@@ -781,20 +781,14 @@ impl Core {
         if !check_owner_thread(self, "hook.status") {
             return Err("hook_status_unavailable");
         }
-        let engine = {
+        let target = {
             let mut runtime = lock_recover(&self.runtime);
             runtime.ingest_hook_status(device, caller, report)?;
-            // Only this machine's engine can be the core's own (a device's
-            // node still runs Herdr), and its panes are named bare.
-            report
-                .session
-                .as_ref()
-                .filter(|_| device == runtime.node().as_str())
-                .and_then(|_| runtime.delivery_engine(device))
+            runtime.hook_session_target(device, caller, report)
         };
         // The engine is asked off the runtime lock, as every engine call is.
-        if let (Some(engine), Some(session)) = (engine, report.session.as_deref()) {
-            match engine.hook_session(caller, &report.runtime, session) {
+        if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref()) {
+            match engine.hook_session(&pane, &report.runtime, session) {
                 Ok(false) => {}
                 // An agent resumed after its turn was cut off is owed one
                 // letter (PRD engine-bundle-4-herdr-removal D-22).

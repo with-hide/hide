@@ -601,6 +601,17 @@ pub(crate) fn run(
             }
             Ok(value)
         }
+        Command::RegisterSelf { project } => {
+            if project
+                .as_deref()
+                .is_some_and(|project| !super::key(project))
+            {
+                return Err("invalid_registration".into());
+            }
+            let ledger = state(&client)?;
+            let id = own_registration(&client, &authority, &actor, &ledger, project)?;
+            Ok(json!({"id": id}))
+        }
         command @ Command::Spawn { .. } => spawn(&client, &authority, &actor, command.clone())
             .map_err(|code| incomplete_spawn(&client, &actor, &command, code)),
     }
@@ -627,6 +638,68 @@ pub(super) fn publish_tokens(client: &Client, engine: &dyn Engine, id: &str) -> 
     }
     Ok(())
 }
+/// The caller's own live registration, made from what Herdr reports of its
+/// pane when it has none yet: a spawn's parent, and the session that takes a
+/// mission over (`Command::RegisterSelf`). Converges on the existing record.
+fn own_registration(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    ledger: &crate::delivery::ledger::Ledger,
+    project: Option<String>,
+) -> Result<String, String> {
+    if let Some(own) = super::live_self(ledger, actor).next() {
+        return Ok(own.id.clone());
+    }
+    if actor.hide_owned() {
+        // Hide's own work (Desk, Hide AI) has no pane for Herdr to
+        // report: its record is the origin it registers here, once.
+        return register_code_owned(client, authority, actor);
+    }
+    let CoordinationContext {
+        engine,
+        host_scope,
+        machine: native_machine,
+        on_node,
+        ..
+    } = context(client, &actor.device_id)?;
+    let observed = agents(engine.as_ref())?;
+    let native = observed
+        .iter()
+        .find(|agent| {
+            actor_for(agent, &actor.device_id, on_node)
+                .is_ok_and(|current| current.same_identity(actor))
+        })
+        .ok_or("parent_unavailable")?;
+    let record = record(
+        native,
+        HostIdentity {
+            machine: &actor.device_id,
+            scope: &host_scope,
+            native_machine: &native_machine,
+            on_node,
+        },
+        native.pane_id.clone(),
+        // Herdr's name for the caller while it has one; a caller Herdr never
+        // named stays unnamed instead of taking its pane id for a name.
+        native.name.clone(),
+        None,
+        project,
+    )?;
+    mutate(
+        client,
+        authority,
+        actor,
+        Mutation::Register {
+            record,
+            check: false,
+        },
+    )?["id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "parent_unavailable".into())
+}
+
 /// Registers a code-owned identity, a Factory's or Hide's own, as the
 /// parent or origin of the agents it starts (D-14); converges on the
 /// existing record.
@@ -903,58 +976,14 @@ fn spawn(
     // creates something runs under it.
     let single = SPAWN.try_lock().map_err(|_| "spawn_busy")?;
     let parent_id = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
-        if let Some(parent) = super::live_self(&ledger, actor).next() {
-            parent.id.clone()
-        } else if actor.hide_owned() {
-            // Hide's own work (Desk, Hide AI) has no pane for Herdr to
-            // report: its record is the origin it registers here, once.
-            register_code_owned(client, authority, actor)?
-        } else {
-            let CoordinationContext {
-                engine,
-                host_scope,
-                machine: native_machine,
-                on_node,
-                ..
-            } = context(client, &actor.device_id)?;
-            let observed = agents(engine.as_ref())?;
-            let native = observed
-                .iter()
-                .find(|agent| {
-                    actor_for(agent, &actor.device_id, on_node)
-                        .is_ok_and(|current| current.same_identity(actor))
-                })
-                .ok_or("parent_unavailable")?;
-            let record = record(
-                native,
-                HostIdentity {
-                    machine: &actor.device_id,
-                    scope: &host_scope,
-                    native_machine: &native_machine,
-                    on_node,
-                },
-                native.pane_id.clone(),
-                // Herdr's name for the parent while it has one; a parent
-                // Herdr never named stays unnamed instead of taking its pane
-                // id for a name.
-                native.name.clone(),
-                None,
-                // A device's path names no project of the caller's machine.
-                machine.is_none().then(|| repo.clone()),
-            )?;
-            mutate(
-                client,
-                authority,
-                actor,
-                Mutation::Register {
-                    record,
-                    check: false,
-                },
-            )?["id"]
-                .as_str()
-                .ok_or("parent_unavailable")?
-                .to_owned()
-        }
+        // A device's path names no project of the caller's machine.
+        own_registration(
+            client,
+            authority,
+            actor,
+            &ledger,
+            machine.is_none().then(|| repo.clone()),
+        )?
     } else {
         parent.clone().ok_or("parent_unavailable")?
     };

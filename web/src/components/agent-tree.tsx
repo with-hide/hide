@@ -4,28 +4,13 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { AgentRow, AskSubject, RaiseVerb } from "../snapshot";
 import type { LineParts } from "../agentRow";
-import { askSubjectLead, askSubjectText } from "../askSubject";
+import { askSubjectText } from "../askSubject";
 
 // The parts every agent tree draws the same way (PRD agent-hierarchy-screens
-// D-37 to D-43): the verb a Needs You row starts with, the one descendant
+// D-37 to D-43): a Needs You row's ask line, the one descendant
 // mark a folded parent wears, the
 // elbow rails and the chevron lane of a tree row, and the tree button. The
 // core decides every value; these only draw it.
-
-/** 승인 · 질문 · 확인 · 초안: colored text, no box (D-37); a row's turn word (status-marks B5), or a mission decision's 판단 (needs-you-cleanup D-01). */
-export function VerbText({ verb, subject }: { verb: RaiseVerb; subject?: AskSubject | null }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <span className="shrink-0 font-semibold text-warning" data-verb={verb}>
-      {askVerb(t, verb, subject)}
-    </span>
-  );
-}
-
-/** The word an ask leads with: its verb's, or the subject's own (`판단`). */
-export function askVerb(t: TFunction<"translation">, verb: RaiseVerb, subject?: AskSubject | null): string {
-  return askSubjectLead(t, subject) ?? t(`agentSessions.verb.${verb}`);
-}
 
 /** What to do, or the verb's own words when no label line or letter says it (B3). */
 export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: string | null | undefined, subject?: AskSubject | null): string {
@@ -33,9 +18,14 @@ export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: stri
   return what ?? t(`agentSessions.ask.${verb}`);
 }
 
-/** An ask as a line's parts, the verb leading, so a list cuts only what to do (status-marks B5, B33). */
+/**
+ * An ask as a line's parts: what to do, with no verb leading it. The warning
+ * colour and the row's `!` already say it is the operator's turn, and whether
+ * it is a question, an approval or a decision is what the line itself says
+ * (status-marks B5, B33; the verb words stay in notifications and hints).
+ */
 export function askParts(t: TFunction<"translation">, ask: NonNullable<AgentRow["state"]["ask"]>): LineParts {
-  return { lead: askVerb(t, ask.verb, ask.subject), text: askWhat(t, ask.verb, ask.what, ask.subject), tail: moreTail(t, ask.more) };
+  return { lead: null, text: askWhat(t, ask.verb, ask.what, ask.subject), tail: moreTail(t, ask.more) };
 }
 
 /** The count of the other asks under one root, `외 N건`, or null with none (needs-you-cleanup D-13). */
@@ -43,15 +33,13 @@ export function moreTail(t: TFunction<"translation">, more: number): string | nu
   return more > 0 ? t("agentSessions.moreAsks", { count: more }) : null;
 }
 
-/** A Needs You row's second line: the verb and what to do, and the count of the other asks waiting under the same root (B2, needs-you-cleanup B9). */
+/** A Needs You row's second line: what to do, and the count of the other asks waiting under the same root (B2, needs-you-cleanup B9). */
 export function AskLine({ ask, className }: { ask: NonNullable<AgentRow["state"]["ask"]>; className?: string }) {
   const { t } = useInterfaceTranslation();
   const what = askWhat(t, ask.verb, ask.what, ask.subject);
   const more = moreTail(t, ask.more);
   return (
     <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
-      <VerbText verb={ask.verb} subject={ask.subject} />
-      <span aria-hidden="true" className="shrink-0 text-warning">·</span>
       <span className="min-w-0 truncate text-warning" title={what}>
         {what}
       </span>

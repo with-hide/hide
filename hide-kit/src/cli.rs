@@ -4,14 +4,18 @@
 //! The name is Hide's to replace only when it is absent or is already a link
 //! into a place only Hide puts it: an app bundle's `Contents/Resources`, or
 //! one of the target's own roots such as a device helper root. A file, or a
-//! link anywhere else, is the operator's and stays.
+//! link anywhere else, is the operator's and stays. A link to another Hide
+//! installation's command that is still there is that installation's, kept
+//! by its own pass: a pane's `hide` reaches the installation that started
+//! the pane whichever one holds the name (docs/agent-hooks.md, More than one
+//! Hide on an account).
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use crate::KitTarget;
+use crate::{KitTarget, PartCause, Reason};
 #[cfg(not(windows))]
-use crate::{Observed, PartCause, Reason, RemoveOutcome};
+use crate::{Observed, RemoveOutcome};
 
 #[cfg(windows)]
 #[path = "cli_windows.rs"]
@@ -47,17 +51,52 @@ fn hides_own(target: &KitTarget, destination: &Path) -> bool {
     // proves it by layout; our last installed destination proves it after
     // that package is gone. An unreadable record grants no authority.
     if crate::bundled_kit_dir(destination).is_some()
-        || crate::record::load(&target.home).is_ok_and(|record| record.owns_cli(destination))
+        || crate::record::load(&target.home, &target.install)
+            .is_ok_and(|record| record.owns_cli(destination))
     {
         return true;
     }
-    if target
+    target
         .owned_roots
         .iter()
         .any(|root| destination.starts_with(root))
-    {
-        return true;
+        || in_app_bundle(destination)
+}
+
+/// The installation a Hide command at `destination` belongs to, read from
+/// where it sits: a desktop package's resources are the app's, and a build
+/// folder or the `current` link under a helper root is that root's.
+fn install_at(destination: &Path) -> Option<String> {
+    if crate::bundled_kit_dir(destination).is_some() || in_app_bundle(destination) {
+        return Some(hide_agent_hooks::route::APP_INSTALL.to_owned());
     }
+    let folder = destination.parent()?;
+    let name = folder.file_name()?.to_str()?;
+    if name != crate::CURRENT && !crate::is_build_name(name) {
+        return None;
+    }
+    Some(hide_agent_hooks::route::install_of_root(folder.parent()?))
+}
+
+/// Whether `destination` is the command of another installation on this
+/// account that is still there.
+fn held_by_another(target: &KitTarget, destination: &Path) -> bool {
+    install_at(destination).is_some_and(|install| install != target.install)
+        && destination.is_file()
+}
+
+fn other_install(destination: &Path) -> Reason {
+    Reason::with(
+        PartCause::OtherInstall,
+        destination.display().to_string(),
+        format!(
+            "another Hide on this account holds the hide command, {}; Hide left it",
+            destination.display()
+        ),
+    )
+}
+
+fn in_app_bundle(destination: &Path) -> bool {
     let mut parts = destination.iter().rev();
     parts.next() == Some(OsStr::new(CLI_NAME))
         && parts.next() == Some(OsStr::new("Resources"))
@@ -100,6 +139,9 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
     }
     match std::fs::read_link(&link) {
         Ok(destination) if destination == wanted(target) => Observed::Current,
+        Ok(destination) if held_by_another(target, &destination) => {
+            Observed::Absent(other_install(&destination))
+        }
         Ok(destination) if hides_own(target, &destination) => Observed::Stale(Reason::with(
             PartCause::OtherBuild,
             destination.display().to_string(),
@@ -139,6 +181,9 @@ pub(crate) fn install(target: &KitTarget) -> Result<(), String> {
 pub(crate) fn remove(target: &KitTarget) -> RemoveOutcome {
     let link = link_path(target);
     match std::fs::read_link(&link) {
+        Ok(destination) if held_by_another(target, &destination) => RemoveOutcome::Kept {
+            reason: format!("{} is another Hide's on this account", link.display()),
+        },
         Ok(destination) if hides_own(target, &destination) => match std::fs::remove_file(&link) {
             Ok(()) => RemoveOutcome::Removed,
             Err(error) => RemoveOutcome::Failed {

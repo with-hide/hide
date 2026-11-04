@@ -104,8 +104,8 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것 and �
   expect(rows(container)).toEqual(["ask", "stuck", "done", "works", "waits"]);
   expect(container.querySelector("[data-task-count]")?.textContent).toBe("태스크 5");
   const line = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-task-line]`);
-  // A question leads with its verb, as the sidebar row does (status-marks B5, B33).
-  expect(line("ask")?.textContent).toBe("herdr-ide질문 · 새 언어로 다시 쓸까요?");
+  // A question says only what it asks, as the sidebar row does: its ! and colour say whose turn it is.
+  expect(line("ask")?.textContent).toBe("herdr-ide새 언어로 다시 쓸까요?");
   expect(line("ask")?.querySelector(".text-warning")).not.toBeNull();
   // A block is the operator's turn: its cause in the warning colour, led by 막힘.
   expect(line("stuck")?.querySelector(".text-warning")?.textContent).toBe("막힘 · API 서버에 닿지 못해 멈춤");
@@ -347,7 +347,7 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
   expect(at("parent").querySelector("[data-descendant-mark]")).toBeNull();
 });
 
-it("keeps a read question in 내 차례 dimmed with a hollow ! and 읽음, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B10, B13)", async () => {
+it("keeps a read question in 내 차례 dimmed with a hollow ! and no 읽음 word, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B10, B13)", async () => {
   const agents = [
     row("asked", { mark: "quiet", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
     row("kept", { mark: "quiet", group: "seen", activity: "idle", revisit: { starred: true, read_ask: false, since_unix_ms: 1 } } as Partial<AgentRow>),
@@ -356,7 +356,7 @@ it("keeps a read question in 내 차례 dimmed with a hollow ! and 읽음, and i
   const at = (pane: string) => container.querySelector(`[data-task-row="${pane}"]`)!;
   expect(at("asked").getAttribute("data-task-read")).toBe("true");
   expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark-read")).toBe("true");
-  expect(at("asked").querySelector("[data-task-read-tag]")?.textContent).toBe("읽음");
+  expect(at("asked").querySelector("[data-task-read-tag]")).toBeNull();
   expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("내 차례 · 읽은 질문");
   expect(at("kept").getAttribute("data-task-read")).toBeNull();
   const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;

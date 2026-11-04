@@ -8,6 +8,9 @@ fn main() {
     if let Some(code) = hide_node::ssh::askpass::client(&raw) {
         std::process::exit(code);
     }
+    if let Some(code) = hided::pane_install::hand_off(&raw) {
+        std::process::exit(code);
+    }
     let args: Vec<String> = std::env::args().collect();
     let parsed = hided::cli::parse_args(&args);
     if let Err(error) = &parsed

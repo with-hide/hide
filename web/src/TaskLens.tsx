@@ -407,7 +407,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
   // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask in 내 차례
-  // wears a hollow `!`, is dimmed and says 읽음 (needs-you-cleanup B10).
+  // wears a hollow `!` and is dimmed; the mark says it was read, so no word repeats it (needs-you-cleanup B10).
   // The small ★ after the title steps aside where the time's slot shows the ☆/★ button, so the row never draws two.
   const starMark = card.state === "revisit";
   const read = card.state === "needs_you" && card.read === true;
@@ -421,7 +421,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
       data-task-row={agent.pane_id} data-task-state={card.state} data-task-read={read ? "true" : undefined} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
-      <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
             title={[agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
@@ -436,7 +436,6 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
           </button>
           <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
-          {read ? <span aria-hidden="true" className="shrink-0 rounded-xs border border-border px-xxs text-micro text-subtle-foreground group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" data-task-read-tag="">{t("taskLens.readTag")}</span> : null}
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
         <SecondLine entry={entry} showProject={showProject} read={read} />
@@ -489,7 +488,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
       <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent focus-within:bg-accent", (pending || away) && "opacity-(--opacity-dimmed)")}
         data-archived-row={row.id} data-archived-phase={row.phase} data-archived-resume={failed ? "failed" : pending ? "pending" : undefined} onClick={record}>
         <TreeChevron name={root.title} open={null} onToggle={() => {}} hangs={false} />
-        <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+        <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
           <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
             <button type="button" data-task-focus="row" aria-label={[root.title, agentProductName(root.agent_kind), t("archive.state"), row.starred ? t("taskLens.revisit.starred") : null, state].filter(Boolean).join(", ")}
               title={[root.title, agentProductName(root.agent_kind), root.last_line].filter(Boolean).join("\n")}
@@ -699,7 +698,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
       data-task-child={child.pane_id} data-depth={depth} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeRails place={place} />
       <TreeChevron name={child.identity_label} open={open} onToggle={toggle} hangs chain={place.chain} disabled={disabled} data-task-chevron={child.pane_id} />
-      <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
             aria-label={[child.identity_label, forkLabel(t, child), agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}

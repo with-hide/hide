@@ -76,21 +76,48 @@ pub(crate) fn deliver(engine: &dyn Engine, target: &InputTarget, text: &str) -> 
             logged(target, TYPED);
             Delivered::Sent(SendRoute::Typed)
         }
-        // Herdr refused the parameters: nothing was typed.
-        Err(EngineError::Request(_)) => {
-            unavailable_reason(target, TYPED, "herdr_parameters");
-            Delivered::NotYet("herdr_parameters")
-        }
-        Err(EngineError::Answer(_)) => {
-            lost(target, TYPED, "herdr_format");
-            Delivered::Lost("herdr_format")
-        }
-        Err(_) => {
-            lost(target, TYPED, "herdr_call_failed");
-            Delivered::Lost("herdr_call_failed")
-        }
+        Err(error) => match not_typed(&error) {
+            Some(reason) => {
+                unavailable_reason(target, TYPED, reason, &error);
+                Delivered::NotYet(reason)
+            }
+            None => {
+                let reason = if matches!(error, EngineError::Answer(_)) {
+                    "herdr_format"
+                } else {
+                    "herdr_call_failed"
+                };
+                lost(target, TYPED, reason, &error);
+                Delivered::Lost(reason)
+            }
+        },
     }
 }
+
+/// Why a submission that failed typed nothing, or `None` when it may have:
+/// a request the engine could not take and a refusal the engine makes before
+/// it writes leave the agent's input untouched, so the doorbell may ring
+/// again. Any other refusal, such as Herdr's `timeout` while it waits after
+/// the submission, a failed connection, and an answer that never came or
+/// could not be read may follow a submission that arrived.
+fn not_typed(error: &EngineError) -> Option<&'static str> {
+    match error {
+        EngineError::Request(_) => Some("herdr_parameters"),
+        EngineError::Refused { code, .. } if REFUSED_BEFORE_TYPING.contains(&code.as_str()) => {
+            Some("engine_refused")
+        }
+        // A connection that failed after the request was written can read
+        // as a transport failure, so only the engine's own words prove that
+        // nothing was typed.
+        _ => None,
+    }
+}
+
+/// The refusals an engine answers `agent.prompt` with before it writes
+/// anything: Herdr's `agent_blocked` ("returns `agent_blocked` without
+/// sending input", its socket API), and the core's own engine's three
+/// (`engine::own`'s `prompt_agent`).
+const REFUSED_BEFORE_TYPING: &[&str] = &["agent_blocked", "agent_not_ready", "empty_agent_prompt"];
 
 /// The typed rung's name in a log line (`InputRung::name`).
 const TYPED: &str = "typed";
@@ -102,16 +129,20 @@ fn logged(target: &InputTarget, rung: &str) {
 
 /// A prompt that could not be submitted: diagnostic detail stays in the log
 /// (design principle 13), while the caller handles NotYet or Lost.
-fn unavailable_reason(target: &InputTarget, rung: &str, reason: &str) {
+fn unavailable_reason(target: &InputTarget, rung: &str, reason: &str, error: &EngineError) {
     crate::diagnostic!(
         json!({"component":"delivery","kind":"input.rung_unavailable",
-        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason})
+        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason,
+        "detail":error.to_string()})
     );
 }
 
-fn lost(target: &InputTarget, rung: &str, reason: &str) {
+/// A prompt whose answer was lost; the engine's own words go to the log
+/// only, as the detail of a failure the caller handles (design principle 13).
+fn lost(target: &InputTarget, rung: &str, reason: &str, error: &EngineError) {
     crate::diagnostic!(json!({"component":"delivery","kind":"input.rung_lost",
-        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason}));
+        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason,
+        "detail":error.to_string()}));
 }
 
 #[cfg(test)]
@@ -169,6 +200,47 @@ mod tests {
             herdr.calls()[0].1["text"],
             "names no file.\n    It needs no change.\nReply TOKEN"
         );
+    }
+
+    /// A refusal the engine makes before writing typed nothing, so a bell may
+    /// ring again and a brief is not submitted; a submission whose answer
+    /// never came, or that Herdr's wait after it timed out, may have arrived
+    /// and is never sent again blindly.
+    #[test]
+    fn a_refused_submission_is_not_typed_and_an_unanswered_one_may_be() {
+        let herdr = FakeHerdr::start_with_errors("ladder-refused", |method, _| {
+            assert_eq!(method, "agent.prompt");
+            Err(("agent_blocked".into(), "agent is blocked".into()))
+        });
+        let target = InputTarget {
+            kind: "claude".into(),
+            pane_id: "pane".into(),
+            raw_pane_id: "w1:p2".into(),
+        };
+        assert_eq!(
+            deliver(herdr.engine().as_ref(), &target, "letter"),
+            Delivered::NotYet("engine_refused")
+        );
+        assert_eq!(
+            crate::coordination::executor::send_brief(
+                herdr.engine().as_ref(),
+                &target,
+                "spawn-1",
+                "brief"
+            ),
+            Err("brief_not_submitted".to_owned())
+        );
+
+        for code in [crate::fake_herdr::NO_REPLY, "timeout"] {
+            let uncertain = FakeHerdr::start_with_errors("ladder-uncertain", move |_, _| {
+                Err((code.into(), String::new()))
+            });
+            assert_eq!(
+                deliver(uncertain.engine().as_ref(), &target, "letter"),
+                Delivered::Lost("herdr_call_failed"),
+                "{code}"
+            );
+        }
     }
 
     /// An agent that never takes input within the wait is `Late`, with

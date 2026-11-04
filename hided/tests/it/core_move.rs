@@ -2740,6 +2740,7 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
             tailscale_bin: Some(tailscale.bin.clone()),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
             search_path: None,
+            install: None,
         }))
         .map_err(anyhow::Error::msg)?;
     std::fs::create_dir_all(home.join(".ssh"))?;

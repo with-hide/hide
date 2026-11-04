@@ -24,7 +24,7 @@ export function askSubjectText(t: TFunction<"translation">, subject: AskSubject)
   }
 }
 
-/** The word a subject's line leads with in place of the row's own (`판단 · <line>`, needs-you-cleanup D-01; `확인 필요 · <node>`, PRD mission-node-simple B14), or null to keep the row's. */
+/** The word a notification about a subject leads with (`판단`, needs-you-cleanup D-01; `확인 필요`, PRD mission-node-simple B14), or null to keep the status word; a row's line names no verb. */
 export function askSubjectLead(t: TFunction<"translation">, subject: AskSubject | null | undefined): string | null {
   if (subject?.cause === "mission_decision") return t("mission.askDecision");
   if (subject?.cause === "mission_attention") return t("mission.attention");

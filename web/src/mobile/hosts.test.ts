@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { bundlePath, forgetHost, HOSTS_KEY, MAX_HOSTS, readHosts, saveHost, type PairedHost } from "./hosts";
+import { bundlePath, forgetHost, HOSTS_KEY, MAX_HOSTS, readHosts, revokeHost, saveHost, type PairedHost } from "./hosts";
 
 function storage() {
   const entries = new Map<string, string>();
@@ -16,6 +16,17 @@ it("retains each device's credential and protocol, replaces that device, and nev
   expect(store.getItem(HOSTS_KEY)).not.toContain("single-use secret");
   forgetHost(store as Storage, host.room);
   expect(readHosts(store).map((entry) => entry.room)).toEqual(["c".repeat(43)]);
+});
+
+it("keeps a revoked device's name and room without its credential, and a new pairing replaces it", () => {
+  const store = storage();
+  // A list written before revoked rows existed reads unchanged.
+  store.setItem(HOSTS_KEY, JSON.stringify([host, { ...host, room: "c".repeat(43) }]));
+  revokeHost(store, host.room);
+  expect(readHosts(store)).toEqual([{ ...host, credential: null }, { ...host, room: "c".repeat(43) }]);
+  saveHost(store, { ...host, credential: "fresh" });
+  expect(readHosts(store)[0]).toEqual({ ...host, credential: "fresh" });
+  expect(() => readHosts({ getItem: () => JSON.stringify([{ ...host, credential: "" }]) })).toThrow("host_storage_invalid");
 });
 
 it("rejects corrupt or unavailable storage and a seventeenth device without losing the existing list", () => {

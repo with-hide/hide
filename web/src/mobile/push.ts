@@ -11,7 +11,7 @@ import { staleTags, type AgentGroup } from "./protocol";
 import { patch, usePhone } from "./store";
 import { send, currentHost } from "./connection";
 import { hostedPhone } from "./relayRuntime";
-import { registerHostPush, removeHostPush } from "./hosts";
+import { dropHostPush, registerHostPush } from "./hosts";
 
 export function pushSupported(): boolean {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -123,12 +123,12 @@ export async function syncPush(): Promise<void> {
 export async function forgetPush(): Promise<void> {
   if (!("serviceWorker" in navigator)) return;
   const host = currentHost();
+  if (hostedPhone()) { if (host) await dropHostPush(host.room); return; }
   try {
-    if (hostedPhone()) { if (host) await removeHostPush(host.room); return; }
     const worker = await registration();
     await (await worker?.pushManager.getSubscription())?.unsubscribe();
   } catch {
-    if (hostedPhone()) patch({ relayError: "storage" });
+    // The device already refuses this phone; a subscription left behind is never sent to.
   }
 }
 

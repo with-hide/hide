@@ -100,17 +100,16 @@ function childrenFixture(): AgentRow[] {
 }
 
 // PRD B1-B2: the resting row names no child; the tree button shows the first
-// children's marks in tree order, `+N` for the rest, and keeps its full counts.
-it("puts the tree and the first children's marks first while keeping state counts accessible", async () => {
+// child's mark in tree order and how many children there are, and keeps its full counts.
+it("puts the tree and the first child's mark first while keeping state counts accessible", async () => {
   const agents = childrenFixture().map((row) => row.pane_id === "result" ? { ...row, mark: "done" as const } : row.pane_id === "idle" ? { ...row, mark: "quiet" as const } : row);
   const { container, unmount } = await mount({ working: true, notice: null, band: null }, agents);
   try {
     const row = container.querySelector('[data-pane-header-band="children"]')!;
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
-    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => [mark.getAttribute("data-pane-tree-mark"), mark.getAttribute("data-mark")])).toEqual([["question", "quiet"], ["working", "going"], ["result", "done"]]);
-    // The unknown child draws no mark, so it is counted with the rest.
-    expect(trigger.textContent).toBe("+2");
+    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => [mark.getAttribute("data-pane-tree-mark"), mark.getAttribute("data-mark")])).toEqual([["question", "quiet"]]);
+    expect(trigger.textContent).toBe("5");
     expect(row.firstElementChild?.firstElementChild).toBe(trigger);
     // An ordinary child's question is its parent's to answer: no raised count.
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
@@ -136,11 +135,11 @@ it("puts the pane's own approval after the tree and keeps raised counts in its n
   try {
     const row = container.querySelector('[data-pane-header-band="approval"]')!;
     expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
-    expect(row.querySelector("[data-verb]")?.getAttribute("data-verb")).toBe("approval");
+    expect(row.querySelector("[data-verb]")).toBeNull();
     expect(row.querySelector("[data-pane-band-who]")).toBeNull();
     expect(row.querySelector("[data-pane-child-names]")).toBeNull();
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
-    expect(trigger.textContent).toBe("+2");
+    expect(trigger.textContent).toBe("5");
     expect(trigger.getAttribute("aria-label")).toContain("Descendant requests needing you: 2");
     expect(row.textContent).toContain("Run the verification command");
     expect(container.querySelector("[data-pane-band-more]")).toBeNull();
@@ -175,12 +174,13 @@ it("never counts a core unknown child as resting or a result when the wire omits
 });
 
 it("skips a child of unknown state and marks the next known one", async () => {
-  const agents = childrenFixture().map((row) => row.pane_id === "unknown" ? { ...row, state: { ...row.state, tree_rank: 1 } } : row.pane_id === "working" ? { ...row, state: { ...row.state, tree_rank: 2 } } : row);
+  const rank: Record<string, number> = { unknown: 0, working: 1, question: 2 };
+  const agents = childrenFixture().map((row) => row.pane_id in rank ? { ...row, state: { ...row.state, tree_rank: rank[row.pane_id]! } } : row);
   const { container, unmount } = await mount({ working: false, notice: null, band: null }, agents);
   try {
     const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
-    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => mark.getAttribute("data-pane-tree-mark"))).toEqual(["question", "working", "result"]);
-    expect(trigger.textContent).toBe("+2");
+    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => mark.getAttribute("data-pane-tree-mark"))).toEqual(["working"]);
+    expect(trigger.textContent).toBe("5");
   } finally { await unmount(); }
 });
 
@@ -343,7 +343,7 @@ it("turns a missing core answer into a retryable timeout beside the move", async
   } finally { await unmount(); }
 });
 
-it("leads a raised ask with its verb, then the child name and request", async () => {
+it("leads a raised ask with the child name, then the request, and no verb", async () => {
   const {container, unmount} = await mount();
   try {
     const band = container.querySelector("[data-pane-header-band=raised]")!;
@@ -351,9 +351,7 @@ it("leads a raised ask with its verb, then the child name and request", async ()
     expect(who.getAttribute("data-pane-band-who")).toBe("child");
     expect(who.textContent).toBe("자식 검증(child)");
     expect(who.querySelector('[data-mark="turn"]')).toBeNull();
-    const verb = band.querySelector("[data-verb=approval]")!;
-    expect(verb.textContent).toBe("Approval");
-    expect(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(band.querySelector("[data-verb]")).toBeNull();
     expect(band.textContent).toContain("하위 검증 권한이 필요합니다");
     expect(band.querySelector("[data-pane-band-more]")).toBeNull();
   } finally { await unmount(); }
@@ -364,7 +362,7 @@ it("names the raised descendant while a draft opens its holder", async () => {
   const {container, unmount} = await mount({ ...header, band: { ...header.band!, action: { pane_id: "middle", label: "Middle" }, raised } }, [], {paneId: "root"});
   try {
     const band = container.querySelector("[data-pane-header-band=raised]")!;
-    expect(band.querySelector("[data-verb=draft]")?.textContent).toBe("Draft");
+    expect(band.querySelector("[data-verb]")).toBeNull();
     expect(band.querySelector("[data-pane-band-who=leaf]")?.textContent).toBe("Leaf(descendant)");
     expect(band.textContent).toContain("My draft keeps the question from going through");
     await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.click());
@@ -557,14 +555,14 @@ it("says a waiting pane's mark words on its record button, the words its tab and
   } finally { await act(async () => root.unmount()); }
 });
 
-// docs/UI_BEHAVIOR.md, Agent panes and the Agents explorer: the pane's own ask starts with
-// its verb and says what is asked; one the operator has looked at dims and
-// stays until it is answered.
-it("words the pane's own ask by its verb and dims it once it is read", async () => {
+// docs/UI_BEHAVIOR.md, Agent panes and the Agents explorer: the pane's own
+// question or approval says only what is asked, a block or a stop leads with
+// its word; one the operator has looked at dims and stays until it is answered.
+it("words the pane's own ask with no verb, a block by its word, and dims it once it is read", async () => {
   const own = (kind: PaneBand["kind"], reason: string | null, read = false): PaneHeader => ({ working: false, notice: null, band: { kind, reason, since_unix_ms: null, read, action: null, more: 0 } });
   const cases: [PaneHeader, string][] = [
-    [own("approval", null), "ApprovalStopped at a permission request"],
-    [own("answer", "Deploy to staging first?"), "QuestionDeploy to staging first?"],
+    [own("approval", null), "Stopped at a permission request"],
+    [own("answer", "Deploy to staging first?"), "Deploy to staging first?"],
     [own("blocked", "gh login expired"), "Blockedgh login expired"],
     [own("stopped", "Three tests left"), "UnfinishedThree tests left"],
   ];
@@ -578,12 +576,14 @@ it("words the pane's own ask by its verb and dims it once it is read", async () 
       // Only what the operator answers is drawn in the warning colour; work left is not an ask.
       const asks = value.band!.kind !== "stopped";
       expect(row.className.includes("border-warning")).toBe(asks);
-      expect(row.querySelector("[data-verb]")!.className.includes("text-warning")).toBe(asks);
+      const verb = row.querySelector("[data-verb]");
+      if (value.band!.kind === "approval" || value.band!.kind === "answer") expect(verb).toBeNull();
+      else expect(verb!.className.includes("text-warning")).toBe(asks);
     } finally { await unmount(); }
   }
   const { container, unmount } = await mount(own("answer", "Deploy to staging first?", true), [], { paneId: "solo" });
   try {
-    expect(container.querySelector('[data-pane-header-band="answer"] [data-pane-band-read="true"]')?.textContent).toBe("QuestionDeploy to staging first?");
+    expect(container.querySelector('[data-pane-header-band="answer"] [data-pane-band-read="true"]')?.textContent).toBe("Deploy to staging first?");
   } finally { await unmount(); }
 });
 
@@ -601,7 +601,7 @@ it("leads the row with the turn's request before its ask, progress or result", a
   const request = { text: "Proceed as proposed + check unclear states", images: 0 };
   const ask: PaneBand = { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
   const cases: [PaneHeader, string, string][] = [
-    [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→QuestionBundle questions 1-3 into one PR?"],
+    [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→Bundle questions 1-3 into one PR?"],
     [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "Proceed as proposed + check unclear states→Reading the status model"],
     [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states"],
     [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "Proceed as proposed + check unclear states→DoneRemote reads every 3 s, PR merged"],
@@ -750,7 +750,7 @@ it("draws one row in one line, stacks two lines and draws no row when off, keepi
   try {
     const row = one.container.querySelector('[data-pane-header-band="answer"]')!;
     expect(row.classList.contains("flex-col")).toBe(false);
-    expect(row.textContent).toBe("Proceed as proposed→QuestionBundle into one PR?");
+    expect(row.textContent).toBe("Proceed as proposed→Bundle into one PR?");
     expect(one.container.querySelector("header [data-pane-tree]")).toBeNull();
   } finally { await one.unmount(); }
 
@@ -758,7 +758,7 @@ it("draws one row in one line, stacks two lines and draws no row when off, keepi
   try {
     const row = two.container.querySelector('[data-pane-header-band="answer"]')!;
     expect(row.classList.contains("flex-col")).toBe(true);
-    expect(row.textContent).toBe("Proceed as proposed→QuestionBundle into one PR?");
+    expect(row.textContent).toBe("Proceed as proposed→Bundle into one PR?");
   } finally { await two.unmount(); }
 
   // A parent with no turn to show keeps one line: the children button, no empty answer under it.

@@ -513,6 +513,51 @@ fn the_operators_end_asks_a_present_conductor_once_and_cancels_a_mission_none_ho
     assert!(!runtime.mission_end_event("mission-1"));
 }
 
+/// A mission counts when its plan starts, with its size, and when it first
+/// closes: a mission cancelled before it started, and a reopened one that
+/// closes again, send nothing more.
+#[test]
+fn a_mission_counts_its_start_and_its_first_close() {
+    use crate::product_analytics::{Event, MissionOutcome, MissionSize};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let statistics = Arc::new(RecordedStatistics::default());
+    runtime.install_product_analytics(statistics.clone());
+    let create = |runtime: &mut Runtime, title: &str| {
+        command(runtime, "sender", json!({"op": "create", "title": title})).unwrap();
+    };
+    create(&mut runtime, "Never started");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    assert_eq!(statistics.take(), []);
+
+    create(&mut runtime, "Fix the bug");
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    assert_eq!(
+        statistics.take(),
+        [Event::MissionStarted {
+            nodes: MissionSize::TwoToThree
+        }]
+    );
+    without_gate(&mut runtime);
+    let close = json!({"op": "close", "end": "done"});
+    command(&mut runtime, "sender", close.clone()).unwrap();
+    assert_eq!(
+        statistics.take(),
+        [Event::MissionEnded {
+            outcome: MissionOutcome::Done
+        }]
+    );
+    command(&mut runtime, "sender", json!({"op": "reopen"})).unwrap();
+    command(&mut runtime, "sender", close).unwrap();
+    assert_eq!(statistics.take(), []);
+}
+
 #[test]
 fn a_cancelled_mission_is_over() {
     let fixture = conducting();

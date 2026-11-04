@@ -27,13 +27,15 @@ pub(super) enum Shell {
 }
 
 impl Shell {
-    /// The shell a pane's program name says, or this system's own when the
-    /// name is unknown: the own engine starts PowerShell on Windows and a
-    /// POSIX shell elsewhere. cmd.exe reads neither line, so it has none: a
-    /// pane a caller made run it takes no start.
-    pub(super) fn of(name: Option<&str>) -> Option<Self> {
-        let Some(name) = name else {
-            return Some(if cfg!(windows) {
+    /// The shell a pane's program name says, or, when the name is unknown
+    /// or could not be read, the own engine's shell on the pane's machine:
+    /// PowerShell when `windows` (the machine whose holder runs the pane,
+    /// a device's system and not the core's) and a POSIX shell elsewhere.
+    /// cmd.exe reads neither line, so it has none: a pane a caller made run
+    /// it takes no start.
+    pub(super) fn of(name: Option<&str>, windows: bool) -> Option<Self> {
+        let Some(name) = name.filter(|name| !name.is_empty()) else {
+            return Some(if windows {
                 Self::PowerShell
             } else {
                 Self::Posix
@@ -299,21 +301,30 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_is_told_by_its_name_and_else_by_the_system() {
-        assert_eq!(Shell::of(Some("-zsh")), Some(Shell::Posix));
-        assert_eq!(Shell::of(Some("fish")), Some(Shell::Posix));
-        assert_eq!(Shell::of(Some("pwsh.exe")), Some(Shell::PowerShell));
-        assert_eq!(
-            Shell::of(Some("/usr/local/bin/pwsh")),
-            Some(Shell::PowerShell)
-        );
-        assert_eq!(Shell::of(Some("C:\\Windows\\System32\\cmd.exe")), None);
-        let fallback = if cfg!(windows) {
-            Shell::PowerShell
-        } else {
-            Shell::Posix
-        };
-        assert_eq!(Shell::of(None), Some(fallback));
+    fn the_shell_is_told_by_its_name_and_else_by_the_panes_machine() {
+        for windows in [false, true] {
+            assert_eq!(Shell::of(Some("-zsh"), windows), Some(Shell::Posix));
+            assert_eq!(Shell::of(Some("fish"), windows), Some(Shell::Posix));
+            assert_eq!(
+                Shell::of(Some("pwsh.exe"), windows),
+                Some(Shell::PowerShell)
+            );
+            assert_eq!(
+                Shell::of(Some("/usr/local/bin/pwsh"), windows),
+                Some(Shell::PowerShell)
+            );
+            assert_eq!(
+                Shell::of(Some("C:\\Windows\\System32\\cmd.exe"), windows),
+                None
+            );
+        }
+        // A name not known, or one the holder could not read (an empty
+        // name), is the pane's machine's shell, whatever the core runs on:
+        // a Mac core types PowerShell's line into a Windows device's pane.
+        for name in [None, Some("")] {
+            assert_eq!(Shell::of(name, true), Some(Shell::PowerShell));
+            assert_eq!(Shell::of(name, false), Some(Shell::Posix));
+        }
     }
 
     #[test]
