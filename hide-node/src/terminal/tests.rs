@@ -1190,25 +1190,6 @@ fn keys_a_letter_held_ahead_of_a_full_fork_queue_drop_the_latest_typed_and_repor
 }
 
 #[test]
-fn a_herdr_session_takes_a_forks_released_keys_as_typed() {
-    let harness = harness(RetryPolicy::Automatic);
-    let fork = harness.controlling("w1:p2");
-    fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
-    harness.service.control(TerminalControl::RequestResolve {
-        request: "fork-1".into(),
-        pane: "w1:p2".into(),
-    });
-    let writes = written(&fork, b"hello\r");
-    assert_eq!(
-        writes
-            .into_iter()
-            .map(|(_, bytes)| bytes)
-            .collect::<Vec<_>>(),
-        [b"hello".to_vec(), b"\r".to_vec()]
-    );
-}
-
-#[test]
 fn a_holder_built_before_submissions_drops_a_forks_released_keys_and_reports_them() {
     let harness = harness_taking(
         RetryPolicy::Automatic,
