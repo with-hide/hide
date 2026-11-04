@@ -104,20 +104,37 @@ fn wait_for(engine: &dyn Engine, pane: &str, text: &str, what: &str) {
     }
 }
 
-/// The check on `engine`, whose panes run with `home` as their home once
-/// given `env`: Claude Code asks in the worktree nobody trusted and starts
+/// The check on `engine`, whose panes receive only private config roots:
+/// Claude Code asks in the worktree nobody trusted and starts
 /// at its prompt in the one Hide trusted.
-fn claude_reads_the_trust_hide_recorded(
-    engine: &dyn Engine,
-    home: &Path,
-    env: &BTreeMap<String, String>,
-) {
+fn claude_reads_the_trust_hide_recorded(engine: &dyn Engine, home: &Path) {
     let claude = PathBuf::from(
         std::env::var_os("HIDE_TEST_CLAUDE_BIN").expect("HIDE_TEST_CLAUDE_BIN names Claude Code"),
     );
+    // Move every native config lookup with HOME, including an inherited
+    // Claude override and its keychain namespace. The same private .claude
+    // folder holds the legacy global config both Claude and trust_worktree
+    // read (hide-agent-hooks Runtime::trust_path).
+    let config = home.join(".claude");
+    std::fs::create_dir_all(&config).unwrap();
+    let env = [
+        ("HOME", home.to_owned()),
+        ("USERPROFILE", home.to_owned()),
+        ("CLAUDE_CONFIG_DIR", config.clone()),
+        ("CLAUDE_SECURESTORAGE_CONFIG_DIR", config.clone()),
+        ("APPDATA", home.join("AppData/Roaming")),
+        ("LOCALAPPDATA", home.join("AppData/Local")),
+        ("XDG_CONFIG_HOME", home.join(".config")),
+        ("XDG_STATE_HOME", home.join(".local/state")),
+        ("XDG_DATA_HOME", home.join(".local/share")),
+        ("XDG_CACHE_HOME", home.join(".cache")),
+    ]
+    .into_iter()
+    .map(|(key, folder)| (key.to_owned(), folder.to_string_lossy().into_owned()))
+    .collect();
     // An account where Claude Code has run before and trusts no folder.
     std::fs::write(
-        home.join(".claude.json"),
+        config.join(".config.json"),
         r#"{"hasCompletedOnboarding": true, "hasSeenAutoDefaultNotice": true, "theme": "dark", "numStartups": 3}"#,
     )
     .unwrap();
@@ -158,14 +175,28 @@ fn claude_reads_the_trust_hide_recorded(
     )
     .unwrap();
 
-    let asked = claude_in(engine, env, &claude, &other, "other");
+    // The node must have written the file the real CLI will read, not the
+    // default global file outside CLAUDE_CONFIG_DIR.
+    let trusted_config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config.join(".config.json")).unwrap()).unwrap();
+    let projects = trusted_config["projects"].as_object().unwrap();
+    assert_eq!(projects.len(), 1);
+    let (folder, trust) = projects.iter().next().unwrap();
+    assert_eq!(
+        std::fs::canonicalize(folder).unwrap(),
+        std::fs::canonicalize(&task).unwrap()
+    );
+    assert_eq!(trust["hasTrustDialogAccepted"], true);
+    assert!(!home.join(".claude.json").exists());
+
+    let asked = claude_in(engine, &env, &claude, &other, "other");
     wait_for(
         engine,
         &asked,
         TRUST_QUESTION,
         "Claude Code asks its folder trust question in a worktree no one trusted",
     );
-    let trusted = claude_in(engine, env, &claude, &task, "task");
+    let trusted = claude_in(engine, &env, &claude, &task, "task");
     wait_for(
         engine,
         &trusted,
@@ -185,7 +216,7 @@ fn the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_a
     // The server runs in its private home, which its panes inherit.
     let herdr = PrivateHerdr::new(None);
     let engine = herdr.engine();
-    claude_reads_the_trust_hide_recorded(engine.as_ref(), &herdr.home, &BTreeMap::new());
+    claude_reads_the_trust_hide_recorded(engine.as_ref(), &herdr.home);
 }
 
 #[test]
@@ -203,10 +234,5 @@ fn on_the_own_engine_the_real_claude_starts_at_its_prompt_in_a_worktree_hide_tru
     // is named to the pane's program as Herdr's server names its own.
     let home = Path::new(&running.0.folder).join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let home_text = home.to_str().unwrap().to_owned();
-    let env = BTreeMap::from([
-        ("HOME".to_owned(), home_text.clone()),
-        ("USERPROFILE".to_owned(), home_text),
-    ]);
-    claude_reads_the_trust_hide_recorded(&running.0.engine, &home, &env);
+    claude_reads_the_trust_hide_recorded(&running.0.engine, &home);
 }
