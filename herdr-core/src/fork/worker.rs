@@ -1355,7 +1355,7 @@ mod tests {
                     }
                     reply(())
                 }
-                "pane_token" => {
+                "pane_agent_status" => {
                     let mut statuses = statuses.lock().unwrap();
                     let status = if statuses.len() > 1 {
                         statuses.remove(0)

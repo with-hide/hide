@@ -1,5 +1,5 @@
 // The stand-in for `hide-agent-hooks opencode <operation>` the plugin test
-// runs: it logs the operation and its input, then answers
+// runs: it logs the operation, its input and the pane it ran in, then answers
 // from HIDE_OPENCODE_HELPER_ANSWERS. `delay_ms` holds the answer back, `exit`
 // ends without one, `raw` prints it unparsed.
 
@@ -15,7 +15,7 @@ process.stdin.setEncoding("utf8");
 for await (const chunk of process.stdin) stdin += chunk;
 appendFileSync(
   process.env.HIDE_OPENCODE_HELPER_LOG,
-  `${JSON.stringify({ operation, input: JSON.parse(stdin) })}\n`,
+  `${JSON.stringify({ operation, input: JSON.parse(stdin), env: { HIDE_PANE_ID: process.env.HIDE_PANE_ID } })}\n`,
 );
 const { delay_ms: delay, exit, raw, ...answer } =
   JSON.parse(readFileSync(process.env.HIDE_OPENCODE_HELPER_ANSWERS, "utf8"))[operation] ?? {};

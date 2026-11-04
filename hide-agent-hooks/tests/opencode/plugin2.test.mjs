@@ -250,6 +250,120 @@ async function opencode(t) {
   return host;
 }
 
+/** Waits until the terminal attached to `root`. */
+async function attached(view, root) {
+  for (let waited = 0; waited < 2000; waited += 20) {
+    if (view.attached.some((entry) => entry.root === root)) return;
+    await sleep(20);
+  }
+  assert.fail(`never attached to ${root}: ${JSON.stringify(view.attached)}`);
+}
+
+test("OpenCode 2 reads the 1.x file as a plugin that does nothing", async () => {
+  const { default: v1 } = await import(pathToFileURL(process.env.HIDE_OPENCODE_PLUGIN).href);
+  assert.equal(typeof v1.id, "string");
+  assert.equal(typeof v1.setup, "function");
+  assert.equal(v1.setup({}), undefined);
+  assert.equal(typeof v1.server, "function");
+});
+
+test("each terminal answers for the session it shows, in its own pane, whichever folder the session is in", async (t) => {
+  answer({
+    start: { context: "HIDE-GUIDANCE" },
+    prompt: { context: "Hide letter letter-1 from lead (claude) [request]\nBODY-1\n", letters: ["letter-1"] },
+    confirm: { confirmed: ["letter-1"] },
+    subagents: { reported: true },
+  });
+  const host = await opencode(t);
+  host.create("ses_a");
+  host.create("ses_b");
+  const a = host.terminal("w1:p1", { type: "session", sessionID: "ses_a" });
+  const b = host.terminal("w1:p2", { type: "session", sessionID: "ses_b" });
+  await attached(a, "ses_a");
+  await attached(b, "ses_b");
+  // Attached where the session's plugin runs: OpenCode sends a call that names no folder to the launch folder's.
+  assert.deepEqual(a.attached[0].location, { directory: PROJECT });
+  await until("start", 2);
+
+  const [item] = await host.prompt("ses_b");
+  const [call] = await until("prompt");
+  assert.equal(call.env.HIDE_PANE_ID, "w1:p2");
+  assert.equal(call.input.session_id, "ses_b");
+  assert.equal(call.input.first, true);
+  assert.equal(call.input.cwd, PROJECT);
+  // Written ahead of the prompt as OpenCode's synthetic message, with Hide's own reminder tags.
+  assert.equal(item.sessionID, "ses_b");
+  assert.equal(item.payload.resume, false);
+  assert.match(item.payload.text, /^<system-reminder>\nHIDE-GUIDANCE\n\nHide letter letter-1/);
+  assert.match(item.payload.text, /\n<\/system-reminder>$/);
+
+  // A letter is confirmed only once OpenCode delivered the message into the session.
+  await sleep(100);
+  assert.deepEqual(calls("confirm"), []);
+  host.publish("session.inbox.delivered", { sessionID: "ses_b", inboxID: item.id });
+  const [confirm] = await until("confirm");
+  assert.deepEqual(confirm.input, { session_id: "ses_b", letters: ["letter-1"] });
+  assert.equal(confirm.env.HIDE_PANE_ID, "w1:p2");
+
+  // The guidance goes with a session's first prompt only.
+  answer({ prompt: { context: "MEMORY" } });
+  const [again] = await host.prompt("ses_b", "and the test");
+  assert.doesNotMatch(again.payload.text, /HIDE-GUIDANCE/);
+  await host.prompt("ses_a");
+  const prompts = await until("prompt", 3);
+  assert.deepEqual(
+    prompts.map((call) => [call.env.HIDE_PANE_ID, call.input.session_id, call.input.first]),
+    [
+      ["w1:p2", "ses_b", true],
+      ["w1:p2", "ses_b", false],
+      ["w1:p1", "ses_a", true],
+    ],
+  );
+});
+
+test("a prompt in a session the terminal has just opened is answered before its route is read again", async (t) => {
+  answer({ prompt: { context: "MEMORY" } });
+  const host = await opencode(t);
+  const view = host.terminal("w1:p1");
+  host.create("ses_new");
+  view.route = { type: "session", sessionID: "ses_new" };
+  const [item] = await host.prompt("ses_new");
+  assert.match(item?.payload.text ?? "", /MEMORY/);
+  const [call] = await until("prompt");
+  assert.equal(call.env.HIDE_PANE_ID, "w1:p1");
+});
+
+test("a letter due while the session works is written after a tool result and confirmed once OpenCode stored it", async (t) => {
+  answer({
+    letters: { context: "Hide letter letter-2 from lead (claude) [request]\nBODY-2\n", letters: ["letter-2"] },
+    confirm: { confirmed: ["letter-2"] },
+  });
+  const host = await opencode(t);
+  host.create("ses_a");
+  const view = host.terminal("w1:p1", { type: "session", sessionID: "ses_a" });
+  await attached(view, "ses_a");
+
+  const content = await host.result("ses_a");
+  assert.equal(content.length, 2);
+  assert.equal(content[0].text, "RESULT");
+  assert.match(content[1].text, /^<system-reminder>\nHide letter letter-2/);
+  const [call] = await until("letters");
+  assert.equal(call.env.HIDE_PANE_ID, "w1:p1");
+  // While those letters wait for their receipt, the next result asks nothing.
+  assert.equal((await host.result("ses_a", "call_2")).length, 1);
+  assert.equal(calls("letters").length, 1);
+
+  // Stored without Hide's text (a later plugin rewrote it), nothing is confirmed.
+  host.publish("session.tool.success", { sessionID: "ses_a", id: "call_1", content: [{ type: "text", text: "RESULT" }] });
+  await sleep(100);
+  assert.deepEqual(calls("confirm"), []);
+
+  const again = await host.result("ses_a", "call_3");
+  host.publish("session.tool.success", { sessionID: "ses_a", id: "call_3", content: again });
+  const [confirm] = await until("confirm");
+  assert.deepEqual(confirm.input, { session_id: "ses_a", letters: ["letter-2"] });
+});
+
 test("the opener guard uses the pane showing the session and native questions run normally", async (t) => {
   answer({ tool: { deny: "Not run: use hide file open" } });
   const host = await opencode(t);

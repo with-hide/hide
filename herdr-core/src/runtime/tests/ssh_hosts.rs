@@ -217,19 +217,16 @@ fn event(kind: &str) -> Vec<u8> {
 /// Add device's list and the first-run step read one config and say the
 /// same thing about each Host: a Host whose server is a registered device,
 /// spelled in another case, reads as that device on both, and a different
-/// port, a named session or a custom socket on the same host reads as not
-/// added on both.
+/// port on the same host reads as not added on both.
 #[test]
 fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
     let shared = first_run_runtime(
-        "Host lower other-port named socket\n",
+        "Host lower other-port\n",
         Arc::new(|_, alias, _| {
             let (user, host, port) = match alias {
                 "upper" => ("alice", "BOX.example", 22),
                 "lower" => ("alice", "box.example", 22),
                 "other-port" => ("alice", "box.example", 2222),
-                "named" => ("carol", "box.example", 22),
-                "socket" => ("dave", "box.example", 22),
                 _ => return Err(Problem::SshFailed),
             };
             Ok(Address {
@@ -247,12 +244,6 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
         .device_registrations = vec![
         // Added under an alias the config no longer names, in capitals.
         registration("box", "Box", "upper"),
-        DeviceRegistration {
-            ..registration("box-work", "Box work", "named")
-        },
-        DeviceRegistration {
-            ..registration("box-socket", "Box socket", "socket")
-        },
     ];
     for kind in ["ssh_hosts_list", "herdr_profiles_list"] {
         assert!(shared.lock().unwrap().dispatch_json(&event(kind)));
@@ -278,13 +269,8 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
         .iter()
         .map(|row| (row.ssh_host.clone().unwrap(), row.added_as.clone()))
         .collect();
-    let expected = [
-        ("lower", Some("Box")),
-        ("other-port", None),
-        ("named", None),
-        ("socket", None),
-    ]
-    .map(|(alias, added)| (alias.to_owned(), added.map(str::to_owned)));
+    let expected = [("lower", Some("Box")), ("other-port", None)]
+        .map(|(alias, added)| (alias.to_owned(), added.map(str::to_owned)));
     assert_eq!(add_device, expected);
     assert_eq!(first_run, expected);
 }

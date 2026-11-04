@@ -1050,11 +1050,11 @@ mod tests {
         .unwrap();
         let mut persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let dialed = serde_json::json!({"id": "studio", "label": "studio", "ssh_alias": "studio-host", "herdr_socket_path": null, "host_consent": null});
-        let inbound = serde_json::json!({"id": "laptop", "label": "MacBook", "ssh_alias": null, "herdr_socket_path": null, "host_consent": null, "inbound": true});
-        let wsl = serde_json::json!({"id": "wsl-ubuntu", "label": "WSL Ubuntu", "ssh_alias": null, "herdr_socket_path": null, "host_consent": null, "wsl_distro": "Ubuntu"});
+        let dialed = serde_json::json!({"id": "studio", "label": "studio", "ssh_alias": "studio-host", "host_consent": null});
+        let inbound = serde_json::json!({"id": "laptop", "label": "MacBook", "ssh_alias": null, "host_consent": null, "inbound": true});
+        let wsl = serde_json::json!({"id": "wsl-ubuntu", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null, "wsl_distro": "Ubuntu"});
         // What a build from before WSL devices reads of the same record.
-        let wsl_as_an_older_build_reads_it = serde_json::json!({"id": "wsl-old", "label": "WSL Ubuntu", "ssh_alias": null, "herdr_socket_path": null, "host_consent": null});
+        let wsl_as_an_older_build_reads_it = serde_json::json!({"id": "wsl-old", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null});
         persisted["device_registrations"] = serde_json::json!([
             dialed,
             inbound,

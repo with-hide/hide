@@ -509,7 +509,7 @@ mod tests {
             GeneratorLock::new(
                 LockPlace {
                     node: Box::new(move || Ok(Arc::clone(&node))),
-                    scope: None,
+                    scope: Some("/state/engine".into()),
                 },
                 "device:mini",
                 Arc::new(|| {}),

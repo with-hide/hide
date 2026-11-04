@@ -49,7 +49,16 @@ fn forking() -> Forking {
     let (runtime, _, _, path) = fixture(root.path());
     let listed = Arc::new(AtomicBool::new(true));
     let reported = Arc::new(AtomicBool::new(false));
+    let (shown, own) = (listed.clone(), reported.clone());
     let herdr = FakeEngine::start(move |method, _| match method {
+        "session" => {
+            let mut agents = vec![row("sender", "sender", Some("sender-native"))];
+            if shown.load(Ordering::SeqCst) {
+                let session = own.load(Ordering::SeqCst).then_some("fork-native");
+                agents.push(row(FORK_PANE, FORK_NAME, session));
+            }
+            reply(crate::engine::fake::session(json!({"agents": agents})))
+        }
         "report_pane_tokens" => reply(()),
         other => panic!("unexpected {other}"),
     });

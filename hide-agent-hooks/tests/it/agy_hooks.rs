@@ -21,7 +21,6 @@ use crate::stand_ins;
 const PANE: &str = "w1:p3";
 const CONVERSATION: &str = "ade08778-fcdd-4e96-88ba-fd1c4e594fa2";
 const SUBAGENT: &str = "7956974a-cd2e-41c0-bd3b-4c12822badd5";
-const START: &str = "herdr agent start probe --kind claude --pane w1:p9";
 
 /// The stand-in `hide`: the checkout is registered, the pane has one letter
 /// and every other call (Memory, the Workspace) is
@@ -206,16 +205,8 @@ fn injected(run: &Run) -> String {
 }
 
 #[test]
-fn a_direct_agent_start_is_denied_in_agys_shape_and_every_other_call_is_left_to_agy() {
+fn an_ordinary_call_is_left_to_agy() {
     let machine = Machine::new();
-
-    let denied = refusal(&machine.run("PreToolUse", &machine.shell(START), Some(PANE)));
-    let reason = denied["reason"].as_str().unwrap();
-    assert!(
-        reason.contains("hide agent spawn --parent here"),
-        "{reason}"
-    );
-    assert!(reason.contains("--branch topic"), "{reason}");
 
     let ask = json!({ "decision": "ask" });
     let view = json!({
@@ -225,7 +216,7 @@ fn a_direct_agent_start_is_denied_in_agys_shape_and_every_other_call_is_left_to_
     for (payload, pane) in [
         (machine.shell("cargo test"), Some(PANE)),
         (view, Some(PANE)),
-        (machine.shell(START), None),
+        (machine.shell("open out/report.html"), None),
         (json!("not agy's payload"), Some(PANE)),
     ] {
         let run = machine.run("PreToolUse", &payload, pane);
@@ -445,9 +436,9 @@ fn a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout() 
             .unwrap(),
     );
 
-    // A direct start has a bounded daemon check; a native question runs normally.
+    // An opening has a bounded daemon check; a native question runs normally.
     for payload in [
-        machine.shell(START),
+        machine.shell("open out/report.html"),
         call(&machine, "ask_question", json!({ "Question": "q" })),
     ] {
         let started = Instant::now();

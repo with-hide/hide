@@ -1823,7 +1823,7 @@ mod tests {
                                 return refused(code, "read refused");
                             }
                         };
-                        reply(hide_node_link::holders::PaneText {
+                        reply(crate::engine::answers::PaneText {
                             text: shown.lock().unwrap().clone(),
                             truncated,
                         })

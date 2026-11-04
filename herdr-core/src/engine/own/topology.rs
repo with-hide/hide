@@ -1641,17 +1641,7 @@ fn projected_agent(
     catalog: &Catalog,
     now: Instant,
 ) -> ProjectedAgent {
-    use crate::engine::tokens::{
-        CHILD_SESSION_TOKEN, PARENT_MACHINE_TOKEN, PARENT_PANE_TOKEN, PARENT_SESSION_TOKEN,
-        lineage_parent, session_digest, session_holds,
-    };
-    let token = |name: &str| pane.tokens.get(name).and_then(Value::as_str);
-    let own_session = agent.session.as_deref().and_then(session_digest);
-    let child_holds = session_holds(
-        lineage_parent(token(CHILD_SESSION_TOKEN)).as_deref(),
-        own_session.as_deref(),
-    );
-    let declared = |name: &str| child_holds.then(|| lineage_parent(token(name))).flatten();
+    let lineage = crate::engine::tokens::lineage(&pane.tokens, agent.session.as_deref());
     ProjectedAgent {
         pane_id: pane_id.to_owned(),
         terminal_id: pane_id.to_owned(),
@@ -1675,10 +1665,10 @@ fn projected_agent(
                 .to_owned(),
                 value: session.clone(),
             }),
-        spawned_from_pane_id: declared(PARENT_PANE_TOKEN),
-        spawned_from_machine_id: declared(PARENT_MACHINE_TOKEN),
-        declared_parent_session: declared(PARENT_SESSION_TOKEN),
-        lineage_session: own_session,
+        spawned_from_pane_id: lineage.spawned_from_pane_id,
+        spawned_from_machine_id: lineage.spawned_from_machine_id,
+        declared_parent_session: lineage.declared_parent_session,
+        lineage_session: lineage.own_session,
         state_change_seq: agent.live.seq,
         completion_seq: agent.live.completion,
         launch_pending: agent.launch_pending(now),

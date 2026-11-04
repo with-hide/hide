@@ -2080,7 +2080,7 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
     let tokens: Vec<serde_json::Value> = herdr
         .calls()
         .into_iter()
-        .filter(|(method, _)| *method == "workspace.report_metadata")
+        .filter(|(method, _)| *method == "report_workspace_token")
         .map(|(_, params)| params)
         .collect();
     assert!(

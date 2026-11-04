@@ -313,7 +313,7 @@ fn snapshot(created: bool) -> Value {
 fn replacement_creation_failure_sends_no_close() {
     let herdr = FakeEngine::start(|method, _| match method {
         "session" => reply(session(snapshot(false))),
-        "create_tab" => refused("fixture_create_refused", "private diagnostic"),
+        "create_replacement_tab" => refused("fixture_create_refused", "private diagnostic"),
         other => panic!("unexpected effect {other}"),
     });
     let error = prepare_close_replacement(
@@ -325,7 +325,7 @@ fn replacement_creation_failure_sends_no_close() {
     )
     .unwrap_err();
     assert!(error.message.contains("fixture_create_refused"));
-    assert_eq!(herdr.methods(), ["session", "create_tab"]);
+    assert_eq!(herdr.methods(), ["session", "create_replacement_tab"]);
 }
 
 #[test]
@@ -333,10 +333,9 @@ fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create
     let mut created = false;
     let herdr = FakeEngine::start(move |method, params| match method {
         "session" => reply(session(snapshot(created))),
-        "create_tab" => {
+        "create_replacement_tab" => {
             assert!(!created);
             assert_eq!(params["cwd"], "/tmp");
-            assert_eq!(params["focus"], false);
             assert_eq!(params["env"][REOPEN_INTENT_ENV], "intent:close-replacement");
             created = true;
             reply(("w1:t2".to_owned(), "w1:p2".to_owned()))
@@ -390,7 +389,7 @@ fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create
         herdr
             .methods()
             .iter()
-            .filter(|method| **method == "create_tab")
+            .filter(|method| **method == "create_replacement_tab")
             .count(),
         1
     );
@@ -428,7 +427,7 @@ fn replacement_shell_is_placed_at_its_checkout_while_herdr_still_names_the_serve
             }
             reply(session(value))
         }
-        "create_tab" => {
+        "create_replacement_tab" => {
             created = true;
             reply(("w1:t2".to_owned(), "w1:p2".to_owned()))
         }

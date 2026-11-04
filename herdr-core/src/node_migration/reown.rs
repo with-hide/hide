@@ -1148,7 +1148,7 @@ mod tests {
     const C_SOCKET: &str = "/Users/remote/.config/herdr/herdr.sock";
 
     fn mini_registration() -> Value {
-        json!({"id": ALIAS, "label": "Mac mini", "ssh_alias": "mini", "herdr_socket_path": C_SOCKET})
+        json!({"id": ALIAS, "label": "Mac mini", "ssh_alias": "mini"})
     }
 
     fn forward() -> OwnerChange {

@@ -1039,8 +1039,11 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                     reply(("w-order:t3".to_owned(), "wake-pane".to_owned()))
                 }
                 "pane_processes" => {
+                    // The connection moves after the shell is read and
+                    // before the start is sent.
                     if case.ends_with("during-start-connect") {
                         arm_start.store(true, Ordering::SeqCst);
+                        on_call.on_call();
                     }
                     reply(fake::processes(&serde_json::json!({
                         "shell_pid":4100,"foreground_process_group_id":4100,
@@ -1159,7 +1162,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 .agent_reason
                 .as_deref()
                 .or(operation.failure.as_deref())
-                .expect("retired execution must refuse the start");
+                .unwrap_or_else(|| panic!("{case}: retired execution must refuse the start"));
             assert!(
                 reason.contains(
                     if case.starts_with("reader-")
@@ -1190,7 +1193,8 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         // be on the control lane. A retired creation result admits none.
         assert!(fork_methods(&replacement).is_empty());
         if case != "current" && !case.ends_with("during-start-connect") {
-            assert_eq!(old.methods(), fork_methods(&old), "{case}");
+            // Nothing but the start's own calls: no focus reached the server.
+            assert_eq!(old.methods().len(), fork_methods(&old).len(), "{case}");
             assert!(replacement.methods().is_empty(), "{case}");
             assert_ne!(
                 runtime.snapshot.focused.pane_id.as_deref(),
@@ -1354,8 +1358,11 @@ fn native_fork_current_journey(kind: &'static str) {
                     focus_answer(method, params, &old_focus).unwrap()
                 }
                 "session" => {
+                    // The connection moves after the session is read and
+                    // before the fork's tab is asked for.
                     if case == "during-tab-connect" {
                         arm_connect.store(true, Ordering::SeqCst);
+                        on_call.on_call();
                     }
                     reply(fake::session(serde_json::json!({
                         "layouts":[{"workspace_id":"w-order","tab_id":"w-order:t1","zoomed":false,
@@ -1560,6 +1567,13 @@ fn native_fork_current_journey(kind: &'static str) {
                 | "source-cwd-changed"
                 | "source-agent-gone"
                 | "source-pane-gone" => vec!["session", "launch_tab", "close_pane"],
+                "during-start-connect" => vec![
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "close_pane"
+                ],
                 _ => vec!["session", "launch_tab", "pane_processes", "close_pane"],
             },
             "{case}"

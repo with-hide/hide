@@ -372,6 +372,10 @@ mod tests {
                 reply(())
             }
             "start_agent" => refused("agent_name_taken", "name is used"),
+            // The name stays held when the start reads it.
+            "delivery_agent" => reply(crate::engine::fake::delivery_agent(&json!({
+                "pane_id": "w1:p9", "name": "held", "agent": "claude"
+            }))),
             other => panic!("unexpected {other}"),
         });
         let reaper = thread::spawn(move || {

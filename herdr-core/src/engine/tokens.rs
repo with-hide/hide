@@ -137,6 +137,36 @@ pub(crate) fn lineage_parent(declared: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// What a pane's tokens say of the agent it runs, given the agent's
+/// native session: the session's digest, and the parent its spawner
+/// declared while the pane still hosts the session the declaration was
+/// written for.
+pub(crate) struct Lineage {
+    pub(crate) own_session: Option<String>,
+    pub(crate) spawned_from_pane_id: Option<String>,
+    pub(crate) spawned_from_machine_id: Option<String>,
+    pub(crate) declared_parent_session: Option<String>,
+}
+
+pub(crate) fn lineage(
+    tokens: &std::collections::BTreeMap<String, Value>,
+    session: Option<&str>,
+) -> Lineage {
+    let token = |name: &str| tokens.get(name).and_then(Value::as_str);
+    let own_session = session.and_then(session_digest);
+    let child_holds = session_holds(
+        lineage_parent(token(CHILD_SESSION_TOKEN)).as_deref(),
+        own_session.as_deref(),
+    );
+    let declared = |name: &str| child_holds.then(|| lineage_parent(token(name))).flatten();
+    Lineage {
+        spawned_from_pane_id: declared(PARENT_PANE_TOKEN),
+        spawned_from_machine_id: declared(PARENT_MACHINE_TOKEN),
+        declared_parent_session: declared(PARENT_SESSION_TOKEN),
+        own_session,
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct IssueTokens {
     pub panes: std::collections::BTreeMap<String, String>,

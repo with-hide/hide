@@ -54,12 +54,35 @@ pub(crate) fn unanswered(message: &str) -> Reply {
 
 /// A session written as JSON in [`ProjectionState`]'s field names, alone or
 /// under `snapshot`; a field left out is empty and one it does not name is
-/// left out.
+/// left out. An agent's lineage fields it leaves out are read from its
+/// session and its pane's tokens, as the core's own engine reads them.
 pub(crate) fn session(mut value: Value) -> ProjectionState {
     if value.get("snapshot").is_some_and(Value::is_object) {
         value = value["snapshot"].take();
     }
-    serde_json::from_value(value).expect("the fixture session is a ProjectionState")
+    let mut state: ProjectionState =
+        serde_json::from_value(value).expect("the fixture session is a ProjectionState");
+    for agent in &mut state.agents {
+        let session = agent
+            .agent_session
+            .as_ref()
+            .map(|session| session.value.as_str());
+        let lineage = crate::engine::tokens::lineage(&agent.tokens, session);
+        agent.lineage_session = agent.lineage_session.take().or(lineage.own_session);
+        agent.spawned_from_pane_id = agent
+            .spawned_from_pane_id
+            .take()
+            .or(lineage.spawned_from_pane_id);
+        agent.spawned_from_machine_id = agent
+            .spawned_from_machine_id
+            .take()
+            .or(lineage.spawned_from_machine_id);
+        agent.declared_parent_session = agent
+            .declared_parent_session
+            .take()
+            .or(lineage.declared_parent_session);
+    }
+    state
 }
 
 /// A tab's layout written as JSON in [`ClosedLayout`]'s field names, alone

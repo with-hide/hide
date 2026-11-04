@@ -64,10 +64,11 @@ fn device_herdr(device: Arc<Mutex<Device>>) -> Fake {
             "worktree_path" if device.worktree_gone => {
                 refused("internal_error", "the repository is gone")
             }
-            "worktree_path" => {
-                assert_eq!(params["branch"], "topic");
-                reply(Some(checkout))
+            // Another branch is another checkout of the repository.
+            "worktree_path" if params["branch"] != "topic" => {
+                reply(Some(format!("/srv/{}", params["branch"].as_str().unwrap())))
             }
+            "worktree_path" => reply(Some(checkout)),
             "session" => reply(fake::session(json!({
                 "panes": device.panes.iter().map(|(pane, label)| json!({
                     "pane_id": pane, "workspace_id": "w2", "tab_id": "w2:t1",
