@@ -92,6 +92,13 @@ pub(crate) const SPAWN_LIMIT: usize = 4096;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    /// Registers the caller's own session from what Herdr reports of its
+    /// pane, or answers the registration it already has: `hide mission
+    /// take` asks it first, so the former Conductor's children have a
+    /// registration to move to (PRD software-factory-conductor B43).
+    RegisterSelf {
+        project: Option<String>,
+    },
     Register {
         check: bool,
         /// The caller's own machine when given; absent means the machine
