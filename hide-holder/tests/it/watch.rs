@@ -32,11 +32,12 @@ struct Watch {
 
 impl Watch {
     fn open(socket: &std::path::Path) -> Self {
-        let (stream, watching) = hide_holder_protocol::watch(
-            socket,
-            vec![Capability::Facts],
-            Instant::now() + HANG_LIMIT,
-        )
+        Self::accepting(socket, vec![Capability::Facts])
+    }
+
+    fn accepting(socket: &std::path::Path, accepts: Vec<Capability>) -> Self {
+        let (stream, watching) =
+            hide_holder_protocol::watch(socket, accepts, Instant::now() + HANG_LIMIT)
         .unwrap();
         Self {
             stream,
@@ -233,4 +234,51 @@ fn a_watch_names_the_program_in_the_foreground_and_none_once_the_shell_holds_it(
     watch.wait("the shell in the foreground again", |facts| {
         facts.foreground.is_none()
     });
+}
+
+/// A program reads keys only once it turns the terminal's line editing off,
+/// which it does without writing anything (Pi 1.0.4 does it as its screen
+/// starts): a watch whose node accepts the fact says so while the program
+/// holds the foreground, and a watch that does not is sent facts without it.
+#[cfg(unix)]
+#[test]
+fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
+    use hide_holder_protocol::ClientMessage;
+
+    let home = Home::new();
+    let folder = home.prepare(current_version(), &source());
+    let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
+    let mut connection = holder.open();
+    let mut watch = Watch::accepting(
+        &holder.socket,
+        vec![Capability::Facts, Capability::LineEditing],
+    );
+    assert_eq!(
+        watch.watching.sends,
+        vec![Capability::Facts, Capability::LineEditing]
+    );
+    watch.wait("the shell's facts", |facts| facts.foreground.is_none());
+
+    // It says it started, then turns line editing off and writes nothing
+    // more.
+    connection
+        .send(ClientMessage::Input(
+            b"sh -c 'echo started; sleep 1; stty -icanon; sleep 30'\r".to_vec(),
+        ))
+        .unwrap();
+    let editing = watch.wait("the program in the terminal's line", |facts| {
+        facts.foreground.is_some() && facts.line_editing == Some(true)
+    });
+    let reading = watch.wait("the program reading keys", |facts| {
+        facts.line_editing == Some(false)
+    });
+    assert_eq!(reading.foreground, editing.foreground);
+
+    let mut older = Watch::open(&holder.socket);
+    assert_eq!(older.watching.sends, vec![Capability::Facts]);
+    let facts = older.wait("the facts", |_| true);
+    assert_eq!(facts.line_editing, None);
+    connection
+        .send(ClientMessage::Input(b"\x03".to_vec()))
+        .unwrap();
 }

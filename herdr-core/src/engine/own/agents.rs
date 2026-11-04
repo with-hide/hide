@@ -257,8 +257,10 @@ pub(super) struct Live {
     /// a line break. Pi 1.0.4 started on a CI runner took more than
     /// [`START_SETTLE`] after its start line to do so, and a brief typed at
     /// that mark sat in its editor, never submitted (nightly 41789009557).
-    /// False where the holder cannot say (Windows).
-    pub(super) line_editing: bool,
+    /// `None` where the holder cannot say (Windows, or a holder or node
+    /// built before it), which leaves a start to the settle alone, as
+    /// before; never read as reading keys.
+    pub(super) line_editing: Option<bool>,
     pub(super) status: Status,
     /// One more each time its status changed, from the engine's own count.
     pub(super) seq: u64,
@@ -323,11 +325,11 @@ impl PaneAgent {
     }
 
     /// Whether a start made at `started` has settled by `now`: its program
-    /// shows, reads keys and its screen rests, at least [`START_SETTLE`]
-    /// after the start.
+    /// shows, does not leave the terminal editing lines, and its screen
+    /// rests, at least [`START_SETTLE`] after the start.
     fn settled(&self, started: Instant, now: Instant) -> bool {
         self.live.shown
-            && !self.live.line_editing
+            && self.live.line_editing != Some(true)
             && matches!(self.live.status, Status::Idle | Status::Done)
             && now.duration_since(started) >= START_SETTLE
     }
@@ -459,9 +461,8 @@ pub(super) fn apply(
         {
             current.live.started = None;
         }
-        let line_editing = facts.line_editing == Some(true);
-        if line_editing != current.live.line_editing {
-            current.live.line_editing = line_editing;
+        if facts.line_editing != current.live.line_editing {
+            current.live.line_editing = facts.line_editing;
             applied.changed |= current.live.started.is_some();
         }
         let status = status_of(&facts.screen, current.live.status);
@@ -710,6 +711,43 @@ mod tests {
             "a settled start stays settled"
         );
         assert_eq!(agent.live.started, None);
+    }
+
+    /// A program in the foreground whose screen rests can still leave the
+    /// terminal editing lines: Pi 1.0.4 on a CI runner had not turned it off
+    /// [`START_SETTLE`] after its start, and a brief typed then sat in its
+    /// editor with its Enter read as a line break. Its start settles once
+    /// the program reads keys; a holder that cannot say keeps the settle
+    /// alone.
+    #[test]
+    fn a_start_takes_input_only_once_its_program_reads_keys() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        let at = |line_editing| PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            line_editing,
+            ..PaneFacts::default()
+        };
+        pane.facts(at(Some(true)));
+        let started = Instant::now() - START_SETTLE;
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "its screen rests past the settle, but the terminal edits lines"
+        );
+        let applied = pane.facts(at(Some(false)));
+        assert!(applied.changed, "the start's readiness moved");
+        assert!(!pane.agent.as_ref().unwrap().launch_pending(Instant::now()));
+
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        pane.facts(at(None));
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        assert!(
+            !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a holder that cannot say leaves the start to the settle"
+        );
     }
 
     #[test]
