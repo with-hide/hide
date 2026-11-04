@@ -2009,7 +2009,9 @@ pub struct Runtime {
     /// development switch on (`own_devices`); `None` runs them on Herdr.
     own_devices: Option<own_devices::OwnDevices>,
     herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
-    herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
+    /// Where each ssh config Host the first-run step listed leads, as
+    /// `user@host:port`, by alias.
+    ssh_host_endpoints: BTreeMap<String, String>,
     /// The connection attempt each first-run Connect started, by device and
     /// generation: the only sign-ins the step ends as it goes away, never
     /// one the device row or another screen started. At most one per device.
@@ -2645,7 +2647,7 @@ impl Runtime {
             agent_definitions: None,
             own_devices: None,
             herdr_profiles_job: None,
-            herdr_profile_endpoints: BTreeMap::new(),
+            ssh_host_endpoints: BTreeMap::new(),
             first_run_attempts: BTreeMap::new(),
             purpose_operation_target: None,
             created_purpose_writes_in_flight: HashMap::new(),

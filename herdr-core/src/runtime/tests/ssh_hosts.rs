@@ -191,52 +191,6 @@ fn a_missing_config_or_program_lists_nothing_or_names_the_problem() {
     assert_eq!(hosts[0].problem.as_deref(), Some("ssh_missing"));
 }
 
-/// The real ssh connector for Hosts, beside a Herdr that saved no machine:
-/// the first-run step of a person who never used Herdr.
-struct NoSavedMachines(hide_node::ssh::Connector);
-
-impl crate::remote::DeviceConnector for NoSavedMachines {
-    fn transport(
-        &self,
-        home: &std::path::Path,
-        node: &str,
-        alias: &str,
-        herdr_socket: Option<String>,
-    ) -> Result<Arc<dyn crate::remote::DialedTransport>, String> {
-        self.0.transport(home, node, alias, herdr_socket)
-    }
-
-    fn herdr_profiles(
-        &self,
-        _home: &std::path::Path,
-        _registered: &[String],
-        _stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<hide_node_link::device::HerdrProfileListing, String> {
-        Ok(hide_node_link::device::HerdrProfileListing::default())
-    }
-
-    fn ssh_hosts(
-        &self,
-        home: &std::path::Path,
-        registered: &[String],
-        stop: &std::sync::atomic::AtomicBool,
-    ) -> crate::remote::SshHostListing {
-        self.0.ssh_hosts(home, registered, stop)
-    }
-
-    fn wsl_transport(
-        &self,
-        node: &str,
-        distro: &str,
-    ) -> Result<Arc<dyn crate::remote::DialedTransport>, String> {
-        self.0.wsl_transport(node, distro)
-    }
-
-    fn wsl_distributions(&self) -> crate::remote::WslListing {
-        self.0.wsl_distributions()
-    }
-}
-
 /// A runtime whose account has `config` as its ssh config and whose `ssh -G`
 /// answers as `resolve` does.
 fn first_run_runtime(config: &str, resolve: Resolve) -> Arc<Mutex<Runtime>> {
@@ -244,9 +198,7 @@ fn first_run_runtime(config: &str, resolve: Resolve) -> Arc<Mutex<Runtime>> {
     let home = runtime.home_path.clone().expect("fixture home");
     std::fs::create_dir_all(home.join(".ssh")).unwrap();
     std::fs::write(home.join(".ssh/config"), config).unwrap();
-    runtime.devices = Arc::new(NoSavedMachines(
-        hide_node::ssh::Connector::new(None).with_resolve(resolve),
-    ));
+    runtime.devices = Arc::new(hide_node::ssh::Connector::new(None).with_resolve(resolve));
     let shared = Arc::new(Mutex::new(runtime));
     shared.lock().unwrap().install_worker_context(
         Arc::downgrade(&shared),

@@ -59,14 +59,12 @@ const UNAVAILABLE_KEYS = new Map<KitUnavailable, MessageKey>([
 
 const PROFILE_REFUSAL_KEYS = new Map<HerdrProfileRefusal, MessageKey>([
   ["no_consent", "herdrProfileRefusal.no_consent"],
-  ["disabled", "herdrProfileRefusal.disabled"],
   ["invalid_target", "herdrProfileRefusal.invalid_target"],
   ["discovery_pending", "herdrProfileRefusal.discovery_pending"],
   ["device_limit", "herdrProfileRefusal.device_limit"],
-  ["profile_moved", "herdrProfileRefusal.profile_moved"],
 ]);
 
-/** Why Hide declined to connect a saved Herdr profile; a code this build does not know gets the general sentence. */
+/** Why Hide declined to connect a first-run machine; a code this build does not know gets the general sentence. */
 export function profileRefusalText(refusal: HerdrProfileRefusal, t: Translate): string {
   return t(PROFILE_REFUSAL_KEYS.get(refusal) ?? "herdrProfileRefusal.other");
 }

@@ -52,7 +52,6 @@ pub struct Connector {
     /// Where each device's terminals' output and reports go; none for a
     /// connector whose devices' terminals do not reach this process.
     terminals: Option<Arc<dyn crate::terminal::device::DeviceSink>>,
-    herdr_program: PathBuf,
     /// This PC's WSL, whose distributions are devices too (PRD wsl-device
     /// D-01); none where there is none.
     wsl: Option<host::wsl::WslAccess>,
@@ -136,7 +135,6 @@ impl Connector {
             resolve: ssh_g(PathBuf::from("ssh")),
             panes: None,
             terminals: None,
-            herdr_program: PathBuf::from("herdr"),
             wsl: None,
             device_home: None,
         }
@@ -153,11 +151,6 @@ impl Connector {
     /// test's stand-in.
     pub fn with_wsl(mut self, access: host::wsl::WslAccess) -> Self {
         self.wsl = Some(access);
-        self
-    }
-
-    pub fn with_herdr_program(mut self, program: PathBuf) -> Self {
-        self.herdr_program = program;
         self
     }
 
@@ -237,7 +230,7 @@ impl DeviceConnector for Connector {
                 );
             }
             (Some(session), None) => {
-                super::profiles::validate_session(&session)?;
+                super::destination::validate_session(&session)?;
                 HerdrChoice::Session(session)
             }
             (None, Some(socket)) => {
@@ -250,7 +243,7 @@ impl DeviceConnector for Connector {
             }
             (None, None) => HerdrChoice::Account,
         };
-        super::profiles::Target::parse(alias)?;
+        super::destination::Target::parse(alias)?;
         let (panes, terminals) = self.hooks(node);
         Ok(Arc::new(SshDevice {
             program: SshProgram::new(self.ssh.clone(), home),
@@ -287,15 +280,6 @@ impl DeviceConnector for Connector {
 
     fn ssh_hosts(&self, home: &Path, registered: &[String], stop: &AtomicBool) -> SshHostListing {
         super::hosts::list(&self.resolve, home, registered, stop)
-    }
-
-    fn herdr_profiles(
-        &self,
-        home: &Path,
-        registered: &[String],
-        stop: &AtomicBool,
-    ) -> Result<hide_node_link::device::HerdrProfileListing, String> {
-        super::profiles::list(&self.herdr_program, &self.resolve, home, registered, stop)
     }
 }
 

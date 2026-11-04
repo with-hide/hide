@@ -45,15 +45,6 @@ impl DeviceConnector for Distributions {
         SshHostListing::default()
     }
 
-    fn herdr_profiles(
-        &self,
-        _home: &std::path::Path,
-        _registered: &[String],
-        _stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<hide_node_link::device::HerdrProfileListing, String> {
-        Ok(hide_node_link::device::HerdrProfileListing::default())
-    }
-
     fn wsl_transport(&self, _node: &str, distro: &str) -> Result<Arc<dyn DialedTransport>, String> {
         assert_eq!(distro, "Ubuntu");
         Ok(Arc::new(OffDistribution(Arc::clone(&self.0))))

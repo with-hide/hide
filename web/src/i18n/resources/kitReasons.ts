@@ -45,12 +45,10 @@ export const kitReasonsEnglish = {
   "kitUnavailable.other": "Hide's kit does not run on this device.",
 
   "herdrProfileRefusal.no_consent": "Allow the installation of Hide's helper, then connect.",
-  "herdrProfileRefusal.disabled": "This profile is turned off in Herdr. Turn it on there, then try again.",
-  "herdrProfileRefusal.invalid_target": "Fix this profile's SSH target in Herdr or your SSH settings, then try again.",
+  "herdrProfileRefusal.invalid_target": "Fix this device in your ssh config, then try again.",
   "herdrProfileRefusal.discovery_pending": "Hide is still reading the saved devices. Try again in a moment.",
   "herdrProfileRefusal.device_limit": "Hide already keeps as many devices as it can. Remove one you no longer use, then connect.",
-  "herdrProfileRefusal.profile_moved": "This profile now points to another server. Remove the device registered for it before, then connect again.",
-  "herdrProfileRefusal.other": "Hide did not connect this profile.",
+  "herdrProfileRefusal.other": "Hide did not connect this device.",
 } as const;
 
 const ko = {
@@ -91,12 +89,10 @@ const ko = {
   "kitUnavailable.other": "이 기기에서는 Hide 도구가 동작하지 않아요.",
 
   "herdrProfileRefusal.no_consent": "Hide 헬퍼 설치를 허용한 뒤 연결하세요.",
-  "herdrProfileRefusal.disabled": "Herdr에서 이 프로필이 꺼져 있어요. Herdr에서 켠 뒤 다시 시도하세요.",
-  "herdrProfileRefusal.invalid_target": "Herdr나 SSH 설정에서 이 프로필의 SSH 대상을 고친 뒤 다시 시도하세요.",
+  "herdrProfileRefusal.invalid_target": "ssh 설정에서 이 기기를 고친 뒤 다시 시도하세요.",
   "herdrProfileRefusal.discovery_pending": "저장된 기기를 아직 읽는 중이에요. 잠시 뒤 다시 시도하세요.",
   "herdrProfileRefusal.device_limit": "등록할 수 있는 기기 수가 다 찼어요. 쓰지 않는 기기를 제거한 뒤 연결하세요.",
-  "herdrProfileRefusal.profile_moved": "이 프로필이 이제 다른 서버를 가리켜요. 전에 이 프로필로 등록한 기기를 제거한 뒤 다시 연결하세요.",
-  "herdrProfileRefusal.other": "이 프로필을 연결하지 않았어요.",
+  "herdrProfileRefusal.other": "이 기기를 연결하지 않았어요.",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 const ja = {
@@ -137,12 +133,10 @@ const ja = {
   "kitUnavailable.other": "このデバイスでは Hide ツールが動作しません。",
 
   "herdrProfileRefusal.no_consent": "Hide のヘルパーのインストールを許可してから接続してください。",
-  "herdrProfileRefusal.disabled": "このプロファイルは Herdr でオフになっています。Herdr でオンにしてからもう一度お試しください。",
-  "herdrProfileRefusal.invalid_target": "Herdr または SSH の設定でこのプロファイルの SSH 接続先を直してから、もう一度お試しください。",
+  "herdrProfileRefusal.invalid_target": "ssh設定でこのデバイスを直してから、もう一度お試しください。",
   "herdrProfileRefusal.discovery_pending": "保存されたデバイスをまだ読み取っています。少し待ってからもう一度お試しください。",
   "herdrProfileRefusal.device_limit": "登録できるデバイスの数に達しています。使っていないデバイスを削除してから接続してください。",
-  "herdrProfileRefusal.profile_moved": "このプロファイルは別のサーバーを指すようになりました。以前このプロファイルで登録したデバイスを削除してから、もう一度接続してください。",
-  "herdrProfileRefusal.other": "このプロファイルは接続されませんでした。",
+  "herdrProfileRefusal.other": "このデバイスは接続されませんでした。",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 const zhCN = {
@@ -183,12 +177,10 @@ const zhCN = {
   "kitUnavailable.other": "Hide 工具无法在此设备上运行。",
 
   "herdrProfileRefusal.no_consent": "请先允许安装 Hide 的辅助程序，再进行连接。",
-  "herdrProfileRefusal.disabled": "此配置在 Herdr 中已关闭。请在 Herdr 中打开后重试。",
-  "herdrProfileRefusal.invalid_target": "请在 Herdr 或 SSH 设置中修正此配置的 SSH 目标，然后重试。",
+  "herdrProfileRefusal.invalid_target": "请在 ssh 配置中修正此设备，然后重试。",
   "herdrProfileRefusal.discovery_pending": "Hide 仍在读取已保存的设备。请稍后重试。",
   "herdrProfileRefusal.device_limit": "可登记的设备数量已满。请移除不再使用的设备后再连接。",
-  "herdrProfileRefusal.profile_moved": "此配置现在指向另一台服务器。请移除之前用它登记的设备，然后重新连接。",
-  "herdrProfileRefusal.other": "Hide 未连接此配置。",
+  "herdrProfileRefusal.other": "Hide 未连接此设备。",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 export const kitReasonsCatalogs = { en: kitReasonsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof kitReasonsEnglish>;

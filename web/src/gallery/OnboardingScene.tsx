@@ -79,7 +79,7 @@ export const ONBOARDING_STATES = [
   "devices",
   "devices-loading",
   "devices-failed",
-  "devices-disabled",
+  "devices-unavailable",
   "devices-partial",
   "devices-long32",
   "devices-wsl",
@@ -316,20 +316,19 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const kit = refused
     ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR", stop: REFUSED_STOP[system] } }
     : { agents, components: [{ id: "cli", label: "hide", state: "off", why: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
-  const profile = (id: string, label: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label, target: `${id}@work.example`, session: "work", herdr: true, ssh_host: null, address: null, enabled: true, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
-  // A Host of the account's ssh config, which Add device lists too, and one that is also a saved Herdr profile.
-  const host = (alias: string, address: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => profile(`ssh:${alias}`, alias, { target: alias, session: "default", herdr: false, ssh_host: alias, address, ...patch });
+  // A Host of the account's ssh config, the list Add device reads too.
+  const host = (alias: string, address: string | null, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id: `ssh:${alias}`, label: alias, target: alias, ssh_host: alias, address, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
+  // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
+  const wsl = (name: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id: `wsl:${name}`, label: `WSL ${name}`, target: name, ssh_host: null, address: null, wsl_distro: name, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
   const linked = (alias: string, connect_state: string) => ({ added_as: alias, device_id: alias, connect_state });
-  const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => profile(`research-${index}`, `연구 개발팀의 아주 긴 기기 이름 ${index + 1} · 프로젝트 빌드 서버`, { target: `developer-${index}@very-long-research-hostname.engineering.example.test:2222`, session: "research-team-project-session-with-a-long-name" }))
-    : state === "devices-disabled" ? [profile("build", "Build server", { enabled: false, problem: "disabled" }), profile("existing", "Design Mac", { added_as: "Design Mac", device_id: "existing", connect_state: "added" }), profile("invalid", "Unavailable configuration", { problem: "invalid_target" })]
-    : state === "devices-partial" ? [profile("build", "Build server", { added_as: "Build server", device_id: "build", connect_state: "connected" }), profile("research", "Research server", { added_as: "Research server", device_id: "research", connect_state: "failed", connect_refusal: null })]
-    // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
-    : state === "devices-wsl" ? [profile("wsl:Ubuntu", "WSL Ubuntu", { target: "Ubuntu", session: "default", wsl_distro: "Ubuntu" }), profile("build", "Build server")]
-    : state === "devices-wsl1" ? [profile("wsl:Ubuntu-20.04", "WSL Ubuntu-20.04", { target: "Ubuntu-20.04", session: "default", wsl_distro: "Ubuntu-20.04", problem: "wsl1" }), profile("build", "Build server")]
+  const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => host(`research-team-build-server-${index + 1}-for-the-long-running-project`, `developer-${index}@very-long-research-hostname.engineering.example.test:2222`))
+    : state === "devices-unavailable" ? [host("build", null, { problem: "ssh_failed" }), host("design-mac", "me@design-mac.example:22", linked("design-mac", "added")), host("old-lab", null, { problem: "timed_out" })]
+    : state === "devices-partial" ? [host("build", "dev@build.example:22", linked("build", "connected")), host("research", "dev@research.example:22", linked("research", "failed"))]
+    : state === "devices-wsl" ? [wsl("Ubuntu"), host("build", "dev@build.example:22")]
+    : state === "devices-wsl1" ? [wsl("Ubuntu-20.04", { problem: "wsl1" }), host("build", "dev@build.example:22")]
     : state === "devices-signin" ? [host("mini", "me@mini.example:22", linked("mini", "connected")), host("config-ubuntu", "ubuntu@config-ubuntu.example:22", linked("config-ubuntu", "connecting")), host("office", "dev@office.example:22", linked("office", "connecting")), host("lab", "me@lab.example:22", linked("lab", "connecting")), host("home-nas", "me@nas.example:22", linked("home-nas", "connecting"))]
     : state === "devices-ssh-failed" ? [host("office", "dev@office.example:22", linked("office", "failed")), host("lab", "me@lab.example:22", linked("lab", "failed")), host("home-nas", "me@nas.example:22", linked("home-nas", "failed"))]
-    // The account's ssh config Hosts beside Herdr's profiles: one row per machine, a chip for where it came from.
-    : [host("config-ubuntu", "ubuntu@config-ubuntu.example:22"), profile("mini", "mini", { target: "mini", session: "default", ssh_host: "mini", address: "me@mini.example:22" }), host("office", "dev@office.example:22"), profile("gpu-box", "gpu-box", { target: "me@gpu-box.example", session: "default", address: null, added_as: "gpu-box", device_id: "gpu-box", connect_state: "added" })];
+    : [host("config-ubuntu", "ubuntu@config-ubuntu.example:22"), host("mini", "me@mini.example:22"), host("office", "dev@office.example:22"), host("gpu-box", "me@gpu-box.example:22", linked("gpu-box", "added"))];
   const deviceStep = state.startsWith("devices");
   return {
     revision: 1,

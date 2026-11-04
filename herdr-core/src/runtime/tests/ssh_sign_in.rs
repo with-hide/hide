@@ -61,15 +61,6 @@ impl DeviceConnector for Devices {
         SshHostListing::default()
     }
 
-    fn herdr_profiles(
-        &self,
-        _home: &std::path::Path,
-        _registered: &[String],
-        _stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<hide_node_link::device::HerdrProfileListing, String> {
-        Ok(hide_node_link::device::HerdrProfileListing::default())
-    }
-
     fn wsl_transport(
         &self,
         _node: &str,
@@ -777,12 +768,9 @@ fn step_lists_the_host(shared: &Arc<Mutex<Runtime>>) {
             id: format!("ssh:{DEVICE}"),
             label: DEVICE.to_owned(),
             target: DEVICE.to_owned(),
-            session: "default".to_owned(),
-            herdr: false,
             ssh_host: Some(DEVICE.to_owned()),
             address: Some(format!("alice@{DEVICE}:22")),
             wsl_distro: None,
-            enabled: true,
             added_as: Some("Mini".to_owned()),
             problem: None,
             device_id: Some(DEVICE.to_owned()),

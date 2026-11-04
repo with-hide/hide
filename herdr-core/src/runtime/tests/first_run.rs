@@ -989,7 +989,7 @@ fn an_in_flight_apply_keeps_its_choice_and_a_late_report_cannot_move_another_ste
 }
 
 #[test]
-fn a_saved_profile_keeps_the_devices_route_even_when_disabled() {
+fn a_listed_host_keeps_the_devices_route_even_when_it_cannot_connect() {
     let mut runtime = runtime();
     report_here(&mut runtime, &first_run_pass());
     runtime
@@ -998,17 +998,14 @@ fn a_saved_profile_keeps_the_devices_route_even_when_disabled() {
         .herdr_profiles
         .profiles
         .push(crate::model::HerdrProfileSnapshot {
-            id: "disabled".to_owned(),
-            label: "Build server".to_owned(),
-            target: "build.example".to_owned(),
-            session: "review".to_owned(),
-            herdr: true,
-            ssh_host: None,
+            id: "ssh:build".to_owned(),
+            label: "build".to_owned(),
+            target: "build".to_owned(),
+            ssh_host: Some("build".to_owned()),
             address: None,
             wsl_distro: None,
-            enabled: false,
             added_as: None,
-            problem: Some("disabled".to_owned()),
+            problem: Some("ssh_failed".to_owned()),
             device_id: None,
             connect_state: "saved".to_owned(),
             connect_refusal: None,

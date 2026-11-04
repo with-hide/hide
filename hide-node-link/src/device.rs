@@ -1104,24 +1104,6 @@ pub struct SshHostListing {
     pub unreadable: bool,
 }
 
-/// Saved client configuration, never evidence of a reachable server.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HerdrProfile {
-    pub id: String,
-    pub label: String,
-    pub target: String,
-    pub session: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Default)]
-pub struct HerdrProfileListing {
-    pub profiles: Vec<HerdrProfile>,
-    /// Config-only resolution for profile and already registered targets.
-    pub endpoints: std::collections::BTreeMap<String, Result<String, String>>,
-    pub truncated: bool,
-}
-
 /// One WSL distribution of this PC, as Add device lists it: read from the
 /// account's registry, so listing never starts WSL (PRD wsl-device D-13).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1168,19 +1150,6 @@ pub trait DeviceConnector: Send + Sync {
             return Err("This connector cannot select a saved Herdr session".to_owned());
         }
         self.transport(home, node, target, herdr_socket)
-    }
-
-    /// Reads local client profiles only, without connecting to any target.
-    fn herdr_profiles(
-        &self,
-        _home: &std::path::Path,
-        _registered: &[String],
-        _stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<HerdrProfileListing, String> {
-        Err(
-            "Saved Herdr machines are unavailable on this node. Retry after reconnecting"
-                .to_owned(),
-        )
     }
 
     /// The concrete Host aliases of the SSH configuration of the account at

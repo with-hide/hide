@@ -22,12 +22,12 @@ use tokio::runtime::Runtime;
 use hide_herdr_client::{ApiConnector, ApiError, ApiStream};
 
 pub mod askpass;
+mod destination;
 mod device;
 mod gate;
 pub mod host;
 pub mod hosts;
 pub mod openssh;
-pub mod profiles;
 pub mod session;
 pub mod transfer;
 pub mod upstream;

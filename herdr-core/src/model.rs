@@ -6920,30 +6920,24 @@ impl Default for HerdrProfilesSnapshot {
     }
 }
 
-/// One machine the first-run Devices step offers: a saved Herdr profile, a
-/// Host of the account's ssh config (Add device's list), or both when the
-/// profile's target is that Host or leads to the same `user@host:port`, or
-/// this PC's default WSL distribution.
+/// One machine the first-run Devices step offers: a Host of the account's
+/// ssh config (Add device's list), one row per `user@host:port`, or this
+/// PC's default WSL distribution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrProfileSnapshot {
     pub id: String,
     pub label: String,
-    /// The SSH target, or the distribution of a WSL row.
+    /// The Host alias, or the distribution of a WSL row.
     pub target: String,
-    pub session: String,
-    /// Herdr saved this machine (`herdr machine list`).
-    pub herdr: bool,
-    /// The ssh config Host the row is, or the one the profile's target is.
+    /// The ssh config Host the row is.
     pub ssh_host: Option<String>,
     /// `user@host:port` as `ssh -G` resolved the Host, read without
     /// connecting.
     pub address: Option<String>,
-    /// Set on the one row that is not a saved Herdr profile: this PC's
-    /// default WSL distribution (PRD wsl-device B1), which connects as a
-    /// WSL device.
+    /// Set on the one row that is not a Host: this PC's default WSL
+    /// distribution (PRD wsl-device B1), which connects as a WSL device.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl_distro: Option<String>,
-    pub enabled: bool,
     pub added_as: Option<String>,
     pub problem: Option<String>,
     pub device_id: Option<String>,
@@ -6955,24 +6949,19 @@ pub struct HerdrProfileSnapshot {
     pub connect_refusal: Option<HerdrProfileRefusal>,
 }
 
-/// Why Hide declined to connect a saved Herdr profile, one per thing the
+/// Why Hide declined to connect a first-run machine, one per thing the
 /// operator does next.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HerdrProfileRefusal {
     /// The helper installation was not allowed.
     NoConsent,
-    /// The profile is turned off in Herdr.
-    Disabled,
-    /// The profile's SSH target or session cannot be used.
+    /// The Host or distribution cannot be used.
     InvalidTarget,
-    /// The saved profiles are still being read.
+    /// The machines are still being read.
     DiscoveryPending,
     /// As many devices as Hide keeps are registered.
     DeviceLimit,
-    /// The profile now names another server than the device registered
-    /// for it.
-    ProfileMoved,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -9012,20 +9001,16 @@ mod wire_enum_tests {
 
         let profile_refusals = [
             HerdrProfileRefusal::NoConsent,
-            HerdrProfileRefusal::Disabled,
             HerdrProfileRefusal::InvalidTarget,
             HerdrProfileRefusal::DiscoveryPending,
             HerdrProfileRefusal::DeviceLimit,
-            HerdrProfileRefusal::ProfileMoved,
         ];
         for variant in profile_refusals {
             match variant {
                 HerdrProfileRefusal::NoConsent
-                | HerdrProfileRefusal::Disabled
                 | HerdrProfileRefusal::InvalidTarget
                 | HerdrProfileRefusal::DiscoveryPending
-                | HerdrProfileRefusal::DeviceLimit
-                | HerdrProfileRefusal::ProfileMoved => {}
+                | HerdrProfileRefusal::DeviceLimit => {}
             }
         }
         assert_wire(&contract, "herdr_profile_refusal", &profile_refusals);
