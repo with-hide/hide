@@ -944,6 +944,69 @@ fn a_restored_tab_whose_pane_is_in_a_subfolder_stays_in_the_folder_its_workspace
         .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
 }
 
+/// A program a pane's shell runs in another folder is reported with the
+/// pane, as its machine reads the program's folder, so a checkout a program
+/// works in is not removed as unused while the pane's own folder is elsewhere.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+#[allow(clippy::disallowed_methods)] // polls the pane's places, bounded by a deadline
+fn a_program_run_in_another_folder_is_that_panes_foreground_folder() {
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let running = Running(BuiltHolders::start());
+    let built = &running.0;
+    let engine = &built.engine;
+    let native = hide_platform::path::from_wire(&built.folder).unwrap();
+    let other = native.join("다른-작업-폴더");
+    std::fs::create_dir(&other).unwrap();
+    // The folder as the system names it, which is what its machine reads.
+    let other = hide_platform::fs::identity::canonical(&other).unwrap();
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "folders", true, BTreeMap::new())
+        .unwrap();
+    prompted(engine, &pane);
+    // A program outside the shell, started in the other folder: Windows
+    // PowerShell's own location is not its process's folder, so it starts
+    // `cmd.exe`, which changes its own.
+    let line = if cfg!(windows) {
+        format!(
+            "cmd.exe /c \"cd /d {} && ping -n 60 127.0.0.1 > nul\"",
+            other.display()
+        )
+    } else {
+        format!("(cd '{}' && exec sleep 60)", other.display())
+    };
+    engine.submit_text(WAIT, &pane, &line).unwrap();
+    let other = hide_platform::path::to_wire(&other).unwrap();
+    let deadline = Instant::now() + SHOWN_WITHIN;
+    let places = loop {
+        let places = engine.pane_places(WAIT).unwrap();
+        if places
+            .iter()
+            .any(|place| place.foreground_cwd.as_deref() == Some(other.as_str()))
+        {
+            break places;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the program's folder was never reported: {places:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(places.iter().all(|place| place.pane_id == pane));
+    assert!(
+        engine
+            .pane_folders(WAIT)
+            .unwrap()
+            .contains(&(pane.clone(), Some(other))),
+        "the cleanup's read guards the program's folder"
+    );
+}
+
 /// PRD engine-bundle-3-core-owns B28, D-9: a pane on the core's own engine
 /// names itself `HIDE_PANE_ID` and no Herdr pane, says its terminal is
 /// Hide's, and its proof names the shell its record holds, by the start time

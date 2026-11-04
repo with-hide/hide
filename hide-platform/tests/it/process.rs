@@ -19,9 +19,9 @@ use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
     RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cwd_of, descendants, descends_from, detach,
-    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, parent_of,
-    restrict_to_login_environment, run_to_end, run_to_end_tied, running, set_output_aside,
-    start_time, terminate, terminate_group,
+    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, observed_cwd_of,
+    parent_of, restrict_to_login_environment, run_to_end, run_to_end_tied, running,
+    set_output_aside, start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -2453,6 +2453,29 @@ fn the_working_directory_is_the_kernels_answer_or_unsupported() {
     }
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+/// The folder another process works in is known on every system: the
+/// kernel's answer on macOS and Linux, the process's own parameters on
+/// Windows, so a folder a program works in is never removed as unused.
+#[test]
+fn the_observed_working_directory_is_the_folder_the_process_works_in() {
+    let _serial = serial();
+    let folder = tempfile::tempdir().unwrap();
+    let mut child = role_command("sleep")
+        .current_dir(folder.path())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    ready_number(child.stdout.take().unwrap());
+    let observed = observed_cwd_of(pid);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let canonical = hide_platform::fs::identity::canonical;
+    assert_eq!(
+        canonical(&observed.unwrap()).unwrap(),
+        canonical(folder.path()).unwrap()
+    );
 }
 
 #[test]

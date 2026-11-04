@@ -132,6 +132,13 @@ pub struct HolderForeground {
     pub group: u32,
     /// Each member's pid and name, in the order the holder listed them.
     pub members: Vec<(u32, String)>,
+    /// The folders the members other than the pane's shell work in, as the
+    /// pane's machine observes them (`hide_platform::process::observed_cwd_of`),
+    /// in the wire spelling, each once; `None` when it could not say for one
+    /// of them, or the node predates this field, which a caller guarding a
+    /// folder takes as unknown, never as no folder.
+    #[serde(default)]
+    pub folders: Option<Vec<String>>,
 }
 
 /// A key the engine presses by name, which the pane's holder encodes for

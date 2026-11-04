@@ -86,6 +86,12 @@ pub(super) fn read() -> io::Result<Vec<ListeningSocket>> {
     Ok(answer)
 }
 
+/// The folder `pid` works in, read from its process parameters as a
+/// listener owner's is ([`super::observe_cwd`]).
+pub(super) fn observe(pid: u32) -> io::Result<ObservedWorkingDirectory> {
+    observe_owner(pid, nt_query()?, Instant::now()).map(|(_, cwd)| cwd)
+}
+
 fn owners(start: Instant) -> io::Result<Owners> {
     let mut owners = Owners::new();
     let ipv4 = table(

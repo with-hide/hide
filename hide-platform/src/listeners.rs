@@ -93,6 +93,15 @@ pub fn read() -> io::Result<Vec<ListeningSocket>> {
     }
 }
 
+/// The folder `pid` works in, observed from its process parameters as a
+/// listener owner's is: Windows has no kernel query for another process's
+/// folder. Like a listener's, it can refuse a cleanup and never
+/// authenticates a caller ([`crate::process::observed_cwd_of`]).
+#[cfg(windows)]
+pub(crate) fn observe_cwd(pid: u32) -> io::Result<ObservedWorkingDirectory> {
+    windows::observe(pid)
+}
+
 #[cfg(windows)]
 mod windows;
 
