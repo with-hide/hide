@@ -2456,42 +2456,28 @@ fn the_working_directory_is_the_kernels_answer_or_unsupported() {
 }
 
 #[test]
-fn the_arguments_are_the_ones_the_process_started_with_or_unsupported() {
+fn the_arguments_are_the_ones_the_process_started_with() {
     let _serial = serial();
     let program = std::env::current_exe().unwrap();
-    let mut child = role_command("sleep")
-        .arg("a word with spaces")
-        .spawn()
-        .unwrap();
+    let arguments = ["a word with spaces", "", "한글", "a\"quoted\"word", "C:\\a path\\"];
+    let mut child = role_command("sleep").args(arguments).spawn().unwrap();
     let pid = child.id();
     ready_number(child.stdout.take().unwrap());
-    match argv_of(pid) {
-        Ok(argv) => {
-            if cfg!(windows) {
-                panic!("Windows keeps no command line another process can read");
-            }
-            assert_eq!(
-                argv,
-                [
-                    program.to_str().unwrap(),
-                    "--exact",
-                    "process::child_role",
-                    "--nocapture",
-                    "--test-threads=1",
-                    "a word with spaces",
-                ],
-            );
-        }
-        Err(error) => {
-            if !cfg!(windows) {
-                panic!("only Windows cannot answer: {error}");
-            }
-            assert_eq!(error.kind(), ErrorKind::Unsupported);
-        }
-    }
+    let actual = argv_of(pid);
     child.kill().unwrap();
     child.wait().unwrap();
     drop(child);
+    let expected: Vec<&str> = [
+        program.to_str().unwrap(),
+        "--exact",
+        "process::child_role",
+        "--nocapture",
+        "--test-threads=1",
+    ]
+    .into_iter()
+    .chain(arguments)
+    .collect();
+    assert_eq!(actual.unwrap(), expected);
     if !cfg!(windows) {
         assert!(gone_within(pid, Duration::from_secs(5)));
         assert_eq!(
