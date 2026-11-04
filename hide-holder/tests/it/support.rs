@@ -581,6 +581,21 @@ impl Script {
         std::fs::read(self.folder.join("heard")).unwrap_or_default()
     }
 
+    /// When the program read the byte at `offset` of what it was sent.
+    pub fn heard_at(&self, offset: usize) -> std::time::SystemTime {
+        let times = std::fs::read_to_string(self.folder.join("heard.times")).unwrap_or_default();
+        let mut seen = 0;
+        for line in times.lines() {
+            let (at, count) = line.split_once(' ').unwrap();
+            seen += count.parse::<usize>().unwrap();
+            if seen > offset {
+                let at: u64 = at.parse::<u128>().unwrap().try_into().unwrap();
+                return std::time::UNIX_EPOCH + Duration::from_nanos(at);
+            }
+        }
+        panic!("the program was not sent byte {offset}");
+    }
+
     /// Waits until the program was sent `expected`, and nothing else. On
     /// Windows ConPTY changes what reaches the program, so no test there
     /// compares it byte for byte.

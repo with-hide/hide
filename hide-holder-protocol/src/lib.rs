@@ -101,8 +101,21 @@ pub const MAX_INPUT: usize = 64 * 1024;
 /// The most bytes one [`ClientMessage::Paste`] carries.
 pub const MAX_PASTE: usize = 512 * 1024;
 
-/// The most bytes a node's message after its hello carries.
-const MAX_CLIENT: usize = MAX_PASTE + 64;
+/// The most bytes a [`Submit`]'s submitting part carries, and the most its
+/// text carries beyond [`MAX_PASTE`]: a focus report before it and a paste
+/// boundary after it, as Herdr's `agent.prompt` sends them.
+pub const MAX_SUBMIT_ENTER: usize = 64;
+
+/// The most parts a [`Submit`]'s text has.
+pub const MAX_SUBMIT_PARTS: usize = 4;
+
+/// The longest gap a [`Submit`] asks for between its text and its submit.
+pub const MAX_SUBMIT_GAP: Duration = Duration::from_secs(2);
+
+/// The most bytes a node's message after its hello carries: a
+/// [`ClientMessage::Submit`] with the longest text and submit, and each
+/// part's tag and length.
+const MAX_CLIENT: usize = MAX_PASTE + 2 * MAX_SUBMIT_ENTER + 64;
 
 /// The most rows one [`Ask::Read`] asks for.
 pub const MAX_READ_LINES: u16 = 2000;
@@ -163,6 +176,7 @@ mod kind {
     pub const SCROLL: u8 = 0x13;
     pub const THEME: u8 = 0x14;
     pub const KEY: u8 = 0x15;
+    pub const SUBMIT: u8 = 0x16;
     /// A first message, like [`HELLO`].
     pub const ASK: u8 = 0x18;
     /// A first message, like [`HELLO`]: a connection that follows the facts.
@@ -205,6 +219,9 @@ pub enum Capability {
     /// holds the terminal ([`Facts::foreground_unread`]), which a node built
     /// before it reads as the pane's own program holding it.
     ForegroundUnread,
+    /// The holder reads [`ClientMessage::Submit`]; a node sends it only to a
+    /// holder whose welcome names this.
+    Submit,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -220,6 +237,7 @@ impl Capability {
             Self::Keys => "keys",
             Self::LineEditing => "line_editing",
             Self::ForegroundUnread => "foreground_unread",
+            Self::Submit => "submit",
             Self::Other(name) => name,
         }
     }
@@ -233,6 +251,7 @@ impl Capability {
             "keys" => Self::Keys,
             "line_editing" => Self::LineEditing,
             "foreground_unread" => Self::ForegroundUnread,
+            "submit" => Self::Submit,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -993,6 +1012,8 @@ pub enum ClientMessage {
     /// Keys pressed in order, at most [`MAX_KEYS`], to a holder that names
     /// [`Capability::Keys`].
     Key(Vec<Key>),
+    /// One submission to a holder that names [`Capability::Submit`].
+    Submit(Submit),
     Resize(Size),
     Theme(Theme),
     /// The next fragment is full: the node lost track of the screen.
@@ -1001,6 +1022,92 @@ pub enum ClientMessage {
     Release,
     /// Ends the pane's program and everything it started, then the holder.
     Terminate,
+}
+
+/// One submission, as Herdr's `agent.prompt` makes it: the holder writes
+/// `text`'s parts to the program in order and flushes them, waits `gap`,
+/// then writes `enter`,
+/// and the connection's input that came after waits until `enter` was
+/// written, so nothing lands between them and a program that reads keys
+/// arriving together as a paste still submits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Submit {
+    /// At most [`MAX_SUBMIT_PARTS`], [`MAX_PASTE`] and [`MAX_SUBMIT_ENTER`]
+    /// bytes together.
+    pub text: Vec<SubmitPart>,
+    /// At most [`MAX_SUBMIT_GAP`].
+    pub gap: Duration,
+    pub enter: SubmitPart,
+}
+
+/// What one part of a [`Submit`] types, encoded the way the message of the
+/// same kind is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmitPart {
+    Input(Vec<u8>),
+    Paste(Vec<u8>),
+    Keys(Vec<Key>),
+}
+
+impl SubmitPart {
+    /// The bytes or keys it carries, as its bound counts them.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Input(bytes) | Self::Paste(bytes) => bytes.len(),
+            Self::Keys(keys) => keys.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Puts it in `payload` and answers how much of `bound` it took.
+    fn put(&self, payload: &mut Vec<u8>, bound: usize) -> io::Result<usize> {
+        let (tag, bytes): (u8, Vec<u8>) = match self {
+            Self::Input(bytes) => (0, bytes.clone()),
+            Self::Paste(bytes) => (1, bytes.clone()),
+            Self::Keys(keys) => (2, keys.iter().map(|key| key.code()).collect()),
+        };
+        let bound = if tag == 2 { bound.min(MAX_KEYS) } else { bound };
+        if bytes.len() > bound {
+            return Err(too_long("submit part", bytes.len(), bound));
+        }
+        payload.push(tag);
+        payload.extend_from_slice(&u32::try_from(bytes.len()).expect("bounded").to_le_bytes());
+        payload.extend_from_slice(&bytes);
+        Ok(bytes.len())
+    }
+
+    fn take(payload: &mut Payload<'_>, bound: usize) -> Result<Self, FrameError> {
+        let tag = payload.u8()?;
+        let length = usize::try_from(payload.u32()?).unwrap_or(usize::MAX);
+        let bound = if tag == 2 { bound.min(MAX_KEYS) } else { bound };
+        if length > bound {
+            return Err(FrameError::Malformed(format!(
+                "a submit part of {length} bytes, past {bound}"
+            )));
+        }
+        let bytes = payload.take(length)?.to_vec();
+        Ok(match tag {
+            0 => Self::Input(bytes),
+            1 => Self::Paste(bytes),
+            2 => Self::Keys(
+                bytes
+                    .into_iter()
+                    .map(|code| {
+                        Key::from_code(code)
+                            .ok_or_else(|| FrameError::Malformed(format!("an unknown key {code}")))
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            other => {
+                return Err(FrameError::Malformed(format!(
+                    "an unknown submit part {other}"
+                )));
+            }
+        })
+    }
 }
 
 /// A connection's first message.
@@ -1298,6 +1405,30 @@ pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Res
             let payload: Vec<u8> = keys.iter().map(|key| key.code()).collect();
             write_frame(writer, kind::KEY, &payload)
         }
+        ClientMessage::Submit(submit) => {
+            if submit.gap > MAX_SUBMIT_GAP {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("a submit gap of {:?}, past {MAX_SUBMIT_GAP:?}", submit.gap),
+                ));
+            }
+            let gap = u16::try_from(submit.gap.as_millis()).expect("bounded above");
+            let mut payload = gap.to_le_bytes().to_vec();
+            if submit.text.len() > MAX_SUBMIT_PARTS {
+                return Err(too_long(
+                    "submit text parts",
+                    submit.text.len(),
+                    MAX_SUBMIT_PARTS,
+                ));
+            }
+            payload.push(u8::try_from(submit.text.len()).expect("bounded above"));
+            let mut left = MAX_PASTE + MAX_SUBMIT_ENTER;
+            for part in &submit.text {
+                left -= part.put(&mut payload, left)?;
+            }
+            submit.enter.put(&mut payload, MAX_SUBMIT_ENTER)?;
+            write_frame(writer, kind::SUBMIT, &payload)
+        }
         ClientMessage::Resize(size) => {
             let mut payload = size.rows.to_le_bytes().to_vec();
             payload.extend_from_slice(&size.cols.to_le_bytes());
@@ -1494,6 +1625,30 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
                 })
                 .collect::<Result<_, _>>()?;
             ClientMessage::Key(keys)
+        }
+        kind::SUBMIT => {
+            let gap = Duration::from_millis(u64::from(payload.u16()?));
+            if gap > MAX_SUBMIT_GAP {
+                return Err(FrameError::Malformed(format!(
+                    "a submit gap of {gap:?}, past {MAX_SUBMIT_GAP:?}"
+                )));
+            }
+            let parts = usize::from(payload.u8()?);
+            if parts > MAX_SUBMIT_PARTS {
+                return Err(FrameError::Malformed(format!(
+                    "a submit of {parts} text parts, past {MAX_SUBMIT_PARTS}"
+                )));
+            }
+            let mut left = MAX_PASTE + MAX_SUBMIT_ENTER;
+            let text = (0..parts)
+                .map(|_| {
+                    let part = SubmitPart::take(&mut payload, left)?;
+                    left -= part.len();
+                    Ok(part)
+                })
+                .collect::<Result<_, FrameError>>()?;
+            let enter = SubmitPart::take(&mut payload, MAX_SUBMIT_ENTER)?;
+            ClientMessage::Submit(Submit { text, gap, enter })
         }
         kind::RESIZE => ClientMessage::Resize(payload.size()?),
         kind::THEME => ClientMessage::Theme(Theme::take(&mut payload)?),
@@ -2367,6 +2522,20 @@ mod tests {
                 modifiers: Modifiers::default(),
             }),
             ClientMessage::Key(Key::ALL.to_vec()),
+            ClientMessage::Submit(Submit {
+                text: vec![
+                    SubmitPart::Input(b"\x1b[I".to_vec()),
+                    SubmitPart::Paste(b"two\nlines".to_vec()),
+                    SubmitPart::Keys(vec![Key::Right]),
+                ],
+                gap: Duration::from_millis(300),
+                enter: SubmitPart::Keys(vec![Key::Enter]),
+            }),
+            ClientMessage::Submit(Submit {
+                text: vec![SubmitPart::Input(b"hello".to_vec())],
+                gap: MAX_SUBMIT_GAP,
+                enter: SubmitPart::Input(b"\r".to_vec()),
+            }),
             ClientMessage::Resize(Size {
                 rows: 40,
                 cols: 120,
