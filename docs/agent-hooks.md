@@ -1213,6 +1213,7 @@ Codex trusts an exact command, so each installation's pass trusts its own entrie
 A pane holder's pane names the installation that started it (`HIDE_INSTALL`) and that installation's own `hide` (`HIDE_INSTALL_CLI`, its `current` link for a helper root).
 An entry another installation wrote exits at once in such a pane, with nothing to say and no report: Cursor's permission hook answers allow and agy's tool hook ask, as when the helper is gone, and a plugin's helper call prints nothing, which the script reads as nothing to do.
 Each event therefore also starts the other installation's helper once, which ends before it reads its input.
+Claude Code and Codex start an event's matching hooks together, so that costs little time: on a Windows PC, where each entry starts `powershell.exe`, the other installation's entry added about 50 ms to a 1.6 s Stop event at the median (2026-11-04), and on a Mac the helper alone takes about 5 ms.
 A pane that names no installation, a Herdr pane or a plain terminal, lets every entry act, as before; until Herdr is gone, a device helper's entries in the app's Herdr panes report to the helper's own route, which holds no such pane.
 
 A `hide` that another installation put first on the pane's `PATH` hands the call to `HIDE_INSTALL_CLI` (`hided::pane_install`), so the call speaks its own daemon's protocol.
