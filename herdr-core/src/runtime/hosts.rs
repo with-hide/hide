@@ -1093,6 +1093,7 @@ impl Runtime {
                             generation,
                             Arc::clone(&node.host),
                             node.hello.home.clone(),
+                            node.hello.os == "windows",
                         ),
                         Err(reason) => {
                             self.own_device_holders_unstarted(device_id, reason);

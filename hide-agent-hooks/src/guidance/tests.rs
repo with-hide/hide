@@ -92,7 +92,7 @@ fn active_agents_capture_the_daemon_route_and_preserve_operator_edits() {
         super::install(agent, fixture.home(), target).unwrap();
         assert!(matches_install(agent, fixture.home(), target));
         assert!(!matches_install(agent, fixture.home(), &fixture.helper));
-        assert!(matches_helper(agent, fixture.home(), &fixture.helper));
+        assert!(matches_helper(agent, fixture.home(), &fixture.helper, None));
         let path = agent.config_path(fixture.home());
         let mut document = fixture.read(agent);
         // Timeout is operator-owned once edited, even though the marker and
@@ -113,10 +113,15 @@ fn active_agents_capture_the_daemon_route_and_preserve_operator_edits() {
         }
         edit(&mut document);
         fs::write(path, serde_json::to_string(&document).unwrap()).unwrap();
-        assert!(!matches_helper(agent, fixture.home(), &fixture.helper));
+        assert!(!matches_helper(
+            agent,
+            fixture.home(),
+            &fixture.helper,
+            None
+        ));
         super::install(agent, fixture.home(), &fixture.helper).unwrap();
         assert!(
-            !matches_helper(agent, fixture.home(), &fixture.helper),
+            !matches_helper(agent, fixture.home(), &fixture.helper, None),
             "removing the captured route is an edit"
         );
     }
@@ -196,7 +201,7 @@ fn droid_never_hides_hooks_kept_in_settings_json_behind_a_new_hooks_file() {
         document["hooks"]["SessionStart"][0]["hooks"][0]["type"],
         "command"
     );
-    remove(GuidanceAgent::Droid, fixture.home()).unwrap();
+    remove(GuidanceAgent::Droid, fixture.home(), None).unwrap();
     let after: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(
         after["hooks"]["Stop"][0]["hooks"][0]["command"],
@@ -278,7 +283,7 @@ fn cursor_augment_and_junie_write_the_shapes_their_documentation_gives() {
         "{command}"
     );
     assert_eq!(
-        installed_helper_path(GuidanceAgent::Cursor, fixture.home()).as_deref(),
+        installed_helper_path(GuidanceAgent::Cursor, fixture.home(), None).as_deref(),
         Some(fixture.helper.to_str().unwrap())
     );
     // PRD grok-cursor-hooks D-01: the guard on the shell tool, under Cursor's
@@ -376,7 +381,7 @@ fn another_tools_entries_survive_install_and_remove_in_every_shared_file() {
             "{agent:?}: theirs and Hide's"
         );
 
-        let removed = remove(agent, fixture.home()).unwrap();
+        let removed = remove(agent, fixture.home(), None).unwrap();
         assert_eq!(removed.removed_entries, agent.slots().len(), "{agent:?}");
         let after = commands(&fixture.read(agent));
         assert_eq!(after, vec!["/theirs.sh".to_owned()], "{agent:?}");
@@ -397,16 +402,16 @@ fn a_second_install_changes_nothing_and_a_removal_leaves_no_trace_of_an_own_file
         assert!(!again.changed, "{agent:?}");
         assert_eq!(first, fs::read(agent.config_path(fixture.home())).unwrap());
         assert!(matches!(
-            status(agent, fixture.home()),
+            status(agent, fixture.home(), None),
             HookStatus::Installed {
                 version
             } if version == agent.version()
         ));
         assert!(matches_install(agent, fixture.home(), &fixture.helper));
-        let removed = remove(agent, fixture.home()).unwrap();
+        let removed = remove(agent, fixture.home(), None).unwrap();
         assert_eq!(removed.removed_entries, agent.slots().len(), "{agent:?}");
         assert!(matches!(
-            status(agent, fixture.home()),
+            status(agent, fixture.home(), None),
             HookStatus::NotInstalled
         ));
         // Every file here was created by the install and holds nothing else,
@@ -429,12 +434,12 @@ fn a_file_that_does_not_parse_is_never_written() {
             "{agent:?}"
         );
         assert!(matches!(
-            remove(agent, fixture.home()),
+            remove(agent, fixture.home(), None),
             Err(InstallFailure::Unparsable { .. })
         ));
         assert_eq!(before, fs::read(agent.config_path(fixture.home())).unwrap());
         assert!(matches!(
-            status(agent, fixture.home()),
+            status(agent, fixture.home(), None),
             HookStatus::Failed { .. }
         ));
     }
@@ -445,7 +450,7 @@ fn an_agent_that_is_not_set_up_has_nothing_to_attach_to() {
     for agent in installable() {
         let home = tempfile::tempdir().unwrap();
         assert!(matches!(
-            status(agent, home.path()),
+            status(agent, home.path(), None),
             HookStatus::RuntimeAbsent
         ));
     }
@@ -463,13 +468,13 @@ fn an_older_marker_reads_outdated_and_a_gone_helper_reads_failed() {
     );
     fs::write(&path, text).unwrap();
     assert!(matches!(
-        status(GuidanceAgent::Qwen, fixture.home()),
+        status(GuidanceAgent::Qwen, fixture.home(), None),
         HookStatus::Outdated { version: 0 }
     ));
     install(GuidanceAgent::Qwen, fixture.home(), &fixture.helper).unwrap();
     fs::remove_file(&fixture.helper).unwrap();
     assert!(matches!(
-        status(GuidanceAgent::Qwen, fixture.home()),
+        status(GuidanceAgent::Qwen, fixture.home(), None),
         HookStatus::Failed {
             reason: InstallFailure::HelperMissing { .. }
         }
@@ -482,7 +487,7 @@ fn the_installed_helper_is_read_back_from_the_entry() {
     let fixture = Fixture::new(GuidanceAgent::Kiro);
     install(GuidanceAgent::Kiro, fixture.home(), &fixture.helper).unwrap();
     assert_eq!(
-        installed_helper_path(GuidanceAgent::Kiro, fixture.home()).as_deref(),
+        installed_helper_path(GuidanceAgent::Kiro, fixture.home(), None).as_deref(),
         Some(fixture.helper.to_str().unwrap())
     );
 }
@@ -594,7 +599,7 @@ fn another_tools_hook_in_the_same_group_survives_a_reinstall_and_a_removal() {
         assert!(found.iter().any(|c| c == "/theirs.sh"), "{agent:?}");
         assert_eq!(found.len(), 2, "{agent:?}: theirs and one Hide hook");
 
-        let removed = remove(agent, fixture.home()).unwrap();
+        let removed = remove(agent, fixture.home(), None).unwrap();
         assert_eq!(removed.removed_entries, 1, "{agent:?}");
         assert_eq!(
             commands(&fixture.read(agent)),
@@ -611,7 +616,7 @@ fn removing_hide_from_droids_own_hooks_file_deletes_the_file_it_would_leave_empt
     install(GuidanceAgent::Droid, fixture.home(), &fixture.helper).unwrap();
     let path = GuidanceAgent::Droid.config_path(fixture.home());
     assert!(path.exists());
-    remove(GuidanceAgent::Droid, fixture.home()).unwrap();
+    remove(GuidanceAgent::Droid, fixture.home(), None).unwrap();
     // `{}` left behind would shadow hooks the operator later adds to settings.json.
     assert!(!path.exists());
 
@@ -621,7 +626,7 @@ fn removing_hide_from_droids_own_hooks_file_deletes_the_file_it_would_leave_empt
         r#"{"Stop":[{"hooks":[{"type":"command","command":"/theirs.sh"}]}]}"#,
     );
     install(GuidanceAgent::Droid, fixture.home(), &fixture.helper).unwrap();
-    remove(GuidanceAgent::Droid, fixture.home()).unwrap();
+    remove(GuidanceAgent::Droid, fixture.home(), None).unwrap();
     assert!(path.exists());
     assert_eq!(
         commands(&fixture.read(GuidanceAgent::Droid)),
@@ -664,7 +669,7 @@ fn a_settings_file_that_holds_another_key_keeps_it_when_hides_hook_goes() {
         let fixture = Fixture::new(agent);
         fixture.write(agent, r#"{"model":"x"}"#);
         install(agent, fixture.home(), &fixture.helper).unwrap();
-        remove(agent, fixture.home()).unwrap();
+        remove(agent, fixture.home(), None).unwrap();
         assert_eq!(fixture.read(agent), json!({ "model": "x" }), "{agent:?}");
     }
 }
@@ -720,7 +725,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
     );
     assert!(grok["hooks"]["Stop"][0].get("matcher").is_none());
     assert_eq!(
-        installed_helper_path(GuidanceAgent::Grok, fixture.home()).as_deref(),
+        installed_helper_path(GuidanceAgent::Grok, fixture.home(), None).as_deref(),
         Some(fixture.helper.to_str().unwrap())
     );
     let old = fs::read_to_string(&path)
@@ -728,7 +733,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
         .replace("hide-guidance@9", "hide-guidance@6");
     fs::write(&path, old).unwrap();
     assert!(matches!(
-        status(GuidanceAgent::Grok, fixture.home()),
+        status(GuidanceAgent::Grok, fixture.home(), None),
         HookStatus::Outdated { version: 6 }
     ));
 }
@@ -751,10 +756,10 @@ fn every_byte_another_tool_wrote_in_cursors_shared_file_survives_install_and_rem
         assert!(installed.contains(kept), "{kept} in {installed}");
     }
     assert!(matches!(
-        status(GuidanceAgent::Cursor, fixture.home()),
+        status(GuidanceAgent::Cursor, fixture.home(), None),
         HookStatus::Installed { .. }
     ));
-    let removed = remove(GuidanceAgent::Cursor, fixture.home()).unwrap();
+    let removed = remove(GuidanceAgent::Cursor, fixture.home(), None).unwrap();
     assert_eq!(removed.removed_entries, 2);
     assert_eq!(
         fs::read_to_string(GuidanceAgent::Cursor.config_path(fixture.home())).unwrap(),
@@ -776,12 +781,12 @@ fn a_missing_event_or_an_edited_entry_is_not_current() {
         ),
     );
     assert!(matches!(
-        status(GuidanceAgent::Cursor, fixture.home()),
+        status(GuidanceAgent::Cursor, fixture.home(), None),
         HookStatus::Outdated { version: 1 }
     ));
     install(GuidanceAgent::Cursor, fixture.home(), &fixture.helper).unwrap();
     assert!(matches!(
-        status(GuidanceAgent::Cursor, fixture.home()),
+        status(GuidanceAgent::Cursor, fixture.home(), None),
         HookStatus::Installed { version: 7 }
     ));
     assert!(matches_install(
@@ -807,7 +812,7 @@ fn a_missing_event_or_an_edited_entry_is_not_current() {
         .shift_remove("preToolUse");
     fs::write(&path, document.to_string()).unwrap();
     assert!(matches!(
-        status(GuidanceAgent::Cursor, fixture.home()),
+        status(GuidanceAgent::Cursor, fixture.home(), None),
         HookStatus::Outdated { .. }
     ));
 }
@@ -862,7 +867,7 @@ fn installing_over_version_two_takes_out_the_subagent_and_turn_entries_and_only_
     let fixture = Fixture::new(GuidanceAgent::Cursor);
     fixture.write(GuidanceAgent::Cursor, &cursor_version_two(&fixture));
     assert!(matches!(
-        status(GuidanceAgent::Cursor, fixture.home()),
+        status(GuidanceAgent::Cursor, fixture.home(), None),
         HookStatus::Outdated { version: 2 }
     ));
     install(GuidanceAgent::Cursor, fixture.home(), &fixture.helper).unwrap();
@@ -880,7 +885,7 @@ fn installing_over_version_two_takes_out_the_subagent_and_turn_entries_and_only_
         json!([{ "command": "/orca/status.sh stop" }])
     );
     assert!(matches!(
-        status(GuidanceAgent::Cursor, fixture.home()),
+        status(GuidanceAgent::Cursor, fixture.home(), None),
         HookStatus::Installed { version: 7 }
     ));
     assert!(matches_install(
@@ -895,7 +900,7 @@ fn installing_over_version_two_takes_out_the_subagent_and_turn_entries_and_only_
 fn removing_version_twos_cursor_hook_takes_the_retired_entries_too() {
     let fixture = Fixture::new(GuidanceAgent::Cursor);
     fixture.write(GuidanceAgent::Cursor, &cursor_version_two(&fixture));
-    let removed = remove(GuidanceAgent::Cursor, fixture.home()).unwrap();
+    let removed = remove(GuidanceAgent::Cursor, fixture.home(), None).unwrap();
     assert_eq!(removed.removed_entries, 5);
     let document = fixture.read(GuidanceAgent::Cursor);
     assert_eq!(
@@ -917,7 +922,7 @@ fn a_retired_agent_gets_no_new_hook_and_its_old_entry_comes_out() {
         assert!(failure.is_err(), "{agent:?}");
         assert!(!agent.config_path(fixture.home()).exists(), "{agent:?}");
         install_any(agent, fixture.home(), &fixture.helper).unwrap();
-        let removed = remove(agent, fixture.home()).unwrap();
+        let removed = remove(agent, fixture.home(), None).unwrap();
         assert_eq!(
             removed.removed_entries,
             if agent == GuidanceAgent::Cursor { 2 } else { 1 },
@@ -1018,22 +1023,22 @@ fn agys_legacy_windows_block_is_replaced_without_touching_other_blocks() {
         .to_string(),
     );
     assert_eq!(
-        status(agent, fixture.home()),
+        status(agent, fixture.home(), None),
         HookStatus::Outdated { version: 6 }
     );
     assert_eq!(
-        installed_helper_path(agent, fixture.home()).as_deref(),
+        installed_helper_path(agent, fixture.home(), None).as_deref(),
         fixture.helper.to_str()
     );
     install(agent, fixture.home(), &fixture.helper).unwrap();
     assert_eq!(
-        status(agent, fixture.home()),
+        status(agent, fixture.home(), None),
         HookStatus::Installed {
             version: agent.version()
         }
     );
     assert_eq!(
-        installed_helper_path(agent, fixture.home()).as_deref(),
+        installed_helper_path(agent, fixture.home(), None).as_deref(),
         fixture.helper.to_str()
     );
     assert!(matches_install(agent, fixture.home(), &fixture.helper));
@@ -1044,8 +1049,75 @@ fn agys_legacy_windows_block_is_replaced_without_touching_other_blocks() {
     );
     assert_eq!(fixture.read(agent)["other"], other);
     assert_eq!(
-        remove(agent, fixture.home()).unwrap().removed_entries,
+        remove(agent, fixture.home(), None).unwrap().removed_entries,
         agent.slots().len()
     );
     assert_eq!(fixture.read(agent), json!({"other": other}));
+}
+
+/// Two Hide installations on one account, the desktop app and a device
+/// helper, each keep their own entry in every agent's file: installing and
+/// taking out one leaves the other's (docs/agent-hooks.md, More than one Hide
+/// on an account).
+#[test]
+fn each_installation_keeps_its_own_entry_in_every_agents_file() {
+    for agent in GuidanceAgent::LIVE
+        .into_iter()
+        .filter(|agent| agent.supported_here().is_ok())
+    {
+        let fixture = Fixture::new(agent);
+        let device_helper = fixture.home().join("helper-root/current/hide-agent-hooks");
+        fs::create_dir_all(device_helper.parent().unwrap()).unwrap();
+        fs::write(&device_helper, b"binary").unwrap();
+        let state = fixture.home().join("state");
+        let device = "root:/helper-root";
+        let app_target = HookTarget::new(&fixture.helper, &state)
+            .unwrap()
+            .of_install(crate::route::APP_INSTALL)
+            .unwrap();
+        let device_target = HookTarget::new(&device_helper, &state)
+            .unwrap()
+            .of_install(device)
+            .unwrap();
+        super::install(agent, fixture.home(), app_target).unwrap();
+        super::install(agent, fixture.home(), device_target).unwrap();
+        assert!(
+            matches_install(agent, fixture.home(), app_target),
+            "{agent:?}"
+        );
+        assert!(
+            matches_install(agent, fixture.home(), device_target),
+            "{agent:?}"
+        );
+        assert_eq!(
+            installed_helper_path(agent, fixture.home(), Some(device)).as_deref(),
+            Some(device_helper.to_str().unwrap()),
+            "{agent:?}"
+        );
+        assert!(matches!(
+            status(agent, fixture.home(), Some(crate::route::APP_INSTALL)),
+            HookStatus::Installed { .. }
+        ));
+        // Passes of either keep the other's entry, and settle.
+        super::install(agent, fixture.home(), app_target).unwrap();
+        for target in [app_target, device_target] {
+            let again = super::install(agent, fixture.home(), target).unwrap();
+            assert!(!again.changed, "{agent:?}");
+        }
+        assert!(
+            matches_install(agent, fixture.home(), device_target),
+            "{agent:?}"
+        );
+
+        let removed = super::remove(agent, fixture.home(), Some(device)).unwrap();
+        assert!(removed.removed_entries > 0, "{agent:?}");
+        assert!(
+            matches_install(agent, fixture.home(), app_target),
+            "{agent:?}"
+        );
+        assert!(matches!(
+            status(agent, fixture.home(), Some(device)),
+            HookStatus::NotInstalled
+        ));
+    }
 }

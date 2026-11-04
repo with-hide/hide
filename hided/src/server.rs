@@ -1866,6 +1866,21 @@ async fn scoped_client_loop(
                                         })?
                                 }
                                 ScopedRequest::Mission(command) => {
+                                    // A take hands the former Conductor's
+                                    // children to the caller's registration,
+                                    // so the caller has one first (B43).
+                                    if matches!(*command, herdr_core::missions::MissionCommand::Take { .. }) {
+                                        crate::hook_request::delivery(
+                                            &core,
+                                            &cap,
+                                            herdr_core::delivery::Command::Agents {
+                                                command: herdr_core::coordination::Command::RegisterSelf {
+                                                    project: Some(cap.context.checkout_path.clone()),
+                                                },
+                                            },
+                                            None,
+                                        )?;
+                                    }
                                     core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, *command)
                                         .map_err(|code| {
                                             let next = herdr_core::missions::next_action(

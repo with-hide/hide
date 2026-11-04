@@ -3,13 +3,115 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     Connected,
-    AiCalled,
-    /// A native agent session a Hide pane carried for the first time.
-    AgentStarted(hide_session::Agent),
+    /// A native agent session a Hide pane carried for the first time, and
+    /// who started it; `None` when the delivery ledger could not be read.
+    AgentStarted {
+        agent: hide_session::Agent,
+        source: Option<AgentSource>,
+    },
     DeviceConnected {
         outcome: DeviceOutcome,
         platform: DevicePlatform,
     },
+    /// A mission's plan was started (Planning to Running), with its size.
+    MissionStarted {
+        nodes: MissionSize,
+    },
+    /// A started mission's first close: a reopened one that closes again,
+    /// and a waiting one that later lands, add none.
+    MissionEnded {
+        outcome: MissionOutcome,
+    },
+    /// A practice chapter reached its first step, or its end, for the first
+    /// time on this installation.
+    Practice {
+        chapter: PracticeChapter,
+        stage: PracticeStage,
+    },
+    /// A phone paired with this core.
+    PhonePaired {
+        route: PhoneRoute,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentSource {
+    /// Typed into a pane, started from Hide's own controls, or forked.
+    Operator,
+    /// `hide agent spawn`, with a parent or as a handoff.
+    Spawn,
+    /// A mission node's worker.
+    Mission,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissionSize {
+    One,
+    TwoToThree,
+    FourToSeven,
+    EightOrMore,
+}
+
+impl MissionSize {
+    pub(crate) fn of(nodes: usize) -> Self {
+        match nodes {
+            0 | 1 => Self::One,
+            2..=3 => Self::TwoToThree,
+            4..=7 => Self::FourToSeven,
+            _ => Self::EightOrMore,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissionOutcome {
+    Done,
+    MergeWait,
+    Cancelled,
+}
+
+/// The practice window's chapters, spelled here so a chapter the shell
+/// adds sends nothing until it is named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PracticeChapter {
+    Mission,
+    Overview,
+    Screen,
+    Switch,
+    Find,
+    Follow,
+    Delegate,
+    Plan,
+    Project,
+}
+
+impl PracticeChapter {
+    pub(crate) fn of(id: &str) -> Option<Self> {
+        Some(match id {
+            "mission" => Self::Mission,
+            "overview" => Self::Overview,
+            "screen" => Self::Screen,
+            "switch" => Self::Switch,
+            "find" => Self::Find,
+            "follow" => Self::Follow,
+            "delegate" => Self::Delegate,
+            "plan" => Self::Plan,
+            "project" => Self::Project,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PracticeStage {
+    Started,
+    Finished,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PhoneRoute {
+    Relay,
+    Tailnet,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,88 +165,136 @@ impl Event {
     pub fn name(self) -> &'static str {
         match self {
             Self::Connected => "hide_connected",
-            Self::AiCalled => "hide_ai_called",
-            Self::AgentStarted(_) => "hide_agent_started",
+            Self::AgentStarted { .. } => "hide_agent_started",
             Self::DeviceConnected { .. } => "hide_device_connected",
+            Self::MissionStarted { .. } => "hide_mission_started",
+            Self::MissionEnded { .. } => "hide_mission_ended",
+            Self::Practice { .. } => "hide_practice",
+            Self::PhonePaired { .. } => "hide_phone_paired",
         }
     }
 
-    /// The `agent` property, spelled here so an adapter's rename cannot
-    /// change what the wire says.
-    pub fn agent(self) -> Option<&'static str> {
-        let Self::AgentStarted(agent) = self else {
-            return None;
-        };
-        Some(match agent {
-            hide_session::Agent::Codex => "codex",
-            hide_session::Agent::Claude => "claude",
-            hide_session::Agent::Grok => "grok",
-            hide_session::Agent::Pi => "pi",
-            hide_session::Agent::Omp => "omp",
-            hide_session::Agent::Cursor => "cursor",
-            hide_session::Agent::OpenCode => "opencode",
-            hide_session::Agent::Antigravity => "antigravity",
-        })
-    }
-
-    pub fn outcome(self) -> Option<&'static str> {
+    /// The event's own properties, every key and value spelled here so a
+    /// rename elsewhere cannot change what the wire says.
+    pub fn properties(self) -> Vec<(&'static str, &'static str)> {
         match self {
-            Self::DeviceConnected {
-                outcome: DeviceOutcome::Ready(_),
-                ..
-            } => Some("ready"),
-            Self::DeviceConnected {
-                outcome: DeviceOutcome::Failed(_),
-                ..
-            } => Some("failed"),
-            _ => None,
+            Self::Connected => Vec::new(),
+            Self::AgentStarted { agent, source } => {
+                let mut properties = vec![("agent", agent_name(agent))];
+                if let Some(source) = source {
+                    properties.push((
+                        "source",
+                        match source {
+                            AgentSource::Operator => "operator",
+                            AgentSource::Spawn => "spawn",
+                            AgentSource::Mission => "mission",
+                        },
+                    ));
+                }
+                properties
+            }
+            Self::DeviceConnected { outcome, platform } => {
+                let mut properties = Vec::with_capacity(3);
+                match outcome {
+                    DeviceOutcome::Ready(herdr) => {
+                        properties.push(("outcome", "ready"));
+                        properties.push((
+                            "herdr",
+                            match herdr {
+                                DeviceHerdr::Started => "started",
+                                DeviceHerdr::HandedOff => "handed_off",
+                                DeviceHerdr::Current => "current",
+                                DeviceHerdr::Kept => "kept",
+                                DeviceHerdr::Preserved => "preserved",
+                            },
+                        ));
+                    }
+                    DeviceOutcome::Failed(step) => {
+                        properties.push(("outcome", "failed"));
+                        properties.push((
+                            "failed_step",
+                            match step {
+                                DeviceFailedStep::Install => "install",
+                                DeviceFailedStep::Download => "download",
+                                DeviceFailedStep::HerdrStart => "herdr_start",
+                                DeviceFailedStep::HerdrHandoff => "herdr_handoff",
+                            },
+                        ));
+                    }
+                }
+                properties.push((
+                    "platform",
+                    match platform {
+                        DevicePlatform::LinuxX86_64 => "linux-x86_64",
+                        DevicePlatform::LinuxAarch64 => "linux-aarch64",
+                        DevicePlatform::MacosX86_64 => "macos-x86_64",
+                        DevicePlatform::MacosAarch64 => "macos-aarch64",
+                        DevicePlatform::Unknown => "unknown",
+                    },
+                ));
+                properties
+            }
+            Self::MissionStarted { nodes } => vec![(
+                "nodes",
+                match nodes {
+                    MissionSize::One => "1",
+                    MissionSize::TwoToThree => "2-3",
+                    MissionSize::FourToSeven => "4-7",
+                    MissionSize::EightOrMore => "8+",
+                },
+            )],
+            Self::MissionEnded { outcome } => vec![(
+                "outcome",
+                match outcome {
+                    MissionOutcome::Done => "done",
+                    MissionOutcome::MergeWait => "merge_wait",
+                    MissionOutcome::Cancelled => "cancelled",
+                },
+            )],
+            Self::Practice { chapter, stage } => vec![
+                (
+                    "chapter",
+                    match chapter {
+                        PracticeChapter::Mission => "mission",
+                        PracticeChapter::Overview => "overview",
+                        PracticeChapter::Screen => "screen",
+                        PracticeChapter::Switch => "switch",
+                        PracticeChapter::Find => "find",
+                        PracticeChapter::Follow => "follow",
+                        PracticeChapter::Delegate => "delegate",
+                        PracticeChapter::Plan => "plan",
+                        PracticeChapter::Project => "project",
+                    },
+                ),
+                (
+                    "stage",
+                    match stage {
+                        PracticeStage::Started => "started",
+                        PracticeStage::Finished => "finished",
+                    },
+                ),
+            ],
+            Self::PhonePaired { route } => vec![(
+                "route",
+                match route {
+                    PhoneRoute::Relay => "relay",
+                    PhoneRoute::Tailnet => "tailnet",
+                },
+            )],
         }
     }
+}
 
-    pub fn failed_step(self) -> Option<&'static str> {
-        let Self::DeviceConnected {
-            outcome: DeviceOutcome::Failed(step),
-            ..
-        } = self
-        else {
-            return None;
-        };
-        Some(match step {
-            DeviceFailedStep::Install => "install",
-            DeviceFailedStep::Download => "download",
-            DeviceFailedStep::HerdrStart => "herdr_start",
-            DeviceFailedStep::HerdrHandoff => "herdr_handoff",
-        })
-    }
-
-    pub fn herdr(self) -> Option<&'static str> {
-        let Self::DeviceConnected {
-            outcome: DeviceOutcome::Ready(herdr),
-            ..
-        } = self
-        else {
-            return None;
-        };
-        Some(match herdr {
-            DeviceHerdr::Started => "started",
-            DeviceHerdr::HandedOff => "handed_off",
-            DeviceHerdr::Current => "current",
-            DeviceHerdr::Kept => "kept",
-            DeviceHerdr::Preserved => "preserved",
-        })
-    }
-
-    pub fn platform(self) -> Option<&'static str> {
-        let Self::DeviceConnected { platform, .. } = self else {
-            return None;
-        };
-        Some(match platform {
-            DevicePlatform::LinuxX86_64 => "linux-x86_64",
-            DevicePlatform::LinuxAarch64 => "linux-aarch64",
-            DevicePlatform::MacosX86_64 => "macos-x86_64",
-            DevicePlatform::MacosAarch64 => "macos-aarch64",
-            DevicePlatform::Unknown => "unknown",
-        })
+fn agent_name(agent: hide_session::Agent) -> &'static str {
+    match agent {
+        hide_session::Agent::Codex => "codex",
+        hide_session::Agent::Claude => "claude",
+        hide_session::Agent::Grok => "grok",
+        hide_session::Agent::Pi => "pi",
+        hide_session::Agent::Omp => "omp",
+        hide_session::Agent::Cursor => "cursor",
+        hide_session::Agent::OpenCode => "opencode",
+        hide_session::Agent::Antigravity => "antigravity",
     }
 }
 

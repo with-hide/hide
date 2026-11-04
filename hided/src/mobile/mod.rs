@@ -1446,22 +1446,32 @@ impl Mobile {
     /// Pairs a phone with the live code (the phone's `pair` handshake). A
     /// code exists only while Mobile is exposed.
     pub fn pair(&self, code: &str, user_agent: &str) -> Result<(PhoneRecord, String), PairRefusal> {
-        let result = {
+        let (result, route) = {
+            use herdr_core::product_analytics::PhoneRoute;
             let mut inner = self.lock();
-            let admitted = inner.settings.enabled
-                && matches!(inner.exposure, Exposure::Exposed { .. } | Exposure::Relay);
-            let result = if admitted {
-                inner.phones.pair(code, user_agent, now_ms())
-            } else {
-                Err(PairRefusal::CodeExpired)
+            let route = match inner.exposure {
+                Exposure::Exposed { .. } => Some(PhoneRoute::Tailnet),
+                Exposure::Relay => Some(PhoneRoute::Relay),
+                _ => None,
+            };
+            let result = match route {
+                Some(_) if inner.settings.enabled => inner.phones.pair(code, user_agent, now_ms()),
+                _ => Err(PairRefusal::CodeExpired),
             };
             // The code is spent; the next phone needs `mobile_show_code`.
-            result
+            (result, route)
         };
         match &result {
-            Ok((phone, _)) => herdr_core::diagnostic!(json!({
-                "component": "mobile_pairing", "kind": "phone.paired", "phone_id": phone.id, "name": phone.name,
-            })),
+            Ok((phone, _)) => {
+                herdr_core::diagnostic!(json!({
+                    "component": "mobile_pairing", "kind": "phone.paired", "phone_id": phone.id, "name": phone.name,
+                }));
+                if let Some(route) = route {
+                    self.config.core.capture_product_event(
+                        herdr_core::product_analytics::Event::PhonePaired { route },
+                    );
+                }
+            }
             Err(refusal) => herdr_core::diagnostic!(json!({
                 "component": "mobile_pairing", "kind": "pairing.refused", "reason": refusal.reason(),
             })),

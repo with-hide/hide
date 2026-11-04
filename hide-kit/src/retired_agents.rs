@@ -178,7 +178,7 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
         if let Some(hook) = agent.hook
             && record.contains_piece(&hook_code)
         {
-            match hide_agent_hooks::guidance::remove(hook, &target.home) {
+            match hide_agent_hooks::guidance::remove(hook, &target.home, Some(&target.install)) {
                 Ok(removed) => {
                     if removed.removed_entries > 0 {
                         outcome.report.removed.push(format!("{} hook", agent.label));
@@ -265,13 +265,15 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, RemoveOutcome)> {
     let mut outcomes = Vec::new();
     for agent in &RETIRED {
         if let Some(hook) = agent.hook {
-            let outcome = match hide_agent_hooks::guidance::remove(hook, &target.home) {
-                Ok(done) if done.removed_entries > 0 => RemoveOutcome::Removed,
-                Ok(_) => RemoveOutcome::Absent,
-                Err(failure) => RemoveOutcome::Failed {
-                    reason: failure.message(),
-                },
-            };
+            let outcome =
+                match hide_agent_hooks::guidance::remove(hook, &target.home, Some(&target.install))
+                {
+                    Ok(done) if done.removed_entries > 0 => RemoveOutcome::Removed,
+                    Ok(_) => RemoveOutcome::Absent,
+                    Err(failure) => RemoveOutcome::Failed {
+                        reason: failure.message(),
+                    },
+                };
             outcomes.push((format!("hook:{}", agent.id), outcome));
         }
         if let Skills::Own(folder) = agent.skills {

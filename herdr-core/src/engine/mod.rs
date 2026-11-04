@@ -699,6 +699,8 @@ impl EngineHandle {
                 home,
                 hooks_home: Some(hooks_home),
                 node,
+                // This machine's own node.
+                windows: cfg!(windows),
                 definitions: Arc::new(definitions),
                 launches: Arc::new(launches),
             },

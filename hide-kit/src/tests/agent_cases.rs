@@ -1489,7 +1489,7 @@ fn grok_without_its_own_folder_gets_no_folder_and_its_row_says_why() {
 }
 
 fn opencode_plugin(fixture: &Fixture) -> PathBuf {
-    hide_agent_hooks::opencode::PLUGIN.path(fixture.home())
+    hide_agent_hooks::opencode::PLUGIN.path(fixture.home(), None)
 }
 
 #[test]
@@ -1515,6 +1515,7 @@ fn opencode_switched_on_gets_hides_plugin_beside_herdrs_and_reads_installed() {
                 &fixture.target.kit_dir.join("hide-agent-hooks"),
                 &crate::layout::state_dir_from_process(fixture.home()),
             )
+            .and_then(|target| target.of_install(&fixture.target.install))
             .unwrap()
         )
     );

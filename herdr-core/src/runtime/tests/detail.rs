@@ -121,6 +121,29 @@ fn practice_progress_is_kept_per_chapter_and_an_identical_write_changes_nothing(
     );
 }
 
+/// A practice chapter counts its start and its end once each per
+/// installation: later steps, a replay that keeps the chapter finished, and
+/// a chapter the statistics do not name send nothing.
+#[test]
+fn a_practice_chapter_counts_its_start_and_end_once() {
+    use crate::product_analytics::{Event, PracticeChapter, PracticeStage};
+    let practice = |stage| Event::Practice {
+        chapter: PracticeChapter::Mission,
+        stage,
+    };
+    let mut runtime = runtime();
+    let statistics = Arc::new(RecordedStatistics::default());
+    runtime.install_product_analytics(statistics.clone());
+    assert!(practice_event(&mut runtime, "mission", 0, false));
+    assert!(practice_event(&mut runtime, "mission", 4, false));
+    assert_eq!(statistics.take(), [practice(PracticeStage::Started)]);
+    assert!(practice_event(&mut runtime, "mission", 9, true));
+    assert!(practice_event(&mut runtime, "mission", 2, true));
+    assert_eq!(statistics.take(), [practice(PracticeStage::Finished)]);
+    assert!(practice_event(&mut runtime, "first-agent", 9, true));
+    assert_eq!(statistics.take(), []);
+}
+
 /// A chapter id outside `^[a-z0-9-]{1,32}$` and a step past 255 are refused
 /// with their codes and leave the progress as it was.
 #[test]

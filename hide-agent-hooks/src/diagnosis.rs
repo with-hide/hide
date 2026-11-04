@@ -284,7 +284,7 @@ impl Diagnosis {
                     runtime,
                     label: runtime.label().to_owned(),
                     path: runtime.config_path(home).display().to_string(),
-                    status: status(runtime, home),
+                    status: status(runtime, home, None),
                     current_version: HOOK_ENTRY_VERSION,
                     memory_compatibility: probe(runtime),
                 })

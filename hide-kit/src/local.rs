@@ -75,6 +75,7 @@ pub fn local_target(
     let login_shell = crate::agents::login_shell();
     KitTarget {
         home: home.to_path_buf(),
+        install: hide_agent_hooks::route::APP_INSTALL.to_owned(),
         kit_dir: kit_dir.to_path_buf(),
         cli_dir: home.join(".local").join("bin"),
         // A `hide` linked into a device helper root is Hide's too: this Mac

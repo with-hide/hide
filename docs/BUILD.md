@@ -655,7 +655,7 @@ These checks prove the release contract, not actual credentials, hosting, DNS, a
 
 ## Mobile relay server
 
-[RELAY_DEPLOYMENT.md](RELAY_DEPLOYMENT.md) owns the production main-CI artifact, Linux installation and rollback, systemd/proxy/collector configuration and scoped cloud operations.
+Installing, updating and operating the production relay is owned by a private operations document, not this guide.
 The manual `relay-artifact.yml` producer builds only the relay from its exact protected-main dispatch SHA and retains source/run and SHA-256 evidence; it signs nothing and deploys nothing.
 
 `bash scripts/verify-cargo.sh build -p hide-relay --bin hide-relay` builds the standalone memory-only server into `target/debug/hide-relay` (`.exe` on Windows).

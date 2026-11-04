@@ -112,7 +112,7 @@ No IP address, key, credential, URL, application payload or close reason supplie
 A disconnected stderr collector does not panic connection tasks; deployment must monitor its collector too.
 The relay itself retains no log files; deployment owns the stderr collector, seven-day retention and alerts on `cap_exceeded`, `server_failed` and missing health responses.
 Those collection and alert settings are deployment work, not established by running the binary locally.
-[RELAY_DEPLOYMENT.md](RELAY_DEPLOYMENT.md) owns the single-VM installation, dedicated journal and collector, seven-day cloud routing, failure alerts and production acceptance boundary.
+Installing and operating the production relay, with its collector, retention and alerts, is owned by a private operations document.
 
 TLS terminates at the deployment's reverse proxy.
 By default IP budgets use the TCP peer and ignore all forwarding headers.

@@ -47,13 +47,15 @@ impl Runtime {
     /// The device's node is ready on `link` for attempt `generation`: opens
     /// the device's engine on a worker, off the lock, since it reads its
     /// saved session, and installs it once open if that link is still the
-    /// device's. `home` is the account the node answers for.
+    /// device's. `home` is the account the node answers for, and `windows`
+    /// whether its machine runs Windows, as the node's hello says.
     pub(super) fn open_own_device_engine(
         &mut self,
         device_id: &str,
         generation: u64,
         link: Arc<dyn NodeLink>,
         home: Option<String>,
+        windows: bool,
     ) {
         let Some(own) = self.own_devices.as_ref() else {
             return;
@@ -125,6 +127,7 @@ impl Runtime {
                             Arc::clone(&link),
                             &state_dir,
                             home,
+                            windows,
                             definitions,
                             launches,
                         )

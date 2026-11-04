@@ -76,14 +76,14 @@ fn record_integration(
     agent: &str,
     entries: Vec<hide_agent_hooks::codex_trust::HookEntry>,
 ) {
-    let mut record = record::load(fixture.home()).unwrap();
+    let mut record = record::load(fixture.home(), &fixture.target.install).unwrap();
     record.insert_piece(&format!("herdr:{agent}"));
     record.set_herdr_hook_entries(agent, entries);
     record::save(fixture.home(), &record).unwrap();
 }
 
 fn recorded(fixture: &Fixture, agent: &str) -> bool {
-    record::load(fixture.home())
+    record::load(fixture.home(), &fixture.target.install)
         .unwrap()
         .contains_piece(&format!("herdr:{agent}"))
 }

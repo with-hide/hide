@@ -11,6 +11,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use hide_host::kit::PaneInstall;
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
@@ -30,6 +31,7 @@ pub struct LocalPanes {
     holders: Arc<Holders>,
     service: Arc<Service>,
     shell: PaneShell,
+    install: Option<PaneInstall>,
     owner: Option<Arc<hide_kit::panes::Owner>>,
 }
 
@@ -71,13 +73,14 @@ impl PaneShell {
 
 impl LocalPanes {
     /// The panes of `holders`, attached to `service`; a pane started with no
-    /// program runs `shell`.
+    /// program runs `shell`. Its panes name no installation.
     pub fn new(holders: Arc<Holders>, service: Arc<Service>, shell: PaneShell) -> Self {
         holders.own_every_pane();
         Self {
             holders,
             service,
             shell,
+            install: None,
             owner: None,
         }
     }
@@ -86,15 +89,23 @@ impl LocalPanes {
     /// no program of its own runs the account's shell with Hide's
     /// integration, as the node prepares it for a tab. What this machine's
     /// engine and a device's node both run.
+    /// Every such pane names the Hide installation this program belongs to,
+    /// so a hook entry or a `hide` command another installation wrote leaves
+    /// the pane to this one's (docs/agent-hooks.md, More than one Hide on an
+    /// account).
     pub fn for_account(holders: Arc<Holders>, service: Arc<Service>, home: PathBuf) -> Self {
-        Self::new(
+        let mut panes = Self::new(
             holders,
             service,
             PaneShell::Account {
                 home,
                 user: hide_host::shell_integration::UserShell::of_process(),
             },
-        )
+        );
+        panes.install = std::env::current_exe()
+            .ok()
+            .and_then(|program| hide_host::kit::pane_install(&program));
+        panes
     }
 
     fn expand(&self, start: &HolderStart) -> Result<StartRequest, HolderError> {
@@ -144,9 +155,10 @@ impl LocalPanes {
             program,
             cwd,
             // The shell's own variables, then the caller's, then the pane's
-            // own name for itself, which no caller's variable replaces (PRD
-            // engine-bundle-3-core-owns D-9): the holder removes every
-            // Herdr variable, so a process in the pane names this pane alone.
+            // own name for itself and its installation, which no caller's
+            // variable replaces (PRD engine-bundle-3-core-owns D-9): the
+            // holder removes every Herdr variable, so a process in the pane
+            // names this pane alone.
             env: env
                 .into_iter()
                 .chain(
@@ -159,6 +171,7 @@ impl LocalPanes {
                     OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
                     OsString::from(&start.pane),
                 )])
+                .chain(self.install.iter().flat_map(PaneInstall::variables))
                 .collect(),
             size,
             // The screen's colors reach a holder by a theme message once a
@@ -219,6 +232,7 @@ impl PaneHolders for LocalPanes {
             holders: Arc::clone(&self.holders),
             service: Arc::clone(&self.service),
             shell: self.shell.clone(),
+            install: self.install.clone(),
             owner: Some(owner),
         }))
     }

@@ -151,7 +151,7 @@ fn a_second_daemon_cannot_rewrite_the_live_owners_account_hooks() {
     else {
         panic!("fixture daemon owns its lock")
     };
-    let mut installed = record::load(fixture.home()).unwrap();
+    let mut installed = record::load(fixture.home(), &fixture.target.install).unwrap();
     installed.remember_state_route(previous);
     record::save(fixture.home(), &installed).unwrap();
     let paths = [
@@ -176,7 +176,9 @@ fn a_second_daemon_cannot_rewrite_the_live_owners_account_hooks() {
     let allowed = apply(&fixture.target, &Scope::automatic());
     assert!(allowed.refused.is_none(), "{allowed:?}");
     assert_eq!(
-        record::load(fixture.home()).unwrap().state_route(),
+        record::load(fixture.home(), &fixture.target.install)
+            .unwrap()
+            .state_route(),
         Some(layout::state_dir_from_process(fixture.home()).as_path())
     );
 }

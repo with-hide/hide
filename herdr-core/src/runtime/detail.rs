@@ -189,7 +189,27 @@ impl Runtime {
             );
             return true;
         }
-        practice.insert(payload.chapter, progress);
+        let before = practice.insert(payload.chapter.clone(), progress);
+        if let (Some(sink), Some(chapter)) = (
+            &self.product_analytics,
+            crate::product_analytics::PracticeChapter::of(&payload.chapter),
+        ) {
+            use crate::product_analytics::{Event, PracticeStage};
+            // Each stage counts once per installation: a replayed chapter
+            // keeps its progress, and a finished one stays finished.
+            if before.is_none() {
+                sink.capture(Event::Practice {
+                    chapter,
+                    stage: PracticeStage::Started,
+                });
+            }
+            if progress.finished && !before.is_some_and(|before| before.finished) {
+                sink.capture(Event::Practice {
+                    chapter,
+                    stage: PracticeStage::Finished,
+                });
+            }
+        }
         self.persist_ui_state();
         true
     }

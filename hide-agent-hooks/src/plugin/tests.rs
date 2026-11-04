@@ -30,7 +30,7 @@ fn extension_routes_are_updated_without_treating_operator_edits_as_generated() {
             plugin.observe(fixture.home(), &fixture.helper),
             PluginObserved::Stale(_)
         ));
-        let path = plugin.path(fixture.home());
+        let path = plugin.path(fixture.home(), None);
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("--state-dir-b64"));
         fs::write(path, format!("{text}\n// operator edit\n")).unwrap();
@@ -92,7 +92,7 @@ impl Fixture {
     }
 
     fn remove(&self) -> Result<bool, String> {
-        self.plugin.remove(self.home())
+        self.plugin.remove(self.home(), None)
     }
 
     /// The folder the agent loads scripts from.
@@ -103,13 +103,13 @@ impl Fixture {
 
     /// The file Settings names.
     fn read(&self) -> String {
-        fs::read_to_string(self.plugin.path(self.home())).unwrap()
+        fs::read_to_string(self.plugin.path(self.home(), None)).unwrap()
     }
 
     /// Whether every file of the plugin is this build's.
     fn all_current(&self) -> bool {
         self.plugin.files.iter().all(|file| {
-            fs::read_to_string(file.path(self.home())).ok() == Some(file.text(&self.helper))
+            fs::read_to_string(file.path(self.home(), None)).ok() == Some(file.text(&self.helper))
         })
     }
 }
@@ -128,7 +128,7 @@ fn each_file_is_its_template_with_the_helper_and_a_marker_that_hashes_the_rest()
                 digest(body)
             )
         );
-        assert!(!body.contains(HELPER_PLACEHOLDER), "{}", file.name());
+        assert!(!body.contains(HELPER_PLACEHOLDER), "{}", file.name(None));
         if names_helper(file) {
             // A JSON string literal: quotes and the apostrophe survive as JavaScript.
             assert!(body.contains(r#"const HELPER = "/kit path/it's \"here\"/hide-agent-hooks";"#));
@@ -158,7 +158,7 @@ fn each_plugin_names_its_helper_and_each_template_names_it_and_its_constants_onc
                 .count(),
             named,
             "{}",
-            file.name()
+            file.name(None)
         );
         for (placeholder, _) in file.constants {
             assert_eq!(
@@ -256,19 +256,28 @@ fn an_edit_of_any_file_reads_edited_and_only_install_puts_hides_back() {
             .unwrap();
         let fixture = Fixture::new(plugin);
         fixture.install().unwrap();
-        let path = file.path(fixture.home());
+        let path = file.path(fixture.home(), None);
         let edited = format!(
             "{}\n// the operator's line\n",
             fs::read_to_string(&path).unwrap()
         );
         fs::write(&path, &edited).unwrap();
 
-        assert_eq!(fixture.observe(), PluginObserved::Edited, "{}", file.name());
+        assert_eq!(
+            fixture.observe(),
+            PluginObserved::Edited,
+            "{}",
+            file.name(None)
+        );
         // The kit's switch-off takes no file of an edited plugin.
         assert_eq!(fixture.remove(), Ok(false));
         assert_eq!(fs::read_to_string(&path).unwrap(), edited);
         for own in plugin.files {
-            assert!(own.path(fixture.home()).is_file(), "{}", own.name());
+            assert!(
+                own.path(fixture.home(), None).is_file(),
+                "{}",
+                own.name(None)
+            );
         }
         // Reinstall is the kit calling install on an edited plugin.
         assert_eq!(fixture.install(), Ok(true));
@@ -305,7 +314,7 @@ fn another_builds_plugin_or_a_gone_helper_reads_stale_with_the_reason() {
         let entry = plugin.entry();
         let body = entry.body(&fixture.helper);
         fs::write(
-            entry.path(fixture.home()),
+            entry.path(fixture.home(), None),
             format!(
                 "// {}@0 sha256={}\n{body}",
                 entry.source_name,
@@ -329,7 +338,7 @@ fn opencodes_1x_file_alone_reads_stale_and_a_pass_adds_the_2x_folder_beside_it()
     // What an earlier build wrote: the 1.x file and nothing else.
     let body = opencode::V1.body(&fixture.helper);
     fs::write(
-        opencode::V1.path(fixture.home()),
+        opencode::V1.path(fixture.home(), None),
         format!("// hide-opencode-plugin@5 sha256={}\n{body}", digest(&body)),
     )
     .unwrap();
@@ -349,18 +358,22 @@ fn a_file_hide_did_not_write_anywhere_in_a_plugin_holds_every_file_back() {
             .find(|plugin| plugin.files.iter().any(|own| std::ptr::eq(own, file)))
             .unwrap();
         let fixture = Fixture::new(plugin);
-        let path = file.path(fixture.home());
+        let path = file.path(fixture.home(), None);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let theirs = "export default function () {}\n";
         fs::write(&path, theirs).unwrap();
 
-        assert_eq!(fixture.observe(), PluginObserved::Foreign(file.name()));
+        assert_eq!(fixture.observe(), PluginObserved::Foreign(file.name(None)));
         assert!(fixture.install().is_err());
         assert_eq!(fixture.remove(), Ok(false));
         assert_eq!(fs::read_to_string(&path).unwrap(), theirs);
         // Nothing of Hide's went in beside it.
         for own in plugin.files.iter().filter(|own| !std::ptr::eq(*own, file)) {
-            assert!(!own.path(fixture.home()).exists(), "{}", own.name());
+            assert!(
+                !own.path(fixture.home(), None).exists(),
+                "{}",
+                own.name(None)
+            );
         }
     }
 }
@@ -371,7 +384,7 @@ fn the_other_agents_file_in_an_agents_folder_reads_stale_and_is_replaced() {
     fs::create_dir_all(fixture.folder()).unwrap();
     // omp's file copied into Pi's folder by hand is Hide's, but not Pi's.
     fs::write(
-        crate::pi_extension::PI.path(fixture.home()),
+        crate::pi_extension::PI.path(fixture.home(), None),
         crate::pi_extension::OMP.text(&fixture.helper),
     )
     .unwrap();
@@ -405,4 +418,63 @@ fn remove_takes_hides_unedited_files_and_its_emptied_folder_and_nothing_else() {
     assert_eq!(fixture.remove(), Ok(true));
     assert_eq!(fs::read(&theirs).unwrap(), b"mine");
     assert_eq!(fs::read_dir(theirs.parent().unwrap()).unwrap().count(), 1);
+}
+
+/// The desktop app's plugin and a device helper's sit side by side under
+/// their own names, each judged, written and taken out alone; the device
+/// helper's first pass takes out what its earlier build wrote under the
+/// app's names (docs/agent-hooks.md, More than one Hide on an account).
+#[test]
+fn each_installation_keeps_its_own_plugin_files() {
+    for plugin in PLUGINS {
+        let fixture = Fixture::new(plugin);
+        let device_helper = fixture.home().join("helper-root/current/hide-agent-hooks");
+        fs::create_dir_all(device_helper.parent().unwrap()).unwrap();
+        fs::write(&device_helper, b"binary").unwrap();
+        let state = fixture.home().join("state");
+        let device = "root:/helper-root";
+        let app = HookTarget::new(&fixture.helper, &state)
+            .unwrap()
+            .of_install(crate::route::APP_INSTALL)
+            .unwrap();
+        let device_target = HookTarget::new(&device_helper, &state)
+            .unwrap()
+            .of_install(device)
+            .unwrap();
+        // What an earlier build of the device helper wrote, under the app's
+        // names and naming no installation.
+        let earlier = HookTarget::new(&device_helper, &state).unwrap();
+        plugin.install(fixture.home(), earlier).unwrap();
+
+        assert!(plugin.install(fixture.home(), device_target).unwrap());
+        assert_ne!(
+            plugin.path(fixture.home(), Some(device)),
+            plugin.path(fixture.home(), None)
+        );
+        assert_eq!(
+            plugin.observe(fixture.home(), device_target),
+            PluginObserved::Current,
+            "{}",
+            plugin.agent()
+        );
+        assert_eq!(
+            plugin.observe(fixture.home(), app),
+            PluginObserved::Missing,
+            "the earlier device build's files went: {}",
+            plugin.agent()
+        );
+
+        plugin.install(fixture.home(), app).unwrap();
+        assert_eq!(plugin.observe(fixture.home(), app), PluginObserved::Current);
+        assert_eq!(
+            plugin.observe(fixture.home(), device_target),
+            PluginObserved::Current
+        );
+        assert!(plugin.remove(fixture.home(), Some(device)).unwrap());
+        assert_eq!(
+            plugin.observe(fixture.home(), device_target),
+            PluginObserved::Missing
+        );
+        assert_eq!(plugin.observe(fixture.home(), app), PluginObserved::Current);
+    }
 }

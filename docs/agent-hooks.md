@@ -1184,6 +1184,36 @@ Removing a device from Hide does that on the device while its helper is connecte
 Install and remove are deliberately not CLI subcommands: writing to the operator's configuration is the kit's decision, agreed to when the app was installed or a device's helper allowed in Settings › Devices, not something a stray command line performs.
 `hide device add` registers a device without that agreement, so it installs nothing, and `hide device remove` takes the kit off only as removing the device in Settings does.
 
+### More than one Hide on an account
+
+An account can hold more than one Hide installation: the desktop app, one per account and named `app`, and a device helper another machine's Hide put under a helper root, or a build Hide placed there, named `root:<helper root>` (`hide_agent_hooks::route::install_of_root`).
+Each installation's kit writes its own entries and acts only in its own panes, so a Windows PC that runs Hide and is also a Mac's device keeps both sets of agents reporting.
+Every entry carries its installation (`--install-b64`), and OpenCode's, Pi's and omp's plugin files carry it in their names: the app's keep the names earlier builds wrote, and another installation's add a 16-hex mark (`route::mark`).
+A pass judges, installs and takes out only its own entries: those that name its installation, those an earlier build wrote without naming one, which read as an older version and are replaced, and those whose helper is gone.
+A device helper's first pass takes out the plugin files its earlier build wrote under the app's names.
+Codex trusts an exact command, so each installation's pass trusts its own entries.
+
+A pane holder's pane names the installation that started it (`HIDE_INSTALL`) and that installation's own `hide` (`HIDE_INSTALL_CLI`, its `current` link for a helper root).
+An entry another installation wrote exits at once in such a pane, with nothing to say and no report: Cursor's permission hook answers allow and agy's tool hook ask, as when the helper is gone, and a plugin's helper call prints nothing, which the script reads as nothing to do.
+Each event therefore also starts the other installation's helper once, which ends before it reads its input.
+Claude Code and Codex start an event's matching hooks together, so that costs little time: on a Windows PC, where each entry starts `powershell.exe`, the other installation's entry added about 50 ms to a 1.6 s Stop event at the median (2026-11-04), and on a Mac the helper alone takes about 5 ms.
+A pane that names no installation, a Herdr pane or a plain terminal, lets every entry act, as before; until Herdr is gone, a device helper's entries in the app's Herdr panes report to the helper's own route, which holds no such pane.
+
+A `hide` that another installation put first on the pane's `PATH` hands the call to `HIDE_INSTALL_CLI` (`hided::pane_install`), so the call speaks its own daemon's protocol.
+In a pane of an installation other than the app, `hide` asks the device bridges first and this account's daemon after (`workspace_cli::bootstrap`), since the daemon would bind the pane by its folder alone.
+The call names the pane's installation, and a daemon of another one refuses it with `other_install` before it looks at the folder (`pane_auth`), so a pane whose own Hide does not answer never runs its calls against another.
+The `hide` link in the command folder stays with the installation that holds it while that installation's command is there: the other's part reads Not on this machine, "another Hide on this account holds it", and takes the name back once that command is gone.
+
+The kit record keeps the app's parts, command and hook route where earlier builds read them, and every other installation's under `installs`.
+A record without `installs` is an earlier build's, which was the account's, and another installation starts from it once.
+A record that cannot be read, damaged or written by a newer build, stays as it is when an installation goes, since it may hold the other's part and the account's choices; removing that installation reports the record as kept.
+The operator's agent choices and the retirements stay the account's.
+A pane of an installation other than the app keeps its subagent counts and plan record under `~/.hide/agent-hooks/installs/<mark>/`, so the app's core neither reads nor sweeps them and equal pane ids never meet.
+
+The two coexist once both installations run a build with this rule.
+An installation still on an earlier build treats every Hide entry, plugin file, the `hide` link and the whole record as its own, and can take the other's away until it updates.
+What stays shared: the skill stubs and the folder trust Hide records for Grok, agy, Pi and Codex, so switching one of those agents off in one installation removes the trust recorded for both, and the next start Hide makes trusts the folder again.
+
 ## Testing
 
 The operator's real `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/hooks.json` and `~/.codex/config.toml` are never a test target.
