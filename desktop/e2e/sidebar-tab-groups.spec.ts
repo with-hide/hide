@@ -1,12 +1,10 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { skipOwnWindowsAgentStart } from "../../web/e2e/own-windows-agent-start";
 import { launchShell, startStack, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 import { captureNativeWindow } from "./native-window";
 
 test("sidebar tab segments use the candidate window's real tab", { tag: "@platform" }, async () => {
-  skipOwnWindowsAgentStart();
   // A private desktop host, local stream and state file on each system.
   const stack = await startStack("sidebar-tab-groups");
   const { fixture, run } = stack;

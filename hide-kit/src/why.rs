@@ -66,6 +66,9 @@ pub enum PartCause {
     /// Retiring an earlier Hide's coordination has not finished; the next
     /// pass carries it on.
     RetirementPending,
+    /// Another Hide installation on this account holds the place, and its
+    /// own pass keeps it; Hide left it (`value`: what holds it).
+    OtherInstall,
     /// A cause a newer helper named that this build does not know; the
     /// screen says only the state.
     #[serde(other)]

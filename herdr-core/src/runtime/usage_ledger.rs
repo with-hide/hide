@@ -53,7 +53,6 @@ impl Runtime {
         sink: Arc<dyn crate::product_analytics::Sink>,
     ) {
         sink.set_enabled(self.snapshot.ui_state.product_analytics_enabled);
-        self.ai_usage.set_product_analytics(Arc::clone(&sink));
         self.product_analytics = Some(sink);
     }
 

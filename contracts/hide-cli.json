@@ -5068,7 +5068,7 @@
                 "plan"
             ],
             "arguments": [],
-            "command": "plan set",
+            "command": "task set",
             "options": [
                 {
                     "conflicts": [
@@ -5137,7 +5137,7 @@
                     }
                 }
             ],
-            "command": "plan node",
+            "command": "task node",
             "options": [
                 {
                     "name": "--status",
@@ -5204,7 +5204,7 @@
                 "plan"
             ],
             "arguments": [],
-            "command": "plan approve",
+            "command": "task approve",
             "options": [],
             "refusals": [
                 "plan_missing",
@@ -5219,7 +5219,7 @@
                 "plan"
             ],
             "arguments": [],
-            "command": "plan drop",
+            "command": "task drop",
             "options": [],
             "refusals": [
                 "plan_not_yours",
@@ -5233,7 +5233,7 @@
                 "plan"
             ],
             "arguments": [],
-            "command": "plan show",
+            "command": "task show",
             "options": [],
             "refusals": [
                 "plan_agent_unknown"
@@ -5242,7 +5242,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:a7f256d2987af61c21622f083fdd8add0d313557c9275ebc46e6103a94a31422",
+    "digest": "sha256:381d0833bae131b765e92ce8bf5f486e106b89198d5160c3b642d82958c464b0",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -5300,7 +5300,7 @@
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
         "commit": "7 to 64 hexadecimal digits",
-        "json": "a JSON document of the shape hide mission help or hide plan help shows",
+        "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
         "paste_text": "non-empty, at most 16384 bytes, no control characters but line breaks (LF, CR) and tabs",

@@ -1518,7 +1518,7 @@ enum ScopedRequest {
     MemoryHook(herdr_core::memory_hook::Ask),
     /// `hide mission`: a Conductor's mission record, the core's own.
     Mission(Box<herdr_core::missions::MissionCommand>),
-    /// `hide plan`: the caller's session's own plan, the core's record.
+    /// `hide task`: the caller's session's own plan, the core's record.
     Plan(herdr_core::plans::PlanCommand),
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
@@ -1866,6 +1866,21 @@ async fn scoped_client_loop(
                                         })?
                                 }
                                 ScopedRequest::Mission(command) => {
+                                    // A take hands the former Conductor's
+                                    // children to the caller's registration,
+                                    // so the caller has one first (B43).
+                                    if matches!(*command, herdr_core::missions::MissionCommand::Take { .. }) {
+                                        crate::hook_request::delivery(
+                                            &core,
+                                            &cap,
+                                            herdr_core::delivery::Command::Agents {
+                                                command: herdr_core::coordination::Command::RegisterSelf {
+                                                    project: Some(cap.context.checkout_path.clone()),
+                                                },
+                                            },
+                                            None,
+                                        )?;
+                                    }
                                     core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, *command)
                                         .map_err(|code| {
                                             let next = herdr_core::missions::next_action(
@@ -5032,7 +5047,7 @@ mod tests {
     }
 
     /// A plan's refusal answers as the plan words it, with the step, field or
-    /// evidence it names, from `hide plan` and from a spawn or a letter
+    /// evidence it names, from `hide task` and from a spawn or a letter
     /// alike, never as a device list (PRD hide-plan-delegate B5, B10, B24).
     #[test]
     fn a_plan_refusal_answers_the_plans_next_action_and_what_it_names() {
@@ -5055,7 +5070,7 @@ mod tests {
                 "Finish or drop",
             ),
             ("plan_node_finished\u{1f}web", "already done or dropped"),
-            ("plan_node_unknown\u{1f}nope", "hide plan show"),
+            ("plan_node_unknown\u{1f}nope", "hide task show"),
             ("plan_delegate_full\u{1f}3", "do this step yourself"),
         ] {
             let (code, detail) = herdr_core::coordination::split_refusal(reason);

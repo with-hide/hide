@@ -60,22 +60,15 @@ fn main() -> ExitCode {
         // reads any exit as no answer, and an agent's call is never failed by
         // Hide's helper. Cursor's permission hooks get their allow, since
         // Cursor reads output that is not a valid answer as a refusal.
-        Err(_)
-            if matches!(
-                arguments.first().map(String::as_str),
-                Some("hook" | "opencode" | "pi" | "omp")
-            ) =>
-        {
-            if cursor_permission_hook(&arguments) {
-                let _ = print_line(basic::CURSOR_ALLOW);
-            }
-            if antigravity_tool_hook(&arguments) {
-                print_line(antigravity::ASK);
-            }
-            return ExitCode::SUCCESS;
-        }
+        Err(_) if agent_call(&arguments) => return nothing_to_say(&arguments),
         Err(_) => return ExitCode::from(2),
     };
+    // A pane another Hide installation on this account started is that
+    // installation's entry's to answer (docs/agent-hooks.md, More than one
+    // Hide on an account): this one says nothing and reports nothing.
+    if agent_call(&arguments) && hide_agent_hooks::route::foreign_pane() {
+        return nothing_to_say(&arguments);
+    }
     match arguments.first().map(String::as_str) {
         Some("hook") => {
             if argument_value("--event", &arguments)
@@ -182,6 +175,29 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Whether `arguments` are an agent's call: a hook entry's, or a script of
+/// Hide's in an agent's own folder.
+fn agent_call(arguments: &[String]) -> bool {
+    matches!(
+        arguments.first().map(String::as_str),
+        Some("hook" | "opencode" | "pi" | "omp")
+    )
+}
+
+/// The answer of an agent's call that has nothing to say: none, which every
+/// agent reads as no decision, but Cursor's permission hooks get their
+/// allow, since Cursor reads output that is not a valid answer as a
+/// refusal, and agy's tool hook its ask, which agy needs on every path.
+fn nothing_to_say(arguments: &[String]) -> ExitCode {
+    if cursor_permission_hook(arguments) {
+        let _ = print_line(basic::CURSOR_ALLOW);
+    }
+    if antigravity_tool_hook(arguments) {
+        print_line(antigravity::ASK);
+    }
+    ExitCode::SUCCESS
 }
 
 /// Post observation never prints a permission/context decision or alters the

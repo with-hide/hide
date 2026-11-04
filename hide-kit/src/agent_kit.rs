@@ -161,11 +161,13 @@ fn observe_guidance(
     }
     let wanted = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    let hook_target = match HookTarget::new(&wanted, &state) {
-        Ok(target) => target,
-        Err(reason) => return Observed::Blocked(Reason::not_changed(reason)),
-    };
-    let observed = match guidance::status(agent, &target.home) {
+    let hook_target =
+        match HookTarget::new(&wanted, &state).and_then(|hook| hook.of_install(&target.install)) {
+            Ok(target) => target,
+            Err(reason) => return Observed::Blocked(Reason::not_changed(reason)),
+        };
+    let install = Some(target.install.as_str());
+    let observed = match guidance::status(agent, &target.home, install) {
         // Installed, but the agent has not made its settings folder yet; the
         // hook goes in on the pass after it has.
         HookStatus::RuntimeAbsent => {
@@ -199,7 +201,7 @@ fn observe_guidance(
             return Observed::Blocked(Reason::new(PartCause::Unreadable, reason.message()));
         }
         HookStatus::Installed { .. } => {
-            match guidance::installed_helper_path(agent, &target.home) {
+            match guidance::installed_helper_path(agent, &target.home, install) {
                 Some(found) if Path::new(&found) != wanted => Observed::Stale(Reason::with(
                     PartCause::OtherBuild,
                     found.clone(),
@@ -222,7 +224,20 @@ fn observe_guidance(
                 Some(_) if guidance::matches_install(agent, &target.home, hook_target) => {
                     Observed::Current
                 }
-                Some(_) if guidance::matches_helper(agent, &target.home, &wanted) => {
+                // An earlier build's entries, the same but for naming no
+                // installation (docs/agent-hooks.md, More than one Hide on an
+                // account).
+                Some(_)
+                    if HookTarget::new(&wanted, &state).is_ok_and(|unnamed| {
+                        guidance::matches_install(agent, &target.home, unnamed)
+                    }) =>
+                {
+                    Observed::Stale(Reason::new(
+                        PartCause::OlderVersion,
+                        "the hook was written by a build that names no installation",
+                    ))
+                }
+                Some(_) if guidance::matches_helper(agent, &target.home, &wanted, install) => {
                     Observed::Stale(Reason::new(
                         PartCause::RouteChanged,
                         "the hook's captured state route changed",
@@ -268,14 +283,14 @@ fn no_helper(helper: &Path) -> Reason {
 fn install_guidance(target: &KitTarget, agent: GuidanceAgent) -> Result<(), String> {
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    let hook_target = HookTarget::new(&helper, &state)?;
+    let hook_target = HookTarget::new(&helper, &state)?.of_install(&target.install)?;
     hide_agent_hooks::guidance::install(agent, &target.home, hook_target)
         .map(|_| ())
         .map_err(|failure| failure.message())
 }
 
 fn remove_guidance(target: &KitTarget, agent: GuidanceAgent) -> RemoveOutcome {
-    match hide_agent_hooks::guidance::remove(agent, &target.home) {
+    match hide_agent_hooks::guidance::remove(agent, &target.home, Some(&target.install)) {
         Ok(outcome) if outcome.removed_entries > 0 => RemoveOutcome::Removed,
         Ok(_) => RemoveOutcome::Absent,
         Err(failure) => RemoveOutcome::Failed {
@@ -291,7 +306,7 @@ fn remove_guidance(target: &KitTarget, agent: GuidanceAgent) -> RemoveOutcome {
 /// the agent off does (docs/agent-hooks.md, Folder trust for the worktrees
 /// Hide makes).
 fn remove_plugin(target: &KitTarget, dialect: PluginDialect) -> RemoveOutcome {
-    match plugin::of(dialect).remove(&target.home) {
+    match plugin::of(dialect).remove(&target.home, Some(&target.install)) {
         Ok(true) => RemoveOutcome::Removed,
         Ok(false) => RemoveOutcome::Absent,
         Err(reason) => RemoveOutcome::Failed { reason },
@@ -310,10 +325,11 @@ fn plugin_state(
     let noun = file.noun();
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    let hook_target = match HookTarget::new(&helper, &state) {
-        Ok(target) => target,
-        Err(reason) => return (ComponentState::Failed, Some(Reason::not_changed(reason))),
-    };
+    let hook_target =
+        match HookTarget::new(&helper, &state).and_then(|hook| hook.of_install(&target.install)) {
+            Ok(target) => target,
+            Err(reason) => return (ComponentState::Failed, Some(Reason::not_changed(reason))),
+        };
     let observed = file.observe(&target.home, hook_target);
     if !matches!(
         observed,
@@ -389,7 +405,11 @@ fn plugin_piece(
     failures: Option<&AgentFailures>,
 ) -> PieceReport {
     let file = plugin::of(dialect);
-    let location = Some(file.path(&target.home).display().to_string());
+    let location = Some(
+        file.path(&target.home, Some(&target.install))
+            .display()
+            .to_string(),
+    );
     let failure = failures
         .and_then(|failures| failures.hook.get(adapter.id).cloned())
         .map(Reason::not_changed);
@@ -400,7 +420,7 @@ fn plugin_piece(
         let left = failure.or_else(|| {
             let helper = helper(target);
             let state = crate::layout::state_dir_from_process(&target.home);
-            let hook_target = match HookTarget::new(&helper, &state) {
+            let hook_target = match HookTarget::new(&helper, &state).and_then(|hook| hook.of_install(&target.install)) {
                 Ok(target) => target,
                 Err(reason) => return Some(Reason::not_changed(reason)),
             };
@@ -813,7 +833,11 @@ fn guidance_piece(
             .map(Reason::not_changed)
             .or_else(|| {
                 matches!(
-                    hide_agent_hooks::guidance::status(agent, &target.home),
+                    hide_agent_hooks::guidance::status(
+                        agent,
+                        &target.home,
+                        Some(&target.install)
+                    ),
                     HookStatus::Installed { .. } | HookStatus::Outdated { .. }
                 )
                 .then(|| {
@@ -925,7 +949,8 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
         let code = hook_code(adapter);
         if !on {
             if scope.agent_off.contains(adapter.id) {
-                match hide_agent_hooks::guidance::remove(agent, &target.home) {
+                match hide_agent_hooks::guidance::remove(agent, &target.home, Some(&target.install))
+                {
                     Ok(_) => changed |= record.forget_piece(&code),
                     Err(failure) => {
                         failures.hook.insert(adapter.id, failure.message());
@@ -973,7 +998,7 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
         let code = hook_code(adapter);
         if !enabled(record, scope, adapter) {
             if scope.agent_off.contains(adapter.id) {
-                match file.remove(&target.home) {
+                match file.remove(&target.home, Some(&target.install)) {
                     Ok(_) => changed |= record.forget_piece(&code),
                     Err(reason) => {
                         failures.hook.insert(adapter.id, reason);
@@ -989,7 +1014,9 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
         }
         let helper = helper(target);
         let state = crate::layout::state_dir_from_process(&target.home);
-        let hook_target = match HookTarget::new(&helper, &state) {
+        let hook_target = match HookTarget::new(&helper, &state)
+            .and_then(|hook| hook.of_install(&target.install))
+        {
             Ok(target) => target,
             Err(reason) => {
                 failures.hook.insert(adapter.id, reason.to_owned());

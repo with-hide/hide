@@ -8,10 +8,8 @@
 // the core's own engine. Both engines read the stand-in's screen with
 // Herdr's rules for Claude Code (`hide-agent-adapter/agents/claude-code.toml`).
 
-import fs from "node:fs";
 import path from "node:path";
-import { expect } from "@playwright/test";
-import { reportedMarker } from "./agent-pane";
+import { prepareAgentInput, waitForAgentInput } from "./agent-pane";
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
 import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
@@ -65,6 +63,7 @@ export async function setAgentSession(fixture: EngineServer, daemon: Pick<Daemon
     if (fixture.engine === "herdr") {
       declareAgentSession(fixture as EngineServer & { env: NodeJS.ProcessEnv; bin: string }, pane, session, true);
     } else {
+      await waitForAgentInput(fixture.root, pane);
       sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
     }
     await control.until((rest) => agentIn(rest, pane)?.session_id === session, `${pane} on session ${session}`, 20_000);
@@ -110,6 +109,7 @@ export async function finishUnseenTurn(fixture: AgentFixture, daemon: Pick<Daemo
 export async function startAgentIn(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, pane: string, session?: string): Promise<AgentRow> {
   const row = await withControl(daemon, async (control) => {
     await preparePaneInput(control, pane);
+    prepareAgentInput(fixture.root, pane);
     sendKeys(control, pane, "claude\r");
     return control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
   });
@@ -242,9 +242,10 @@ export async function spawnRoot(
   fixture: AgentFixture,
   daemon: Pick<Daemon, "origin" | "token">,
   from: string,
-  { name, repo, branch = "main", session }: { name: string; repo: string; branch?: string; session?: string },
+  { name, repo, branch = "main", session, kind = "claude", nativeArgs = [] }: { name: string; repo: string; branch?: string; session?: string; kind?: string; nativeArgs?: string[] },
 ): Promise<string> {
-  const args = ["agent", "spawn", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch, ...(session ? ["--", "--resume", session] : [])];
+  const passed = session ? ["--resume", session] : nativeArgs;
+  const args = ["agent", "spawn", "--name", name, "--intent", name, "--kind", kind, "--repo", repo, "--branch", branch, ...(passed.length ? ["--", ...passed] : [])];
   type Spawned = { ok?: boolean; value?: { pane?: string }; error?: { code?: string } } | null;
   const deadline = Date.now() + 30_000;
   let pane: string | undefined;
@@ -262,10 +263,10 @@ export async function spawnRoot(
 
 /**
  * Waits until the stand-in a family fixture's agent runs in `pane` has
- * reported its session and so reads its terminal: a child `spawnChild`
+ * configured its terminal for input: a child `spawnChild`
  * lists is registered before its stand-in runs, and keys typed before it
  * reads are dropped by the terminal mode it sets.
  */
 export async function agentReading(fixture: Pick<EngineServer, "root">, pane: string): Promise<void> {
-  await expect.poll(() => fs.existsSync(reportedMarker(fixture.root, pane)), { message: `the agent in ${pane} reading its terminal`, timeout: 30_000 }).toBe(true);
+  await waitForAgentInput(fixture.root, pane);
 }

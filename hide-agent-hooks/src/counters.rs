@@ -139,7 +139,7 @@ pub struct Reporter<'a> {
 
 /// Where the counts live. Under Hide's own directory, never the runtime's.
 pub fn state_directory(home: &Path) -> PathBuf {
-    home.join(".hide").join("agent-hooks").join("panes")
+    crate::route::pane_records(home).join("panes")
 }
 
 /// A pane id is Herdr's (`w7B:pM`), so it is folded into a file name rather
@@ -803,7 +803,7 @@ fn hold(
 /// The lock every count update holds. It sits beside the records' folder,
 /// so the sweep in [`retain`] never takes it for a record.
 fn lock_path(home: &Path) -> PathBuf {
-    home.join(".hide").join("agent-hooks").join("panes.lock")
+    crate::route::pane_records(home).join("panes.lock")
 }
 
 /// Drops a pane's record. Used by the diagnosis when a pane is gone.

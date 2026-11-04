@@ -2456,42 +2456,34 @@ fn the_working_directory_is_the_kernels_answer_or_unsupported() {
 }
 
 #[test]
-fn the_arguments_are_the_ones_the_process_started_with_or_unsupported() {
+fn the_arguments_are_the_ones_the_process_started_with() {
     let _serial = serial();
     let program = std::env::current_exe().unwrap();
-    let mut child = role_command("sleep")
-        .arg("a word with spaces")
-        .spawn()
-        .unwrap();
+    let arguments = [
+        "a word with spaces",
+        "",
+        "한글",
+        "a\"quoted\"word",
+        "C:\\a path\\",
+    ];
+    let mut child = role_command("sleep").args(arguments).spawn().unwrap();
     let pid = child.id();
     ready_number(child.stdout.take().unwrap());
-    match argv_of(pid) {
-        Ok(argv) => {
-            if cfg!(windows) {
-                panic!("Windows keeps no command line another process can read");
-            }
-            assert_eq!(
-                argv,
-                [
-                    program.to_str().unwrap(),
-                    "--exact",
-                    "process::child_role",
-                    "--nocapture",
-                    "--test-threads=1",
-                    "a word with spaces",
-                ],
-            );
-        }
-        Err(error) => {
-            if !cfg!(windows) {
-                panic!("only Windows cannot answer: {error}");
-            }
-            assert_eq!(error.kind(), ErrorKind::Unsupported);
-        }
-    }
+    let actual = argv_of(pid);
     child.kill().unwrap();
     child.wait().unwrap();
     drop(child);
+    let expected: Vec<&str> = [
+        program.to_str().unwrap(),
+        "--exact",
+        "process::child_role",
+        "--nocapture",
+        "--test-threads=1",
+    ]
+    .into_iter()
+    .chain(arguments)
+    .collect();
+    assert_eq!(actual.unwrap(), expected);
     if !cfg!(windows) {
         assert!(gone_within(pid, Duration::from_secs(5)));
         assert_eq!(
@@ -2582,10 +2574,51 @@ fn a_process_group_lists_its_members_where_the_system_has_them() {
             "no such group"
         );
     }
+    // Windows has no process group: a job's first process stands in for it,
+    // and the group is that process and every process under it.
     #[cfg(windows)]
+    {
+        let _serial = serial();
+        let (mut child, grandchild) = owned_tree();
+        let members = group_members(child.id()).unwrap();
+        assert!(
+            members.contains(&child.id()) && members.contains(&grandchild),
+            "{members:?}"
+        );
+        assert_eq!(group_members(grandchild).unwrap(), vec![grandchild]);
+        child.kill_tree().unwrap();
+        child.wait().unwrap();
+        // The held child is known to have ended and keeps its pid. A raw
+        // grandchild pid can still be ending or name another process by now.
+        assert_eq!(
+            group_members(child.id()).unwrap_err().kind(),
+            ErrorKind::NotFound,
+            "an ended leader leads nothing"
+        );
+    }
+}
+
+/// Windows names no foreground for a console: the program a shell runs now,
+/// its oldest child still running, stands in for it, and the shell itself
+/// while it runs none.
+#[cfg(windows)]
+#[test]
+fn a_consoles_foreground_is_the_program_its_shell_runs_or_the_shell() {
+    use hide_platform::process::console_foreground;
+    let _serial = serial();
+    let (mut shell, program) = owned_tree();
+    assert_eq!(console_foreground(shell.id()).unwrap(), program);
     assert_eq!(
-        group_members(std::process::id()).unwrap_err().kind(),
-        ErrorKind::Unsupported
+        console_foreground(program).unwrap(),
+        program,
+        "a program that runs nothing holds its console itself"
+    );
+    shell.kill_tree().unwrap();
+    shell.wait().unwrap();
+    // As above, retain the ended process's handle while asking about it.
+    assert_eq!(
+        console_foreground(shell.id()).unwrap_err().kind(),
+        ErrorKind::NotFound
     );
 }
 

@@ -6,7 +6,6 @@ import { setAgentState } from "../../web/e2e/fixture-agents";
 import { continueFixtureTranscript } from "../../web/e2e/herdr-fixture";
 import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
 import { chord } from "../../web/e2e/chords";
-import { skipOwnWindowsAgentStart } from "../../web/e2e/own-windows-agent-start";
 import { enterWorkspace, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
 import { fitWindow, launchShell, REPO, startStack, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
@@ -21,7 +20,6 @@ async function expectRecordPrs(record: Locator, child: string, total: number) {
 
 // The repository and the fake gh exist before the daemon registers the checkout and starts with its PATH.
 test("@platform session records by goal flow, ended work and search render in both themes in a narrow native lane", async () => {
-  skipOwnWindowsAgentStart();
   test.setTimeout(240_000);
   let github!: ReturnType<typeof workFixture>;
   const stack = await startStack("session-record", { family: true, prepare: (fixture, home) => { github = workFixture(fixture); Object.assign(home.env, github.env); } });

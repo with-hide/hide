@@ -8,6 +8,7 @@ schema = 1
 id = "grok"
 name = "Grok"
 executables = ["grok"]
+packages = ["@xai-official/grok"]
 home = "~/.grok"
 hooks = "grok"
 

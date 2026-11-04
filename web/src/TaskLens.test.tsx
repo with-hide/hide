@@ -90,7 +90,7 @@ it.each(["status", "project"] as const)("in %s orders resting tasks by their dis
   expect(rows(container)).toEqual(["recent", "middle", "old", "unknown"]);
 });
 
-it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 작업 중 and 대기, drops empty groups, names each row's project, and folds the resting and cleanup ones (B4, B5, B9; status-marks B32)", async () => {
+it("groups the device's tasks as 내 차례 (a block included), 읽을 것 and 작업 중 (a wait included, under the working ones), drops empty groups, names each row's project, and folds the resting and cleanup ones (B4, B5, B9; status-marks B32)", async () => {
   const agents = [
     row("ask", { status_code: "question", state: undefined as never }, { group: "needs_you" }),
     row("stuck", { status_code: "error", demand: "error", mark: "turn" }, { group: "needs_you", line: "API 서버에 닿지 못해 멈춤" }),
@@ -99,12 +99,13 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 작�
   agents[0] = { ...agents[0]!, state: { ...agents[0]!.state, ask: { verb: "answer", what: "새 언어로 다시 쓸까요?", more: 0 } } };
   const cards = [card("ask", "needs_you", "hide-main"), card("stuck", "blocked", "hide-main"), card("waits", "waiting", "site-main"), card("works", "working", "hide-main"), card("done", "done", "site-main"), card("rest", "resting", "hide-main"), card("clean", "cleanup", "hide-main")];
   const { container } = await render(snapshot(agents, cards), agents);
-  expect(heads(container)).toEqual(["내 차례2", "읽을 것1", "작업 중1", "대기1"]);
+  expect(heads(container)).toEqual(["내 차례2", "읽을 것1", "작업 중2"]);
+  // The core lists the waiting task first; a working agent stands above it.
   expect(rows(container)).toEqual(["ask", "stuck", "done", "works", "waits"]);
   expect(container.querySelector("[data-task-count]")?.textContent).toBe("태스크 5");
   const line = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-task-line]`);
-  // A question leads with its verb, as the sidebar row does (status-marks B5, B33).
-  expect(line("ask")?.textContent).toBe("herdr-ide질문 · 새 언어로 다시 쓸까요?");
+  // A question says only what it asks, as the sidebar row does: its ! and colour say whose turn it is.
+  expect(line("ask")?.textContent).toBe("herdr-ide새 언어로 다시 쓸까요?");
   expect(line("ask")?.querySelector(".text-warning")).not.toBeNull();
   // A block is the operator's turn: its cause in the warning colour, led by 막힘.
   expect(line("stuck")?.querySelector(".text-warning")?.textContent).toBe("막힘 · API 서버에 닿지 못해 멈춤");
@@ -112,6 +113,11 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 작�
   // The folds open in place and close with 접기.
   const folds = [...container.querySelectorAll<HTMLElement>("[data-task-fold] > button")];
   expect(folds.map((fold) => fold.textContent)).toEqual(["쉬는 중 1", "정리할 것 1"]);
+  // Each part's sticky heads stack, each under the ones above it, so a head passed stays in view.
+  const stack = (selector: string) => [...container.querySelectorAll<HTMLElement>(`${selector} [data-section-sticky]`)].map((head) => head.style.top);
+  const place = (n: number) => `calc(var(--size-sidebar-section-header) * ${n})`;
+  expect(stack('[data-task-scroll="raised"]')).toEqual([place(0), place(1)]);
+  expect(stack('[data-task-scroll="list"]')).toEqual([place(0), place(1), place(2)]);
   await act(async () => folds[0]!.click());
   expect(rows(container)).toContain("rest");
   await act(async () => container.querySelector<HTMLElement>('[data-task-focus="fold-close"]')!.click());
@@ -188,13 +194,13 @@ it("in 프로젝트별 draws one group per project, the asking project first, wi
   expect(rows(container)).toEqual(["b", "c", "a", "d"]);
   const bands = (project: string) => [...container.querySelectorAll(`[data-task-group="${project}"] [data-task-band]`)].map((band) => band.textContent);
   expect(bands("site")).toEqual(["내 차례"]);
-  expect(bands("hide")).toEqual(["읽을 것", "작업 중", "대기"]);
+  expect(bands("hide")).toEqual(["읽을 것", "작업 중"]);
   const label = container.querySelector('[data-task-group="site"] [data-task-band]')!;
   expect(label.getAttribute("aria-hidden")).toBe("true");
   expect(label.className).toContain("text-warning");
-  expect([...container.querySelectorAll('[data-task-group="hide"] ul[aria-label]')].map((list) => list.getAttribute("aria-label"))).toEqual(["읽을 것", "작업 중", "대기"]);
+  expect([...container.querySelectorAll('[data-task-group="hide"] ul[aria-label]')].map((list) => list.getAttribute("aria-label"))).toEqual(["읽을 것", "작업 중"]);
   expect(container.querySelector('[data-task-group-head="project"]')?.textContent).toBe("site내 차례 1");
-  expect([...container.querySelectorAll('[data-task-group-head="project"]')][1]?.textContent).toBe("herdr-ide읽을 것 1작업 중 1대기 1");
+  expect([...container.querySelectorAll('[data-task-group-head="project"]')][1]?.textContent).toBe("herdr-ide읽을 것 1작업 중 2");
 });
 
 it("in 프로젝트별 puts a project whose only turn is a block first, as a block is the operator's turn (status-marks B32)", async () => {
@@ -341,7 +347,7 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
   expect(at("parent").querySelector("[data-descendant-mark]")).toBeNull();
 });
 
-it("keeps a read question in 내 차례 dimmed with a hollow ! and 읽음, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B10, B13)", async () => {
+it("keeps a read question in 내 차례 dimmed with a hollow ! and no 읽음 word, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B10, B13)", async () => {
   const agents = [
     row("asked", { mark: "quiet", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
     row("kept", { mark: "quiet", group: "seen", activity: "idle", revisit: { starred: true, read_ask: false, since_unix_ms: 1 } } as Partial<AgentRow>),
@@ -350,7 +356,7 @@ it("keeps a read question in 내 차례 dimmed with a hollow ! and 읽음, and i
   const at = (pane: string) => container.querySelector(`[data-task-row="${pane}"]`)!;
   expect(at("asked").getAttribute("data-task-read")).toBe("true");
   expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark-read")).toBe("true");
-  expect(at("asked").querySelector("[data-task-read-tag]")?.textContent).toBe("읽음");
+  expect(at("asked").querySelector("[data-task-read-tag]")).toBeNull();
   expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("내 차례 · 읽은 질문");
   expect(at("kept").getAttribute("data-task-read")).toBeNull();
   const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;

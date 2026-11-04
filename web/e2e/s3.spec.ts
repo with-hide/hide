@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // S3 Explorer and editor flows on an isolated pinned Herdr (PRD
 // web-shell-pivot-s3 B1, B3, B4, B5): a real git checkout listed lazily in the
 // Explorer, a folder expanded through the core's ui state, a file opened into
@@ -541,7 +540,6 @@ test("the Explorer filter keeps matches under their folders and Escape restores 
 
 // @platform: A save and a change on disk, on the platform's filesystem.
 test("editing a document marks it dirty, saves it, and a disk change asks how to resolve", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { file, sent, lastSent } = fixture;
   try {
@@ -1081,7 +1079,6 @@ async function dragRow(page: Page, from: string, to: string): Promise<void> {
 
 // @platform: Trash is a system call on macOS.
 test("the Explorer creates, renames, moves and trashes entries", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo, sent, lastSent } = fixture;
   try {
@@ -1270,7 +1267,6 @@ test("a preview-only document closes without a save", async ({ page }) => {
 
 // @platform: File watching is FSEvents on macOS and inotify on Linux.
 test("a change in an expanded folder refreshes the tree without a reload", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo } = fixture;
   try {
@@ -1296,7 +1292,6 @@ test("a change in an expanded folder refreshes the tree without a reload", { tag
 
 // @platform: ⌘ chords, the command key of the system hide ships on.
 test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo, sent } = fixture;
   try {
@@ -1346,7 +1341,6 @@ test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" 
 });
 
 test("Explorer files paste paths and images attach to the receiving terminal", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { herdr, sent } = fixture;
   try {

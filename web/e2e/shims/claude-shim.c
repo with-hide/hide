@@ -530,6 +530,13 @@ int main(int argc, char **argv) {
   // exec, so a silent stand-in leaves output-driven detection seeing the shell.
   static const char ready[] = "claude fixture ready\r\n";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+  if (pane_root && pane && *pane) {
+    char marker[4096];
+    if (snprintf(marker, sizeof marker, "%s/terminal-ready-%s", pane_root, pane) >= (int)sizeof marker) return 1;
+    for (char *at = marker + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';
+    FILE *file = fopen(marker, "wb");
+    if (!file || fclose(file) != 0) return 1;
+  }
 #ifdef _WIN32
   char b[16384];
 #else

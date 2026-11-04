@@ -98,6 +98,10 @@ pub(crate) struct Place {
     /// device.
     pub(crate) hooks_home: Option<PathBuf>,
     pub(crate) node: Arc<dyn NodeLink>,
+    /// Whether the machine `node` answers for runs Windows: a device's
+    /// system, from its node's hello, never the core's own, since a Mac core
+    /// runs the panes of a Windows device and the reverse.
+    pub(crate) windows: bool,
     /// The agent definitions the operator's folder held when the daemon
     /// started, so a restore resumes their agents before the core's first
     /// read reaches the engine.
@@ -130,6 +134,9 @@ struct Shared {
     definitions: agents::Definitions,
     /// Gives panes' holders their screen rules off every lock.
     rules: rules::RulesWorker,
+    /// Whether the machine whose holders run the panes runs Windows: the
+    /// place's, or this machine's for a test engine with no place.
+    windows: bool,
     /// Facts a holder sent before its pane entered the topology (a pane
     /// reserves its id and starts its holder first), laid on once it has.
     /// The oldest goes first past [`EARLY_FACTS_CAP`].
@@ -212,6 +219,7 @@ pub(crate) fn open_device(
     node: Arc<dyn NodeLink>,
     state_dir: &std::path::Path,
     home: String,
+    windows: bool,
     definitions: Arc<hide_agent_adapter::definition::Catalog>,
     launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
 ) -> Result<OwnEngine<'static>, String> {
@@ -223,6 +231,7 @@ pub(crate) fn open_device(
             home,
             hooks_home: None,
             node,
+            windows,
             definitions,
             launches,
         },
@@ -314,8 +323,10 @@ impl OwnEngine<'static> {
             || Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             |place| Arc::clone(&place.definitions),
         );
+        let windows = place.as_ref().map_or(cfg!(windows), |place| place.windows);
         let engine = Self {
             shared: Arc::new(Shared {
+                windows,
                 topology: Arc::new(Mutex::new(topology)),
                 rules: rules::RulesWorker::start(Arc::clone(&holders), restored)?,
                 holders,
@@ -1207,7 +1218,7 @@ fn delivery_of(
         state_change_seq: agent.live.seq,
         readiness: Readiness::of(
             Some(agent.live.shown),
-            Some(agent.starting(std::time::Instant::now())),
+            Some(agent.launch_pending(std::time::Instant::now())),
         ),
     }
 }
@@ -2103,7 +2114,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs a program; an agent starts only in an idle shell"),
             ));
         }
-        let shell = shell_line::Shell::of(processes.shell_name()).ok_or_else(|| {
+        let shell = shell_line::Shell::of(processes.shell_name(), self.shared.windows).ok_or_else(|| {
             refused(
                 "agent_start_refused",
                 format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),
@@ -2195,7 +2206,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.live.shown || agent.starting(std::time::Instant::now()) {
+            if !agent.live.shown || agent.launch_pending(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),
@@ -3337,6 +3348,7 @@ mod tests {
         Place {
             engine_dir: hide_kit::layout::engine_dir(&root.join("state")),
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
+            windows: cfg!(windows),
             home: wire(&home),
             hooks_home: Some(home.clone()),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
@@ -3719,11 +3731,21 @@ mod tests {
         }
     }
 
+    /// Moves the start of the agent in `pane` back by the settle delay, as
+    /// if it had been typed that long ago.
+    fn settle_start(engine: &OwnEngine, pane: &str) {
+        let mut topology = engine.topology();
+        let agent = topology.pane_mut(pane).unwrap().agent.as_mut().unwrap();
+        let started = agent.live.started.as_mut().unwrap();
+        *started -= agents::START_SETTLE;
+    }
+
     fn running(program: &str, screen: hide_node_link::holders::ScreenState) -> PaneFacts {
         PaneFacts {
             foreground: Some(hide_node_link::holders::ForegroundProgram {
                 pid: 77,
                 name: program.to_owned(),
+                package: None,
                 argv: vec![program.to_owned()],
             }),
             screen: hide_node_link::holders::ScreenRead::Read {
@@ -3762,6 +3784,34 @@ mod tests {
             .collect()
     }
 
+    /// A device's engine types the line its pane's machine reads, never the
+    /// core's: a Mac core starts an agent in a Windows device's pane with
+    /// PowerShell's line when the holder could not name the shell, and a
+    /// Windows core in a Linux device's with a POSIX one.
+    #[test]
+    fn a_start_takes_the_panes_machine_shell_when_its_name_is_unknown() {
+        for (windows, line) in [(true, "& codex\r"), (false, "codex\r")] {
+            let root = tempfile::tempdir().unwrap();
+            let mut place = place(root.path());
+            place.windows = windows;
+            let folder = home(&place);
+            std::fs::create_dir_all(&folder).unwrap();
+            let holders = Holders::found(HolderRecovery::default());
+            let engine =
+                OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place).unwrap();
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+                .unwrap();
+            // The holder could not read the shell's program name.
+            holders.idle_shell(41, "");
+            let start = engine
+                .prepare_start(launch(&pane, "worker", "codex", &[]))
+                .unwrap();
+            engine.start_agent(WAIT, &start).unwrap();
+            assert_eq!(holders.typed(&pane), line, "windows: {windows}");
+        }
+    }
+
     /// D-19, B17, B18: a start types its definition's line into the idle
     /// shell and hands the holder the agent's screen rules; the holder's
     /// facts then say what the agent does, through working to done.
@@ -3788,18 +3838,23 @@ mod tests {
         assert_eq!(starting.kind.as_deref(), Some("claude"));
         assert_eq!(starting.status, "unknown");
 
+        settle_start(&engine, &pane);
         holders.say(&pane, &running("claude", ScreenState::Working));
         let working = engine.agent_state(WAIT, "worker").unwrap();
         assert_eq!(working.status, "working");
         assert_eq!(
             engine.delivery_agent(WAIT, &pane).unwrap().readiness,
-            Readiness::Ready,
-            "the pane id names its agent too"
+            Readiness::Launching,
+            "the pane id names its agent too, still starting until it rests"
         );
         holders.say(&pane, &running("claude", ScreenState::Idle));
         let done = engine.agent_state(WAIT, "worker").unwrap();
         assert_eq!(done.status, "done", "a rest after work is done");
         assert!(done.state_change_seq > working.state_change_seq);
+        assert_eq!(
+            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+            Readiness::Ready
+        );
         let listed = engine.agents(WAIT).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name.as_deref(), Some("worker"));
@@ -4324,13 +4379,17 @@ mod tests {
             refused(engine.prompt_agent(WAIT, "worker", "hi")),
             "agent_not_ready"
         );
-        holders.say(
-            &pane,
-            &PaneFacts {
-                bracketed_paste: true,
-                ..running("codex", ScreenState::Idle)
-            },
+        let idle = PaneFacts {
+            bracketed_paste: true,
+            ..running("codex", ScreenState::Idle)
+        };
+        holders.say(&pane, &idle);
+        assert_eq!(
+            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            "agent_not_ready",
+            "a screen drawn within the start's settle"
         );
+        settle_start(&engine, &pane);
         engine.prompt_agent(WAIT, "worker", "a\nb").unwrap();
         assert!(
             holders

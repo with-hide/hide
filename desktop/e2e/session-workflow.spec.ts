@@ -43,15 +43,11 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await expect(pane.locator(`[data-pane-child-name]`)).toHaveCount(0);
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveCount(0);
     const raisedRow = pane.locator('[data-pane-header-band="raised"]');
-    const raisedVerb = raisedRow.locator('[data-verb="approval"]');
     const raisedWho = raisedRow.locator(`[data-pane-band-who="${child}"]`);
-    await expect(raisedVerb).toHaveText("Approval");
+    // A raised ask names no verb: the warning rail says whose turn it is, and the child's name leads.
+    await expect(raisedRow.locator("[data-verb]")).toHaveCount(0);
     await expect(raisedWho).toContainText("자식의 긴 한국어 검증 요청");
     await expect(raisedWho).toContainText("(child)");
-    expect(await raisedVerb.evaluate((verb, childPaneId) => {
-      const who = verb.parentElement?.querySelector(`[data-pane-band-who="${childPaneId}"]`);
-      return !!who && !!(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING);
-    }, child)).toBe(true);
     // The raised ask leads with the parent's request, its own first line while the label gave no summary (PRD pane-last-request B1, B3).
     await expect(raisedRow.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
     const terminal = await host.boundingBox();

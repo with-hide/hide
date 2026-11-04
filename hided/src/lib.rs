@@ -40,6 +40,7 @@ pub mod node_uploads;
 mod outside_open;
 pub mod page_forward;
 pub mod pane_cli;
+pub mod pane_install;
 pub mod plan_cli;
 mod project_open;
 

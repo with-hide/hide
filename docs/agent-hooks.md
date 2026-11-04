@@ -69,7 +69,7 @@ After that daemon ends, the next pass may take ownership and refresh the entries
 Development and QA candidates use a private HOME as well as a private state folder, because changing only the state folder still shares the account's hook files.
 Before that pass, an unavailable old folder leaves mail pending and records the existing throttled `intake.failed` diagnostic with code `unavailable` in the helper's private delivery diagnostics; an invalid captured argument records `record` instead.
 
-The shared SessionStart guidance is English and begins with an intent table that turns what the operator asks for into its command: showing the operator a file, diff or web page (`hide file|diff|browser open …`, which opens as a tab of the active View area and waits in their Needs You as To look at until they look at it), checking a page for yourself with your own browser tool such as `aside` and not `hide browser open`, collecting what a delegated child opened (`hide view list`, a read with `hide view status` or `hide browser snapshot`, and an open again from your own pane to show it), an agent beside you (`hide agent spawn --beside …`, own checkout only), work handed to an agent whose result you collect (`--parent here`), work the operator wants split across several agents (plan it with `hide plan help` and hand only the steps that deliver something with `hide agent spawn --parent here --plan-node <key> …`, research staying with the agent's own subagents, PRD hide-plan-delegate D-11) and independent work (no `--parent`), with a line that forbids starting an agent with `hide pane open` or by typing its program into a pane.
+The shared SessionStart guidance is English and begins with an intent table that turns what the operator asks for into its command: showing the operator a file, diff or web page (`hide file|diff|browser open …`, which opens as a tab of the active View area and waits in their Needs You as To look at until they look at it), checking a page for yourself with your own browser tool such as `aside` and not `hide browser open`, collecting what a delegated child opened (`hide view list`, a read with `hide view status` or `hide browser snapshot`, and an open again from your own pane to show it), an agent beside you (`hide agent spawn --beside …`, own checkout only), work handed to an agent whose result you collect (`--parent here`), work the operator wants split across several agents (plan it with `hide task help` and hand only the steps that deliver something with `hide agent spawn --parent here --plan-node <key> …`, research staying with the agent's own subagents, PRD hide-plan-delegate D-11) and independent work (no `--parent`), with a line that forbids starting an agent with `hide pane open` or by typing its program into a pane.
 The table is one literal (`hide_agent_hooks::intent_table!`) at the front of `PURPOSE_CONTEXT`, so every runtime's SessionStart, `hide guide` and the `hide` skill (version 5) carry the same text, and an older version is replaced at the next kit pass.
 The guidance names Hide's commands only, never Herdr's program, its variables or its commands (PRD engine-bundle-1 D-6): a pane is read and driven with `hide pane read|send|open` and `hide agent read`, a worktree's purpose is set with `hide workspace purpose` and a worktree is removed with `hide workspace remove`, and input for another agent goes as a letter, `hide request send`, with `--force` to put it into the agent's input now ([delivery.md](delivery.md#pane-commands)).
 `hided/src/guide.rs` holds the session note, `hide guide` and `hide mission help` to that: none names Herdr, and every command of the contract's topics they teach is one `hide contract --json` names.
@@ -532,14 +532,14 @@ A command hook pays one policy read per call and parses the payload only when so
 ## The pane's plan record
 
 The prompt hook and the pre-tool hook know a pane's plan and mission work from one small file, `~/.hide/agent-hooks/plans/<pane>.json` (`hide_agent_hooks::plan_record`), written whole and private to the account: `{"version":1,"session":<native session>,"context":<plan_context>}`, under 16 KiB (PRD hide-plan D-14, D-15, D-30).
-`plan_context` is the summary the core sends ([delivery.md: Plans](delivery.md#plans)), fixed in `contracts/delivery-envelope.json`; the prompt hook writes it from its letter pull's answer, which already asks the core, and every `hide plan` command writes it from its own answer, so an approval lets the next write through in the same turn.
+`plan_context` is the summary the core sends ([delivery.md: Plans](delivery.md#plans)), fixed in `contracts/delivery-envelope.json`; the prompt hook writes it from its letter pull's answer, which already asks the core, and every `hide task` command writes it from its own answer, so an approval lets the next write through in the same turn.
 A pane with no record, and a record of another session than the call's, gives neither a line nor a refusal, so a new session in a reused pane starts clean.
 A record written before node criteria still reads: a mission's missing `role` is a worker's, and missing `line`, `criteria` and `unmet` are empty, so it gives the lines it gave before.
 The other way round, a hook from before node criteria reads its records with unknown fields refused, so a record a newer core wrote reads as no record there: that hook gives no plan or mission line and refuses nothing until the kit installs the hook of the running Hide, which a Hide update does.
 
 The prompt hook adds the record's lines to the session context:
 
-- the plan's, `Plan: now <step> (n/m) · next <step> · updated <N> min ago`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
+- the plan's, `Task: now <step> (n/m) · next <step> · updated <N> min ago`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide task node <key> --status done` command; a finished plan has none;
 - a mission worker's, `Mission <id> · node <key> · range <its own lines or title> · criteria <met>/<total> · left: <keys> · no merging · no starting agents`, without `no merging` for a mission that goes through the merge, and without the criteria for a mission made before node criteria (PRD mission-map-git-criteria D-19, B22); while a line is left, a second line names `hide mission record <node> <line> --pass|--fail --evidence <one line>`, the check line with `--commit <sha>`;
 - a checker's, `Mission <id> · checking node <key> (<review or verify>) · range <its own lines or title> · criteria …`, followed by the one `hide mission record` command for its own line;
 - a Conductor's, `Mission <done>/<nodes> · working <n> · letters <n> · decision waiting: <yes/no>`, with ` · reported with lines left: <nodes>` when a worker sent its report while its node still has a line open.
@@ -549,7 +549,7 @@ The lines only tell: no hook refuses a call or ends a turn because a line is ope
 The pre-tool hook reads only the record, after the project guardrails and before the spawn guard, and never asks the daemon; a tool call refused here is logged in the spawn guard's log as `plan.refused` with the rule, the runtime and the pane, never the command.
 It refuses three things and lets everything else run, reading and searching included:
 
-- a file write, `git commit` or `git push` while the plan waits for the operator's review (`plan_proposed`), with `hide plan approve` as the way on and `hide plan set --json '<plan>' --ask` as the way to send a revised plan without writing a file;
+- a file write, `git commit` or `git push` while the plan waits for the operator's review (`plan_proposed`), with `hide task approve` as the way on and `hide task set --json '<plan>' --ask` as the way to send a revised plan without writing a file;
 - `gh pr merge` by a worker of a mission that goes up to pull requests (`mission_merge`);
 - `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, in any pane with a record (`history_rewrite`).
 
@@ -768,8 +768,8 @@ What some lines take on:
 
 Two pieces are written per agent into the agent's own files, and nothing else; a third, Herdr's integration, is put in through Herdr's own CLI (below):
 
-- The skill stubs Hide puts down (`hide_kit::agents::SKILLS`), each as `<name>/SKILL.md` in the folder the agent reads, plain copies written by every pass into every folder: `hide`, the guide to Hide, `hide-mission`, for a mission of agents, and `hide-plan`, for the session's own plan; a further stub is one more entry of that array, and the observe, write and remove passes read the array.
-  Each is a few lines that point at the CLI's own guide, `hide guide`, `hide mission help` or `hide plan help`, so it stays right as that guide changes; the `hide` guide sends browser work to `hide browser help`, so there is no separate browser skill, and it names `hide mission help` too, so an agent that did not pick the Conductor's skill still finds it.
+- The skill stubs Hide puts down (`hide_kit::agents::SKILLS`), each as `<name>/SKILL.md` in the folder the agent reads, plain copies written by every pass into every folder: `hide`, the guide to Hide, `hide-mission`, for a mission of agents, and `hide-task`, for the session's own plan; a further stub is one more entry of that array, and the observe, write and remove passes read the array.
+  Each is a few lines that point at the CLI's own guide, `hide guide`, `hide mission help` or `hide task help`, so it stays right as that guide changes; the `hide` guide sends browser work to `hide browser help`, so there is no separate browser skill, and it names `hide mission help` too, so an agent that did not pick the Conductor's skill still finds it.
   The folders are the agent's global ones, read in every terminal, so each description says the skill is only for a session in a pane Hide manages, and the body first has the agent check that (Hide's session guidance, or `hide workspace info` answering) and stop when it is not.
   The description is a quoted YAML string: Pi 1.0.4 parses front matter strictly and drops a skill whose plain description holds `: `, which is how the Conductor's first stub never reached Pi's model (measured on 2026-10-22).
   The `hide-browser` stub an earlier build wrote is retired by ownership (`RETIRED_SKILLS`): a pass takes it out when its bytes are exactly what that build wrote, with its folder when nothing else is in it, and keeps one the operator edited; a folder holding a retired stub reads Outdated until that pass, so a folder an earlier build filled gets the current stubs even though the kit had recorded it as written. An edited one decides nothing: a recorded folder that holds only edited ones reads as the operator's removal of Hide's stubs, which Reinstall undoes, so a stub the operator deleted is not written back on every pass.
@@ -1200,6 +1200,36 @@ Removing a device from Hide does that on the device while its helper is connecte
 `hide-agent-hooks doctor [--json]` prints the same judgement in a terminal, because a broken hook shows on screen only as a Not connected chip on a Claude Code or Codex pane and nowhere for any other agent, and the output of that command is the evidence.
 Install and remove are deliberately not CLI subcommands: writing to the operator's configuration is the kit's decision, agreed to when the app was installed or a device's helper allowed in Settings › Devices, not something a stray command line performs.
 `hide device add` registers a device without that agreement, so it installs nothing, and `hide device remove` takes the kit off only as removing the device in Settings does.
+
+### More than one Hide on an account
+
+An account can hold more than one Hide installation: the desktop app, one per account and named `app`, and a device helper another machine's Hide put under a helper root, or a build Hide placed there, named `root:<helper root>` (`hide_agent_hooks::route::install_of_root`).
+Each installation's kit writes its own entries and acts only in its own panes, so a Windows PC that runs Hide and is also a Mac's device keeps both sets of agents reporting.
+Every entry carries its installation (`--install-b64`), and OpenCode's, Pi's and omp's plugin files carry it in their names: the app's keep the names earlier builds wrote, and another installation's add a 16-hex mark (`route::mark`).
+A pass judges, installs and takes out only its own entries: those that name its installation, those an earlier build wrote without naming one, which read as an older version and are replaced, and those whose helper is gone.
+A device helper's first pass takes out the plugin files its earlier build wrote under the app's names.
+Codex trusts an exact command, so each installation's pass trusts its own entries.
+
+A pane holder's pane names the installation that started it (`HIDE_INSTALL`) and that installation's own `hide` (`HIDE_INSTALL_CLI`, its `current` link for a helper root).
+An entry another installation wrote exits at once in such a pane, with nothing to say and no report: Cursor's permission hook answers allow and agy's tool hook ask, as when the helper is gone, and a plugin's helper call prints nothing, which the script reads as nothing to do.
+Each event therefore also starts the other installation's helper once, which ends before it reads its input.
+Claude Code and Codex start an event's matching hooks together, so that costs little time: on a Windows PC, where each entry starts `powershell.exe`, the other installation's entry added about 50 ms to a 1.6 s Stop event at the median (2026-11-04), and on a Mac the helper alone takes about 5 ms.
+A pane that names no installation, a Herdr pane or a plain terminal, lets every entry act, as before; until Herdr is gone, a device helper's entries in the app's Herdr panes report to the helper's own route, which holds no such pane.
+
+A `hide` that another installation put first on the pane's `PATH` hands the call to `HIDE_INSTALL_CLI` (`hided::pane_install`), so the call speaks its own daemon's protocol.
+In a pane of an installation other than the app, `hide` asks the device bridges first and this account's daemon after (`workspace_cli::bootstrap`), since the daemon would bind the pane by its folder alone.
+The call names the pane's installation, and a daemon of another one refuses it with `other_install` before it looks at the folder (`pane_auth`), so a pane whose own Hide does not answer never runs its calls against another.
+The `hide` link in the command folder stays with the installation that holds it while that installation's command is there: the other's part reads Not on this machine, "another Hide on this account holds it", and takes the name back once that command is gone.
+
+The kit record keeps the app's parts, command and hook route where earlier builds read them, and every other installation's under `installs`.
+A record without `installs` is an earlier build's, which was the account's, and another installation starts from it once.
+A record that cannot be read, damaged or written by a newer build, stays as it is when an installation goes, since it may hold the other's part and the account's choices; removing that installation reports the record as kept.
+The operator's agent choices and the retirements stay the account's.
+A pane of an installation other than the app keeps its subagent counts and plan record under `~/.hide/agent-hooks/installs/<mark>/`, so the app's core neither reads nor sweeps them and equal pane ids never meet.
+
+The two coexist once both installations run a build with this rule.
+An installation still on an earlier build treats every Hide entry, plugin file, the `hide` link and the whole record as its own, and can take the other's away until it updates.
+What stays shared: the skill stubs and the folder trust Hide records for Grok, agy, Pi and Codex, so switching one of those agents off in one installation removes the trust recorded for both, and the next start Hide makes trusts the folder again.
 
 ## Testing
 

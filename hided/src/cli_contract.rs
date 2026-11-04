@@ -1,5 +1,5 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `device`, `pane`, `workspace
+//! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `workspace
 //! purpose`, `workspace remove`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
@@ -20,7 +20,7 @@ pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
-    "agent", "ps", "request", "inbox", "watch", "mission", "plan", "device", "pane",
+    "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -1106,7 +1106,7 @@ pub const COMMANDS: &[Spec] = &[
     spec(&["mission", "list"], &[], &[], &["mission_list"]),
     spec(&["mission", "settings"], &[], &[], &["mission_settings"]),
     Spec {
-        words: &["plan", "set"],
+        words: &["task", "set"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1150,7 +1150,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     Spec {
-        words: &["plan", "node"],
+        words: &["task", "node"],
         arguments: &[Arg {
             name: "key",
             value: Key,
@@ -1186,7 +1186,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     Spec {
-        words: &["plan", "approve"],
+        words: &["task", "approve"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1196,7 +1196,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &["plan_missing", "plan_not_yours", "plan_agent_unknown"],
     },
     Spec {
-        words: &["plan", "drop"],
+        words: &["task", "drop"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1206,7 +1206,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &["plan_not_yours", "plan_agent_unknown"],
     },
     Spec {
-        words: &["plan", "show"],
+        words: &["task", "show"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1341,7 +1341,7 @@ fn body() -> Value {
             "commit": "7 to 64 hexadecimal digits",
             "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
-            "json": "a JSON document of the shape hide mission help or hide plan help shows",
+            "json": "a JSON document of the shape hide mission help or hide task help shows",
             "paste_text": format!(
                 "non-empty, at most {} bytes, no control characters but line breaks (LF, CR) and tabs",
                 herdr_core::pane_command::TEXT_LIMIT

@@ -341,7 +341,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     const oneRow = phone.locator(`[data-phone-agent$="|${one}"]`);
     const twoRow = phone.locator(`[data-phone-agent$="|${two}"]`);
     await expect(phone.locator('[data-phone-group="needs_you"]').locator(`[data-phone-agent$="|${one}"]`)).toBeVisible({ timeout: 20_000 });
-    await expect(oneRow.locator("[data-phone-line]")).toHaveText("Question · 배포 전에 테스트를 다시 돌릴까요?");
+    await expect(oneRow.locator("[data-phone-line]")).toHaveText("배포 전에 테스트를 다시 돌릴까요?");
     await expect(phone.locator('[data-phone-group="working"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible();
     await expect(phone.locator("[data-phone-group] h2").first()).toContainText("Needs You");
     // B21: live; two asks and joins one under Needs You without a reload.
@@ -627,7 +627,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         subject_mission_attention_wake_refused: "PR 일로 일꾼을 깨우지 못함",
         subject_mission_attention_worker_ended: "일꾼 끝남, 일 남음",
         subject_mission_decision: "판단",
-        subject_plan_review: "계획 검토 · {{count}}단계",
+        subject_plan_review: "작업 단계 검토 · {{count}}단계",
       });
     await page.locator("[data-interface-language]").click();
     await page.locator('[data-language-option="system"]').click();

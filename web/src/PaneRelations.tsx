@@ -149,7 +149,7 @@ export type RevisitOffer = "hidden" | "star" | "done";
 
 /**
  * `overview`: the pane runs an agent, so `개요에서 보기` is offered (PRD pane-open-in-overview D-07).
- * `plan`: the pane's session has a plan, so `계획` opens its map (PRD hide-plan B11).
+ * `plan`: the pane's session has a plan, so `작업 단계` opens its map (PRD hide-plan B11).
  */
 /** Why a disabled Sleep agent or Fork item is disabled, from the core's code; a code this build does not word falls back to the item's general line. */
 function refusalText(reason: AgentActionRefusal | null | undefined, fallback: "panes.menu.sleepUnavailable" | "panes.menu.forkUnavailable"): string {

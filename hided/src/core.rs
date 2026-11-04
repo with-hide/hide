@@ -42,6 +42,9 @@ type ReleaseSourceAnswer =
     Result<(herdr_core::ReleaseSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
 
 enum Command {
+    /// A usage event the daemon observed outside the core (a phone's
+    /// pairing); the owner thread hands it to the statistics worker it owns.
+    ProductEvent(herdr_core::product_analytics::Event),
     ObservationPrepare {
         device_id: String,
         pane_id: String,
@@ -346,6 +349,12 @@ impl CoreHandle {
         &self.node
     }
 
+    /// Counts a usage event the daemon observed outside the core; the
+    /// statistics worker drops it while usage statistics are off.
+    pub fn capture_product_event(&self, event: herdr_core::product_analytics::Event) {
+        let _ = self.commands.send(Command::ProductEvent(event));
+    }
+
     /// The core's state folder.
     pub fn state_dir(&self) -> &std::path::Path {
         &self.state_dir
@@ -512,7 +521,7 @@ impl CoreHandle {
             .map_err(|_| "mission_unavailable".to_owned())?
     }
 
-    /// Runs a `hide plan` command on the owner thread. A change whose
+    /// Runs a `hide task` command on the owner thread. A change whose
     /// evidence needs reading (a step's pull request or file, PRD
     /// hide-plan-delegate D-19) has it read here, on the caller's request
     /// thread, and is asked again with what was read; a plan that moved in
@@ -1522,6 +1531,11 @@ fn owner_loop(
             }
             Command::ReleaseEffects { reply } => {
                 let _ = reply.send(core.release_effects());
+            }
+            Command::ProductEvent(event) => {
+                if let Some(worker) = &analytics {
+                    herdr_core::product_analytics::Sink::capture(&*worker.client, event);
+                }
             }
             Command::MemoryPrepare {
                 device_id,

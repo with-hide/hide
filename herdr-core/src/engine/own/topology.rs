@@ -352,6 +352,24 @@ impl Topology {
         Some((workspace, found.active_tab.as_str()))
     }
 
+    /// `panes` with those of the tab the keyboard's workspace shows first,
+    /// each part in the order given: a restore starts the shells the screen
+    /// opens on before the others.
+    pub(super) fn front_first(&self, panes: &mut [String]) {
+        let front: BTreeSet<&str> = self
+            .shown_tab()
+            .and_then(|(workspace, tab)| {
+                self.workspace(workspace)
+                    .ok()?
+                    .tabs
+                    .iter()
+                    .find(|found| found.id == tab)
+            })
+            .map(|tab| tab.panes.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        panes.sort_by_key(|pane| !front.contains(pane.as_str()));
+    }
+
     /// Records a move when the shown tab is not the one last recorded, as
     /// Herdr publishes `tab_focused` for every tab it moves to and none for
     /// a focus of the tab it shows. The engine calls it as each hold of its
@@ -1668,7 +1686,7 @@ fn projected_agent(
         lineage_session: own_session,
         state_change_seq: agent.live.seq,
         completion_seq: agent.live.completion,
-        launch_pending: agent.starting(now),
+        launch_pending: agent.launch_pending(now),
         tokens: pane.tokens.clone(),
     }
 }
@@ -1930,6 +1948,29 @@ mod tests {
         crate::live::project_layout(&topology.pane_layout(pane).unwrap())
             .unwrap()
             .root
+    }
+
+    /// A restore starts the shells of the tab the keyboard's workspace
+    /// shows before the others, the rest in the order given.
+    #[test]
+    fn the_shown_tab_s_panes_come_first() {
+        let mut topology = Topology::default();
+        let first = workspace(&mut topology);
+        let (_, other) = new_tab(&mut topology, &first.workspace);
+        let second = workspace(&mut topology);
+        let beside = split(&mut topology, &second.pane, PaneLayoutDirection::Right);
+        let (_, later) = new_tab(&mut topology, &second.workspace);
+        topology.focus_tab(&second.tab).unwrap();
+
+        let mut panes = vec![
+            first.pane.clone(),
+            other.clone(),
+            second.pane.clone(),
+            beside.clone(),
+            later.clone(),
+        ];
+        topology.front_first(&mut panes);
+        assert_eq!(panes, [second.pane, beside, first.pane, other, later]);
     }
 
     #[test]

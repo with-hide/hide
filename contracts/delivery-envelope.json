@@ -17,7 +17,7 @@
     "sender": "ci-lead"
   },
   "plan_context": {
-    "description": "The pane's plan summary (PRD hide-plan D-30): the core adds it to a prompt's letter pull as plan_context and to each hide plan answer as context, and the hook keeps it in the pane's record. These examples bind the core that makes it from a plan, the hook's prompt line and the pre-tool refusals read from the record alone. Fields are fixed: the plan's review, current and next step, count and update time; the mission node and scope a worker or checker works on, with how many of the node's finish lines are met and which are left (null for a mission made before criteria); the counts of a mission a Conductor runs and the nodes reported done with lines left.",
+    "description": "The pane's plan summary (PRD hide-plan D-30): the core adds it to a prompt's letter pull as plan_context and to each hide task answer as context, and the hook keeps it in the pane's record. These examples bind the core that makes it from a plan, the hook's prompt line and the pre-tool refusals read from the record alone. Fields are fixed: the plan's review, current and next step, count and update time; the mission node and scope a worker or checker works on, with how many of the node's finish lines are met and which are left (null for a mission made before criteria); the counts of a mission a Conductor runs and the nodes reported done with lines left.",
     "examples": [
       {
         "name": "proposed plan",
@@ -84,7 +84,7 @@
           "mission": null,
           "conductor": null
         },
-        "hint": "Plan: now Core events (1/4) · next Web map · updated 5 min ago\nThe plan waits for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide plan approve; if they ask for changes, send the revised plan with hide plan set --json '<plan>' --ask rather than a file; if they say not to, run hide plan drop.",
+        "hint": "Task: now Core events (1/4) · next Web map · updated 5 min ago\nThe task's steps wait for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide task approve; if they ask for changes, send the revised steps with hide task set --json '<plan>' --ask rather than a file; if they say not to, run hide task drop.",
         "commands": [
           {
             "tool": "shell",
@@ -173,7 +173,7 @@
           "mission": null,
           "conductor": null
         },
-        "hint": "Plan: now Core events (1/4) · next Web map · updated 31 min ago\nMark a finished step with `hide plan node core --status done` and the step you are on with `--status working`.",
+        "hint": "Task: now Core events (1/4) · next Web map · updated 31 min ago\nMark a finished step with `hide task node core --status done` and the step you are on with `--status working`.",
         "commands": [
           {
             "tool": "shell",

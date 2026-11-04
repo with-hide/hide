@@ -247,9 +247,8 @@ jobs:
       matrix:
         system: ${{ fromJSON(inputs.systems) }}
         engine: [herdr, own]
-        # win-agent-start 대기: every journey cell starts an agent. The own
-        # Windows path also needs bounded ownership of holders outside its
-        # process job before this exclusion can be removed.
+        # CI Job forbids holder breakaway. b4-default owns holder lifetime
+        # and must enable this Windows cell after that integration.
         exclude:
           - system: windows
             engine: own

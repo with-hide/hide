@@ -105,6 +105,17 @@ fn wait_engine(shared: &Mutex<Runtime>, installed: bool) {
     }
 }
 
+/// Waits, bounded, until the device takes deliveries: its session reads
+/// connected, which the link's session sync reports after the engine opened.
+#[allow(clippy::disallowed_methods)] // a polling helper: the session sync runs on a worker the test cannot join
+fn wait_delivery(shared: &Mutex<Runtime>) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while shared.lock().unwrap().delivery_engine(DEVICE).is_none() {
+        assert!(Instant::now() < deadline, "the device never read connected");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn row_message(shared: &Mutex<Runtime>) -> Option<String> {
     shared
         .lock()
@@ -176,6 +187,7 @@ fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
         Arc::new(HolderNode::default()),
         state.path(),
         "/srv/account".to_owned(),
+        false,
         Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
         Arc::default(),
     )
@@ -198,4 +210,44 @@ fn a_core_on_herdr_opens_no_device_engine() {
     connect(&shared, ready(Arc::new(HolderNode::default()), Ok(())));
     assert!(shared.lock().unwrap().own_device_engines().is_empty());
     assert!(shared.lock().unwrap().own_devices.is_none());
+}
+
+/// A spawned agent's identity on a device binds by the session its hook
+/// reports, which only the device's own engine can keep: the core once
+/// handed a hook's session to this machine's engine alone, so an agent on a
+/// device never had one and its spawn waited for an identity for good.
+#[test]
+fn a_hooks_session_on_a_device_goes_to_that_devices_own_engine() {
+    let state = tempfile::tempdir().unwrap();
+    let shared = own_runtime(state.path());
+    let node = Arc::new(HolderNode::default());
+    connect(&shared, ready(Arc::clone(&node), Ok(())));
+    wait_engine(&shared, true);
+    wait_delivery(&shared);
+    let report = |session: Option<&str>| hide_node_link::panes::HookStatusReport {
+        runtime: "claude-code".to_owned(),
+        version: hide_agent_hooks::HOOK_VERSION,
+        session: session.map(str::to_owned),
+        turn: None,
+        counts: None,
+        session_start: true,
+        waiting: None,
+    };
+    let runtime = shared.lock().unwrap();
+    let device = runtime.own_device_engines().remove(0);
+    // The pane's credential names it as the core does, with its device; the
+    // device's engine knows it by its holder's own id.
+    let scoped = crate::address::scoped_pane_id(DEVICE, "w4:p2");
+    for caller in [scoped.as_str(), "w4:p2"] {
+        let (taken, pane) = runtime
+            .hook_session_target(DEVICE, caller, &report(Some("s-1")))
+            .expect("the device's engine takes the session");
+        assert!(Arc::ptr_eq(&taken, &device));
+        assert_eq!(pane, "w4:p2", "{caller}");
+    }
+    assert!(
+        runtime
+            .hook_session_target(DEVICE, &scoped, &report(None))
+            .is_none()
+    );
 }

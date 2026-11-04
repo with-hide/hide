@@ -22,7 +22,7 @@ Hand a step of your own plan to the agent with --parent here --plan-node <key> i
   The step's earlier steps must be done or dropped, the plan must not wait for the operator's review, and
   your plans' children that have not ended or gone to sleep number at most 3. Running the same command again
   returns the same agent while it works; after it sent block or its pane closed, the same command hands the
-  step to a new agent. An agent a plan or a mission started cannot start agents. See hide plan help.
+  step to a new agent. An agent a plan or a mission started cannot start agents. See hide task help.
 
 Choose responsibility when spawning:
   With --parent here (or your own id): delegate work you will supervise.

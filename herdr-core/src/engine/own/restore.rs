@@ -358,7 +358,7 @@ impl OwnEngine<'static> {
                 .collect();
             topology.gather(missing, GATHERED_LABEL);
             let placed: BTreeSet<String> = topology.panes().map(|(id, _)| id.to_owned()).collect();
-            let restarted: Vec<String> = topology
+            let mut restarted: Vec<String> = topology
                 .panes()
                 .filter(|(id, _)| {
                     (saved.contains(*id)
@@ -367,6 +367,9 @@ impl OwnEngine<'static> {
                 })
                 .map(|(id, _)| id.to_owned())
                 .collect();
+            // The shells of the tab the screen opens on start first, so its
+            // panes draw before the rest have their turn.
+            topology.front_first(&mut restarted);
             // A restarted pane's agent ended with its holder: the pane is a
             // shell until its resume is typed.
             let restarts: Vec<Restart> = restarted
@@ -861,7 +864,7 @@ impl OwnEngine<'static> {
         let group = self
             .processes(&resume.pane)
             .map_err(|error| error.to_string())?;
-        let shell = Shell::of(group.shell_name())
+        let shell = Shell::of(group.shell_name(), self.shared.windows)
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
         let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;

@@ -8,6 +8,7 @@ schema = 1
 id = "opencode"
 name = "OpenCode"
 executables = ["opencode"]
+packages = ["opencode-ai"]
 home = "~/.config/opencode"
 hooks = "opencode"
 
