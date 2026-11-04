@@ -24,9 +24,12 @@ export type DaemonEngine = Pick<HerdrFixture, "root" | "fixturePath" | "afterSto
   daemonEnv?: NodeJS.ProcessEnv;
   /** The HOME the daemon runs in when a spec names none: the own engine's panes are its children and read their shell's files there. */
   home?: string;
-  /** Makes what the fixture holds through its first daemon, once that daemon answers (`startFixture`). */
-  opened?: (daemon: Daemon) => Promise<void>;
+  /** Makes what the fixture holds through its first daemon, once that daemon answers (`startFixture`; the desktop fixture's `startStack`). */
+  opened?: (daemon: OpenedDaemon) => Promise<void>;
 };
+
+/** What a fixture reads of the daemon it makes its panes through. */
+export type OpenedDaemon = Pick<Daemon, "origin" | "token" | "stateDir">;
 
 /**
  * `restart` stops the daemon and starts it again on the same state directory

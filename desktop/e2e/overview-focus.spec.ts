@@ -3,20 +3,20 @@ import { expect, type ElectronApplication } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startHerdr, setFixtureLifecycle } from '../../web/e2e/herdr-fixture';
+import { setAgentState } from '../../web/e2e/fixture-agents';
 import { openOverview } from '../../web/e2e/overview-entry';
-import { isolate, launch, test } from './fixture';
+import { launchShell, startStack, test } from './fixture';
 import { captureElectronWindow } from './electron-window';
 
 test('Overview selects explicitly, shares filters and preserves layout in a private desktop', async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, 'overview-focus');
+  const stack = await startStack('overview-focus');
+  const { fixture, run, daemon } = stack;
   let app: ElectronApplication | undefined;
   try {
-    const launched = await launch(run.env);
+    const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
-    await setFixtureLifecycle(herdr, herdr.panes[0]!, 'blocked');
+    await setAgentState(daemon, fixture.panes[0], 'blocked');
     await openOverview(page, 'work');
     const graph = page.locator('[data-overview-graph]');
     await expect(graph).toHaveAttribute('data-graph-phase', 'ready', { timeout: 30_000 });
@@ -64,19 +64,18 @@ test('Overview selects explicitly, shares filters and preserves layout in a priv
     await graph.getByRole('button', { name: 'Graph', exact: true }).click();
     await expect(graph).toHaveAttribute('data-graph-phase', 'ready');
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    await captureElectronWindow(app, 'overview-focus-renderer', { state: run.env.HIDE_STATE_DIR, socket: herdr.socket, daemonPid: run.daemonPid(), scenario: 'explicit selection, filters, stable coordinates' });
+    await captureElectronWindow(app, 'overview-focus-renderer', { state: run.env.HIDE_STATE_DIR, socket: fixture.socket, daemonPid: run.daemonPid(), scenario: 'explicit selection, filters, stable coordinates' });
     if (evidence && process.platform === 'darwin') {
       const identity = await app.evaluate(({ BrowserWindow }) => {
         const windows = BrowserWindow.getAllWindows();
         if (windows.length !== 1) throw new Error('expected one owned candidate window');
         return { pid: process.pid, executable: process.execPath, window: windows[0]!.getMediaSourceId() };
       });
-      fs.writeFileSync(path.join(evidence, 'overview-focus-native.json'), JSON.stringify({ ...identity, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }));
+      fs.writeFileSync(path.join(evidence, 'overview-focus-native.json'), JSON.stringify({ ...identity, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }));
       execFileSync('/usr/sbin/screencapture', ['-x', '-o', '-l', identity.window.split(':')[1]!, path.join(evidence, 'overview-focus-native.png')]);
     }
   } finally {
     await app?.close();
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

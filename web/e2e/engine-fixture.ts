@@ -15,7 +15,7 @@ import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
 import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
 import { claudeProjects, declareAgentSession, panePrompt, paneShellOf, startHerdr, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
-import { startHided, type Daemon, type DaemonEngine } from "./hided-fixture";
+import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
 import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRun, type HideAnswer } from "./agent-pane";
 
@@ -199,7 +199,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
     if (!made) throw new Error("the fixture's checkout and panes are made by its first daemon: read them after startHided");
     return made;
   };
-  const opened = async (daemon: Daemon) => {
+  const opened = async (daemon: OpenedDaemon) => {
     if (made) return;
     // Preserve the setup's last output when no page could open yet. A fixed
     // byte cap keeps an unexpected output flood from growing the run's memory.
@@ -254,7 +254,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
 
 type Opened = { workspace: string; checkout: string; tab: string; panes: [string, string]; runAs?: (pane: string) => HideRunner };
 
-async function openFixture(control: HidedControl, server: EngineServer, daemon: Daemon, kind: "shells" | "agents" | "family"): Promise<Opened> {
+async function openFixture(control: HidedControl, server: EngineServer, daemon: OpenedDaemon, kind: "shells" | "agents" | "family"): Promise<Opened> {
   const dir = path.join(server.root, "fixture");
   // A child beside its parent opens in the parent's own worktree (docs/delivery.md, Agent registration and spawning).
   if (kind === "family") gitRepository(dir);
