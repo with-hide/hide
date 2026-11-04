@@ -38,11 +38,11 @@ function watchThread(page: Page): { thread: () => SessionThreadSection | null; w
 
 test("a Claude pane's record reads as a thread, follows what the session writes, and takes the input box's words", async ({ page }) => {
   const { thread, words } = watchThread(page);
-  const herdr = await startFixture();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "claude-thread");
-    const pane = herdr.panes[0];
+    daemon = await startHided(fixture, "claude-thread");
+    const pane = fixture.panes[0];
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"]`)).toBeVisible({ timeout: 30_000 });
 
@@ -52,7 +52,7 @@ test("a Claude pane's record reads as a thread, follows what the session writes,
     expect(words()).toContain("Agent one 진행해줘");
 
     // The session writes on while it works: the thread reads what it wrote.
-    continueFixtureTranscript(herdr, "fixture-one", { task: "스레드가 따라 읽는 새 말" });
+    continueFixtureTranscript(fixture, "fixture-one", { task: "스레드가 따라 읽는 새 말" });
     await setAgentState(daemon, pane, "working");
     await expect.poll(() => words(), { timeout: 30_000 }).toContain("스레드가 따라 읽는 새 말");
 
@@ -64,7 +64,7 @@ test("a Claude pane's record reads as a thread, follows what the session writes,
     expect(fs.existsSync(fixture.inputLogs[1]) ? fs.readFileSync(fixture.inputLogs[1], "utf8") : "").not.toContain("계속해 주세요");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
@@ -93,7 +93,11 @@ test("a Pi pane's record reads as a thread, follows what the session writes, and
     // The session writes on while it works: the thread reads what it wrote.
     const record = { type: "message", id: "a0000004", parentId: "a0000003", timestamp: "2026-10-03T01:01:00Z", message: { role: "assistant", content: [{ type: "text", text: "스레드가 따라 읽는 새 말" }], stopReason: "stop" } };
     fs.appendFileSync(session, `${JSON.stringify(record)}\n`);
-    await pi(fixture, daemon, pane, session, "working");
+    await withControl(daemon, async (control) => {
+      await preparePaneInput(control, pane);
+      sendKeys(control, pane, "\x1b[2J\x1b[HWorking...\r\n");
+      await control.until((rest) => agentIn(rest, pane)?.activity === "working" ? true : undefined, `${pane} working`, 30_000);
+    });
     await expect.poll(() => words(), { timeout: 30_000 }).toContain("스레드가 따라 읽는 새 말");
 
     // The input box's words reach the pane's program, with Enter, and nowhere else.

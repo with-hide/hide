@@ -209,8 +209,8 @@ function writeSessionReport(root: string, kind: NativeFileReader, session: strin
  * own session report. On Herdr the spec reports the session through Herdr's
  * integration (`reportNativeWriter`).
  */
-export function prepareEngineWriter(fixture: NativeWriterHost & { engine: E2eEngine }, kind: NativeFileReader, checkout?: string): string {
-  const session = prepareNativeWriter(fixture, kind, checkout);
+export function prepareEngineWriter(fixture: { root: string; engine: E2eEngine }, kind: NativeFileReader, checkout?: string): string {
+  const session = prepareNativeWriter({ root: fixture.root, env: { HOME: path.join(fixture.root, "home") } }, kind, checkout);
   if (fixture.engine === "own") writeSessionReport(fixture.root, kind, session);
   return session;
 }
@@ -274,7 +274,10 @@ if (!(argv[0] === "-s" && argv[1] === config.id)) {
   db.close();
 }
 // The helper answers on its standard output; the pane shows OpenCode, not that.
-const helper = (operation, input) => execFileSync(config.hooks, ["opencode", operation], { input: JSON.stringify(input), stdio: ["pipe", "ignore", "ignore"], timeout: 10000 });
+const helper = (operation, input) => {
+  const answer = JSON.parse(execFileSync(config.hooks, ["opencode", operation], { input: JSON.stringify(input), encoding: "utf8", timeout: 10000 }));
+  if (answer.reported !== true) throw new Error("OpenCode fixture's " + operation + " report was refused");
+};
 if (config.herdr) {
   const pane = process.env.HERDR_PANE_ID;
   const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
