@@ -15,7 +15,7 @@ import {
   PI_TITLE, type NativeFileReader, appendOmpQuestion, nativeSessionId, prepareEngineWriter, prepareOpenCodeWriter, reportNativeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
   writeOpenCodeQuestion,
 } from "./session-reader-fixture";
-import { openSleepingProject, screenshot, sendEvent } from "./wire";
+import { enterWorkspace, openSleepingProject, screenshot, sendEvent } from "./wire";
 import { afterCleanup } from "./worker-owned";
 import { FakeTailscale } from "./fake-tailscale";
 import { dumpOnFailure } from "./failure-dump";
@@ -108,7 +108,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     expect(fs.existsSync(session)).toBe(false);
     await startNative(fixture, daemon, kind, sourcePane, session);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await page.locator("[data-checkout]").first().click();
+    await enterWorkspace(page);
     const row = await showNativeRow(page, sourcePane);
     // status-model.md, Task identity: an automatic/source-less name follows the goal.
     const selected = kind === "pi" ? "Generated Pi goal" : kind === "grok" ? "Generated Grok goal" : initialTitle;
@@ -175,7 +175,8 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
 }
 
 for (const refusal of ["override", "duplicate"] as const) {
-test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane`, async ({ page }) => {
+// Herdr only: Cursor's retired integration supplies the historical session identity.
+test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane`, { tag: "@herdr" }, async ({ page }) => {
   const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
@@ -204,7 +205,7 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
     const launches = path.join(fixture.root, "cursor-launches.jsonl");
     const starts = fs.readFileSync(launches, "utf8");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await page.locator("[data-checkout]").first().click();
+    await enterWorkspace(page);
     const row = await showNativeRow(page, pane);
     await expect(row).toContainText(CURSOR_GOAL, { timeout: 30_000 });
     await row.click();
@@ -231,7 +232,8 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
 });
 }
 
-test("Cursor phone reads native message units and omits an unrecorded time", async ({ browser, page }) => {
+// Herdr only: Cursor's retired integration supplies the historical session identity.
+test("Cursor phone reads native message units and omits an unrecorded time", { tag: "@herdr" }, async ({ browser, page }) => {
   const fixture = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
   let daemon: Daemon | null = null;
@@ -298,7 +300,7 @@ test("OpenCode's root session titles its row, waits on its question and wakes by
     // The double reports its own session: Herdr's integration report on Herdr, Hide's plugin on the own engine.
     await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, sourcePane)?.session_id === OPENCODE_ID ? true : undefined), `${sourcePane} on OpenCode's session`, 30_000));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await page.locator("[data-checkout]").first().click();
+    await enterWorkspace(page);
     await showNativeRow(page, sourcePane);
     const row = page.locator(`nav[data-sidebar] [data-pane="${sourcePane}"]`);
     // OpenCode records no manual source: goal first, native title with summaries off.
