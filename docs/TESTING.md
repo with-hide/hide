@@ -215,6 +215,8 @@ When the behavior depends on the order of two events, the test fixes that order;
   Every completion retains the integer status and publishes a correlated `.json` sidecar first, with the supervisor's phase, OS error, elapsed time and cleanup result.
   `python3 scripts/check-agent-journey-controller.py --provider <compiled-provider> --run-dir agents/runs/<run>/controller` exercises that same supervisor with real Python children, without a Herdr server or a model.
   Its opt-in `--deadline-comparison` compares a controlled 21-second child under the old 20-second watchdog and the journey's protocol budget; it cannot establish why an earlier Windows command failed.
+  The own-engine controller sources its initial environment from a private file and confirms a ready file before bootstrap; sending a long PATH before the shell leaves canonical mode can truncate both the setup and its Enter.
+  Both setup files are removed on success or failure.
   Journey observations (`pane read` and registration `agent list`) use the controller's claimed capability from the host, bounded by the same process owner, without typing an input turn into its pane.
   Repeated reads therefore consume none of the controller's 512 command-file budget; mutations still use that bounded command path, and a read failure retains its cause instead of becoming a registration timeout.
   Desktop fixture homes use a short `/tmp` root on Unix, so the default state folder below HOME, as well as an explicit state folder, leaves room for the holder socket within the OS path limit.

@@ -521,7 +521,7 @@ def budget_failures(agents):
 def main(argv=None):
     args = parser().parse_args(argv)
     if WINDOWS and args.engine == "own":
-        refuse("win-agent-start 대기: native journey also requires ownership of holders outside the Windows job")
+        refuse("b4-default 대기(CI Job holder breakaway): native journey also requires ownership of holders outside the Windows job")
     checkout = Path(__file__).resolve().parents[2]
     operator = Path.home().resolve()
     local = args.mode == "local"

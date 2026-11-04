@@ -12,7 +12,7 @@ import shlex
 
 from agent_live_check.authentication import require_no_login
 from agent_live_check.processes import ProcessError
-from agent_live_check.protection import ProtectionError
+from agent_live_check.protection import ProtectionError, write_private
 from agent_live_check.runtime import Runtime
 from agent_live_check.system import WINDOWS, remove_pane_files
 from holder_owned import Owned
@@ -31,7 +31,7 @@ class OwnRuntime(Runtime):
         # The Windows lane declares this transition gap before setup. Do not
         # silently start a holder under a job that forbids its breakaway.
         if WINDOWS:
-            raise ProtectionError("win-agent-start 대기")
+            raise ProtectionError("b4-default 대기(CI Job holder breakaway)")
         super().__init__(*args, **kwargs, engine="own")
         self.control = None
         self.owned = Owned()
@@ -87,12 +87,17 @@ class OwnRuntime(Runtime):
         for name in environment:
             if not name.replace("_", "").isalnum() or name[0].isdigit():
                 raise ProtectionError("invalid_controller_environment_name")
-        setup = "; ".join(f"export {name}={shlex.quote(value)}" for name, value in environment.items())
-        self.send_text(pane, f"{setup}; printf ready > {shlex.quote(str(ready))}\r")
+        # The PTY can accept input before zsh leaves canonical mode. Its line
+        # limit can truncate a long PATH along with the final Enter. Source a
+        # private file instead, so only its short invocation crosses the PTY.
+        setup = self.run / "native-controller-shell-setup.zsh"
+        write_private(setup, ("\n".join(f"export {name}={shlex.quote(value)}" for name, value in environment.items())
+                              + f"\nprintf ready > {shlex.quote(str(ready))}\n").encode())
         try:
+            self.send_text(pane, f". {shlex.quote(str(setup))}\r")
             self.wait(lambda: ready.exists() and ready.read_text() == "ready", 20)
         finally:
-            remove_pane_files(ready)
+            remove_pane_files(ready, setup)
         return workspace, pane
 
     def wait_shell(self, pane):
