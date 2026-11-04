@@ -326,7 +326,6 @@ impl FactsWriter {
                     foreground_unread: self.foreground_unread.then_some(unread.is_some()),
                     ..facts
                 },
-                Ok(facts) => facts,
                 Err(error) => {
                     self.log.event(
                         "holder.facts_unread",
@@ -504,7 +503,7 @@ mod tests {
     }
 
     fn read(pane: &Mutex<Pane>, rules: &SharedRules, reading: &mut Reading) -> ScreenRead {
-        facts(pane, rules, reading, None, None).unwrap().screen
+        facts(pane, rules, reading, None).unwrap().screen
     }
 
     fn working(rule: &str) -> ScreenRead {

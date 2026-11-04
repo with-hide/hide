@@ -43,7 +43,7 @@ impl Foreground {
         group: Result<u32, Unknown>,
         log: &crate::log::Log,
     ) -> Result<Option<Program>, Unread> {
-        let group = group.map_err(|unknown| Unread::Group(unknown))?;
+        let group = group.map_err(Unread::Group)?;
         if group == shell {
             return Ok(None);
         }
