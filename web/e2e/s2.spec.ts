@@ -523,7 +523,7 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     // they never carry a Chrome move note (electron-digit-shortcuts-hints B3).
     // The two Explorer path copies and its Cut, Copy and Paste are rows too,
     // and so is the sidebar's Projects | Tasks switch (sidebar-task-lens D-19, D-32),
-    // the pane's Show plan (hide-plan B7), the Memory tool's toggle, Next and Previous tab,
+    // the pane's Show task steps (hide-plan B7), the Memory tool's toggle, Next and Previous tab,
     // Desk's thread ⇄ terminal (session-docs-and-assistant B35) is listed only
     // while Desk is on, and Desk is off by default (D-76, B41).
     // The four directional terminal focus commands are listed too.

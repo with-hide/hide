@@ -24,7 +24,7 @@ const LEAVE_MS = 150;
 /**
  * The pane head's plan chip (PRD hide-plan B7, D-11, D-29; PRD
  * mission-plan-visibility B1, B3-B7), where the task chip was: the word
- * `계획`, a cell per step and `n/m`, `검토` in the warning colour while the
+ * `작업 단계`, a cell per step and `n/m`, `검토` in the warning colour while the
  * plan waits for review, a green check and `m/m` once finished, and nothing
  * for a pane with no plan. The pointer or the keyboard's focus opens the
  * checklist; a press or ⇧⌘U pins it, and a second press, ⇧⌘U or Esc closes
@@ -143,7 +143,7 @@ export function planChipLook(proposed: boolean, finished: boolean): string {
 }
 
 /**
- * What the plan chip shows (PRD hide-plan B7): its mark, `계획` or `검토`, a
+ * What the plan chip shows (PRD hide-plan B7): its mark, `작업 단계` or `검토`, a
  * cell per step and `n/m`. The pane head wraps it in its press; Desk's card
  * and thread head draw it from a job's own plan (PRD
  * session-docs-and-assistant B24, B25).
@@ -164,7 +164,7 @@ export function PlanChipFace({ tones, count, proposed, finished }: { tones: read
 /**
  * What a pane head chip with a popover shares (PRD hide-plan B7,
  * mission-pane-chip D-01): the pointer or the keyboard's focus opens it, a
- * press or the Show plan chord pins it through `ui.planPane`, and a second
+ * press or the Show task steps chord pins it through `ui.planPane`, and a second
  * press, the chord or Esc closes it. Opening never takes the keyboard from
  * the terminal. `present` is false while the pane has nothing to show, and a
  * pin outlives that only as long as the pane does.

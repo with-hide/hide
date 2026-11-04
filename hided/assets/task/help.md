@@ -1,10 +1,10 @@
-# hide plan
-Put up the plan of your own work so the operator sees where you are: Hide draws it as a map beside your pane and reminds you of your step on every prompt. A step is something you deliver or a point to check (a spec, a change, a PR, a verification); research, failures and retries are not steps.
+# hide task
+Put up the steps of the task you carry yourself so the operator sees where you are: Hide draws them as a map beside your pane and reminds you of your step on every prompt. You do the work in this session; to conduct several agents carrying pull requests as a group, run `hide mission help` instead. A step is something you deliver or a point to check (a spec, a change, a PR, a verification); research, failures and retries are not steps.
 
 ```
-hide plan set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]
-hide plan node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]
-hide plan approve        hide plan drop        hide plan show [<agent>]        hide plan help
+hide task set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]
+hide task node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]
+hide task approve        hide task drop        hide task show [<agent>]        hide task help
 hide agent spawn --parent here --plan-node <key> --name <name> --kind <kind> --repo <path> --branch <branch> --brief <text>
 ```
 
@@ -20,8 +20,8 @@ hide agent spawn --parent here --plan-node <key> --name <name> --kind <kind> --r
 - Mark a step `working` when you start it and `done` when it is finished; neither is taken before the steps it waits on are done or dropped (`plan_order_refused`). Only the status is refused: your edits are never blocked.
 - A step ends by its output: `pr` with `--status done --pr <number>`, a pull request made from a branch of your checkout or of a child you handed a step to; `file` with `--file <path>`, a file inside your checkout (relative to its root); `none` with nothing. In `set` a done step carries the same as `"pr": <number>` or `"file": "<path>"`. Hide checks the pull request with GitHub and the file on your machine; `plan_pr_unconfirmed` means GitHub could not be asked now, so run the same command again later, and tell the operator if it lasts.
 - When you plan, tell the operator once how you will verify the work (which steps check what, and how) and let them confirm; if they say to just go on, go on as you judge. No verification step is required: size it to the work.
-- `--ask` puts the plan up for the operator's review: until you run `hide plan approve`, writes, `git commit` and `git push` are refused. Use it when a skill or the operator says to have the plan reviewed, or when you change the goal or scope (`--ask "<why>"`).
-- Approval is spoken: when the operator agrees in the conversation, run `hide plan approve`; asked to change it, send the fixed plan with `set --json '<plan>' --ask` (file writes are refused while it waits); told not to do it, `hide plan drop`.
+- `--ask` puts the plan up for the operator's review: until you run `hide task approve`, writes, `git commit` and `git push` are refused. Use it when a skill or the operator says to have the plan reviewed, or when you change the goal or scope (`--ask "<why>"`).
+- Approval is spoken: when the operator agrees in the conversation, run `hide task approve`; asked to change it, send the fixed plan with `set --json '<plan>' --ask` (file writes are refused while it waits); told not to do it, `hide task drop`.
 - Replanning on your own is fine: `set` again with `--reason`; changed steps are marked, the approval stays, and a done step keeps its evidence and the agent that did it.
 
 ## As a mission node's worker
@@ -37,7 +37,7 @@ hide agent spawn --parent here --plan-node <key> --name <name> --kind <kind> --r
 - For a review or a verification, prefer a different kind of agent than yours (Codex when you are Claude, Claude when you are Codex); with none installed, use a new agent of your own kind.
 - The child works on its own branch: for a `pr` step it opens its own pull request; for a change it commits and you take it in; a review or a verification ends with its report and no commit.
 - The child tells you by letter: `hide request send <parent> --kind report` when the step is done (the step shows 보고 옴), `--kind block` when it is stuck or cannot do it (막힘). A report finishes nothing: read it, take the work in if it is a change, then mark the step done. A handed step is done only after its current child's report (`plan_report_missing`); a `pr` step also needs that child's `--pr <number>`, while a `file` step needs no `--file`, since the file is on the child's branch until you take it in.
-- 막힘 lifts when the child sends progress or a report, or when you answer it. With a blocked child, or one whose pane closed (닫힘), choose: answer it (blocked only), hand the step again with the same spawn command (a new agent, and an earlier agent's report no longer counts), do it yourself (`hide plan node <key> --status working`), or drop it (`--status dropped`). A child stopped by an expired login reaches the operator by itself; the step stays as it is.
+- 막힘 lifts when the child sends progress or a report, or when you answer it. With a blocked child, or one whose pane closed (닫힘), choose: answer it (blocked only), hand the step again with the same spawn command (a new agent, and an earlier agent's report no longer counts), do it yourself (`hide task node <key> --status working`), or drop it (`--status dropped`). A child stopped by an expired login reaches the operator by itself; the step stays as it is.
 - Once you mark a handed step done, or take it back, Hide puts its child to sleep when it rests off screen.
 - Your plans' children that have not ended or gone to sleep number at most 3 (`plan_delegate_full`), and a letter that would wake a sleeping child past that is refused too; wait for one to finish, or do the step yourself.
 - An agent a plan or a mission started does its own work and starts no agents (`plan_delegate_not_permitted`).

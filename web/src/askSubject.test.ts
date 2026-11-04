@@ -16,7 +16,7 @@ describe("a mission decision laid on its Conductor's row (needs-you-cleanup B1, 
   it("counts the other asks under the same root after the one that waited longest", async () => {
     const { t: ko } = await createInterfaceI18n("ko");
     expect(askParts(ko, { verb: "answer", what: "어느 쪽으로 갈까요?", more: 2 })).toEqual({ lead: null, text: "어느 쪽으로 갈까요?", tail: "외 2건" });
-    expect(askParts(ko, { verb: "answer", what: null, more: 1, subject: { cause: "plan_review", steps: 3 } })).toEqual({ lead: null, text: "계획 검토 · 3단계", tail: "외 1건" });
+    expect(askParts(ko, { verb: "answer", what: null, more: 1, subject: { cause: "plan_review", steps: 3 } })).toEqual({ lead: null, text: "작업 단계 검토 · 3단계", tail: "외 1건" });
   });
 });
 

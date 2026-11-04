@@ -1825,7 +1825,7 @@ mod tests {
             json!({"sessionUpdate": "tool_call", "toolCallId": "b", "kind": "execute",
                 "title": "cargo test"}),
             json!({"sessionUpdate": "tool_call", "toolCallId": "c", "kind": "read",
-                "title": "hide plan set"}),
+                "title": "hide task set"}),
         ];
         let parts = page_parts(&first, &BTreeMap::new());
         assert_eq!(
