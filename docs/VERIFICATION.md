@@ -357,9 +357,7 @@ It creates the controller shell through the daemon's Add project event, bootstra
 Native session identity is read from Hide's registration ledger and checked against the actual conversation reader; the integration cell requires the kit's hook in the private HOME, while the Herdr run also requires Herdr's installed integration and session source.
 The runtime owns every holder through its private records (pid and birth time) and its existing process guardian; teardown confirms no holder remains before removing private state.
 Native state uses the runtime's private short socket directory so checkout paths cannot exceed a Unix socket address; the local write sandbox still hides that state and grants only issued pane references.
-Windows native journey is `win-agent-start 대기`: all cells need an agent start, and its process owner must also account for holders outside the Windows job with the existing caps before that lane can run.
-The Windows holder lifetime extension is assigned to the default-engine migration after this change and `win-agent-start` merge.
-A native Windows invocation refuses before creating state; the existing Herdr fake-model lane and Windows process forms still run.
+On Windows the job each run's process sits in lets a process leave it only by asking, so hided's pane holders leave it through `start_resident` and the run owns them by their records, as on the other systems; the fake-model lane runs there with the Windows process forms.
 It is the check a release runs on the Mac before its tag ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), and the one to run after a change to how Hide starts, wakes or writes to an agent, after moving the pinned Herdr and after a substantial agent CLI update.
 
 ### What it proves

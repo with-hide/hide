@@ -227,8 +227,7 @@ jobs:
 
   fake:
     name: agent journey fake model (${{ matrix.system }})
-    # Windows runs no journey while a holder cannot leave the CI job (docs/INSTALL.md).
-    if: ${{ inputs.fake && inputs.systems != '["windows"]' }}
+    if: ${{ inputs.fake }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
     # macOS and up to 9 on Windows (2026-10-18), inside the journey step's 85;
@@ -238,10 +237,6 @@ jobs:
       fail-fast: false
       matrix:
         system: ${{ fromJSON(inputs.systems) }}
-        # The CI job forbids a holder's breakaway on Windows; the cell
-        # returns with the holder lifetime fix (docs/INSTALL.md).
-        exclude:
-          - system: windows
     defaults:
       run:
         shell: bash
@@ -302,6 +297,12 @@ jobs:
       - name: Build the native pane holder
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+      - name: Fetch the pane holder's pinned ConPTY runtime
+        # A Windows holder runs its pane on the pinned OpenConsole, which the
+        # journey's package carries beside it.
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
       - name: Build the controller's spawn provider
         timeout-minutes: 5
         # Before the run, as the stand-ins are: a Windows link can outlast the

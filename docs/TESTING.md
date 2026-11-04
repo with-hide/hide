@@ -736,7 +736,6 @@ The transition retains these explicit exceptions:
 | Cell | Current coverage | What closes it |
 | --- | --- | --- |
 | `agent-live-check`, 5 specs | Herdr integration checks, outside the dual-engine migration | CLI retirement by `b4-default` |
-| Windows journey | Excluded: CI Job forbids holder breakaway; Windows agent start proof is available | Holder lifetime integration and enabled cell by `b4-default` |
 | Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; cells outside the named exclusions remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
 | OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
 | Codex and Antigravity own-engine fake journey, `fork` only | Excluded: `own-start-fixes 노드 대기`; Codex's new pane has no session or fork lineage, and Antigravity's fork input is discarded before readiness is confirmed | `own-start-fixes` confirms the fork's readiness and registration and removes these exclusions |

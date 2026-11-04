@@ -28,10 +28,6 @@ def layout_panes(node):
 
 class OwnRuntime(Runtime):
     def __init__(self, *args, **kwargs):
-        # The Windows lane declares this transition gap before setup. Do not
-        # silently start a holder under a job that forbids its breakaway.
-        if WINDOWS:
-            raise ProtectionError("b4-default 대기(CI Job holder breakaway)")
         super().__init__(*args, **kwargs, engine="own")
         self.control = None
         self.owned = Owned()

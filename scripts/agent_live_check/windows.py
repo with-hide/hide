@@ -5,7 +5,10 @@ The job follows hide-platform's `process` (Windows): the child starts
 suspended, joins its job, and only then runs, so nothing it starts is ever
 outside the job; the job ends everything in it when its last handle closes
 (`KILL_ON_JOB_CLOSE`), so an owner that dies without cleaning up still takes
-the tree with it. The handle is never inheritable and no child is given it.
+the tree with it. A process may leave it only by asking (`BREAKAWAY_OK`,
+never silently): a pane holder hided starts through `start_resident`, which
+the run owns by the record its node writes (`holder_owned.py`) and ends at
+teardown. The handle is never inheritable and no child is given it.
 The private files follow hide-platform's `fs::private` (Windows): created
 with an access list naming only this account, and checked by owner and
 access list. The account's Path in the registry is where a pane Herdr opens
@@ -45,6 +48,7 @@ JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
 JOB_BASIC_ACCOUNTING = 1
 JOB_BASIC_PROCESS_ID_LIST = 3
 JOB_ASSOCIATE_COMPLETION_PORT = 7
@@ -191,7 +195,7 @@ class Job:
         try:
             limits = ExtendedLimit()
             limits.BasicLimitInformation.LimitFlags = (
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
                 | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
             limits.BasicLimitInformation.ActiveProcessLimit = processes
             limits.JobMemoryLimit = committed
