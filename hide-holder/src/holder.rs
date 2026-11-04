@@ -126,7 +126,7 @@ const READ_CHUNK: usize = 64 * 1024;
 const SENDS: [Capability; 3] = [Capability::Screen, Capability::Notices, Capability::Keys];
 
 /// What this holder sends on a watch.
-const WATCH_SENDS: [Capability; 1] = [Capability::Facts];
+const WATCH_SENDS: [Capability; 2] = [Capability::Facts, Capability::LineEditing];
 
 enum Event {
     /// A connection whose hello was accepted.
@@ -982,6 +982,7 @@ impl Holder {
             .unwrap_or_else(PoisonError::into_inner)
             .owner = generation;
         let wake = Arc::new(Wake::default());
+        let line_editing = sends.contains(&Capability::LineEditing);
         wake.send(HolderMessage::Watching(Watching {
             version,
             rules_engine: hide_screen_rules::ENGINE_VERSION,
@@ -1008,8 +1009,16 @@ impl Holder {
                 rules: self.rules.clone(),
                 shell: self.program,
                 group: Box::new({
+                    let master = master.clone();
                     let shell = self.program;
                     move || master.group(shell)
+                }),
+                line_editing: Box::new(move || {
+                    if line_editing {
+                        master.line_editing()
+                    } else {
+                        None
+                    }
                 }),
                 log: self.log.clone(),
             };
@@ -1500,6 +1509,26 @@ struct PtyMaster(Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>);
 impl PtyMaster {
     fn lock(&self) -> MutexGuard<'_, Option<Box<dyn MasterPty + Send>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the terminal edits lines (canonical mode), as its program
+    /// set it: `None` on Windows, whose console keeps its program's input
+    /// mode where a holder cannot read it, and when the terminal could not
+    /// be asked, its pane having ended.
+    fn line_editing(&self) -> Option<bool> {
+        #[cfg(unix)]
+        {
+            self.lock().as_ref()?.get_termios().map(|termios| {
+                termios
+                    .local_flags
+                    .contains(nix::sys::termios::LocalFlags::ICANON)
+            })
+        }
+        #[cfg(windows)]
+        {
+            let _ = self;
+            None
+        }
     }
 
     /// The terminal's foreground process group, or why it is not known. On

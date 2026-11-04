@@ -2702,6 +2702,52 @@ pub(crate) mod pi {
         );
     }
 
+    /// Pi names its session file at its start but writes it only once its
+    /// first prompt is submitted, so a proof asked before then meets no file:
+    /// that is told as a file not written yet, which reading again answers,
+    /// never as a file outside Pi's folder.
+    #[test]
+    fn a_session_file_pi_has_not_written_yet_is_missing_not_outside_its_folder() {
+        let native = Native::new();
+        let written = fs::read_to_string(&native.path).unwrap();
+        fs::remove_file(&native.path).unwrap();
+        let proof = |path: &Path| {
+            hide_session::confirm_session_file(
+                native.home.path(),
+                Agent::Pi,
+                path,
+                None,
+                native.cwd.to_str(),
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        };
+        assert_eq!(proof(&native.path), Err("session_file_missing".to_owned()));
+        let scope = hide_session::SessionReadScope {
+            id: "pi-native-a".to_owned(),
+            cwd: native.cwd.display().to_string(),
+        };
+        assert_eq!(
+            hide_session::read_session_file(
+                native.home.path(),
+                Agent::Pi,
+                &native.path,
+                Some(&scope),
+                || Ok(()),
+            ),
+            Err("session_file_missing".to_owned())
+        );
+        let outside = native.home.path().join("outside.jsonl");
+        fs::write(&outside, &written).unwrap();
+        assert_eq!(
+            proof(&outside),
+            Err("label_session_outside_roots".to_owned())
+        );
+
+        fs::write(&native.path, &written).unwrap();
+        assert_eq!(proof(&native.path), Ok(()));
+    }
+
     #[test]
     fn incremental_titles_clear_without_replaying_history_and_fork_paths_are_not_followed() {
         let mut native = Native::new();

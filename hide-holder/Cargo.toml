@@ -27,6 +27,10 @@ serde_json = "=1.0.151"
 # How wide a receiver draws a cell's text, as Herdr's encoder measures it.
 unicode-width = "=0.2.2"
 
+[target.'cfg(unix)'.dependencies]
+# Whether the PTY edits lines: the flags `MasterPty::get_termios` answers.
+nix = { version = "=0.28.0", default-features = false, features = ["term"] }
+
 [dev-dependencies]
 hide-kit = { path = "../hide-kit" }
 # The node's side, run against the built holder (tests/it/node.rs).

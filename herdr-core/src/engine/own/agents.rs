@@ -37,7 +37,9 @@ pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT
 /// taking input: Herdr's `AGENT_START_SETTLE_DELAY`. A program in the
 /// foreground has not drawn its screen yet, and a screen no rule matches
 /// reads at rest, so a start read sooner would be typed into a program that
-/// has not asked for input.
+/// has not asked for input. The time alone does not say the program reads
+/// keys yet: a start whose program still leaves the terminal editing lines
+/// is pending however long it took ([`Live::line_editing`]).
 pub(super) const START_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The agent definitions the engine starts and recognizes agents by: the
@@ -249,6 +251,14 @@ pub(super) struct Live {
     pub(super) start_previous_name: Option<String>,
     /// Its program is in the pane's foreground.
     pub(super) shown: bool,
+    /// The terminal edits lines, as its holder last read it: the program has
+    /// not turned that off to read keys, so what is typed waits in the
+    /// terminal's line and the Enter that submits it reaches the program as
+    /// a line break. Pi 1.0.4 started on a CI runner took more than
+    /// [`START_SETTLE`] after its start line to do so, and a brief typed at
+    /// that mark sat in its editor, never submitted (nightly 41789009557).
+    /// False where the holder cannot say (Windows).
+    pub(super) line_editing: bool,
     pub(super) status: Status,
     /// One more each time its status changed, from the engine's own count.
     pub(super) seq: u64,
@@ -312,9 +322,12 @@ impl PaneAgent {
                 || now.duration_since(started) < START_DEADLINE)
     }
 
-    /// Whether a start made at `started` has settled by `now`.
+    /// Whether a start made at `started` has settled by `now`: its program
+    /// shows, reads keys and its screen rests, at least [`START_SETTLE`]
+    /// after the start.
     fn settled(&self, started: Instant, now: Instant) -> bool {
         self.live.shown
+            && !self.live.line_editing
             && matches!(self.live.status, Status::Idle | Status::Done)
             && now.duration_since(started) >= START_SETTLE
     }
@@ -445,6 +458,11 @@ pub(super) fn apply(
             .is_some_and(|started| current.settled(started, now))
         {
             current.live.started = None;
+        }
+        let line_editing = facts.line_editing == Some(true);
+        if line_editing != current.live.line_editing {
+            current.live.line_editing = line_editing;
+            applied.changed |= current.live.started.is_some();
         }
         let status = status_of(&facts.screen, current.live.status);
         // An answered question restarts a pending start's settle: the agent

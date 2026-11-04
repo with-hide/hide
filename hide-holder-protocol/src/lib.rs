@@ -194,6 +194,10 @@ pub enum Capability {
     /// holder whose welcome names this, since an older holder reads it as a
     /// message it does not know and closes the connection.
     Keys,
+    /// The holder says on a watch whether its terminal edits lines
+    /// ([`Facts::line_editing`]); a node that does not accept it, as one
+    /// built before it does not, is sent facts without it.
+    LineEditing,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -206,6 +210,7 @@ impl Capability {
             Self::Notices => "notices",
             Self::Facts => "facts",
             Self::Keys => "keys",
+            Self::LineEditing => "line_editing",
             Self::Other(name) => name,
         }
     }
@@ -216,6 +221,7 @@ impl Capability {
             "notices" => Self::Notices,
             "facts" => Self::Facts,
             "keys" => Self::Keys,
+            "line_editing" => Self::LineEditing,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -305,6 +311,14 @@ pub struct Facts {
     /// The program in the terminal's foreground other than the pane's own.
     pub foreground: Option<Program>,
     pub screen: ScreenRead,
+    /// Whether the terminal edits input a line at a time before its program
+    /// reads it (canonical mode): until a program turns that off to read
+    /// keys, as every agent's screen does, what is typed waits in the
+    /// terminal's line and an Enter in it reaches the program as a line
+    /// break. `None` where the system keeps no such mode (Windows), the
+    /// terminal could not be asked, or the watch's node did not accept
+    /// [`Capability::LineEditing`]; it is sent last, and only when known.
+    pub line_editing: Option<bool>,
 }
 
 /// A program in a pane's foreground.
@@ -2016,6 +2030,9 @@ impl Facts {
                 put_text(payload, &bounded(reason, MAX_DETAIL));
             }
         }
+        if let Some(editing) = self.line_editing {
+            payload.push(u8::from(editing));
+        }
     }
 
     fn take(payload: &mut Payload<'_>) -> Result<Self, FrameError> {
@@ -2061,6 +2078,13 @@ impl Facts {
                 )));
             }
         };
+        // Last and only when known, so the facts of a holder built before
+        // it read as not known.
+        let line_editing = if payload.0.is_empty() {
+            None
+        } else {
+            Some(payload.u8()? != 0)
+        };
         Ok(Self {
             cwd,
             title,
@@ -2069,6 +2093,7 @@ impl Facts {
             bracketed_paste,
             foreground,
             screen,
+            line_editing,
         })
     }
 }
@@ -2093,6 +2118,30 @@ mod tests {
         let mut bytes = Vec::new();
         write_holder(&mut bytes, &message).unwrap();
         read_holder(&mut &bytes[..]).unwrap()
+    }
+
+    /// A node built before the line editing fact reads every byte of the
+    /// facts it is sent, so facts that do not know it are the bytes such a
+    /// holder sends, and the fact rides as one byte after them.
+    #[test]
+    fn facts_without_line_editing_are_the_bytes_an_older_holder_sends() {
+        let facts = Facts {
+            title: Some("pi".to_owned()),
+            ..Facts::default()
+        };
+        let mut older = Vec::new();
+        write_holder(&mut older, &HolderMessage::Facts(facts.clone())).unwrap();
+        let mut newer = Vec::new();
+        let editing = Facts {
+            line_editing: Some(true),
+            ..facts.clone()
+        };
+        write_holder(&mut newer, &HolderMessage::Facts(editing)).unwrap();
+        assert_eq!(newer.len(), older.len() + 1);
+        assert_eq!(
+            read_holder(&mut &older[..]).unwrap(),
+            HolderMessage::Facts(facts)
+        );
     }
 
     #[test]
@@ -2245,6 +2294,11 @@ mod tests {
                     state: ScreenState::Working,
                     rule: Some("osc_title_working".to_owned()),
                 },
+                line_editing: Some(false),
+            }),
+            HolderMessage::Facts(Facts {
+                line_editing: Some(true),
+                ..Facts::default()
             }),
             HolderMessage::Facts(Facts {
                 screen: ScreenRead::Unknown {
