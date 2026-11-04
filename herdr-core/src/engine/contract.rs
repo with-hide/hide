@@ -13,12 +13,11 @@
 //!
 //! [`meets_the_contract`] is the suite. Each implementation runs it in one
 //! test of its own against an engine it started for the test, as each agent
-//! runs its fixture through `hide-session/tests/it/adapters.rs`: the pinned
-//! Herdr in a private server, which needs `HIDE_E2E_HERDR_BIN`, and the
-//! core's own engine over pane holders this node starts from the built
-//! holder, which needs `HIDE_TEST_HOLDER_BIN` (and `HIDE_HOLDER_CONPTY` on
-//! Windows). Both are ignored by default; the real-shell steps of `pr.yml`
-//! run them.
+//! runs its fixture through `hide-session/tests/it/adapters.rs`. Today that
+//! is the core's own engine over pane holders this node starts from the
+//! built holder, which needs `HIDE_TEST_HOLDER_BIN` (and `HIDE_HOLDER_CONPTY`
+//! on Windows); it is ignored by default and the real-shell steps of
+//! `pr.yml` run it on Linux and Windows.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};

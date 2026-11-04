@@ -304,7 +304,7 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-node --lib -E 'test(=ssh::host::bootstrap::tests::the_remote_command_starts_the_script_in_every_login_shell)' --run-ignored only --no-capture
           bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
           export HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | (test(/^engine::contract::/) & !test(=engine::contract::the_pinned_herdr_meets_the_engine_contract))' --run-ignored only --no-capture
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
