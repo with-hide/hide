@@ -222,9 +222,19 @@ fn a_hooks_session_on_a_device_goes_to_that_devices_own_engine() {
     };
     let runtime = shared.lock().unwrap();
     let device = runtime.own_device_engines().remove(0);
-    let taken = runtime
-        .hook_session_engine(DEVICE, &report(Some("s-1")))
-        .expect("the device's engine takes the session");
-    assert!(Arc::ptr_eq(&taken, &device));
-    assert!(runtime.hook_session_engine(DEVICE, &report(None)).is_none());
+    // The pane's credential names it as the core does, with its device; the
+    // device's engine knows it by its holder's own id.
+    let scoped = crate::address::scoped_pane_id(DEVICE, "w4:p2");
+    for caller in [scoped.as_str(), "w4:p2"] {
+        let (taken, pane) = runtime
+            .hook_session_target(DEVICE, caller, &report(Some("s-1")))
+            .expect("the device's engine takes the session");
+        assert!(Arc::ptr_eq(&taken, &device));
+        assert_eq!(pane, "w4:p2", "{caller}");
+    }
+    assert!(
+        runtime
+            .hook_session_target(DEVICE, &scoped, &report(None))
+            .is_none()
+    );
 }

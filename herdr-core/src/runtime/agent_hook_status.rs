@@ -28,18 +28,23 @@ impl Runtime {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = facts;
     }
 
-    /// The engine that keeps the session a hook in a pane of `device`
-    /// reported: the engine of the machine the pane runs on, this machine's
-    /// or a dialed device's own (`own_devices`), which binds a spawned
-    /// agent's identity by it. A device on Herdr's engine ignores it, since
-    /// Herdr learns a pane's session itself.
-    pub(crate) fn hook_session_engine(
+    /// The engine that keeps the session a hook in `caller`'s pane on
+    /// `device` reported, with the id that engine gives the pane: the engine
+    /// of the machine the pane runs on, this machine's or a dialed device's
+    /// own (`own_devices`), which binds a spawned agent's identity by it and
+    /// names the pane bare, as that machine's holders do, where the core
+    /// names a device's pane with its device. A device on Herdr's engine
+    /// ignores it, since Herdr learns a pane's session itself.
+    pub(crate) fn hook_session_target(
         &self,
         device: &str,
+        caller: &str,
         report: &HookStatusReport,
-    ) -> Option<crate::engine::SharedEngine> {
+    ) -> Option<(crate::engine::SharedEngine, String)> {
         report.session.as_ref()?;
-        self.delivery_engine(device)
+        let (machine, pane) = crate::address::split_pane(device, caller);
+        let engine = self.delivery_engine(machine)?;
+        Some((engine, pane.to_owned()))
     }
 
     /// Records what the hook in `caller`'s pane on `device` reported.

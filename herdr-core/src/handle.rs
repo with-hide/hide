@@ -769,15 +769,14 @@ impl Core {
         if !check_owner_thread(self, "hook.status") {
             return Err("hook_status_unavailable");
         }
-        let engine = {
+        let target = {
             let mut runtime = lock_recover(&self.runtime);
             runtime.ingest_hook_status(device, caller, report)?;
-            // Each machine's engine names its panes bare, as `caller` is.
-            runtime.hook_session_engine(device, report)
+            runtime.hook_session_target(device, caller, report)
         };
         // The engine is asked off the runtime lock, as every engine call is.
-        if let (Some(engine), Some(session)) = (engine, report.session.as_deref())
-            && let Err(error) = engine.hook_session(caller, &report.runtime, session)
+        if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref())
+            && let Err(error) = engine.hook_session(&pane, &report.runtime, session)
         {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_hooks", "kind": "hook_session.refused",
