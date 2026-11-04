@@ -582,6 +582,7 @@ impl Script {
     }
 
     /// When the program read the byte at `offset` of what it was sent.
+    #[cfg(unix)] // its one test reads a Unix program's bytes as sent
     pub fn heard_at(&self, offset: usize) -> std::time::SystemTime {
         let times = std::fs::read_to_string(self.folder.join("heard.times")).unwrap_or_default();
         let mut seen = 0;
