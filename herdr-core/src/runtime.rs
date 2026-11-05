@@ -156,7 +156,7 @@ use crate::model::{
     ExplorerOperationSnapshot, LastErrorSnapshot, LinkOrigin, OperatorFocusAck,
     PANE_TEXT_SCALE_STEP, PaneFindOpened, PaneFindRoute, PaneFindSnapshot,
     PaneFocusRequestSnapshot, PaneForkSnapshot, PaneLayoutNodeSnapshot, PaneLayoutSnapshot,
-    PaneSnapshot, PetBadgesSnapshot, PetOriginSnapshot, PetSnapshot, RemoteFileEntrySnapshot,
+    PaneSnapshot, RemoteFileEntrySnapshot,
     RemoteFileListSnapshot, RemoteSessionSnapshot, RightPanelSection, SCHEMA_VERSION,
     SessionRowSnapshot, SidebarAgentSnapshot, Snapshot, StripTabKind, StripTabSnapshot, Surface,
     TabSnapshot, TerminalPaneSnapshot, UiStateSnapshot, WorkspaceSnapshot, clamp_pane_text_scale,
@@ -166,7 +166,7 @@ use crate::recent_closed::{
 };
 use crate::remote::DeviceConnector;
 use crate::sidebar::{SessionSnapshotPayload, project_agents};
-use crate::{environment, files, live, persistence, pet, session_sync, workspace};
+use crate::{environment, files, live, persistence, session_sync, workspace};
 
 fn conversation_agent_kind(kind: &str) -> bool {
     hide_session::Agent::from_kind(kind)
@@ -542,9 +542,6 @@ fn reveal_expansion_paths(checkout_path: &str, path: &str, is_directory: bool) -
     }
     expanded
 }
-
-/// How long the pet plays its waking pose after activity interrupts sleep.
-const PET_WAKING_MS: u64 = 1_200;
 
 /// The absolute lifetime of one stage of a Herdr-owned mutation: restore
 /// capture, the request itself, and the topology wait each get this long
@@ -1607,15 +1604,8 @@ pub struct Runtime {
     base_push_work: base_push::BasePushWork,
     editor_tab_history: Vec<String>,
     worker_context: Option<RuntimeWorkerContext>,
-    /// The last moment any agent was working or waiting on the user. The pet
-    /// measures idleness from here, so roam and sleep are driven by real
-    /// session activity rather than wall-clock uptime.
-    pet_active_at_unix_ms: u64,
-    /// When an agent last worked or waited on the operator; 0 until one has
-    /// (the pet's own clock starts at launch, this one must not).
+    /// When an agent last worked or waited on the operator; 0 until one has.
     agent_worked_at_unix_ms: u64,
-    pet_waking_until_unix_ms: u64,
-    pet_dragging: bool,
     /// The pane the operator chose to look at, and the only pane whose read
     /// record may be raised.
     ///
@@ -1685,9 +1675,6 @@ pub struct Runtime {
     /// The tabs Herdr most recently reported active in their own workspaces.
     /// A pane layout remembers a focused pane even while its tab is hidden,
     /// so the layout alone cannot confirm a pane-focus request.
-    /// First moment each currently-unseen pane became unseen. Memory only by
-    /// decision (D-21): after a restart snapshot order decides instead.
-    pet_unseen_observed: std::collections::BTreeMap<String, u64>,
     /// True until the first live session snapshot has been ingested. The pane
     /// and checkout ids loaded from disk describe a session that ended, so
     /// they are a restore hint rather than a user selection: the first
@@ -2507,10 +2494,7 @@ impl Runtime {
             project_settings_pending: BTreeMap::new(),
             guardrails: guardrails::GuardrailsWork::default(),
             system_language: None,
-            pet_active_at_unix_ms: unix_milliseconds(),
             agent_worked_at_unix_ms: 0,
-            pet_waking_until_unix_ms: 0,
-            pet_dragging: false,
             operator_focused_pane_id: None,
             local_read_connection: crate::agent_state::ReadConnection::new(read_mark(0)),
             remote_read_connections: BTreeMap::new(),
@@ -2528,7 +2512,6 @@ impl Runtime {
             control_lane: ControlLane::default(),
             last_view_intent_serial: 0,
             next_pane_focus_serial: 0,
-            pet_unseen_observed: std::collections::BTreeMap::new(),
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),
             ui_attached: true,
@@ -2654,8 +2637,6 @@ impl Runtime {
             test_dirs: Vec::new(),
         };
         runtime.resync_navigator_focus();
-        runtime.apply_persisted_pet_state();
-        runtime.refresh_pet();
         runtime.refresh_agent_scopes();
         // A sleep saved before this start is as closed as it was.
         runtime.sync_input_gate();

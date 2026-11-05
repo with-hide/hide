@@ -745,8 +745,8 @@ fn first_line_cut(text: &str) -> Option<String> {
     Some(cut)
 }
 
-/// The one ordering every agent surface reads: the two sidebar views, the pet
-/// dashboard, and the agent switcher's candidate list.
+/// The one ordering every agent surface reads: the two sidebar views and the
+/// agent switcher's candidate list.
 ///
 /// Group order first, then most recent activity descending, then the order
 /// Herdr sent the rows in. The sort is stable, so that third key costs

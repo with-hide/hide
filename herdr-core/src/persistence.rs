@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, OverviewGraphChoices,
     PRACTICE_CHAPTER_LIMIT, PRACTICE_STEP_LIMIT, PaneCompletion, PaneReadRecord, PaneTurnRowMode,
-    PetOriginSnapshot, PracticeProgress, RightPanelSection, SidebarLens, SidebarProject, TaskView,
+    PracticeProgress, RightPanelSection, SidebarLens, SidebarProject, TaskView,
     ThemePreference, UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
     default_pane_text_scale, default_panel_visible, default_sidebar_width,
     default_terminal_font_size, practice_chapter_id_valid,
@@ -112,12 +112,6 @@ struct StoredUiState {
     shortcut_bindings_imported: bool,
     #[serde(default)]
     browser_shortcut_bindings: BTreeMap<String, String>,
-    #[serde(default = "default_pet_visible")]
-    pet_visible: bool,
-    #[serde(default)]
-    pet_origin: Option<PetOriginSnapshot>,
-    #[serde(default)]
-    pet_shortcut: Option<String>,
     #[serde(default)]
     focused_device_id: Option<String>,
     #[serde(default)]
@@ -276,12 +270,6 @@ struct StoredIssueSettings {
     settings: crate::model::IssueSettingsSnapshot,
     #[serde(default, skip_serializing)]
     default_agent: Option<String>,
-}
-
-/// A store written before the pet existed carries no visibility, and the pet
-/// shows itself by default (D-09).
-fn default_pet_visible() -> bool {
-    true
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -664,9 +652,6 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             shortcut_bindings: stored.shortcut_bindings,
             shortcut_bindings_imported: stored.shortcut_bindings_imported,
             browser_shortcut_bindings: stored.browser_shortcut_bindings,
-            pet_visible: stored.pet_visible,
-            pet_origin: stored.pet_origin,
-            pet_shortcut: stored.pet_shortcut,
             focused_device_id: stored.focused_device_id,
             focused_checkout_id: stored.focused_checkout_id,
             workspace_registrations: stored.workspace_registrations,
@@ -854,9 +839,6 @@ pub fn save(
         shortcut_bindings: state.shortcut_bindings.clone(),
         shortcut_bindings_imported: state.shortcut_bindings_imported,
         browser_shortcut_bindings: state.browser_shortcut_bindings.clone(),
-        pet_visible: state.pet_visible,
-        pet_origin: state.pet_origin,
-        pet_shortcut: state.pet_shortcut.clone(),
         focused_device_id: state.focused_device_id.clone(),
         focused_checkout_id: state.focused_checkout_id.clone(),
         workspace_registrations: state.workspace_registrations.clone(),
@@ -1334,9 +1316,6 @@ mod tests {
         );
         assert!(state.right_panel_visible);
         assert!(state.shortcut_bindings.is_empty());
-        assert!(state.pet_visible, "a pre-pet store still shows the pet");
-        assert_eq!(state.pet_origin, None);
-        assert_eq!(state.pet_shortcut, None);
     }
 
     /// A moved store's hint stays until a session takes it, and an ordinary
@@ -1388,39 +1367,14 @@ mod tests {
         let _ = fs::remove_dir(root);
     }
 
+    /// Stores written while the core kept a pet carry its fields; they load
+    /// as any other field the build no longer reads.
     #[test]
-    fn pet_position_visibility_and_shortcut_survive_a_relaunch() {
-        let folder = tempfile::tempdir().unwrap();
-        let root = folder.path().to_path_buf();
-        let path = root.join("state.json");
-        let mut state = UiStateSnapshot {
-            pet_visible: false,
-            pet_origin: Some(PetOriginSnapshot { x: 120.0, y: 640.0 }),
-            pet_shortcut: Some("command+option+p".to_owned()),
-            ..UiStateSnapshot::default()
-        };
-
-        save(&path, &state, &PaneTerminalSizes::new()).expect("persist pet state");
-        let (restored, _sizes, disposition) = load(&path);
-
+    fn a_store_carrying_the_retired_pet_fields_still_loads() {
+        let source = br#"{"schema_version":1,"selected_pane_id":"p1","pet_visible":false,"pet_origin":{"x":120.0,"y":640.0},"pet_shortcut":"command+option+p"}"#;
+        let (state, _sizes, disposition) = decode(source);
         assert_eq!(disposition, LoadDisposition::Loaded);
-        assert!(
-            !restored.pet_visible,
-            "hidden at exit means hidden at start"
-        );
-        assert_eq!(
-            restored.pet_origin,
-            Some(PetOriginSnapshot { x: 120.0, y: 640.0 })
-        );
-        assert_eq!(restored.pet_shortcut.as_deref(), Some("command+option+p"));
-
-        // Saving the same state twice is a no-op the next load cannot tell apart.
-        state.pet_visible = false;
-        save(&path, &state, &PaneTerminalSizes::new()).expect("persist pet state again");
-        assert_eq!(load(&path).0.pet_origin, restored.pet_origin);
-
-        let _ = fs::remove_file(path);
-        let _ = fs::remove_dir(root);
+        assert_eq!(state.selected_pane_id.as_deref(), Some("p1"));
     }
 
     #[test]
@@ -1436,7 +1390,7 @@ mod tests {
         // That store carries fields the core's own schema would refuse.
         fs::write(
             &path,
-            br#"{"schema_version":7,"pet_visible":"yes","shortcut_bindings":{"toggle_zoom":"command+shift+return"}}"#,
+            br#"{"schema_version":7,"left_sidebar_visible":"yes","shortcut_bindings":{"toggle_zoom":"command+shift+return"}}"#,
         )
         .unwrap();
         assert_eq!(

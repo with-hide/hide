@@ -10,10 +10,8 @@ pub mod tasks;
 use super::axes::*;
 use super::turn::*;
 use crate::model::SidebarAgentSnapshot;
-use crate::pet::PetSummary;
 use crate::sidebar::sync_checkout_purposes;
 use serde::Serialize;
-use std::collections::BTreeMap;
 
 /// The mark a row draws: whose move is next (docs/status-model.md, One
 /// meaning across surfaces). It is one decision for the row's own mark and
@@ -257,112 +255,18 @@ pub fn sync_checkout_agent_summaries(
     changed
 }
 
-/// Buckets the projected agent list.
-///
-/// While the herdr connection is down the last valid agent list is retained
-/// (so the pet does not blink to empty) but every retained agent counts as
-/// disconnected: a stale yellow "act now" badge for a server that is no
-/// longer answering is exactly the failure this prevents.
-pub fn summarize(agents: &[SidebarAgentSnapshot], connected: bool) -> PetSummary {
-    let mut summary = PetSummary::default();
-    for agent in agents {
-        if !connected {
-            summary.disconnected += 1;
-            continue;
-        }
-        // The groups are decided once, in the projection. The pet counts them
-        // through the projection's own enum rather than reading tokens, axes,
-        // or group names a second time.
-        if !listed_for_operator(agent) {
-            continue;
-        }
-        match crate::agent_state::group_of(agent) {
-            AgentGroup::NeedsYou => {
-                summary.needs_you += 1;
-                if crate::agent_state::demand_of(agent) == AgentDemand::Error {
-                    summary.error += 1;
-                }
-            }
-            AgentGroup::Done => summary.done += 1,
-            AgentGroup::Working => summary.working += 1,
-            AgentGroup::Seen => summary.seen += 1,
-        }
-    }
-    summary
-}
-
-/// The in-process subagents Hide's hook reports as working, summed over the
-/// listed agents. A count is only meaningful while the server is answering,
-/// and only a pane that still holds an agent is counted, so a token left on
-/// a pane whose agent exited does not linger in the badge.
-pub fn subagents_active(
-    agents: &[SidebarAgentSnapshot],
-    hook_tokens: &BTreeMap<String, crate::agent_hooks::PaneHookTokens>,
-    connected: bool,
-) -> u32 {
-    if !connected {
-        return 0;
-    }
-    agents
-        .iter()
-        .filter_map(|agent| hook_tokens.get(&agent.pane_id))
-        .filter_map(|tokens| tokens.working)
-        .fold(0, u32::saturating_add)
-}
-
-/// Whether this agent is one the operator still has to act on.
-///
-/// Read through the projection's own enum, not by matching the group name a
-/// second time: a name compared here is a copy of a vocabulary that lives in
-/// one place.
-pub fn is_unseen(agent: &SidebarAgentSnapshot) -> bool {
-    crate::agent_state::group_of(agent) == AgentGroup::NeedsYou
-}
-
-/// The unseen panes in click order: the pane whose unseen state was observed
-/// first, then snapshot order.
-///
-/// `observed` holds the first time each pane was seen unseen. It lives in
-/// memory only (D-21), so after a restart every pane carries the same first
-/// observation and the snapshot's own order decides - which is the approved
-/// fallback, not a defect.
-pub fn attention_order(
-    agents: &[SidebarAgentSnapshot],
-    observed: &BTreeMap<String, u64>,
-) -> Vec<String> {
-    let mut unseen = agents
-        .iter()
-        .enumerate()
-        .filter(|(_, agent)| is_unseen(agent))
-        .map(|(index, agent)| {
-            (
-                observed.get(&agent.pane_id).copied().unwrap_or(u64::MAX),
-                index,
-                agent.pane_id.clone(),
-            )
+/// Whether any agent the operator is shown is working or waiting on them,
+/// read through the projection's own groups. A server that stopped answering
+/// says nothing true about its agents, so it reports none.
+pub fn any_agent_active(agents: &[SidebarAgentSnapshot], connected: bool) -> bool {
+    connected
+        && agents.iter().any(|agent| {
+            listed_for_operator(agent)
+                && matches!(
+                    crate::agent_state::group_of(agent),
+                    AgentGroup::NeedsYou | AgentGroup::Working
+                )
         })
-        .collect::<Vec<_>>();
-    unseen.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    unseen.into_iter().map(|(_, _, pane_id)| pane_id).collect()
-}
-
-/// Records the first moment each currently-unseen pane became unseen and
-/// forgets panes that are no longer unseen. Running it twice with the same
-/// agent list leaves the map unchanged.
-pub fn observe_unseen(
-    observed: &mut BTreeMap<String, u64>,
-    agents: &[SidebarAgentSnapshot],
-    now_unix_ms: u64,
-) {
-    let unseen = agents
-        .iter()
-        .filter(|agent| is_unseen(agent))
-        .map(|agent| agent.pane_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    observed.retain(|pane_id, _| unseen.contains(pane_id.as_str()));
-    for pane_id in unseen {
-        observed.entry(pane_id.to_owned()).or_insert(now_unix_ms);
-    }
 }
 
 /// The phone-safe projection, built only from accepted core snapshot values.

@@ -1525,33 +1525,6 @@ pub(super) struct ColorThemeSetPayload {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct PetVisibilityPayload {
-    pub(super) visible: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct PetMovePayload {
-    /// Already clamped to a visible screen by the shell, which owns the
-    /// display geometry; the core only records where the pet ended up.
-    pub(super) x: f64,
-    pub(super) y: f64,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct PetDragPayload {
-    pub(super) dragging: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct PetShortcutPayload {
-    /// `null` or blank means the user cleared the binding: nothing is
-    /// registered and no shortcut fires (D-14).
-    pub(super) accelerator: Option<String>,
-    #[serde(default)]
-    pub(super) error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub(super) struct TerminalScrollPayload {
     pub(super) pane_id: String,
     pub(super) direction: String,
@@ -1813,12 +1786,6 @@ pub(super) enum Event {
     CardRefresh,
     DiskWatch(super::disk_sweep::DiskWatchPayload),
     ReconnectPane(FocusPanePayload),
-    PetSetVisible(PetVisibilityPayload),
-    PetToggleVisible,
-    PetMove(PetMovePayload),
-    PetDrag(PetDragPayload),
-    PetActivity,
-    PetShortcutUpdate(PetShortcutPayload),
 }
 
 /// The web shell rebinds a handful of pane commands; the bound keeps a
@@ -2162,12 +2129,6 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "card_refresh" => Ok(Event::CardRefresh),
         "disk_watch" => decode!(super::disk_sweep::DiskWatchPayload, DiskWatch),
         "reconnect_pane" => decode!(FocusPanePayload, ReconnectPane),
-        "pet_set_visible" => decode!(PetVisibilityPayload, PetSetVisible),
-        "pet_toggle_visible" => Ok(Event::PetToggleVisible),
-        "pet_move" => decode!(PetMovePayload, PetMove),
-        "pet_drag" => decode!(PetDragPayload, PetDrag),
-        "pet_activity" => Ok(Event::PetActivity),
-        "pet_shortcut_update" => decode!(PetShortcutPayload, PetShortcutUpdate),
         "workspace_view" => decode!(WorkspaceViewPayload, WorkspaceView),
         "agent_layout" => decode!(AgentLayoutPayload, AgentLayout),
         "pane_move" => decode!(super::pane_move::Request, PaneMove),
@@ -2400,53 +2361,6 @@ impl Runtime {
             Event::CheckSleepingSession(payload) => self.request_dormant_status(&payload.sleep_id),
             Event::PaneReopen(payload) => self.request_pane_reopen(&payload.pane_id),
             Event::RefreshStatus => self.request_status_refresh(),
-            Event::PetSetVisible(payload) => self.set_pet_visible(payload.visible),
-            Event::PetToggleVisible => {
-                let visible = !self.snapshot.ui_state.pet_visible;
-                self.set_pet_visible(visible)
-            }
-            Event::PetMove(payload) => {
-                let origin = PetOriginSnapshot {
-                    x: payload.x,
-                    y: payload.y,
-                };
-                if self.snapshot.ui_state.pet_origin == Some(origin) {
-                    return false;
-                }
-                self.snapshot.ui_state.pet_origin = Some(origin);
-                self.persist_ui_state();
-                self.refresh_pet();
-                true
-            }
-            Event::PetDrag(payload) => {
-                if self.pet_dragging == payload.dragging {
-                    return false;
-                }
-                self.pet_dragging = payload.dragging;
-                self.note_pet_activity();
-                self.refresh_pet()
-            }
-            Event::PetActivity => {
-                self.note_pet_activity();
-                self.refresh_pet()
-            }
-            Event::PetShortcutUpdate(payload) => {
-                let accelerator = payload
-                    .accelerator
-                    .map(|value| value.trim().to_owned())
-                    .filter(|value| !value.is_empty());
-                let error = payload.error.filter(|value| !value.trim().is_empty());
-                let unchanged = self.snapshot.ui_state.pet_shortcut == accelerator
-                    && self.snapshot.pet.shortcut_error == error;
-                if unchanged {
-                    return false;
-                }
-                self.snapshot.ui_state.pet_shortcut = accelerator;
-                self.snapshot.pet.shortcut_error = error;
-                self.persist_ui_state();
-                self.refresh_pet();
-                true
-            }
             Event::Click(payload) => {
                 let _ = (payload.x, payload.y, payload.button, payload.click_count);
                 self.snapshot.focused.surface = payload.surface;
@@ -4422,8 +4336,6 @@ impl Runtime {
                 if payload.usage_window_visible.is_some() || payload.usage_popover_open.is_some() {
                     self.feed_usage_ledger();
                 }
-                // Pet placement, visibility, and shortcut belong to the pet
-                // events; a navigator or keyboard save must not erase them.
                 let current = self.snapshot.ui_state.clone();
                 let previous_ui_state = current.clone();
                 let git_was_visible = current.right_panel_visible
@@ -4515,9 +4427,6 @@ impl Runtime {
                         }
                         None => current.browser_shortcut_bindings.clone(),
                     },
-                    pet_visible: self.snapshot.ui_state.pet_visible,
-                    pet_origin: self.snapshot.ui_state.pet_origin,
-                    pet_shortcut: self.snapshot.ui_state.pet_shortcut.clone(),
                     focused_device_id: current.focused_device_id,
                     focused_checkout_id: current.focused_checkout_id,
                     workspace_registrations: payload
@@ -4604,8 +4513,7 @@ impl Runtime {
                         None => current.terminal_font_family,
                     },
                     // The zoom chords own this map; a navigator or keyboard
-                    // save must not erase it, for the same reason the pet
-                    // fields above are carried through.
+                    // save must not erase it.
                     pane_text_scales: current.pane_text_scales,
                     editor_text_scale: current.editor_text_scale,
                     conversation_pane_ids: current.conversation_pane_ids,

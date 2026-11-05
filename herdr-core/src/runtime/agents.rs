@@ -1167,88 +1167,13 @@ impl Runtime {
         }
     }
 
-    /// Recomputes the pet's pose, badge row, and attention queue from the
-    /// current agent list and connection state. Idempotent: the same inputs
-    /// produce the same snapshot and report no change.
-    pub(super) fn refresh_pet(&mut self) -> bool {
-        let now = unix_milliseconds();
+    /// Stamps when an agent last worked or waited on the operator, the clock
+    /// the usage limit reads (`limit_reads_usage`).
+    pub(super) fn note_agent_work(&mut self) {
         let connected = self.snapshot.status.herdr.state == "connected";
-        let agents = &self.snapshot.navigator.agents;
-        let summary = crate::agent_state::summarize(agents, connected);
-        if summary.needs_you + summary.working > 0 {
-            self.pet_active_at_unix_ms = now;
-            self.agent_worked_at_unix_ms = now;
+        if crate::agent_state::any_agent_active(&self.snapshot.navigator.agents, connected) {
+            self.agent_worked_at_unix_ms = unix_milliseconds();
         }
-        let idle_ms = now.saturating_sub(self.pet_active_at_unix_ms);
-        let waking = now < self.pet_waking_until_unix_ms;
-        let subagents_active =
-            crate::agent_state::subagents_active(agents, &self.pane_hook_tokens, connected);
-        let attention_pane_ids = if connected {
-            crate::agent_state::observe_unseen(&mut self.pet_unseen_observed, agents, now);
-            crate::agent_state::attention_order(
-                &self.snapshot.navigator.agents,
-                &self.pet_unseen_observed,
-            )
-        } else {
-            Vec::new()
-        };
-
-        let next = PetSnapshot {
-            visible: self.snapshot.ui_state.pet_visible,
-            connection: self.snapshot.status.herdr.state.clone(),
-            connection_message: self.snapshot.status.herdr.message.clone(),
-            pose: pet::pose(summary, idle_ms, waking, connected).to_owned(),
-            sleep_phase: pet::sleep_phase_for_idle_ms(idle_ms).as_str().to_owned(),
-            roam_allowed: connected && pet::is_roam_allowed(summary, idle_ms, self.pet_dragging),
-            badges: PetBadgesSnapshot {
-                needs_you: summary.needs_you,
-                done: summary.done,
-                working: summary.working,
-                seen: summary.seen,
-                disconnected: summary.disconnected,
-                subagents_active,
-            },
-            attention_pane_ids,
-            origin: self.snapshot.ui_state.pet_origin,
-            shortcut: self.snapshot.ui_state.pet_shortcut.clone(),
-            shortcut_error: self.snapshot.pet.shortcut_error.clone(),
-            theme_id: self.snapshot.pet.theme_id.clone(),
-        };
-        if self.snapshot.pet == next {
-            return false;
-        }
-        self.snapshot.pet = next;
-        true
-    }
-
-    /// Applying the same visibility twice converges instead of flapping, so
-    /// four surfaces sharing one state can all set it freely.
-    pub(super) fn set_pet_visible(&mut self, visible: bool) -> bool {
-        if self.snapshot.ui_state.pet_visible == visible {
-            return false;
-        }
-        self.snapshot.ui_state.pet_visible = visible;
-        self.persist_ui_state();
-        self.note_pet_activity();
-        self.refresh_pet();
-        true
-    }
-
-    /// Pointer or toggle activity wakes a sleeping pet before the normal
-    /// priority resumes.
-    pub(super) fn note_pet_activity(&mut self) {
-        let now = unix_milliseconds();
-        let idle_ms = now.saturating_sub(self.pet_active_at_unix_ms);
-        if pet::sleep_phase_for_idle_ms(idle_ms) != pet::SleepPhase::Awake {
-            self.pet_waking_until_unix_ms = now.saturating_add(PET_WAKING_MS);
-        }
-        self.pet_active_at_unix_ms = now;
-    }
-
-    pub(super) fn apply_persisted_pet_state(&mut self) {
-        self.snapshot.pet.visible = self.snapshot.ui_state.pet_visible;
-        self.snapshot.pet.origin = self.snapshot.ui_state.pet_origin;
-        self.snapshot.pet.shortcut = self.snapshot.ui_state.pet_shortcut.clone();
     }
 
     /// Starts the read axis's view of a new connection to one Herdr server:

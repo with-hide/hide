@@ -121,7 +121,6 @@ pub struct Snapshot {
     pub ui_state: UiStateSnapshot,
     pub ime: ImeSnapshot,
     pub status: StatusSnapshot,
-    pub pet: PetSnapshot,
     pub recent_closed: RecentClosedSnapshot,
     /// The front Workspace's presentation, present only in a shell that draws
     /// separate Agent and View areas (`CoreOptions::workspace_views_path`).
@@ -801,50 +800,6 @@ pub enum PaneFindRoute {
     /// Herdr holds the pane's history, or the agent's search could not be
     /// opened (`unavailable_reason` says why), so Hide's find bar opens.
     Bar,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct PetSnapshot {
-    pub visible: bool,
-    /// `connected` while Herdr session sync is healthy; otherwise the sync
-    /// failure state, so a missing socket is never a silent idle.
-    pub connection: String,
-    pub connection_message: Option<String>,
-    pub pose: String,
-    pub sleep_phase: String,
-    pub roam_allowed: bool,
-    pub badges: PetBadgesSnapshot,
-    /// Unseen panes in click order: oldest observation first, snapshot order
-    /// as the tie-break.
-    pub attention_pane_ids: Vec<String>,
-    pub origin: Option<PetOriginSnapshot>,
-    pub shortcut: Option<String>,
-    pub shortcut_error: Option<String>,
-    pub theme_id: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct PetBadgesSnapshot {
-    /// The four groups the sidebar draws, counted once. `needs_you` is the
-    /// pet's "act now" number and `done` is what finished unseen, so the badge
-    /// row and the sidebar cannot disagree.
-    pub needs_you: usize,
-    pub done: usize,
-    pub working: usize,
-    pub seen: usize,
-    /// Retained agents on a server that stopped answering. They are counted
-    /// separately because a stale count of what is waiting would be a lie.
-    pub disconnected: usize,
-    /// In-process subagents Hide's hook reported as working, summed over the
-    /// agents on an answering server. It is the one count the hook can vouch
-    /// for; an uninstrumented session contributes nothing, not a zero.
-    pub subagents_active: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
-pub struct PetOriginSnapshot {
-    pub x: f64,
-    pub y: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -2984,7 +2939,6 @@ pub enum Surface {
     Sidebar,
     Terminal,
     RightPanel,
-    Pet,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -4429,9 +4383,6 @@ pub struct UiStateSnapshot {
     /// (Chrome keeps ⌘W), so one host's rebind must never become the other's.
     #[serde(default)]
     pub browser_shortcut_bindings: BTreeMap<String, String>,
-    pub pet_visible: bool,
-    pub pet_origin: Option<PetOriginSnapshot>,
-    pub pet_shortcut: Option<String>,
     #[serde(default)]
     pub focused_device_id: Option<String>,
     #[serde(default)]
@@ -5370,11 +5321,6 @@ impl Default for UiStateSnapshot {
             shortcut_bindings: BTreeMap::new(),
             shortcut_bindings_imported: false,
             browser_shortcut_bindings: BTreeMap::new(),
-            // The pet shows itself on a first run; hiding it is a choice the
-            // user makes and the store then remembers (D-09).
-            pet_visible: true,
-            pet_origin: None,
-            pet_shortcut: None,
             focused_device_id: None,
             focused_checkout_id: None,
             workspace_registrations: Vec::new(),
@@ -7190,7 +7136,7 @@ pub struct DiagnosticSnapshot {
 /// Carries no "last checked" stamp on purpose. Every check restamped it, the
 /// stamp rides `rest`, and `rest` is compared field by field to decide whether
 /// the reader is current - so a clock reading nothing renders made every
-/// heartbeat re-send the whole navigator, ui state, status and pet.
+/// heartbeat re-send the whole navigator, ui state and status.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ProviderStatusSnapshot {
     pub state: String,
@@ -7506,7 +7452,6 @@ impl Snapshot {
                     failure: None,
                 },
             },
-            pet: PetSnapshot::initial(),
             recent_closed: RecentClosedSnapshot::default(),
             workspace_view: None,
             browser_views: Vec::new(),
@@ -7525,25 +7470,6 @@ impl Snapshot {
             session_work_search: None,
             session_thread: None,
             session_thread_history: None,
-        }
-    }
-}
-
-impl PetSnapshot {
-    pub fn initial() -> Self {
-        Self {
-            visible: true,
-            connection: "not_connected".to_owned(),
-            connection_message: Some("Waiting for the first herdr connection attempt".to_owned()),
-            pose: "disconnected".to_owned(),
-            sleep_phase: "awake".to_owned(),
-            roam_allowed: false,
-            badges: PetBadgesSnapshot::default(),
-            attention_pane_ids: Vec::new(),
-            origin: None,
-            shortcut: None,
-            shortcut_error: None,
-            theme_id: "default".to_owned(),
         }
     }
 }
@@ -7668,7 +7594,7 @@ pub struct SnapshotDeltaWire<'a> {
     pub session_thread_history: Option<&'a SessionThreadHistorySnapshot>,
     /// Find state rides top-level rather than in `rest`, because it changes on
     /// every keystroke while a search is open. In `rest` each keystroke would
-    /// restamp that revision and resend the whole navigator, ui state, and pet
+    /// restamp that revision and resend the whole navigator and ui state
     /// sections with it - the wire would be sized by total state instead of by
     /// what changed. Six scalars on every response cost far less.
     pub find: &'a PaneFindSnapshot,

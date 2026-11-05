@@ -66,7 +66,6 @@ mod observed;
 pub mod pane_command;
 mod pane_reopen;
 mod persistence;
-pub mod pet;
 pub mod plans;
 mod ports;
 pub mod product_analytics;

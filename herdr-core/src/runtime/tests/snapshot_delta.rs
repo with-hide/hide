@@ -261,7 +261,7 @@ fn one_daemon_creates_the_core_once_and_never_replaces_it() {
 /// R6, AC12. Herdr publishes a session snapshot on every event and on
 /// every agent refresh, and the wire has to be sized by what changed. A
 /// republish that moved nothing must leave the reader's cursor current, or
-/// the whole navigator, ui state, status and pet sections ride the next
+/// the whole navigator, ui state and status sections ride the next
 /// read for nothing.
 #[test]
 fn snapshot_delivery_leaves_the_rest_section_alone_when_a_republish_moves_nothing() {

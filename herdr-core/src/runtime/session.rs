@@ -3178,7 +3178,8 @@ impl Runtime {
         changed |= self.refresh_browser_inventory_scope();
         // A pre-check's pane may now name its agent's session.
         self.feed_link_reviews();
-        changed | self.refresh_pet()
+        self.note_agent_work();
+        changed
     }
     /// Moves the navigator to the checkout that owns a pane without emitting
     /// a second Herdr command.

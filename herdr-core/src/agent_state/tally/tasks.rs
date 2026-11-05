@@ -56,7 +56,7 @@ pub struct Card {
     pub state: TaskState,
     /// In `NeedsYou` for an ask the operator read and has not answered: the
     /// list draws it dimmed, while the row's own group, and with it every
-    /// notification, badge and pet, stays read (needs-you-cleanup D-10).
+    /// notification and badge, stays read (needs-you-cleanup D-10).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub read: bool,
     /// `작업 → PR → 검토 → 머지` filled up to here (1 to 4); absent for a
