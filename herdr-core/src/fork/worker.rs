@@ -432,9 +432,18 @@ pub(crate) fn read_past_writes<T: serde::de::DeserializeOwned>(
     }
 }
 
+/// Whether an agent's status reads it at rest, ready for what is typed:
+/// `idle`, or `done`, a rest after work, as Herdr's start wait reads both
+/// (`herdr agent start`, v0.9.5). agy redrawing the resumed conversation
+/// can read working for a moment as it starts, which leaves its rest `done`.
+fn at_rest(status: &str) -> bool {
+    matches!(status, "idle" | "done")
+}
+
 /// agy forks only through its `/fork` command (agy 1.4.0, PRD
 /// antigravity-first-class D-07). The fork's pane resumed the source
-/// conversation; this types `/fork` once Herdr reads agy as idle there, finds
+/// conversation; this types `/fork` once the engine reads agy at rest there
+/// ([`at_rest`]), finds
 /// the conversation `/fork` made in agy's index on the pane's node, and
 /// reports it to Herdr, which would keep the source's id until the next
 /// prompt. Everything the fork assumes of agy's screen is in this function;
@@ -452,11 +461,11 @@ fn fork_antigravity(
         .as_deref()
         .ok_or("Session fork has no confirmed checkout")?;
     let deadline = Instant::now() + ANTIGRAVITY_FORK_WAIT;
-    while engine
-        .pane_agent_status(CONTROL_WAIT, pane_id)
-        .map_err(failed("pane.get"))?
-        != "idle"
-    {
+    while !at_rest(
+        &engine
+            .pane_agent_status(CONTROL_WAIT, pane_id)
+            .map_err(failed("pane.get"))?,
+    ) {
         if Instant::now() >= deadline {
             return Err("agy did not open the conversation to fork in time".into());
         }
@@ -478,12 +487,12 @@ fn fork_antigravity(
     clear_antigravity_composer(engine, pane_id, Instant::now() + ANTIGRAVITY_CLEAR_WAIT)?;
     // The mark's read may have waited on agy writing its index, and the
     // composer's clearing on agy redrawing: `/fork` is typed only into a pane
-    // still idle, never into a turn that began since.
-    if engine
-        .pane_agent_status(CONTROL_WAIT, pane_id)
-        .map_err(failed("pane.get"))?
-        != "idle"
-    {
+    // still at rest, never into a turn that began since.
+    if !at_rest(
+        &engine
+            .pane_agent_status(CONTROL_WAIT, pane_id)
+            .map_err(failed("pane.get"))?,
+    ) {
         return Err("agy started working before /fork could be typed".into());
     }
     engine
@@ -1282,6 +1291,8 @@ mod tests {
         // empty composer might, and `/fork` is typed as before.
         // `no-composer`: the screen shows no composer as declared, and
         // `/fork` is typed as before.
+        // `done`: agy read working for a moment as it opened the
+        // conversation, so its rest reads done, and `/fork` is typed on it.
         const AGY_EMPTY: &str =
             include_str!("../../../hide-agent-adapter/tests/fixtures/composer/agy-0-empty.ansi");
         const AGY_TYPED: &str =
@@ -1290,6 +1301,7 @@ mod tests {
             "stray",
             "stuck",
             "no-composer",
+            "done",
             "success",
             "ambiguous",
             "moved",
@@ -1332,7 +1344,10 @@ mod tests {
             };
             let index_home = home.path().to_path_buf();
             let index_cwd = cwd.clone();
-            let statuses = Arc::new(Mutex::new(vec!["working", "idle"]));
+            let statuses = Arc::new(Mutex::new(vec![
+                "working",
+                if case == "done" { "done" } else { "idle" },
+            ]));
             let held = Arc::new(Mutex::new(matches!(case, "stray" | "stuck")));
             let herdr = FakeEngine::start(move |method, params| match method {
                 "read_screen" => {
@@ -1447,7 +1462,7 @@ mod tests {
                     assert_eq!(result, Ok(()), "{case}");
                     &stuck
                 }
-                "success" | "moved" | "in-motion" | "no-composer" => {
+                "success" | "moved" | "in-motion" | "no-composer" | "done" => {
                     assert_eq!(result, Ok(()), "{case}");
                     &[
                         "pane_agent_status",
