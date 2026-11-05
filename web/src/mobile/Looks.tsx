@@ -99,6 +99,7 @@ function Tile({ row }: { row: LookRow }) {
 export function LookViewer({ row, content }: { row: LookRow; content: LookContent }) {
   const { t } = useInterfaceTranslation();
   const word = useKindWord()(row.kind);
+  const connected = usePhone((s) => s.connected);
   switch (content.state) {
     case "loading":
       return (
@@ -159,7 +160,7 @@ export function LookViewer({ row, content }: { row: LookRow; content: LookConten
           <p role="alert" className="text-title text-foreground">
             {t("mobile.look.failed")}
           </p>
-          <Button variant="secondary" className="h-(--size-touch-target) px-lg text-title" data-phone-look-retry="true" onClick={retryLook}>
+          <Button variant="secondary" className="h-(--size-touch-target) px-lg text-title" data-phone-look-retry="true" disabled={!connected} onClick={retryLook}>
             {t("mobile.look.retry")}
           </Button>
         </Centered>

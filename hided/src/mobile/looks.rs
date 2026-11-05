@@ -49,16 +49,6 @@ const CHANGE_FILES: usize = 200;
 const NAME_CHARS: usize = 200;
 const URL_CHARS: usize = 500;
 
-/// Extensions a phone draws as an image: the ones its own browser decodes.
-/// Documents drawn as Markdown.
-const MARKDOWN_EXTENSIONS: [&str; 3] = ["md", "markdown", "mdx"];
-
-/// The extension of a file name, lowercased.
-fn extension(name: &str) -> Option<String> {
-    let (stem, extension) = name.rsplit_once('.')?;
-    (!stem.is_empty()).then(|| extension.to_ascii_lowercase())
-}
-
 /// How a phone treats a View, from what the list already knows of it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Shown {
@@ -206,7 +196,7 @@ impl Transfer {
     pub fn ack(&self, request_id: &str, seq: u64) {
         if self.request_id == request_id {
             self.acked.send_if_modified(|acked| {
-                let next = (*acked).max(seq + 1);
+                let next = (*acked).max(seq.saturating_add(1));
                 let changed = next != *acked;
                 *acked = next;
                 changed
@@ -428,7 +418,6 @@ async fn read(
                 }));
                 break Err(match reason.as_str() {
                     "too_large" => "too_large",
-                    "outside_checkout" | "not_found" => "closed",
                     _ => "failed",
                 });
             }
@@ -468,8 +457,9 @@ async fn chunks(
     }
     let mode = match shown {
         Shown::Image => "image",
-        _ if extension(&view.path)
-            .is_some_and(|extension| MARKDOWN_EXTENSIONS.contains(&extension.as_str())) =>
+        // The desktop's own rule for what a Markdown file is, so the two draw alike.
+        _ if hide_host::document::language_for(std::path::Path::new(&view.path)).as_deref()
+            == Some("markdown") =>
         {
             "markdown"
         }
@@ -685,6 +675,27 @@ mod tests {
             (Some("look_end"), Some("d-1"))
         );
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_document_is_drawn_as_markdown_by_the_desktops_own_rule() {
+        for (name, mode) in [
+            ("a.md", "markdown"),
+            ("a.markdown", "markdown"),
+            ("a.mdown", "markdown"),
+            ("a.mdx", "text"),
+            ("a.txt", "text"),
+        ] {
+            let looked = view(name, DisplayKind::File);
+            let (frames, mut sent) = mpsc::channel(8);
+            let (_acked, window) = watch::channel(0_u64);
+            let read = Read {
+                bytes: b"# title".to_vec(),
+                total: 7,
+            };
+            chunks("r-3", &looked, Shown::Document, read, &frames, window).await;
+            assert_eq!(sent_next(&mut sent).await["mode"], mode, "{name}");
+        }
     }
 
     #[tokio::test]

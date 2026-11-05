@@ -655,8 +655,8 @@ impl Runtime {
     /// What a View's tile shows of it from what Hide already holds: its tab's
     /// name, the kind of the file its editor tab holds and an open text
     /// document's first lines, never a read or a capture made for the tile.
-    /// The session record's gallery and the phone's 볼 것 list draw the same
-    /// tile.
+    /// The session record's gallery draws it; the phone's 볼 것 list needs
+    /// only the name (`phone_looks`), so it does not pay for the rest.
     fn view_tile(&self, display: &Display) -> ViewTile {
         use crate::view_layout::DisplayKind;
         let document = display
@@ -725,23 +725,20 @@ impl Runtime {
         let views = found
             .into_iter()
             .take(LOOK_VIEWS)
-            .map(|(key, display)| {
-                let tile = self.view_tile(display);
-                crate::model::LookView {
-                    device_id: key.0,
-                    checkout_path: key.1,
-                    display_id: display.id.clone(),
-                    kind: display.kind,
-                    label: tile.label,
-                    path: display.path.clone(),
-                    url: display.url.clone(),
-                    committed: display.committed,
-                    output: (display.kind == crate::view_layout::DisplayKind::File)
-                        .then(|| output_kind(hide_platform::path::wire_name(&display.path)))
-                        .flatten(),
-                    unseen: display.unseen.is_some(),
-                    at_unix_ms: at(display),
-                }
+            .map(|(key, display)| crate::model::LookView {
+                device_id: key.0,
+                checkout_path: key.1,
+                display_id: display.id.clone(),
+                kind: display.kind,
+                label: super::view_areas::display_label(display),
+                path: display.path.clone(),
+                url: display.url.clone(),
+                committed: display.committed,
+                output: (display.kind == crate::view_layout::DisplayKind::File)
+                    .then(|| output_kind(hide_platform::path::wire_name(&display.path)))
+                    .flatten(),
+                unseen: display.unseen.is_some(),
+                at_unix_ms: at(display),
             })
             .collect();
         crate::model::LookViews { views, omitted }

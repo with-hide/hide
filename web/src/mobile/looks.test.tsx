@@ -213,6 +213,11 @@ it("says a View is not open any more, and a failed read starts over under a new 
     await press('[data-phone-look="v3"]');
     const first = last("look_open").request_id as string;
     await serve({ type: "look_result", request_id: first, view_id: "v3", state: "failed" });
+    // Away from the Mac there is nothing to ask again: 다시 waits for the connection.
+    const { patch } = await import("./store");
+    await act(async () => patch({ connected: false }));
+    expect(container.querySelector<HTMLButtonElement>("[data-phone-look-retry]")!.disabled).toBe(true);
+    await act(async () => patch({ connected: true }));
     await press("[data-phone-look-retry]");
     const retried = last("look_open");
     expect(retried.view_id).toBe("v3");
