@@ -1631,7 +1631,9 @@ export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number };
+/** Which way every mission's map runs: what a node waits on above it, or to its left. */
+export type MissionMapFlow = "down" | "across";
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number; map_flow?: MissionMapFlow };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };
