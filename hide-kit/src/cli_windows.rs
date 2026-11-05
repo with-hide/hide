@@ -133,13 +133,6 @@ fn reached(target: &KitTarget) -> Option<PathBuf> {
         .ok()
         .and_then(|bytes| shim_folder(&bytes));
     match named {
-        // This installation's own way, whatever case or separators its two
-        // folders were spelled with: an installation is named by its root's
-        // spelling (`install_of_root`), which a path rebuilt from the
-        // command folder need not repeat.
-        Some(folder) if matches!(form(target), Ok(Form::Relative(ref own)) if *own == folder) => {
-            Some(wanted(target))
-        }
         Some(folder) if folder != JUNCTION => {
             Some(lexical(&target.cli_dir.join(folder)).join("hide.exe"))
         }
@@ -148,9 +141,21 @@ fn reached(target: &KitTarget) -> Option<PathBuf> {
 }
 
 /// The command another live installation on this account reaches through
-/// the shim, which that installation's own pass keeps.
+/// the shim, which that installation's own pass keeps. This installation's
+/// own command is known by the file it is, not by how the way to it is
+/// spelled: an installation is named by its root's spelling
+/// (`install_of_root`), which a path rebuilt from the shim, or read back
+/// from a junction, need not repeat.
 fn another_installs(target: &KitTarget) -> Option<PathBuf> {
-    reached(target).filter(|destination| held_by_another(target, destination))
+    reached(target).filter(|destination| {
+        !same_file(destination, &wanted(target)) && held_by_another(target, destination)
+    })
+}
+
+/// Whether two paths lead to one file.
+fn same_file(left: &Path, right: &Path) -> bool {
+    use hide_platform::fs::identity::file_id;
+    matches!((file_id(left), file_id(right)), (Ok(left), Ok(right)) if left == right)
 }
 
 /// Both names are ours or absent. An exact shim alone does not authorize
@@ -206,8 +211,12 @@ fn owned_or_missing(target: &KitTarget) -> Result<(), String> {
     match std::fs::symlink_metadata(&pointer) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             let destination = std::fs::read_link(&pointer)
-                .map_err(|error| format!("{} could not be read: {error}", pointer.display()))?;
-            if !hides_own(target, &destination.join("hide.exe")) {
+                .map_err(|error| format!("{} could not be read: {error}", pointer.display()))?
+                .join("hide.exe");
+            // A junction reads back in its verbatim `\\?\` spelling, which no
+            // root's prefix matches; one that leads to this build's own
+            // command is this installation's whatever its spelling.
+            if !same_file(&destination, &wanted(target)) && !hides_own(target, &destination) {
                 return Err(format!(
                     "{} is another program's link; Hide left it",
                     pointer.display()
