@@ -35,26 +35,6 @@ def record(samples):
             'boundary': 'page_keydown_to_xterm_write'}
 
 
-def driven_frames():
-    """Two panes with independently observed progress in all three window thirds."""
-    panes = ['pane-a', 'pane-b']
-    return {
-        'frames': [{'dt': 16}] * 7500, 'done': True,
-        'window': {'start': 100, 'end': 120100, 'duration_ms': 120000, 'requested_ms': 120000},
-        'driver_launch_complete': True, 'driver_cleanup_complete': True,
-        'driven_panes': panes,
-        'workload_evidence': {
-            'method': 'pane_sequence_progress_v1', 'sample_interval_ms': 500,
-            'panes': [
-                {'pane_id': pane, 'marker': f'f0123456789abcdef{index}:', 'phases': [
-                    {'first': {'at_ms': phase * 40000 + 1000, 'sequence': phase * 100 + 1},
-                     'last': {'at_ms': phase * 40000 + 39000, 'sequence': phase * 100 + 90},
-                     'observations': 2} for phase in range(3)]}
-                for index, pane in enumerate(panes)],
-        },
-    }
-
-
 def summarize(doc):
     complete = {**record(doc['samples']), **doc}
     status, summary = run_summary('echo', [complete])
@@ -136,109 +116,6 @@ class MeasurementValidity(unittest.TestCase):
         self.assertNotEqual(status, 0)
         self.assertFalse(result['valid'])
         self.assertFalse(result['pass'])
-
-    def test_invalid_frames_are_not_silently_dropped(self):
-        for bad in ({}, {'dt': -1}, {'dt': float('nan')}, {'dt': float('inf')}, {'dt': True}):
-            with self.subTest(bad=bad):
-                doc = driven_frames()
-                doc['frames'].append(bad)
-                status, result = run_summary('frames', [doc])
-                self.assertNotEqual(status, 0)
-                self.assertFalse(result['pass'])
-                self.assertFalse(result['complete'])
-
-    def test_an_unfinished_frame_window_does_not_pass(self):
-        for doc, expected in ((driven_frames(), True),
-                              (dict(driven_frames(), done=False), False),
-                              (dict(driven_frames(), frames=[{'dt': 16}]), False)):
-            status, result = run_summary('frames', [doc])
-            self.assertEqual(result['pass'], expected)
-            self.assertEqual(status, 0 if expected else 1)
-
-
-class DrivenWorkloadValidity(unittest.TestCase):
-    def test_failed_collector_preserves_observations_without_a_valid_verdict(self):
-        doc = driven_frames()
-        doc.update(error='frame writer retirement unconfirmed', driver_cleanup_complete=False,
-                   pane_diagnostics={'after_stop': [{'pane_id': 'pane-a', 'retired': False,
-                                                     'tail': 'writer output retained'}]})
-        status, result = run_summary('frames', [doc])
-        self.assertNotEqual(status, 0)
-        self.assertFalse(result['valid'])
-        self.assertFalse(result['pass'])
-        self.assertEqual(result['count'], len(doc['frames']))
-        self.assertEqual(result['workload_evidence'], doc['workload_evidence'])
-        self.assertEqual(result['pane_diagnostics'], doc['pane_diagnostics'])
-        self.assertIn(doc['error'], result['errors'])
-
-    def test_failed_unobserved_driver_cannot_pass_on_idle_frames(self):
-        doc = {'frames': [{'dt': 16}] * 7500, 'done': True,
-               'window': {'start': 0, 'end': 120000, 'duration_ms': 120000},
-               'driver_exit': 1, 'ws_frames_during_run': 0, 'driven_panes': []}
-        status, result = run_summary('frames', [doc])
-        self.assertNotEqual(status, 0)
-        self.assertFalse(result['pass'])
-        self.assertFalse(result['valid'])
-
-    def test_actual_progress_in_every_pane_and_phase_can_pass_without_ws_counts(self):
-        status, result = run_summary('frames', [driven_frames()])
-        self.assertEqual(status, 0)
-        self.assertTrue(result['pass'])
-        self.assertTrue(result['workload_valid'])
-
-    def test_launch_success_and_ws_traffic_cannot_replace_pane_evidence(self):
-        for field in ('workload_evidence', 'driver_launch_complete', 'driver_cleanup_complete'):
-            doc = driven_frames()
-            del doc[field]
-            doc['ws_frames_during_run'] = 100000
-            with self.subTest(field=field):
-                status, result = run_summary('frames', [doc])
-                self.assertNotEqual(status, 0)
-                self.assertFalse(result['pass'])
-
-    def test_one_missing_or_stalled_pane_invalidates_the_whole_window(self):
-        for kind in ('missing', 'duplicate', 'unobserved', 'stale', 'outside', 'failed', 'cleanup'):
-            doc = driven_frames()
-            panes = doc['workload_evidence']['panes']
-            phase = panes[1]['phases'][1]
-            if kind == 'missing':
-                panes.pop()
-            elif kind == 'duplicate':
-                panes[1] = panes[0]
-            elif kind == 'unobserved':
-                phase.update(first=None, last=None, observations=0)
-            elif kind == 'stale':
-                phase['last']['sequence'] = phase['first']['sequence']
-            elif kind == 'outside':
-                phase['first']['at_ms'] = -1
-            elif kind == 'failed':
-                doc['driver_launch_complete'] = False
-            else:
-                doc['driver_cleanup_complete'] = False
-            with self.subTest(kind=kind):
-                status, result = run_summary('frames', [doc])
-                self.assertNotEqual(status, 0)
-                self.assertFalse(result['workload_valid'])
-                self.assertFalse(result['pass'])
-
-    def test_workload_evidence_must_belong_to_the_recorded_window(self):
-        for kind in ('wrong_phase', 'earlier_sequence', 'wrong_window', 'nonfinite', 'marker'):
-            doc = driven_frames()
-            pane = doc['workload_evidence']['panes'][0]
-            if kind == 'wrong_phase':
-                pane['phases'][2]['first']['at_ms'] = 1000
-            elif kind == 'earlier_sequence':
-                pane['phases'][2]['first']['sequence'] = 1
-            elif kind == 'wrong_window':
-                doc['window']['duration_ms'] = 600000
-            elif kind == 'nonfinite':
-                pane['phases'][0]['last']['at_ms'] = float('nan')
-            else:
-                pane['marker'] = doc['workload_evidence']['panes'][1]['marker']
-            with self.subTest(kind=kind):
-                status, result = run_summary('frames', [doc])
-                self.assertNotEqual(status, 0)
-                self.assertFalse(result['pass'])
 
 
 if __name__ == '__main__':

@@ -732,10 +732,10 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: Option<&str>, refusal: &
         "unread": refusal.unread,
         "runtime": runtime,
         "pane": pane,
-        "at_unix_ms": crate::spawn_guard::now_ms(),
+        "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+    let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
 }
 
 /// A shell call named more words than the files protection checks, so the
@@ -746,10 +746,10 @@ fn record_word_limit(home: &Path) {
             "component": "guardrails",
             "kind": "guard.word_limit",
             "limit": git::WORD_LIMIT,
-            "at_unix_ms": crate::spawn_guard::now_ms(),
+            "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+        let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
     }
 }
 
@@ -763,10 +763,10 @@ pub fn record_unreadable(home: &Path, runtime: &str, failure: PolicyFailure) {
             "kind": "policy.unreadable",
             "cause": failure.code(),
             "runtime": runtime,
-            "at_unix_ms": crate::spawn_guard::now_ms(),
+            "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+        let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
     }
 }
 
@@ -783,10 +783,10 @@ pub fn record_failure(home: &Path, runtime: &str, cause: &str) {
             "kind": "guard.failed",
             "cause": cause,
             "runtime": runtime,
-            "at_unix_ms": crate::spawn_guard::now_ms(),
+            "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+        let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
     }
 }
 

@@ -15,7 +15,7 @@ import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Disclosure, Group, Note, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { deviceIdFor, socketProblem } from "../settings";
+import { deviceIdFor } from "../settings";
 import type { Device } from "../snapshot";
 import { chosenDistro, defaultDeviceName, hostChoices, pickableAliases, wslChoices, type HostChoice, type WslChoice } from "../sshHosts";
 import { useShellStore } from "../store";
@@ -30,7 +30,6 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
   const [alias, setAlias] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
-  const [socket, setSocket] = useState("");
   const [submitted, setSubmitted] = useState<{ id: string | null; distro: string | null; at: number } | null>(null);
   const error = useRefusalSince(submitted?.at ?? null, ["device."]);
   const choices = hostChoices(hosts?.hosts ?? []);
@@ -46,7 +45,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
   const distribution = distributions.find((choice) => choice.value === chosen) ?? null;
   const added = submitted ? devices.some((device) => (submitted.distro !== null ? device.wsl_distro === submitted.distro : device.id === submitted.id)) : false;
   const pending = submitted !== null && !added && error === null;
-  const blocked = pending || chosen === null || (distro === null && (!name.trim() || socketProblem(socket, t) !== null));
+  const blocked = pending || chosen === null || (distro === null && !name.trim());
   const choose = (next: string) => {
     setAlias(next);
     // The name follows the Host until the person writes their own.
@@ -64,7 +63,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
     }
     const id = deviceIdFor(chosen, devices.map((device) => device.id));
     setSubmitted({ id, distro: null, at: Date.now() });
-    actions.registerDevice(id, name.trim(), chosen, { hostConsent: true, herdrSocketPath: socket.trim() || null });
+    actions.registerDevice(id, name.trim(), chosen, { hostConsent: true });
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
   const reading = hosts === undefined || ((hosts.state === "idle" || hosts.state === "loading") && hosts.hosts.length === 0 && distributions.length === 0);
@@ -113,20 +112,6 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
         </Row>
         <Disclosure title={t("devices.advanced")} data-add-device-advanced="true">
               <Row label={<span className="text-subhead text-subtle-foreground">{t("devices.whatInstalls")}</span>} detail={<DeviceInstallTerms helperRoot={helperRoot} cliDir={cliDir} />} />
-          {distro === null ? (
-          <Row label={t("devices.herdrSocket")} detail={socketProblem(socket, t) ? <Note tone="warn">{socketProblem(socket, t)}</Note> : <Note>{t("devices.socketDescription")}</Note>}>
-            <Input
-              mono
-              value={socket}
-              disabled={pending}
-              placeholder={t("devices.defaultServer")}
-              aria-label={t("devices.socketAria")}
-              className="w-(--size-settings-control-w)"
-              onChange={(event) => setSocket(event.target.value)}
-              data-device-socket="true"
-            />
-          </Row>
-          ) : null}
         </Disclosure>
       </Group>
       <div className="flex justify-end">

@@ -1,8 +1,7 @@
 //! The operator notice for a letter that missed its delivery deadline
 //! (issue 755), against a real daemon with a seeded ledger. Mobile is in its
-//! default state (push mode off), so the phone is skipped before any send;
-//! what is left is Herdr, which is either absent or the pinned private
-//! server, and the daemon's diagnostic log names both reasons. The ledger is
+//! default state (push mode off), so the phone is skipped before any send,
+//! and the daemon's diagnostic log names the reasons. The ledger is
 //! the test's own, so no notice reaches the operator.
 //!
 //! Each daemon is a child process: the diagnostic sink is one slot per
@@ -17,8 +16,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::private_herdr::PrivateHerdr;
-
 const BODY: &str = "report the operator never saw";
 
 /// A `hided` child with the test's own home and state folder, killed and
@@ -27,10 +24,9 @@ struct Daemon(Child);
 
 impl Daemon {
     /// Starts it with every `HERDR_*` and `HIDE_*` of this process removed, so
-    /// it reaches neither the operator's Herdr nor its state; `herdr` is the
-    /// private server it should use, and none leaves it without a Herdr socket.
-    fn start(root: &Path, herdr: Option<&PrivateHerdr>) -> Self {
-        let home = herdr.map_or_else(|| root.join("home"), |herdr| herdr.home.clone());
+    /// it reaches none of the operator's state.
+    fn start(root: &Path) -> Self {
+        let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_hided"));
         for (key, _) in std::env::vars_os() {
@@ -50,11 +46,6 @@ impl Daemon {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        if let Some(herdr) = herdr {
-            command
-                .env("HERDR_SOCKET_PATH", &herdr.socket)
-                .env("HERDR_BIN_PATH", &herdr.bin);
-        }
         Self(command.spawn().expect("hided starts"))
     }
 }
@@ -147,16 +138,18 @@ async fn channels_failed(state: &Path) -> Value {
 }
 
 #[tokio::test]
-async fn without_a_herdr_socket_the_record_names_both_skipped_channels() {
+async fn the_record_names_the_skipped_channels() {
     let root = tempfile::tempdir().unwrap();
     seed_undelivered_letters(&root.path().join("state"), &["letter-7"]);
-    let _daemon = Daemon::start(root.path(), None);
+    let _daemon = Daemon::start(root.path());
     let row = channels_failed(&root.path().join("state")).await;
     assert_eq!(row["component"], "delivery");
     assert_eq!(row["notice"], "letter_undelivered");
     assert_eq!(row["letter_id"], "letter-7");
     assert_eq!(row["push"], "mode_off");
-    assert_eq!(row["herdr"], "no_socket");
+    // The core's own engine has no toast of its own (the desktop host shows
+    // the notice), so the second channel answers why it did not show one.
+    assert_eq!(row["herdr"], "the core's own engine shows no notification");
 }
 
 /// A machine that was a device before its core moved there has the state
@@ -170,7 +163,7 @@ async fn a_state_folder_an_earlier_helper_left_open_is_closed_and_its_letters_ar
     seed_undelivered_letters(&state, &["letter-7"]);
     std::fs::create_dir(state.join("workspace-bridges")).unwrap();
     std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let _daemon = Daemon::start(root.path(), None);
+    let _daemon = Daemon::start(root.path());
     let row = channels_failed(&state).await;
     assert_eq!(row["letter_id"], "letter-7");
     let mode = std::fs::metadata(&state).unwrap().permissions().mode();
@@ -182,34 +175,6 @@ async fn a_state_folder_an_earlier_helper_left_open_is_closed_and_its_letters_ar
             .any(|record| record["kind"] == "state.made_private"),
         "the repair is not logged: {log}"
     );
-}
-
-#[tokio::test]
-#[ignore = "needs the pinned Herdr: set HIDE_E2E_HERDR_BIN and run with --ignored"]
-async fn the_pinned_herdr_is_tried_and_its_reason_is_recorded() {
-    let bin = std::path::PathBuf::from(
-        std::env::var_os("HIDE_E2E_HERDR_BIN").expect("HIDE_E2E_HERDR_BIN names the pinned herdr"),
-    );
-    // A Unix socket path is limited to about a hundred bytes.
-    let root = tempfile::Builder::new()
-        .prefix("hn")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let mut herdr = PrivateHerdr::start(bin, root.path());
-    seed_undelivered_letters(&root.path().join("state"), &["letter-7"]);
-    let _daemon = Daemon::start(root.path(), Some(&herdr));
-    let row = channels_failed(&root.path().join("state")).await;
-    assert_eq!(row["notice"], "letter_undelivered");
-    assert_eq!(row["letter_id"], "letter-7");
-    assert_eq!(row["push"], "mode_off");
-    // Herdr's toast is off by default and no client is attached to this
-    // server: either way it answered, and the answer is what is recorded.
-    let herdr_reason = row["herdr"].as_str().unwrap();
-    assert!(
-        ["disabled", "no_foreground_client"].contains(&herdr_reason),
-        "Herdr's own reason, not a skip: {row}"
-    );
-    herdr.stop().expect("the private Herdr server exits");
 }
 
 /// A stand-in push service on loopback (a debug build accepts that endpoint).
@@ -302,7 +267,7 @@ async fn a_reachable_phone_still_gets_the_notice_and_only_the_one_that_failed_is
             },
         }]}),
     );
-    let _daemon = Daemon::start(root.path(), None);
+    let _daemon = Daemon::start(root.path());
     // The delivery pass runs on a blocking thread; the hang guard only ends
     // a daemon that never sends.
     let first = tokio::task::spawn_blocking(move || {
@@ -320,5 +285,7 @@ async fn a_reachable_phone_still_gets_the_notice_and_only_the_one_that_failed_is
     let row = channels_failed(&state).await;
     assert_eq!(row["letter_id"], "letter-8");
     assert_eq!(row["push"], "send_failed");
-    assert_eq!(row["herdr"], "no_socket");
+    // The core's own engine has no toast of its own (the desktop host shows
+    // the notice), so the second channel answers why it did not show one.
+    assert_eq!(row["herdr"], "the core's own engine shows no notification");
 }

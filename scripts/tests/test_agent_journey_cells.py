@@ -52,12 +52,12 @@ class Plan(unittest.TestCase):
     def test_retired_cursor_is_absent_from_the_active_journey(self):
         self.assertNotIn("cursor", cells.plan(contract(), ["codex"]))
 
-    def test_every_agent_row_is_planned_on_both_engines(self):
+    def test_every_agent_row_is_planned(self):
         # The own engine's first-input fix closed the Pi and OpenCode rows.
-        for engine, fake in (("herdr", True), ("own", False), ("own", True)):
+        for fake in (False, True):
             for agent in ("pi", "opencode"):
-                with self.subTest(engine=engine, fake=fake, agent=agent):
-                    table = cells.plan(contract(), [agent, "codex"], engine=engine, fake_model=fake)
+                with self.subTest(fake=fake, agent=agent):
+                    table = cells.plan(contract(), [agent, "codex"], fake_model=fake)
                     self.assertEqual(table[agent]["start"]["status"], cells.PENDING)
                     self.assertEqual(table["codex"]["start"]["status"], cells.PENDING)
 
@@ -71,11 +71,11 @@ class Plan(unittest.TestCase):
         self.assertEqual(cells.exit_code({"codex": passed, "cursor": table["cursor"]}, ["codex", "cursor"],
                                          setup_failed=False), 0)
 
-    def test_no_cell_of_a_registered_agent_is_excluded_on_either_engine(self):
+    def test_no_cell_of_a_registered_agent_is_excluded(self):
         selected = ["codex", "antigravity", "omp", "claude-code", "grok", "pi", "opencode"]
-        for engine, fake in (("own", True), ("herdr", True), ("own", False)):
-            with self.subTest(engine=engine, fake=fake):
-                table = cells.plan(contract(), selected, engine=engine, fake_model=fake)
+        for fake in (True, False):
+            with self.subTest(fake=fake):
+                table = cells.plan(contract(), selected, fake_model=fake)
                 actual = {(agent, name) for agent in selected for name, value in table[agent].items()
                           if value["status"] == cells.EXCLUDED}
                 self.assertEqual(actual, set())
@@ -168,22 +168,13 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(cells.turn_verdict([("stopped", 13_000)], events, "JOURNEY-0", after=1),
                          (cells.FAIL, "Hide's reader found no answer to the prompt"))
 
-    def test_the_emitter_must_be_herdrs_own_integration(self):
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:codex"}, "herdr:codex")[0], cells.PASS)
-        self.assertEqual(cells.emitter_verdict({"source": "hide:hook"}, "herdr:codex")[0], cells.FAIL)
-        self.assertEqual(cells.emitter_verdict(None, "herdr:codex")[0], cells.FAIL)
-        # agy's integration reports under its target, not its kind (the contract's `herdr_source`).
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:antigravity_cli"}, "herdr:antigravity_cli")[0],
-                         cells.PASS)
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:agy"}, "herdr:antigravity_cli")[0], cells.FAIL)
-
     def test_native_identity_needs_the_registration_ledger_not_just_a_projected_row(self):
         session = {"observation": "hide.agent.list", "kind": "id", "value": "native-session"}
-        self.assertEqual(cells.emitter_verdict(session, None)[0], cells.PASS)
+        self.assertEqual(cells.emitter_verdict(session)[0], cells.PASS)
         for invalid in (None, {**session, "observation": "snapshot"}, {**session, "value": ""},
                         {**session, "kind": "unknown"}, {"source": "herdr:claude"}):
             with self.subTest(session=invalid):
-                self.assertEqual(cells.emitter_verdict(invalid, None)[0], cells.FAIL)
+                self.assertEqual(cells.emitter_verdict(invalid)[0], cells.FAIL)
 
     def test_a_reply_passes_only_with_the_token_from_the_assistant_in_that_session(self):
         events = [{"role": "user", "text": "Reply with exactly JOURNEY-1"}, {"role": "assistant", "text": "JOURNEY-1"}]

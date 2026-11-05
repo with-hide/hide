@@ -15,7 +15,7 @@ process.stdin.setEncoding("utf8");
 for await (const chunk of process.stdin) stdin += chunk;
 appendFileSync(
   process.env.HIDE_OPENCODE_HELPER_LOG,
-  `${JSON.stringify({ operation, input: JSON.parse(stdin), env: { HERDR_PANE_ID: process.env.HERDR_PANE_ID } })}\n`,
+  `${JSON.stringify({ operation, input: JSON.parse(stdin), env: { HIDE_PANE_ID: process.env.HIDE_PANE_ID } })}\n`,
 );
 const { delay_ms: delay, exit, raw, ...answer } =
   JSON.parse(readFileSync(process.env.HIDE_OPENCODE_HELPER_ANSWERS, "utf8"))[operation] ?? {};

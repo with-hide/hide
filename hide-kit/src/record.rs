@@ -44,11 +44,6 @@ pub(crate) struct Record {
     /// entry in `installs` yet starts from it.
     #[serde(flatten)]
     app: InstallRecord,
-    /// One-time retirements of older layouts this machine has finished, so a
-    /// later pass does not ask again (PRD hide-home-layout D-14). A build
-    /// that does not know the field ignores it.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    retired: BTreeSet<String>,
     /// The operator's explicit choice per agent (issue #517), by adapter id:
     /// `true` switched on, `false` switched off. An agent with no entry has
     /// made no choice and is on only when its adapter says it is by default.
@@ -153,8 +148,9 @@ impl Record {
         self.herdr_hooks.get(agent).map_or(&[], Vec::as_slice)
     }
 
-    /// Keeps what Herdr's integration for `agent` wrote; true when that
-    /// changed the record.
+    /// Keeps what Herdr's integration for `agent` wrote, as earlier builds
+    /// did; true when that changed the record. Only a fixture writes it now.
+    #[cfg(test)]
     pub(crate) fn set_herdr_hook_entries(&mut self, agent: &str, entries: Vec<HookEntry>) -> bool {
         if entries.is_empty() {
             return self.herdr_hooks.remove(agent).is_some();
@@ -218,14 +214,6 @@ impl Record {
         }
         mine.cli_destination = Some(destination);
         true
-    }
-
-    pub(crate) fn has_retired(&self, what: &str) -> bool {
-        self.retired.contains(what)
-    }
-
-    pub(crate) fn mark_retired(&mut self, what: &str) {
-        self.retired.insert(what.to_owned());
     }
 }
 
@@ -308,7 +296,6 @@ pub(crate) fn save(home: &Path, record: &Record) -> Result<(), String> {
     let record = Record {
         format: FORMAT,
         app: record.app.clone(),
-        retired: record.retired.clone(),
         agents: record.agents.clone(),
         awaiting_choice: record.awaiting_choice,
         herdr_hooks: record.herdr_hooks.clone(),

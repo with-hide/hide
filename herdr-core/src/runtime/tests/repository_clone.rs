@@ -82,7 +82,7 @@ fn shared_runtime() -> SharedRuntime {
         socket_path: socket_path.clone().into(),
         runtime: shared.weak(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        engine: crate::engine::herdr::local(&socket_path),
+        engine: FakeEngine::absent().engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     shared

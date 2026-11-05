@@ -13,7 +13,7 @@ pub(super) const DEVICE: &str = "studio";
 /// A device helper that answers only kit calls: a set report, and a set
 /// removal outcome for `remove`.
 pub(super) struct KitDevice {
-    calls: Mutex<Vec<(KitAction, String, Option<String>)>>,
+    calls: Mutex<Vec<(KitAction, String)>>,
     retirement_projects: Mutex<Vec<Vec<String>>>,
     answer: Mutex<Result<KitReport, String>>,
     closed: Mutex<Option<String>>,
@@ -42,7 +42,7 @@ impl KitDevice {
         (device, release)
     }
 
-    pub(super) fn calls(&self) -> Vec<(KitAction, String, Option<String>)> {
+    pub(super) fn calls(&self) -> Vec<(KitAction, String)> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -52,9 +52,7 @@ impl NodeLink for KitDevice {
         let Call::Kit {
             action,
             cli_dir,
-            herdr_socket,
             retirement_projects,
-            ..
         } = call
         else {
             return Err(LinkError::NotConnected("kit calls only".to_owned()));
@@ -64,10 +62,7 @@ impl NodeLink for KitDevice {
             .lock()
             .unwrap()
             .push(retirement_projects);
-        self.calls
-            .lock()
-            .unwrap()
-            .push((action, cli_dir, herdr_socket));
+        self.calls.lock().unwrap().push((action, cli_dir));
         if !removing && let Some(gate) = self.gate.lock().unwrap().take() {
             let _ = gate.recv();
         }
@@ -110,7 +105,6 @@ pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
             .collect(),
         agents: Vec::new(),
         held_for_onboarding: false,
-        labels_retirement: Default::default(),
         legacy_retirement: Default::default(),
         codex_daemon: None,
         codex_daemon_on: None,
@@ -118,7 +112,6 @@ pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
         codex_daemon_unreadable: None,
         codex_capability_unread: None,
         codex_daemon_off: None,
-        herdr: None,
         refused: None,
     }
 }
@@ -156,7 +149,6 @@ fn device_runtime(
             .find(|registration| registration.id == DEVICE)
             .unwrap();
         registration.host_consent = consent;
-        registration.herdr_socket_path = Some("~/.config/herdr/other.sock".to_owned());
         if let Some(helper) = helper {
             runtime.device_hosts.insert(
                 DEVICE.to_owned(),
@@ -224,12 +216,7 @@ fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
     let shared = with_consent(None);
     let helper = KitDevice::answering(Err("no second install was requested".to_owned()));
     let mut connected = established(helper.clone(), None);
-    connected.kit = Some(Ok(Box::new(with_herdr(Some(
-        hide_kit::device_herdr::HerdrUpdate::Started {
-            version: "pinned".to_owned(),
-            pid: 42,
-        },
-    )))));
+    connected.kit = Some(Ok(Box::new(installed())));
     {
         let mut runtime = shared.lock().unwrap();
         runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
@@ -256,69 +243,6 @@ fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
         "the completed bootstrap queued another automatic install"
     );
     assert!(helper.calls().is_empty());
-}
-
-/// A start failure remains actionable across status reads, and the same
-/// install retry clears it once the node confirms the server started.
-#[test]
-fn a_failed_device_server_start_reaches_its_row_until_a_retry_starts_it() {
-    use hide_kit::device_herdr::HerdrUpdate;
-    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Failed {
-        stage: "start".to_owned(),
-        reason: "private process detail".to_owned(),
-        version: Some("pinned".to_owned()),
-        server_version: None,
-    }))));
-    let shared = with_consent(Some(helper.clone()));
-    shared
-        .lock()
-        .unwrap()
-        .queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
-    settle(&shared);
-    assert!(
-        kit(&shared).herdr_start_failed,
-        "the row lost the start failure"
-    );
-    *helper.answer.lock().unwrap() = Ok(with_herdr(None));
-    shared
-        .lock()
-        .unwrap()
-        .queue_device_kit(DEVICE, KitJob::Status);
-    settle(&shared);
-    assert!(
-        kit(&shared).herdr_start_failed,
-        "a status read erased the failure"
-    );
-    let terminals = record_terminals(&mut shared.lock().unwrap());
-    let calls_before_retry = helper.calls();
-    dispatch(
-        &shared,
-        "kit_reinstall",
-        serde_json::json!({ "device_id": DEVICE }),
-    );
-    settle(&shared);
-    assert!(
-        helper.closed_reason().is_some(),
-        "retry must re-establish pane and terminal services"
-    );
-    assert_eq!(
-        helper.calls(),
-        calls_before_retry,
-        "retry must not only reapply the kit on the incomplete link"
-    );
-    let mut connected = established_with_terminals();
-    connected.kit = Some(Ok(Box::new(with_herdr(Some(HerdrUpdate::Started {
-        version: "pinned".to_owned(),
-        pid: 42,
-    })))));
-    let mut runtime = shared.lock().unwrap();
-    let generation = runtime.device_host_generation(DEVICE);
-    runtime.ingest_host_established(DEVICE, generation, Ok(hosts::HostReady::Dialed(connected)));
-    assert!(!runtime.kit_view(DEVICE).herdr_start_failed);
-    assert!(
-        terminals.devices().contains(&"install:studio".to_owned()),
-        "the recovered link must install the terminal route"
-    );
 }
 
 /// B13: a connected device's kit is installed by the connection pass, with
@@ -350,11 +274,7 @@ fn a_connected_device_shows_its_kit_and_retirement_failure_with_recovery() {
 
     assert_eq!(
         helper.calls(),
-        vec![(
-            KitAction::Apply,
-            crate::remote::DEFAULT_CLI_DIR.to_owned(),
-            Some("~/.config/herdr/other.sock".to_owned()),
-        )]
+        vec![(KitAction::Apply, crate::remote::DEFAULT_CLI_DIR.to_owned())]
     );
     let kit = kit(&shared);
     assert!(!kit.busy);
@@ -444,7 +364,6 @@ fn agent_report(
         chosen: false,
         skill: piece(skill),
         hook: None,
-        herdr: None,
         update: None,
         doc_url: "https://example.test/skills".to_owned(),
     }
@@ -519,46 +438,6 @@ fn an_agent_switch_on_a_device_sends_the_agent_and_repeats_nothing() {
         ],
         "{actions:?}"
     );
-}
-
-/// PRD settings-cleanup D-13: a device's Herdr integration for an agent is a
-/// piece of that agent's row, a failed one offers Reinstall for that agent
-/// alone, and a row from a helper whose build predates the piece carries none.
-#[test]
-fn a_failed_herdr_integration_shows_on_its_agent_and_offers_reinstall() {
-    use hide_kit::Availability::Available;
-    let mut pi = agent_report("pi", Available, true, ComponentState::Installed);
-    pi.herdr = Some(hide_kit::PieceReport {
-        state: ComponentState::Failed,
-        reason: Some("`herdr integration install pi` failed: disk full".to_owned()),
-        why: Some(hide_kit::PartWhy {
-            cause: hide_kit::PartCause::NotChanged,
-            value: None,
-        }),
-        location: Some("/home/me/.pi/agent".to_owned()),
-    });
-    let grok = agent_report("grok", Available, true, ComponentState::Installed);
-    let mut answer = report(&[(ComponentId::Cli, ComponentState::Installed)]);
-    answer.agents = vec![pi, grok];
-    let shared = with_consent(Some(KitDevice::answering(Ok(answer))));
-    shared
-        .lock()
-        .unwrap()
-        .queue_device_kit(DEVICE, KitJob::Status);
-    settle(&shared);
-
-    let kit = kit(&shared);
-
-    let piece = kit.agents[0].herdr.as_ref().expect("pi has an integration");
-    assert_eq!(piece.state, ComponentState::Failed);
-    assert_eq!(
-        piece.why.as_ref().map(|why| why.cause),
-        Some(hide_kit::PartCause::NotChanged)
-    );
-    assert!(kit.agents[0].needs_attention());
-    assert!(kit.agents[1].herdr.is_none());
-    assert!(!kit.agents[1].needs_attention());
-    assert!(kit.offers_reinstall);
 }
 
 /// A pass that ran: it lists the agents, which a refused or failed pass never does.
@@ -916,51 +795,6 @@ fn a_device_on_an_unsupported_platform_shows_why() {
     }
     assert_eq!(
         kit(&shared).unavailable,
-        Some(crate::model::KitUnavailable::UnsupportedPlatform)
-    );
-}
-
-/// A device whose system connects only on the core's own engine, dialed by a
-/// core on Herdr's, says so on its row and waits for the operator: it is not
-/// a system Hide does not run on, and what the own engine installed there
-/// before is still its kit's, so the kit is not called unsupported.
-#[test]
-fn a_device_that_needs_the_new_engine_says_so_and_waits() {
-    let probe = device_runtime(None, None);
-    let shared = device_runtime(Some(granted(&probe)), None);
-    {
-        let mut runtime = shared.lock().unwrap();
-        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
-        let attempt = runtime.device_host_generation(DEVICE);
-        runtime.ingest_host_established(
-            DEVICE,
-            attempt,
-            Err(hide_node_link::device::EstablishError::NeedsNewEngine(
-                "Windows devices connect only on the new engine".to_owned(),
-            )),
-        );
-        assert!(
-            runtime
-                .device_host_retries
-                .get(DEVICE)
-                .is_none_or(|retry| retry.at_unix_ms.is_none()),
-            "no retry of this engine can connect it"
-        );
-    }
-    let row = shared
-        .lock()
-        .unwrap()
-        .snapshot()
-        .navigator
-        .devices
-        .iter()
-        .find(|device| device.id == DEVICE)
-        .expect("device row")
-        .clone();
-    assert_eq!(row.problem.as_deref(), Some("needs_new_engine"));
-    assert_eq!(row.host.state, "unavailable");
-    assert_ne!(
-        row.kit.unavailable,
         Some(crate::model::KitUnavailable::UnsupportedPlatform)
     );
 }
@@ -1958,8 +1792,8 @@ fn a_late_answer_for_a_turn_off_run_that_settled_changes_nothing() {
 }
 
 /// PRD core-host-node D-21: this machine's kit runs on the core's own node,
-/// asked with the command folder in its home and the embedder's Herdr
-/// socket, and its row shows what the node answered.
+/// asked with the command folder in its home, and its row shows what the
+/// node answered.
 #[test]
 fn this_machines_kit_runs_on_its_own_node() {
     let shared = device_runtime(None, None);
@@ -1969,7 +1803,6 @@ fn this_machines_kit_runs_on_its_own_node() {
         shared.weak(),
         crate::handle::ChangeNotifier::noop(),
         Arc::clone(&node) as Arc<dyn NodeLink>,
-        Some("/run/herdr.sock".to_owned()),
         shared.lock().unwrap().node.clone(),
     )
     .unwrap();
@@ -1978,11 +1811,7 @@ fn this_machines_kit_runs_on_its_own_node() {
     drop(pump);
     assert_eq!(
         node.calls(),
-        vec![(
-            KitAction::Apply,
-            "~/.local/bin".to_owned(),
-            Some("/run/herdr.sock".to_owned())
-        )]
+        vec![(KitAction::Apply, "~/.local/bin".to_owned())]
     );
     assert_eq!(kit.unavailable, None);
     assert!(
@@ -2028,7 +1857,6 @@ fn local_hook_diagnosis_and_merged_installs_have_one_ordered_owner() {
         shared.weak(),
         crate::handle::ChangeNotifier::noop(),
         Arc::new(HeldKitHost(requests)),
-        None,
         shared.lock().unwrap().node.clone(),
     )
     .unwrap();
@@ -2077,7 +1905,6 @@ fn stopping_local_kit_joins_the_held_diagnosis_without_publishing_or_starting_pe
         shared.weak(),
         crate::handle::ChangeNotifier::noop(),
         Arc::new(HeldKitHost(requests)),
-        None,
         shared.lock().unwrap().node.clone(),
     )
     .unwrap();
@@ -2129,7 +1956,6 @@ fn this_machines_shared_server_turn_off_goes_to_its_own_node() {
         shared.weak(),
         crate::handle::ChangeNotifier::noop(),
         Arc::clone(&node) as Arc<dyn NodeLink>,
-        Some("/run/herdr.sock".to_owned()),
         own.clone(),
     )
     .unwrap();
@@ -2154,7 +1980,6 @@ fn a_standalone_own_node_installs_nothing_and_says_why() {
         shared.weak(),
         crate::handle::ChangeNotifier::noop(),
         Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),
-        None,
         shared.lock().unwrap().node.clone(),
     )
     .unwrap();
@@ -2356,7 +2181,6 @@ pub(super) fn node_ready(
                 reason: "test".to_owned(),
             },
             reader_features: None,
-            herdr_socket: None,
             windows_drives: None,
         },
         terminals: terminals.ok_or_else(|| "the test's node runs no terminal service".to_owned()),
@@ -2401,7 +2225,6 @@ fn session_with_pane() -> RemoteSessionSnapshot {
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     }
 }
 
@@ -2460,81 +2283,12 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     assert_eq!(attaches(&terminals), 1, "the shown pane attached again");
 }
 
-fn herdr_behind(shared: &Mutex<Runtime>) -> Option<crate::model::HerdrBehindSnapshot> {
-    shared
-        .lock()
-        .unwrap()
-        .snapshot()
-        .navigator
-        .devices
-        .iter()
-        .find(|device| device.id == DEVICE)
-        .expect("device row")
-        .herdr_behind
-        .clone()
+/// A pass that installed the CLI.
+fn installed() -> KitReport {
+    report(&[(ComponentId::Cli, ComponentState::Installed)])
 }
 
-fn with_herdr(update: Option<hide_kit::device_herdr::HerdrUpdate>) -> KitReport {
-    let mut report = report(&[(ComponentId::Cli, ComponentState::Installed)]);
-    report.herdr = update.map(Box::new);
-    report
-}
-
-/// PRD device-herdr-update B8, B3: a device server its node left on an
-/// older Herdr puts one line on the device row, with why, until a later
-/// pass finds it on the pin; a read, or a pass that could not tell, keeps it.
-#[test]
-fn a_device_server_left_older_than_the_pin_keeps_its_line_until_a_pass_finds_it_moved() {
-    use hide_kit::device_herdr::{BehindCause, HerdrUpdate};
-    let behind = HerdrUpdate::Behind {
-        server_version: "0.9.1".to_owned(),
-        version: "0.9.3".to_owned(),
-        cause: BehindCause::CannotHandOff,
-        reason: "Herdr 0.9.1 cannot hand its panes over".to_owned(),
-    };
-    let helper = KitDevice::answering(Ok(with_herdr(Some(behind))));
-    let shared = with_consent(Some(Arc::clone(&helper)));
-    let pass = |job: KitJob| {
-        shared.lock().unwrap().queue_device_kit(DEVICE, job);
-        settle(&shared);
-    };
-
-    pass(KitJob::Apply(hide_kit::Scope::automatic()));
-    let line = crate::model::HerdrBehindSnapshot {
-        server_version: "0.9.1".to_owned(),
-        version: "0.9.3".to_owned(),
-        cause: BehindCause::CannotHandOff,
-    };
-    assert_eq!(herdr_behind(&shared), Some(line.clone()));
-
-    *helper.answer.lock().unwrap() = Ok(with_herdr(None));
-    pass(KitJob::Status);
-    assert_eq!(herdr_behind(&shared), Some(line.clone()), "a read keeps it");
-    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Failed {
-        stage: "ping".to_owned(),
-        reason: "timed out".to_owned(),
-        version: Some("0.9.3".to_owned()),
-        server_version: None,
-    })));
-    pass(KitJob::Apply(hide_kit::Scope::automatic()));
-    assert_eq!(
-        herdr_behind(&shared),
-        Some(line),
-        "an unreadable server keeps it"
-    );
-
-    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::HandedOff {
-        server_version: "0.9.1".to_owned(),
-        version: "0.9.3".to_owned(),
-        from_pid: 41,
-        to_pid: 42,
-        elapsed_ms: 900,
-    })));
-    pass(KitJob::Apply(hide_kit::Scope::automatic()));
-    assert_eq!(herdr_behind(&shared), None);
-}
-
-fn live_session(herdr_version: &str) -> RemoteSessionSnapshot {
+fn live_session() -> RemoteSessionSnapshot {
     RemoteSessionSnapshot {
         workspaces: Vec::new(),
         agents: Vec::new(),
@@ -2547,80 +2301,7 @@ fn live_session(herdr_version: &str) -> RemoteSessionSnapshot {
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: Some(herdr_version.to_owned()),
     }
-}
-
-/// PRD device-herdr-update B8: the line is about the server it was left on,
-/// so a server the operator restarted on another release ends it as soon as
-/// that server answers, without waiting for the next kit pass.
-#[test]
-fn a_device_servers_line_ends_once_the_live_server_answers_with_another_release() {
-    use hide_kit::device_herdr::{BehindCause, HerdrUpdate};
-    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Behind {
-        server_version: "0.9.1".to_owned(),
-        version: "0.9.3".to_owned(),
-        cause: BehindCause::HandoffFailed,
-        reason: "the handoff timed out".to_owned(),
-    }))));
-    let shared = with_consent(Some(helper));
-    shared
-        .lock()
-        .unwrap()
-        .queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
-    settle(&shared);
-    assert!(herdr_behind(&shared).is_some());
-
-    shared
-        .lock()
-        .unwrap()
-        .ingest_remote_session(DEVICE, Ok(live_session("0.9.1")));
-    assert!(herdr_behind(&shared).is_some(), "the same server keeps it");
-
-    shared
-        .lock()
-        .unwrap()
-        .ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
-    assert_eq!(herdr_behind(&shared), None);
-}
-
-/// PRD device-herdr-update B3, B11: the device's Herdr version is the one
-/// its server names in the session, so a handoff shows at once, and a
-/// device on an older protocol is told the device's step, never this
-/// machine's advice to reopen Hide.
-#[test]
-fn a_device_reads_its_servers_own_version_and_device_advice_for_an_older_protocol() {
-    let shared = with_consent(None);
-    let mut runtime = shared.lock().unwrap();
-    let remote = |runtime: &Runtime| {
-        runtime
-            .snapshot
-            .status
-            .remote
-            .iter()
-            .find(|status| status.target_id == DEVICE)
-            .cloned()
-            .expect("the device's remote status")
-    };
-    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
-    assert_eq!(remote(&runtime).herdr_version.as_deref(), Some("0.9.3"));
-
-    runtime.ingest_remote_session(
-        DEVICE,
-        Err(crate::engine::herdr::wire::protocol_mismatch(
-            21,
-            Some("0.8.0".to_owned()),
-        )),
-    );
-    let status = remote(&runtime);
-    assert_eq!(status.state, "protocol_mismatch");
-    assert_eq!(status.herdr_version.as_deref(), Some("0.8.0"));
-    let message = status.message.expect("the device row says why");
-    assert!(
-        message.contains("Allow and install Hide's helper"),
-        "{message}"
-    );
-    assert!(!message.contains("reopen Hide"), "{message}");
 }
 
 fn status_of(runtime: &Runtime) -> crate::model::RemoteStatusSnapshot {
@@ -2670,7 +2351,7 @@ fn a_device_session_that_answers_again_makes_the_helper_retry_due_once_per_outag
             DEVICE,
             Err(SessionFetchError::Unreachable("no answer".to_owned())),
         );
-        runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+        runtime.ingest_remote_session(DEVICE, Ok(live_session()));
     };
     flap(&mut runtime);
     let attempt = runtime.device_host_generation(DEVICE);
@@ -2841,7 +2522,7 @@ fn a_session_back_while_the_helper_link_starts_makes_its_failure_retry_at_once_o
     runtime.device_hosts.get_mut(DEVICE).unwrap().phase = hosts::HostPhase::Connecting;
     let generation = runtime.device_host_generation(DEVICE);
 
-    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+    runtime.ingest_remote_session(DEVICE, Ok(live_session()));
     assert_eq!(
         runtime.device_host_generation(DEVICE),
         generation,
@@ -2861,7 +2542,7 @@ fn a_session_back_while_the_helper_link_starts_makes_its_failure_retry_at_once_o
         DEVICE,
         Err(SessionFetchError::Unreachable("no answer".to_owned())),
     );
-    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+    runtime.ingest_remote_session(DEVICE, Ok(live_session()));
     let before = super::unix_milliseconds();
     runtime.ingest_host_established(DEVICE, generation, helper_failed());
     let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();
@@ -2931,23 +2612,12 @@ impl crate::product_analytics::Sink for DeviceStatistics {
 /// or another completion arrive. A reconnect is a new attempt.
 #[test]
 fn device_connect_statistics_count_each_ready_bootstrap_once() {
-    use crate::product_analytics::{DeviceHerdr, DeviceOutcome, DevicePlatform, Event};
-    use hide_kit::device_herdr::HerdrUpdate;
+    use crate::product_analytics::{DeviceOutcome, DevicePlatform, Event};
     let shared = with_consent(None);
     let statistics = Arc::new(DeviceStatistics::default());
-    for preserved in [false, true] {
-        let helper = KitDevice::answering(Ok(with_herdr(None)));
+    for _ in 0..2 {
+        let helper = KitDevice::answering(Ok(installed()));
         let mut runtime = shared.lock().unwrap();
-        if preserved {
-            runtime
-                .snapshot
-                .ui_state
-                .device_registrations
-                .iter_mut()
-                .find(|registration| registration.id == DEVICE)
-                .unwrap()
-                .herdr_session = Some("saved-profile".to_owned());
-        }
         runtime.product_analytics = Some(statistics.clone());
         runtime.close_device_host(DEVICE, "fixture reconnect");
         runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
@@ -2957,14 +2627,7 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
         let generation = runtime.device_host_generation(DEVICE);
         for _ in 0..2 {
             let mut connected = established(helper.clone(), None);
-            connected.kit = Some(Ok(Box::new(with_herdr(if preserved {
-                None
-            } else {
-                Some(HerdrUpdate::Started {
-                    version: "private-device-version".to_owned(),
-                    pid: 42,
-                })
-            }))));
+            connected.kit = Some(Ok(Box::new(installed())));
             runtime.ingest_host_established(
                 DEVICE,
                 generation,
@@ -2987,31 +2650,23 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
         *statistics.0.lock().unwrap(),
         [
             Event::DeviceConnected {
-                outcome: DeviceOutcome::Ready(DeviceHerdr::Started),
+                outcome: DeviceOutcome::Ready,
                 platform: DevicePlatform::MacosAarch64,
             },
             Event::DeviceConnected {
-                outcome: DeviceOutcome::Ready(DeviceHerdr::Preserved),
+                outcome: DeviceOutcome::Ready,
                 platform: DevicePlatform::MacosAarch64,
             },
         ]
     );
 }
 
-/// A failed start settles once; status reads do not count it again, while
-/// the operator's Retry reconnects, and that attempt can succeed.
+/// A failed install settles once; status reads do not count it again, and
+/// the next connection is an attempt of its own that can succeed.
 #[test]
 fn device_connect_statistics_settle_failure_and_retry_once() {
-    use crate::product_analytics::{
-        DeviceFailedStep, DeviceHerdr, DeviceOutcome, DevicePlatform, Event,
-    };
-    use hide_kit::device_herdr::HerdrUpdate;
-    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Failed {
-        stage: "start".to_owned(),
-        reason: "private socket and process detail".to_owned(),
-        version: Some("private-device-version".to_owned()),
-        server_version: None,
-    }))));
+    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    let helper = KitDevice::answering(Err("private kit failure detail".to_owned()));
     let shared = with_consent(Some(helper.clone()));
     let statistics = Arc::new(DeviceStatistics::default());
     {
@@ -3026,39 +2681,27 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
     assert_eq!(
         *statistics.0.lock().unwrap(),
         [Event::DeviceConnected {
-            outcome: DeviceOutcome::Failed(DeviceFailedStep::HerdrStart),
+            outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
             platform: DevicePlatform::MacosAarch64,
         }]
     );
-    *helper.answer.lock().unwrap() = Ok(with_herdr(None));
+    *helper.answer.lock().unwrap() = Ok(installed());
     shared
         .lock()
         .unwrap()
         .queue_device_kit(DEVICE, KitJob::Status);
     settle(&shared);
     assert_eq!(statistics.0.lock().unwrap().len(), 1);
-    dispatch(
-        &shared,
-        "kit_reinstall",
-        serde_json::json!({ "device_id": DEVICE }),
-    );
-    settle(&shared);
-    assert!(
-        helper.closed_reason().is_some(),
-        "retry must reconnect the device"
-    );
-    assert_eq!(statistics.0.lock().unwrap().len(), 1);
     {
         let mut runtime = shared.lock().unwrap();
         // The fixture has no SSH transport, so it supplies the reconnect's
         // result and admits the attempt its outbound worker would.
+        runtime.close_device_host(DEVICE, "fixture reconnect");
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
         runtime.begin_device_connect(DEVICE);
         let generation = runtime.device_host_generation(DEVICE);
         let mut connected = established_with_terminals();
-        connected.kit = Some(Ok(Box::new(with_herdr(Some(HerdrUpdate::Started {
-            version: "private-device-version".to_owned(),
-            pid: 42,
-        })))));
+        connected.kit = Some(Ok(Box::new(installed())));
         runtime.ingest_host_established(
             DEVICE,
             generation,
@@ -3070,11 +2713,11 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
         *statistics.0.lock().unwrap(),
         [
             Event::DeviceConnected {
-                outcome: DeviceOutcome::Failed(DeviceFailedStep::HerdrStart),
+                outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
                 platform: DevicePlatform::MacosAarch64,
             },
             Event::DeviceConnected {
-                outcome: DeviceOutcome::Ready(DeviceHerdr::Started),
+                outcome: DeviceOutcome::Ready,
                 platform: DevicePlatform::MacosAarch64,
             },
         ]
@@ -3109,13 +2752,7 @@ fn device_connect_statistics_include_early_install_failure() {
 /// An inbound node performs no outbound bootstrap, including its kit Retry.
 #[test]
 fn device_connect_statistics_exclude_inbound_retry() {
-    use hide_kit::device_herdr::HerdrUpdate;
-    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Failed {
-        stage: "start".to_owned(),
-        reason: "private detail".to_owned(),
-        version: None,
-        server_version: None,
-    }))));
+    let helper = KitDevice::answering(Err("private detail".to_owned()));
     let shared = with_consent(Some(helper.clone()));
     let statistics = Arc::new(DeviceStatistics::default());
     {
@@ -3132,11 +2769,7 @@ fn device_connect_statistics_exclude_inbound_retry() {
         runtime.queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
     }
     settle(&shared);
-    assert!(kit(&shared).herdr_start_failed);
-    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Started {
-        version: "private-device-version".to_owned(),
-        pid: 42,
-    })));
+    *helper.answer.lock().unwrap() = Ok(installed());
     dispatch(
         &shared,
         "kit_reinstall",

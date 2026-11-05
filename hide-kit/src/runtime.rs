@@ -2,10 +2,10 @@
 //!
 //! The Windows installer stops every process whose program lies under the
 //! install folder, and Windows cannot replace a file a process runs, so a
-//! daemon or Herdr server started from the install folder would end with
-//! every update and hold the update back. The desktop host therefore runs
-//! the package's runtime (`hided`, `hide`, `hide-agent-hooks`, `herdr` and its
-//! ConPTY folder, beside the shell archive) from a copy of its resources
+//! daemon started from the install folder would end with every update and
+//! hold the update back. The desktop host therefore runs the package's
+//! runtime (`hided`, `hide`, `hide-agent-hooks`, `hide-holder` and the
+//! holder's ConPTY folder, beside the shell archive) from a copy of its resources
 //! folder under `~/.hide/runtime/<build>`, made once per build by
 //! `hide runtime prepare`. A copy is a package to the kit
 //! ([`is_runtime_copy`]): the `hide` command, the hooks and a daemon's
@@ -34,14 +34,14 @@ use crate::layout;
 pub const MARKER: &str = ".hide-runtime";
 
 /// The programs a copy runs; one missing makes the copy unfinished.
-const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "herdr"];
+const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
 
 /// What the package's resources hold for the Electron window alone, which a
 /// copy leaves out.
 const SHELL_ONLY: [&str; 2] = ["app.asar", "app.asar.unpacked"];
 
 /// How many copies may remain after a prepare: the running build's, and a
-/// few that an older Herdr server or a hook still runs from.
+/// few that an older daemon or a hook still runs from.
 pub const COPIES_CAP: usize = 4;
 
 /// How long a prepare waits for another prepare of the same account.
@@ -306,10 +306,14 @@ mod tests {
 
     fn package(dir: &Path) -> PathBuf {
         let resources = dir.join("Programs/hide/resources");
-        fs::create_dir_all(resources.join("conpty")).unwrap();
+        fs::create_dir_all(resources.join("holder-conpty")).unwrap();
         fs::write(resources.join("app.asar"), "app.asar").unwrap();
-        fs::write(resources.join("conpty/conpty.dll"), "conpty/conpty.dll").unwrap();
-        for program in ["hided", "hide", "hide-agent-hooks", "herdr"] {
+        fs::write(
+            resources.join("holder-conpty/conpty.dll"),
+            "holder-conpty/conpty.dll",
+        )
+        .unwrap();
+        for program in ["hided", "hide", "hide-agent-hooks", "hide-holder"] {
             let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
             fs::write(resources.join(&file), &file).unwrap();
         }
@@ -336,8 +340,8 @@ mod tests {
         assert!(first.copied);
         assert_eq!(first.dir, home.join(".hide/runtime/0.4.0-aaaaaaaaaaaa"));
         assert_eq!(
-            fs::read_to_string(first.dir.join("conpty/conpty.dll")).unwrap(),
-            "conpty/conpty.dll"
+            fs::read_to_string(first.dir.join("holder-conpty/conpty.dll")).unwrap(),
+            "holder-conpty/conpty.dll"
         );
         assert!(is_runtime_copy(&first.dir));
         assert!(
@@ -346,7 +350,7 @@ mod tests {
         );
         assert!(
             crate::holds_package_runtime(&first.dir),
-            "a Herdr running from the copy is still Hide's"
+            "a hook running from the copy is still Hide's"
         );
         let again = prepare(&resources, &home, "0.4.0-aaaaaaaaaaaa").unwrap();
         assert!(!again.copied, "a finished copy is found, not made again");
@@ -379,14 +383,14 @@ mod tests {
         let home = scratch.path().join("home");
         let resources = package(scratch.path());
         let first = prepare(&resources, &home, "0.4.0-aaaaaaaaaaaa").unwrap();
-        let herdr = first
+        let holder = first
             .dir
-            .join(format!("herdr{}", std::env::consts::EXE_SUFFIX));
-        fs::remove_file(&herdr).unwrap();
+            .join(format!("hide-holder{}", std::env::consts::EXE_SUFFIX));
+        fs::remove_file(&holder).unwrap();
         assert!(!is_runtime_copy(&first.dir));
         let again = prepare(&resources, &home, "0.4.0-aaaaaaaaaaaa").unwrap();
         assert!(again.copied);
-        assert!(herdr.is_file());
+        assert!(holder.is_file());
     }
 
     #[test]
@@ -457,7 +461,7 @@ mod tests {
         let held = fs::OpenOptions::new()
             .read(true)
             .share_mode(1)
-            .open(old.join("herdr.exe"))
+            .open(old.join("hided.exe"))
             .unwrap();
         let prepared = prepare(&resources, &home, "0.4.0-cccccccccccc").unwrap();
         assert_eq!(

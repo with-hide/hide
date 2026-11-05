@@ -1,29 +1,17 @@
 //! The measurements' requests (docs/PERFORMANCE_TESTING.md, The pane
-//! holder's path): key-to-frame latency at the node, frame totals and
-//! attaching a Herdr pane, each the same on the Herdr path and the holder
-//! path. A slow consumer is made outside the node, on one pane's connection
+//! holder's path): key-to-frame latency at the node and frame totals. A slow
+//! consumer is made outside the node, on one pane's connection
 //! (`scripts/holder-perf.py`), so the node's sink is never slowed.
 
 use std::time::{Duration, Instant};
 
-use hide_node_link::terminal::{KeyTarget, TerminalControl, TerminalNode};
+use hide_node_link::terminal::{KeyTarget, TerminalNode};
 use serde_json::{Value, json};
 
-use crate::{Node, grid, number, text, wait_limit};
+use crate::{Node, number, text, wait_limit};
 
 pub fn answer(node: &Node, op: &str, request: &Value) -> Result<Value, String> {
     Ok(match op {
-        "attach_herdr" => {
-            let pane = text(request, "pane")?;
-            let size = grid(request);
-            node.terminals.service.control(TerminalControl::Attach {
-                pane: pane.clone(),
-                size: Some(size),
-                manual: false,
-            });
-            node.terminals.service.view(&pane, size, true);
-            json!({})
-        }
         "wait_drawn" => {
             let panes: Vec<String> = request["panes"]
                 .as_array()

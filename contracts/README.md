@@ -1,29 +1,3 @@
-# Herdr API contract
-
-`herdr-api.schema.json` is what the pinned Herdr binary answers to `herdr api schema --json`, written by `scripts/bump-herdr.sh` in the same run that moves the pin recorded in `contracts/herdr-bundle.json`.
-Herdr owns the schema and the protocol revision; `herdr-core/build.rs` derives `HERDR_PROTOCOL_REVISION` from this file, so no protocol number is maintained by hand anywhere in this repository.
-
-<!-- herdr-provenance:start -->
-hide distributes the [upstream Herdr release v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5).
-The bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-`herdr-update.yml` proposes an upstream stable release with `--repo herdrdev/herdr` only when run by hand, since the pin holds while Hide moves to its own engine; updates must pass contract and runtime checks.
-<!-- herdr-provenance:end -->
-
-Never edit this file directly.
-Move the pin and the contract together:
-
-```sh
-./scripts/bump-herdr.sh <release-tag>
-```
-
-Re-running the script for the tag already pinned rewrites the contract only when it drifted from what the binary reports, and is otherwise a no-op.
-
-Before launching the IDE against a local runtime, verify that the contract, the CLI, and the running server agree:
-
-```sh
-./scripts/check-herdr-contract.sh --herdr-bin <path to the pinned binary>
-```
-
 # Snapshot wire enums
 
 `snapshot-wire-enums.json` lists, for every string enum the core serializes into the shell snapshot, the exact values it emits.
@@ -53,7 +27,7 @@ target/debug/examples/export_web_contract > contracts/agent-adapters.json
 
 # Agent journey
 
-`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its Herdr kind, the source Herdr's own integration reports its session under (`herdr_source`, named by the integration target: `herdr:antigravity_cli` for agy), its own folder in its HOME (`home_folder`, which the kit reads as the agent being set up), the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares (`composer` for an agent whose adapter declares a composer, which the journey reads with `journey_composer`), how a letter reaches it (`letter`: `bell` wakes the pane, `next_prompt` rides the next prompt's hook, `tool` waits until the agent reads its inbox), how it wakes from sleep (`wake`: `pane` wakes the pane it sleeps in, `sleeping_session` reopens a closed session in a new pane), where the native title its `title` cell reads comes from (`title`: `automatic` when the agent titles its session itself, `{"named": "/name"}` when only the name the operator gives it with that command is one, as Pi's), the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start, four for Grok, whose CLI makes four for every turn), and the oldest CLI version Hide puts its hook, plugin or extension in place for (`minimum_version`, [agent-hooks.md](../docs/agent-hooks.md#the-oldest-version-of-each-agent)), which every pin in `agent-clis.json` must meet (`scripts/tests/test_agent_journey_contract.py`).
+`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its Herdr kind, its own folder in its HOME (`home_folder`, which the kit reads as the agent being set up), the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares (`composer` for an agent whose adapter declares a composer, which the journey reads with `journey_composer`), how a letter reaches it (`letter`: `bell` wakes the pane, `next_prompt` rides the next prompt's hook, `tool` waits until the agent reads its inbox), how it wakes from sleep (`wake`: `pane` wakes the pane it sleeps in, `sleeping_session` reopens a closed session in a new pane), where the native title its `title` cell reads comes from (`title`: `automatic` when the agent titles its session itself, `{"named": "/name"}` when only the name the operator gives it with that command is one, as Pi's), the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start, four for Grok, whose CLI makes four for every turn), and the oldest CLI version Hide puts its hook, plugin or extension in place for (`minimum_version`, [agent-hooks.md](../docs/agent-hooks.md#the-oldest-version-of-each-agent)), which every pin in `agent-clis.json` must meet (`scripts/tests/test_agent_journey_contract.py`).
 `scripts/agent_journey` reads only this file for what an agent supports, so a cell an adapter does not declare reads N/A rather than a failure.
 The `fake_home` declaration also carries a private-HOME API-key route and auto-update disable policy with its source evidence, or a named exception.
 These policies are for the keyless journey only and never authorize changing HOME for a real login.

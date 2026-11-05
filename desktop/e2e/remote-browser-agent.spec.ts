@@ -58,7 +58,7 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
     const page = await app.firstWindow();
     await enterWorkspace(page, "fixture");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
-    await page.evaluate(async ({ port, token, socket }) => {
+    await page.evaluate(async ({ port, token }) => {
       await new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
         const timer = setTimeout(() => reject(new Error("device registration timed out")), 10_000);
@@ -66,12 +66,12 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
         ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2 }));
         ws.onmessage = () => {
           ws.send(JSON.stringify({ schema_version: 2, kind: "register_device", payload: {
-            id: "ssh-browser", label: "SSH browser fixture", ssh_alias: "isolated-workspace", herdr_socket_path: socket, host_consent: true,
+            id: "ssh-browser", label: "SSH browser fixture", ssh_alias: "isolated-workspace", host_consent: true,
           } }));
           clearTimeout(timer); ws.close(); resolve();
         };
       });
-    }, { port: state.port, token: state.token, socket: remote.socket });
+    }, { port: state.port, token: state.token });
     await expect.poll(() => liveBridges(bridge).length, { timeout: 60_000 }).toBe(1);
     await expect.poll(() => appliedFor(daemonLog, "ssh-browser"), { timeout: 120_000 }).toBe(true);
     await remote.attach(run, "ssh-browser");

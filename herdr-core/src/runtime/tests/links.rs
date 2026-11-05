@@ -32,7 +32,6 @@ fn remote_session(workspaces: Vec<WorkspaceSnapshot>) -> RemoteStatusSnapshot {
         target_id: "remote".into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         session: Some(RemoteSessionSnapshot {
             workspaces,
             agents: vec![],
@@ -45,7 +44,6 @@ fn remote_session(workspaces: Vec<WorkspaceSnapshot>) -> RemoteStatusSnapshot {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -162,7 +160,6 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
         target_id: "remote".into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![record_workspace(
                 "remote",
@@ -183,7 +180,6 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -865,32 +861,39 @@ fn resume_event(provider: &str, session: &str) -> Vec<u8> {
     .unwrap()
 }
 
-/// The external Herdr connect finishes with a usable old stream while the
-/// current execution changes. Its preceding response orders the transition.
-/// Only the worker's own next connect takes it: the control lane focuses on
-/// the same connector beside the worker, and a transition its connect took
-/// would land while the worker had already passed its check.
+/// A change of the current execution that lands while the worker's own next
+/// call is on its way to the old engine: the call still reaches the old
+/// engine and is answered there. Only the worker's own call takes it: the
+/// control lane focuses on the same engine beside the worker, and a change
+/// its call took would land while the worker had already passed its check.
 #[cfg(unix)]
-struct HerdrConnectTransition {
-    connector: hide_herdr_client::LocalSocketConnector,
+struct ConnectTransition {
     armed: Arc<std::sync::atomic::AtomicBool>,
     /// The name of the worker's thread.
     worker: &'static str,
-    transition: Box<dyn Fn() + Send + Sync>,
+    transition: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 #[cfg(unix)]
-impl hide_herdr_client::ApiConnector for HerdrConnectTransition {
-    fn connect(
-        &self,
-    ) -> Result<Box<dyn hide_herdr_client::ApiStream>, hide_herdr_client::ApiError> {
-        let stream = self.connector.connect()?;
+impl ConnectTransition {
+    fn new(armed: Arc<std::sync::atomic::AtomicBool>, worker: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            armed,
+            worker,
+            transition: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// Lands the change when the worker's call is the one armed for it.
+    fn on_call(&self) {
         if std::thread::current().name() == Some(self.worker)
             && self.armed.swap(false, Ordering::SeqCst)
         {
-            (self.transition)();
+            (self
+                .transition
+                .get()
+                .expect("the transition is set before the worker runs"))();
         }
-        Ok(stream)
     }
 }
 
@@ -908,7 +911,7 @@ fn a_native_archive_worker_refuses_retired_control_before_creation_or_start() {
         let account = tempfile::tempdir().unwrap();
         let bin = account.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        // FakeHerdr owns agent.start; only the real executable lookup reaches
+        // The fake engine owns the start; only the real executable lookup reaches
         // this stand-in. No operator installation is needed or executed.
         for kind in ["pi", "omp"] {
             std::os::unix::fs::symlink("/usr/bin/true", bin.join(kind)).unwrap();
@@ -1001,7 +1004,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         runtime.task_agent_launch.as_mut().unwrap().resume_reference = Some(reference.clone());
         let shared = SharedRuntime::new(runtime);
         let replacement_focus = std::sync::Mutex::new("wake-pane".to_owned());
-        let replacement = FakeHerdr::start("pi-resume-current", move |method, params| {
+        let replacement = FakeEngine::start(move |method, params| {
             if case.ends_with("during-start-connect")
                 && let Some(answer) = focus_answer(method, params, &replacement_focus)
             {
@@ -1014,15 +1017,18 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         let changed_connector = Arc::clone(&replacement_connector);
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let arm_start = Arc::clone(&armed);
+        let transition = ConnectTransition::new(armed, "herdr-core-checkout-tab-create");
+        let on_call = Arc::clone(&transition);
         let old_focus = std::sync::Mutex::new("wake-pane".to_owned());
-        let old = FakeHerdr::start("pi-resume-retired", move |method, params| {
+        let old = FakeEngine::start(move |method, params| {
+            on_call.on_call();
             if (case == "current" || case.ends_with("during-start-connect"))
                 && let Some(answer) = focus_answer(method, params, &old_focus)
             {
                 return answer;
             }
             match method {
-                "tab.create" => {
+                "create_tab" | "launch_tab" => {
                     if case == "local-after-tab" {
                         let runtime = changed_runtime.upgrade().unwrap();
                         let mut runtime = runtime.lock().unwrap();
@@ -1030,56 +1036,53 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                         next.engine = Arc::clone(&changed_connector);
                         runtime.set_live(next);
                     }
-                    serde_json::json!({"type":"tab_created", "tab":{
-                "tab_id":"w-order:t3","workspace_id":"w-order","number":3,"label":"resume","focused":true,"pane_count":1,"agent_status":"idle"
-            },"root_pane":{"pane_id":"wake-pane","terminal_id":"wake-terminal","workspace_id":"w-order","tab_id":"w-order:t3","focused":true,"agent_status":"idle","revision":0}})
+                    reply(("w-order:t3".to_owned(), "wake-pane".to_owned()))
                 }
-                "pane.process_info" => {
+                "pane_processes" => {
+                    // The connection moves after the shell is read and
+                    // before the start is sent.
                     if case.ends_with("during-start-connect") {
                         arm_start.store(true, Ordering::SeqCst);
+                        on_call.on_call();
                     }
-                    serde_json::json!({"type":"pane_process_info","process_info":{
-                        "pane_id":"wake-pane","shell_pid":4100,"foreground_process_group_id":4100,
-                        "foreground_processes":[{"pid":4100,"name":"zsh"}]}})
+                    reply(fake::processes(&serde_json::json!({
+                        "shell_pid":4100,"foreground_process_group_id":4100,
+                        "foreground_processes":[{"pid":4100,"name":"zsh"}]})))
                 }
-                "agent.start" => serde_json::json!({"type":"agent_started","argv":[],"agent":{
-                    "pane_id":"wake-pane","terminal_id":"wake-terminal","workspace_id":"w-order",
-                    "tab_id":"w-order:t3","focused":true,"agent_status":"idle","revision":1}}),
+                "start_agent" => reply(crate::engine::StartedAgent {
+                    pane_id: "wake-pane".into(),
+                    terminal_id: Some("wake-terminal".into()),
+                }),
                 other => panic!("unexpected retired-server request: {other}"),
             }
         });
         let connect_runtime = shared.weak();
         let connect_replacement = Arc::clone(&replacement_connector);
         let reader_home = home.path().to_path_buf();
-        let old_connector =
-            crate::engine::herdr::HerdrEngine::shared(Arc::new(HerdrConnectTransition {
-                connector: old.connector(),
-                armed,
-                worker: "herdr-core-checkout-tab-create",
-                transition: Box::new(move || {
-                    let runtime = connect_runtime.upgrade().unwrap();
-                    let mut runtime = runtime.lock().unwrap();
-                    match case {
-                        "reader-during-start-connect" => {
-                            runtime.own_node =
-                                Arc::new(hide_node::Local::new(Some(reader_home.clone())));
-                        }
-                        "intent-during-start-connect" => {
-                            runtime
-                                .task_agent_launch
-                                .as_mut()
-                                .unwrap()
-                                .args
-                                .push("replacement-intent".into());
-                        }
-                        _ => {
-                            let mut next = runtime.live.as_ref().unwrap().clone();
-                            next.engine = Arc::clone(&connect_replacement);
-                            runtime.set_live(next);
-                        }
-                    }
-                }),
-            }));
+        let old_connector = old.engine();
+        let set = transition.transition.set(Box::new(move || {
+            let runtime = connect_runtime.upgrade().unwrap();
+            let mut runtime = runtime.lock().unwrap();
+            match case {
+                "reader-during-start-connect" => {
+                    runtime.own_node = Arc::new(hide_node::Local::new(Some(reader_home.clone())));
+                }
+                "intent-during-start-connect" => {
+                    runtime
+                        .task_agent_launch
+                        .as_mut()
+                        .unwrap()
+                        .args
+                        .push("replacement-intent".into());
+                }
+                _ => {
+                    let mut next = runtime.live.as_ref().unwrap().clone();
+                    next.engine = Arc::clone(&connect_replacement);
+                    runtime.set_live(next);
+                }
+            }
+        }));
+        assert!(set.is_ok(), "the transition is set once");
         let target = {
             let mut runtime = shared.lock().unwrap();
             let mut context = runtime.live.as_ref().unwrap().clone();
@@ -1159,7 +1162,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 .agent_reason
                 .as_deref()
                 .or(operation.failure.as_deref())
-                .expect("retired execution must refuse the start");
+                .unwrap_or_else(|| panic!("{case}: retired execution must refuse the start"));
             assert!(
                 reason.contains(
                     if case.starts_with("reader-")
@@ -1177,11 +1180,11 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         assert_eq!(
             fork_methods(&old),
             if case == "current" {
-                vec!["tab.create", "pane.process_info", "agent.start"]
+                vec!["launch_tab", "pane_processes", "start_agent"]
             } else if case.ends_with("during-start-connect") {
-                vec!["tab.create", "pane.process_info"]
+                vec!["launch_tab", "pane_processes"]
             } else if case == "local-after-tab" {
-                vec!["tab.create"]
+                vec!["launch_tab"]
             } else {
                 vec![]
             }
@@ -1190,7 +1193,8 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         // be on the control lane. A retired creation result admits none.
         assert!(fork_methods(&replacement).is_empty());
         if case != "current" && !case.ends_with("during-start-connect") {
-            assert_eq!(old.methods(), fork_methods(&old), "{case}");
+            // Nothing but the start's own calls: no focus reached the server.
+            assert_eq!(old.methods().len(), fork_methods(&old).len(), "{case}");
             assert!(replacement.methods().is_empty(), "{case}");
             assert_ne!(
                 runtime.snapshot.focused.pane_id.as_deref(),
@@ -1233,9 +1237,9 @@ fn focus_answer(
     method: &str,
     params: &serde_json::Value,
     focused: &std::sync::Mutex<String>,
-) -> Option<serde_json::Value> {
+) -> Option<Reply> {
     let mut focused = focused.lock().unwrap();
-    if let Some(pane) = params["pane_id"].as_str() {
+    if let Some(pane) = params["pane"].as_str() {
         *focused = pane.to_owned();
     }
     let pane = focused.as_str();
@@ -1245,26 +1249,36 @@ fn focus_answer(
         _ => "w-order:t1",
     };
     Some(match method {
-        "pane.focus" => serde_json::json!({"type":"pane_info","pane":{
-            "pane_id":pane,"terminal_id":"terminal","workspace_id":"w-order",
-            "tab_id":tab,"focused":true,"agent_status":"idle","revision":3}}),
-        "pane.layout" => serde_json::json!({"type":"pane_layout","layout":{
-            "workspace_id":"w-order","tab_id":tab,"zoomed":false,
-            "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":pane,
-            "panes":[{"pane_id":pane,"focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}}),
-        "workspace.get" => serde_json::json!({"type":"workspace_info","workspace":{
-            "workspace_id":"w-order","number":1,"label":"w-order","focused":true,"pane_count":2,
-            "tab_count":2,"active_tab_id":tab,"agent_status":"idle"}}),
+        "focus_pane" => reply(()),
+        "pane_layout" => reply(
+            serde_json::from_value::<crate::sidebar::SessionLayoutPayload>(serde_json::json!({
+                "workspace_id":"w-order","tab_id":tab,"zoomed":false,
+                "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":pane,
+                "panes":[{"pane_id":pane,"focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]
+            }))
+            .unwrap(),
+        ),
+        "workspace_active_tab" => reply(tab.to_owned()),
         _ => return None,
     })
 }
 
+/// The calls the worker made, without the keyboard moves the control lane
+/// makes beside it; a tab made with or without the shell's own launch is
+/// the same tab.
 #[cfg(unix)]
-fn fork_methods(server: &FakeHerdr) -> Vec<String> {
+fn fork_methods(server: &Fake) -> Vec<&'static str> {
     server
         .methods()
         .into_iter()
-        .filter(|method| !["pane.focus", "pane.layout", "workspace.get"].contains(&method.as_str()))
+        .filter(|method| !["focus_pane", "pane_layout", "workspace_active_tab"].contains(method))
+        .map(|method| {
+            if method == "create_tab" {
+                "launch_tab"
+            } else {
+                method
+            }
+        })
         .collect()
 }
 
@@ -1323,7 +1337,7 @@ fn native_fork_current_journey(kind: &'static str) {
         runtime.ingest_session(Ok(initial));
         let shared = SharedRuntime::new(runtime);
         let replacement_focus = std::sync::Mutex::new(String::new());
-        let replacement = FakeHerdr::start("pi-fork-current", move |method, params| {
+        let replacement = FakeEngine::start(move |method, params| {
             focus_answer(method, params, &replacement_focus)
                 .unwrap_or_else(|| panic!("unexpected replacement-server request: {method}"))
         });
@@ -1335,154 +1349,157 @@ fn native_fork_current_journey(kind: &'static str) {
         let started_name = std::sync::Mutex::new(String::new());
         let confirm_runtime = shared.weak();
         let confirm_reads = std::sync::atomic::AtomicUsize::new(0);
-        let old = FakeHerdr::start("pi-fork-retired", move |method, params| match method {
-            "pane.focus" | "pane.layout" | "workspace.get" => {
-                focus_answer(method, params, &old_focus).unwrap()
-            }
-            "session.snapshot" => {
-                if case == "during-tab-connect" {
-                    arm_connect.store(true, Ordering::SeqCst);
+        let transition = ConnectTransition::new(armed, "herdr-core-agent-fork");
+        let on_call = Arc::clone(&transition);
+        let old = FakeEngine::start(move |method, params| {
+            on_call.on_call();
+            match method {
+                "focus_pane" | "pane_layout" | "workspace_active_tab" => {
+                    focus_answer(method, params, &old_focus).unwrap()
                 }
-                serde_json::json!({"type":"session_snapshot","snapshot":{
-                    "version":"fixture","protocol":hide_herdr_client::HERDR_PROTOCOL_REVISION,
-                    "workspaces":[],"tabs":[],"panes":[],"agents":[],
-                    "layouts":[{"workspace_id":"w-order","tab_id":"w-order:t1","zoomed":false,
-                        "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":parent,
-                        "panes":[{"pane_id":parent,"focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}]
-                }})
-            }
-            // The fork's tab runs the node's shell with the integration.
-            "layout.apply" => {
-                if matches!(
-                    case,
-                    "during-parent-state-change"
-                        | "source-session-changed"
-                        | "source-reference-changed"
-                        | "source-cwd-changed"
-                        | "source-agent-gone"
-                        | "source-pane-gone"
-                ) {
-                    let runtime = status_runtime.upgrade().unwrap();
-                    let mut runtime = runtime.lock().unwrap();
-                    let agent = runtime
-                        .snapshot
-                        .navigator
-                        .agents
-                        .iter_mut()
-                        .find(|agent| agent.pane_id == parent)
-                        .unwrap();
-                    match case {
-                        "during-parent-state-change" => agent.state_change_seq = Some(5),
-                        "source-session-changed" => {
-                            agent.session_id = Some("another-session".into())
-                        }
-                        "source-reference-changed" => {
-                            agent
-                                .row_facts
-                                .as_mut()
-                                .unwrap()
-                                .native_reference
-                                .as_mut()
-                                .unwrap()
-                                .value = "another-source".into()
-                        }
-                        "source-cwd-changed" => {
-                            runtime
-                                .snapshot
-                                .navigator
-                                .workspaces
-                                .iter_mut()
-                                .flat_map(|workspace| &mut workspace.checkouts)
-                                .flat_map(|checkout| &mut checkout.tabs)
-                                .flat_map(|tab| &mut tab.panes)
-                                .find(|pane| pane.id == parent)
-                                .unwrap()
-                                .cwd = "another-folder".into();
-                        }
-                        "source-agent-gone" => {
-                            runtime
-                                .snapshot
-                                .navigator
-                                .agents
-                                .retain(|agent| agent.pane_id != parent);
-                        }
-                        "source-pane-gone" => {
-                            for tab in runtime
-                                .snapshot
-                                .navigator
-                                .workspaces
-                                .iter_mut()
-                                .flat_map(|workspace| &mut workspace.checkouts)
-                                .flat_map(|checkout| &mut checkout.tabs)
-                            {
-                                tab.panes.retain(|pane| pane.id != parent);
-                            }
-                        }
-                        _ => unreachable!(),
+                "session" => {
+                    // The connection moves after the session is read and
+                    // before the fork's tab is asked for.
+                    if case == "during-tab-connect" {
+                        arm_connect.store(true, Ordering::SeqCst);
+                        on_call.on_call();
                     }
+                    reply(fake::session(serde_json::json!({
+                        "layouts":[{"workspace_id":"w-order","tab_id":"w-order:t1","zoomed":false,
+                            "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":parent,
+                            "panes":[{"pane_id":parent,"focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}]
+                    })))
                 }
-                serde_json::json!({"type":"layout_apply","layout":{
-                "workspace_id":"w-order","tab_id":"w-order:t2","zoomed":false,
-                "focused_pane_id":"child-pane","root":{"type":"pane","pane_id":"child-pane"}}})
-            }
-            "pane.process_info" => {
-                if case == "during-start-connect" {
-                    arm_connect.store(true, Ordering::SeqCst);
+                // The fork's tab runs the node's shell with the integration.
+                "launch_tab" => {
+                    if matches!(
+                        case,
+                        "during-parent-state-change"
+                            | "source-session-changed"
+                            | "source-reference-changed"
+                            | "source-cwd-changed"
+                            | "source-agent-gone"
+                            | "source-pane-gone"
+                    ) {
+                        let runtime = status_runtime.upgrade().unwrap();
+                        let mut runtime = runtime.lock().unwrap();
+                        let agent = runtime
+                            .snapshot
+                            .navigator
+                            .agents
+                            .iter_mut()
+                            .find(|agent| agent.pane_id == parent)
+                            .unwrap();
+                        match case {
+                            "during-parent-state-change" => agent.state_change_seq = Some(5),
+                            "source-session-changed" => {
+                                agent.session_id = Some("another-session".into())
+                            }
+                            "source-reference-changed" => {
+                                agent
+                                    .row_facts
+                                    .as_mut()
+                                    .unwrap()
+                                    .native_reference
+                                    .as_mut()
+                                    .unwrap()
+                                    .value = "another-source".into()
+                            }
+                            "source-cwd-changed" => {
+                                runtime
+                                    .snapshot
+                                    .navigator
+                                    .workspaces
+                                    .iter_mut()
+                                    .flat_map(|workspace| &mut workspace.checkouts)
+                                    .flat_map(|checkout| &mut checkout.tabs)
+                                    .flat_map(|tab| &mut tab.panes)
+                                    .find(|pane| pane.id == parent)
+                                    .unwrap()
+                                    .cwd = "another-folder".into();
+                            }
+                            "source-agent-gone" => {
+                                runtime
+                                    .snapshot
+                                    .navigator
+                                    .agents
+                                    .retain(|agent| agent.pane_id != parent);
+                            }
+                            "source-pane-gone" => {
+                                for tab in runtime
+                                    .snapshot
+                                    .navigator
+                                    .workspaces
+                                    .iter_mut()
+                                    .flat_map(|workspace| &mut workspace.checkouts)
+                                    .flat_map(|checkout| &mut checkout.tabs)
+                                {
+                                    tab.panes.retain(|pane| pane.id != parent);
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    reply(("w-order:t2".to_owned(), "child-pane".to_owned()))
                 }
-                serde_json::json!({"type":"pane_process_info","process_info":{
-                    "pane_id":"child-pane","shell_pid":4100,"foreground_process_group_id":4100,
-                    "foreground_processes":[{"pid":4100,"name":"zsh"}]}})
-            }
-            // The fork's node writes the shell integration, so its shell marks
-            // the first prompt before the start is typed.
-            "pane.get" => serde_json::json!({"type":"pane_info","pane":{
-                "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
-                "tab_id":"w-order:t2","focused":false,"agent_status":"unknown","revision":1,
-                "tokens":{"hide_prompt":"1"}}}),
-            "agent.start" => {
-                *started_name.lock().unwrap() = params["name"].as_str().unwrap().to_owned();
-                serde_json::json!({"type":"agent_started","argv":[],"agent":{
-                "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
-                "tab_id":"w-order:t2","focused":false,"agent_status":"idle","revision":2}})
-            }
-            "agent.get" => {
-                let read = confirm_reads.fetch_add(1, Ordering::SeqCst);
-                if case == "during-input-confirmation" {
-                    let runtime = confirm_runtime.upgrade().unwrap();
-                    let mut runtime = runtime.lock().unwrap();
-                    runtime
-                        .snapshot
-                        .navigator
-                        .agents
-                        .iter_mut()
-                        .find(|agent| agent.pane_id == parent)
-                        .unwrap()
-                        .state_change_seq = Some(5 + read as u64);
+                "pane_processes" => {
+                    if case == "during-start-connect" {
+                        arm_connect.store(true, Ordering::SeqCst);
+                    }
+                    reply(fake::processes(&serde_json::json!({
+                    "shell_pid":4100,"foreground_process_group_id":4100,
+                    "foreground_processes":[{"pid":4100,"name":"zsh"}]})))
                 }
-                let ready = case != "during-input-confirmation" || read > 0;
-                serde_json::json!({"type":"agent_info","agent":{
-                    "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w-order",
-                    "tab_id":"w-order:t2","name":*started_name.lock().unwrap(),"agent":kind,
-                    "launch_pending":!ready,"interactive_ready":ready,
-                    "focused":false,"agent_status":"idle","revision":3}})
+                // The fork's node writes the shell integration, so its shell marks
+                // the first prompt before the start is typed.
+                "pane_token" => {
+                    assert_eq!(params["token"], "hide_prompt");
+                    reply(Some("1".to_owned()))
+                }
+                "start_agent" => {
+                    *started_name.lock().unwrap() = params["name"].as_str().unwrap().to_owned();
+                    reply(crate::engine::StartedAgent {
+                        pane_id: "child-pane".into(),
+                        terminal_id: Some("child-terminal".into()),
+                    })
+                }
+                "delivery_agent" => {
+                    let read = confirm_reads.fetch_add(1, Ordering::SeqCst);
+                    if case == "during-input-confirmation" {
+                        let runtime = confirm_runtime.upgrade().unwrap();
+                        let mut runtime = runtime.lock().unwrap();
+                        runtime
+                            .snapshot
+                            .navigator
+                            .agents
+                            .iter_mut()
+                            .find(|agent| agent.pane_id == parent)
+                            .unwrap()
+                            .state_change_seq = Some(5 + read as u64);
+                    }
+                    let ready = case != "during-input-confirmation" || read > 0;
+                    reply(fake::delivery_agent(&serde_json::json!({
+                    "pane_id":"child-pane","name":*started_name.lock().unwrap(),"agent":kind,
+                    "launch_pending":!ready,"interactive_ready":ready,"agent_status":"idle"})))
+                }
+                "close_pane" => reply(()),
+                other => panic!("unexpected original-server request: {other}"),
             }
-            "pane.close" => serde_json::json!({"type":"ok"}),
-            other => panic!("unexpected original-server request: {other}"),
         });
         let connect_runtime = shared.weak();
-        let connector =
-            crate::engine::herdr::HerdrEngine::shared(Arc::new(HerdrConnectTransition {
-                connector: old.connector(),
-                armed,
-                worker: "herdr-core-agent-fork",
-                transition: Box::new(move || {
+        let connector = old.engine();
+        assert!(
+            transition
+                .transition
+                .set(Box::new(move || {
                     let runtime = connect_runtime.upgrade().unwrap();
                     let mut runtime = runtime.lock().unwrap();
                     let mut next = runtime.live.as_ref().unwrap().clone();
                     next.engine = Arc::clone(&replacement_connector);
                     runtime.set_live(next);
-                }),
-            }));
+                }))
+                .is_ok()
+        );
         {
             let mut runtime = shared.lock().unwrap();
             let mut context = runtime.live.as_ref().unwrap().clone();
@@ -1528,34 +1545,36 @@ fn native_fork_current_journey(kind: &'static str) {
             fork_methods(&old),
             match case {
                 "current" | "during-parent-state-change" => vec![
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.get",
-                    "agent.start",
-                    "agent.get"
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "start_agent",
+                    "delivery_agent"
                 ],
                 "during-input-confirmation" => vec![
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.get",
-                    "agent.start",
-                    "agent.get",
-                    "agent.get"
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "start_agent",
+                    "delivery_agent",
+                    "delivery_agent"
                 ],
-                "during-tab-connect" => vec!["session.snapshot"],
+                "during-tab-connect" => vec!["session"],
                 "source-session-changed"
                 | "source-reference-changed"
                 | "source-cwd-changed"
                 | "source-agent-gone"
-                | "source-pane-gone" => vec!["session.snapshot", "layout.apply", "pane.close"],
-                _ => vec![
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.close"
+                | "source-pane-gone" => vec!["session", "launch_tab", "close_pane"],
+                "during-start-connect" => vec![
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "close_pane"
                 ],
+                _ => vec!["session", "launch_tab", "pane_processes", "close_pane"],
             },
             "{case}"
         );
@@ -1563,9 +1582,9 @@ fn native_fork_current_journey(kind: &'static str) {
             assert_eq!(
                 old.calls()
                     .iter()
-                    .rfind(|(method, _)| method == "pane.close")
+                    .rfind(|(method, _)| *method == "close_pane")
                     .unwrap()
-                    .1["pane_id"],
+                    .1["pane"],
                 "child-pane",
                 "cleanup owns only the created child"
             );
@@ -1805,8 +1824,6 @@ fn statistics_runtime(
             schema_version: SCHEMA_VERSION,
             home: None,
             node_id: crate::node::test_node(),
-            herdr_socket_path: Some("/tmp/herdr-core-pet-runtime.sock".to_owned()),
-            herdr_bin_path: None,
             app_state_path: state.to_string_lossy().into_owned(),
             host_helper_root: None,
             host_cli_dir: None,

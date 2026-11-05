@@ -455,7 +455,7 @@ impl Runtime {
             let live = self
                 .live
                 .as_ref()
-                .ok_or("A live Herdr connection is required")?;
+                .ok_or("A live engine connection is required")?;
             let channel = target.channel.clone()?;
             let (runtime, notifier) = (live.runtime.clone(), live.notifier.clone());
             let (worker_target, head) = (target.clone(), payload.head_sha.clone());

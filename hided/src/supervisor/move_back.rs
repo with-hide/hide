@@ -172,11 +172,11 @@ pub(super) async fn prepare_back(
             detail: placement.alias.clone(),
         });
     }
-    let own_socket = env.herdr_socket_path.clone();
-    if own_socket.is_none() {
+    let own_socket = crate::core_move::preflight::movable_scope();
+    if let Err(detail) = crate::core_move::preflight::engine_moves() {
         failed.push(FailedCheck {
-            check: CheckId::Herdr,
-            detail: "this machine has no Herdr server".to_owned(),
+            check: CheckId::Engine,
+            detail,
         });
     }
     let present = copy::brain_present(&env.state_dir);
@@ -312,10 +312,12 @@ pub(super) async fn prepare_back(
         }
     }
     let (Some(peer_socket), Some(own_socket)) = (inspected.herdr_socket.clone(), own_socket) else {
-        if inspected.herdr_socket.is_none() {
+        if inspected.herdr_socket.is_none()
+            && !failed.iter().any(|check| check.check == CheckId::Engine)
+        {
             failed.push(FailedCheck {
-                check: CheckId::Herdr,
-                detail: "the core's machine has no Herdr server".to_owned(),
+                check: CheckId::Engine,
+                detail: "the core's machine names no scope a move can rewrite".to_owned(),
             });
         }
         return Err(failed);

@@ -1469,7 +1469,7 @@ mod tests {
         hide_platform::fs::private::create_dir_all(&state).unwrap();
         let options: crate::model::CoreOptions = serde_json::from_value(json!({
             "schema_version": crate::model::SCHEMA_VERSION, "node_id": "test-node", "home": root,
-            "herdr_socket_path": null, "app_state_path": state.join("app.json"),
+            "app_state_path": state.join("app.json"),
         }))
         .unwrap();
         let mut runtime = Runtime::new(
@@ -1518,7 +1518,6 @@ mod tests {
                     location: None,
                 },
                 hook: None,
-                herdr: None,
                 partial: false,
                 features: Vec::new(),
                 sessions: None,

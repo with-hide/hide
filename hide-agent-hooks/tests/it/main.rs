@@ -24,9 +24,9 @@ mod opencode_plugin;
 mod opener_guard;
 mod pi_extension;
 mod plan_record;
+mod pre_tool;
 mod programs;
 mod session_start_probes;
-mod spawn_guard;
 #[path = "../../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
 mod windows_hook_command;

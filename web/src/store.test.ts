@@ -64,7 +64,7 @@ describe("snapshot merge", () => {
 
   it("keeps the device the core names on a device's agent row, and the row's identity across frames", () => {
     const store = useShellStore.getState();
-    const device = (agents: unknown[]) => ({ target_id: "hq3mini", state: "connected", message: null, herdr_version: null, session: { agents } });
+    const device = (agents: unknown[]) => ({ target_id: "hq3mini", state: "connected", message: null, session: { agents } });
     const row = { id: "a", pane_id: "remote:hq3mini:pane:w1:p4", device_id: "hq3mini", device_pane_id: "w1:p4", agent_kind: "claude", session_id: "s-1" };
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: { status: { remote: [device([row])] } } } as never });
     const stamped = useShellStore.getState().rest?.status?.remote?.[0]?.session?.agents[0];

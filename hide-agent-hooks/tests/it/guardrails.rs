@@ -9,7 +9,7 @@
 
 use serde_json::{Value, json};
 
-use crate::spawn_guard::{Machine, PANE, Run};
+use crate::pre_tool::{Machine, PANE, Run};
 
 /// Writes the policy the core would publish: `rules` on the machine's checkout.
 fn policy(machine: &Machine, rules: Value) {

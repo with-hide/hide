@@ -1,17 +1,11 @@
-"""The integration cell: the engine integration that reported the agent's
-session is the one the candidate's kit installed where the agent reads it.
+"""The integration cell: the hook the candidate's kit installed where the
+agent reads it is the one that registered the agent's session.
 
 Hide's own record of what its kit put on this Mac is the machine's kit row in
-the snapshot (`navigator.devices[].kit.agents[]`): its hook and Herdr
-integration pieces, each with a state and a location. The kit reads Herdr's
-own `integration status` for the second, and calls it installed only while
-Herdr lists it current. Herdr names the integration that reported a session
-in the session's source, the contract's `herdr_source`
-(`herdr:<integration target>`). Both together, with both pieces in
-the HOME the agent reads its configuration from, say the agent loaded the
-candidate's integration and not one of the operator's.
-On the own engine, the private hook and Hide's registered session identity
-provide the corresponding observations; no Herdr integration is required.
+the snapshot (`navigator.devices[].kit.agents[]`): its hook piece, with a
+state and a location. An installed hook in the HOME the agent reads its
+configuration from, and a session Hide's registration ledger names, say the
+agent loaded the candidate's hook and not one of the operator's.
 """
 
 from pathlib import Path
@@ -37,24 +31,23 @@ def kit_agent(rest, agent):
     return next((row for row in (device.get("kit") or {}).get("agents") or [] if row.get("id") == agent), None)
 
 
-def verdict(row, session, source, home):
-    """`row` the kit's agent row, `session` the pane's session as Herdr
-    reports it, `home` where the agent reads its configuration."""
+def verdict(row, session, home):
+    """`row` the kit's agent row, `session` the pane's session as Hide's
+    registration ledger names it, `home` where the agent reads its
+    configuration."""
     if not row:
         return cells.FAIL, "the kit has no row for the agent on this Mac"
-    for name in (("hook", "herdr") if source is not None else ("hook",)):
-        piece = row.get(name) or {}
-        if piece.get("state") != "installed":
-            return cells.FAIL, f"the kit's {name} piece is {piece.get('state')}" + (
-                f": {piece['reason']}" if piece.get("reason") else "")
-        location = piece.get("location")
-        if not location or not Path(location).resolve().is_relative_to(Path(home).resolve()):
-            return cells.FAIL, f"the kit's {name} piece is at {location}, outside the HOME the agent reads"
-    status, reason = cells.emitter_verdict(session, source)
+    piece = row.get("hook") or {}
+    if piece.get("state") != "installed":
+        return cells.FAIL, f"the kit's hook piece is {piece.get('state')}" + (
+            f": {piece['reason']}" if piece.get("reason") else "")
+    location = piece.get("location")
+    if not location or not Path(location).resolve().is_relative_to(Path(home).resolve()):
+        return cells.FAIL, f"the kit's hook piece is at {location}, outside the HOME the agent reads"
+    status, reason = cells.emitter_verdict(session)
     if status != cells.PASS:
         return status, reason
-    pieces = "Hide's hook and Herdr's current integration" if source is not None else "Hide's hook"
-    return cells.PASS, f"the kit installed {pieces} in the agent's HOME, and {reason}"
+    return cells.PASS, f"the kit installed Hide's hook in the agent's HOME, and {reason}"
 
 
 def measure(journey):
@@ -63,7 +56,7 @@ def measure(journey):
 
     def installed(rest):
         row = kit_agent(rest, journey.id) or {}
-        return all((row.get(name) or {}).get("state") == "installed" for name in (("hook", "herdr") if journey.runtime.engine == "herdr" else ("hook",))) and row
+        return (row.get("hook") or {}).get("state") == "installed" and row
     try:
         journey.daemon.wait(installed, KIT_SECONDS, "the kit row to read the agent's pieces installed")
     except ProcessError as error:
@@ -71,11 +64,11 @@ def measure(journey):
             raise
         journey.record.setdefault(CELL, {})["kit_wait"] = str(error)
     row = kit_agent(journey.daemon.snapshot() or {}, journey.id)
-    session = (journey.herdr_agent() or {}).get("agent_session")
+    session = (journey.engine_agent() or {}).get("agent_session")
     record = journey.record.setdefault(CELL, {})
     record.update(kit=row, session=session, home=str(journey.runtime.home))
     if not row:
         record["devices"] = [{"id": device.get("id"), "kind": device.get("kind"), "state": device.get("state"),
                               "agents": [agent.get("id") for agent in (device.get("kit") or {}).get("agents") or []]}
                              for device in ((journey.daemon.snapshot() or {}).get("navigator") or {}).get("devices") or []]
-    journey.settle(CELL, verdict(row, session, (journey.row["herdr_source"] if journey.runtime.engine == "herdr" else None), journey.runtime.home), journey.evidence(CELL, record))
+    journey.settle(CELL, verdict(row, session, journey.runtime.home), journey.evidence(CELL, record))

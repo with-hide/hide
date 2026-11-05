@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { setAgentSession, setAgentState, labelAgentPane } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, showTasks } from "./wire";
 

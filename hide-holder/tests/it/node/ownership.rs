@@ -38,10 +38,9 @@ impl Connection {
             )
             .unwrap(),
         );
-        let (opened, _) = channel();
         let service = Arc::new(
             Service::start(
-                wrap(holders.attacher(Box::new(Herdr(Mutex::new(opened))))),
+                wrap(holders.attacher()),
                 screens.clone(),
                 reports.clone(),
                 RetryPolicy::Automatic,

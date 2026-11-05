@@ -327,19 +327,15 @@ fn remote_operation_confirmed_by(
 }
 
 impl Runtime {
+    /// The shell asked for the session to be read again: the coordinator
+    /// reads it whole on its next wake.
     pub(crate) fn request_status_refresh(&mut self) -> bool {
-        self.status_refresh_requested = true;
+        self.request_republish();
         self.push_diagnostic(
             "session.status_refresh_requested",
             "A read-only session refresh was requested by the shell",
         );
         true
-    }
-
-    pub(crate) fn take_status_refresh_request(&mut self) -> bool {
-        let requested = self.status_refresh_requested;
-        self.status_refresh_requested = false;
-        requested
     }
 
     /// Advances every bounded asynchronous operation from a coordinator timer.
@@ -476,7 +472,7 @@ impl Runtime {
             self.fail_remote_operation(
                 target_id,
                 request_id,
-                "Remote Herdr acknowledged split without a created pane id".to_owned(),
+                "Remote engine acknowledged split without a created pane id".to_owned(),
             );
             return true;
         }
@@ -484,7 +480,7 @@ impl Runtime {
             current.phase = "awaiting_topology".to_owned();
             current.stage = "topology".to_owned();
             current.message = Some(
-                "Request accepted; waiting for the remote Herdr topology to confirm it".to_owned(),
+                "Request accepted; waiting for the remote engine topology to confirm it".to_owned(),
             );
             current.retryable = false;
             current.created_pane_id = created_pane_id
@@ -1017,7 +1013,7 @@ impl Runtime {
         let Some(scope_id) = self.pane_operation_scope(&target_id) else {
             self.set_error(
                 "pane.operation_scope_unavailable",
-                format!("Herdr has no confirmed layout for pane {target_id}"),
+                format!("The engine has no confirmed layout for pane {target_id}"),
                 true,
             );
             return true;
@@ -1033,7 +1029,7 @@ impl Runtime {
         let Some(baseline_signature) = self.pane_operation_baseline(&target_id) else {
             self.set_error(
                 "pane.operation_scope_unavailable",
-                format!("Herdr has no confirmed layout for pane {target_id}"),
+                format!("The engine has no confirmed layout for pane {target_id}"),
                 true,
             );
             return true;
@@ -1680,7 +1676,10 @@ impl Runtime {
 
     fn send_pane_operation(&mut self, id: &str, action: PaneControlAction) {
         let Some(context) = self.live.as_ref().cloned() else {
-            self.fail_pane_operation(id, "Herdr disconnected before the request was sent".into());
+            self.fail_pane_operation(
+                id,
+                "The engine disconnected before the request was sent".into(),
+            );
             return;
         };
         let now = unix_milliseconds();
@@ -1846,13 +1845,10 @@ impl Runtime {
                 if operation.kind == "pane.split" && created_pane_id.is_none() {
                     self.fail_pane_operation(
                         id,
-                        "Herdr acknowledged split without a created pane id".to_owned(),
+                        "The engine acknowledged split without a created pane id".to_owned(),
                     );
                     return true;
                 }
-                let now = std::time::Instant::now();
-                self.op_timings
-                    .stamp(id, super::op_timing::Stage::HerdrAck, now);
                 if let Some(created) = created_pane_id.as_deref() {
                     self.op_timings.learn(id, None, Some(created));
                     self.await_op_frame(id, created, false);
@@ -1889,7 +1885,7 @@ impl Runtime {
                     current.phase = "awaiting_topology".to_owned();
                     current.stage = "topology".to_owned();
                     current.message = Some(
-                        "Request accepted; waiting for Herdr to confirm the new topology"
+                        "Request accepted; waiting for the engine to confirm the new topology"
                             .to_owned(),
                     );
                     current.retryable = false;
@@ -1931,7 +1927,7 @@ impl Runtime {
             }
             Ok(PaneControlOutcome::Projected { .. }) => self.fail_pane_operation(
                 id,
-                "Herdr returned a projection outcome for a mutation request".to_owned(),
+                "The engine returned a projection outcome for a mutation request".to_owned(),
             ),
             Err(error) if error.is_ambiguous() => {
                 self.mark_pane_operation_unknown(id, error.message().to_owned());

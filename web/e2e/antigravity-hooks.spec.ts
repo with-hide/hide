@@ -3,8 +3,8 @@
 // `~/.gemini/config/hooks.json` beside the operator's block, the skill stub in `~/.gemini/config/skills`, and Hide
 // AI's read-only folder with its trust, and takes out only Hide's; the operator's own skills under
 // `~/.gemini/antigravity-cli/skills` are never touched. The INSTALLED tool command, read from the file the kit wrote
-// and run the way agy runs it (agy's payload on stdin, from inside a pane's agent), refuses a direct `herdr agent start` in agy's shape and
-// leaves every other call to agy's own question.
+// and run the way agy runs it (agy's payload on stdin, from inside a pane's agent), refuses a result handed to the system opener in agy's
+// shape and leaves every other call to agy's own question.
 // The real agy is never run here: it signs in through the operator's browser whenever its home changes (D-18).
 
 import { expect, test, type Page } from "@playwright/test";
@@ -119,16 +119,13 @@ test("the agy switch writes Hide's block, skill and Hide AI folder beside the op
     // B1: agy takes letters and is refused a launch, so its row wears no Basic chip.
     await expect(list.locator('[data-agent-partial="antigravity"]')).toHaveCount(0);
 
-    // B3 and onboarding B23: Hide's block joins the operator's, including passive tool results.
+    // B3 and onboarding B23: Hide's block joins the operator's.
     await switchOf("off").click();
     await expect(switchOf("on")).toBeVisible();
     await expect.poll(() => read(hooksFile(home)), { timeout: 60_000 }).toContain("--runtime antigravity");
     const block = json<Block & typeof OPERATOR_HOOKS>(hooksFile(home));
     expect(block.mine).toEqual(OPERATOR_HOOKS.mine);
-    expect(Object.keys(block.hide).sort()).toEqual(["PostToolUse", "PreInvocation", "PreToolUse", "SessionStart", "Stop"]);
-    const post = block.hide.PostToolUse![0] as { matcher: string; hooks: { command: string }[] };
-    expect(post.matcher).toBe("run_command");
-    expect(post.hooks[0]!.command).toContain("--event PostToolUse");
+    expect(Object.keys(block.hide).sort()).toEqual(["PreInvocation", "PreToolUse", "SessionStart", "Stop"]);
     expect((block.hide.PreToolUse![0] as { matcher: string }).matcher).toBe("run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content");
     // D-12: the stub goes where agy's model reads skills, never into the operator's antigravity-cli folder.
     await expect.poll(() => read(stubFile(home)), { timeout: 60_000 }).toContain("hide browser help");
@@ -155,7 +152,7 @@ test("the agy switch writes Hide's block, skill and Hide AI folder beside the op
   }
 });
 
-test("the installed agy tool command refuses a direct agent start in agy's shape and leaves every other call to agy", async ({ page }) => {
+test("the installed agy tool command refuses a result handed to the system opener in agy's shape and leaves every other call to agy", async ({ page }) => {
   // No recorded choice: agy is on by default, and its block goes in on the first pass.
   const stack = await start("agy-guard");
   const { herdr, home } = stack;
@@ -169,11 +166,11 @@ test("the installed agy tool command refuses a direct agent start in agy's shape
     const checkout = path.join(herdr.root, "fixture");
     const call = (name: string, args: Record<string, unknown>) => ({ conversationId: "ade08778-fcdd-4e96-88ba-fd1c4e594fa2", toolCall: { name, args } });
 
-    const refused = await runHook(asAgent, home, toolCommand(home), call("run_command", { CommandLine: `herdr agent start worker --kind claude --pane ${pane}`, Cwd: checkout }));
+    const refused = await runHook(asAgent, home, toolCommand(home), call("run_command", { CommandLine: "open report.html", Cwd: checkout }));
     expect(refused.status).toBe(0);
     const answer = JSON.parse(refused.out) as { decision: string; reason: string };
     expect(answer.decision).toBe("deny");
-    expect(answer.reason).toContain("hide agent spawn");
+    expect(answer.reason).toContain("browser open report.html");
     expect(refusals(home)).toEqual(["antigravity"]);
 
     // Every other path leaves the call to agy's own permission question: ask, never allow.
@@ -193,9 +190,9 @@ function runHook(asAgent: Awaited<ReturnType<typeof agentPane>>, home: string, c
   return asAgent(["-c", command], { program: "/bin/sh", input: JSON.stringify(payload), env: { HOME: home } });
 }
 
-/** The runtimes of the guard's refusals so far, in order: its own log, one `launch.refused` line each. */
+/** The runtimes of the opener guard's refusals so far, in order: the hooks' log, one `opener.refused` line each. */
 const refusals = (home: string): string[] =>
   read(path.join(home, ".hide", "agent-hooks", "spawn-guard.log"))
     .split("\n")
-    .filter((line) => line.includes('"launch.refused"'))
+    .filter((line) => line.includes('"opener.refused"'))
     .map((line) => (JSON.parse(line) as { runtime: string }).runtime);

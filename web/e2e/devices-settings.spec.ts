@@ -142,12 +142,12 @@ test("the Add dialog lists the account's Hosts, fills the name from the chosen o
     await expect(dialog.locator("[data-device-label]")).toHaveValue(ALIAS);
     await expect(dialog.locator("[data-add-device]")).toBeEnabled();
 
-    // B53: the three install lines and the Herdr socket sit under Advanced, closed at first.
+    // B53: the three install lines sit under Advanced, closed at first, and no socket is asked for.
     const advanced = dialog.locator("[data-add-device-advanced]");
     await expect(dialog.locator("[data-add-device-installs]")).toBeHidden();
     await advanced.click();
     await expect(dialog.locator("[data-add-device-installs] li")).toHaveCount(3);
-    await expect(dialog.locator("[data-device-socket]")).toBeVisible();
+    await expect(dialog.locator("[data-device-socket]")).toHaveCount(0);
     await screenshot(page, "add-device-host");
   } finally {
     daemon?.stop();

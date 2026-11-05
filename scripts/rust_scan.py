@@ -1,7 +1,6 @@
 """How the repository's source checks read Rust: comments and literals
 blanked with line numbers kept, and what only a test build compiles told
-apart, so `check-engine-boundary.py` and `check-core-touches-no-machine.py`
-judge the same production code.
+apart, for `check-core-touches-no-machine.py`.
 """
 import pathlib
 import re

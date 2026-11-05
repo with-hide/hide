@@ -4,7 +4,7 @@
 //! retains one Agent area in each named group.
 
 use super::device_catalog::{
-    RecordingHerdr, connected_status, dispatch, herdr_workspace, next_request, session, tree,
+    connected_status, dispatch, herdr_workspace, next_request, recording_engine, session, tree,
 };
 use super::*;
 use crate::device_catalog;
@@ -206,8 +206,6 @@ fn device_in_front(
             id: NODE.to_owned(),
             label: "MacBook".to_owned(),
             origin,
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(connected_status(NODE));
@@ -222,9 +220,7 @@ fn device_in_front(
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         NODE,
-        crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
-            requests: requests.clone(),
-        })),
+        recording_engine(requests.clone()),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
@@ -306,9 +302,9 @@ fn a_node_that_dialed_in_splits_its_tabs_into_agent_areas_and_its_herdr_shows_th
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(shown(&runtime), [tab("t1"), tab("t2")]);
     let request = next_request(&requests, 0);
-    assert_eq!(request["method"], "tab.focus");
+    assert_eq!(request["method"], "focus_tab");
     assert_eq!(
-        request["params"]["tab_id"], "t2",
+        request["params"]["tab"], "t2",
         "the id the node's Herdr knows"
     );
     for pane in ["t1", "t2"] {

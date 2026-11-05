@@ -6,7 +6,7 @@
 //
 // The folder is where the system's installer put the app (PRD auto-update
 // D-32): %LOCALAPPDATA%\Programs\hide after the Windows installer, /opt/hide
-// after the deb or the rpm. From it: Herdr reports the pinned version, the
+// after the deb or the rpm. From it: the
 // daemon answers in its device node role (`hided node --version`), the hook
 // helper starts, `hide runtime prepare` names where the runtime runs (on
 // Windows a copy under the private home, outside the install folder; D-10),
@@ -17,7 +17,7 @@
 // package fixture with a changed daemon hash, before `hide stop` ends it; on
 // Windows the next prepare then removes the first build's copy (D-11). Every
 // process runs with a private home and state folder, so none reaches a daemon
-// or Herdr of the runner's account.
+// of the runner's account.
 //
 // macOS uses the isolated packaged-app e2e lane instead.
 
@@ -26,11 +26,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { copyTree } from "./copy-tree.mjs";
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const LABELS = { win32: "windows", linux: "linux" };
 const label = LABELS[process.platform];
 if (!label) throw new Error(`smoke-package checks Windows and Linux packages only, not ${process.platform}`);
@@ -88,14 +86,14 @@ try {
   const electron = path.join(app, `hide${exe}`);
 
   check("bundled files", () => {
-    const expected = [path.join(resources, "app.asar"), electron, ...["hide", "hided", "hide-agent-hooks", "hide-holder", "herdr"].map(bundled)];
-    // herdr.exe finds its ConPTY runtime in the folder beside it, and a pane
-    // holder its own pinned one in holder-conpty.
-    if (process.platform === "win32") {
-      expected.push(path.join(resources, "conpty", "conpty.dll"), path.join(resources, "holder-conpty", "conpty.dll"));
-    }
+    const expected = [path.join(resources, "app.asar"), electron, ...["hide", "hided", "hide-agent-hooks", "hide-holder"].map(bundled)];
+    // A pane holder finds its pinned ConPTY runtime in holder-conpty.
+    if (process.platform === "win32") expected.push(path.join(resources, "holder-conpty", "conpty.dll"));
     const absent = expected.filter((file) => !fs.statSync(file, { throwIfNoEntry: false })?.isFile());
     if (absent.length > 0) throw new Error(`missing: ${absent.map((file) => path.relative(app, file)).join(", ")}`);
+    // No package carries Herdr (PRD engine-bundle-4-herdr-removal D-2).
+    const herdr = [bundled("herdr"), path.join(resources, "conpty")].filter((file) => fs.existsSync(file));
+    if (herdr.length > 0) throw new Error(`carries Herdr: ${herdr.map((file) => path.relative(app, file)).join(", ")}`);
   });
 
   // What every process below runs with: the account's places moved under the
@@ -109,11 +107,8 @@ try {
     XDG_CONFIG_HOME: path.join(home, ".config"),
     CODEX_HOME: path.join(home, ".codex"),
     CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
-    HERDR_SOCKET_PATH: path.join(scratch, "herdr.sock"),
     HIDE_STATE_DIR: state,
     HIDE_TAILSCALE_BIN: path.join(home, "no-tailscale"),
-    // What the desktop host hands every `hide` child it starts.
-    HERDR_BIN_PATH: bundled("herdr"),
   });
   delete isolated.XDG_STATE_HOME;
 
@@ -134,13 +129,6 @@ try {
       hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo smoke-foreign" }] }] },
     }));
   }
-
-  check("herdr --version", () => {
-    const pinned = JSON.parse(fs.readFileSync(path.join(repo, "contracts", "herdr-bundle.json"), "utf8")).version;
-    const reported = output(bundled("herdr"), ["--version"], isolated);
-    if (reported.split(/\s+/).at(-1) !== pinned) throw new Error(`reports '${reported}', the pin is ${pinned}`);
-    return reported;
-  });
 
   // A device runs this same program in its node role.
   check("hided node --version", () => {
@@ -201,7 +189,7 @@ try {
   const upgraded = path.join(scratch, "new 한글 package");
   check("prepare a second complete package", () => {
     copyTree(app, upgraded);
-    for (const file of ["app.asar", ...["hide", "hided", "hide-agent-hooks", "herdr"].map((name) => `${name}${exe}`)]) {
+    for (const file of ["app.asar", ...["hide", "hided", "hide-agent-hooks", "hide-holder"].map((name) => `${name}${exe}`)]) {
       if (!fs.statSync(path.join(upgraded, "resources", file), { throwIfNoEntry: false })?.isFile()) {
         const holds = (dir) => (fs.existsSync(path.join(dir, "resources")) ? fs.readdirSync(path.join(dir, "resources")).join(", ") : "no resources folder");
         throw new Error(`second package is missing resources/${file}; its resources hold: ${holds(upgraded)}; the installed package's hold: ${holds(app)}`);

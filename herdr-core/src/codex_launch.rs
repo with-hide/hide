@@ -150,14 +150,8 @@ mod tests {
         unavailable.unavailable = Some(crate::model::KitUnavailable::Standalone);
         for kit in [kit(None), unavailable, KitSnapshot::default()] {
             for args in [vec![], strings(&["resume", "a"]), strings(&["--no-daemon"])] {
-                let error = crate::engine::herdr::wire::agent_start_params(
-                    "pane",
-                    "agent",
-                    "codex",
-                    args,
-                    CodexDaemon::from_kit(&kit),
-                )
-                .unwrap_err();
+                let error =
+                    start_arguments("codex", CodexDaemon::from_kit(&kit), args).unwrap_err();
                 assert_eq!(error, CAPABILITY_UNKNOWN);
             }
         }

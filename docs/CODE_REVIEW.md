@@ -38,7 +38,7 @@ So every review covers the perspectives below, and names the perspective of each
 ### 4. Module boundaries
 
 - One part does one job; a component that both decides and transports, or both renders and queries, is split.
-- Code outside a boundary that knows what is behind it (for Herdr, `docs/ARCHITECTURE.md` and `scripts/check-engine-boundary.py` say where that boundary is).
+- Code outside a boundary that knows what is behind it (for the pane engine, `docs/ARCHITECTURE.md` says where that boundary is).
 - New code that a planned removal will have to rewrite: a foundation laid on something already scheduled to go.
   Transition paths a removal needs are fine; a new feature built on the path being removed is not.
 

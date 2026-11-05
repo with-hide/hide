@@ -72,7 +72,7 @@ pub fn next_action(code: &str) -> &'static str {
         "workspace_create_refused_not_a_directory" => "Give a folder on that device, not a file",
         "workspace_remove_in_flight" => "Wait for the project's panes to close, then run it again",
         "workspace_control_unavailable" | "workspace_create_unavailable" => {
-            "Check that Hide's Herdr server, or the device's connection, is running, then retry"
+            "Check that Hide, or the device's connection, is running, then retry"
         }
         "project_open_busy" => "Wait for the other folders being added, then retry",
         "project_open_unconfirmed" => {

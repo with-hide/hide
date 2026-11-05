@@ -1438,7 +1438,7 @@ fn removing_a_registration_with_panes_needs_a_live_connection() {
     );
     let error = runtime.snapshot.status.last_error.clone().unwrap();
     assert_eq!(error.kind, "workspace.remove_failed");
-    assert!(error.message.contains("live Herdr connection"));
+    assert!(error.message.contains("live engine connection"));
 }
 
 /// B2, B4, B5, B10. Pinning moves the registered row ahead of its device's
@@ -1946,7 +1946,7 @@ fn cleanup_review_without_live_state_is_visible_and_never_deletes() {
             shown[field]
                 .as_str()
                 .unwrap()
-                .contains("live Herdr connection"),
+                .contains("live engine connection"),
             "{field}"
         );
     }
@@ -3778,6 +3778,57 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
     }
 }
 
+/// A woken agent's pane still shows its last run's screen, which the engine
+/// reads at rest before the program it started again takes input, and its
+/// hook's last report, a finished turn, is the last run's. While the start
+/// is pending the row says Starting, so neither the operator nor a journey
+/// reads it ready and types into a program that drops the keys (journeys
+/// 41929631031 and 41937427750); work it does shows as work, a turn the
+/// engine saw end since the start reads as it rests, and the row reads at
+/// rest once the start settles.
+#[test]
+fn an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests() {
+    let mut runtime = runtime();
+    let status = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == "w1:p9")
+            .map(|agent| agent.status_code)
+            .expect("the woken agent's row")
+    };
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "idle", 7, true))));
+    assert_eq!(
+        status(&runtime),
+        AgentStatusCode::Starting,
+        "pending, at rest"
+    );
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "working", 8, true))));
+    assert_eq!(
+        status(&runtime),
+        AgentStatusCode::Working,
+        "pending, working"
+    );
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "done", 9, true))));
+    assert_eq!(
+        status(&runtime),
+        AgentStatusCode::Starting,
+        "pending, the last run's turn finished"
+    );
+    let mut ended = starting_task_agent(Some("codex"), "done", 10, true);
+    ended.agents[0].completion_seq = Some(10);
+    assert!(runtime.ingest_session(Ok(ended)));
+    assert_ne!(
+        status(&runtime),
+        AgentStatusCode::Starting,
+        "pending, a turn the engine saw end since the start"
+    );
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "idle", 11, false))));
+    assert_eq!(status(&runtime), AgentStatusCode::Idle, "settled");
+}
+
 /// The chosen agent starts after the creation is published, and its answer
 /// lands on its own axis: a failure keeps the created pane and path, and only
 /// a definite failure is offered again.
@@ -4408,8 +4459,6 @@ fn primary_checkout_switch_survives_restart_and_catalog_refresh() {
                 home: None,
                 app_state_path: state_path.to_string_lossy().into_owned(),
                 node_id: crate::node::test_node(),
-                herdr_socket_path: None,
-                herdr_bin_path: None,
                 host_helper_root: None,
                 host_cli_dir: None,
                 workspace_views_path: None,

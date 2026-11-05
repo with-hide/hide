@@ -46,10 +46,6 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
             .is_none_or(|token| token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()))
         && match &request.command {
             HookCommand::WorkspaceInfo {} => true,
-            HookCommand::Observation { observation }
-            | HookCommand::StartObservation { observation } => {
-                herdr_core::direct_observation::valid(observation)
-            }
             HookCommand::Memory {
                 event,
                 runtime,
@@ -82,12 +78,6 @@ pub(crate) fn answer(
 ) -> Value {
     let result = match &request.command {
         HookCommand::WorkspaceInfo {} => workspace_info(core, cap, desktop),
-        HookCommand::Observation { observation } => {
-            observation_answer(core, cap, observation, false)
-        }
-        HookCommand::StartObservation { observation } => {
-            observation_answer(core, cap, observation, true)
-        }
         HookCommand::LetterPull {
             prompt_digest,
             session,
@@ -143,37 +133,6 @@ pub(crate) fn answer(
     } else {
         answer
     }
-}
-
-fn observation_answer(
-    core: &CoreHandle,
-    cap: &Capability,
-    observation: &hide_node_link::panes::DirectObservation,
-    start: bool,
-) -> Result<Value, Failure> {
-    let deadline = Instant::now() + hide_node_link::panes::OBSERVATION_SEND_BUDGET;
-    let result = cap
-        .pane_terminal()
-        .ok_or("observation_agent_pane_required".to_owned())
-        .and_then(|terminal| {
-            core.prepare_direct_observation(
-                &cap.context.device_id,
-                &cap.pane_id,
-                &cap.context,
-                terminal.to_owned(),
-                observation.clone(),
-                start,
-                deadline,
-            )
-        })
-        .and_then(|prepared| prepared.run());
-    result.map(|()| json!({"queued":true})).map_err(|reason| {
-        herdr_core::diagnostic!(
-            json!({"component":"observation","kind":"observation.refused",
-            "pane":cap.pane_id,"device":cap.context.device_id,"reason":reason})
-        );
-        (reason, "Continue without the passive observation")
-    })
 }
 
 /// A report names a known agent and, when it names one, a session id the

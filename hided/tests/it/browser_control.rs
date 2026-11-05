@@ -45,11 +45,6 @@ async fn desktop_registration_requires_daemon_auth_and_local_origin() {
     let env = Env {
         home: dir.path().into(),
         state_dir: dir.path().into(),
-        herdr_socket_path: None,
-        herdr_move_socket: None,
-        herdr_bin_path: None,
-        own_engine: false,
-        login_shell: None,
         legacy_state_dir: None,
         account_state_folder: false,
         keep_alive: true,

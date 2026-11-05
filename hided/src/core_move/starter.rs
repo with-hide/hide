@@ -243,7 +243,6 @@ mod tests {
             pid,
             port: 1,
             token: String::new(),
-            socket: None,
             started_at: String::new(),
             pid_started,
         };

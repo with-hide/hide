@@ -1232,10 +1232,13 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
             let result =
                 engine.move_pane_to_new_tab(CALL_WAIT, &current, &intent.workspace_id, "")?;
             if !result.changed {
-                return Err(format!("Herdr refused the pane move: {:?}", result.reason));
+                return Err(format!(
+                    "The engine refused the pane move: {:?}",
+                    result.reason
+                ));
             }
             if result.terminal_id != intent.terminal_id {
-                return Err("Herdr returned a different terminal identity".into());
+                return Err("The engine returned a different terminal identity".into());
             }
             current = result.pane_id;
         }
@@ -1247,10 +1250,13 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
             matches!(edge, Edge::Up | Edge::Down),
         )?;
         if !result.changed {
-            return Err(format!("Herdr refused the pane move: {:?}", result.reason));
+            return Err(format!(
+                "The engine refused the pane move: {:?}",
+                result.reason
+            ));
         }
         if result.terminal_id != intent.terminal_id {
-            return Err("Herdr returned a different terminal identity".into());
+            return Err("The engine returned a different terminal identity".into());
         }
         if matches!(edge, Edge::Left | Edge::Up) {
             engine.swap_panes(CALL_WAIT, &result.pane_id, &pane)?;
@@ -1258,10 +1264,13 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
     } else {
         let result = engine.move_pane_to_new_tab(CALL_WAIT, &current, &intent.workspace_id, "")?;
         if !result.changed {
-            return Err(format!("Herdr refused the pane move: {:?}", result.reason));
+            return Err(format!(
+                "The engine refused the pane move: {:?}",
+                result.reason
+            ));
         }
         if result.terminal_id != intent.terminal_id {
-            return Err("Herdr returned a different terminal identity".into());
+            return Err("The engine returned a different terminal identity".into());
         }
     }
     Ok(())
@@ -1660,7 +1669,7 @@ fn same_placement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, refused, reply, session};
     use serde_json::json;
 
     fn intent(edge: Edge, target_tab: &str) -> Intent {
@@ -1709,12 +1718,21 @@ mod tests {
         json!({"x":x,"y":y,"width":width,"height":height})
     }
 
-    fn moved(pane: &str, tab: &str, terminal: &str) -> serde_json::Value {
-        json!({"type":"pane_move","move_result":{
-            "changed":true,"previous_pane_id":"w1:p1","previous_workspace_id":"w1","previous_tab_id":"w1:t1",
-            "pane":{"pane_id":pane,"terminal_id":terminal,"workspace_id":"w1","tab_id":tab,"focused":false,"agent_status":"unknown","revision":1},
-            "target_layout":{"workspace_id":"w1","tab_id":tab,"zoomed":false,"area":rect(0,0,80,24),"focused_pane_id":pane,"panes":[{"pane_id":pane,"focused":true,"rect":rect(0,0,80,24)}],"splits":[]},"focused_pane_id":pane
-        }})
+    fn moved(pane: &str, tab: &str, terminal: &str) -> crate::engine::fake::Reply {
+        reply(crate::engine::PaneJoinResult {
+            changed: true,
+            reason: None,
+            workspace_id: "w1".into(),
+            tab_id: tab.into(),
+            pane_id: pane.into(),
+            terminal_id: terminal.into(),
+            previous_workspace_id: "w1".into(),
+            previous_tab_id: "w1:t1".into(),
+            previous_pane_id: "w1:p1".into(),
+            closed_tab_id: None,
+            closed_workspace_id: None,
+            created_tab_id: None,
+        })
     }
 
     #[test]
@@ -1959,67 +1977,43 @@ mod tests {
     #[test]
     fn same_tab_insertion_detaches_once_and_swaps_only_for_left_or_up() {
         for edge in [Edge::Left, Edge::Right, Edge::Up, Edge::Down] {
-            let mut moves = 0;
-            let server = FakeHerdr::start("pane-move-same-tab", move |method, _| match method {
-                "pane.zoom" | "pane.swap" => json!({"type":"ok"}),
-                "pane.move" => {
-                    moves += 1;
-                    moved(
-                        "w1:p1",
-                        if moves == 1 { "w1:temporary" } else { "w1:t1" },
-                        "term-original",
-                    )
-                }
+            let server = FakeEngine::start(|method, _| match method {
+                "set_zoom" | "swap_panes" => reply(()),
+                "move_pane_to_new_tab" => moved("w1:p1", "w1:temporary", "term-original"),
+                "move_pane_beside" => moved("w1:p1", "w1:t1", "term-original"),
                 other => panic!("unexpected request {other}"),
             });
             execute(server.engine().as_ref(), &intent(edge, "w1:t1"), true).unwrap();
-            let calls = server.calls();
-            let moving = calls
-                .iter()
-                .filter(|(method, _)| method == "pane.move")
-                .collect::<Vec<_>>();
-            assert_eq!(moving.len(), 2);
-            assert_eq!(moving[0].1["destination"]["type"], "new_tab");
-            assert_eq!(moving[1].1["destination"]["type"], "tab");
+            assert_eq!(server.calls_of("move_pane_to_new_tab").len(), 1);
+            let beside = server.calls_of("move_pane_beside");
+            assert_eq!(beside.len(), 1);
+            assert_eq!(beside[0]["down"], matches!(edge, Edge::Up | Edge::Down));
             assert_eq!(
-                moving[1].1["destination"]["split"],
-                if matches!(edge, Edge::Up | Edge::Down) {
-                    "down"
-                } else {
-                    "right"
-                }
-            );
-            assert!(moving.iter().all(|(_, params)| params["focus"] == false));
-            assert_eq!(
-                calls
-                    .iter()
-                    .filter(|(method, _)| method == "pane.swap")
-                    .count(),
+                server.calls_of("swap_panes").len(),
                 usize::from(matches!(edge, Edge::Left | Edge::Up))
             );
-            assert!(calls.iter().all(|(method, _)| !matches!(
-                method.as_str(),
-                "pane.split" | "layout.apply" | "tab.create"
-            )));
         }
     }
 
     #[test]
     fn a_lost_or_refused_move_answer_is_never_replayed() {
-        let server = FakeHerdr::start_with_errors("pane-move-refusal", |method, _| match method {
-            "pane.zoom" => Ok(json!({"type":"ok"})),
-            "pane.move" => Err(("target_pane_not_found".into(), "target ended".into())),
+        let server = FakeEngine::start(|method, _| match method {
+            "set_zoom" => reply(()),
+            "move_pane_beside" => refused("target_pane_not_found", "target ended"),
             other => panic!("unexpected {other}"),
         });
         assert!(execute(server.engine().as_ref(), &intent(Edge::Left, "w1:t2"), true).is_err());
-        assert_eq!(server.methods(), ["pane.zoom", "pane.zoom", "pane.move"]);
+        assert_eq!(
+            server.methods(),
+            ["set_zoom", "set_zoom", "move_pane_beside"]
+        );
     }
 
     #[test]
     fn changed_terminal_on_detach_stops_before_the_join() {
-        let server = FakeHerdr::start("pane-move-identity", |method, _| match method {
-            "pane.zoom" => json!({"type":"ok"}),
-            "pane.move" => moved("w1:p1", "w1:temporary", "another-terminal"),
+        let server = FakeEngine::start(|method, _| match method {
+            "set_zoom" => reply(()),
+            "move_pane_to_new_tab" => moved("w1:p1", "w1:temporary", "another-terminal"),
             other => panic!("unexpected {other}"),
         });
         assert!(
@@ -2031,7 +2025,7 @@ mod tests {
             .unwrap_err()
             .contains("different terminal")
         );
-        assert_eq!(server.methods(), ["pane.zoom", "pane.move"]);
+        assert_eq!(server.methods(), ["set_zoom", "move_pane_to_new_tab"]);
     }
 
     #[test]
@@ -2075,9 +2069,7 @@ mod tests {
     }
     #[test]
     fn failed_durable_save_sends_no_native_request() {
-        let server = FakeHerdr::start("pane-move-save-refusal", |method, _| {
-            panic!("save failure sent {method}")
-        });
+        let server = FakeEngine::start(|method, _| panic!("save failure sent {method}"));
         let runtime = crate::runtime::tests::SharedRuntime::new(crate::runtime::tests::runtime());
         let intent = intent(Edge::Right, "w1:t2");
         runtime.lock().unwrap().record_pane_move(intent.clone());
@@ -2122,7 +2114,7 @@ mod tests {
     }
     #[test]
     fn refusal_restores_only_original_zoomed_tab_and_original_keyboard_target() {
-        let server = FakeHerdr::start("pane-move-restore-zoom", |_, _| json!({"type":"ok"}));
+        let server = FakeEngine::start(|_, _| reply(()));
         let mut before = payload(rect(0, 0, 40, 24), rect(40, 0, 40, 24));
         before.layouts[0].zoomed = true;
         restore_refused_presentation(
@@ -2134,27 +2126,25 @@ mod tests {
         assert_eq!(
             server.calls(),
             vec![
-                ("pane.zoom".into(), json!({"pane_id":"w1:p2","mode":"on"})),
-                ("pane.focus".into(), json!({"pane_id":"w1:p2"}))
+                ("set_zoom", json!({"pane":"w1:p2","zoom":true})),
+                ("focus_pane", json!({"pane":"w1:p2"}))
             ]
         );
     }
-    fn native_snapshot() -> serde_json::Value {
-        let layout =
-            moved("w1:p1", "w1:t1", "term-original")["move_result"]["target_layout"].clone();
-        json!({"type":"session_snapshot","snapshot":{
-            "protocol":crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION,"version":"fixture",
-            "focused_workspace_id":"w1","focused_tab_id":"w1:t1","focused_pane_id":"w1:p1",
+    fn native_snapshot() -> crate::session_sync::ProjectionState {
+        let layout = json!({"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":rect(0,0,80,24),"focused_pane_id":"w1:p1","panes":[{"pane_id":"w1:p1","rect":rect(0,0,80,24)}],"splits":[]});
+        session(json!({
+            "focused_workspace_id":"w1","focused_pane_id":"w1:p1",
             "workspaces":[{"workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"unknown"}],
             "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":1,"agent_status":"unknown"}],
             "panes":[{"pane_id":"w1:p1","terminal_id":"term-original","workspace_id":"w1","tab_id":"w1:t1","focused":true,"agent_status":"unknown","revision":1}],
             "layouts":[layout],"agents":[]
-        }})
+        }))
     }
     #[test]
     fn explicit_check_settles_confirmed_unintended_location_without_repeating_effects() {
-        let server = FakeHerdr::start("pane-move-check-only", |method, _| match method {
-            "session.snapshot" => native_snapshot(),
+        let server = FakeEngine::start(|method, _| match method {
+            "session" => reply(native_snapshot()),
             other => panic!("status check mutated {other}"),
         });
         let runtime = crate::runtime::tests::SharedRuntime::new(crate::runtime::tests::runtime());
@@ -2181,11 +2171,6 @@ mod tests {
         assert!(operation.retryable);
         assert!(!guard.pane_move_holds_tab("w1:t1"));
         assert!(!guard.pane_move_holds_tab("w1:t2"));
-        assert!(
-            server
-                .methods()
-                .iter()
-                .all(|method| method == "session.snapshot")
-        );
+        assert!(server.methods().iter().all(|method| *method == "session"));
     }
 }

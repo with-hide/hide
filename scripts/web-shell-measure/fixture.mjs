@@ -1,18 +1,16 @@
 #!/usr/bin/env node
-// The measured topology made the way the web shell makes it, on either engine
-// (PRD engine-bundle-3-core-owns D-15, D-24): every workspace, tab and split
-// is one typed event on the daemon's WebSocket (`create_workspace`,
-// `create_tab`, `create_pane`), and the ids come back from the snapshot
-// frames, so a Herdr run and an own-engine run of the same build start from
-// the same fixture, measured in a primary Git checkout on both engines.
+// The measured topology made the way the web shell makes it (PRD
+// engine-bundle-3-core-owns D-15, D-24): every workspace, tab and split is one
+// typed event on the daemon's WebSocket (`create_workspace`, `create_tab`,
+// `create_pane`), and the ids come back from the snapshot frames, so two
+// builds start from the same fixture, measured in a primary Git checkout.
 // Scales (PRD instant-pane-topology D-18):
 //   keys:     the measured checkout with five panes in one tab
 //   none:     the measured checkout, its pane and the tab switch target
 //   operator: 43 workspaces, 62 tabs, 66 panes, 5 printing
 //   double:   86 workspaces, 124 tabs, 132 panes, 10 printing
-// No pane reports an agent: a report is Herdr's own call (`pane
-// report-agent`) and has no daemon event, so neither engine's fixture has
-// one. A printing pane is a split whose folder holds the `.measure-go` FIFO
+// No pane reports an agent: a report has no daemon event, so the fixture has
+// none. A printing pane is a split whose folder holds the `.measure-go` FIFO
 // the private `.zshrc` (run.sh) blocks on; `drive` writes to each.
 // usage (from run.sh, in the isolated environment):
 //   fixture.mjs build <none|operator|double|keys>  -> fixture.json, scale.json

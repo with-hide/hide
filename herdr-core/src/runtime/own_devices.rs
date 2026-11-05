@@ -1,19 +1,15 @@
 //! The core's own engine on devices (PRD engine-bundle-3-core-owns D-22,
-//! B35): with the development switch `HIDE_DEV_PANE_HOLDER` on, a device the
-//! core dials (over SSH, or a WSL distribution of this PC) runs no Herdr; its
-//! node runs pane holders, and the core keeps the device's session itself,
-//! in an engine of its own for that device, as it keeps this machine's.
+//! B35, engine-bundle-4-herdr-removal D-10): a device (one the core dials
+//! over SSH, a WSL distribution of this PC, or a node that dials the core)
+//! runs no Herdr; its node runs pane holders, and the core keeps the
+//! device's session itself, in an engine of its own for that device, as it
+//! keeps this machine's.
 //!
 //! The engine lives as long as one link: it is opened, off the runtime lock,
 //! once the device's node is ready, and let go when that link ends, which
 //! saves its session. A node that starts again (every new link starts its
 //! node) is laid out again from that save around the holders it finds, so
-//! a pane whose holder ran on keeps its id and its process. A node that
-//! dials this core keeps its Herdr: only a dialed device is the core's to
-//! run.
-//!
-//! With the switch off nothing here runs, and a device's session is its
-//! Herdr's, as it always was.
+//! a pane whose holder ran on keeps its id and its process.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,16 +32,16 @@ impl Runtime {
         self.own_devices = Some(OwnDevices { state_dir });
     }
 
-    /// Whether this core runs on its own engine: the switch is on, so the
-    /// devices it dials run on it too (`run_devices_on_own_engine`).
+    /// Whether this core runs on its own engine, so its devices run on it
+    /// too (`run_devices_on_own_engine`).
     pub(super) fn runs_own_engine(&self) -> bool {
         self.own_devices.is_some()
     }
 
-    /// Whether `registration`'s panes run on the core's own engine: the
-    /// switch is on and the core dials the device.
-    pub(super) fn device_on_own_engine(&self, registration: &DeviceRegistration) -> bool {
-        self.own_devices.is_some() && registration.origin.core_redials()
+    /// Whether `registration`'s panes run on the core's own engine: the core
+    /// runs on it.
+    pub(super) fn device_on_own_engine(&self, _registration: &DeviceRegistration) -> bool {
+        self.own_devices.is_some()
     }
 
     /// The device's node is ready on `link` for attempt `generation`: opens
@@ -284,8 +280,7 @@ impl Runtime {
     }
 
     /// The engines of the devices on the core's own engine, whose
-    /// definitions follow the core's reads as this machine's do; a device
-    /// that dials the core keeps its Herdr, which reads its own.
+    /// definitions follow the core's reads as this machine's do.
     pub(crate) fn own_device_engines(&self) -> Vec<crate::engine::SharedEngine> {
         if self.own_devices.is_none() {
             return Vec::new();

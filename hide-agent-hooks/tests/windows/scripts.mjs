@@ -19,7 +19,7 @@ const fixture = (path) => JSON.parse(readFileSync(new URL(`../fixtures/${path}`,
 // A slow runner can miss a prompt's budget, and the script then gives the guidance to a later prompt.
 const PROMPTS = 3;
 
-Object.assign(process.env, { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "\\\\.\\pipe\\herdr-fixture" });
+Object.assign(process.env, { HIDE_PANE_ID: "w1:p1" });
 const module = await import(pathToFileURL(process.env.HIDE_SCRIPT).href);
 
 async function opencode() {

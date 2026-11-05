@@ -19,7 +19,6 @@ import {
   kitConsentTerms as kitConsentTermsIn,
   kitRemovalLine as kitRemovalLineIn,
   herdrLine as herdrLineIn,
-  herdrProtocolText as herdrProtocolTextIn,
   hostLine as hostLineIn,
   kitPartLine as kitPartLineIn,
   kitPartNeedsReinstall,
@@ -28,7 +27,6 @@ import {
   shownIn,
   sleepAfterLabel,
   SLEEP_AFTER_CHOICES,
-  socketProblem as socketProblemIn,
   usableAccent,
   usableFontSize,
   usableTerminalFontFamily,
@@ -41,7 +39,7 @@ import type { Device, DeviceHost, DeviceProblem, Kit, KitComponent, RemoteStatus
 // The English strings are what the sheet shipped with; the rules read the same under them.
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
-const deviceSubtitle = (device: Device, remote: RemoteStatus | undefined) => deviceSubtitleIn(device, remote, t);
+const deviceSubtitle = (device: Device) => deviceSubtitleIn(device, t);
 const deviceAwayLine = (patch: Partial<Device>, name = "Mac mini") => deviceAwayLineIn(device(patch), name, t);
 const deviceProblemLine = (problem: DeviceProblem | null | undefined, alias: string | null, platform?: string) => deviceProblemLineIn(problem, alias, t, platform);
 const deviceRemovalLines = (deviceId: string, registrations: Parameters<typeof deviceRemovalLinesIn>[1], tabs: Parameters<typeof deviceRemovalLinesIn>[2], drafts: Parameters<typeof deviceRemovalLinesIn>[3], onlyExported: (tabId: string) => boolean = () => false) =>
@@ -50,11 +48,9 @@ const deviceLine = (device: Device, remote: RemoteStatus | undefined) => deviceL
 const kitConsentTerms = (helperRoot: string | null, cliDir: string | null) => kitConsentTermsIn(helperRoot, cliDir, t);
 const kitRemovalLine = (device: Device) => kitRemovalLineIn(device, t);
 const herdrLine = (herdr: Parameters<typeof herdrLineIn>[0]) => herdrLineIn(herdr, t);
-const herdrProtocolText = (herdr: Parameters<typeof herdrProtocolTextIn>[0]) => herdrProtocolTextIn(herdr, t);
 const hostLine = (host: DeviceHost | undefined) => hostLineIn(host, t);
 const kitPartLine = (part: KitComponent) => kitPartLineIn(part, t);
 const kitPartText = (part: Pick<KitComponent, "state" | "why">) => kitPartTextIn(part, t);
-const socketProblem = (path: string) => socketProblemIn(path, t);
 
 const device = (patch: Partial<Device>): Device => ({ agent_scope: emptyScope(),
   id: "studio",
@@ -69,16 +65,15 @@ const device = (patch: Partial<Device>): Device => ({ agent_scope: emptyScope(),
 });
 
 describe("where settings live and what a device reported", () => {
-  it("names a device by its alias, its platform and its Herdr version, and only as far as the device reported them", () => {
-    expect(deviceSubtitle(device({}), undefined)).toBe("studio");
+  it("names a device by its alias and its platform, and only as far as the device reported them", () => {
+    expect(deviceSubtitle(device({}))).toBe("studio");
     const host = { state: "ready", platform: "macos aarch64" } as DeviceHost;
-    const status = { target_id: "studio", state: "connected", message: null, herdr_version: "0.9.1" };
-    expect(deviceSubtitle(device({ host }), status)).toBe("studio · macos aarch64 · Herdr 0.9.1");
-    expect(deviceSubtitle(device({ host: { ...host, state: "connecting" } }), status)).toBe("studio · Herdr 0.9.1");
-    expect(deviceSubtitle(device({ kind: "local", host }), status)).toBe("local, no SSH alias");
+    expect(deviceSubtitle(device({ host }))).toBe("studio · macos aarch64");
+    expect(deviceSubtitle(device({ host: { ...host, state: "connecting" } }))).toBe("studio");
+    expect(deviceSubtitle(device({ kind: "local", host }))).toBe("local, no SSH alias");
     // PRD wsl-device B5: a WSL distribution is named where it is, the core's PC, in place of its Linux platform.
     const wsl = device({ id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", ssh_alias: null, wsl_distro: "Ubuntu", host: { ...host, platform: "linux x86_64" } });
-    expect(deviceSubtitleIn(wsl, { ...status, target_id: wsl.id }, t, "This PC")).toBe("WSL Ubuntu · This PC · Herdr 0.9.1");
+    expect(deviceSubtitleIn(wsl, t, "This PC")).toBe("WSL Ubuntu · This PC");
   });
 
   it("draws every ssh failure as one of three states: sign in, the server key, or cannot connect (operator decision 2026-10-30)", () => {
@@ -202,7 +197,7 @@ describe("settings rules", () => {
 
   it("tells pending, failed and connected devices apart and offers Retry only when it is a new attempt", () => {
     expect(deviceLine(device({ state: "ready" }), undefined).tone).toBe("ok");
-    const waiting = { target_id: "studio", state: "not_connected", message: null, herdr_version: null };
+    const waiting = { target_id: "studio", state: "not_connected", message: null };
     expect(deviceLine(device({}), waiting).tone).toBe("pending");
     expect(canRetryDevice(device({}), waiting)).toBe(false);
     const failed = { ...waiting, state: "unreachable" };
@@ -212,16 +207,10 @@ describe("settings rules", () => {
     expect(canRetryDevice(device({ kind: "local", state: "local" }), undefined)).toBe(false);
   });
 
-  it("names a protocol mismatch rather than a bare state", () => {
-    expect(herdrLine({ state: "protocol_mismatch", expected_protocol: 3, received_protocol: 2 }).tone).toBe("error");
+  it("words the terminal engine's connection from the core's state", () => {
+    expect(herdrLine({ state: "socket_missing" })).toEqual({ text: "The terminal engine is not running.", tone: "warn" });
     expect(herdrLine({ state: "connected" }).text).toBe("Connected");
     expect(herdrLine(undefined).text).toBe("unavailable");
-  });
-
-  it("shows the protocol as one real number while it matches, and both numbers only when it does not (B5)", () => {
-    expect(herdrProtocolText({ state: "connected", expected_protocol: 22, received_protocol: 22 })).toEqual({ text: "22", matches: true });
-    expect(herdrProtocolText({ state: "protocol_mismatch", expected_protocol: 23, received_protocol: 22 })).toEqual({ text: "22 (expects 23)", matches: false });
-    expect(herdrProtocolText({ state: "socket_missing" })).toEqual({ text: "unavailable", matches: true });
   });
 
   it("copies diagnostics without the page token or any secret-shaped value", () => {
@@ -249,7 +238,8 @@ describe("settings rules", () => {
       userAgent: "test",
     });
     expect(text).toContain("hided 0.1.0 pid 42");
-    expect(text).toContain("herdr binary: unavailable");
+    expect(text).toContain("engine: connected");
+    expect(text).not.toMatch(/herdr/i);
     expect(text).not.toContain(token);
     expect(text).not.toContain("abc123");
     for (const privateText of ["ghp_Q9z", "q7Z", "someone@example.invalid", "/Users/example"]) expect(text).not.toContain(privateText);
@@ -279,25 +269,19 @@ describe("settings rules", () => {
     expect(hostLine(host({ consent: "this_machine" })).tone).toBe("local");
   });
 
-  it("names every kit part and where it goes in the one consent, and refuses a relative device socket", () => {
+  it("names every kit part and where it goes in the one consent", () => {
     const lines = kitConsentTerms("/opt/hide", "/opt/bin");
     const terms = lines.join(" ");
     for (const named of ["/opt/hide", "/opt/bin", "hook helper", "old records are kept", "~/.claude/settings.json", "~/.codex/hooks.json"]) {
       expect(terms).toContain(named);
     }
     // The kit no longer touches Codex's daemon setting (PRD settings-cleanup D-12), so the consent says nothing of it.
-    expect(lines).toHaveLength(6);
-    expect(terms).toContain("starts a server when none runs");
-    expect(terms).toContain("Saved Herdr profiles keep their server");
-    expect(terms).toContain("Its Herdr server and files still in use stay");
+    expect(lines).toHaveLength(5);
+    expect(terms).not.toMatch(/Herdr/);
+    expect(terms).toContain("Files still in use stay");
     expect(terms).not.toMatch(/daemon_auto_start|per pane/);
     expect(terms).toContain("~/hide");
     expect(terms).not.toContain("changes no hook");
-    expect(socketProblem("")).toBeNull();
-    expect(socketProblem("/tmp/herdr.sock")).toBeNull();
-    expect(socketProblem("herdr.sock")).not.toBeNull();
-    expect(socketProblem("/")).not.toBeNull();
-    expect(socketProblem("/tmp/a\nb")).not.toBeNull();
   });
 });
 

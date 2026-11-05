@@ -146,7 +146,7 @@ pub fn silences_claude_hook<V>(variable: impl Fn(&str) -> Option<V>) -> bool {
 /// hooks it runs, its own and the Claude Code and Cursor hooks it loads beside
 /// them; `GROK_SESSION_ID` can also reach a program a Grok session started,
 /// such as a Claude Code launched from its shell, whose own hook must still
-/// count, so it does not decide this. (That Claude Code's spawn guard stays
+/// count, so it does not decide this. (That Claude Code's opener guard stays
 /// out as in any foreign session, `ForeignOrigin`.)
 pub fn inside_grok<V>(variable: impl Fn(&str) -> Option<V>) -> bool {
     variable("GROK_HOOK_EVENT").is_some()
@@ -412,9 +412,9 @@ pub enum HookEvent {
     /// is what clears a count left behind by a `SubagentStop` that never
     /// arrived (PRD B31, D-53).
     Stop,
-    /// A tool call is about to run. Hide's entry selects the shell tool by its
-    /// matcher and refuses only a call that starts an agent through Herdr
-    /// directly (`crate::spawn_guard`); every other call passes untouched.
+    /// A tool call is about to run. Hide's entry selects the tools by its
+    /// matcher and refuses only what a guard names (`crate::pre_tool`); every
+    /// other call passes untouched.
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,

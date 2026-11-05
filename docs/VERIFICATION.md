@@ -10,7 +10,7 @@ A claim is verified by the check that observes what a caller of the behavior obs
 
 | The change claims | Check | Owner |
 | --- | --- | --- |
-| Core state, a runtime event, a Herdr fixture, the hided wire | `bash scripts/verify-cargo.sh test` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
+| Core state, a runtime event, an engine fixture, the hided wire | `bash scripts/verify-cargo.sh test` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
 | Local mailbox intake, safe doorbells, durable watches and activity privacy | Named library checks plus actual isolated runtime observations | [delivery.md: Verification](delivery.md#verification) |
 | Web or desktop logic that needs no window | `bash scripts/verify-web.sh` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
 | A flow a user performs in the web shell | `pnpm --dir web e2e` | [Before an e2e run](#before-an-e2e-run) |
@@ -20,7 +20,7 @@ A claim is verified by the check that observes what a caller of the behavior obs
 | A screen matches its approved design | Gallery or isolated candidate captures under the approved conditions | [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md#visual-review) |
 | Responsiveness, rendering, CPU, or memory | The layered procedure | [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) |
 | The installed app carries the fix | A rebuilt package, then the identity checks | [dev-runtime.md](dev-runtime.md), [INSTALL.md](INSTALL.md#verify-the-installed-app) |
-| A remote device's behavior | A private Herdr on the device | [A device check](#a-device-check) |
+| A remote device's behavior | A private daemon and device home | [A device check](#a-device-check) |
 | Each supported agent works end to end in Hide | `python3 scripts/agent-journey-check.py` | [Agent journey](#agent-journey) |
 | Anything the rows above cannot reach yet | Manual QA on an isolated candidate | [Manual native QA](#manual-native-qa) |
 
@@ -38,9 +38,6 @@ Capture failures must preserve their primary outcome and report unconfirmed clea
 Existing-anchor regressions establish the canonical chain with real barriers before creating sibling home and state directories, reject links and untrusted leaves without mutation, and preserve identity through a reported barrier failure and explicit recovery that checks the existing chain again.
 Windows's pre-mutation `Unsupported` is fail-closed interim behavior, not cross-OS bootstrap completion, and callers must not become ready without an established parent-chain boundary.
 
-`python3 scripts/check-herdr-schema.py --herdr-bin <pinned binary>` compares the binary's own schema and version with the committed contract and manifest on macOS, Linux and Windows.
-It clears inherited `HERDR_*` and needs no server; the full zsh contract check delegates this same comparison before its live-server checks.
-The schema digest is canonical JSON (sorted keys, UTF-8, two-space indentation and a trailing newline).
 A configured nightly matrix proves no executed job, native input or package launch by itself.
 Record the actual head, attempt, job URLs, failures and skips; a package smoke with a private HOME or simulated hook does not prove a physical IME, an operator PATH or a real agent session.
 The macOS package job (nightly, and a pull request's `package` lane) extracts and checks the actual archive, then runs the existing isolated install-kit and packaged-app tests.
@@ -103,7 +100,7 @@ Read [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#2-identify-the-build-and-pr
 | `desktop/e2e/electron-window.ts` | The Electron process and sole BrowserWindow Playwright launched | The running candidate's renderer, without Screen Recording permission or OS focus; retains its PID, window id, bounds, build and capture method | OS window chrome, compositor presentation and native input; renderer captures do not prove those surfaces |
 | The window list below | PID to window id | Resolving the candidate's window id before each capture | |
 | open-computer-use (`ocu`, or its MCP server) | An app name or bundle id, never a PID | Reading the accessibility tree; `click` on an element index and `set_value` on a candidate whose name answers exactly one process | A packaged candidate while the operator's app runs; keyboard input into the renderer, which 0.3.5 does not deliver reliably to Chromium; `click_method: global` |
-| `herdr pane read <pane> --source recent --lines <N>` under the private socket | One pane | Terminal content without a screenshot | History of a Claude or Codex pane: they draw in the alternate screen, so `recent` is what is visible, and history comes from the transcript |
+| `hide pane read <pane> --lines <N>` run from a pane of the candidate | One pane | Terminal content without a screenshot | History of a Claude or Codex pane: they draw in the alternate screen, so the read is what is visible, and history comes from the transcript |
 
 A capture shows an old frame unless the candidate was launched with `--disable-backgrounding-occluded-windows`, because Chromium stops painting an occluded window.
 Before trusting open-computer-use's target, check that `ocu list-apps` shows the candidate's name once and that no other process answers it.
@@ -117,8 +114,8 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 
 ### Procedure
 
-1. Start a private Herdr server with the pinned binary and the isolation environment, and prove `herdr workspace list` is empty under that environment before creating fixtures.
-2. Clear every inherited `HERDR_*` and `HIDE_*` variable, then launch the candidate with its own `HOME`, `HIDE_STATE_DIR`, `HIDE_DESKTOP_USER_DATA_DIR`, and `HERDR_SOCKET_PATH`, and `HERDR_BIN_PATH` naming the pinned binary.
+1. Make a private `HOME` and state folder, and prove the candidate's state folder holds no session before creating fixtures.
+2. Clear every inherited `HERDR_*` and `HIDE_*` variable, then launch the candidate with its own `HOME`, `HIDE_STATE_DIR` and `HIDE_DESKTOP_USER_DATA_DIR`.
    Pass `--hide-show-inactive --disable-backgrounding-occluded-windows` so it opens behind the operator's windows and keeps painting: `pnpm --dir desktop dev --hide-show-inactive --disable-backgrounding-occluded-windows` appends them to `electron .`, and a `--` before them would reach Electron literally.
    The `host.start` line in `$HIDE_DESKTOP_USER_DATA_DIR/logs/desktop.log` records `packaged`, `version`, and `show_inactive`.
 3. Resolve the candidate's PID from the process your launch started, never by name, then its window id from the window list.
@@ -126,7 +123,7 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 4. Before each action, confirm the target again; after each action, observe again with a fresh capture, accessibility read, or pane read, rather than trusting the tool's success reply.
 5. Drive a scenario that needs real key semantics (an Enter or Tab override, a physical input method's key order, a chord through the menu, a pinch, a native drag) with a `@needs-focus` spec, or in a foreground window agreed with the operator.
    A scenario that cannot be driven either way is covered by tests and reported as not observed natively.
-6. Quit only what you launched, by exact PID, stop the private server with `herdr server stop` under the same environment, and check that no process of your run remains.
+6. Quit only what you launched, by exact PID, stop the private daemon with `hide stop` under the same environment, end the pane holders its state folder records (`web/e2e/pane-holders.mjs` names them), and check that no process of your run remains.
 
 ### Evidence
 
@@ -139,7 +136,7 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 ### Focused-area navigation
 
 `web/src/areaCycle.test.ts` checks full device/checkout/area identity for View areas, the Agent pane order across devices and checkouts, commit events, Agent cycling outside a View without inventing visits, and single-tab or retired View no-op boundaries.
-`web/e2e/recent.spec.ts` commits an Agent pane in another project on a real isolated Herdr, opens the list from the sidebar, Explorer and Overview, and keeps focused files in their own View scope.
+`web/e2e/recent.spec.ts` commits an Agent pane in another project on a real isolated daemon, opens the list from the sidebar, Explorer and Overview, and keeps focused files in their own View scope.
 `web/e2e/recent-agents-restart.spec.ts` restarts hided and reloads the page, then reaches an agent pane visited only before the restart from the same cycle.
 `desktop/e2e/keys.spec.ts` walks ⌃Tab over Agent panes in the desktop host, including from sidebar focus.
 The area renderer can be checked with Korean document fixtures in both themes and two widths, including unchanged geometry when keyboard ownership moves.
@@ -155,28 +152,11 @@ Run it only in an agreed foreground QA slot, using `pnpm --dir desktop exec play
 Record the candidate PID/window, private daemon/server/profile and build head beside the captures.
 Compare any temporary weak-blur proposal against the readable treatment in the actual terminal, document and native page, with idle and driven measurements, before choosing it.
 
-## Local agent bell measurement
+## Run isolation
 
-Run `python3 scripts/agent-live-check.py --agents codex --model codex=gpt-6-luna` before proposing a new bell target, after changing the pinned Herdr, and after a substantial agent CLI update.
-Omitting `--agents` selects every adapter declared by the current source.
-Confirm the cheapest suitable model for the logged-in account and pass `--model ID=MODEL`; recipe defaults can become unavailable.
-Fetch the pinned binary with `scripts/fetch-herdr-runtime.sh` first, and build this worktree's `hided` and `hide` with `bash scripts/verify-cargo.sh build -p hided`.
-The tool never builds, upgrades a CLI, logs in, or changes bell declarations.
-An unclassified startup menu remains measurable when the pinned CLI's readiness wait expires: its pane, workspace, cwd, agent kind and actual menu must match the owned launch before observation continues.
-Registration may still be absent after that timeout; if an agent name is present, it must match the requested name.
-Other startup refusals retain their screen and agent evidence without being counted as arrival.
-The startup scene never auto-selects trust, and a blocked startup receives no bell input.
-For other scenes, an observed recipe may prepare the owned folder by selecting its explicit trust option with Down and Enter before the scene baseline.
-Each key requires fresh matching pane, workspace, cwd, agent kind and selection evidence; an unknown option, changed identity, login prompt or missing ready composer prevents the scene from proceeding.
-Preparation has one scene deadline, two key attempts at most and at most four retained frames, saved separately from bell observations.
-The deadline starts before its first screen read; every screen query, identity query and key command receives only the remaining time, and late responses cannot authorize another key or readiness.
-Each command retains the 15-second cap and the same absolute launch deadline through receipt checks, registry setup and the guardian's child admission.
-Required teardown may finish after that deadline, but never renews permission to start another command.
-An actual received screen is retained immediately, even when its following deadline or identity check fails; unavailable identity remains null and never authorizes input.
-Scene arrival and post-bell observations likewise retain their latest received frame before authentication or identity checks, within the existing two-frame bound.
-The controller never writes shared operator trust files; any native-agent private probe key follows the shared-file observer and leftover policy below.
+The agent journey runs every agent inside the isolation `scripts/agent_live_check` holds: private state, the write sandbox, the process guardian and the configuration guards.
 
-The command starts the verified pinned Herdr on a private socket and this worktree's hided on private state, creates disposable Git checkouts, and attests their actual shells through the candidate `hide workspace bootstrap`.
+The journey (below) starts this worktree's hided on private state, creates disposable Git checkouts, and attests their actual shells through the candidate `hide workspace bootstrap`.
 It never opens a renderer or controls the installed app.
 Native agents keep the operator HOME for existing login.
 Supported per-command config roots use bounded private copies of existing authentication, with source/version provenance in each provider row.
@@ -218,7 +198,7 @@ A readable, birth-rechecked owner marker also identifies helpers that left the g
 A different live guardian's marker belongs to concurrent work and is excluded.
 Private issued marker families are retained under `agents/runs/process-owner-families/` so a fabricated scope prefix cannot claim a previous run.
 The registry has a locked 4096-family cap; exhausting it is a reported failure rather than an unbounded directory.
-The private Herdr server and hided also receive their protocol close before process teardown.
+hided also receives its protocol close before process teardown.
 Unrelated orphans whose environment is empty or unreadable are neither signalled nor treated as cleanup failures.
 The report lists these as "출처 확인 못 함" with only PID, birth and executable name, within a declared record cap.
 A known owned identity that becomes uninspectable still makes cleanup unconfirmed.
@@ -228,7 +208,7 @@ Those errors remain failures with exit 2; missing process confirmation retains t
 An unseen double-fork descendant that clears its marker and leaves the owned group may escape attribution; record this limitation in the PR's Review section.
 This ownership boundary follows the explicitly recorded B8/D-09 scope decision; it does not claim complete workstation process attribution.
 Linux fixture supervision uses a child subreaper and validates its procfs namespace and visibility before using process identities.
-The subreaper keeps an adopted process that ended as a zombie until the run's cleanup, and Herdr's pane close on Linux asks `kill(pid, 0)`, which a zombie answers, so Herdr logs `pane session still alive after forced shutdown` for an agent it did end; the warning is the harness's, and a desktop's init reaps the same process at once.
+The subreaper keeps an adopted process that ended as a zombie until the run's cleanup; a desktop's init reaps the same process at once.
 On Windows each child starts suspended and joins a job object of its own before it runs, so everything it starts is in the job (`scripts/agent_live_check/windows.py`, after hide-platform's `process`).
 The job holds the same caps, measured as Linux and macOS measure them: 128 processes, which the job itself refuses, and 2 GiB of resident memory, the working set of every process in the job summed every 0.1 s as a guardian sums RSS, so the three systems judge a run by one measure.
 This replaces the committed memory #1327 capped on Windows: Windows counts every page a process committed, touched or not, so that cap ended a run Linux and macOS pass within theirs.
@@ -238,37 +218,13 @@ A refused process or allocation reaches the owner through the job's completion p
 Output, the command time and the run time are capped by the same code as on Unix.
 A program Windows starts on a child's behalf (a service, a COM server, a scheduled task) is outside the job, and the report says so.
 Private files there carry an access list naming only this account and are checked by owner and access list (hide-platform's `fs`).
-The owned pane runs cmd.exe, named as Herdr's default shell with its prompt from `PROMPT`, as the web e2e's Herdr fixture does, and the launchers the run writes are `.cmd` files.
+The owned pane runs cmd.exe with its prompt from `PROMPT`, and the launchers the run writes are `.cmd` files.
 Darwin group enumeration uses Apple's [process-group API](https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c).
 Token lookup preserves the existing target-width alignment and birth checks and records no argument, environment or marker contents.
 Each Darwin token scan reuses one buffer of at most 1 MiB, supplies its full capacity for every query and interprets only that query's returned prefix.
 Bytes retained from a previous PID never establish another process's ownership.
-`--socket` and `--state-dir` cannot select operator routing, existing sockets, or state outside the new run.
+The run cannot select operator routing, existing sockets, or state outside the new run.
 
-Every recipe retains rest, working, shell approval, file approval, question, plan approval, model picker, resume picker, MCP approval and startup rows.
-MCP registration uses each CLI's documented project file or per-command override only for its MCP scene; recipe data records that source.
-Rest and resume share a disposable checkout and private session catalog.
-Supported native readers first observe a real previous user/assistant turn.
-Other providers seed a real prompt and require a positive native identity and a working-to-ready transition; that weaker history evidence cannot verify assistant text or mail.
-Resume arrival additionally requires that owned session's label, filename or identity on the picker screen.
-Missing history, an empty picker or an unobserved native transition remains unknown.
-The tool checks scene arrival independently of Herdr status, types the source's sample bell line (`SAMPLE` in `herdr-core/src/delivery/bell.rs`, a line the bell types for a letter whose first line carries `@`, `$`, `/`, `!`, `#`, backticks and Korean past the 60-character cut) and Enter only when the observed status is not `blocked`, then observes the effect.
-Approval work stays within `probe-N.txt` in the disposable checkout.
-A confirmed selection, approval, session replacement, settings write or unsubmitted draft is unsafe, even when other scenes remain unknown.
-An unrecognized, inaccessible or timed-out scene never counts as safe.
-These direct input experiments measure the CLI and Herdr detection boundary; they do not replace the core's draft, session, identity or plan-approval guards.
-
-Each new private `agents/runs/live-check-<timestamp>-<id>/` contains `report.md`, `report.json`, screen reads and private configuration backups.
-Reports record the actual binary digests, Herdr version, active server manifest versions and sources, CLI versions, selected models and positively observed native integration provenance.
-The verified pinned binary generates its own integration assets in a disposable HOME, then the tool routes them through documented provider settings while preserving the authenticated provider's operator HOME.
-The loaded-version claim requires an isolated configuration route, unchanged prepared artifact hashes, one common version across its possible native emitters and a native session report, sampled again after the first turn.
-Prepared files are inventoried separately; the claim does not say every prepared frontend asset loaded.
-A stable change to an ordinary bounded private integration artifact invalidates loaded-version provenance for the rest of that provider run, including after the original bytes return or native session visibility disappears.
-The report retains the relative artifact name and changed stamp fields, without changed contents or their hashes, and refuses a positive safety aggregate while preserving any confirmed unsafe scene.
-Known integrity loss is published even if a later artifact refusal or native query stops that observation; the original fatal error and cleanup failure ordering remain intact.
-Artifact reads open ancestor directories without following links; path, alias, file type, owner, link count, size, missing-artifact and unstable-read failures still stop the run.
-Each integration observation reserves its remaining read budget before opening content: generated originals and routed copies each retain their own 16 MiB aggregate cap, including raced growth.
-A prepared file alone never proves load; Cursor's project hooks and copied OpenCode configuration cannot exclude external-hook or plugin ambiguity, so their loaded versions remain unproven.
 Only adapter-listed configuration/trust files are read and backed up with private permissions, with a 16 MiB per-file and 256 MiB total backup limit.
 Nonshared declared files retain exact byte guards.
 The declared shared Claude JSON and Codex TOML files are compared read-only and are never restored or rewritten, preserving other live sessions' updates.
@@ -283,9 +239,9 @@ The inventory stops at 50,000 scanned entries and reports partial coverage, a lo
 The excluded-boundary count includes explicitly listed roots inside an excluded tree and is not a deduplicated count of physical installation trees.
 An addition or removal is reported only where the opposite inventory observed absence, so partial coverage cannot manufacture a change.
 Metadata changes outside the known file list are named and preserved without failing the run or attempting restoration.
-The native sandbox explicitly protects nonshared declared configuration/trust files, operator Hide/Herdr routing, the installed app and this checkout's control files, including its external Git metadata, the owner-family registry, candidate and selected CLI executables, wrappers, backups and evidence.
+The native sandbox explicitly protects nonshared declared configuration/trust files, operator Hide routing, the installed app and this checkout's control files, including its external Git metadata, the owner-family registry, candidate and selected CLI executables, wrappers, backups and evidence.
 Protected ancestors cannot be renamed or removed; the private probe/temp/socket trees and exact issued claim files remain writable.
-Both lexical entrypoints and resolved targets are protected, including symlinked CLI installations and inherited custom Herdr sockets or XDG configuration roots.
+Both lexical entrypoints and resolved targets are protected, including symlinked CLI installations and inherited XDG configuration roots.
 Native account and session state, including shared project bookkeeping and Claude's session environment, remain writable under the recorded native-state policy.
 There is no universal OS guarantee that files outside the probe cannot change: harmless probe instructions constrain requested actions, and the bounded metadata inventory observes only its recorded roots and exclusions.
 Existing and new native history changes remain named where that inventory covers them; the profile never enumerates session files.
@@ -294,44 +250,6 @@ The command cap remains 15 seconds regardless of history count.
 Unexpected or concurrent changes to nonshared known configuration/trust files are preserved and fail the run; observing a diff never authorizes overwriting the operator.
 Only the test lane's exclusively owned disposable HOME permits attributed restoration.
 
-Delivery is verified only by a fresh marker sent through the private hided mailbox and then found in the native assistant reply to the turn the line hided's own doorbell typed opened.
-The controller types nothing for it: a bell is recognized only by the line the doorbell kept on the letter, which the tool reads back with `hide request show`, so the delivery window adds the doorbell's 30-second quiet period (`QUIET_MS`) to the scene seconds.
-The letter's first line carries `@`, `$`, `/`, `!`, `#`, backticks, Korean and a trailing backslash, so a verified delivery also shows that line arrived as one submitted prompt.
-The tool's agents run Herdr's integration hooks, not Hide's, so the letter reaches them through `hide inbox`, which their probe guidance says to read when a `🦉` prompt brings none; that a prompt hook recognizes the line and hands the letter over is what the remote mailbox lane and the manual checks in [delivery.md](delivery.md#verification) prove.
-The controller generates the marker after the earlier prompt and holds it only in memory; it writes no helper or marker receipt for the agent to read.
-The native sandbox denies other-process argument inspection and private mailbox storage access; its exact candidate capability and claim files remain available for ordinary `hide inbox`.
-Of the run root only the folder itself is readable, its metadata and its names, so native settings readers can vet every ancestor of a private probe path and Bun's `realpath` can open it: OpenCode resolves its project folder that way, and on 2026-10-18, with only the metadata readable, it fell back to HOME and recorded its sessions there.
-The run root's folders and controller-file contents remain denied, and the pre-provider self-test checks both denials alongside ancestor metadata access.
-For omp's credential database, the tool queries the system's open-file table and copies the DB, WAL and SHM together only when no opener is observed and every source's identity, size, mtime and bytes remain unchanged.
-It never opens the original through SQLite or checkpoints it; any recovery happens in the private copy.
-An open or changing bundle leaves all omp scenes UNKNOWN without launching omp, prints guidance to close all omp instances and rerun, and lets the other providers continue.
-Alias, integrity and copy-budget failures remain fatal.
-The opener queries and file checks are observations rather than an atomic lock against another process opening the original later.
-Arrival and post-bell observation keep separate windows, starting after their respective input completes.
-Each phase has a fixed budget of the 15-second transport allowance plus `--scene-seconds`, clamped to the remaining run budget; history seeding and delivery observation use the same formula.
-The original observation-only window excluded transport, so the one-second synthetic window now has a 16-second phase and a ten-second native window has a 25-second phase.
-Timely scene arrival remains reached when only the later effect phase expires; its effect is ambiguous (UNKNOWN), which never counts as safe.
-Positive effect evidence received after the phase ends is rejected, while safety errors, cancellation and resource-limit failures still propagate.
-The JSON and human-readable reports record both components and the total; the per-command cap remains 15 seconds.
-Within a window, reads and resulting input share its absolute deadline through process admission and retain the existing per-command cap.
-Late replies cannot certify arrival, safe effects, previous-session history or model delivery; a received scene frame remains in its evidence even when the next deadline check refuses it.
-The owned pane claims and verifies its exact persistent reference before the native CLI starts, preventing unclaimed-reference expiry during a long scene.
-The Info request used for that claim may return the explicit `renderer_unavailable` refusal in this headless run; the daemon validates the capability first, and the CLI must still complete the claim and leave its claim file.
-Other refusals and missing claim files fail the measurement.
-Typed text, hook installation, a tool's output and transport arrival alone are insufficient.
-Unknown native conversation formats, permission holds and unavailable integration remain unknown delivery.
-No unavailable CLI or unauthenticated account is a safety PASS; the table retains its login instruction without attempting login.
-
-Exit 1 identifies an unsafe scene for a source-declared bell target; exit 2 reports isolation, configuration, resource or cleanup failure; exit 3 reports incomplete measurement; exit 0 means the selected rows were fully measured without a target safety failure.
-A result applies only to its recorded versions, manifests, model, environment and reached scenes.
-It does not prove a different provider/model/version, a different remote manifest, or release readiness.
-Report the actual native result and its unknown/skipped cells in PR Evidence; never commit these run artifacts.
-
-CI runs `web/e2e/agent-live-check.spec.ts` with the existing compiled Claude/Codex shim on real pinned Herdr and candidate hided.
-The fixture report is marked synthetic and proves tool plumbing, not authenticated model behavior.
-That lane includes operator-routing refusal, byte-exact configuration restoration, runtime failure, owned-server loss and Ctrl-C cleanup.
-`scripts/tests/test_agent_live_protection.py` exercises real filesystem recovery/conflicts, OS denial, timeout/output caps and owner-death cleanup; `test_agent_live_results.py` challenges unsafe verdicts and false delivery evidence.
-The scene preparation and overlay tests cover supported MCP formats, positive native identity, role separation and bounded private authentication copies.
 
 ## Agent journey
 
@@ -351,15 +269,12 @@ The ordinary PR's Windows forms job builds the same small C provider and runs th
 Those controlled cases prove the boundary's behavior, not the historical cause of a Windows failure whose original stderr and supervisor phase were lost.
 
 `python3 scripts/agent-journey-check.py` follows each supported agent through what an operator does with it in Hide, on an isolated candidate, and says per agent and step whether it worked.
-`--engine herdr|own` chooses the pane engine, with Herdr as the transition default.
-The native run packages `hide-holder` beside `hided`, enables `HIDE_DEV_PANE_HOLDER=1`, and starts no Herdr server.
-It creates the controller shell through the daemon's Add project event, bootstraps its real pane capability, and reads terminal text and styling through the same `hide pane read` command as the Herdr run.
-Native session identity is read from Hide's registration ledger and checked against the actual conversation reader; the integration cell requires the kit's hook in the private HOME, while the Herdr run also requires Herdr's installed integration and session source.
+The run packages `hide-holder` beside `hided`, so the panes run in the core's own engine.
+It creates the controller shell through the daemon's Add project event, bootstraps its real pane capability, and reads terminal text and styling through `hide pane read`.
+Native session identity is read from Hide's registration ledger and checked against the actual conversation reader; the integration cell requires the kit's hook in the private HOME.
 The runtime owns every holder through its private records (pid and birth time) and its existing process guardian; teardown confirms no holder remains before removing private state.
 Native state uses the runtime's private short socket directory so checkout paths cannot exceed a Unix socket address; the local write sandbox still hides that state and grants only issued pane references.
-Windows native journey is `win-agent-start 대기`: all cells need an agent start, and its process owner must also account for holders outside the Windows job with the existing caps before that lane can run.
-The Windows holder lifetime extension is assigned to the default-engine migration after this change and `win-agent-start` merge.
-A native Windows invocation refuses before creating state; the existing Herdr fake-model lane and Windows process forms still run.
+On Windows the job each run's process sits in lets a process leave it only by asking, so hided's pane holders leave it through `start_resident` and the run owns them by their records, as on the other systems; the fake-model lane runs there with the Windows process forms.
 It is the check a release runs on the Mac before its tag ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), and the one to run after a change to how Hide starts, wakes or writes to an agent, after moving the pinned Herdr and after a substantial agent CLI update.
 
 ### What it proves
@@ -378,7 +293,7 @@ macOS's `path_helper` otherwise moves system folders ahead of them, so an instal
 
 | Step | Passes when |
 | --- | --- |
-| `start` | The spawn answers registered, running and connected with a native session id, Hide's reader holds the answer to the first prompt and the row reads idle later than that answer's session time, and Herdr's integration reports that session as the contract's `herdr_source` (`herdr:<integration target>`, `herdr:antigravity_cli` for agy); whether the row read working is reported, not required, since Herdr's screen detection misses a turn of about two seconds; a real CLI's first prompt is Hide's `--brief`, and the start also requires the agent's own record of it at its one typing (`brief_input.confirmed_at_unix_ms` in the candidate's delivery ledger, `attempts` 1), with the seconds from the typing to the record in the reason ([delivery.md](delivery.md#input-an-agent-did-not-take)), and an agent whose contract `input` starts with `launch_prompt` (Claude Code, Codex, Grok, omp, agy) must have had its brief carried by its start (`brief_input.route` is `launch`) and recorded it exactly once (the record check of `launch_brief`), any other typed ([delivery.md](delivery.md#the-input-ladder)); the stand-ins keep the agent's prompt argument |
+| `start` | The spawn answers registered, running and connected with a native session id, Hide's reader holds the answer to the first prompt and the row reads idle later than that answer's session time, and Hide's registration ledger names that session; whether the row read working is reported, not required, since screen detection misses a turn of about two seconds; a real CLI's first prompt is Hide's `--brief`, and the start also requires the agent's own record of it at its one typing (`brief_input.confirmed_at_unix_ms` in the candidate's delivery ledger, `attempts` 1), with the seconds from the typing to the record in the reason ([delivery.md](delivery.md#input-an-agent-did-not-take)), and an agent whose contract `input` starts with `launch_prompt` (Claude Code, Codex, Grok, omp, agy) must have had its brief carried by its start (`brief_input.route` is `launch`) and recorded it exactly once (the record check of `launch_brief`), any other typed ([delivery.md](delivery.md#the-input-ladder)); the stand-ins keep the agent's prompt argument |
 | `launch_brief` | For an agent whose contract `input` starts with `launch_prompt` (Claude Code, Codex, Grok, omp, agy), a second spawn in a new worktree of the never-trusted repository, with a `--brief` over lines and a tab that starts with `@journey-missing-file.md`, a file it does not have: the spawn answers as `start`'s does, its turn is answered, the brief rode the start (`brief_input.route` `launch`, `attempts` 1; typed once on Windows), and the agent's own record of it, read by Hide's reader, is one person message that is the brief line for line, a line break recorded as LF, CRLF or the U+2028 the start line carries and a tab as its four spaces (`cells.record_verdict`); `start` makes the same record check of its launched 16 KiB brief; a second submit, a brief cut short, read as options or a file, or wrapped, fails |
 | `reply` | Hide's reader finds the first turn's token in an assistant message; a reply only another parser finds fails |
 | `letter` | A token sent with `hide request send` comes back in the turn the letter reached, `hide request show` says delivered, and the row reads idle after that answer, and a bell's agent shows its declared rung carried it (`input.rung` in the core's log); the turn is the one Hide's doorbell opened for an agent with a bell (Claude Code, Codex, Grok), and for one with a prompt hook and no bell (agy, Pi, omp, OpenCode) the next prompt the journey types, whose hook hands the letter over and confirms it (`hook_confirmed`) |
@@ -386,9 +301,9 @@ macOS's `path_helper` otherwise moves system folders ahead of them, so an instal
 | `letter_menu` | Starts once the core's log shows this agent version's composer check passed (`composer.version_checked` read empty, which the core does after the pane rests 30 s from a turn; up to 60 s, else the cell fails), since a letter held on the closed picker is released only by a composer read of a checked version ([delivery.md](delivery.md#reading-the-composer)); then a letter sent with `--now` while the agent's `/model` picker is open is delivered after one bell and answered once the journey closes the picker with Esc, through the agent's declared rung, and a letter still pending at the end is cancelled so it rings into no later cell; a bell line the picker took as its choice would start no turn; declared for the measured Codex picker, retaining the draft/menu guard through the switch to typed input; direct external input remains the residual of [delivery.md](delivery.md#safe-intake-and-manual-fallback) |
 | `composer` | On the agent at rest the journey types `hello 안녕하세요`, erases it with Backspace, pastes twelve lines as Hide's terminal pastes them (one bracketed paste with CR between the lines, as xterm.js sends it; Grok on Windows, which joins a paste's keys only by their timing and can send it partway, gets the lines typed with Alt+Enter between them instead and the step is named `drafted`, [INSTALL.md](INSTALL.md#what-each-system-supports)) and clears them with Backspace, never pressing Return, and after each step reads the pane's visible screen with its styling (`hide pane read --source visible --format ansi`) and has the adapter's composer declaration and parser (`hide_agent_adapter::composer`, built as the `journey_composer` example) judge it: `not_empty` after the text, `empty` after the erase, `not_empty` after the paste, `empty` after the clear; a step waits for its verdict up to 30 s after the last key it sent and a Backspace erase sends 8 before each read, up to 400, since the screen says when the composer is empty and not a count, and a slower screen read must not cut an erase short (Codex and agy keep the paste as 275 characters of text, which took 35 reads on macOS); after each step Hide's reader counts the session's prompts, and a step after which the session holds a new one fails the cell there (`the keys started a turn`), before those turns spend a later cell's requests; a failed cell names the step and the last verdict, and keeps the pane capture every failed cell keeps |
 | `sleep_wake` | After the daemon's Sleep event the row reads asleep, and after Wake it runs again: in the pane it slept in for an agent Hide wakes there (Claude Code, Codex, agy), and for one whose Sleep closes its pane (Grok, Pi, omp, OpenCode) once `wake_sleeping_session` opened a new pane that hosts the same session and its registration |
-| `resume` | The operator opens the woken agent (`focus_pane`), its terminal takes this screen's keys, a typed token prompt is answered in the session it slept in, the row reads idle after that answer, and Herdr reports the same session id |
+| `resume` | The operator opens the woken agent (`focus_pane`), its terminal takes this screen's keys, a typed token prompt is answered in the session it slept in, the row reads idle after that answer, and Hide's registration ledger names the same session id |
 | `start_untrusted` | A start in a repository the account never trusted, with no preparation, passes once Hide has recorded the trust of the worktree it made; the repository holds `.pi/settings.json`, a project file Pi 1.0.4 asks about, so Pi's start passes only with the trust Hide recorded |
-| `integration` | The candidate's kit row in the snapshot reads Hide's hook and Herdr's integration installed (the kit calls Herdr's current) at locations inside the HOME the agent reads its configuration from, and Herdr reports the agent's session as its `herdr_source` |
+| `integration` | The candidate's kit row in the snapshot reads Hide's hook installed at a location inside the HOME the agent reads its configuration from, and Hide's registration ledger names the agent's session |
 | `guidance_memory` | A rule card the run wrote into its private state before any start (`hide-memory`'s `journey_memory` example) carries a fresh token in its title, and a turn asked `Run no tool. Reply with exactly the uppercase code in the title of your only Project Memory card.` is answered with it; the question shares no word with the card, so the card came from the start's index and not from prompt-time Memory |
 | `fork` | After the journey sends Fork agent's `fork_pane` as the pane menu does and types one prompt into the fork's pane, as the operator does to use it, a row whose `forked_from` names the source shows a session of its own, Herdr reports that session as its `herdr_source`, Hide's reader finds the answer in it, and `hide agent list` registers the fork with no parent and the source as its origin; an agent that tells its session only at its first turn, as Codex does, is registered as a fork only after that prompt |
 | `title` | The row's `identity_label` reads a title other than the agent's name (the contract's `untitled`); whether Hide's label sentences reached the row is reported beside it |
@@ -399,8 +314,8 @@ Only `start`, `start_untrusted`, `launch_brief`, `guidance_memory`, `letter`, `l
 The `composer` cell comes where the agent rests with nothing pending (its letter turn ended and nothing else types into it before the fork), leaves the composer empty when it passes, and clears what a failed step left so the next cell's prompt is not typed after a draft.
 It is the one cell that judges a screen, the same screen the core reads before it lets a held letter out ([delivery.md: Reading the composer](delivery.md#reading-the-composer)), so a change to an agent's composer declaration or to a new agent version's composer is seen here before an operator's letter waits on it.
 The journey closes each pane no later cell types into: a fork's after the `fork` cell, the agent's own before `start_untrusted`, the untrusted start's before `launch_brief`, and that one's before the next agent starts.
-The run's process guardian ends the private Herdr when everything under it passes 2 GiB together: two Claude Code processes left running beside a Codex fork crossed it, and so did omp's fork, its woken session and its untrusted start held at once on Linux (2.17 GB, 2026-10-18).
-A crossed memory cap names the five live processes holding the most, and the report's cleanup failures carry the reason a guardian (on Windows, the job) ended Herdr or hided, so the cells that fail after it with `herdr_command_exit_1` have their cause in the same report.
+The run's process guardian ends the run's processes when everything under it passes 2 GiB together: two Claude Code processes left running beside a Codex fork crossed it, and so did omp's fork, its woken session and its untrusted start held at once on Linux (2.17 GB, 2026-10-18).
+A crossed memory cap names the five live processes holding the most, and the report's cleanup failures carry the reason a guardian (on Windows, the job) ended a holder or hided, so the cells that fail after it have their cause in the same report.
 The cells an adapter declares, and its letter and wake forms, come from `contracts/agent-journey.json`, which `hide-agent-adapter` generates and its contract test keeps current ([contracts/README.md](../contracts/README.md#agent-journey)).
 Grok's letter uses the `bell` path: the bell wakes it at rest, its prompt hook recognizes that turn without printing context, and its first tool hook or Stop hook delivers the letter body.
 The journey judges its at-rest reply in that bell turn without asking the model to choose a tool.
@@ -447,14 +362,14 @@ The table is printed and written as `report.md` and `report.json` in a new `agen
 
 ### Local mode (macOS)
 
-Build `hided`, `hide` and the hooks with `bash scripts/verify-cargo.sh cli` and the reader with `bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation`, the Memory card writer with `bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory` and the composer judge with `bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer`, fetch the pinned Herdr with `zsh scripts/fetch-herdr-runtime.sh` (a zsh script; it prints the path `--herdr-bin` takes), then run it from the worktree; for `--engine own`, build `hide-holder` with `bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder` instead of fetching Herdr.
+Build `hided`, `hide` and the hooks with `bash scripts/verify-cargo.sh cli` and the reader with `bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation`, the Memory card writer with `bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory` and the composer judge with `bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer` and the pane holder with `bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder`, then run it from the worktree.
 `--agents claude-code,codex` narrows the rows and `--model ID=MODEL` passes a model through the product's own flag.
 A release's run on the Mac is two runs from the same worktree, the fake model first and the signed-in agents second: `--fake-model` measures every agent Hide supports at its pinned CLI with no request to a provider, and the plain local run measures the CLI and login installed on the Mac.
-Run them one after the other, never side by side: both start a private Herdr and `hided` from this worktree's build, and a local fake run leases the CLI cache.
+Run them one after the other, never side by side: both start a private `hided` from this worktree's build, and a local fake run leases the CLI cache.
 agy is measured by neither on the Mac (below): the CI fake model lane measures its CLI and Hide's kit, and no run measures a signed-in agy.
 On 2026-10-25 the local fake run failed OpenCode's `start` on this Mac (its server answered HTTP 500 under the private sandbox, which no smaller sandbox reproduced) alone as well as beside others, and stopped the run before the agents after it, so leave it out of the local fake run's `--agents` until that closes; the fake model lane on CI measures it.
-It reuses `scripts/agent_live_check`'s isolation: the pinned Herdr on a private socket, this worktree's `hided` on private state with the kit installed into a private daemon home, the write sandbox and the process guardian.
-The daemon starts without `XDG_STATE_HOME`, like an app opened from the Dock, while Herdr's shell inherits private XDG folders and no blanket `HIDE_STATE_DIR`.
+It reuses `scripts/agent_live_check`'s isolation ([Run isolation](#run-isolation)): this worktree's `hided` on private state with the kit installed into a private daemon home, the write sandbox and the process guardian.
+The daemon starts without `XDG_STATE_HOME`, like an app opened from the Dock, while the pane shell inherits private XDG folders and no blanket `HIDE_STATE_DIR`.
 CI uses the daemon home's default `.hide/state`; local mode names its state outside the sandbox's writable probe explicitly for the daemon and agent wrappers.
 The kit captures that state folder in every installed hook and extension, so a native start whose hook keeps only HOME, the shell's XDG folder and its pane identity still reaches the candidate.
 The regression at the helper's process boundary removes all inherited Hide routes for every supported hook transport and requires the captured folder to deliver its letter.
@@ -475,12 +390,12 @@ The journey writes no operator file; an entry for the run's paths in the operato
 No provider key in the operator's shell reaches an agent unless its route names it: every variable whose name ends in `_API_KEY`, and `ANTHROPIC_AUTH_TOKEN` and the cloud credentials, is left out of the run's environment, so an agent reaches a provider only through the login or key its route gives it (omp 18.7.0 had sent its background requests to Google with the shell's `GEMINI_API_KEY`), and the one route that names keys is OpenCode's chosen provider's.
 Hide records folder trust for each worktree it spawns an agent into, and must record Codex's and Claude's only in the private folders the agents read: before the cleanup and after it the journey reads the operator's `~/.codex/config.toml` and `~/.claude.json` for trust entries naming a path of the run.
 A Codex entry there is an isolation failure (exit 2); a Claude one is reported by key, and one left after the cleanup is listed as a product finding.
-Every exit, a stop and the deadline included, ends the agents, panes, Herdr and `hided` and confirms it, and then removes the probe, the clone with the run's `journey/<run-id>-<agent>` branches and their worktrees in it; while an agent's end is unconfirmed the probe stays.
+Every exit, a stop and the deadline included, ends the agents, panes, holders and `hided` and confirms it, and then removes the probe, the clone with the run's `journey/<run-id>-<agent>` branches and their worktrees in it; while an agent's end is unconfirmed the probe stays.
 Never run a cargo build or test while it runs: either relinks `target/debug` under the running `hided`.
 
 ### The fake model (`--fake-model`)
 
-With `--fake-model`, in either mode, each real CLI with Hide's real kit and Herdr's integration is answered by the journey's fake model (`scripts/agent_journey/fake_model.py`) instead of a provider, and no login is supplied to an agent or a provider.
+With `--fake-model`, in either mode, each real CLI with Hide's real kit is answered by the journey's fake model (`scripts/agent_journey/fake_model.py`) instead of a provider, and no login is supplied to an agent or a provider.
 It speaks OpenAI Chat Completions and Responses, Anthropic Messages and Gemini `generateContent`, streamed or whole, with usage in each provider's shape, and answers a turn with the last token of what the request sends after the model's own last turn, a token inside Hide's Project Memory blocks left out, or with the token of the Project Memory index the session started with when the turn carries none; a request that asks for JSON of a schema, as Claude Code's and Codex's title requests do, is answered with an object of that schema.
 `scripts/agent_journey/fake_lane.py` writes each CLI's provider configuration into the run's daemon home, and each agent gets its own server, so its log counts that agent's model requests exactly.
 Local fake mode uses a private HOME only for an adapter whose four guards can be enforced; real-login mode always keeps the operator's HOME.
@@ -575,16 +490,15 @@ The macOS fake CI lane temporarily records Grok's authentication method, key-var
 It streams the native debug log through a private FIFO, retains only the selected facts, and removes the FIFO at cleanup; the reader has a 32 MiB input cap, a 4 MiB line cap and a 64-event cap.
 The configured route and the native model-config observation are separate evidence; this diagnostic does not trace filesystem opens.
 `scripts/tests/test_agent_journey_private_home.py` exercises content, top-level entry and link changes on fake watch roots, concurrent SQLite copies, unchanged source bytes, missing proof, cache refusal and authenticated requests; no test watches or changes the operator's folders.
-The report is marked as a fake model run with what a fake model cannot show: it proves the CLI, Hide's kit and Herdr's integration, never a provider, a login or a quota, and its rows are kept apart from a signed-in run's.
+The report is marked as a fake model run with what a fake model cannot show: it proves the CLI and Hide's kit, never a provider, a login or a quota, and its rows are kept apart from a signed-in run's.
 
 ### The CI lanes
 
-`.github/workflows/agent-journey.yml` runs the journey with `--mode ci`, where each agent runs in the runner's disposable HOME with no sandbox and no key: the stand-in and fake model lanes on both engines on Linux and macOS, and the Herdr fake model lane on Windows pending the native gap above.
+`.github/workflows/agent-journey.yml` runs the journey with `--mode ci`, where each agent runs in the runner's disposable HOME with no sandbox and no key: the stand-in and fake model lanes on the core's own engine on Linux and macOS; Windows runs no journey until a holder can leave the CI job ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 `--mode ci` refuses a run with neither `--fixture-bin` nor `--fake-model`: no lane signs an agent in, by the operator's decision of 2026-10-27, because what only a login proves (the provider's sign-in, quota and billed usage) is the provider's rather than Hide's code, while the signed-in lane cost keys and a daily quota rotation and failed for the provider's reasons; a release measures a real login on the Mac ([Local mode](#local-mode-macos)).
 Every lane that runs a real CLI installs it with `scripts/install-agent-clis.py` at the version `contracts/agent-clis.json` pins, the one place a CI agent version is written (`agent-trust-contract.yml` installs from it too); npm installs run no package's install scripts but those a row names (Claude Code's and OpenCode's, which place their native program); agy's installer serves only its latest release, so its row records each system's file and sha512 and the install downloads that file (contracts/README.md, which says how to move agy's pin); a CLI that answers another version than its row fails the install and the lane, so a vendor release moves the pin in a pull request, which plans the `agent CLIs` lane (`agent-clis.yml`, every pinned CLI installed on Linux and Windows) before any lane measures it.
 The real-CLI fake-model lane passed all declared cells of all seven selected agents on Linux, macOS and Windows in [run 39152230964](https://github.com/with-hide/hide/actions/runs/39152230964), 2026-10-19 KST (2026-10-18 UTC); [INSTALL.md](INSTALL.md#what-each-system-supports) records the measured support and remaining gaps.
 On Windows the `windows forms` job also runs `scripts/tests/test_agent_live_windows.py`: an owner that dies takes its children's trees with it, every cap is the Unix guardian's and a crossed one is a named failure, private files admit only this account, the pane commands and launchers keep their arguments and exit status, and the run's folder leaves the account's Path as it found it.
-A pane Herdr opens on Windows takes its PATH and temporary folder from the account's registry, not from Herdr's own environment, so a Windows CI run puts its agents' wrappers first on the runner account's own Path while it runs and takes them out first in its cleanup, on every exit path, and each wrapper sets the agent's temporary folder itself; the change is refused anywhere but a GitHub Actions runner (`GITHUB_ACTIONS=true`), so a local run never touches an operator's registry, and a Path the cleanup could not restore leaves the cleanup unconfirmed (exit 2).
 Every CI lane builds the controller's spawn provider (`web/e2e/shims/spawn-provider.c`) before the run and passes it with `--controller-provider`, as it builds the stand-ins, since a Windows link can outlast the guardian's 15-second command cap; a run by hand builds it itself, and a command asked to run past the cap is refused rather than shortened.
 The journey reads what hide, Herdr and the agents write as UTF-8 and refuses to start outside Python's UTF-8 mode: the workflow sets `PYTHONUTF8=1`, and a run by hand on Windows is `python -X utf8 scripts/agent-journey-check.py ...`.
 - The stand-in lane (`fixture`) puts the compiled `web/e2e/shims/claude-shim.c` in place of Claude Code and Codex with `--fixture-bin` and passes only when both pass `start`, `reply`, `integration`, `guidance_memory`, `letter`, `sleep_wake` and `resume`, and fail none; `letter_busy`, `letter_menu`, `composer`, `fork`, `title` and `usage` read `not measured`, since the C stand-in imitates none of those behaviors, and all running-agent letters are typed.
@@ -604,7 +518,7 @@ The journey reads what hide, Herdr and the agents write as UTF-8 and refuses to 
 Every lane above measures the pins, so a vendor release that breaks Hide would otherwise reach an operator who updated before any lane saw it.
 `.github/workflows/agent-canary.yml` runs daily at the nightly's hour (17:17 UTC), when no pull request needs the runners: it reads each CLI's latest release where that CLI's own installer reads it (`scripts/agent-cli-latest.py`: npm's `latest` tag, Grok's `stable` channel, omp's latest GitHub release, agy's manifest of each system with its file and sha512) and Herdr's latest release, and runs the fake model lane on Linux, macOS and Windows with that table in place of the pins (`agent-journey.yml`'s `clis-table`, which the install, the report's version check and the lane's verdict read through `HIDE_AGENT_CLIS_TABLE`); the stand-ins, which measure no CLI, are left out.
 A day on which no version moved since the last run starts no journey, and a source that answers no version fails the run rather than measuring the pin under the latest's name.
-The canary records both engines on Linux and macOS and Herdr on Windows; a missing engine report leaves the result unknown, and a pinned result clears a failure only on the same engine.
+The canary records Linux and macOS, the systems the journey runs; a missing report leaves the result unknown.
 `scripts/agent-canary-record.py` keeps the result in one issue labelled `agent-canary` in with-hide/hide-private, with the other development issues ([TESTING.md](TESTING.md#flaky-tests)), "Agent CLI support record": per agent the latest version checked and its verdict, the minimum Hide integrates (`minimum_version` in `contracts/agent-journey.json`, [agent-hooks.md](agent-hooks.md#the-oldest-version-of-each-agent)), the last version that passed and when, and the pin, with the state the next run reads in a comment of the body, so nothing is committed.
 An agent passes only when every system's report has its row and every declared cell came out as declared; a system without a report judges no agent and is measured again the next day.
 A miss is not the release's until the pin is measured beside it: the `reruns` job names each agent whose latest release missed something while its pin is another version, with the systems it missed on, and the `pinned` job runs the fake model lane again for those agents alone at their pins, on the same commit (`agent-journey.yml`'s `agents` and `report-name`, the latter so its `agent-journey-pinned-<system>-<engine>` reports stay apart).
@@ -656,17 +570,15 @@ Product follow-up: agy's first-run onboarding holds the first prompt of an agy t
 `desktop/e2e/remote-workspace.spec.ts` covers remote routes and `desktop/e2e/device-kit.spec.ts` the install kit against an isolated SSH server; a check against a real device is for what those specs cannot reach.
 That server logs in as the account running the suite and connecting with consent installs Hide's kit there, so its sessions must get a private `HOME` (`SetEnv` in its config); `desktop/e2e/device-home.ts` describes the setup and refuses to register a device until it has proved both.
 `SetEnv` reaches the commands a session runs but not its SFTP, which spells `~/` from the account's own home, so the consent folders (`HIDE_HOST_HELPER_ROOT`, `HIDE_HOST_CLI_DIR`) must be absolute paths inside the private `HOME`: on 2026-10-09 a probe that kept the `~/` defaults uploaded its helper into the real account's `~/.hide/host-helper` while its commands ran in the private one.
-The remote terminal probe (`hide-node/tests/it/remote_terminal_probe.rs`) and the device measurement (`scripts/web-shell-measure/device-guard.sh`) now refuse, before connecting, any alias that does not resolve to the private sshd's named port, a private HOME outside `/tmp`, and consent folders outside it; a core-role hided the measurement runs on the device (`MEASURE_SCENARIO=remote-core`, `core-host.sh`) is refused unless its program and state folder are inside that HOME.
 
-- Start a private `herdr server` on the device with the same isolation variables, sent as a script over `ssh <alias> 'bash -s' < script.sh`, and keep the device's real `HOME` so its agent CLIs stay logged in.
-- Drive it from a private hided: the web e2e fixtures `startHerdr` and `startHided` with the fixture home's `.ssh` linked to the operator's, because hided resolves the alias from `$HOME/.ssh/config`.
+- Drive the device from a private hided: the web e2e fixtures `startEngine` and `startHided` with the fixture home's `.ssh` linked to the operator's, because hided resolves the alias from `$HOME/.ssh/config`.
 - Register the device with `register_device` and `host_consent: false`, which installs no helper and no kit on the device; a check that needs the kit there needs a private `HOME` on the device too.
 - On a device you cannot give a private `HOME` through its sshd (a shared Windows PC, whose OpenSSH config is the operator's), start the candidate with `HIDE_DEV_DEVICE_HOME` naming a home of its own on the device, `~/` and a path below the account's home or an absolute device path (`C:/...` on Windows).
   From then on `~/` in the consent folders means that home, so leave `HIDE_HOST_HELPER_ROOT` and `HIDE_HOST_CLI_DIR` at their defaults (`~/.hide/host-helper`, `~/.local/bin`); a value that names the device home again nests it inside itself.
   The device's start script makes that folder private where it is missing and starts the helper with it as `HOME`, and on Windows as `USERPROFILE` and `HOME` with `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` made inside it, clears every variable that would move a folder elsewhere (`hide_host::serve::HOME_FOLDER_VARIABLES`: `HIDE_STATE_DIR`, the `XDG_*` base folders, `CLAUDE_CONFIG_DIR`, `CURSOR_CONFIG_DIR`, `ZDOTDIR`), whatever the account's environment set them to, and sets each agent's declared home variable to its folder inside that home (`agent_home_variables`, today `CODEX_HOME=<home>/.codex`: on 2026-11-04 Codex 0.166 in a Windows candidate's pane ignored `USERPROFILE`, read the real profile's `.codex` and wrote a trust table into its `config.toml`); the helper reads its home only through `hide_platform::host::home_dir`, so the candidate's kit (hook files, `~/.hide/kit`, the `hide` command), node state, sessions, pane holders and the programs in its panes never meet the account's own.
   On 2026-11-04 a helper that read `HOME`, which Windows OpenSSH sets beside `USERPROFILE`, installed three candidates' kits into the shared PC's real profile and replaced the operator's hook entries there; `kit::tests::every_kit_location_follows_the_home_the_platform_names` now runs in the Windows lane, with every variable but the cleared ones naming the account's folders, and both start scripts' tests start the helper with each cleared variable and each agent home variable set to the account's folder and check the helper sees none of the former and every agent home inside the dev home.
   An install folder under a folder every signed-in account may change (such as `C:\hide-dev`, which inherits that from `C:\`) fails the install folder's check, so keep the device home below the account's home, such as `~/.hide-dev/<run>/home`.
-  It is a development variable only, read from the candidate Mac's environment like `HIDE_DEV_PANE_HOLDER`, and a value it does not take fails the daemon's check.
+  It is a development variable only, read from the candidate Mac's environment, and a value it does not take fails the daemon's check.
 - Reuse one SSH connection (`-o ControlMaster=auto -o ControlPath=<short path> -o ControlPersist=120`); dozens of fresh connections fail with "Too many authentication failures".
 - A web-attached pane grows its row count, so read it with a large `--lines`.
 - Run every remote cleanup after the local daemon and server stop, or in its own `try`; an ssh that threw inside `finally` once leaked a hided.

@@ -560,7 +560,7 @@ pub(crate) fn location(target: &KitTarget) -> PathBuf {
     path(target)
 }
 
-pub(crate) fn install(target: &KitTarget) -> Result<crate::Retirement, String> {
+pub(crate) fn install(target: &KitTarget) -> Result<(), String> {
     preflight(target)?;
     let mut progress = load(target)?.unwrap_or_else(|| Progress {
         homes: homes(target)
@@ -579,9 +579,8 @@ pub(crate) fn install(target: &KitTarget) -> Result<crate::Retirement, String> {
         ..Progress::default()
     });
     if progress.complete {
-        return Ok(crate::Retirement::default());
+        return Ok(());
     }
-    let mut retirement = crate::Retirement::default();
     for step in [
         "stop daemon",
         "remove login agent",
@@ -600,9 +599,7 @@ pub(crate) fn install(target: &KitTarget) -> Result<crate::Retirement, String> {
             "remove login agent" => homes(target)
                 .iter()
                 .try_for_each(|home| remove_agent(target, home)),
-            "remove owned links" => remove_links(target).map(|report| {
-                retirement = report;
-            }),
+            "remove owned links" => remove_links(target),
             "remove kit copy" => remove_copy(target),
             _ => preserve(target, &progress),
         };
@@ -617,7 +614,7 @@ pub(crate) fn install(target: &KitTarget) -> Result<crate::Retirement, String> {
     }
     progress.complete = true;
     progress.step = "complete".into();
-    save(target, &progress).map(|()| retirement)
+    save(target, &progress)
 }
 
 /// An absent endpoint is already stopped, before IPC validates its name.
@@ -735,7 +732,7 @@ fn remove_agent(target: &KitTarget, home: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn remove_links(target: &KitTarget) -> Result<crate::Retirement, String> {
+fn remove_links(target: &KitTarget) -> Result<(), String> {
     let mut folders = vec![target.cli_dir.clone(), target.home.join(".local/bin")];
     if let Some(path) = std::env::var_os("PATH") {
         folders.extend(std::env::split_paths(&path));
@@ -760,58 +757,7 @@ fn remove_links(target: &KitTarget) -> Result<crate::Retirement, String> {
                 .map_err(|error| format!("owned command link could not be removed: {error}"))?;
         }
     }
-    let plugin = crate::labels::retire_hcoord_plugin(target);
-    if !plugin.failures.is_empty() {
-        return Err(plugin.failures.join("; "));
-    }
-    Ok(plugin)
-}
-
-/// Herdr v0.9.1 persists its global registry here and its CLI can uninstall
-/// without a server. Read strictly first: Herdr's offline list intentionally
-/// treats a corrupt registry as empty, which cannot prove retirement.
-pub(crate) fn retire_offline_plugin(target: &KitTarget) -> Result<Option<&'static str>, String> {
-    use hide_herdr_client::plugin::{InstalledPlugin, PluginSourceKind};
-
-    let config = crate::labels::herdr_config_dir(target)?;
-    if let Ok(anchor) = home_anchor(&target.home, &config) {
-        if !inspect_below(&anchor, &config)? {
-            return Ok(None);
-        }
-    } else if !inspect_state_override(&config)? {
-        return Ok(None);
-    }
-    let registry = config.join("plugins.json");
-    let entries = || -> Result<Vec<InstalledPlugin>, String> {
-        let Some(value) = read_json(&registry, MAX_STATE_BYTES)? else {
-            return Ok(Vec::new());
-        };
-        let entries: Vec<InstalledPlugin> = serde_json::from_value(value)
-            .map_err(|error| format!("Herdr's offline plugin registry is unreadable: {error}"))?;
-        if entries.len() > MAX_ENTRIES {
-            return Err("Herdr's offline plugin registry exceeds the entry bound".into());
-        }
-        Ok(entries)
-    };
-    let Some(plugin) = entries()?
-        .into_iter()
-        .find(|plugin| plugin.plugin_id == crate::HCOORD_PLUGIN_ID)
-    else {
-        return Ok(None);
-    };
-    // The CLI owns the registry lock, unregistering and managed-file removal.
-    // It leaves locally linked source and per-plugin configuration intact.
-    crate::labels::uninstall_managed(target, crate::HCOORD_PLUGIN_ID)?;
-    if entries()?
-        .iter()
-        .any(|plugin| plugin.plugin_id == crate::HCOORD_PLUGIN_ID)
-    {
-        return Err("Herdr's offline plugin registration remains; retry retirement".into());
-    }
-    Ok(Some(match plugin.source.kind {
-        PluginSourceKind::Github => "GitHub",
-        PluginSourceKind::Local => "linked folder",
-    }))
+    Ok(())
 }
 
 fn remove_copy(target: &KitTarget) -> Result<(), String> {

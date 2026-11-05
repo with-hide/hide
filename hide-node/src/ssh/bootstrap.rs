@@ -185,11 +185,10 @@ put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; be
 find "${f%/*}" -maxdepth 1 -name '.upload-*' -mmin +10 -exec rm -f {} + 2>/dev/null;
 if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
-case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
 below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
-case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $c could not be made"; exit 65; };; esac;
+case ${b:--} in -) ;; *) { (umask 077; mkdir -p -- "$b") && HOME=$b && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $b could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
-say start; exec "$h" node serve --own-herdr;;
+say start; exec "$h" node serve;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
 o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && x=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") || { rm -f -- ${o:+"$o"} ${e:+"$e"}; o= e= x=; say fail "no temporary file for the command's output"; continue; };
 { { command "$@" </dev/null; echo $? >"$x"; } 2>&1 1>&3 3>&- | head -c $((b+1)) >"$e"; } 3>&1 | head -c $((b+1)) >"$o";
@@ -207,14 +206,14 @@ esac;
 done
 "#;
 
-/// Each agent's home variable set to its folder inside the home `$c` names,
+/// Each agent's home variable set to its folder inside the home `$b` names,
 /// made private, as the POSIX script's commands.
 fn posix_agent_homes() -> String {
     agent_home_variables()
         .iter()
         .map(|(variable, folder)| {
             format!(
-                " && (umask 077; mkdir -p -- \"$c/{folder}\") && {variable}=$c/{folder} && export {variable}"
+                " && (umask 077; mkdir -p -- \"$b/{folder}\") && {variable}=$b/{folder} && export {variable}"
             )
         })
         .collect()
@@ -444,22 +443,11 @@ pub(crate) fn install(
         other => return Err(failed(refusal(other))),
     };
     let version = &payload.version()[..16];
-    let mut files: Vec<(String, &Package)> = payload
+    let files: Vec<(String, &Package)> = payload
         .files
         .iter()
         .map(|file| (format!("{version}/{}", file.relative), file))
         .collect();
-    if let Some(herdr) = &payload.herdr {
-        files.push((
-            format!(
-                "{}/{}/{}",
-                hide_kit::device_herdr::HERDR_DIR,
-                herdr_copy_name(herdr),
-                herdr.relative
-            ),
-            herdr,
-        ));
-    }
     if files.iter().any(|(relative, _)| !plain(relative)) {
         return Err(failed("The build names a file Hide cannot send".to_owned()));
     }
@@ -506,12 +494,9 @@ pub(crate) fn install(
                 fresh |= index == 0;
             }
             [kind, reason] if kind == "fail" => {
-                // The helper, a chosen Herdr and its pin must arrive before
-                // the helper starts; an optional kit part the kit reports.
-                if index == 0
-                    || file.relative == hide_kit::device_herdr::HERDR_PIN
-                    || file.relative == hide_kit::device_herdr::HERDR_PROGRAM
-                {
+                // The helper must arrive before it starts; an optional kit
+                // part the kit reports.
+                if index == 0 {
                     return Err(failed(format!("The device could not take {reason}")));
                 }
                 upload.missing.push(reason.clone());
@@ -532,15 +517,6 @@ pub(crate) fn install(
     })
 }
 
-/// Which Herdr server the helper bridges to the core: the account's own,
-/// a named session, or a socket the registration names (B24).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HerdrChoice {
-    Account,
-    Session(String),
-    Socket(String),
-}
-
 /// Starts the helper in place of the script; from its answer on, the pipes
 /// are the helper's link. `home`, an absolute path in the device's own wire
 /// spelling, is the home the helper runs with in place of the account's
@@ -554,17 +530,11 @@ pub(crate) enum HerdrChoice {
 pub(crate) fn start(
     pipe: &mut dyn Pipe,
     helper_relative: &str,
-    herdr: &HerdrChoice,
     home: Option<&str>,
 ) -> Result<(), EstablishError> {
-    let choice = match herdr {
-        HerdrChoice::Account => "-".to_owned(),
-        HerdrChoice::Session(session) => format!("session={session}"),
-        HerdrChoice::Socket(socket) => format!("socket={socket}"),
-    };
-    if !plain(&choice) || !plain(helper_relative) {
+    if !plain(helper_relative) {
         return Err(EstablishError::Helper(
-            "The device's Herdr session or socket is not a plain name".to_owned(),
+            "The device's helper path is not a plain name".to_owned(),
         ));
     }
     let home = match home {
@@ -579,7 +549,7 @@ pub(crate) fn start(
     let deadline = Instant::now() + STEP_TIMEOUT;
     match step(
         pipe,
-        &format!("start\t{helper_relative}\t{choice}\t{home}\n"),
+        &format!("start\t{helper_relative}\t{home}\n"),
         deadline,
     )?
     .as_slice()
@@ -591,15 +561,14 @@ pub(crate) fn start(
 
 /// Puts this build in its version folder under `root` on a machine that
 /// already runs a build of Hide's (a core update, PRD core-host-node-move
-/// B10), sending only the files it lacks or holds damaged, without the
-/// device's Herdr. Answers where the build's `hided` is.
+/// B10), sending only the files it lacks or holds damaged. Answers where the
+/// build's `hided` is.
 pub(crate) fn install_build(
     pipe: &mut dyn Pipe,
     root: &str,
     home: &str,
     payload: Payload,
 ) -> Result<String, EstablishError> {
-    let payload = payload.without_herdr();
     if !payload.missing.is_empty() {
         return Err(EstablishError::Install(format!(
             "This build cannot update a core without all of its parts: {}",

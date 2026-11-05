@@ -14,7 +14,6 @@ pub struct DaemonState {
     pub pid: u32,
     pub port: u16,
     pub token: String,
-    pub socket: Option<String>,
     pub started_at: String,
     /// When the daemon's process started, as the platform layer reports it,
     /// written with the pid so a later reader can tell the daemon from
@@ -250,7 +249,6 @@ mod tests {
                 pid: 1,
                 port: 9,
                 token: "aa".into(),
-                socket: None,
                 started_at: "now".into(),
                 pid_started: None,
             },

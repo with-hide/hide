@@ -706,7 +706,7 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
         socket_path: socket_path.clone().into(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        engine: crate::engine::herdr::local(&socket_path),
+        engine: FakeEngine::absent().engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     let payload = |focused_workspace_id: &str, focused_pane_id: &str| {
@@ -3141,14 +3141,8 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
     let file_entry = strip_ids(&runtime, &checkout_id)[2].clone();
     let before = strip_ids(&runtime, &checkout_id);
 
-    let herdr = FakeHerdr::start("tab-move", |_, _| tab_list(&["w-order:t2", "w-order:t1"]));
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    let herdr = FakeEngine::start(|_, _| tab_list(&["w-order:t2", "w-order:t1"]));
+    runtime.live = Some(herdr.live());
 
     // Move the first Herdr tab behind the second. The file tab does not
     // move, so the arrangement differs from Herdr's only in Herdr's own
@@ -3159,12 +3153,12 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
         "herdr:w-order:t1",
         1
     ));
-    herdr.wait_for_requests(1, Duration::from_secs(5));
-    let request = &herdr.requests()[0];
-    assert_eq!(request["method"], "tab.move");
+    herdr.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&herdr)[0];
+    assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
-        serde_json::json!({"tab_id": "w-order:t1", "insert_index": 2})
+        serde_json::json!({"tab": "w-order:t1", "index": 2})
     );
 
     // The strip does not move on the operator's word alone.
@@ -3219,16 +3213,10 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
         "the repository's checkout holds only its own three tabs"
     );
 
-    let herdr = FakeHerdr::start("split-move", |_, _| {
+    let herdr = FakeEngine::start(|_, _| {
         tab_list(&["w-order:t5", "w-order:t2", "w-order:t3", "w-order:t1"])
     });
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    runtime.live = Some(herdr.live());
 
     // Drag the first tab to the end of this checkout's strip. In the
     // checkout's own coordinates that reads as index 3, which Herdr would
@@ -3239,12 +3227,12 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
         "herdr:w-order:t1",
         2
     ));
-    herdr.wait_for_requests(1, Duration::from_secs(5));
-    let request = &herdr.requests()[0];
-    assert_eq!(request["method"], "tab.move");
+    herdr.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&herdr)[0];
+    assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
-        serde_json::json!({"tab_id": "w-order:t1", "insert_index": 4})
+        serde_json::json!({"tab": "w-order:t1", "index": 4})
     );
     assert!(
         runtime.snapshot().status.last_error.is_none(),
@@ -3351,14 +3339,8 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
     // Both drags are answered; what the answer says does not matter here,
     // because the worker's callback is what carries it and this test
     // drives that by hand.
-    let herdr = FakeHerdr::start("tab-retry", |_, _| tab_list(&["w-order:t2", "w-order:t1"]));
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    let herdr = FakeEngine::start(|_, _| tab_list(&["w-order:t2", "w-order:t1"]));
+    runtime.live = Some(herdr.live());
 
     // The first drag is refused.
     assert!(reorder_tab(
@@ -3406,10 +3388,10 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
         "herdr:w-order:t1",
         1
     ));
-    herdr.wait_for_requests(2, Duration::from_secs(5));
-    let requests = herdr.requests();
+    herdr.wait_for_calls(2, Duration::from_secs(5));
+    let requests = requests_of(&herdr);
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1]["method"], "tab.move");
+    assert_eq!(requests[1]["method"], "move_tab");
     assert_eq!(
         requests[1]["params"], requests[0]["params"],
         "the retry asks Herdr for exactly what the refused drag asked for"
@@ -4214,34 +4196,6 @@ fn a_restored_pane_the_session_no_longer_has_retargets_without_reporting() {
     assert!(runtime.snapshot().active_pane_layout().is_some());
 }
 
-#[test]
-fn protocol_mismatch_exposes_typed_diagnostics_and_recovery_reports_the_connected_values() {
-    let mut runtime = runtime();
-    runtime.ingest_session(Err(SessionFetchError::Protocol {
-        message: "incompatible runtime".to_owned(),
-        expected_protocol: 23,
-        received_protocol: 22,
-        received_version: Some("0.9.0".to_owned()),
-    }));
-
-    let mismatch = &runtime.snapshot().status.herdr;
-    assert_eq!(mismatch.state, "protocol_mismatch");
-    assert_eq!(mismatch.expected_protocol, Some(23));
-    assert_eq!(mismatch.received_protocol, Some(22));
-    assert_eq!(mismatch.received_version.as_deref(), Some("0.9.0"));
-
-    let mut payload = working_payload();
-    payload.herdr_version = Some("0.9.1".to_owned());
-    runtime.ingest_session(Ok(payload));
-    let connected = &runtime.snapshot().status.herdr;
-    assert_eq!(connected.state, "connected");
-    // A healthy Herdr reports its real version and the revision that matched (B5).
-    let revision = u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION);
-    assert_eq!(connected.expected_protocol, Some(revision));
-    assert_eq!(connected.received_protocol, Some(revision));
-    assert_eq!(connected.received_version.as_deref(), Some("0.9.1"));
-}
-
 /// AC11, R9, SC6. A checkout whose tabs come from two Herdr workspaces
 /// refused every drag, because ownership was decided for the checkout
 /// rather than for the drag. A drag that only steps over the other
@@ -4303,14 +4257,8 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
     ))));
     let before = strip_ids(&runtime, &checkout_id);
 
-    let herdr = FakeHerdr::start("split-move", |_, _| tab_list(&["w-right:t2", "w-right:t1"]));
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    let herdr = FakeEngine::start(|_, _| tab_list(&["w-right:t2", "w-right:t1"]));
+    runtime.live = Some(herdr.live());
 
     // Move the right workspace's first tab behind its second.
     let moved = before
@@ -4324,12 +4272,12 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
         .expect("the right workspace's second tab");
     assert!(reorder_tab(&mut runtime, &checkout_id, &moved, target));
 
-    herdr.wait_for_requests(1, Duration::from_secs(5));
-    let request = &herdr.requests()[0];
-    assert_eq!(request["method"], "tab.move");
+    herdr.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&herdr)[0];
+    assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
-        serde_json::json!({"tab_id": "w-right:t1", "insert_index": 2}),
+        serde_json::json!({"tab": "w-right:t1", "index": 2}),
         "the index was not counted in the moved tab's own workspace"
     );
     // Nothing lands on the operator's word alone.
@@ -4397,16 +4345,8 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
         "the fixture strip is not the order this test reasons about: {before:?}"
     );
 
-    let herdr = FakeHerdr::start("split-interleave", |_, _| {
-        tab_list(&["w-right:t2", "w-right:t1"])
-    });
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    let herdr = FakeEngine::start(|_, _| tab_list(&["w-right:t2", "w-right:t1"]));
+    runtime.live = Some(herdr.live());
 
     // The right workspace's second tab is dragged to the very front, over
     // the left workspace's tab as well as its own sibling.
@@ -4416,12 +4356,12 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
         "herdr:w-right:t2",
         0
     ));
-    herdr.wait_for_requests(1, Duration::from_secs(5));
-    let request = &herdr.requests()[0];
-    assert_eq!(request["method"], "tab.move");
+    herdr.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&herdr)[0];
+    assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
-        serde_json::json!({"tab_id": "w-right:t2", "insert_index": 0}),
+        serde_json::json!({"tab": "w-right:t2", "index": 0}),
         "the index was not counted in the moved tab's own workspace"
     );
 
@@ -4871,15 +4811,8 @@ fn tab_rename_keeps_the_committed_name_on_failure_and_ignores_old_receipts() {
     runtime.apply_tab_rename(&mut incoming);
     assert_eq!(incoming.label.as_deref(), Some("External"));
 
-    let herdr =
-        crate::fake_herdr::FakeHerdr::start("rename-busy", |_, _| serde_json::json!({"type":"ok"}));
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_owned(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    let herdr = FakeEngine::start(|_, _| reply(()));
+    runtime.live = Some(herdr.live());
     runtime.rename_tab(request("slow", "First"));
     runtime.rename_tab(request("newer", "Retry me"));
     runtime.ingest_tab_rename_result("slow", Ok(()));

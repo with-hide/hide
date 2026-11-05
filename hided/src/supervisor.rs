@@ -75,9 +75,6 @@ impl From<String> for Halt {
 
 pub async fn run(env: Env) -> Result<(), String> {
     let state_dir = env.state_dir.clone();
-    if let Some(error) = crate::env::herdr_bin_error(&env) {
-        return Err(error);
-    }
     let lock = state_file::acquire_lock(&env.state_dir).map_err(|error| error.to_string())?;
     // The process's records go beside its state from its start, so a move
     // resumed before any role runs is logged where its roles log.
@@ -98,7 +95,7 @@ pub async fn run(env: Env) -> Result<(), String> {
     // Recorded once for the process, so a window finds it whichever role
     // runs, the move screen included; a request before the first role
     // waits for it (`seat`).
-    crate::record_daemon(&state_dir, &seat.parts(), env.herdr_socket_path.clone())?;
+    crate::record_daemon(&state_dir, &seat.parts())?;
     seat.parts().starting("resume");
     // Whatever role runs, the moves given up here are ended on their
     // machines.
@@ -723,11 +720,11 @@ async fn prepare(
             detail: source.other_linked_nodes.join(", "),
         });
     }
-    let own_socket = env.herdr_socket_path.clone();
-    if own_socket.is_none() {
+    let own_socket = crate::core_move::preflight::movable_scope();
+    if let Err(detail) = crate::core_move::preflight::engine_moves() {
         failed.push(FailedCheck {
-            check: CheckId::Herdr,
-            detail: "this machine has no Herdr server".to_owned(),
+            check: CheckId::Engine,
+            detail,
         });
     }
     // This machine's own setting, which moves with the core: not a login
@@ -878,11 +875,12 @@ async fn prepare(
         if !inspected
             .failed
             .iter()
-            .any(|check| check.check == CheckId::Herdr)
+            .any(|check| check.check == CheckId::Engine)
+            && !failed.iter().any(|check| check.check == CheckId::Engine)
         {
             failed.push(FailedCheck {
-                check: CheckId::Herdr,
-                detail: "the device has no Herdr server".to_owned(),
+                check: CheckId::Engine,
+                detail: "the device names no scope a move can rewrite".to_owned(),
             });
         }
         return Err(failed);

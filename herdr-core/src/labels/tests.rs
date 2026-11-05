@@ -353,7 +353,7 @@ impl Harness {
                             Arc::new(hide_node::Local::new(None));
                         Box::new(move || Ok(Arc::clone(&node)))
                     },
-                    herdr_socket: Some(self.locks.path().join(socket_name).display().to_string()),
+                    scope: Some(self.locks.path().join(socket_name).display().to_string()),
                 },
                 input: Arc::clone(&self.input),
                 ledger,
@@ -3204,8 +3204,6 @@ fn a_core_given_its_own_home_imports_labels_from_that_home_only() {
         schema_version: crate::SCHEMA_VERSION,
         home: Some(home),
         node_id: crate::node::test_node(),
-        herdr_socket_path: None,
-        herdr_bin_path: None,
         app_state_path: state.path().join("core-state.json").display().to_string(),
         host_helper_root: None,
         host_cli_dir: None,

@@ -1,23 +1,21 @@
-//! The real Claude Code in a pane of an engine, in a worktree of a
+//! The real Claude Code in a pane of the core's own engine, in a worktree of a
 //! repository it was never told to trust: it starts at its prompt in the
 //! worktree whose trust Hide recorded through the node (`trust_worktree`),
 //! and asks its folder trust question in the repository's other worktree,
 //! which shows the check reads the question where Claude asks it. Claude Code
 //! shows the question before it needs a sign-in, so no account is needed.
 //!
-//! It runs once on each engine: the pinned Herdr in a private server
-//! (`HIDE_E2E_HERDR_BIN`), and the core's own engine over holders started
-//! from the built holder (`HIDE_TEST_HOLDER_BIN`, and `HIDE_HOLDER_CONPTY` on
-//! Windows). Both need Claude Code in `HIDE_TEST_CLAUDE_BIN`, so they are
-//! ignored by default; the nightly agent trust contract installs the pinned
-//! Claude Code and runs both on every system.
+//! It needs holders started from the built holder (`HIDE_TEST_HOLDER_BIN`,
+//! and `HIDE_HOLDER_CONPTY` on Windows) and Claude Code in
+//! `HIDE_TEST_CLAUDE_BIN`, so it is ignored by default; the nightly agent
+//! trust contract installs the pinned Claude Code and runs it on every
+//! system.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use super::real_herdr_tests::PrivateHerdr;
 use super::*;
 use crate::engine::{Engine, Wait};
 
@@ -208,26 +206,16 @@ fn claude_reads_the_trust_hide_recorded(engine: &dyn Engine, home: &Path) {
         PROMPT_BANNER,
         "Claude Code starts at its prompt in the worktree Hide trusted",
     );
-    let screen = screen(engine, &trusted);
+    let shown = screen(engine, &trusted);
     assert!(
-        !screen.contains(TRUST_QUESTION),
-        "Claude Code asked in the worktree Hide trusted:\n{screen}"
+        !shown.contains(TRUST_QUESTION),
+        "Claude Code asked in the worktree Hide trusted:\n{shown}"
     );
 }
 
 #[test]
-#[ignore = "needs the pinned Herdr (HIDE_E2E_HERDR_BIN) and Claude Code (HIDE_TEST_CLAUDE_BIN)"]
-fn the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another() {
-    // The server runs in its private home, which its panes inherit.
-    let herdr = PrivateHerdr::new(None);
-    let engine = herdr.engine();
-    claude_reads_the_trust_hide_recorded(engine.as_ref(), &herdr.home);
-}
-
-#[test]
 #[ignore = "needs the built pane holder (HIDE_TEST_HOLDER_BIN) and Claude Code (HIDE_TEST_CLAUDE_BIN)"]
-fn on_the_own_engine_the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another()
- {
+fn the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another() {
     struct Running(crate::engine::contract::BuiltHolders);
     impl Drop for Running {
         fn drop(&mut self) {
@@ -235,9 +223,5 @@ fn on_the_own_engine_the_real_claude_starts_at_its_prompt_in_a_worktree_hide_tru
         }
     }
     let running = Running(crate::engine::contract::BuiltHolders::start());
-    // A holder's pane runs with the test's environment, so the private home
-    // is named to the pane's program as Herdr's server names its own.
-    let home = Path::new(&running.0.folder).join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    claude_reads_the_trust_hide_recorded(&running.0.engine, &home);
+    claude_reads_the_trust_hide_recorded(&running.0.engine, &running.0.home);
 }

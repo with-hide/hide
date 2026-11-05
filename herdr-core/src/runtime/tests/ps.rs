@@ -101,7 +101,6 @@ fn fixture() -> Runtime {
         target_id: "mini".to_owned(),
         state: "unavailable".to_owned(),
         message: None,
-        herdr_version: Some("0.9.5".to_owned()),
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![far],
             agents: far_rows,
@@ -114,7 +113,6 @@ fn fixture() -> Runtime {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),

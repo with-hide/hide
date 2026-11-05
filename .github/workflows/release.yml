@@ -10,8 +10,8 @@ name: hide release
 #     installs and starts each one: the macOS dmg and zip signed with the
 #     Developer ID certificate and notarized, the app the zip holds opened by
 #     its packaged-app specs; the Windows installer installed, installed again
-#     while Herdr runs and uninstalled, and the installed app opened with its
-#     window; the Linux deb installed on Ubuntu and the rpm in Fedora, and
+#     while the daemon runs and uninstalled, and the installed app opened
+#     with its window; the Linux deb installed on Ubuntu and the rpm in Fedora, and
 #     every installed daemon started (PRD auto-update D-32);
 #   - `agent-journey.yml` spawns the agents through Hide on the stand-ins
 #     and against its fake model with the pinned CLIs (PRD agent-journey-check

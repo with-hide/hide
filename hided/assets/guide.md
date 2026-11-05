@@ -97,7 +97,7 @@ hide workspace remove <path> [--delete-branch] [--force]
 
 ```
 hide device list [--json]
-hide device add <ssh alias> [--name <name>] [--socket <path>] [--json]
+hide device add <ssh alias> [--name <name>] [--json]
 hide device remove <device id> [--json]
 hide device retry <device id> [--wait] [--json]
 ```

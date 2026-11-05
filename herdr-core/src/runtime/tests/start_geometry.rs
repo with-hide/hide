@@ -16,20 +16,14 @@ fn session(zoomed: bool) -> SessionSnapshotPayload {
     payload
 }
 
-fn setup() -> (Runtime, FakeHerdr, u64) {
-    let herdr = FakeHerdr::start_with_errors("checkout-start-geometry", |method, _| match method {
-        "pane.zoom" => Ok(serde_json::json!({"type":"ok"})),
-        other => Err(("unsupported".into(), format!("unexpected {other}"))),
+fn setup() -> (Runtime, Fake, u64) {
+    let herdr = FakeEngine::start(|method, _| match method {
+        "set_zoom" => reply(()),
+        other => refused("unsupported", &format!("unexpected {other}")),
     });
     let (mut runtime, _) = tab_order_runtime(PATH);
     record_terminals(&mut runtime);
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: Weak::new(),
-        notifier: ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    runtime.live = Some(herdr.live());
     runtime.ingest_session(Ok(session(true)));
     let task = runtime
         .begin_task_operation("checkout_start", None, None, None, None)
@@ -247,7 +241,7 @@ fn queued_checkout_start_refuses_full_tab_and_last_pane_closes_without_native_wo
         runtime.finish_checkout_start_geometry(task, &lease, Err("start cancelled".into()));
         runtime.dispatch_json(&explorer_event(event, payload));
         assert_eq!(runtime.close_operations.len(), 1);
-        herdr.wait_for_requests(1, Duration::from_secs(5));
+        herdr.wait_for_calls(1, Duration::from_secs(5));
     }
 }
 
@@ -312,7 +306,7 @@ fn a_close_ahead_of_checkout_start_keeps_its_normal_fifo_turn() {
 
 const DEVICE: &str = "geometry-device";
 
-fn remote_setup() -> (Runtime, FakeHerdr, u64, String, String) {
+fn remote_setup() -> (Runtime, Fake, u64, String, String) {
     let (mut runtime, herdr, task) = setup();
     let tab = format!("remote:{DEVICE}:tab:{TAB}");
     let pane_id = crate::address::scoped_pane_id(DEVICE, PANE);
@@ -333,7 +327,6 @@ fn remote_setup() -> (Runtime, FakeHerdr, u64, String, String) {
         target_id: DEVICE.into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
@@ -370,7 +363,6 @@ fn remote_setup() -> (Runtime, FakeHerdr, u64, String, String) {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
     });
     runtime.install_remote_control(RemoteControlContext::new(

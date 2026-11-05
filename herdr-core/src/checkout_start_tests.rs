@@ -1,16 +1,10 @@
 //! Controller regressions at the typed socket and node boundaries.
 use super::*;
-use crate::fake_herdr::FakeHerdr;
+use crate::engine::fake::{FakeEngine, Reply, closed_layout, refused, reply, session, unanswered};
 use crate::live::ControlFailure;
 use crate::worktree_control::{CheckoutStart, CheckoutTabRequest, WorktreeTaskOutcome};
-use hide_herdr_client::{
-    ApiConnector, ApiError, ApiStream, ConnectionShutdown, LocalSocketConnector,
-};
-use hide_node_link::protocol::Call;
-use hide_node_link::{LinkAnswer, LinkError, NodeLink};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -55,8 +49,12 @@ struct State {
     refuse_binding_save: bool,
     respawn_at_inspection: Option<usize>,
     refuse_unzoom: bool,
-    /// The node has no Herdr server, so it names no pane's shell.
-    no_herdr: bool,
+    /// The engine names no pane's shell.
+    no_identity: bool,
+    /// The call whose answer is lost after its effect, and the flag that
+    /// stops the controller once it is.
+    lost: Option<&'static str>,
+    stopped: Arc<AtomicBool>,
 }
 
 impl State {
@@ -77,7 +75,9 @@ impl State {
             refuse_binding_save: false,
             respawn_at_inspection: None,
             refuse_unzoom: false,
-            no_herdr: false,
+            no_identity: false,
+            lost: None,
+            stopped: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -87,50 +87,64 @@ impl State {
 
     fn pane_info(&self, id: &str, tab: &str) -> Value {
         json!({"pane_id":id,"terminal_id":self.identities[id].terminal_id,"workspace_id":"w1",
-            "tab_id":tab,"focused":id == "w1:p1","cwd":"/fixture","agent_status":"unknown","revision":0})
+            "tab_id":tab,"cwd":"/fixture","agent_status":"unknown"})
     }
 
-    fn geometry(&self, tab: &str) -> Value {
-        let layout = &self.layouts[tab];
-        let ids = pane_ids(&layout["root"]);
-        json!({"workspace_id":"w1", "tab_id":tab, "zoomed":layout["zoomed"],
-            "area":{"x":0,"y":0,"width":120,"height":40}, "focused_pane_id":layout["focused_pane_id"],
-            "panes":ids.iter().map(|id| json!({"pane_id":id,"focused":id == "w1:p1",
-                "rect":{"x":0,"y":0,"width":60,"height":40}})).collect::<Vec<_>>(), "splits":[]})
+    /// The engine's answer to `method`; a lost answer is the effect done
+    /// and no answer read.
+    fn answer(&mut self, method: &'static str, params: &Value) -> Reply {
+        if method == "set_zoom" && self.refuse_unzoom {
+            self.calls.push(method.into());
+            return refused("invalid_operation", "unzoom refused");
+        }
+        let answer = self.effect(method, params);
+        if self.lost == Some(method) {
+            self.stopped.store(true, Ordering::Release);
+            return unanswered("answer lost after effect");
+        }
+        answer
     }
 
-    fn answer(&mut self, method: &str, params: &Value) -> Value {
-        self.calls.push(method.into());
+    fn effect(&mut self, method: &str, params: &Value) -> Reply {
+        if method != "inspect_pane" {
+            self.calls.push(method.into());
+        }
         match method {
-            "layout.apply" => {
+            "launch_checkout_tab" => {
                 let saved = self.last_saved();
                 assert_eq!(saved.workspace_id, "w1");
                 assert!(saved.binding.is_none());
-                assert_eq!(params["focus"], false);
-                assert_eq!(params["workspace_id"], "w1");
-                assert!(params.get("tab_id").is_none());
-                assert_eq!(params["root"]["label"], crate::start_claim::label(MARKER));
-                let mut root = params["root"].clone();
-                root["pane_id"] = json!("w1:p3");
-                // Actual pinned layout.apply/export omits launch env.
-                root.as_object_mut().unwrap().remove("env");
+                assert_eq!(params["workspace"], "w1");
+                assert!(params["seed_tab"].is_null());
+                assert_eq!(params["claim"], crate::start_claim::label(MARKER));
+                let mut root = json!({"type":"pane", "pane_id":"w1:p3",
+                    "label":params["claim"], "cwd":params["cwd"]});
+                if !params["command"].is_null() {
+                    root["command"] = params["command"].clone();
+                }
                 let mut created = layout("w1:t2", root);
                 created["focused_pane_id"] = json!("w1:p3");
-                self.layouts.insert("w1:t2".into(), created.clone());
-                json!({"type":"layout_apply", "layout":created})
+                self.layouts.insert("w1:t2".into(), created);
+                reply(("w1:t2".to_owned(), "w1:p3".to_owned()))
             }
-            "layout.export" => {
-                let mut exported = self.layouts[params["tab_id"].as_str().unwrap()].clone();
+            "export_layout" => {
+                let mut exported = self.layouts[params["tab"].as_str().unwrap()].clone();
                 if self.wrong_export_owner {
                     exported["workspace_id"] = json!("w2");
                 }
-                json!({"type":"layout_export", "layout":exported})
+                reply(closed_layout(exported))
             }
-            "session.snapshot" => {
-                let tabs: Vec<_> = self.layouts.iter().enumerate().map(|(n,(id,l))| json!({
-                    "tab_id":id,"workspace_id":"w1","number":n+1,"label":"Terminal",
-                    "focused":id == "w1:t1","pane_count":pane_ids(&l["root"]).len(),"agent_status":"unknown"
-                })).collect();
+            "session" => {
+                let tabs: Vec<_> = self
+                    .layouts
+                    .keys()
+                    .enumerate()
+                    .map(|(n, id)| {
+                        json!({
+                            "tab_id":id,"workspace_id":"w1","number":n+1,"label":"Terminal"
+                        })
+                    })
+                    .collect();
                 let panes: Vec<_> = self
                     .layouts
                     .iter()
@@ -141,182 +155,82 @@ impl State {
                             .collect::<Vec<_>>()
                     })
                     .collect();
-                json!({"type":"session_snapshot","snapshot":{
-                    "version":"fixture", "protocol":crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION,
-                    "workspaces":[{"workspace_id":"w1","number":1,"label":"fixture","focused":true,
-                        "pane_count":panes.len(),"tab_count":tabs.len(),"active_tab_id":"w1:t1","agent_status":"unknown"}],
-                    "tabs":tabs,"panes":panes,"layouts":[],"agents":[],
-                    "focused_workspace_id":"w1","focused_tab_id":"w1:t1","focused_pane_id":"w1:p1"
-                }})
+                reply(session(json!({
+                    "workspaces":[{"workspace_id":"w1","label":"fixture","active_tab_id":"w1:t1"}],
+                    "tabs":tabs,"panes":panes,
+                    "focused_workspace_id":"w1","focused_pane_id":"w1:p1"
+                })))
             }
-            "pane.zoom" => {
-                assert_eq!(params, &json!({"pane_id":"w1:p1","mode":"off"}));
+            "set_zoom" => {
+                assert_eq!(params, &json!({"pane":"w1:p1","zoom":false}));
                 assert!(self.last_saved().binding.is_some());
                 self.layouts.get_mut("w1:t1").unwrap()["zoomed"] = json!(false);
-                json!({"type":"pane_zoom","zoom":{"changed":true,"zoom_changed":true,"focus_changed":false,
-                    "pane_id":"w1:p1","focused_pane_id":"w1:p1","zoomed":false,"layout":self.geometry("w1:t1")}})
+                reply(())
             }
-            "pane.move" => {
+            "move_pane_beside" => {
                 let saved = self.last_saved();
                 assert_eq!(saved.binding.as_ref().unwrap().identity, identity("w1:p3"));
                 assert_eq!(saved.target.as_ref().unwrap().identity, identity("w1:p1"));
                 assert_eq!(
                     params,
-                    &json!({"pane_id":"w1:p3","focus":false,"destination":{
-                    "type":"tab","tab_id":"w1:t1","target_pane_id":"w1:p1","split":"right","ratio":0.5}})
+                    &json!({"pane":"w1:p3","target_tab":"w1:t1","target_pane":"w1:p1","down":false})
                 );
                 assert_eq!(self.layouts["w1:t1"]["zoomed"], false);
                 let source = self.layouts.remove("w1:t2").unwrap();
                 let target = self.layouts.get_mut("w1:t1").unwrap();
                 target["root"]["first"] =
                     split(target["root"]["first"].clone(), source["root"].clone());
-                json!({"type":"pane_move","move_result":{"changed":true,
-                    "previous_pane_id":"w1:p3","previous_workspace_id":"w1","previous_tab_id":"w1:t2",
-                    "pane":self.pane_info("w1:p3","w1:t1"), "target_layout":self.geometry("w1:t1"),
-                    "closed_tab_id":"w1:t2","focused_pane_id":"w1:p1"}})
+                reply(crate::engine::PaneJoinResult {
+                    changed: true,
+                    reason: None,
+                    workspace_id: "w1".into(),
+                    tab_id: "w1:t1".into(),
+                    pane_id: "w1:p3".into(),
+                    terminal_id: self.identities["w1:p3"].terminal_id.clone(),
+                    previous_workspace_id: "w1".into(),
+                    previous_tab_id: "w1:t2".into(),
+                    previous_pane_id: "w1:p3".into(),
+                    closed_tab_id: Some("w1:t2".into()),
+                    closed_workspace_id: None,
+                    created_tab_id: None,
+                })
             }
-            "tab.close" => {
-                self.layouts.remove(params["tab_id"].as_str().unwrap());
-                json!({"type":"ok"})
+            "close_tab" => {
+                self.layouts.remove(params["tab"].as_str().unwrap());
+                reply(())
             }
+            "inspect_pane" => self.inspect(params["pane"].as_str().unwrap()),
             other => panic!("unexpected start request {other}"),
         }
     }
-}
 
-struct IdentityNode(Arc<Mutex<State>>);
-impl NodeLink for IdentityNode {
-    fn call(&self, call: Call, _: Duration) -> Result<LinkAnswer, LinkError> {
-        let Call::PaneInspect { pane_id } = call else {
-            panic!("unexpected node call");
-        };
-        let mut state = self.0.lock().unwrap();
-        state.inspections.push(pane_id.clone());
-        if state.no_herdr {
-            return Err(LinkError::Refused(hide_node_link::HostError::new(
-                hide_node_link::ErrorCode::Unsupported,
-                "This node has no Herdr server",
-            )));
+    /// The pane's shell as the engine names it.
+    fn inspect(&mut self, pane_id: &str) -> Reply {
+        self.inspections.push(pane_id.to_owned());
+        if self.no_identity {
+            return refused("unsupported", "the engine names no pane's shell");
         }
         if pane_id == "w1:p3"
-            && state.respawn_at_inspection
-                == Some(
-                    state
-                        .inspections
-                        .iter()
-                        .filter(|id| *id == &pane_id)
-                        .count(),
-                )
+            && self.respawn_at_inspection
+                == Some(self.inspections.iter().filter(|id| *id == pane_id).count())
         {
-            state.respawn_at_inspection = None;
-            let identity = state.identities.get_mut(&pane_id).unwrap();
+            self.respawn_at_inspection = None;
+            let identity = self.identities.get_mut(pane_id).unwrap();
             identity.shell_pid += 1000;
             identity.shell_started += 1000;
-            // A same-server respawn retains pane/terminal ids and manual
-            // label, but clears launch argv in the pinned Herdr.
-            state.layouts.get_mut("w1:t2").unwrap()["root"]
+            // A same-engine respawn keeps the pane, its terminal id and its
+            // claim, but not the command it was launched with.
+            self.layouts.get_mut("w1:t2").unwrap()["root"]
                 .as_object_mut()
                 .unwrap()
                 .remove("command");
         }
-        Ok(serde_json::to_value(&state.identities[&pane_id])
-            .unwrap()
-            .into())
-    }
-}
-
-// Decorates the existing fake transport, without another socket/listener.
-// The server's valid answer is consumed before the controller loses it.
-struct LostAnswer {
-    inner: LocalSocketConnector,
-    method: &'static str,
-    stopped: Arc<AtomicBool>,
-}
-impl ApiConnector for LostAnswer {
-    fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
-        Ok(Box::new(LostStream {
-            inner: self.inner.connect()?,
-            method: self.method,
-            stopped: self.stopped.clone(),
-            sent: vec![],
-        }))
-    }
-}
-struct LostStream {
-    inner: Box<dyn ApiStream>,
-    method: &'static str,
-    stopped: Arc<AtomicBool>,
-    sent: Vec<u8>,
-}
-impl LostStream {
-    fn should_lose(&self) -> bool {
-        let request: Value = serde_json::from_slice(&self.sent).unwrap();
-        request["method"] == self.method
-    }
-
-    fn record_lost_success(&self, answer: &str) {
-        let response: Value = serde_json::from_str(answer).unwrap();
-        let request: Value = serde_json::from_slice(&self.sent).unwrap();
-        assert_eq!(response["id"], request["id"]);
-        assert!(response.get("result").is_some());
-        assert!(response.get("error").is_none());
-        self.stopped.store(true, Ordering::Release);
-    }
-}
-impl Read for LostStream {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        if out.is_empty() {
-            return Ok(0);
-        }
-        // request_with_correlation_id uses BufReader's Read path, while
-        // request_on_stream uses ApiStream::read_line_with_timeout below.
-        if self.should_lose() {
-            let answer = self
-                .inner
-                .read_line_with_timeout(Duration::from_secs(5))
-                .expect("server must complete the effect and answer before loss");
-            self.record_lost_success(&answer);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "answer lost after effect",
-            ));
-        }
-        self.inner.read(out)
-    }
-}
-impl Write for LostStream {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let n = self.inner.write(bytes)?;
-        self.sent.extend_from_slice(&bytes[..n]);
-        Ok(n)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-}
-impl ApiStream for LostStream {
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
-        self.inner.set_read_timeout(timeout)
-    }
-    fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
-        self.inner.set_write_timeout(timeout)
-    }
-    fn shutdown_handle(&self) -> Result<Box<dyn ConnectionShutdown>, ApiError> {
-        self.inner.shutdown_handle()
-    }
-    fn read_line_with_timeout(&mut self, timeout: Duration) -> Result<String, ApiError> {
-        let answer = self.inner.read_line_with_timeout(timeout)?;
-        if self.should_lose() {
-            self.record_lost_success(&answer);
-            Err(ApiError::Transport("answer lost after effect".into()))
-        } else {
-            Ok(answer)
-        }
+        reply(self.identities[pane_id].clone())
     }
 }
 
 struct Fixture {
-    server: FakeHerdr,
+    server: Arc<FakeEngine<'static>>,
     state: Arc<Mutex<State>>,
     stopped: Arc<AtomicBool>,
 }
@@ -324,17 +238,13 @@ impl Fixture {
     fn new() -> Self {
         let state = Arc::new(Mutex::new(State::new()));
         let answer = state.clone();
+        let stopped = state.lock().unwrap().stopped.clone();
         Self {
-            server: FakeHerdr::start_with_errors("checkout-start", move |method, params| {
-                let mut state = answer.lock().unwrap();
-                if method == "pane.zoom" && state.refuse_unzoom {
-                    state.calls.push(method.into());
-                    return Err(("invalid_operation".into(), "unzoom refused".into()));
-                }
-                Ok(state.answer(method, params))
+            server: FakeEngine::start(move |method, params| {
+                answer.lock().unwrap().answer(method, params)
             }),
             state,
-            stopped: Arc::new(AtomicBool::new(false)),
+            stopped,
         }
     }
     fn request(&self, add_pane: bool) -> CheckoutTabRequest {
@@ -366,13 +276,8 @@ impl Fixture {
         launch: Option<&ShellLaunch>,
         lost: Option<&'static str>,
     ) -> Result<WorktreeTaskOutcome, ControlFailure> {
-        let plain = self.server.engine();
-        let lossy = crate::engine::herdr::HerdrEngine::shared(Arc::new(LostAnswer {
-            inner: self.server.connector(),
-            method: lost.unwrap_or(""),
-            stopped: self.stopped.clone(),
-        }));
-        let node = IdentityNode(self.state.clone());
+        let engine = self.server.engine();
+        self.state.lock().unwrap().lost = lost;
         let save = |effect: &Effect| {
             let mut state = self.state.lock().unwrap();
             if state.refuse_binding_save && effect.binding.is_some() {
@@ -390,12 +295,7 @@ impl Fixture {
         };
         let result = run(
             &Control {
-                engine: if lost.is_some() {
-                    lossy.as_ref()
-                } else {
-                    plain.as_ref()
-                },
-                node: &node,
+                engine: engine.as_ref(),
                 save: &save,
                 check: &check,
             },
@@ -408,6 +308,7 @@ impl Fixture {
                 "the requested successful answer was not intercepted"
             );
         }
+        self.state.lock().unwrap().lost = None;
         result
     }
     fn recover(&self, request: &CheckoutTabRequest) -> CheckoutTabRequest {
@@ -424,7 +325,12 @@ impl Fixture {
             .unwrap()
             .calls
             .iter()
-            .filter(|method| matches!(method.as_str(), "layout.apply" | "pane.move" | "pane.zoom"))
+            .filter(|method| {
+                matches!(
+                    method.as_str(),
+                    "launch_checkout_tab" | "move_pane_beside" | "set_zoom"
+                )
+            })
             .cloned()
             .collect()
     }
@@ -448,7 +354,7 @@ fn respawn_after_discovery_cannot_become_the_first_binding_with_or_without_an_ac
             let result = if lost_ack {
                 assert!(
                     fixture
-                        .run(&request, Some(&launch()), Some("layout.apply"))
+                        .run(&request, Some(&launch()), Some("launch_checkout_tab"))
                         .is_err()
                 );
                 fixture.run(&fixture.recover(&request), None, None)
@@ -457,7 +363,7 @@ fn respawn_after_discovery_cannot_become_the_first_binding_with_or_without_an_ac
             };
             assert!(result.unwrap_err().is_ambiguous());
             assert!(fixture.state.lock().unwrap().last_saved().binding.is_none());
-            assert_eq!(fixture.mutations(), ["layout.apply"]);
+            assert_eq!(fixture.mutations(), ["launch_checkout_tab"]);
         }
     }
 }
@@ -468,7 +374,7 @@ fn respawn_after_discovery_cannot_become_the_first_binding_with_or_without_an_ac
 #[test]
 fn a_start_no_node_can_confirm_fails_and_closes_the_tab_it_made() {
     let fixture = Fixture::new();
-    fixture.state.lock().unwrap().no_herdr = true;
+    fixture.state.lock().unwrap().no_identity = true;
     let error = fixture
         .run(&fixture.request(false), Some(&launch()), None)
         .unwrap_err();
@@ -479,9 +385,9 @@ fn a_start_no_node_can_confirm_fails_and_closes_the_tab_it_made() {
         state
             .calls
             .iter()
-            .filter(|method| matches!(method.as_str(), "layout.apply" | "tab.close"))
+            .filter(|method| matches!(method.as_str(), "launch_checkout_tab" | "close_tab"))
             .collect::<Vec<_>>(),
-        ["layout.apply", "tab.close"]
+        ["launch_checkout_tab", "close_tab"]
     );
     assert!(
         !state.layouts.contains_key("w1:t2"),
@@ -502,13 +408,18 @@ fn refused_unzoom_retains_the_created_terminal_for_confirmation() {
     let error = fixture.run(&request, Some(&launch()), None).unwrap_err();
     assert!(error.is_ambiguous(), "creation already succeeded");
     assert!(fixture.state.lock().unwrap().last_saved().binding.is_some());
-    assert_eq!(fixture.mutations(), ["layout.apply", "pane.zoom"]);
+    assert_eq!(fixture.mutations(), ["launch_checkout_tab", "set_zoom"]);
     fixture.state.lock().unwrap().refuse_unzoom = false;
     let recovered = fixture.run(&fixture.recover(&request), None, None).unwrap();
     assert_eq!(recovered.created_tab_id.as_deref(), Some("w1:t1"));
     assert_eq!(
         fixture.mutations(),
-        ["layout.apply", "pane.zoom", "pane.zoom", "pane.move"]
+        [
+            "launch_checkout_tab",
+            "set_zoom",
+            "set_zoom",
+            "move_pane_beside"
+        ]
     );
 }
 
@@ -518,7 +429,7 @@ fn lost_create_answer_recovers_the_claim_without_creating_again() {
     let request = fixture.request(false);
     assert!(
         fixture
-            .run(&request, Some(&launch()), Some("layout.apply"))
+            .run(&request, Some(&launch()), Some("launch_checkout_tab"))
             .unwrap_err()
             .is_ambiguous()
     );
@@ -526,7 +437,7 @@ fn lost_create_answer_recovers_the_claim_without_creating_again() {
     let recovered = fixture.run(&fixture.recover(&request), None, None).unwrap();
     assert_eq!(recovered.pane_id, "w1:p3");
     assert_eq!(recovered.created_tab_id.as_deref(), Some("w1:t2"));
-    assert_eq!(fixture.mutations(), ["layout.apply"]);
+    assert_eq!(fixture.mutations(), ["launch_checkout_tab"]);
     assert_eq!(
         fixture
             .state
@@ -546,7 +457,7 @@ fn lost_move_answer_recovers_saved_incarnation_without_moving_again() {
     let request = fixture.request(true);
     assert!(
         fixture
-            .run(&request, Some(&launch()), Some("pane.move"))
+            .run(&request, Some(&launch()), Some("move_pane_beside"))
             .unwrap_err()
             .is_ambiguous()
     );
@@ -556,7 +467,10 @@ fn lost_move_answer_recovers_saved_incarnation_without_moving_again() {
     let recovered = fixture.run(&fixture.recover(&request), None, None).unwrap();
     assert_eq!(recovered.created_tab_id.as_deref(), Some("w1:t1"));
     assert_eq!(recovered.pane_id, "w1:p3");
-    assert_eq!(fixture.mutations(), ["layout.apply", "pane.move"]);
+    assert_eq!(
+        fixture.mutations(),
+        ["launch_checkout_tab", "move_pane_beside"]
+    );
     let state = fixture.state.lock().unwrap();
     assert_eq!(state.layouts.len(), 1);
     assert_eq!(
@@ -573,7 +487,7 @@ fn unobserved_default_shell_stays_unknown_after_lost_create_answer() {
     let request = fixture.request(false);
     assert!(
         fixture
-            .run(&request, Some(&launch()), Some("layout.apply"))
+            .run(&request, Some(&launch()), Some("launch_checkout_tab"))
             .unwrap_err()
             .is_ambiguous()
     );
@@ -591,7 +505,7 @@ fn unobserved_default_shell_stays_unknown_after_lost_create_answer() {
     let error = fixture.run(&legacy, None, None).unwrap_err();
     assert!(error.is_ambiguous());
     assert!(error.message().contains("continuity"));
-    assert_eq!(fixture.mutations(), ["layout.apply"]);
+    assert_eq!(fixture.mutations(), ["launch_checkout_tab"]);
     assert!(fixture.state.lock().unwrap().last_saved().binding.is_none());
 }
 
@@ -617,7 +531,7 @@ fn an_explicit_plain_shell_recovers_a_lost_answer_without_another_creation() {
     };
     assert!(
         fixture
-            .run(&request, Some(&plain), Some("layout.apply"))
+            .run(&request, Some(&plain), Some("launch_checkout_tab"))
             .unwrap_err()
             .is_ambiguous()
     );
@@ -630,7 +544,7 @@ fn an_explicit_plain_shell_recovers_a_lost_answer_without_another_creation() {
         crate::agent_start::ShellStart::Plain
     ));
     assert_eq!(recovered.pane_id, "w1:p3");
-    assert_eq!(fixture.mutations(), ["layout.apply"]);
+    assert_eq!(fixture.mutations(), ["launch_checkout_tab"]);
 }
 
 #[test]
@@ -640,7 +554,7 @@ fn recovery_refuses_duplicate_claim_or_wrong_export_owner_without_mutation() {
         let request = fixture.request(false);
         assert!(
             fixture
-                .run(&request, Some(&launch()), Some("layout.apply"))
+                .run(&request, Some(&launch()), Some("launch_checkout_tab"))
                 .is_err()
         );
         {
@@ -662,7 +576,7 @@ fn recovery_refuses_duplicate_claim_or_wrong_export_owner_without_mutation() {
         } else {
             "owner changed"
         }));
-        assert_eq!(fixture.mutations(), ["layout.apply"]);
+        assert_eq!(fixture.mutations(), ["launch_checkout_tab"]);
         assert!(fixture.state.lock().unwrap().last_saved().binding.is_none());
     }
 }
@@ -674,7 +588,7 @@ fn saved_terminal_binding_refuses_each_changed_incarnation_field() {
         let request = fixture.request(true);
         assert!(
             fixture
-                .run(&request, Some(&launch()), Some("pane.move"))
+                .run(&request, Some(&launch()), Some("move_pane_beside"))
                 .is_err()
         );
         {
@@ -695,7 +609,10 @@ fn saved_terminal_binding_refuses_each_changed_incarnation_field() {
                 .message()
                 .contains("terminal or its placement changed")
         );
-        assert_eq!(fixture.mutations(), ["layout.apply", "pane.move"]);
+        assert_eq!(
+            fixture.mutations(),
+            ["launch_checkout_tab", "move_pane_beside"]
+        );
     }
 }
 
@@ -715,7 +632,7 @@ fn adding_to_a_zoomed_target_unzooms_then_preserves_its_existing_panes() {
     assert_eq!(outcome.created_tab_id.as_deref(), Some("w1:t1"));
     assert_eq!(
         fixture.mutations(),
-        ["layout.apply", "pane.zoom", "pane.move"]
+        ["launch_checkout_tab", "set_zoom", "move_pane_beside"]
     );
     let state = fixture.state.lock().unwrap();
     assert_eq!(
@@ -740,7 +657,7 @@ fn joining_waits_for_the_incarnation_save_to_succeed() {
     let error = fixture.run(&request, Some(&launch()), None).unwrap_err();
     assert!(error.is_ambiguous());
     assert_eq!(error.message(), "binding was not saved");
-    assert_eq!(fixture.mutations(), ["layout.apply"]);
+    assert_eq!(fixture.mutations(), ["launch_checkout_tab"]);
     let state = fixture.state.lock().unwrap();
     assert!(state.last_saved().binding.is_none());
     assert_eq!(
@@ -756,7 +673,7 @@ fn a_restored_claim_without_the_original_command_is_not_bound() {
     let request = fixture.request(false);
     assert!(
         fixture
-            .run(&request, Some(&launch()), Some("layout.apply"))
+            .run(&request, Some(&launch()), Some("launch_checkout_tab"))
             .is_err()
     );
     fixture
@@ -774,6 +691,6 @@ fn a_restored_claim_without_the_original_command_is_not_bound() {
         .unwrap_err();
     assert!(error.is_ambiguous());
     assert!(error.message().contains("continuity"));
-    assert_eq!(fixture.mutations(), ["layout.apply"]);
+    assert_eq!(fixture.mutations(), ["launch_checkout_tab"]);
     assert!(fixture.state.lock().unwrap().last_saved().binding.is_none());
 }

@@ -19,25 +19,21 @@ use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
 
-use hide_herdr_client::{ApiConnector, ApiError, ApiStream};
-
 pub mod askpass;
+mod destination;
 mod device;
 mod gate;
 pub mod host;
 pub mod hosts;
 pub mod openssh;
-pub mod profiles;
 pub mod session;
 pub mod transfer;
 pub mod upstream;
 
 pub use device::{Connector, DEVICE_HOME_VARIABLE, SshDevice, parse_device_home};
-pub use host::{
-    DeviceEngine, LinkStream, LinkWriter, OpenError, PaneEvents, PaneEventsSlot, RemoteHost,
-};
+pub use host::{LinkStream, LinkWriter, OpenError, PaneEvents, PaneEventsSlot, RemoteHost};
 
-use hide_node_link::device::{CapabilityReport, RemoteHostIdentity, RemoteStage, SnapshotCheck};
+use hide_node_link::device::{CapabilityReport, RemoteHostIdentity, RemoteStage};
 
 /// The remembered socket is one owned `String`, so a panic while it was held
 /// cannot have left it half-written; the value is taken as it is.

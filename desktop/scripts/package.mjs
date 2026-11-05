@@ -1,6 +1,6 @@
 // Packages the release app for the system this runs on: the Electron host
-// with the release daemon, the hide CLI, the hook helper, the
-// pinned Herdr in its resources folder (the Electron release app PRD, D-03),
+// with the release daemon, the hide CLI, the hook helper and the pane holder
+// in its resources folder (the Electron release app PRD, D-03),
 // wrapped in that system's installers and the files its updater reads
 // (installers.mjs; PRD auto-update D-08, D-35), each installer beside a
 // SHA-256 checksum, all in desktop/out/release.
@@ -35,7 +35,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
-import { copyTree } from "./copy-tree.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
@@ -55,43 +54,21 @@ const run = (file, args, options = {}) => execFileSync(file, args, { cwd: repo, 
 const pnpm = (args) => run("pnpm", args, { stdio: "inherit", shell: process.platform === "win32" });
 
 /**
- * What differs per system. `arch` is the one architecture the pinned Herdr
- * asset for that system serves (`contracts/herdr-bundle.json`), so another
- * machine is refused rather than given a Herdr it cannot run. `herdr` fetches
- * the verified asset and answers its executable and the files that must sit
- * beside it.
+ * What differs per system. `arch` is the one architecture a package for that
+ * system is built for, so another machine is refused rather than given
+ * binaries it cannot run.
  */
 const SYSTEMS = {
-  darwin: {
-    label: "macos",
-    arch: "arm64",
-    herdr: () => ({ executable: run("zsh", ["scripts/fetch-herdr-runtime.sh"]), companions: [] }),
-  },
-  win32: {
-    label: "windows",
-    arch: "x64",
-    // The Windows asset is a zip: herdr.exe finds its ConPTY runtime in the
-    // `conpty` folder beside it, and the zip carries that runtime's notices.
-    // Every entry ships as upstream laid it out.
-    herdr: () => {
-      const executable = run("pwsh", ["-NoProfile", "-File", "scripts/fetch-herdr-runtime.ps1"]);
-      const folder = path.dirname(executable);
-      const companions = fs.readdirSync(folder).filter((entry) => entry !== path.basename(executable)).map((entry) => path.join(folder, entry));
-      return { executable, companions };
-    },
-  },
-  linux: {
-    label: "linux",
-    arch: "x64",
-    herdr: () => ({ executable: run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", "linux-x86_64"]), companions: [] }),
-  },
+  darwin: { label: "macos", arch: "arm64" },
+  win32: { label: "windows", arch: "x64" },
+  linux: { label: "linux", arch: "x64" },
 };
 
 const platform = process.platform;
 const system = SYSTEMS[platform];
 if (!system) throw new Error(`hide has no package for ${platform}`);
 const arch = process.arch;
-if (arch !== system.arch) throw new Error(`the pinned Herdr serves ${system.label} ${system.arch} only, and this machine is ${arch}`);
+if (arch !== system.arch) throw new Error(`hide packages ${system.label} ${system.arch} only, and this machine is ${arch}`);
 const exe = platform === "win32" ? ".exe" : "";
 const [phase = "both", ...extraArguments] = process.argv.slice(2);
 if (!["both", "compile", "assemble"].includes(phase) || extraArguments.length > 0) throw new Error("usage: package.mjs [compile|assemble]");
@@ -174,12 +151,7 @@ if (phase === "compile") {
   recordReleaseBinaries(binariesRecord, cargoRelease, releaseBinaries, { commit, version, order });
   process.exit(0);
 }
-const herdr = system.herdr();
-
-const shipped = [
-  ...releaseBinaries.map((name) => [name, path.join(cargoRelease, name)]),
-  [`herdr${exe}`, herdr.executable],
-];
+const shipped = releaseBinaries.map((name) => [name, path.join(cargoRelease, name)]);
 const missing = shipped.filter(([, source]) => {
   try {
     fs.accessSync(source, fs.constants.X_OK);
@@ -203,15 +175,9 @@ const extraResource = shipped.map(([name, source]) => {
   return target;
 });
 if (deviceManifest) extraResource.push(deviceManifest);
-for (const companion of herdr.companions) {
-  const target = path.join(staged, path.basename(companion));
-  copyTree(companion, target);
-  extraResource.push(target);
-}
 // A Windows holder runs its pane only on the pinned ConPTY runtime, which the
 // node finds in `holder-conpty` beside its program (hide_kit::holders::
-// CONPTY_SOURCE), apart from the `conpty` folder Herdr's asset ships. The
-// fetch refuses a package or a file of any digest other than
+// CONPTY_SOURCE). The fetch refuses a package or a file of any digest other than
 // contracts/conpty.json's, which fails the package.
 const HOLDER_CONPTY = "holder-conpty";
 if (platform === "win32") {
@@ -331,10 +297,6 @@ for (const [name] of shipped) {
   fs.accessSync(file, fs.constants.X_OK);
   if (!fs.statSync(file).isFile()) throw new Error(`${name} did not land as a file in ${bundledResources}`);
 }
-for (const companion of herdr.companions) {
-  const name = path.basename(companion);
-  if (!fs.existsSync(path.join(bundledResources, name))) throw new Error(`Herdr's ${name} did not land in ${bundledResources}`);
-}
 if (platform === "win32") {
   for (const file of ["conpty.dll", "x64/OpenConsole.exe", "arm64/OpenConsole.exe", "conpty-files.json"]) {
     if (!fs.statSync(path.join(bundledResources, HOLDER_CONPTY, file), { throwIfNoEntry: false })?.isFile()) {
@@ -362,7 +324,7 @@ const installers = await buildInstallers({ app: bundle, version, out: release, s
 if (deviceManifest) {
   const manifest = JSON.parse(fs.readFileSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST), "utf8"));
   for (const [devicePlatform, { asset }] of Object.entries(manifest.platforms)) {
-    for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder", "herdr"]) {
+    for (const name of releaseBinaries) {
       if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
     }
     // The archives and their manifest are release assets once, beside the

@@ -238,9 +238,7 @@ impl Core {
 
     /// `own_node` answers for the machine this core runs on (PRD
     /// core-host-node D-21); the core reaches that machine only through it.
-    /// `own_engine` is the engine that runs that machine's panes: the Herdr
-    /// server at `options.herdr_socket_path`, given exactly when a socket is
-    /// (PRD engine-bundle-1 D-2), or with no socket the core's own engine
+    /// `own_engine` is the core's own engine that runs that machine's panes
     /// (`EngineHandle::own`, PRD engine-bundle-3-core-owns D-5).
     /// `devices` opens the transport to each registered device.
     /// `terminals` reaches every node's terminal service, and `reports` is
@@ -271,12 +269,9 @@ impl Core {
         reports: crate::terminal_reports::TerminalReports,
         analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
     ) -> Option<Box<Self>> {
-        let engine_fits = match (&options.herdr_socket_path, &own_engine) {
-            (Some(_), Some(engine)) => engine.own_scope().is_none(),
-            (None, Some(engine)) => engine.own_scope().is_some(),
-            (Some(_), None) => false,
-            (None, None) => true,
-        };
+        let engine_fits = own_engine
+            .as_ref()
+            .is_none_or(|engine| engine.own_scope().is_some());
         if validate_options(&options).is_err() || !engine_fits {
             return None;
         }
@@ -502,13 +497,10 @@ impl Core {
                 None
             }
         };
-        // A Herdr session is keyed by its socket, the core's own engine's by
-        // the folder it stands for (`hide_kit::layout::engine_dir`).
+        // The engine's session is keyed by the folder it stands for
+        // (`hide_kit::layout::engine_dir`).
         let session_sync = own_engine.and_then(|own_engine| {
-            let scope = match options.herdr_socket_path.as_deref() {
-                Some(socket_path) => socket_path.to_owned(),
-                None => own_engine.own_scope()?.to_string_lossy().into_owned(),
-            };
+            let scope = own_engine.own_scope()?.to_string_lossy().into_owned();
             live::install(
                 &runtime,
                 notifier.clone(),
@@ -545,16 +537,12 @@ impl Core {
                 None
             }
         };
-        // This machine's install kit runs on its own node whether or not
-        // Herdr answers; only retiring the old labels plugin needs it (PRD
-        // labels-in-hided D-12). Without a socket from the embedder the node
-        // uses the one Herdr would for its home.
+        // This machine's install kit runs on its own node.
         lock_recover(&runtime).queue_local_kit_launch();
         let kit = match crate::kit::KitPump::spawn(
             Arc::downgrade(&runtime),
             notifier.clone(),
             Arc::clone(&own_node),
-            options.herdr_socket_path.clone(),
             options.node_id.clone(),
         ) {
             Ok(pump) => Some(pump),
@@ -939,35 +927,6 @@ impl Core {
         lock_recover(&self.runtime).prepare_memory(device, caller, expected, command)
     }
 
-    #[allow(clippy::too_many_arguments)] // identity facts and deadline cross the authenticated boundary intact
-    pub fn prepare_direct_observation(
-        &self,
-        device: &str,
-        caller: &str,
-        expected: &crate::workspace_control::Context,
-        terminal: &str,
-        observation: hide_agent_hooks::observation::DirectObservation,
-        start: bool,
-        deadline: std::time::Instant,
-    ) -> Result<crate::direct_observation::PreparedObservation, String> {
-        if !check_owner_thread(self, "observation.prepare") || std::time::Instant::now() >= deadline
-        {
-            return Err("observation_expired".into());
-        }
-        let runtime = self.runtime.try_lock().map_err(|_| "observation_busy")?;
-        let mut prepared = runtime.prepare_direct_observation(
-            device,
-            caller,
-            expected,
-            terminal,
-            observation,
-            start,
-            deadline,
-        )?;
-        prepared.runtime = std::sync::Arc::downgrade(&self.runtime);
-        Ok(prepared)
-    }
-
     pub fn prepare_delivery_human(&self) -> Result<crate::delivery::worker::PreparedHuman, String> {
         if !check_owner_thread(self, "delivery.human.prepare") {
             return Err("delivery_unavailable".into());
@@ -994,21 +953,6 @@ impl Core {
             notify_change(self);
         }
         released
-    }
-
-    /// What moves this machine's Herdr server onto the Herdr this app ships
-    /// (PRD herdr-takeover); a daemon outside a desktop package installs one
-    /// that finds nothing (`NoTakeover`), so nothing is offered and a saved
-    /// Herdr step goes on. Looks at the server at once.
-    pub fn set_herdr_takeover(&self, takeover: Arc<dyn crate::herdr_takeover::HerdrTakeover>) {
-        if check_owner_thread(self, "set_herdr_takeover") {
-            let mut runtime = lock_recover(&self.runtime);
-            runtime.install_herdr_takeover(
-                takeover,
-                Arc::downgrade(&self.runtime),
-                self.notifier.clone(),
-            );
-        }
     }
 
     /// What moves this machine's Herdr save into the core's own engine
@@ -1488,8 +1432,6 @@ mod tests {
                     schema_version: crate::SCHEMA_VERSION,
                     home: Some(home.path().display().to_string()),
                     node_id: crate::node::test_node(),
-                    herdr_socket_path: None,
-                    herdr_bin_path: None,
                     app_state_path: state.path().join("core-state.json").display().to_string(),
                     host_helper_root: None,
                     host_cli_dir: None,

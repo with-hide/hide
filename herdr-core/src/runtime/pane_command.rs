@@ -223,7 +223,7 @@ mod tests {
 
     /// The delivery fixture's checkout with its panes `sender` and
     /// `recipient` hosting `writer` and `reader`, with `twin` a pane `third`
-    /// hosting another `writer`, and this machine's Herdr, which no
+    /// hosting another `writer`, and this machine's engine, which no
     /// admission calls.
     fn fixture(
         twin: bool,
@@ -231,24 +231,24 @@ mod tests {
         Runtime,
         Context,
         tempfile::TempDir,
-        crate::fake_herdr::FakeHerdr,
+        Arc<crate::engine::fake::FakeEngine<'static>>,
     ) {
         fixture_answering(twin, |method, _| {
-            panic!("admission calls no Herdr method, got {method}")
+            panic!("admission calls no engine method, got {method}")
         })
     }
 
-    /// The fixture, its Herdr answering with `respond`.
+    /// The fixture, its engine answering with `respond`.
     fn fixture_answering(
         twin: bool,
-        respond: impl FnMut(&str, &serde_json::Value) -> Result<serde_json::Value, (String, String)>
+        respond: impl FnMut(&'static str, &serde_json::Value) -> crate::engine::fake::Reply
         + Send
         + 'static,
     ) -> (
         Runtime,
         Context,
         tempfile::TempDir,
-        crate::fake_herdr::FakeHerdr,
+        Arc<crate::engine::fake::FakeEngine<'static>>,
     ) {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, _) = crate::runtime::delivery::tests::fixture(root.path());
@@ -267,14 +267,8 @@ mod tests {
         let payload: SessionSnapshotPayload =
             serde_json::from_value(json!({ "agents": agents })).unwrap();
         runtime.observe_delivery_laid(NODE, &payload, None, None);
-        let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("pane-command", respond);
-        runtime.live = Some(crate::live::LiveContext {
-            socket_path: herdr.socket_path().to_path_buf(),
-            runtime: std::sync::Weak::new(),
-            notifier: crate::handle::ChangeNotifier::noop(),
-            engine: herdr.engine(),
-            node: Arc::new(hide_node::Local::of_process()),
-        });
+        let herdr = crate::engine::fake::FakeEngine::start(respond);
+        runtime.live = Some(herdr.live());
         let context = runtime
             .workspace_control_query(NODE, "sender", Query::Info)
             .unwrap()
@@ -307,17 +301,12 @@ mod tests {
     fn a_screen_read_preserves_styles_rows_and_truncation_without_sending_input() {
         let screen = "\u{1b}[31mred\u{1b}[0m\r\n  next row";
         let (runtime, context, _root, _herdr) = fixture_answering(false, move |method, params| {
-            assert_eq!(method, "pane.read");
-            assert_eq!(params["pane_id"], "recipient");
-            assert_eq!(params["source"], "visible");
-            assert_eq!(params["format"], "ansi");
-            assert_eq!(params["strip_ansi"], false);
-            assert!(params.get("lines").is_none_or(serde_json::Value::is_null));
-            Ok(json!({"type": "pane_read", "read": {
-                "pane_id": "recipient", "workspace_id": "w1", "tab_id": "w1:t1",
-                "source": "visible", "format": "ansi", "revision": 1,
-                "truncated": true, "text": screen
-            }}))
+            assert_eq!(method, "read_screen");
+            assert_eq!(params["pane"], "recipient");
+            crate::engine::fake::reply(crate::engine::PaneText {
+                text: screen.to_owned(),
+                truncated: true,
+            })
         });
         let result = runtime
             .prepare_pane_command(
@@ -340,8 +329,8 @@ mod tests {
     #[test]
     fn a_refused_screen_read_is_an_error_not_an_empty_screen() {
         let (runtime, context, _root, _herdr) = fixture_answering(false, |method, _| {
-            assert_eq!(method, "pane.read");
-            Err(("pane_not_found".into(), "gone".into()))
+            assert_eq!(method, "read_screen");
+            crate::engine::fake::refused("pane_not_found", "gone")
         });
         assert_eq!(
             runtime
@@ -370,12 +359,12 @@ mod tests {
         let (runtime, context, _root, _herdr) =
             fixture_answering(false, move |method, _| match method {
                 // No composer to read, as on a trust screen: the send goes on.
-                "pane.read" => Err(("pane_not_found".into(), "no screen".into())),
-                "pane.send_text" if refusing.load(Ordering::SeqCst) => {
-                    Err(("pane_not_found".into(), "gone".into()))
+                "read_screen" => crate::engine::fake::refused("pane_not_found", "no screen"),
+                "send_text" if refusing.load(Ordering::SeqCst) => {
+                    crate::engine::fake::refused("pane_not_found", "gone")
                 }
-                "pane.send_text" => Ok(json!({"type": "ok"})),
-                other => panic!("a send calls only pane.send_text, got {other}"),
+                "send_text" => crate::engine::fake::reply(()),
+                other => panic!("a send calls only send_text, got {other}"),
             });
         let runtime = Arc::new(std::sync::Mutex::new(runtime));
         let send = || {
@@ -409,10 +398,10 @@ mod tests {
         assert_eq!(input(), before + 1, "a completed write is one input");
     }
 
-    /// How the fixture's Herdr answers a send: the screen a composer read
+    /// How the fixture's engine answers a send: the screen a composer read
     /// gets, and which input methods refuse. Every call is recorded.
     #[derive(Default)]
-    struct SendHerdr {
+    struct SendEngine {
         screen: Option<&'static str>,
         refuse: Vec<&'static str>,
         /// Methods taken and never answered, a lost reply.
@@ -427,15 +416,15 @@ mod tests {
         calls: Vec<(String, serde_json::Value)>,
     }
 
-    /// The fixture with a Herdr answering by `herdr`, behind the runtime's
+    /// The fixture with an engine answering by `herdr`, behind the runtime's
     /// mutex as the daemon holds it.
     fn send_fixture(
-        herdr: Arc<std::sync::Mutex<SendHerdr>>,
+        herdr: Arc<std::sync::Mutex<SendEngine>>,
     ) -> (
         Arc<std::sync::Mutex<Runtime>>,
         Context,
         tempfile::TempDir,
-        crate::fake_herdr::FakeHerdr,
+        Arc<crate::engine::fake::FakeEngine<'static>>,
     ) {
         let (runtime, context, root, fake) = fixture_answering(false, send_answers(herdr));
         (
@@ -446,12 +435,11 @@ mod tests {
         )
     }
 
-    /// How the fake Herdr answers by `herdr`.
+    /// How the fake engine answers by `herdr`.
     fn send_answers(
-        herdr: Arc<std::sync::Mutex<SendHerdr>>,
-    ) -> impl FnMut(&str, &serde_json::Value) -> Result<serde_json::Value, (String, String)>
-    + Send
-    + 'static {
+        herdr: Arc<std::sync::Mutex<SendEngine>>,
+    ) -> impl FnMut(&'static str, &serde_json::Value) -> crate::engine::fake::Reply + Send + 'static
+    {
         move |method, params| {
             let mut herdr = herdr.lock().unwrap();
             herdr.calls.push((method.to_owned(), params.clone()));
@@ -465,22 +453,20 @@ mod tests {
                     .note_delivery_key_at(pane, crate::runtime::unix_milliseconds());
             }
             if herdr.lose.contains(&method) {
-                return Err((crate::fake_herdr::NO_REPLY.into(), String::new()));
+                return crate::engine::fake::unanswered("the reply was lost");
             }
             if herdr.refuse.contains(&method) {
-                return Err(("pane_not_found".into(), "refused".into()));
+                return crate::engine::fake::refused("pane_not_found", "refused");
             }
             match method {
-                "pane.read" => match herdr.screen {
-                    Some(text) => Ok(json!({"type": "pane_read", "read": {
-                        "pane_id": "recipient", "workspace_id": "w1", "tab_id": "w1:t1",
-                        "source": "visible", "format": "ansi", "revision": 1,
-                        "truncated": false, "text": text}})),
-                    None => Err(("pane_not_found".into(), "no screen".into())),
+                "read_screen" => match herdr.screen {
+                    Some(text) => crate::engine::fake::reply(crate::engine::PaneText {
+                        text: text.to_owned(),
+                        truncated: false,
+                    }),
+                    None => crate::engine::fake::refused("pane_not_found", "no screen"),
                 },
-                "pane.send_text" | "pane.send_keys" | "pane.send_input" => {
-                    Ok(json!({"type": "ok"}))
-                }
+                "send_text" | "press_pane_keys" | "paste_text" => crate::engine::fake::reply(()),
                 other => panic!("a send reads the composer and writes input, got {other}"),
             }
         }
@@ -515,23 +501,23 @@ mod tests {
         runtime.lock().unwrap().delivery_observations["recipient"].last_input_at_unix_ms
     }
 
-    fn written(herdr: &Arc<std::sync::Mutex<SendHerdr>>) -> Vec<(String, serde_json::Value)> {
+    fn written(herdr: &Arc<std::sync::Mutex<SendEngine>>) -> Vec<(String, serde_json::Value)> {
         herdr
             .lock()
             .unwrap()
             .calls
             .iter()
-            .filter(|(method, _)| method != "pane.read")
+            .filter(|(method, _)| method != "read_screen")
             .cloned()
             .collect()
     }
 
     /// The text goes in first, then the keys in order with Enter last, in
-    /// one press, and the answer says what Herdr took.
+    /// one press, and the answer says what the engine took.
     #[test]
     fn a_send_types_the_text_then_presses_the_keys_and_enter_and_says_what_landed() {
         use crate::engine::keys::PaneKey;
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr::default()));
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine::default()));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         let answer = send(
             &runtime,
@@ -551,12 +537,12 @@ mod tests {
             written(&herdr),
             vec![
                 (
-                    "pane.send_text".to_owned(),
-                    json!({"pane_id":"recipient","text":"2"})
+                    "send_text".to_owned(),
+                    json!({"pane": "recipient","text":"2"})
                 ),
                 (
-                    "pane.send_keys".to_owned(),
-                    json!({"pane_id":"recipient","keys":["down","esc","enter"]})
+                    "press_pane_keys".to_owned(),
+                    json!({"pane": "recipient","keys":["down","esc","enter"]})
                 ),
             ]
         );
@@ -578,11 +564,11 @@ mod tests {
     #[test]
     fn a_draft_in_the_composer_refuses_a_send_before_any_write() {
         use crate::engine::keys::PaneKey;
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine {
             screen: Some(include_str!(
                 "../../../hide-agent-adapter/tests/fixtures/composer/codex-1-typed.ansi"
             )),
-            ..SendHerdr::default()
+            ..SendEngine::default()
         }));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         person_typed(&runtime);
@@ -638,11 +624,11 @@ mod tests {
     #[test]
     fn a_screen_no_person_typed_into_takes_the_keys_that_answer_it() {
         use crate::engine::keys::PaneKey;
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine {
             screen: Some(include_str!(
                 "../../../hide-agent-adapter/tests/fixtures/composer/codex-0.166-hooks-review.ansi"
             )),
-            ..SendHerdr::default()
+            ..SendEngine::default()
         }));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         assert!(!runtime.lock().unwrap().person_draft("recipient"));
@@ -662,8 +648,8 @@ mod tests {
         assert_eq!(
             written(&herdr),
             vec![(
-                "pane.send_keys".to_owned(),
-                json!({"pane_id":"recipient","keys":["esc"]})
+                "press_pane_keys".to_owned(),
+                json!({"pane": "recipient","keys":["esc"]})
             )]
         );
     }
@@ -674,11 +660,11 @@ mod tests {
     #[test]
     fn a_senders_own_text_is_no_draft_until_a_person_types_after_it() {
         use crate::engine::keys::PaneKey;
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine {
             screen: Some(include_str!(
                 "../../../hide-agent-adapter/tests/fixtures/composer/codex-1-typed.ansi"
             )),
-            ..SendHerdr::default()
+            ..SendEngine::default()
         }));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         assert!(
@@ -729,9 +715,9 @@ mod tests {
     #[test]
     fn a_refused_send_is_no_input() {
         use crate::engine::keys::PaneKey;
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
-            refuse: vec!["pane.send_keys"],
-            ..SendHerdr::default()
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine {
+            refuse: vec!["press_pane_keys"],
+            ..SendEngine::default()
         }));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         let before = input_at(&runtime);
@@ -750,29 +736,22 @@ mod tests {
         assert_eq!(input_at(&runtime), before, "a refused key is no input");
     }
 
-    /// The parent of a child whose brief is unconfirmed, with a fake Herdr
+    /// The parent of a child whose brief is unconfirmed, with a fake engine
     /// answering by `herdr`: the brief was typed at `BRIEF_AT` and judged
     /// unconfirmed with nobody having answered the child's screen.
     fn unconfirmed_brief(
-        herdr: Arc<std::sync::Mutex<SendHerdr>>,
+        herdr: Arc<std::sync::Mutex<SendEngine>>,
     ) -> (
         Arc<std::sync::Mutex<Runtime>>,
         Context,
         tempfile::TempDir,
-        crate::fake_herdr::FakeHerdr,
+        Arc<crate::engine::fake::FakeEngine<'static>>,
     ) {
         use crate::delivery::typed::{RECORD_WAIT_MS, REREAD_WAIT_MS};
         const BRIEF_AT: u64 = 100_000;
         let (root, mut runtime, _) = crate::runtime::typed_input::tests::spawned(false, BRIEF_AT);
-        let fake =
-            crate::fake_herdr::FakeHerdr::start_with_errors("pane-send", send_answers(herdr));
-        runtime.live = Some(crate::live::LiveContext {
-            socket_path: fake.socket_path().to_path_buf(),
-            runtime: std::sync::Weak::new(),
-            notifier: crate::handle::ChangeNotifier::noop(),
-            engine: fake.engine(),
-            node: Arc::new(hide_node::Local::of_process()),
-        });
+        let fake = crate::engine::fake::FakeEngine::start(send_answers(herdr));
+        runtime.live = Some(fake.live());
         let asked = BRIEF_AT + RECORD_WAIT_MS;
         runtime.typed_input_work(asked);
         runtime.take_session_rereads();
@@ -822,16 +801,16 @@ mod tests {
         use crate::engine::keys::PaneKey;
         for (herdr, code) in [
             (
-                SendHerdr {
-                    refuse: vec!["pane.send_keys"],
-                    ..SendHerdr::default()
+                SendEngine {
+                    refuse: vec!["press_pane_keys"],
+                    ..SendEngine::default()
                 },
                 "keys_not_sent",
             ),
             (
-                SendHerdr {
-                    lose: vec!["pane.send_keys"],
-                    ..SendHerdr::default()
+                SendEngine {
+                    lose: vec!["press_pane_keys"],
+                    ..SendEngine::default()
                 },
                 "send_unconfirmed",
             ),
@@ -887,11 +866,11 @@ mod tests {
     #[test]
     fn a_person_typing_during_a_send_stops_it_before_its_next_write_and_keeps_their_draft() {
         use crate::engine::keys::PaneKey;
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine {
             screen: Some(include_str!(
                 "../../../hide-agent-adapter/tests/fixtures/composer/codex-1-typed.ansi"
             )),
-            ..SendHerdr::default()
+            ..SendEngine::default()
         }));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         {
@@ -902,7 +881,7 @@ mod tests {
             observation.last_input_at_unix_ms = 1;
         }
         herdr.lock().unwrap().typed_during =
-            Some(("pane.send_text", "recipient", Arc::downgrade(&runtime)));
+            Some(("send_text", "recipient", Arc::downgrade(&runtime)));
         let refused = send(
             &runtime,
             &context,
@@ -923,8 +902,8 @@ mod tests {
         assert_eq!(
             written(&herdr),
             vec![(
-                "pane.send_text".to_owned(),
-                json!({"pane_id": "recipient", "text": "y"})
+                "send_text".to_owned(),
+                json!({"pane": "recipient", "text": "y"})
             )],
             "nothing is written after the person's input"
         );
@@ -949,7 +928,7 @@ mod tests {
     /// refused before anything is asked.
     #[test]
     fn a_paste_goes_in_whole_only_where_its_agent_is_known_to_take_one() {
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr::default()));
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine::default()));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         send(
             &runtime,
@@ -964,8 +943,8 @@ mod tests {
         assert_eq!(
             written(&herdr),
             vec![(
-                "pane.send_input".to_owned(),
-                json!({"pane_id":"recipient","text":"one\rtwo\rthree"})
+                "paste_text".to_owned(),
+                json!({"pane": "recipient","text":"one\rtwo\rthree"})
             )]
         );
         herdr.lock().unwrap().calls.clear();
@@ -988,7 +967,7 @@ mod tests {
     #[test]
     fn a_pane_closed_to_input_takes_no_send() {
         use crate::engine::keys::PaneKey;
-        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr::default()));
+        let herdr = Arc::new(std::sync::Mutex::new(SendEngine::default()));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
         runtime.lock().unwrap().input_gate().close("recipient");
         assert_eq!(

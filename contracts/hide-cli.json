@@ -3429,14 +3429,6 @@
                     }
                 },
                 {
-                    "name": "--socket",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
@@ -5242,7 +5234,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:381d0833bae131b765e92ce8bf5f486e106b89198d5160c3b642d82958c464b0",
+    "digest": "sha256:75de6673f94aed44af13cdd74ca287c7dfc9a68ccc5b1549fffabdad74b2c0cd",
     "envelopes": {
         "agent": {
             "answer": "value",

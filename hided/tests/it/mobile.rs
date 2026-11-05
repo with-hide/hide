@@ -24,11 +24,6 @@ type Socket =
 fn env(dir: &Path, tailscale: &Path) -> Env {
     Env {
         home: dir.to_path_buf(),
-        herdr_socket_path: None,
-        herdr_move_socket: None,
-        herdr_bin_path: None,
-        own_engine: false,
-        login_shell: None,
         state_dir: dir.join("state"),
         legacy_state_dir: None,
         account_state_folder: false,

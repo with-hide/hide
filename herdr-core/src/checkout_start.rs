@@ -21,7 +21,6 @@ mod tests;
 /// the same coalesced settings writer as the original intent.
 pub(super) struct Control<'a> {
     pub engine: &'a dyn Engine,
-    pub node: &'a dyn crate::node_access::NodeLink,
     pub save: &'a dyn Fn(&Effect) -> Result<(), String>,
     pub check: &'a dyn Fn() -> Result<(), String>,
 }
@@ -35,16 +34,16 @@ fn uncertain(message: &str) -> ControlFailure {
 
 fn inspect(control: &Control<'_>, pane: &str) -> Result<PaneIdentity, ControlFailure> {
     (control.check)().map_err(ControlFailure::Ambiguous)?;
-    crate::node_access::pane_terminal(control.engine, control.node, pane, INSPECT_WAIT).map_err(
-        |unconfirmed| match unconfirmed {
+    crate::node_access::pane_terminal(control.engine, pane, INSPECT_WAIT).map_err(|unconfirmed| {
+        match unconfirmed {
             crate::node_access::PaneUnconfirmed::Certain => {
                 ControlFailure::Definite("agent_start.terminal_unchecked".into())
             }
             crate::node_access::PaneUnconfirmed::Uncertain => {
                 uncertain("agent_start.terminal_unchecked")
             }
-        },
-    )
+        }
+    })
 }
 
 fn save(control: &Control<'_>, effect: &Effect) -> Result<(), ControlFailure> {

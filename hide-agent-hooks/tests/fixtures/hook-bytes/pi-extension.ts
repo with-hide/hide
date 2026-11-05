@@ -1,8 +1,8 @@
-// hide-extension@14 sha256=da74c2d52f0311e5c252587a635fa055597e1e05c38eb230ff78ca17869c137b
+// hide-extension@15 sha256=5b4665b45036e57cfddf2f80c684ac4ce6da9e04d378228e393385b46365ff12
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
-// nothing; inside one it acts for the pane's own TUI session, and its spawn guard for every session in it.
+// nothing; inside one it acts for the pane's own TUI session, and its opener guard for every session in it.
 // @ts-nocheck
 
 import { spawn } from "node:child_process";
@@ -14,9 +14,9 @@ import path from "node:path";
 const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 const AGENT = "pi";
-const VERSION = 14;
+const VERSION = 15;
 
-// The prompt budget is Claude Code's prompt hook's; the tool budget is the spawn guard's. Both hosts wait for
+// The prompt budget is Claude Code's prompt hook's; the tool budget is the opener guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
 const PROMPT_BUDGET_MS = 1850;
 const TOOL_BUDGET_MS = 2500;
@@ -138,10 +138,8 @@ function helperPresent() {
 }
 
 function managed(env) {
-  // A pane on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three variables
-  // (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
-  const herdrPane = env.HERDR_ENV === "1" && env.HERDR_PANE_ID && env.HERDR_SOCKET_PATH;
-  if (!env.HIDE_PANE_ID && !herdrPane) return false;
+  // A pane Hide manages names itself HIDE_PANE_ID (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+  if (!env.HIDE_PANE_ID) return false;
   // omp marks every shell it starts with OMPCODE=1 and Pi with PI_SESSION_ID: an agent started there is not
   // the pane's agent, and its prompts must not take the pane's letters.
   if (env.OMPCODE === "1" || env.PI_SESSION_ID) return false;
@@ -467,7 +465,6 @@ function handoverOpen(state) {
  * reply, before the next result.
  */
 async function onToolResult(state, event, ctx) {
-  await observeTool(state, event, ctx);
   if (!root(ctx) || typeof event?.toolCallId !== "string") return undefined;
   const session = sessionFile(ctx);
   if (!session) return undefined;
@@ -482,37 +479,6 @@ async function onToolResult(state, event, ctx) {
   const content = [...(Array.isArray(event.content) ? event.content : []), { type: "text", text }];
   // Replacing the content alone drops a tool's structured result: it is returned with it.
   return event.structuredContent === undefined ? { content } : { content, structuredContent: event.structuredContent };
-}
-
-/** `tool_result` includes the executed input in both hosts. Internal omp
- * sessions keep their own native id; a parent's file is never substituted.
- * The daemon may reject a child it cannot attest. */
-async function observeTool(state, event, ctx) {
-  const command = event?.input?.command;
-  if (!["bash", "powershell"].includes(event?.toolName) || typeof command !== "string" || !(command.includes("herdr") || command.includes("HERDR_BIN_PATH"))) return;
-  const session = nativeSession(ctx);
-  if (!session || typeof event.toolCallId !== "string" || Buffer.byteLength(command, "utf8") > 64 * 1024) { state.lost += 1; return; }
-  const content = event.content;
-  const truncated = Array.isArray(content) && (content.length > 16 || content.reduce((sum, part) => sum + (typeof part?.text === "string" ? Buffer.byteLength(part.text, "utf8") : 0), 0) > 128 * 1024);
-  // Preserve Pi's separate structured result when it actually is the Herdr
-  // envelope, without serializing arbitrary tool metadata or prompt bodies.
-  const structured = AGENT === "pi" && event.structuredContent?.id === "cli:agent:prompt" && !event.structuredContent?.error && event.structuredContent?.result?.type === "agent_prompted" ? event.structuredContent : null;
-  let result = null;
-  if (structured) {
-    const agent = structured.result.agent;
-    const reference = agent?.agent_session;
-    const identifiers = [agent?.pane_id, agent?.terminal_id, reference?.source, reference?.agent, reference?.kind, reference?.value];
-    if (identifiers.every((value) => value === undefined || value === null || (typeof value === "string" && value.length <= 4096))) {
-      result = { id: "cli:agent:prompt", result: { type: "agent_prompted", agent: { pane_id: agent?.pane_id, terminal_id: agent?.terminal_id, agent_session: reference ? { source: reference.source, agent: reference.agent, kind: reference.kind, value: reference.value } : null } } };
-    }
-  } else if (!truncated && Array.isArray(content) && content.every((part) => part?.type === "text" && typeof part.text === "string")) {
-    result = { content: content.filter((part) => part?.type === "text").map((part) => ({ type: "text", text: part.text })) };
-  }
-  await helper(state, "observation", {
-    session_id: session,
-    observation: { command, call_id: event.toolCallId, result, truncated,
-      failed: event.isError === true, asynchronous: Boolean(event.details?.background || event.details?.asyncJobId) },
-  }, 1500);
 }
 
 /** A message the host finished: Hide's hidden message is written, and the reply after it means the turn is recorded. */
@@ -578,10 +544,10 @@ async function onTool(state, event, ctx) {
   if (tool === "bash") {
     const command = event?.input?.command;
     // Every shell call comes here: one asks the helper while a guardrail is on, or, in the pane's own agent, when
-    // it can start an agent through Herdr or hand a result to the system opener.
+    // it can hand a result to the system opener.
     if (typeof command !== "string") return null;
-    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH") || mayOpen(command));
-    if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
+    const opens = !state.guardOnly && mayOpen(command);
+    if (!opens && !namesGlobal(command) && !guardrailsOn(state)) return null;
     const cwd = typeof event.input.cwd === "string" && event.input.cwd ? event.input.cwd : ctx?.cwd;
     request = { tool, command, cwd };
   } else if (FILE_TOOLS.has(tool)) {
@@ -721,7 +687,7 @@ export default function hide(pi) {
     if (shared.publish && AGENT === "omp") shared.publish = null;
     // A prompt or tool call still asking has no one to answer; a confirmation or a count finishes on its own budget.
     for (const running of state.running) {
-      if (["prompt", "tool", "start", "observation"].includes(running.hideOperation)) {
+      if (["prompt", "tool", "start"].includes(running.hideOperation)) {
         try {
           running.kill("SIGKILL");
         } catch {}

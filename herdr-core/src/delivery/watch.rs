@@ -374,7 +374,7 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             _ => "Inspect the target before deciding whether it is blocked.",
         };
         let body = format!(
-            "{summary}\nTarget {}. Last activity unix_ms={activity}; Herdr status={}; open requests={open_requests}; activity basis={basis}; read failure={failure}.\n{advice}",
+            "{summary}\nTarget {}. Last activity unix_ms={activity}; engine status={}; open requests={open_requests}; activity basis={basis}; read failure={failure}.\n{advice}",
             watch.target.name,
             if reading.status_available {
                 reading.status.as_str()

@@ -108,7 +108,6 @@ pub(super) fn session(workspaces: Vec<WorkspaceSnapshot>) -> RemoteSessionSnapsh
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     }
 }
 
@@ -445,20 +444,17 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
         sign_in: None,
         ssh_alias: Some(TARGET.to_owned()),
         wsl_distro: None,
-        herdr_socket_path: None,
         agent_count: 0,
         test: None,
         host: Default::default(),
         kit: Default::default(),
         machine_name: None,
         dials_in: false,
-        herdr_behind: None,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -528,7 +524,6 @@ fn a_device_session_is_grouped_when_its_helper_answers() {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -754,8 +749,6 @@ fn retrying_a_device_keeps_its_panes_in_their_checkouts() {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     runtime
@@ -821,8 +814,6 @@ fn catalog_device_runtime(workspaces: Vec<WorkspaceSnapshot>) -> (Runtime, tempf
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     runtime
@@ -1026,7 +1017,6 @@ fn a_device_whose_helper_is_not_allowed_shows_its_workspaces_unconfirmed() {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1114,7 +1104,6 @@ fn a_device_registration_is_listed_without_panes_pinned_and_removed_on_that_devi
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1424,7 +1413,6 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1461,7 +1449,7 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
         1
     );
     assert_eq!(runtime.snapshot.status.last_error, None);
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
         connector,
@@ -1660,12 +1648,7 @@ fn a_refused_registration_terminal_is_logged_and_leaves_the_project_on_its_start
     let t = tree();
     let mut runtime = runtime();
     registering_device(&mut runtime, Vec::new());
-    let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("registration-terminal", |_, _| {
-        Err((
-            "internal_error".to_owned(),
-            "refused by the fixture".to_owned(),
-        ))
-    });
+    let herdr = FakeEngine::start(|_, _| refused("internal_error", "refused by the fixture"));
     let shared = Arc::new(Mutex::new(runtime));
     shared
         .lock()
@@ -1698,29 +1681,19 @@ fn a_refused_registration_terminal_is_logged_and_leaves_the_project_on_its_start
     assert!(project.checkouts[0].tabs.is_empty());
 }
 
-/// A Herdr socket that records each request and answers none, so a test sees
-/// exactly what a device's Herdr was asked.
-pub(super) struct RecordingHerdr {
-    pub(super) requests: Arc<Mutex<Vec<serde_json::Value>>>,
-}
-
-impl hide_herdr_client::ApiConnector for RecordingHerdr {
-    fn connect(
-        &self,
-    ) -> Result<Box<dyn hide_herdr_client::ApiStream>, hide_herdr_client::ApiError> {
-        use std::io::BufRead;
-        let (client, server) = hide_platform::ipc::LocalStream::pair().unwrap();
-        let requests = self.requests.clone();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            if std::io::BufReader::new(server).read_line(&mut line).is_ok()
-                && let Ok(request) = serde_json::from_str(&line)
-            {
-                requests.lock().unwrap().push(request);
-            }
-        });
-        Ok(Box::new(client))
-    }
+/// A device engine that records each call as `{method, params}` and answers
+/// none, so a test sees exactly what a device's engine was asked.
+pub(super) fn recording_engine(
+    requests: Arc<Mutex<Vec<serde_json::Value>>>,
+) -> crate::engine::SharedEngine {
+    FakeEngine::start(move |method, params| {
+        requests
+            .lock()
+            .unwrap()
+            .push(serde_json::json!({"method": method, "params": params}));
+        unanswered("the recording engine answers nothing")
+    })
+    .engine()
 }
 
 fn device_strip(runtime: &Runtime, checkout_id: &str) -> Vec<String> {
@@ -1752,7 +1725,6 @@ fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_drop
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1769,9 +1741,7 @@ fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_drop
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
-        crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
-            requests: requests.clone(),
-        })),
+        recording_engine(requests.clone()),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
@@ -1830,9 +1800,9 @@ fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_drop
         "the strip waits for the device's Herdr"
     );
     let request = next_request(&requests, 0);
-    assert_eq!(request["method"], "tab.move");
+    assert_eq!(request["method"], "move_tab");
     assert_eq!(
-        request["params"]["tab_id"], "t2",
+        request["params"]["tab"], "t2",
         "the id the device's Herdr knows"
     );
 
@@ -1874,8 +1844,6 @@ fn removing_a_device_forgets_its_projects_tabs_and_folders_and_keeps_this_machin
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     let registration = |id: &str, device: &str| crate::model::WorkspaceRegistration {
@@ -2023,20 +1991,17 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
         sign_in: None,
         ssh_alias: Some(TARGET.to_owned()),
         wsl_distro: None,
-        herdr_socket_path: None,
         agent_count: 0,
         test: None,
         host: Default::default(),
         kit: Default::default(),
         machine_name: None,
         dials_in: false,
-        herdr_behind: None,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2049,7 +2014,7 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     raw.focused_workspace_id = Some(format!("remote:{TARGET}:workspace:w1"));
     raw.focused_checkout_id = Some(format!("remote:{TARGET}:checkout:w1"));
     runtime.ingest_remote_session(TARGET, Ok(raw));
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
         connector,
@@ -2160,13 +2125,12 @@ fn a_refused_device_request_does_not_bring_the_device_forward() {
         target_id: TARGET.to_owned(),
         state: "not_connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
         connector,
@@ -2198,7 +2162,6 @@ fn a_device_pane_carries_its_children_and_its_path_to_the_parent() {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2272,7 +2235,6 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2322,7 +2284,6 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
             }],
             agents: Vec::new(),
             held_for_onboarding: false,
-            labels_retirement: Default::default(),
             legacy_retirement: Default::default(),
             codex_daemon: None,
             codex_daemon_on: None,
@@ -2330,7 +2291,6 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
-            herdr: None,
             refused: None,
         },
     );
@@ -2349,7 +2309,6 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2414,8 +2373,6 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: Some(consent),
         });
     // Allowed, but the first read of its kit failed: the cause is unknown,
@@ -2444,7 +2401,6 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             }],
             agents: Vec::new(),
             held_for_onboarding: false,
-            labels_retirement: Default::default(),
             legacy_retirement: Default::default(),
             codex_daemon: None,
             codex_daemon_on: None,
@@ -2452,7 +2408,6 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
-            herdr: None,
             refused: None,
         },
     );
@@ -2480,9 +2435,7 @@ fn recording_device(runtime: &mut Runtime) -> Arc<Mutex<Vec<serde_json::Value>>>
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
-        crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
-            requests: requests.clone(),
-        })),
+        recording_engine(requests.clone()),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
@@ -2564,7 +2517,6 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2601,8 +2553,8 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
         },
     );
     let request = next_request(&requests, 0);
-    assert_eq!(request["method"], "tab.create");
-    assert_eq!(request["params"]["workspace_id"], "w5N");
+    assert_eq!(request["method"], "create_tab");
+    assert_eq!(request["params"]["workspace"], "w5N");
 
     // Opening the row brings forward the tab last used there, in whichever
     // workspace, after the device's focus has moved elsewhere (B5).
@@ -2619,8 +2571,8 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
         },
     );
     let request = next_request(&requests, 1);
-    assert_eq!(request["method"], "tab.focus");
-    assert_eq!(request["params"]["tab_id"], "c");
+    assert_eq!(request["method"], "focus_tab");
+    assert_eq!(request["params"]["tab"], "c");
     // Once that tab is gone, the owner's active tab.
     let mut bound = herdr_workspace(TARGET, "w5N", &t.main, &[("a", &t.main)]);
     bound.checkouts[0].owner_workspace_id = Some("w5N".to_owned());
@@ -2640,8 +2592,8 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
         },
     );
     let request = next_request(&requests, 2);
-    assert_eq!(request["method"], "tab.focus");
-    assert_eq!(request["params"]["tab_id"], "a");
+    assert_eq!(request["method"], "focus_tab");
+    assert_eq!(request["params"]["tab"], "a");
 
     // With the bound workspace closed, the next tab opens the owner rather
     // than landing in w5T; while the folder is unconfirmed its kind is
@@ -2695,7 +2647,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
     new_tab(&mut runtime, "new-tab-2");
     assert_eq!(runtime.snapshot.status.last_error, None);
     let request = next_request(&requests, 3);
-    assert_eq!(request["method"], "worktree.open");
+    assert_eq!(request["method"], "open_worktree");
     assert_eq!(request["params"]["path"], t.main.as_str());
 }
 
@@ -2709,7 +2661,6 @@ fn folds_saved_under_old_device_checkout_ids_carry_over() {
         target_id: TARGET.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2771,7 +2722,6 @@ fn a_device_tab_hide_created_stays_in_its_folder_while_its_pane_reports_the_birt
         target_id: TARGET.to_owned(),
         state: "not_connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2841,7 +2791,6 @@ pub(super) fn connected_status(target: &str) -> RemoteStatusSnapshot {
         target_id: target.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -3167,7 +3116,6 @@ fn device_runtime(t: &Tree) -> Runtime {
         target_id: TARGET.to_owned(),
         state: "not_connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),

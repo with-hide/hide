@@ -98,18 +98,15 @@ impl Runtime {
         true
     }
 
-    /// The registered device on the server `target` leads to, in Herdr
-    /// `session`: the one question Add device's list, the first-run rows and
-    /// their Connect ask, so one config shows one added state on every
-    /// screen. A device on a custom socket is never equated to a named
-    /// server; one registered under `target` itself is it, and so is one
-    /// whose alias `endpoint` leads to the same server, compared in
-    /// `SshAddress::endpoint_key`'s form. Another named session on the host
-    /// is a separate device.
+    /// The registered device the SSH alias `target` leads to: the one
+    /// question Add device's list, the first-run rows and their Connect ask,
+    /// so one config shows one added state on every screen. One registered
+    /// under `target` itself is it, and so is one whose alias `endpoint`
+    /// leads to the same machine, compared in `SshAddress::endpoint_key`'s
+    /// form.
     pub(super) fn ssh_registration(
         &self,
         target: &str,
-        session: &str,
         endpoint: impl Fn(&str) -> Option<String>,
     ) -> Option<&crate::model::DeviceRegistration> {
         let wanted = endpoint(target);
@@ -118,11 +115,6 @@ impl Runtime {
             .device_registrations
             .iter()
             .find(|registration| {
-                if registration.herdr_socket_path.is_some()
-                    || registration.herdr_session.as_deref().unwrap_or("default") != session
-                {
-                    return false;
-                }
                 let Some(alias) = registration.origin.ssh_alias() else {
                     return false;
                 };
@@ -130,14 +122,14 @@ impl Runtime {
             })
     }
 
-    /// The registered device on the default server of the Host `entry` of
+    /// The registered device of the Host `entry` of
     /// `listing`, where every alias leads where the listing resolved it.
     fn ssh_host_registration(
         &self,
         listing: &SshHostListing,
         entry: &hide_node_link::device::SshHostEntry,
     ) -> Option<&crate::model::DeviceRegistration> {
-        self.ssh_registration(&entry.alias, "default", |alias| {
+        self.ssh_registration(&entry.alias, |alias| {
             listing
                 .entries
                 .iter()

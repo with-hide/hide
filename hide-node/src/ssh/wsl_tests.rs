@@ -73,15 +73,7 @@ fn distribution() -> Distribution {
 
 impl Fixture {
     fn device(&self, packages: HelperPackages) -> WslDevice {
-        WslDevice::new(
-            "Ubuntu",
-            self.access.clone(),
-            packages,
-            super::super::DeviceEngine::Herdr,
-            None,
-            None,
-        )
-        .unwrap()
+        WslDevice::new("Ubuntu", self.access.clone(), packages, None, None).unwrap()
     }
 
     fn calls(&self) -> Vec<String> {
@@ -105,6 +97,7 @@ impl Fixture {
             ("hided", "helper build 1"),
             ("hide", "command build 1"),
             ("hide-agent-hooks", "hooks build 1"),
+            ("hide-holder", "holder build 1"),
         ] {
             let path = builds.join(format!("{name}-linux-x86_64"));
             std::fs::write(&path, bytes).unwrap();

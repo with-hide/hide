@@ -1,4 +1,4 @@
-// hide-opencode-tui@4 sha256=b570e64d7209200a272feff8f2302e18a83736743687949641b7cfc21a749dea
+// hide-opencode-tui@5 sha256=d4b116fc88bf2762600ded51275311965abeabd69e2d3a503add2650f1e85a67
 // Hide's OpenCode 2 plugin, its TUI half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // It runs in the terminal, so in a Herdr pane it is that pane: it attaches to the root session the pane shows,
@@ -22,7 +22,7 @@ import {
 } from "./server.js";
 
 const ROUTE_POLL_MS = 250;
-const OPERATIONS = new Set(["prompt", "tool", "letters", "confirm", "observation"]);
+const OPERATIONS = new Set(["prompt", "tool", "letters", "confirm"]);
 
 /**
  * The root session above a child: up the children this half saw start, then as OpenCode's own sessions know it, so

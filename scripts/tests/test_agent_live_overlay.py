@@ -58,6 +58,7 @@ class PrivateConfiguration(unittest.TestCase):
             def refused(_):
                 raise RuntimeError("injected_protocol_cleanup_failure")
             runtime.close_workspace = refused
+            runtime.stop_panes = lambda: None
             result = runtime.close()
             self.assertFalse(result["confirmed"])
             self.assertTrue(result["credential_copies_removed"])

@@ -91,7 +91,7 @@ afterEach(() => {
 });
 
 function privateHome(label: string): Isolated {
-  const run = isolate({ bin: "/unused/herdr", socket: path.join(root, "unused.sock") }, label);
+  const run = isolate({}, label);
   runs.push(run);
   return run;
 }
@@ -269,18 +269,6 @@ test("pending launches retain HOME and the seventeenth candidate is refused befo
     }
   });
   expect(error).toBeUndefined();
-  expect(fs.existsSync(run.root)).toBe(false);
-});
-
-test("a Herdr that is still running removes the root after it stops on Windows, and at once elsewhere", () => {
-  const queued: (() => void)[] = [];
-  const run = isolate({ bin: "/unused/herdr", socket: path.join(root, "unused.sock"), afterStop: (remove) => { queued.push(remove); } }, "after-stop");
-  runs.push(run);
-  run.cleanup();
-  // A registered project's folder is held by the Herdr server's panes on Windows until it is gone.
-  expect(queued).toHaveLength(process.platform === "win32" ? 1 : 0);
-  expect(fs.existsSync(run.root)).toBe(process.platform === "win32");
-  for (const remove of queued) remove();
   expect(fs.existsSync(run.root)).toBe(false);
 });
 

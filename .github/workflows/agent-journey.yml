@@ -97,7 +97,7 @@ env:
 
 jobs:
   fixture:
-    name: agent journey stand-ins (${{ matrix.system }}, ${{ matrix.engine }})
+    name: agent journey stand-ins (${{ matrix.system }})
     # A Windows-only run leaves no system for the stand-ins.
     if: ${{ inputs.stand-ins != false && inputs.systems != '["windows"]' }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15"}')[matrix.system] }}
@@ -109,15 +109,13 @@ jobs:
       fail-fast: false
       matrix:
         system: ${{ fromJSON(inputs.systems) }}
-        engine: [herdr, own]
         exclude:
           - system: windows
     defaults:
       run:
         shell: bash
     env:
-      HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64"}')[matrix.system] }}
-      RUN_DIR: agents/runs/agent-journey-fixture-${{ matrix.system }}-${{ matrix.engine }}
+      RUN_DIR: agents/runs/agent-journey-fixture-${{ matrix.system }}
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
@@ -130,8 +128,7 @@ jobs:
           set: workspace
           save: false
       - name: Install zsh on Linux
-        # Every private pane starts from SHELL=/bin/zsh, and the Herdr fetch
-        # script is zsh; the Linux image has neither.
+        # Every private pane starts from SHELL=/bin/zsh; the Linux image has none.
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: sudo apt-get install -y --no-install-recommends zsh
@@ -143,14 +140,8 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
           bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
       - name: Build the native pane holder
-        if: matrix.engine == 'own'
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        if: matrix.engine == 'herdr'
-        timeout-minutes: 5
-        run: echo "bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")" >> "$GITHUB_OUTPUT"
       - name: Build the Claude and Codex stand-ins and the controller's spawn provider
         timeout-minutes: 5
         run: |
@@ -167,9 +158,9 @@ jobs:
         timeout-minutes: 30
         run: |
           set +e
-          python3 scripts/agent-journey-check.py --mode ci --engine "${{ matrix.engine }}" \
+          python3 scripts/agent-journey-check.py --mode ci \
             --fixture-bin "$RUNNER_TEMP/journey-shims" --controller-provider "$RUNNER_TEMP/journey-controller/claude" \
-            --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
+            --run-dir "$RUN_DIR"
           echo "exit=$?" >> "$GITHUB_OUTPUT"
       - name: The lane's verdict
         timeout-minutes: 2
@@ -179,7 +170,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: agent-journey-fixture-${{ matrix.system }}-${{ matrix.engine }}
+          name: agent-journey-fixture-${{ matrix.system }}
           # The report and each cell's evidence; the probe, which held the
           # private daemon, is gone by now.
           path: |
@@ -235,7 +226,7 @@ jobs:
           if-no-files-found: warn
 
   fake:
-    name: agent journey fake model (${{ matrix.system }}, ${{ matrix.engine }})
+    name: agent journey fake model (${{ matrix.system }})
     if: ${{ inputs.fake }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
@@ -246,18 +237,11 @@ jobs:
       fail-fast: false
       matrix:
         system: ${{ fromJSON(inputs.systems) }}
-        engine: [herdr, own]
-        # CI Job forbids holder breakaway. b4-default owns holder lifetime
-        # and must enable this Windows cell after that integration.
-        exclude:
-          - system: windows
-            engine: own
     defaults:
       run:
         shell: bash
     env:
-      HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
-      RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}-${{ matrix.engine }}
+      RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}
       # Every active adapter unless the caller named some (agent-canary.yml's pinned rerun).
       AGENTS: ${{ inputs.agents }}
       # The journey needs Python 3.12; Windows names it python.
@@ -311,20 +295,14 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
           bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
       - name: Build the native pane holder
-        if: matrix.engine == 'own'
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        if: matrix.engine == 'herdr'
+      - name: Fetch the pane holder's pinned ConPTY runtime
+        # A Windows holder runs its pane on the pinned OpenConsole, which the
+        # journey's package carries beside it.
+        if: runner.os == 'Windows'
         timeout-minutes: 5
-        run: |
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          else
-            bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
-          fi
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
       - name: Build the controller's spawn provider
         timeout-minutes: 5
         # Before the run, as the stand-ins are: a Windows link can outlast the
@@ -349,9 +327,9 @@ jobs:
           set +e
           selection=()
           if [[ -n "$AGENTS" ]]; then selection=(--agents "$AGENTS"); fi
-          "$PYTHON" scripts/agent-journey-check.py --mode ci --engine "${{ matrix.engine }}" --fake-model "${selection[@]}" \
+          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model "${selection[@]}" \
             --controller-provider "${{ steps.controller.outputs.provider }}" \
-            --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
+            --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
         timeout-minutes: 2
@@ -365,7 +343,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           # A hand run has no `report-name` input.
-          name: ${{ inputs.report-name || 'agent-journey-fake' }}-${{ matrix.system }}-${{ matrix.engine }}
+          name: ${{ inputs.report-name || 'agent-journey-fake' }}-${{ matrix.system }}
           path: |
             ${{ env.RUN_DIR }}/report.*
             ${{ env.RUN_DIR }}/*.json

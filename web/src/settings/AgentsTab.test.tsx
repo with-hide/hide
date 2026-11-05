@@ -19,7 +19,7 @@ vi.hoisted(() => {
 
 const piece = (state: KitPiece["state"], cause: string | null = null): KitPiece => ({ state, why: cause ? { cause } : null, location: null });
 const LABELS: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", grok: "Grok", opencode: "OpenCode", pi: "Pi", omp: "omp", antigravity: "Antigravity" };
-const FEATURES: KitFeatureId[] = ["skill", "guidance", "letters", "bell", "memory", "spawn_guard", "herdr_integration", "sleep", "fork", "start", "titles"];
+const FEATURES: KitFeatureId[] = ["skill", "guidance", "letters", "bell", "memory", "sleep", "fork", "start", "titles"];
 
 const agent = (id: string, over: Partial<KitAgent> = {}): KitAgent => ({
   id,
@@ -29,18 +29,16 @@ const agent = (id: string, over: Partial<KitAgent> = {}): KitAgent => ({
   chosen: false,
   skill: piece("installed"),
   hook: piece("installed"),
-  herdr: piece("installed"),
   doc_url: `https://docs.example.test/${id}`,
   ...over,
 });
-// What a Partial agent does in the fixture: the skill and Herdr's own status.
-const supports = (feature: KitFeatureId) => ["skill", "herdr_integration"].includes(feature);
+// What a Partial agent does in the fixture: the skill alone.
+const supports = (feature: KitFeatureId) => feature === "skill";
 const partial = (id: string, over: Partial<KitAgent> = {}): KitAgent =>
   agent(id, {
     enabled: false,
     skill: piece("off"),
     hook: null,
-    herdr: piece("off"),
     partial: true,
     features: FEATURES.map((feature) => ({ id: feature, supported: supports(feature) })),
     sessions: null,
@@ -128,7 +126,7 @@ it("lists the installed agents in the supported order with a switch each, and fo
   expect(q("[data-agents-machines]")).toBeNull();
   // Gemini CLI is not supported: a row an older helper still reports is not drawn (B1, B9).
   await unmount();
-  const older = await mount(state([device("local", { kit: kit([...SEVEN, partial("gemini-cli", { label: "Gemini CLI", herdr: null }), partial("cursor", { label: "Cursor", herdr: null })]) })]));
+  const older = await mount(state([device("local", { kit: kit([...SEVEN, partial("gemini-cli", { label: "Gemini CLI" }), partial("cursor", { label: "Cursor" })]) })]));
   expect(older.all("[data-agent-row]")).toHaveLength(7);
   expect(older.text()).not.toContain("Gemini");
   expect(older.text()).not.toContain("Cursor");
@@ -159,7 +157,7 @@ it("shows only how many sessions run for an agent that is on, nothing for a heal
 
 it("shows any broken piece as one plain line on its own row with Reinstall, naming the piece only in its hover and description (B13, B20)", async () => {
   const set = [
-    agent("claude-code", { hook: { state: "removed", why: null, location: "/Users/me/.claude/settings.json" }, herdr: piece("failed", "not_changed") }),
+    agent("claude-code", { hook: { state: "removed", why: null, location: "/Users/me/.claude/settings.json" }, skill: piece("failed", "not_changed") }),
     agent("codex"),
     agent("opencode", { skill: piece("outdated") }),
   ];
@@ -167,7 +165,7 @@ it("shows any broken piece as one plain line on its own row with Reinstall, nami
   const line = q('[data-agent-problem="local:claude-code"]')!;
   expect(visible(line)).toBe("✕Disconnected from HideReinstall");
   const detail = line.getAttribute("title");
-  expect(detail).toContain("Herdr integration: Failed: Hide could not install or change it.");
+  expect(detail).toContain("Skill: Failed: Hide could not install or change it.");
   expect(detail).toContain("Hook: Removed · /Users/me/.claude/settings.json");
   const button = q('[data-hook-reinstall="local:claude-code"]')!;
   expect(document.getElementById(button.getAttribute("aria-describedby")!)?.textContent).toBe(detail);
@@ -175,7 +173,7 @@ it("shows any broken piece as one plain line on its own row with Reinstall, nami
   expect(visible(q('[data-agent-problem="local:opencode"]')!)).toBe("!Disconnected from HideReinstall");
   expect(all("[data-agent-problem]")).toHaveLength(2);
   // No piece is named anywhere on the page.
-  expect(visible(q("[data-agents-machine-list]")!)).not.toMatch(/Hook|Plugin|Extension|Skill:|Herdr integration/);
+  expect(visible(q("[data-agents-machine-list]")!)).not.toMatch(/Hook|Plugin|Extension|Skill:/);
   await click(q('[data-hook-reinstall="local:claude-code"]'));
   expect(sent(events, "kit_reinstall")[0]?.payload).toEqual({ device_id: "local", components: [], agents: ["claude-code"] });
   await unmount();
@@ -330,7 +328,6 @@ it("keeps a recorded-on agent with no program under Installed with its switch, f
         chosen,
         skill: { state: "absent", why: { cause: "program_missing", value: id }, location: null },
         hook: { state: "absent", why: { cause: "program_missing", value: id }, location: null },
-        herdr: { state: "absent", why: null, location: null },
         partial: false,
         features: FEATURES.map((feature) => ({ id: feature, supported: true })),
         sessions: 0,
@@ -354,15 +351,15 @@ it("opens the Partial popover from the chip and lists every feature with a mark 
   const lines = [...popover.querySelectorAll("[data-agent-feature]")].map((line) => line.getAttribute("data-agent-feature"));
   expect([...lines].sort()).toEqual(FEATURES.map((feature) => `${feature}:${supports(feature) ? "yes" : "no"}`).sort());
   const groups = [...popover.querySelectorAll("[data-agent-feature-group]")];
-  expect(groups.map((group) => group.getAttribute("data-agent-feature-group"))).toEqual(["herdr", "sessions", "collaboration"]);
+  expect(groups.map((group) => group.getAttribute("data-agent-feature-group"))).toEqual(["basics", "sessions", "collaboration"]);
   expect(groups.map((group) => [...group.querySelectorAll("[data-agent-feature]")].map((line) => line.getAttribute("data-agent-feature")?.split(":")[0]))).toEqual([
-    ["skill", "guidance", "herdr_integration", "start"],
+    ["skill", "guidance", "start"],
     ["titles", "sleep", "fork"],
-    ["letters", "bell", "memory", "spawn_guard"],
+    ["letters", "bell", "memory"],
   ]);
   expect(popover.querySelector('[data-agent-feature="letters:no"]')?.textContent).toContain("–Not supported: Letters and Observer warnings");
   expect(popover.querySelector('[data-agent-feature="skill:yes"]')?.textContent).toContain("✓Supported: The hide skill");
-  // Every supported agent has Herdr's integration, so no row says its status is judged from the screen.
+  // No row says an agent's status is judged from the screen.
   expect(popover.textContent).not.toContain("from the screen");
   await unmount();
 });

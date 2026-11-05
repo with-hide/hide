@@ -31,9 +31,7 @@ pub use hide_node_link::LinkError;
 use hide_node_link::panes::{NodeEvent, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
-pub use link_streams::{
-    LinkHerdrConnector, LinkStream, LinkWriter, MAX_HERDR_PENDING, OpenError, StreamCloser,
-};
+pub use link_streams::{LinkStream, LinkWriter, OpenError, StreamCloser};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -124,20 +122,10 @@ const CLI_NAME: &str = "hide";
 /// The rest of the install kit (`hide_kit`), under the names the kit reads
 /// in its folder: the hook helper.
 const HOOKS_NAME: &str = "hide-agent-hooks";
-/// The pinned Herdr the package carries beside the helper, which a device
-/// of the same system gets in a folder of its own (PRD device-herdr-update
-/// D-08, `hide_kit::device_herdr`).
-const HERDR_NAME: &str = "herdr";
 /// The pane holder (`hide-holder`), which a device of the core's own engine
 /// runs its panes in, beside the helper in the same build folder, as the
 /// app carries it beside `hided` (PRD engine-bundle-3-core-owns D-22).
 const HOLDER_NAME: &str = "hide-holder";
-
-/// Why a Windows device is refused before anything is installed when the
-/// device's panes would run on its Herdr: a Windows device runs its panes in
-/// pane holders only, on the core's own engine (`HIDE_DEV_PANE_HOLDER=1`).
-pub const WINDOWS_NEEDS_OWN_ENGINE: &str =
-    "Windows devices connect only on the new engine; nothing was installed on this one";
 
 /// A program's file name on a device of `os`: Windows finds a program by its
 /// `.exe` suffix.
@@ -149,18 +137,6 @@ fn device_program(name: &str, os: &str) -> String {
     }
 }
 
-/// Which engine runs a device's panes: the device's Herdr, as every shipped
-/// Hide does, or the core's own engine over pane holders the device's node
-/// runs, with the development switch `HIDE_DEV_PANE_HOLDER` on (PRD
-/// engine-bundle-3-core-owns D-22). Only the second carries the holder to
-/// the device, and only the first carries Herdr, so a connection with the
-/// switch off uploads exactly what it always has.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DeviceEngine {
-    #[default]
-    Herdr,
-    Holders,
-}
 /// How long a draining connection waits for its admitted requests before it
 /// closes anyway. An admitted request is written and answered by its one
 /// deadline, and the longest call timeout is 120 s (an index walk, a
@@ -246,70 +222,52 @@ impl HelperPackages {
         })
     }
 
-    /// What a device of `os`/`arch` gets for the engine that runs its panes:
-    /// [`HelperPackages::payload`] for its Herdr, unchanged, or that with no
-    /// Herdr and the pane holder beside the helper.
-    pub(super) fn payload_for(
-        &self,
-        os: &str,
-        arch: &str,
-        engine: DeviceEngine,
-    ) -> Result<Payload, EstablishError> {
-        // Asked before anything is read or sent, so the device gets nothing.
-        if os == "windows" && engine == DeviceEngine::Herdr {
-            return Err(EstablishError::NeedsNewEngine(
-                WINDOWS_NEEDS_OWN_ENGINE.to_owned(),
-            ));
-        }
-        let (payload, bundled) = self.kit(os, arch)?;
-        match engine {
-            DeviceEngine::Herdr => Ok(payload),
-            // No Herdr goes to the device, and the holder goes beside the
-            // helper; a build that does not carry the holder for the
-            // device's system connects nothing rather than a node that
-            // could run no pane.
-            DeviceEngine::Holders => {
-                let mut payload = payload.without_herdr();
-                // A release's device kit carries the holder for a device of
-                // another system; a build's own system, or a developer's
-                // folder, has it beside the helper.
-                let holder = match bundled {
-                    Some(holder) => holder,
-                    None => {
-                        let holder = self.find_named(HOLDER_NAME, os, arch).map_err(|()| {
-                            EstablishError::Unsupported(format!(
-                                "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
-                                platform_label(os)
-                            ))
-                        })?;
-                        read_package(&device_program(HOLDER_NAME, os), &holder)
-                            .map_err(EstablishError::Install)?
-                    }
-                };
-                payload.files.push(holder);
-                // A Windows holder loads the pinned ConPTY runtime from the
-                // folder beside the node's program (`hide_kit::holders`).
-                if os == "windows" {
-                    let conpty = self
-                        .find_named(hide_kit::holders::CONPTY_SOURCE, os, arch)
-                        .map_err(|()| {
-                            EstablishError::Unsupported(format!(
-                                "This Hide build does not include the pane holder's ConPTY runtime for {} {arch}; the core's own engine cannot run this device's panes",
-                                platform_label(os)
-                            ))
-                        })?;
-                    payload.files.extend(
-                        read_folder(hide_kit::holders::CONPTY_SOURCE, &conpty)
-                            .map_err(EstablishError::Install)?,
-                    );
-                }
-                Ok(payload)
+    /// What a device of `os`/`arch` gets: [`HelperPackages::payload`] with
+    /// the pane holder beside the helper, which runs the device's panes for
+    /// the core's own engine.
+    pub(super) fn payload_for(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
+        // The holder goes beside the helper; a build that does not carry
+        // the holder for the device's system connects nothing rather than a
+        // node that could run no pane.
+        let (mut payload, bundled) = self.kit(os, arch)?;
+        // A release's device kit carries the holder for a device of
+        // another system; a build's own system, or a developer's
+        // folder, has it beside the helper.
+        let holder = match bundled {
+            Some(holder) => holder,
+            None => {
+                let holder = self.find_named(HOLDER_NAME, os, arch).map_err(|()| {
+                    EstablishError::Unsupported(format!(
+                        "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
+                        platform_label(os)
+                    ))
+                })?;
+                read_package(&device_program(HOLDER_NAME, os), &holder)
+                    .map_err(EstablishError::Install)?
             }
+        };
+        payload.files.push(holder);
+        // A Windows holder loads the pinned ConPTY runtime from the
+        // folder beside the node's program (`hide_kit::holders`).
+        if os == "windows" {
+            let conpty = self
+                .find_named(hide_kit::holders::CONPTY_SOURCE, os, arch)
+                .map_err(|()| {
+                    EstablishError::Unsupported(format!(
+                        "This Hide build does not include the pane holder's ConPTY runtime for {} {arch}; the core's own engine cannot run this device's panes",
+                        platform_label(os)
+                    ))
+                })?;
+            payload.files.extend(
+                read_folder(hide_kit::holders::CONPTY_SOURCE, &conpty)
+                    .map_err(EstablishError::Install)?,
+            );
         }
+        Ok(payload)
     }
 
-    /// Everything this build puts on a device of `os`/`arch` whose panes run
-    /// on its Herdr: the helper, which the device cannot do without, and the
+    /// The programs this build puts on a device of `os`/`arch` besides the
+    /// pane holder: the helper, which the device cannot do without, and the
     /// kit's parts, each found by the same rule as the helper. A part this
     /// build does not carry is left out and named, and the kit on the device
     /// reports it as missing from the build.
@@ -318,9 +276,8 @@ impl HelperPackages {
     }
 
     /// [`HelperPackages::payload`], and the pane holder when it came with a
-    /// release's device kit, which carries it beside the programs a device
-    /// on its Herdr is sent; a build's own files leave the holder unread
-    /// until a device of the core's own engine asks for it.
+    /// release's device kit; a build's own files leave the holder unread
+    /// until a device asks for it.
     fn kit(&self, os: &str, arch: &str) -> Result<(Payload, Option<Package>), EstablishError> {
         // Existing native and developer-provided artifacts keep their lookup
         // rule. Only a missing foreign helper goes to the release cache. This
@@ -343,7 +300,6 @@ impl HelperPackages {
             .map_err(EstablishError::Install)?;
         let mut payload = Payload {
             files: vec![helper],
-            herdr: None,
             missing: Vec::new(),
         };
         for name in [CLI_NAME, HOOKS_NAME] {
@@ -356,15 +312,6 @@ impl HelperPackages {
                     "This Hide build does not include {name} for {} {arch}",
                     platform_label(os)
                 )),
-            }
-        }
-        // A build without Herdr for this system brings none, and the device
-        // keeps its own (D-08); the build folder names the copy it brings,
-        // so a new pin is a new build folder.
-        if let Ok(path) = self.find_named(HERDR_NAME, os, arch) {
-            match read_package(hide_kit::device_herdr::HERDR_PROGRAM, &path) {
-                Ok(herdr) => payload.add_herdr(herdr),
-                Err(reason) => payload.missing.push(reason),
             }
         }
         Ok((payload, None))
@@ -394,48 +341,15 @@ struct Package {
     executable: bool,
 }
 
-/// The folder name of a pinned Herdr copy on a device: a prefix of its
-/// digest, so each pin has its own folder and builds share it.
-fn herdr_copy_name(herdr: &Package) -> &str {
-    &herdr.digest[..16]
-}
-
 /// What a build puts on one device.
 pub(super) struct Payload {
     /// The helper first, then the kit's parts.
     files: Vec<Package>,
-    /// The pinned Herdr, which goes into `<root>/herdr/<copy>/` rather than
-    /// the build folder, so a build that changes only the helper finds it
-    /// there (D-08).
-    herdr: Option<Package>,
     /// Why a kit part is not among them.
     missing: Vec<String>,
 }
 
 impl Payload {
-    /// The same pin and copy naming applies to bundled and downloaded kits.
-    fn add_herdr(&mut self, herdr: Package) {
-        let pin = format!("{}\n", herdr_copy_name(&herdr));
-        self.files.push(Package {
-            relative: hide_kit::device_herdr::HERDR_PIN.to_owned(),
-            digest: hex_digest(pin.as_bytes()),
-            bytes: pin.into_bytes(),
-            executable: false,
-        });
-        self.herdr = Some(herdr);
-    }
-
-    /// The payload with no Herdr: for the machine running the core, which
-    /// runs its own app's Herdr, and for a device whose panes the core's own
-    /// engine runs, which runs none, so neither carries a device's copy or
-    /// the pin naming it.
-    fn without_herdr(mut self) -> Self {
-        self.herdr = None;
-        self.files
-            .retain(|file| file.relative != hide_kit::device_herdr::HERDR_PIN);
-        self
-    }
-
     /// The build's version: a digest over every file's path, mode and bytes,
     /// so any change to any part is a new folder on the device.
     fn version(&self) -> String {
@@ -505,7 +419,6 @@ fn program_by_contract(relative: &str) -> Option<bool> {
     }
     match relative.strip_suffix(".exe").unwrap_or(relative) {
         HELPER_NAME | CLI_NAME | HOOKS_NAME | HOLDER_NAME => Some(true),
-        name if name == hide_kit::device_herdr::HERDR_PROGRAM => Some(true),
         _ => None,
     }
 }
@@ -1067,6 +980,11 @@ impl RemoteHost {
         written
     }
 
+    /// The protocol the node's Hello named, once it has greeted the core.
+    pub fn protocol(&self) -> Option<u32> {
+        self.inner.protocol.get().copied()
+    }
+
     /// Takes the protocol and reader facts the node's Hello advertised;
     /// once per link.
     pub(super) fn take_readers(
@@ -1275,52 +1193,6 @@ fn mark_closed(inner: &Inner, reason: String) {
     inner.stop_gates(&reason);
 }
 
-/// Starts the node's terminal service for the device's Herdr at
-/// `herdr_socket`, as the node names it, and the writer that carries the
-/// core's side of it, so the device's panes' terminals flow inside this link
-/// (PRD core-host-node-terminal D-10). A device whose Herdr cannot be found
-/// has none; its panes read unavailable and the reason goes to the log.
-pub(super) fn start_terminals_at(
-    herdr_socket: Result<String, String>,
-    host: &RemoteHost,
-    hook: TerminalHook,
-) -> Result<Arc<dyn hide_node_link::terminal::TerminalNode>, String> {
-    let started = herdr_socket
-        .and_then(|herdr_socket| {
-            host.call(Call::TerminalsStart { herdr_socket }, HELLO_TIMEOUT)
-                .map_err(|error| error.to_string())
-        })
-        .and_then(|_| {
-            crate::terminal::device::DeviceTerminals::start(
-                &hook.node,
-                Arc::new(host.clone()),
-                hook.sink,
-            )
-            .map_err(|error| format!("the terminal writer could not start: {error}"))
-        });
-    match started {
-        Ok(terminals) => {
-            host.take_terminal_lines(terminals.inbound());
-            crate::diagnostic!(json!({
-                "component": "remote_host",
-                "kind": "host.terminals_started",
-                "target": host.inner.target,
-                "link": terminals.link(),
-            }));
-            Ok(Arc::new(terminals))
-        }
-        Err(reason) => {
-            crate::diagnostic!(json!({
-                "component": "remote_host",
-                "kind": "host.terminals_unstarted",
-                "target": host.inner.target,
-                "reason": reason,
-            }));
-            Err(reason)
-        }
-    }
-}
-
 /// Why a line the device helper sent, whole or still arriving, is longer
 /// than any the protocol allows: a terminal line past
 /// [`hide_node_link::terminal::MAX_TERMINAL_LINE_BYTES`], an answer past
@@ -1400,31 +1272,6 @@ pub(super) fn start_holders_at(
     }
 }
 
-/// Starts the node's pane service for the device's Herdr at `herdr_socket`,
-/// as the node names it, so its panes' `hide` reaches the core over this
-/// link. A device whose Herdr cannot be found keeps its files and Git; its
-/// panes' `hide` answers that the node is unavailable, and the reason goes
-/// to the log.
-pub(super) fn start_panes_at(herdr_socket: Result<String, String>, host: &RemoteHost) {
-    let started = herdr_socket.and_then(|herdr_socket| {
-        call_as::<PanesStarted>(host, Call::PanesStart { herdr_socket }, HELLO_TIMEOUT)
-            .map_err(|error| error.to_string())
-    });
-    match started {
-        Ok(_) => crate::diagnostic!(json!({
-            "component": "remote_host",
-            "kind": "host.panes_started",
-            "target": host.inner.target,
-        })),
-        Err(reason) => crate::diagnostic!(json!({
-            "component": "remote_host",
-            "kind": "host.panes_unstarted",
-            "target": host.inner.target,
-            "reason": reason,
-        })),
-    }
-}
-
 /// Protocol24 has an audited transition contract with a frozen reader set.
 /// Every other mismatch is refused before use; ordinary digest-based payload
 /// replacement still installs the helper carried by this build.
@@ -1456,8 +1303,7 @@ impl HelperPackages {
         use hide_platform::fs::private;
         let payload = self
             .payload(std::env::consts::OS, std::env::consts::ARCH)
-            .map_err(|error| error.to_string())?
-            .without_herdr();
+            .map_err(|error| error.to_string())?;
         if !payload.missing.is_empty() {
             return Err(format!(
                 "This build cannot update a core without all of its parts: {}",
@@ -3001,7 +2847,6 @@ mod tests {
                 reason: "fixture identity is unavailable".to_owned(),
             },
             reader_features: None,
-            herdr_socket: None,
             windows_drives: None,
         };
         let refusal = helper_protocol_refusal(&hello(23)).expect("refused");
@@ -3178,123 +3023,33 @@ mod tests {
         assert_eq!(other.missing.len(), 2, "{:?}", other.missing);
     }
 
-    /// The pinned Herdr goes to a device of the package's own system only,
-    /// in a folder of its own that the build folder names, so a new pin is
-    /// a new build and a helper-only change finds the copy in place.
+    /// A device gets the holder beside its helper; a build without the
+    /// holder connects nothing.
     #[cfg(unix)]
     #[test]
-    fn a_device_of_the_packages_own_system_gets_the_pinned_herdr_beside_its_build() {
+    fn a_device_gets_the_holder_beside_its_helper() {
         let directory = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
         let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
-        let without = packages.payload(os, arch).unwrap();
-        assert!(without.herdr.is_none());
-
-        write(&directory.path().join(HERDR_NAME), b"pinned herdr", 0o755);
-        let with = packages.payload(os, arch).unwrap();
-        let herdr = with.herdr.as_ref().unwrap();
-        assert_eq!(herdr.relative, "herdr");
-        assert!(herdr.executable);
-        let pin = with
-            .files
-            .iter()
-            .find(|file| file.relative == "herdr.pin")
-            .unwrap();
-        assert_eq!(pin.bytes, format!("{}\n", &herdr.digest[..16]).into_bytes());
-        assert!(!with.files.iter().any(|file| file.relative == "herdr"));
-        assert_ne!(with.version(), without.version());
-        // The machine running the core keeps its own app's Herdr, and its
-        // build is the one it would be without a pin.
-        let core = packages.payload(os, arch).unwrap().without_herdr();
-        assert!(core.herdr.is_none());
-        assert_eq!(core.version(), without.version());
-
-        write(
-            &directory.path().join(HERDR_NAME),
-            b"next pinned herdr",
-            0o755,
-        );
-        assert_ne!(
-            packages.payload(os, arch).unwrap().version(),
-            with.version()
-        );
-
-        // A device of another processor gets its own helper and no Herdr.
-        let other_arch = if arch == "x86_64" {
-            "aarch64"
-        } else {
-            "x86_64"
-        };
-        write(
-            &directory
-                .path()
-                .join(format!("{HELPER_NAME}-{os}-{other_arch}")),
-            b"other",
-            0o755,
-        );
-        let other = packages.payload(os, other_arch).unwrap();
-        assert!(other.herdr.is_none());
-        assert!(!other.files.iter().any(|file| file.relative == "herdr.pin"));
-    }
-
-    /// A device whose panes run on its Herdr gets exactly what it got before
-    /// the core had its own engine, even from a build that carries the
-    /// holder; a device of the core's own engine gets the holder and no
-    /// Herdr, and a build without the holder connects nothing.
-    #[cfg(unix)]
-    #[test]
-    fn only_a_device_of_the_own_engine_gets_the_holder_in_place_of_herdr() {
-        let directory = tempfile::tempdir().unwrap();
-        let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-        write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
-        write(&directory.path().join(HERDR_NAME), b"pinned herdr", 0o755);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
-        let before = packages.payload(os, arch).unwrap();
         assert!(matches!(
-            packages.payload_for(os, arch, DeviceEngine::Holders),
+            packages.payload_for(os, arch),
             Err(EstablishError::Unsupported(_))
         ));
 
         write(&directory.path().join(HOLDER_NAME), b"holder", 0o755);
-        let herdr = packages.payload_for(os, arch, DeviceEngine::Herdr).unwrap();
-        let names = |payload: &Payload| {
-            payload
-                .files
-                .iter()
-                .map(|file| (file.relative.clone(), file.bytes.len()))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(names(&herdr), names(&before));
-        assert_eq!(herdr.version(), before.version());
-        assert_eq!(
-            herdr.herdr.as_ref().map(|file| &file.digest),
-            before.herdr.as_ref().map(|file| &file.digest)
-        );
-
-        let own = packages
-            .payload_for(os, arch, DeviceEngine::Holders)
-            .unwrap();
-        assert!(own.herdr.is_none());
+        let own = packages.payload_for(os, arch).unwrap();
         assert!(own.files.iter().any(|file| file.relative == HOLDER_NAME));
-        assert!(
-            !own.files
-                .iter()
-                .any(|file| file.relative == hide_kit::device_herdr::HERDR_PIN)
-        );
-        assert_ne!(own.version(), before.version());
     }
 
-    /// A Windows device runs its panes in holders only: on the device's
-    /// Herdr it is refused before anything is read or sent, and on the core's
-    /// own engine it gets its programs under their `.exe` names, the holder
-    /// and the ConPTY runtime the holder loads, and no Herdr.
+    /// A Windows device gets its programs under their `.exe` names, the
+    /// holder and the ConPTY runtime the holder loads.
     #[cfg(unix)]
     #[test]
-    fn a_windows_device_gets_its_programs_and_the_conpty_runtime_and_never_herdr() {
+    fn a_windows_device_gets_its_programs_and_the_conpty_runtime() {
         let directory = tempfile::tempdir().unwrap();
         let folder = directory.path();
-        for name in [HELPER_NAME, CLI_NAME, HOOKS_NAME, HOLDER_NAME, HERDR_NAME] {
+        for name in [HELPER_NAME, CLI_NAME, HOOKS_NAME, HOLDER_NAME] {
             write(
                 &folder.join(format!("{name}-windows-x86_64")),
                 name.as_bytes(),
@@ -3302,18 +3057,9 @@ mod tests {
             );
         }
         let packages = HelperPackages::new(Some(folder.to_path_buf()));
-        match packages.payload_for("windows", "x86_64", DeviceEngine::Herdr) {
-            Err(EstablishError::NeedsNewEngine(reason)) => {
-                assert_eq!(reason, WINDOWS_NEEDS_OWN_ENGINE);
-            }
-            other => panic!(
-                "a Windows device on Herdr was not refused: {:?}",
-                other.err()
-            ),
-        }
         assert!(
             matches!(
-                packages.payload_for("windows", "x86_64", DeviceEngine::Holders),
+                packages.payload_for("windows", "x86_64"),
                 Err(EstablishError::Unsupported(reason)) if reason.contains("ConPTY")
             ),
             "a holder without its ConPTY runtime runs no pane"
@@ -3326,10 +3072,7 @@ mod tests {
         std::fs::create_dir_all(conpty.join("x64")).unwrap();
         write(&conpty.join("conpty.dll"), b"dll", 0o644);
         write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
-        let own = packages
-            .payload_for("windows", "x86_64", DeviceEngine::Holders)
-            .unwrap();
-        assert!(own.herdr.is_none());
+        let own = packages.payload_for("windows", "x86_64").unwrap();
         assert_eq!(
             own.files
                 .iter()

@@ -133,7 +133,7 @@ impl Runtime {
                     "provider": record.kind,
                     "reason": reason,
                     "detail": format!(
-                        "no agent appeared in the pane within {} s of Herdr taking the start",
+                        "no agent appeared in the pane within {} s of the engine taking the start",
                         deadline_ms / 1000
                     ),
                 }));
@@ -396,7 +396,7 @@ impl Runtime {
             Err(SleepRefused::Unreachable) => {
                 self.set_error(
                     "pane.control_unavailable",
-                    "Putting an agent to sleep requires a live Herdr connection",
+                    "Putting an agent to sleep requires a live engine connection",
                     true,
                 );
                 true
@@ -1023,7 +1023,7 @@ impl SleepRefused {
         match self {
             Self::NoAgent => "This pane has no agent",
             Self::Agent(refusal) => refusal.detail(),
-            Self::Unreachable => "Putting an agent to sleep requires a live Herdr connection",
+            Self::Unreachable => "Putting an agent to sleep requires a live engine connection",
         }
     }
 }

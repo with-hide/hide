@@ -694,8 +694,6 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
             "UserPromptSubmit",
             "SessionStart",
             "PreToolUse",
-            "PostToolUse",
-            "PostToolUseFailure",
             "SubagentStart",
             "SubagentStop",
             "Stop"

@@ -1,17 +1,15 @@
-// What the fixture's `claude` stand-ins do on either engine (PRD
-// engine-bundle-3-core-owns D-24): the screen that tells an engine an agent
-// works, asks or rests, a new session as Claude Code reports one, a finished
-// turn the operator has not seen. Each goes in through the daemon as the web
-// shell sends it (`key`, `create_tab`, `focus_tab`) and is read back from the
-// snapshot's agent rows, never from an engine's CLI, so a spec on
-// `startFixture` (`engine-fixture.ts`) says the same thing on Herdr and on
-// the core's own engine. Both engines read the stand-in's screen with
-// Herdr's rules for Claude Code (`hide-agent-adapter/agents/claude-code.toml`).
+// What the fixture's `claude` stand-ins do (PRD engine-bundle-3-core-owns
+// D-24): the screen that tells the engine an agent works, asks or rests, a new
+// session as Claude Code reports one, a finished turn the operator has not
+// seen. Each goes in through the daemon as the web shell sends it (`key`,
+// `create_tab`, `focus_tab`) and is read back from the snapshot's agent rows.
+// The engine reads the stand-in's screen with the rules for Claude Code
+// (`hide-agent-adapter/agents/claude-code.toml`).
 
 import path from "node:path";
 import { prepareAgentInput, waitForAgentInput } from "./agent-pane";
-import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
-import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
+import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
+import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, startedAgentIn, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 
@@ -53,20 +51,16 @@ export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pa
 
 /**
  * Gives the stand-in in `pane` a new session, as Claude Code reports one
- * after `/clear`, and waits until its row names it: on Herdr through
- * Herdr's integration report, on the core's own engine through Hide's
+ * after `/clear`, and waits until its row names it, through Hide's
  * SessionStart hook the stand-in runs from inside its pane
- * (`shims/claude-shim.c`, `session_request`).
+ * (`shims/claude-shim.c`, `session_request`), and its start has settled
+ * (`startedAgentIn`).
  */
-export async function setAgentSession(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string): Promise<void> {
+export async function setAgentSession(fixture: Pick<EngineServer, "root">, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string): Promise<void> {
   await withControl(daemon, async (control) => {
-    if (fixture.engine === "herdr") {
-      declareAgentSession(fixture as EngineServer & { env: NodeJS.ProcessEnv; bin: string }, pane, session, true);
-    } else {
-      await waitForAgentInput(fixture.root, pane);
-      sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
-    }
-    await control.until((rest) => agentIn(rest, pane)?.session_id === session, `${pane} on session ${session}`, 20_000);
+    await waitForAgentInput(fixture.root, pane);
+    sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
+    await control.until((rest) => startedAgentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}, started`, 20_000);
   });
 }
 
@@ -106,16 +100,16 @@ export async function finishUnseenTurn(fixture: AgentFixture, daemon: Pick<Daemo
  * the stand-in then reports that session as Claude Code does
  * (`setAgentSession`).
  */
-export async function startAgentIn(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, pane: string, session?: string): Promise<AgentRow> {
+export async function startAgentIn(fixture: Pick<EngineServer, "root">, daemon: Pick<Daemon, "origin" | "token">, pane: string, session?: string): Promise<AgentRow> {
   const row = await withControl(daemon, async (control) => {
     await preparePaneInput(control, pane);
     prepareAgentInput(fixture.root, pane);
     sendKeys(control, pane, "claude\r");
-    return control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
+    return control.until((rest) => startedAgentIn(rest, pane), `an agent started in ${pane}`, 30_000);
   });
   if (!session) return row;
   await setAgentSession(fixture, daemon, pane, session);
-  return withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane), `the agent in ${pane}`));
+  return withControl(daemon, (control) => control.until((rest) => startedAgentIn(rest, pane), `the agent in ${pane}`));
 }
 
 let projectAgents = 0;
@@ -140,14 +134,9 @@ export async function startAgentInProject(fixture: EngineServer, daemon: Pick<Da
       const pane = tab ? tabPanes(rest, tab)[0] : undefined;
       return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
     }, `an agent in a tab of ${project.folder}`, 30_000);
-    // Herdr learns a pane's session from its integration's report, the own engine from the start's resume.
-    if (fixture.engine === "herdr") declareAgentSession(fixture as EngineServer & { env: NodeJS.ProcessEnv; bin: string }, made.pane, session);
+    // The engine learns the pane's session from the start's resume.
     await closePane(control, project.pane);
-    // A row still reading Starting grows a line when it settles, which moves the rows below it.
-    await control.until((rest) => {
-      const row = agentIn(rest, made.pane);
-      return row?.session_id === session && row.status_code !== "starting" ? true : undefined;
-    }, `${made.pane} on session ${session}, started`, 20_000);
+    await control.until((rest) => startedAgentIn(rest, made.pane)?.session_id === session || undefined, `${made.pane} on session ${session}, started`, 20_000);
     return { ...made, session };
   });
 }
@@ -193,13 +182,12 @@ export async function spawnChild(
  * Has the agent in `pane`, an agent of a family fixture
  * (`startFixture({ family: true })`), take a new session as Claude Code does
  * after `/clear`, and waits until its row names it. The family's stand-in
- * does not read the session escape `setAgentSession` types, so on the core's
- * own engine the agent reports through Hide's SessionStart hook, run as the
- * agent from inside its pane; on Herdr it is Herdr's integration report.
+ * does not read the session escape `setAgentSession` types, so the agent
+ * reports through Hide's SessionStart hook, run as the agent from inside its
+ * pane.
  * A child's relationship ends with its session, which is the point.
  */
 export async function takeOverSession(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string, cwd = path.join(fixture.root, "fixture")): Promise<void> {
-  if (fixture.engine === "herdr") return setAgentSession(fixture, daemon, pane, session);
   const hooks = fixture.daemonEnv?.HIDE_E2E_HOOKS;
   if (!hooks) throw new Error("the fixture names no hook helper to report a session with");
   const answer = await fixture.runAs(pane)(["hook", "--runtime", "claude-code", "--event", "SessionStart"], {

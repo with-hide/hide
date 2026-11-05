@@ -1,10 +1,7 @@
-//! One label generator per Herdr server (PRD labels-in-hided D-10,
-//! core-host-node-remote-core amendment 3). Every core that labels a Herdr
-//! server's agents takes the server's lock through the node on the machine
-//! that runs it, so every daemon that labels the same server meets at one
-//! file, whichever machine its core runs on: `<socket>.hide-label-generator.lock`
-//! beside Herdr's socket, which every daemon reaching that server shares
-//! whatever HOME it runs with.
+//! One label generator per engine (PRD labels-in-hided D-10). Every core
+//! that labels an engine's agents takes the engine's lock through its own
+//! node, so two daemons that open the same engine folder meet at one file
+//! beside it: `<engine folder>.hide-label-generator.lock`.
 //!
 //! A node holds the locks its core's workers took for as long as its core's
 //! link lives, each for the worker that took it, so a worker that ends and
@@ -24,10 +21,10 @@ use std::sync::Mutex;
 use hide_node_link::protocol::LabelLock;
 use serde_json::json;
 
-/// The most servers one link's core labels through this node.
+/// The most engines one link's core labels through this node.
 const MAX_LOCKS: usize = 64;
 
-/// The lock of the Herdr server listening at `socket`.
+/// The lock of the engine whose folder is `socket`.
 pub fn lock_path(socket: &Path) -> PathBuf {
     let socket = std::fs::canonicalize(socket).unwrap_or_else(|_| socket.to_path_buf());
     let name = socket

@@ -7,30 +7,11 @@
 
 use super::*;
 
-fn tab_info(tab_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "type": "tab_info",
-        "tab": {"tab_id": tab_id, "workspace_id": "w-order", "number": 1, "label": "1",
-                "focused": true, "pane_count": 1, "agent_status": "idle"}
-    })
-}
-
-fn tab_created(tab_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "type": "tab_created",
-        "tab": {"tab_id": tab_id, "workspace_id": "w-order", "number": 9, "label": "9",
-                "focused": true, "pane_count": 1, "agent_status": "idle"},
-        "root_pane": {"pane_id": format!("{tab_id}:p"), "terminal_id": "fixture-terminal",
-                      "workspace_id": "w-order", "tab_id": tab_id, "focused": true,
-                      "agent_status": "idle", "revision": 1}
-    })
-}
-
-/// A Herdr that answers tab focus and tab creation, recording each request.
-fn fake_herdr(name: &str) -> FakeHerdr {
-    FakeHerdr::start(name, |method, params| match method {
-        "tab.focus" => tab_info(params["tab_id"].as_str().expect("a tab id")),
-        "tab.create" => tab_created("w-order:t9"),
+/// An engine that answers tab focus and tab creation, recording each call.
+fn fake_herdr(_name: &str) -> Fake {
+    FakeEngine::start(|method, _| match method {
+        "focus_tab" => reply(()),
+        "create_tab" => reply(("w-order:t9".to_owned(), "w-order:t9:p".to_owned())),
         other => panic!("unexpected {other}"),
     })
 }
@@ -38,15 +19,9 @@ fn fake_herdr(name: &str) -> FakeHerdr {
 /// A runtime on three tabs of one checkout whose Herdr is `herdr`. Its
 /// workers cannot report back, so each answer reaches it only when the test
 /// calls `complete_lane_tab`.
-fn runtime_on(herdr: &FakeHerdr, checkout_path: &str) -> (Runtime, String) {
+fn runtime_on(herdr: &Fake, checkout_path: &str) -> (Runtime, String) {
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    runtime.live = Some(herdr.live());
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
     runtime.ingest_session(Ok(tab_order_payload(
         checkout_path,
@@ -86,17 +61,17 @@ fn acknowledged() -> Result<RemoteControlOutcome, live::ControlFailure> {
 /// received; an answer handed over before that starts the next job while
 /// the first is still on its way, and the two can reach Herdr in either
 /// order (issue 837).
-fn received(herdr: &FakeHerdr, action: &RemoteControlAction) {
+fn received(herdr: &Fake, action: &RemoteControlAction) {
     let (method, tab_id) = match action {
-        RemoteControlAction::FocusTab { tab_id } => ("tab.focus", Some(tab_id.as_str())),
-        RemoteControlAction::CreateTab { .. } => ("tab.create", None),
+        RemoteControlAction::FocusTab { tab_id } => ("focus_tab", Some(tab_id.as_str())),
+        RemoteControlAction::CreateTab { .. } => ("create_tab", None),
         other => panic!("no fake Herdr answer for {other:?}"),
     };
     let mut count = 1;
     loop {
-        herdr.wait_for_requests(count, Duration::from_secs(5));
+        herdr.wait_for_calls(count, Duration::from_secs(5));
         if herdr.calls().iter().any(|(sent, params)| {
-            sent == method && tab_id.is_none_or(|tab_id| params["tab_id"] == tab_id)
+            *sent == method && tab_id.is_none_or(|tab_id| params["tab"] == tab_id)
         }) {
             return;
         }
@@ -109,7 +84,7 @@ fn received(herdr: &FakeHerdr, action: &RemoteControlAction) {
 /// its own workers cannot report back.
 fn answer(
     runtime: &mut Runtime,
-    herdr: &FakeHerdr,
+    herdr: &Fake,
     action: RemoteControlAction,
     result: Result<RemoteControlOutcome, live::ControlFailure>,
 ) -> (bool, bool) {
@@ -177,12 +152,12 @@ pub(super) fn diagnostic_messages(runtime: &Runtime, kind: &str) -> Vec<String> 
         .collect()
 }
 
-fn focused_tabs(herdr: &FakeHerdr) -> Vec<String> {
+fn focused_tabs(herdr: &Fake) -> Vec<String> {
     herdr
         .calls()
         .into_iter()
-        .filter(|(method, _)| method == "tab.focus")
-        .map(|(_, params)| params["tab_id"].as_str().unwrap_or_default().to_owned())
+        .filter(|(method, _)| *method == "focus_tab")
+        .map(|(_, params)| params["tab"].as_str().unwrap_or_default().to_owned())
         .collect()
 }
 
@@ -204,7 +179,7 @@ fn rapid_tab_focus_sends_the_first_and_the_latest_one_after_the_other() {
         1,
         "the middle click was replaced while it waited"
     );
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     assert_eq!(focused_tabs(&herdr), ["w-order:t2"]);
 
     // Only now does Herdr's answer to the first reach the runtime.
@@ -214,7 +189,7 @@ fn rapid_tab_focus_sends_the_first_and_the_latest_one_after_the_other() {
         focus_action("w-order:t2"),
         acknowledged(),
     );
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t1"]);
 
     answer(
@@ -253,7 +228,7 @@ fn a_lost_tab_focus_answer_does_not_release_the_focus_waiting_behind_it() {
     let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-lost");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
 
     let (changed, started) = answer(
         &mut runtime,
@@ -287,7 +262,7 @@ fn a_lost_tab_focus_answer_does_not_release_the_focus_waiting_behind_it() {
     );
 
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t3")));
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t3"]);
 }
 
@@ -309,7 +284,7 @@ fn a_refused_tab_focus_lets_the_next_control_through_and_keeps_the_tab() {
         )),
     );
 
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t3"]);
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -359,10 +334,10 @@ fn a_tab_created_before_a_click_does_not_take_the_screen_back_from_it() {
         Some("w-order:t2:p")
     );
     assert_eq!(diagnostic_count(&runtime, "tab.create.focus_superseded"), 1);
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(
         herdr.methods(),
-        ["tab.create", "tab.focus"],
+        ["create_tab", "focus_tab"],
         "creation left first, the click after its answer"
     );
 }
@@ -415,8 +390,8 @@ fn a_refused_tab_creation_releases_the_lane_for_the_focus_behind_it() {
         )),
     );
 
-    herdr.wait_for_requests(2, Duration::from_secs(5));
-    assert_eq!(herdr.methods(), ["tab.create", "tab.focus"]);
+    herdr.wait_for_calls(2, Duration::from_secs(5));
+    assert_eq!(herdr.methods(), ["create_tab", "focus_tab"]);
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t3")
@@ -504,14 +479,14 @@ fn a_replacing_focus_queues_behind_the_control_accepted_between_the_two() {
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
     assert_eq!(runtime.control_lane.queued_len(), 2);
 
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     answer(
         &mut runtime,
         &herdr,
         focus_action("w-order:t2"),
         acknowledged(),
     );
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     let methods = || {
         herdr
             .calls()
@@ -519,10 +494,10 @@ fn a_replacing_focus_queues_behind_the_control_accepted_between_the_two() {
             .map(|(method, _)| method)
             .collect::<Vec<_>>()
     };
-    assert_eq!(methods(), ["tab.focus", "tab.create"]);
+    assert_eq!(methods(), ["focus_tab", "create_tab"]);
 
     answer(&mut runtime, &herdr, create_action(), acknowledged());
-    herdr.wait_for_requests(3, Duration::from_secs(5));
+    herdr.wait_for_calls(3, Duration::from_secs(5));
     assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t1"]);
 }
 
@@ -632,7 +607,7 @@ fn a_tab_move_replaced_while_it_waited_is_not_sent() {
     runtime.submit_local_control(stale).expect("accepted");
     assert_eq!(runtime.control_lane.queued_len(), 1);
 
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     let (_, started) = answer(
         &mut runtime,
         &herdr,
@@ -689,7 +664,7 @@ fn a_queued_tab_moves_wait_for_herdr_starts_when_it_leaves() {
         None
     );
 
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
 
     assert!(
@@ -719,7 +694,7 @@ fn a_tab_move_that_is_no_longer_transmitting_is_not_sent() {
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     queued_move(&mut runtime, &checkout_id, "unknown");
 
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
 
     assert!(next.is_none());
@@ -745,7 +720,7 @@ fn a_joining_pane_focus_queues_behind_the_control_accepted_after_the_turn() {
         2,
         "one turn for both clicks, and the create"
     );
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
     assert!(
         matches!(
@@ -768,7 +743,7 @@ fn a_lost_tab_focus_answer_does_not_release_the_pane_focus_behind_it() {
         runtime_on(&herdr, "/private/tmp/hide-control-order-tab-lost-pane");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&correlated_pane_focus_event("w-order:t3:p", "pane-1")));
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
 
     let (changed, next) = runtime.complete_lane_tab(
         focus_action("w-order:t2"),
@@ -801,7 +776,7 @@ fn a_tab_move_queued_on_an_earlier_connection_is_not_sent() {
         runtime_on(&herdr, "/private/tmp/hide-control-order-move-connection");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     queued_move(&mut runtime, &checkout_id, "transmitting");
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     runtime.live_generation += 1;
 
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
@@ -816,9 +791,9 @@ fn a_tab_move_queued_on_an_earlier_connection_is_not_sent() {
 /// in progress (#438 review: a close that "waits behind" the lane).
 #[test]
 fn a_pane_close_starts_while_an_unanswered_tab_focus_holds_the_lane() {
-    let herdr = FakeHerdr::start("order-close", |method, params| match method {
-        "tab.focus" => tab_info(params["tab_id"].as_str().expect("a tab id")),
-        _ => serde_json::json!({"type": "ok"}),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "toggle_zoom" => reply(true),
+        _ => reply(()),
     });
     let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-close");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
@@ -892,8 +867,8 @@ fn a_zoom_and_resize_in_other_tabs_start_while_an_unanswered_pane_focus_holds_th
 /// close in its tab until the deadline.
 #[test]
 fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answer() {
-    let herdr = FakeHerdr::start("order-early-topology", |method, _| match method {
-        "pane.zoom" => serde_json::json!({"type": "ok"}),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "toggle_zoom" => reply(true),
         other => panic!("unexpected {other}"),
     });
     let checkout_path = "/private/tmp/hide-control-order-early-topology";
@@ -910,7 +885,7 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
 
     runtime.dispatch_json(zoom.as_bytes());
     assert_eq!(runtime.pane_operations.len(), 1);
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
 
     // Herdr's update with the zoomed layout arrives while the request is
     // still unanswered.
@@ -943,7 +918,7 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
 
     // The next zoom in the tab is sent, not turned away as already running.
     runtime.dispatch_json(zoom.as_bytes());
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(runtime.pane_operations.len(), 1);
 }
 
@@ -954,8 +929,8 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
 /// once the tab holds a second pane, it is.
 #[test]
 fn a_zoom_on_a_tabs_only_pane_is_not_sent_and_leaves_the_tab_free() {
-    let herdr = FakeHerdr::start("order-zoom-single-pane", |method, _| match method {
-        "pane.zoom" => serde_json::json!({"type": "ok"}),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "toggle_zoom" => reply(true),
         other => panic!("unexpected {other}"),
     });
     let checkout_path = "/private/tmp/hide-control-order-zoom-single-pane";
@@ -979,6 +954,6 @@ fn a_zoom_on_a_tabs_only_pane_is_not_sent_and_leaves_the_tab_free() {
         "w-order:t2",
     )));
     runtime.dispatch_json(zoom.as_bytes());
-    herdr.wait_for_requests(1, Duration::from_secs(5));
-    assert_eq!(herdr.methods(), ["pane.zoom"]);
+    herdr.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(herdr.methods(), ["toggle_zoom"]);
 }

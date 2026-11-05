@@ -74,46 +74,23 @@ def write_private(path: Path, data: bytes) -> None:
         os.fsync(stream.fileno())
 
 
-def validate_isolation(run: Path, home: Path, socket: Path, state: Path,
-                       operator_home: Path, operator_socket: Path | None,
-                       socket_root: Path | None = None, *, short_state=False) -> None:
-    """Refuse operator routing before even starting a version/auth subprocess."""
-    if not all(path.is_absolute() for path in (run, home, socket, state)):
+def validate_isolation(run: Path, home: Path, state: Path, operator_home: Path,
+                       short: Path) -> None:
+    """Refuse operator routing before even starting a version/auth subprocess.
+
+    The daemon's home lives in the run; its state lives in `short`, a private
+    folder the run made, so a holder's socket address stays short."""
+    if not all(path.is_absolute() for path in (run, home, state, short)):
         raise ProtectionError("isolation_paths_must_be_absolute")
     if home.resolve() == operator_home.resolve():
         raise ProtectionError("daemon_home_is_operator_home")
-    for path in (home, state):
-        if short_state and path == state:
-            if (socket_root is None or state != socket_root / "state"
-                    or not socket_root.is_dir() or state.is_symlink()
-                    or socket_root.is_symlink() or not private(socket_root)):
-                raise ProtectionError("state_parent_not_owned_by_run")
-            continue
-        if not beneath(path, run) or path.resolve() == run.resolve():
-            raise ProtectionError("runtime_path_outside_run")
-    # Herdr's config folder, where its default socket is: ~/.config/herdr,
-    # and %APPDATA%\herdr on Windows (hide-platform's `host`).
-    herdr_config = operator_home / ("AppData/Roaming/herdr" if WINDOWS else ".config/herdr")
-    defaults = [herdr_config / "herdr.sock",
-                operator_home / ".hide/state"]
-    if operator_socket is not None:
-        defaults.append(operator_socket)
-    if any(socket.resolve() == path.resolve() for path in defaults):
-        raise ProtectionError("operator_socket_refused")
-    if socket.exists() or socket.is_symlink():
-        raise ProtectionError("socket_already_exists")
-    if len(os.fsencode(socket)) > 85:
-        raise ProtectionError("socket_path_too_long")
-    # Only the run's root or its owned short socket directory may contain it.
-    parent = socket.parent
-    if not beneath(socket, run):
-        if (socket_root is None or parent != socket_root
-                or not parent.is_dir() or parent.is_symlink()
-                or not private(parent)):
-            raise ProtectionError("socket_parent_not_owned_by_run")
-    for forbidden in (operator_home / ".hide", herdr_config):
-        if beneath(state, forbidden) or beneath(socket, forbidden):
-            raise ProtectionError("operator_state_refused")
+    if not beneath(home, run) or home.resolve() == run.resolve():
+        raise ProtectionError("runtime_path_outside_run")
+    if (state != short / "state" or not short.is_dir() or state.is_symlink()
+            or short.is_symlink() or not private(short)):
+        raise ProtectionError("state_parent_not_owned_by_run")
+    if beneath(state, operator_home / ".hide"):
+        raise ProtectionError("operator_state_refused")
 
 
 @dataclass(frozen=True)

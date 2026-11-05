@@ -4780,8 +4780,6 @@ mod tests {
                     id: crate::node::TEST_NODE.to_owned(),
                     label: "device".to_owned(),
                     origin,
-                    herdr_socket_path: None,
-                    herdr_session: None,
                     host_consent: None,
                 });
             let context = crate::workspace_control::Context {

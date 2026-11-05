@@ -258,7 +258,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Claude,
         hook: HookInstall::Runtime(HookDialect::ClaudeCode),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
-        observation: ObservationSupport::Native(HookDialect::ClaudeCode),
         herdr: HerdrIntegration {
             name: "claude",
             target: "claude",
@@ -273,7 +272,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::ClaudeCode,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::ClaudeCode),
+        guard: Some(HookDialect::ClaudeCode),
         subagent_counts: Some(HookDialect::ClaudeCode),
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
         bell: true,
@@ -362,7 +361,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Runtime(HookDialect::Codex),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
-        observation: ObservationSupport::Native(HookDialect::Codex),
         herdr: HerdrIntegration {
             name: "codex",
             target: "codex",
@@ -377,7 +375,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Codex,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Codex),
+        guard: Some(HookDialect::Codex),
         subagent_counts: Some(HookDialect::Codex),
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
         bell: true,
@@ -460,7 +458,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Guidance(GuidanceDialect::Grok),
         guidance: Support::Unsupported(GROK_CONTEXT_ABSENCE),
-        observation: ObservationSupport::Native(HookDialect::Grok),
         herdr: HerdrIntegration {
             name: "grok",
             target: "grok",
@@ -477,7 +474,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Grok,
             context: false,
         }),
-        spawn_guard: Some(HookDialect::Grok),
+        guard: Some(HookDialect::Grok),
         subagent_counts: Some(HookDialect::Grok),
         memory: Support::Unsupported(GROK_CONTEXT_ABSENCE),
         bell: true,
@@ -582,7 +579,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
-        observation: ObservationSupport::Plugin(PluginDialect::OpenCode),
         herdr: HerdrIntegration {
             name: "opencode",
             target: "opencode",
@@ -597,7 +593,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::OpenCode,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::OpenCode),
+        guard: Some(HookDialect::OpenCode),
         subagent_counts: Some(HookDialect::OpenCode),
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
         // A bell's Enter in OpenCode's session picker opens another session
@@ -698,7 +694,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Pi),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
-        observation: ObservationSupport::Plugin(PluginDialect::Pi),
         herdr: HerdrIntegration {
             name: "pi",
             target: "pi",
@@ -713,7 +708,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Pi,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Pi),
+        guard: Some(HookDialect::Pi),
         // Pi runs no subagents.
         subagent_counts: None,
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
@@ -809,7 +804,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Omp),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
-        observation: ObservationSupport::Plugin(PluginDialect::Omp),
         herdr: HerdrIntegration {
             name: "omp",
             target: "omp",
@@ -824,7 +818,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Omp,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Omp),
+        guard: Some(HookDialect::Omp),
         subagent_counts: Some(HookDialect::Omp),
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
         // omp's previous-session picker reads `done` and a bell's Enter there
@@ -922,7 +916,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Antigravity,
         hook: HookInstall::Guidance(GuidanceDialect::Antigravity),
         guidance: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
-        observation: ObservationSupport::Native(HookDialect::Antigravity),
         herdr: HerdrIntegration {
             name: "agy",
             target: "antigravity-cli",
@@ -939,7 +932,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Antigravity,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Antigravity),
+        guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
         memory: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
         // Herdr 0.9.3 reads agy's permission question as an approval, but
@@ -1037,9 +1030,6 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     skill_location: SkillLocation::Shared,
     hook: HookInstall::None,
     guidance: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
-    observation: ObservationSupport::Unsupported {
-        reason: "Cursor is retired; historical hooks perform no observation.",
-    },
     herdr: HerdrIntegration {
         name: "cursor",
         target: "cursor",
@@ -1048,7 +1038,7 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     ai: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     default_on: false,
     prompt_hook: None,
-    spawn_guard: None,
+    guard: None,
     subagent_counts: None,
     memory: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     bell: false,

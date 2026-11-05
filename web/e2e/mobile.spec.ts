@@ -14,7 +14,6 @@
 // only a debug hided accepts.
 
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -22,7 +21,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { closePane, sendKeys, withControl } from "./daemon-actions";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript, labelMarker } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, labelMarker } from "./pane-fixture";
 import { DNS, FakeTailscale } from "./fake-tailscale";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot, THIS_MACHINE } from "./wire";
@@ -805,19 +804,6 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await expect(detail).toBeVisible({ timeout: 45_000 });
     const pane = ((await detail.getAttribute("data-phone-detail")) ?? "").split("|").slice(1).join("|");
     expect(pane).not.toBe("");
-    // The model the agent was started with is the engine's to say; nothing Hide publishes carries the argument list.
-    if (fixture.engine === "herdr") {
-      const server = fixture as typeof fixture & { bin: string; env: NodeJS.ProcessEnv };
-      await expect
-        .poll(
-          () => {
-            const info = spawnSync(server.bin, ["pane", "process-info", "--pane", pane], { env: server.env, encoding: "utf8", timeout: 10_000 }).stdout;
-            return info.includes("--model") && info.includes("opus");
-          },
-          { timeout: 30_000 },
-        )
-        .toBe(true);
-    }
     await screenshot(phone, "mobile-phone-start-detail");
 
     // B44: the text was spent by the start; the remembered model is now the sheet's; offline keeps a new draft.

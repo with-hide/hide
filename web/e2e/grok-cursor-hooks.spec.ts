@@ -1,6 +1,6 @@
 // Active Grok hooks and retired Cursor compatibility on an isolated engine and private install kit.
-// Grok's switch writes and removes only Hide's file, and its installed commands refuse a direct agent start
-// and report subagents. Cursor's installed program produces no switch, user settings stay byte-for-byte,
+// Grok's switch writes and removes only Hide's file, and its installed commands refuse a result handed to the
+// system opener and report subagents. Cursor's installed program produces no switch, user settings stay byte-for-byte,
 // and synthetic stale Cursor callbacks are silent (onboarding B31/D-09). Under Grok, only its own hook counts
 // and refuses, even alongside Claude Code compatibility and a stale Cursor callback.
 // The web shell draws no subagent count (docs/UI_BEHAVIOR.md, Subagent count), so the count is read where the core
@@ -156,7 +156,7 @@ test("Grok's switch installs only its owned file while retired Cursor has no swi
     await switchOf("grok", "off").click();
     await expect(switchOf("grok", "on")).toBeVisible();
     await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain(capturedState(daemon));
-    expect(Object.keys(json<Grouped>(grokFile(home)).hooks).sort()).toEqual(["PostToolUse", "PostToolUseFailure", "PreToolUse", "SessionStart", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit"]);
+    expect(Object.keys(json<Grouped>(grokFile(home)).hooks).sort()).toEqual(["PreToolUse", "SessionStart", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit"]);
     expect(json<Grouped>(grokFile(home)).hooks.UserPromptSubmit![0]!.matcher).toBeUndefined();
     expect(installed.grok(home, "UserPromptSubmit")).toContain("--event UserPromptSubmit");
     // B6 (letters-to-busy-agents): the tool hook carries no matcher, so every tool call is a gap a due letter goes at.
@@ -172,7 +172,7 @@ test("Grok's switch installs only its owned file while retired Cursor has no swi
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
     await list.locator('[data-agent-partial="grok"]').click();
     const popover = page.locator('[data-agent-partial-popover="grok"]');
-    for (const feature of ["spawn_guard:yes", "letters:no", "bell:yes", "memory:no"]) await expect(popover.locator(`[data-agent-feature="${feature}"]`)).toBeVisible();
+    for (const feature of ["letters:no", "bell:yes", "memory:no"]) await expect(popover.locator(`[data-agent-feature="${feature}"]`)).toBeVisible();
     await screenshot(page, "grok-cursor-hooks-on");
     await page.keyboard.press("Escape");
 
@@ -304,17 +304,17 @@ async function grokAgentPane(page: Page, stack: Stack): Promise<{ pane: string; 
   };
 }
 
-/** The runtimes of the guard's refusals so far, in order: its own log, one `launch.refused` line each. */
+/** The runtimes of the opener guard's refusals so far, in order: the hooks' log, one `opener.refused` line each. */
 const refusals = (home: string): string[] =>
   read(path.join(home, ".hide", "agent-hooks", "spawn-guard.log"))
     .split("\n")
-    .filter((line) => line.includes('"launch.refused"'))
+    .filter((line) => line.includes('"opener.refused"'))
     .map((line) => (JSON.parse(line) as { runtime: string }).runtime);
 
 const GROK_ENV = (event: string) => ({ GROK_HOOK_EVENT: event, GROK_SESSION_ID: "grok-session" });
 const CURSOR_ENV = { CURSOR_VERSION: "2026.10.01" };
 
-test("the installed Grok guard refuses direct starts while retired Cursor callbacks stay silent", async ({ page }) => {
+test("the installed Grok guard refuses the system opener while retired Cursor callbacks stay silent", async ({ page }) => {
   const stack = await start("grok-cursor-guard", { on: true });
   const { herdr, home } = stack;
   try {
@@ -326,18 +326,18 @@ test("the installed Grok guard refuses direct starts while retired Cursor callba
 
     // B2, Grok: Claude Code's envelope with the same reason; the guard's log holds the one refusal.
     const grokCall = (command: string) => ({ ...sample("grok-pre-tool-use.json"), cwd: path.join(herdr.root, "fixture"), toolInput: { command } });
-    const start = `herdr agent start worker --kind claude --pane ${grok}`;
+    const start = "open report.html";
     const refused = runHook(stack, grok, installed.grok(home, "PreToolUse"), grokCall(start), GROK_ENV("pre_tool_use"));
     expect(refused.status).toBe(0);
     const answer = JSON.parse(refused.stdout) as { hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string } };
     expect(answer.hookSpecificOutput).toMatchObject({ hookEventName: "PreToolUse", permissionDecision: "deny" });
-    expect(answer.hookSpecificOutput.permissionDecisionReason).toContain("hide agent spawn");
+    expect(answer.hookSpecificOutput.permissionDecisionReason).toContain("browser open report.html");
     expect(refusals(home)).toEqual(["grok"]);
     expect(runHook(stack, grok, installed.grok(home, "PreToolUse"), grokCall("cargo test"), GROK_ENV("pre_tool_use")).stdout).toBe("");
 
     // B31: an explicitly invoked stale Cursor entry neither refuses nor emits an allow response.
     const cursorCall = (command: string) => ({ ...sample("cursor-pre-tool-use.json"), cwd: path.join(herdr.root, "fixture"), tool_input: { command, working_directory: path.join(herdr.root, "fixture") } });
-    for (const command of [`herdr agent start worker --kind claude --pane ${cursor}`, "cargo test"]) {
+    for (const command of ["open report.html", "cargo test"]) {
       expect(runHook(stack, cursor, legacyCursor(home, "PreToolUse"), cursorCall(command), CURSOR_ENV)).toEqual({ status: 0, stdout: "", stderr: "" });
     }
     expect(refusals(home)).toEqual(["grok"]);
@@ -403,7 +403,7 @@ test("inside Grok, only its own hook counts and refuses beside Claude compatibil
     await installedEverywhere(home, true);
     const { pane: grok, run: asGrok } = await grokAgentPane(page, stack);
     const cwd = path.join(herdr.root, "fixture");
-    const start = `herdr agent start worker --kind claude --pane ${grok}`;
+    const start = "open report.html";
     // Each hook gets its own agent's documented payload for the one event, in the environment Grok gives all three.
     const payloads = (event: string, grokFields: Record<string, unknown>, grokTool?: string) => ({
       claude: { session_id: "grok-session", cwd, hook_event_name: event, tool_name: "Bash", tool_input: { command: start }, agent_type: "explore" },
@@ -427,7 +427,8 @@ test("inside Grok, only its own hook counts and refuses beside Claude compatibil
     expect(json(path.join(records, names[0]!))).toMatchObject({ sessions: [{ agent: "grok", working: 1, done: 0 }] });
     await expect.poll(() => wire.counts(grok), { timeout: 20_000 }).toEqual([1, 0]);
 
-    // B4: a direct agent start is refused once: only Hide's Grok file answers, and the guard logs one refusal.
+    // B4: a result handed to the system opener is refused once: only Hide's Grok file answers, and the guard logs one
+    // refusal.
     const answers = Object.fromEntries(everyHook("PreToolUse", "pre_tool_use", payloads("PreToolUse", {}, "shell")).map(({ agent, run }) => [agent, run.stdout]));
     expect(answers.claude).toBe("");
     expect(answers.cursor).toBe("");

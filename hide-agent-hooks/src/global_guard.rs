@@ -80,10 +80,10 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: Option<&str>) {
         "kind": "guard.refused",
         "runtime": runtime,
         "pane": pane,
-        "at_unix_ms": crate::spawn_guard::now_ms(),
+        "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+    let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
 }
 
 /// Whether a word or a redirection of `command`, or of a command it

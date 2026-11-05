@@ -472,10 +472,9 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
     assert_eq!(std::fs::read_dir(&version).unwrap().count(), 0);
 }
 
-/// B24: the helper starts on the same pipes, from the account's home, and a
-/// Windows device takes no Herdr session or socket.
+/// B24: the helper starts on the same pipes, from the account's home.
 #[test]
-fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
+fn the_helper_starts_on_the_same_pipes() {
     let device = Device::new();
     let script = device.dir.path().join("helper.cmd");
     device.echoing_program(&script);
@@ -503,15 +502,6 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     .unwrap();
     pipe.send(&bytes, soon()).unwrap();
     assert_eq!(read_step(&mut pipe, soon()).unwrap(), ["ok"]);
-    assert!(
-        start(
-            &mut pipe,
-            "v1/helper.cmd",
-            &HerdrChoice::Session("work".to_owned()),
-            None
-        )
-        .is_err()
-    );
 
     let mut pipe = device.connect();
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -524,9 +514,9 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
         ["held", "v1/helper.cmd"]
     );
     assert_eq!(read_step(&mut pipe, soon()).unwrap(), ["end"]);
-    start(&mut pipe, "v1/helper.cmd", &HerdrChoice::Account, None).unwrap();
+    start(&mut pipe, "v1/helper.cmd", None).unwrap();
     assert_eq!(line(&mut pipe), "args:node serve");
-    assert_eq!(line(&mut pipe), "third:--own-herdr");
+    assert_eq!(line(&mut pipe), "third:");
     assert_eq!(line(&mut pipe), "cwd:home");
     assert_eq!(line(&mut pipe), "home:home");
     assert_eq!(line(&mut pipe), "folders:other");
@@ -555,13 +545,7 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     for _ in 0..3 {
         read_step(&mut pipe, soon()).unwrap();
     }
-    start(
-        &mut pipe,
-        "v1/helper.cmd",
-        &HerdrChoice::Account,
-        Some(&Device::wire(&own)),
-    )
-    .unwrap();
+    start(&mut pipe, "v1/helper.cmd", Some(&Device::wire(&own))).unwrap();
     line(&mut pipe);
     line(&mut pipe);
     assert_eq!(line(&mut pipe), "cwd:own");

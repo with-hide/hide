@@ -8,13 +8,12 @@ ledger. Holder records identify cleanup targets, never terminal contents.
 import base64
 import json
 from pathlib import Path
-import shlex
 
 from agent_live_check.authentication import require_no_login
 from agent_live_check.processes import ProcessError
-from agent_live_check.protection import ProtectionError, write_private
+from agent_live_check.protection import ProtectionError
 from agent_live_check.runtime import Runtime
-from agent_live_check.system import WINDOWS, remove_pane_files
+from agent_live_check.system import READY, remove_pane_files, same_path
 from holder_owned import Owned
 
 from .daemon import Daemon
@@ -28,11 +27,7 @@ def layout_panes(node):
 
 class OwnRuntime(Runtime):
     def __init__(self, *args, **kwargs):
-        # The Windows lane declares this transition gap before setup. Do not
-        # silently start a holder under a job that forbids its breakaway.
-        if WINDOWS:
-            raise ProtectionError("b4-default 대기(CI Job holder breakaway)")
-        super().__init__(*args, **kwargs, engine="own")
+        super().__init__(*args, **kwargs)
         self.control = None
         self.owned = Owned()
         self.owned.records(self.state)
@@ -46,9 +41,6 @@ class OwnRuntime(Runtime):
         self.control.wait(lambda rest: rest, 20, "the native engine's first snapshot")
         return result
 
-    def command(self, *_args, **_kwargs):
-        raise ProcessError("native_journey_called_herdr")
-
     def pane_ids(self):
         return {pane for layout in (self.control.snapshot() or {}).get("pane_layouts", [])
                 for pane in layout_panes(layout["root"])}
@@ -60,7 +52,7 @@ class OwnRuntime(Runtime):
 
         def opened(rest):
             for workspace in (rest.get("navigator") or {}).get("workspaces", []):
-                checkout = next((row for row in workspace.get("checkouts", []) if row["path"] == folder), None)
+                checkout = next((row for row in workspace.get("checkouts", []) if same_path(row["path"], cwd.resolve())), None)
                 if not checkout:
                     continue
                 tabs = [tab for group in (checkout.get("agent_groups") or {}).get("groups", [])
@@ -87,14 +79,9 @@ class OwnRuntime(Runtime):
         for name in environment:
             if not name.replace("_", "").isalnum() or name[0].isdigit():
                 raise ProtectionError("invalid_controller_environment_name")
-        # The PTY can accept input before zsh leaves canonical mode. Its line
-        # limit can truncate a long PATH along with the final Enter. Source a
-        # private file instead, so only its short invocation crosses the PTY.
-        setup = self.run / "native-controller-shell-setup.zsh"
-        write_private(setup, ("\n".join(f"export {name}={shlex.quote(value)}" for name, value in environment.items())
-                              + f"\nprintf ready > {shlex.quote(str(ready))}\n").encode())
+        setup = self.run / "native-controller-shell-setup"
         try:
-            self.send_text(pane, f". {shlex.quote(str(setup))}\r")
+            self.send_text(pane, self.shell.setup(setup, environment, ready) + "\r")
             self.wait(lambda: ready.exists() and ready.read_text() == "ready", 20)
         finally:
             remove_pane_files(ready, setup)
@@ -108,7 +95,7 @@ class OwnRuntime(Runtime):
         if pane in self.initial_shells and pane not in self.pane_credentials:
             deadline.remaining()
             return True  # open_workspace proved this exact newly created shell.
-        return super().pane_at_shell(pane, deadline)
+        return READY in self.screen(pane, seconds=deadline.command_seconds(), deadline=deadline.end)
 
     def cli(self, args, *, seconds=15, deadline=None):
         reference = self.pane_credentials.get(self.controller_pane)

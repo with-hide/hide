@@ -312,7 +312,14 @@ use crate::error::HostError;
 /// the core types Herdr's focus report before a Copilot prompt and its
 /// paste boundary after a Windows Codex one, inside the submission. An
 /// older helper would refuse the letter, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 75;
+/// 76: drops what started or fed a node's Herdr services (`PanesStart`,
+/// `TerminalsStart`, the kit call's Herdr socket and saved-session flag) and
+/// the pane proofs' passive hook observations, since every node runs its
+/// panes in holders (PRD engine-bundle-4-herdr-removal D-10), and the Herdr
+/// link stream, the Hello's Herdr socket and the label lock's Herdr socket
+/// (the lock now names the engine folder, `scope`); a helper on 75 still
+/// takes them, so it upgrades.
+pub const PROTOCOL_VERSION: u32 = 76;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).
@@ -384,9 +391,6 @@ pub struct ShellLaunch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkEnd {
-    /// The node's own Herdr socket (D-18, D-19), on a node that dialed its
-    /// core.
-    Herdr,
     /// The browser relay of the node's daemon, which carries a caller's CDP
     /// to the gateway of the desktop window whose registration the daemon
     /// holds: a caller on another machine driving a page only that window
@@ -405,7 +409,6 @@ impl LinkEnd {
     /// refused.
     pub const fn cap(self) -> usize {
         match self {
-            Self::Herdr => crate::panes::MAX_HERDR_STREAMS,
             Self::BrowserRelay => crate::panes::MAX_BROWSER_STREAMS,
             Self::Loopback { .. } => crate::panes::MAX_PAGE_STREAMS,
         }
@@ -691,16 +694,11 @@ pub enum Call {
     },
     /// The device's install kit (`hide_host::kit`): the helper acts on the
     /// helper root it runs from, never on a folder the request names.
-    /// `cli_dir` is where the consent allows the `hide` link, and
-    /// `herdr_socket` the registration's Herdr socket; both may start with
-    /// `~/`.
+    /// `cli_dir` is where the consent allows the `hide` link; it may start
+    /// with `~/`.
     Kit {
         action: KitAction,
         cli_dir: String,
-        herdr_socket: Option<String>,
-        /// A saved Herdr profile grants attachment, without server replacement.
-        #[serde(default)]
-        preserve_herdr_server: bool,
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,
@@ -1065,19 +1063,6 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checkpoint: Option<hide_session::ConversationCheckpoint>,
     },
-    /// Starts this node's pane service for the Herdr at `herdr_socket`: the
-    /// bootstrap socket a device pane's `hide` asks on. Answered with
-    /// [`crate::panes::PanesStarted`]; asking again for the same Herdr
-    /// answers the same socket.
-    PanesStart {
-        herdr_socket: String,
-    },
-    /// Starts this node's terminal service for the Herdr at `herdr_socket`:
-    /// from then on the link's terminal lines reach it. Asking again while
-    /// it runs changes nothing.
-    TerminalsStart {
-        herdr_socket: String,
-    },
     /// The core's answer to the pane proof `request` the node sent up.
     PaneProofAnswer {
         request: u64,
@@ -1156,22 +1141,21 @@ pub enum Call {
         scope: serde_json::Value,
         relay: bool,
     },
-    /// Takes the label generator lock of the Herdr server at `herdr_socket`
-    /// on this node's machine, or of the server this link's pane service
-    /// serves when it names none, for the core's worker `generator`, and
-    /// holds it while the link lives. Answered with [`LabelLock`]; asked
+    /// Takes the label generator lock of the engine whose folder is
+    /// `scope` on this node's machine, for the core's worker `generator`,
+    /// and holds it while the link lives. Answered with [`LabelLock`]; asked
     /// again by the same worker while held, it is held, and by another
-    /// worker of the same core, it is not.
+    /// worker of the same core, it is not. Only the core's own node answers
+    /// it; a device's link refuses it, and its core labels that device's
+    /// agents alone.
     LabelLock {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        herdr_socket: Option<String>,
+        scope: String,
         generator: u64,
     },
     /// Gives back the lock [`Call::LabelLock`] took for `generator` on the
-    /// same server; a lock another worker holds stays held.
+    /// same engine; a lock another worker holds stays held.
     LabelUnlock {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        herdr_socket: Option<String>,
+        scope: String,
         generator: u64,
     },
     /// Stops the reporting call `request`: its next report is answered with
@@ -1323,8 +1307,6 @@ impl Call {
             | Self::SessionText { .. }
             | Self::SessionConversation { .. }
             | Self::SessionThread { .. }
-            | Self::PanesStart { .. }
-            | Self::TerminalsStart { .. }
             | Self::PaneProofAnswer { .. }
             | Self::PaneInspect { .. }
             | Self::HoldersStart
@@ -1336,8 +1318,6 @@ impl Call {
             | Self::LinkWrite { .. }
             | Self::LinkClose { .. }
             | Self::BrowserGateway { .. }
-            | Self::LabelLock { .. }
-            | Self::LabelUnlock { .. }
             | Self::Feedback { .. }
             | Self::StageAttachment { .. }
             | Self::RemoveAttachments { .. }
@@ -1356,7 +1336,11 @@ impl Call {
             | Self::Gh { .. }
             | Self::ReadAttachments { .. }
             | Self::ReadDropped { .. }
-            | Self::RemoveClipboard { .. } => false,
+            | Self::RemoveClipboard { .. }
+            // A label lock is the core's own node's, keyed by its engine
+            // folder; a device's labels run unshared.
+            | Self::LabelLock { .. }
+            | Self::LabelUnlock { .. } => false,
         }
     }
 }
@@ -1437,14 +1421,6 @@ pub struct Hello {
     /// remain available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_features: Option<crate::sessions::ReaderFeatures>,
-    /// The socket of the node's own Herdr, as the node spells it, when its
-    /// link streams bridge that server to the core: a WSL distribution's
-    /// helper, whose Herdr no socket on the core's machine reaches (PRD
-    /// wsl-device D-07). Absent for a node that bridges none. Both ends of
-    /// a link run one build, so the field never meets a peer that lacks it;
-    /// its default only keeps a Hello without it readable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub herdr_socket: Option<String>,
     /// Where the node shows the drives of the Windows PC it runs on, when it
     /// is a WSL distribution (`hide_platform::host::windows_drives`), so Add
     /// a project can spell a pasted `C:\` path as that node's own path.

@@ -1,8 +1,8 @@
 //! A device's terminals inside its one node link (PRD core-host-node-terminal
 //! D-10, D-18, D-19, D-20).
 //!
-//! On the device, [`NodeTerminals`] runs the node's [`Service`] for the
-//! device's Herdr and sends what it says up the link: reports first, then
+//! On the device, [`NodeTerminals`] runs the node's [`Service`] over its
+//! pane holders and sends what it says up the link: reports first, then
 //! one line of output per pane in turn, so a pane that floods its output
 //! cannot hold another pane's frames or the core's answers back. A pane
 //! whose unsent output passes [`MAX_UNSENT_OUTPUT_BYTES`] loses it and is
@@ -51,7 +51,7 @@ use hide_node_link::terminal::{
 use serde_json::json;
 
 use super::protocol::{decode_base64, encode_base64};
-use super::{LocalAttacher, OutputSink, RetryPolicy, Service};
+use super::{OutputSink, Service};
 
 /// Reports a device keeps unsent before a new one takes the place of the
 /// waiting one about its subject ([`TerminalReport::same_subject`]), so a
@@ -396,9 +396,6 @@ pub fn forward_diagnostic(record: serde_json::Value) {
     }
 }
 
-/// How a device node attaches to the Herdr at a socket.
-type AttacherFor = Box<dyn Fn(&str) -> Box<dyn super::Attacher> + Send + Sync>;
-
 /// Where a node's pane output goes: up its link and, on a node that draws
 /// its own panes on its own screens, to those screens too.
 struct NodeOutputs {
@@ -422,10 +419,9 @@ impl OutputSink for NodeOutputs {
 pub struct NodeTerminals {
     service: Mutex<Option<Arc<Service>>>,
     /// The node's pane holders, once its core started its terminals over
-    /// them (`Call::HoldersStart`) rather than over its Herdr.
+    /// them (`Call::HoldersStart`).
     holders: Mutex<Option<Arc<dyn hide_node_link::holders::PaneHolders>>>,
     uplink: Arc<Uplink>,
-    attacher: AttacherFor,
     /// The node's own screens, for a node whose core runs elsewhere.
     screen: Option<Arc<dyn OutputSink>>,
 }
@@ -437,46 +433,41 @@ impl Default for NodeTerminals {
 }
 
 impl NodeTerminals {
-    /// The service of a device's node: `herdr terminal session` children of
-    /// the pinned Herdr the account's helper holds (PRD device-herdr-update
-    /// D-10), or of the `herdr` on the account's own search path when none
-    /// arrived.
+    /// The service of a device's node, started over its pane holders when
+    /// its core asks (`Call::HoldersStart`).
     pub fn new() -> Self {
-        Self::with_attacher(Box::new(|socket: &str| {
-            let herdr = hide_platform::host::home_dir()
-                .ok()
-                .and_then(|home| hide_kit::device_herdr::pinned_for_account(&home))
-                .or_else(|| {
-                    hide_platform::programs::find_cli("herdr")
-                        .map(hide_platform::programs::Program::into_path)
-                });
-            Box::new(LocalAttacher::new(herdr, socket.into())) as Box<dyn super::Attacher>
-        }))
+        Self {
+            service: Mutex::default(),
+            holders: Mutex::default(),
+            uplink: Arc::default(),
+            screen: None,
+        }
     }
 
     /// The service of a node whose core runs on another machine (PRD
-    /// core-host-node-remote-core D-06): its panes' output reaches its own
-    /// `screen` always, and its link only while the core says a screen of
-    /// the core's own draws them.
-    /// `herdr` is the binary this machine's daemon runs its Herdr with.
-    pub fn for_screen(screen: Arc<dyn OutputSink>, herdr: std::path::PathBuf) -> Self {
-        let mut terminals = Self::with_attacher(Box::new(move |socket: &str| {
-            Box::new(LocalAttacher::new(Some(herdr.clone()), socket.into()))
-                as Box<dyn super::Attacher>
-        }));
+    /// core-host-node-remote-core D-06): its panes run in its pane holders,
+    /// and their output reaches its own `screen` always, and its link only
+    /// while the core says a screen of the core's own draws them.
+    pub fn for_screen(screen: Arc<dyn OutputSink>) -> Self {
+        let mut terminals = Self::new();
         terminals.uplink.withhold(true);
         terminals.screen = Some(screen);
         terminals
     }
 
-    fn with_attacher(attacher: AttacherFor) -> Self {
-        Self {
-            service: Mutex::default(),
-            holders: Mutex::default(),
-            uplink: Arc::default(),
+    /// Starts the service over `attacher` in place of the node's holders,
+    /// for a test that drives the device's link with a stand-in pane.
+    #[cfg(test)]
+    fn start_service(&self, attacher: Box<dyn super::Attacher>) -> Result<(), String> {
+        let started = Service::start(
             attacher,
-            screen: None,
-        }
+            self.outputs(),
+            Arc::new(UplinkReports(Arc::clone(&self.uplink))),
+            super::RetryPolicy::Automatic,
+        )
+        .map_err(|error| format!("The device's terminal service could not start: {error}"))?;
+        *lock(&self.service) = Some(Arc::new(started));
+        Ok(())
     }
 
     fn take_control(&self, control: TerminalControl) {
@@ -513,35 +504,6 @@ impl NodeTerminals {
 }
 
 impl hide_host::serve::Terminals for NodeTerminals {
-    fn start(&self, herdr_socket: &str) -> Result<(), String> {
-        let mut service = lock(&self.service);
-        if lock(&self.holders).is_some() {
-            return Err(
-                "This node's terminals run on its pane holders; one node runs one engine's panes"
-                    .to_owned(),
-            );
-        }
-        if service.is_some() {
-            return Ok(());
-        }
-        let outputs = self.outputs();
-        // A Herdr node's terminals: holders run when its core asks for them
-        // (`start_holders`), never because of this process's environment.
-        super::holder::device_switch()?;
-        let started = Service::start(
-            (self.attacher)(herdr_socket),
-            outputs,
-            Arc::new(UplinkReports(Arc::clone(&self.uplink))),
-            // A device's panes have always waited for the operator's
-            // Reconnect after a failed attach.
-            RetryPolicy::Manual,
-        )
-        .map_err(|error| format!("The device's terminal service could not start: {error}"))?;
-        *service = Some(Arc::new(started));
-        *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);
-        Ok(())
-    }
-
     /// The node's terminals over its own pane holders, in the device node's
     /// own state folder (`hide_kit::layout::device_node_state`), apart from
     /// a Hide that runs on the same account, so neither reconciles the
@@ -555,12 +517,6 @@ impl hide_host::serve::Terminals for NodeTerminals {
         if let Some(holders) = holders.as_ref() {
             return Ok(Arc::clone(holders));
         }
-        if service.is_some() {
-            return Err(
-                "This node's terminals run on its Herdr; one node runs one engine's panes"
-                    .to_owned(),
-            );
-        }
         let home = hide_platform::host::home_dir()
             .map_err(|error| format!("pane holders need the account's home: {error}"))?;
         let state_dir = hide_kit::layout::device_node_state(&home);
@@ -568,15 +524,13 @@ impl hide_host::serve::Terminals for NodeTerminals {
             service: started,
             holders: opened,
         } = super::holder::Holders::start_local(
-            Some(super::holder::HolderFolders {
+            super::holder::HolderFolders {
                 home: &home,
                 state_dir: &state_dir,
-            }),
-            Box::new(NoHerdr),
+            },
             self.outputs(),
             Arc::new(UplinkReports(Arc::clone(&self.uplink))),
         )?;
-        let opened = opened.ok_or("the node's pane holders did not open")?;
         let panes: Arc<dyn hide_node_link::holders::PaneHolders> = Arc::new(
             super::engine_panes::LocalPanes::for_account(opened, Arc::clone(&started), home),
         );
@@ -666,23 +620,6 @@ impl hide_host::serve::Terminals for NodeTerminals {
         if let Some(service) = lock(&self.service).take() {
             service.close();
         }
-    }
-}
-
-/// A node whose panes are all holder panes opens nothing through Herdr.
-struct NoHerdr;
-
-impl super::Attacher for NoHerdr {
-    fn open(
-        &self,
-        pane: &str,
-        _: super::protocol::Mode,
-        _: u16,
-        _: u16,
-    ) -> Result<super::SessionParts, String> {
-        Err(format!(
-            "pane {pane} has no holder on this device, and this node runs no Herdr"
-        ))
     }
 }
 

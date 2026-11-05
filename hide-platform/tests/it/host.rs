@@ -1,7 +1,7 @@
 //! The contract of `hide_platform::host`, stated as what a caller observes.
-//! The same file runs on macOS, Linux and Windows. The socket Herdr listens
-//! on by default is checked against the pinned Herdr itself, in
-//! `hide-herdr-client/tests/it/real_herdr.rs`.
+//! The same file runs on macOS, Linux and Windows. The Herdr folders it
+//! names are the ones Herdr v0.9.5 reads (`persist/io.rs`), for moving a
+//! 1.1 session into the core's own engine.
 
 use std::fs;
 use std::io::ErrorKind;

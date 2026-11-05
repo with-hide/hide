@@ -244,7 +244,7 @@ fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
         {
             diagnose(&home, "plan_record");
         }
-        if let Some(hint) = crate::plan_record::hint(&plan, crate::spawn_guard::now_ms()) {
+        if let Some(hint) = crate::plan_record::hint(&plan, crate::hook_log::now_ms()) {
             if !intake.context.is_empty() && !intake.context.ends_with('\n') {
                 intake.context.push('\n');
             }
@@ -420,7 +420,7 @@ struct Diagnostics {
 
 /// The fixed causes a hook may record: the delivery intake's sixteen (the
 /// steps and refusals of [`refusal_cause`], `cli`, `deadline`, `format`,
-/// `confirm`, `stdout` and `session_conflict`), the spawn guard's one (`guard`: the daemon could
+/// `confirm`, `stdout` and `session_conflict`), the guards' one (`guard`: the daemon could
 /// not be asked), OpenCode's plugin's one (`plugin`: it skipped or gave up on
 /// a helper call), Memory's three (`crate::memory`: the core could not be
 /// asked, did not answer in time, or the thread asking panicked) and the

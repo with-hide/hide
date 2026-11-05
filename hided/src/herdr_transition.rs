@@ -35,19 +35,12 @@ pub(crate) struct Place {
 }
 
 impl Place {
-    /// The place of `env`'s machine, when its core runs its own engine
-    /// (`herdr_save::Place`): the socket `HERDR_SOCKET_PATH` names, which
-    /// Hide's Herdr ran on, else the account's default one.
+    /// The place of `env`'s machine (`herdr_save::Place`): the account's
+    /// default Herdr session, where Hide's Herdr ran.
     pub(crate) fn of(env: &Env) -> Option<Self> {
-        if !env.own_engine {
-            return None;
-        }
-        let mut save = herdr_save::Place::of_account(&env.home)
+        let save = herdr_save::Place::of_account(&env.home)
             .map_err(|reason| log("herdr_transition.unplaced", json!({ "reason": reason })))
             .ok()?;
-        if let Some(socket) = &env.herdr_move_socket {
-            socket.clone_into(&mut save.socket);
-        }
         Some(Self {
             engine_dir: hide_kit::layout::engine_dir(&env.state_dir),
             save,
@@ -387,10 +380,6 @@ pub(crate) fn cli_answer(
     core: &crate::core::CoreHandle,
     yes: bool,
 ) -> Result<serde_json::Value, String> {
-    // A core on Herdr has no session of Herdr's to move.
-    if core.pane_holders().is_none() {
-        return Ok(json!({ "own_engine": false }));
-    }
     let shown = core.herdr_import_shown()?;
     let action = shown
         .as_ref()
@@ -537,24 +526,6 @@ mod tests {
             ),
             "{look:?}"
         );
-    }
-
-    // D-5: the move reads Hide's Herdr on the socket `HERDR_SOCKET_PATH`
-    // names, where Hide's registrations were made, not the default one.
-    #[test]
-    fn the_move_reads_the_named_herdr_socket() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let named = dir.path().join("named.sock");
-        let env = crate::env::load_from(|key| match key {
-            "HOME" | "USERPROFILE" => Some(home.to_string_lossy().into_owned()),
-            "HIDE_STATE_DIR" => Some(dir.path().join("state").to_string_lossy().into_owned()),
-            "HIDE_DEV_PANE_HOLDER" => Some("1".to_owned()),
-            "HERDR_SOCKET_PATH" => Some(named.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .unwrap();
-        assert_eq!(Place::of(&env).unwrap().save.socket, named);
     }
 
     fn told(restart: &tokio::sync::Notify) -> bool {

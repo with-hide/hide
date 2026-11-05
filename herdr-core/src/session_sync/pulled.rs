@@ -7,7 +7,6 @@
 //! subscription runs for such an engine, and deleting them with Herdr
 //! leaves this path whole.
 
-use super::coordinator::PublishSource;
 use super::*;
 
 /// The last session a pulled engine answered.
@@ -26,23 +25,15 @@ impl PulledSession {
     }
 }
 
-impl PublishSource for PulledSession {
-    fn panes_awaiting_cwd(&self) -> Vec<String> {
-        // The engine started each pane in the folder it holds for it.
-        Vec::new()
-    }
-
-    fn project(&self) -> SessionSnapshotPayload {
+impl PulledSession {
+    /// The session the runtime may see, as the sidebar projects it.
+    pub(super) fn project(&self) -> SessionSnapshotPayload {
         self.state.project()
     }
 
-    fn published_state(&self) -> &ProjectionState {
+    /// The state behind [`Self::project`].
+    pub(super) fn published_state(&self) -> &ProjectionState {
         &self.state
-    }
-
-    fn agents_confirmed(&self) -> bool {
-        // The agents are part of the session read, never a list asked apart.
-        true
     }
 }
 
@@ -53,8 +44,7 @@ fn fetch_error(error: EngineError) -> SessionFetchError {
         | EngineError::Transport(message)
         | EngineError::Unanswered(message)
         | EngineError::Refused { message, .. } => SessionFetchError::Unreachable(message),
-        EngineError::Protocol { message, .. }
-        | EngineError::Malformed(message)
+        EngineError::Malformed(message)
         | EngineError::Request(message)
         | EngineError::Answer(message) => SessionFetchError::Malformed(message),
     }

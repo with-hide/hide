@@ -1,6 +1,5 @@
 // The first-run Devices step: the machines this computer already knows, the
-// Hosts of its ssh config (Add device's list) and the profiles Herdr saved,
-// one row per machine with a chip for where it came from. Reading them
+// Hosts of its ssh config (Add device's list), one row per machine. Reading them
 // contacts no machine; only the explicit Connect press admits the checked
 // rows to the existing consent and connection owner, Add device's for a Host.
 // What ssh asks after the press is answered on the row with the device row's
@@ -14,7 +13,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { Note, Status } from "./components/settings-rows";
-import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Checkbox } from "./components/ui/checkbox";
 import { DialogBody, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
@@ -60,7 +58,6 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   const failed = profiles?.state === "failed";
   const deviceOf = (profile: HerdrProfile) => rest?.navigator?.devices?.find((row) => row.id === profile.device_id);
   const rowState = (profile: HerdrProfile): RowState => {
-    if (!profile.enabled) return "disabled";
     if (profile.problem) return "unavailable";
     const deviceId = profile.device_id ?? profile.added_as;
     const remote = rest?.status?.remote?.find((row) => row.target_id === deviceId);
@@ -70,7 +67,7 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
     if (sent.has(profile.id) && pressedAt === revision) return "connecting";
     if (sent.has(profile.id) || ["connecting", "connected", "failed"].includes(profile.connect_state)) {
       if (kit?.busy) return "installing";
-      if (kit?.unavailable || kit?.refused || kit?.components.some((part) => part.state === "failed") || kit?.agents.some((agent) => agent.enabled && [agent.skill, agent.hook, agent.herdr].some((piece) => piece?.state === "failed"))) return "failed";
+      if (kit?.unavailable || kit?.refused || kit?.components.some((part) => part.state === "failed") || kit?.agents.some((agent) => agent.enabled && [agent.skill, agent.hook].some((piece) => piece?.state === "failed"))) return "failed";
       if (remote?.state === "connected" && kit && !kit.busy) return "connected";
       if (remote?.state === "connecting") return "connecting";
       if (profile.connect_state === "failed" || (remote && !["connected", "not_connected"].includes(remote.state)) || (remote?.state === "not_connected" && remote.message)) return "failed";
@@ -82,7 +79,7 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   const states = new Map(rows.map((profile) => [profile.id, rowState(profile)] as const));
   const busy = [...states.values()].some((state) => state === "connecting" || state === "installing");
   // A failed row is tried again by its own action only (Sign in, Retry, none for a changed server key).
-  const targets = rows.filter((profile) => selected.has(profile.id) && states.get(profile.id) === "saved" && profile.enabled && !profile.problem);
+  const targets = rows.filter((profile) => selected.has(profile.id) && states.get(profile.id) === "saved" && !profile.problem);
   const connect = (only?: HerdrProfile) => {
     if (busy) return;
     const chosen = only ? [only] : targets;
@@ -127,10 +124,9 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
               // A device's connection is worded from its state; the core's sentence beside it is the log's.
               const reason = profile.connect_refusal ? profileRefusalText(profile.connect_refusal, t) : (remote && remote.state !== "connected" && remote.state !== "not_connected" ? remoteStateText(remote.state, profile.label, t) : null);
               const retry = state === "failed" && (link?.problem == null || canRetryDevice(link, remote));
-              const locked = busy || ["added", "connected", "disabled", "unavailable", "signing_in"].includes(state);
+              const locked = busy || ["added", "connected", "unavailable", "signing_in"].includes(state);
               const distro = profile.wsl_distro ?? null;
               const here = distro ? t("firstRun.devices.wslHere") : null;
-              const quiet = state === "saved" || (distro !== null && state === "unavailable");
               const hostReason = distro === null && state === "unavailable" ? hostProblemReason(profile.problem) : null;
               return (
                 <div key={profile.id} className="flex flex-wrap items-start gap-sm px-md py-sm" data-first-run-device={profile.id} data-device-state={state} data-first-run-wsl={distro ?? undefined}>
@@ -141,12 +137,6 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
                       {here ? <span className="break-keep text-caption text-muted-foreground">{here}</span>
                         : <span className="break-all font-mono text-caption text-muted-foreground">{profile.address ?? profile.target}</span>}
                     </label>
-                    {here ? null : (
-                      <span className="flex flex-wrap gap-xs" data-first-run-device-sources={profile.id}>
-                        {profile.ssh_host ? <Badge variant="outline" data-first-run-device-source="ssh">{t("firstRun.devices.fromSsh")}</Badge> : null}
-                        {profile.herdr ? <Badge variant="outline" data-first-run-device-source="herdr">{profile.session === "default" ? t("firstRun.devices.saved") : `${t("firstRun.devices.saved")} · ${t("firstRun.devices.session", { session: profile.session })}`}</Badge> : null}
-                      </span>
-                    )}
                     {link ? <DeviceLink device={link} actions={actions} /> : null}
                     {state === "failed" && !link ? <Status tone="error">{t("firstRun.devices.failed")}</Status> : null}
                     {state === "failed" && !link && reason ? <span className="break-words text-caption text-muted-foreground">{reason}</span> : null}
@@ -155,7 +145,7 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
                   </div>
                   <span className="max-w-full text-caption" aria-live="polite">
                     {retry ? <Button size="sm" variant="secondary" disabled={busy} onClick={() => connect(profile)} data-first-run-device-retry={profile.id}>{retrySignsIn(link?.problem) ? t("devices.signIn.start") : t("common.retry")}</Button>
-                      : quiet || state === "failed" || state === "unavailable" ? null
+                      : state === "saved" || state === "failed" || state === "unavailable" ? null
                       : <Status tone={state === "connected" ? "ok" : state === "connecting" || state === "installing" || state === "signing_in" ? "pending" : "muted"}>{t(DEVICE_STATE_LABEL[state])}</Status>}
                   </span>
                 </div>
@@ -197,7 +187,8 @@ function WslProblem({ distro, problem }: { distro: string; problem: string | nul
 }
 
 const DEVICE_STATE_LABEL = {
-  saved: "firstRun.devices.saved", disabled: "firstRun.devices.disabled", added: "firstRun.devices.added", connected: "firstRun.devices.connected", connecting: "firstRun.devices.connecting", installing: "firstRun.devices.installing", failed: "firstRun.devices.failed", unavailable: "firstRun.devices.unavailable", signing_in: "firstRun.devices.signingIn",
+  added: "firstRun.devices.added", connected: "firstRun.devices.connected", connecting: "firstRun.devices.connecting", installing: "firstRun.devices.installing", failed: "firstRun.devices.failed", unavailable: "firstRun.devices.unavailable", signing_in: "firstRun.devices.signingIn",
 } satisfies Record<string, MessageKey>;
 
-type RowState = keyof typeof DEVICE_STATE_LABEL;
+/** A row not yet connected (`saved`) shows no state; every other state is its label. */
+type RowState = "saved" | keyof typeof DEVICE_STATE_LABEL;

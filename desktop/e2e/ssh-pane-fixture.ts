@@ -1,13 +1,10 @@
-// A shell on either side of the isolated SSH fixture. Herdr can start its
-// shells before a device connects; the own engine creates them through that
-// device's connected node, with the same Add project event the UI sends.
+// A shell on either side of the isolated SSH fixture, created through that
+// device's connected node with the same Add project event the UI sends.
 import { expect } from "@playwright/test";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
-import { e2eEngine } from "../../web/e2e/e2e-engine";
 import { connectStateDir, type HidedControl } from "../../web/e2e/hided-control.mjs";
 import { openProject, sendKeys, viewPane, waitForPaneInput } from "../../web/e2e/daemon-actions";
 import { endPaneHolders, ownedHolders } from "../../web/e2e/pane-holders.mjs";
@@ -31,12 +28,11 @@ export type SshRest = {
 export type SshPaneFixture = Awaited<ReturnType<typeof startSshPaneFixture>>;
 
 export async function startSshPaneFixture() {
-  const herdr: HerdrFixture | null = e2eEngine() === "herdr" ? await startHerdr({ agents: false }) : null;
-  const server: EngineServer = herdr ? { ...herdr, engine: "herdr", shell: "posix" } : await startEngine("own");
+  const server: EngineServer = await startEngine();
   let control: HidedControl | null = null;
   let remoteState: string | null = null;
   let machine: string | undefined;
-  let panes: string[] = herdr ? [...herdr.panes] : [];
+  let panes: string[] = [];
   server.afterStop?.(() => {
     control?.close();
     if (remoteState) endPaneHolders(remoteState);
@@ -55,16 +51,13 @@ export async function startSshPaneFixture() {
   }
   return {
     ...server,
-    herdr,
     async open(folder: string, label: string): Promise<void> {
-      if (herdr) herdr.run(["workspace", "create", "--cwd", folder, "--label", label, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-      else await openOwnProject(folder, label);
+      await openOwnProject(folder, label);
     },
     get panes() { return panes; },
     get control() { if (!control) throw new Error("attach the SSH fixture first"); return control; },
     /** After the daemon is healthy, and on a device after its registration connected. */
     async attach(run: Isolated, device?: string, home?: string): Promise<void> {
-      if (herdr) return;
       if (control) throw new Error("the SSH fixture is already attached");
       control = await connectStateDir(run.env.HIDE_STATE_DIR!);
       machine = device;
@@ -83,17 +76,13 @@ export async function startSshPaneFixture() {
       viewPane(control, panes[0]!);
       await waitForPaneInput(control, panes[0]!);
     },
-    /** Input has no Herdr dependency; the core routes a fully scoped device pane. */
+    /** The core routes a fully scoped device pane. */
     async send(text: string, pane = panes[0]): Promise<void> {
       if (!pane) throw new Error("attach the SSH fixture before sending input");
-      if (herdr) {
-        herdr.run(["pane", "send-text", pane, text]);
-      } else {
-        if (!control) throw new Error("the SSH fixture has no daemon connection");
-        viewPane(control, pane);
-        await waitForPaneInput(control, pane);
-        sendKeys(control, pane, text);
-      }
+      if (!control) throw new Error("the SSH fixture has no daemon connection");
+      viewPane(control, pane);
+      await waitForPaneInput(control, pane);
+      sendKeys(control, pane, text);
     },
     /** Run in the real pane, with its ancestry, without letting synthetic keys
      * change which device the command observes in front. The gate is bounded
@@ -105,29 +94,25 @@ export async function startSshPaneFixture() {
       const arrived = `${gate}.arrived`;
       for (const file of [output, status, gate, arrived]) fs.rmSync(file, { force: true });
       const command = `${line} > ${quote(output)}; printf '%s' "$?" > ${quote(status)}\n`;
-      if (herdr) {
-        herdr.run(["pane", "send-text", panes[0]!, command]);
-      } else {
-        if (!control) throw new Error("attach the SSH fixture before running a command");
-        const before = await control.until((rest) => ({
-          device: (rest as SshRest).navigator?.focused_device_id,
-          pane: (rest as SshRest).focused?.pane_id,
-        }), "the screen's location before fixture input");
-        // The POSIX shell gate needs no device Node/Python installation.
-        const wait = `printf ready > ${quote(arrived)}; ssh_fixture_wait=0; while [ ! -e ${quote(gate)} ] && [ "$ssh_fixture_wait" -lt 200 ]; do sleep 0.1; ssh_fixture_wait=$((ssh_fixture_wait + 1)); done; `;
-        let restored = false;
-        try {
-          viewPane(control, panes[0]!);
-          await waitForPaneInput(control, panes[0]!);
-          sendKeys(control, panes[0]!, `${wait}if [ -e ${quote(gate)} ] && [ "$(cat ${quote(gate)})" = run ]; then ${command.trimEnd()}; else printf 9 > ${quote(status)}; fi\r`);
-          await expect.poll(() => fs.existsSync(arrived), { timeout: 20_000 }).toBe(true);
-          if (before.device) control.send("focus_device", { device_id: before.device });
-          if (before.pane && !machine) control.send("focus_pane", { pane_id: before.pane, origin: "operator" });
-          await control.until((rest) => !before.device || (rest as SshRest).navigator?.focused_device_id === before.device, "the original device restored");
-          restored = true;
-        } finally {
-          fs.writeFileSync(gate, restored ? "run" : "cancel");
-        }
+      if (!control) throw new Error("attach the SSH fixture before running a command");
+      const before = await control.until((rest) => ({
+        device: (rest as SshRest).navigator?.focused_device_id,
+        pane: (rest as SshRest).focused?.pane_id,
+      }), "the screen's location before fixture input");
+      // The POSIX shell gate needs no device Node/Python installation.
+      const wait = `printf ready > ${quote(arrived)}; ssh_fixture_wait=0; while [ ! -e ${quote(gate)} ] && [ "$ssh_fixture_wait" -lt 200 ]; do sleep 0.1; ssh_fixture_wait=$((ssh_fixture_wait + 1)); done; `;
+      let restored = false;
+      try {
+        viewPane(control, panes[0]!);
+        await waitForPaneInput(control, panes[0]!);
+        sendKeys(control, panes[0]!, `${wait}if [ -e ${quote(gate)} ] && [ "$(cat ${quote(gate)})" = run ]; then ${command.trimEnd()}; else printf 9 > ${quote(status)}; fi\r`);
+        await expect.poll(() => fs.existsSync(arrived), { timeout: 20_000 }).toBe(true);
+        if (before.device) control.send("focus_device", { device_id: before.device });
+        if (before.pane && !machine) control.send("focus_pane", { pane_id: before.pane, origin: "operator" });
+        await control.until((rest) => !before.device || (rest as SshRest).navigator?.focused_device_id === before.device, "the original device restored");
+        restored = true;
+      } finally {
+        fs.writeFileSync(gate, restored ? "run" : "cancel");
       }
       await expect.poll(() => fs.existsSync(status), { timeout: 30_000 }).toBe(true);
       return { status: Number(fs.readFileSync(status, "utf8")), stdout: fs.readFileSync(output, "utf8") };

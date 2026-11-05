@@ -30,7 +30,6 @@ pub mod device_herdr;
 mod herdr_integration;
 pub mod holders;
 mod hooks;
-mod labels;
 pub mod layout;
 pub mod legacy;
 mod local;
@@ -59,11 +58,27 @@ pub use agents::{
 };
 pub use coordination_retirement::preflight as retirement_preflight;
 pub use device::{CURRENT, device_target};
-pub use labels::{HCOORD_PLUGIN_ID, LABELS_PLUGIN_ID, Retirement, labels_home, plugin_state_dir};
 pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
 pub use refusal::{KitRefusal, RefusalCause};
+
+/// What a retirement took off one machine.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Retirement {
+    /// Each part found and taken out, in a few words.
+    #[serde(default)]
+    pub removed: Vec<String>,
+    /// Why a part stayed; the next kit pass tries again.
+    #[serde(default)]
+    pub failures: Vec<String>,
+}
+
+impl Retirement {
+    pub fn is_empty(&self) -> bool {
+        self.removed.is_empty() && self.failures.is_empty()
+    }
+}
 pub(crate) use why::Reason;
 pub use why::{PartCause, PartWhy};
 
@@ -217,20 +232,11 @@ pub struct KitReport {
     /// record, so it stays true across launches until answered.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub held_for_onboarding: bool,
-    /// What an apply took out of the retired labels plugin; empty when there
-    /// was nothing of it (PRD labels-in-hided D-12).
-    #[serde(default, skip_serializing_if = "Retirement::is_empty")]
-    pub labels_retirement: Retirement,
-    /// What an apply took off the machine from older layouts: the
-    /// standalone hcoord Herdr plugin and the folders `~/.hide` replaced;
-    /// empty when there was nothing (PRD hide-home-layout D-13, D-14).
+    /// What an apply took off the machine from older layouts: the folders
+    /// `~/.hide` replaced; empty when there was nothing (PRD hide-home-layout
+    /// D-13, D-14).
     #[serde(default, skip_serializing_if = "Retirement::is_empty")]
     pub legacy_retirement: Retirement,
-    /// What a device's node did about the Herdr server on its registered
-    /// socket after this pass (PRD device-herdr-update); only a device's
-    /// apply carries it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub herdr: Option<Box<device_herdr::HerdrUpdate>>,
     /// The pass stopped before changing anything, and why; the report then
     /// has no part and no agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,12 +292,6 @@ pub struct KitTarget {
     /// `Contents/Resources`, such as a device helper root, so a `hide` link
     /// into one of them is replaced rather than left as the operator's.
     pub owned_roots: Vec<PathBuf>,
-    /// The machine's Herdr server, which the retired labels plugin is taken
-    /// out of.
-    pub herdr_socket: PathBuf,
-    /// The `herdr` CLI, needed only to take out a GitHub install of the
-    /// retired labels plugin; `None` when the machine has none Hide can find.
-    pub herdr_bin: Option<PathBuf>,
     /// The machine's `codex`, found on the agents' search
     /// (`agents::search_path`) and run with it; `None` when Hide finds none.
     pub codex: Option<Program>,
@@ -462,7 +462,7 @@ fn install(id: ComponentId, target: &KitTarget) -> Result<(), String> {
             hooks::install(target, hide_agent_hooks::AgentRuntime::ClaudeCode)
         }
         ComponentId::CodexHook => hooks::install(target, hide_agent_hooks::AgentRuntime::Codex),
-        ComponentId::CoordinationRetirement => coordination_retirement::install(target).map(|_| ()),
+        ComponentId::CoordinationRetirement => coordination_retirement::install(target),
     }
 }
 
@@ -637,9 +637,7 @@ pub fn status(target: &KitTarget) -> KitReport {
         codex_capability_unread: daemon.unread,
         codex_daemon_off: None,
         held_for_onboarding: held,
-        labels_retirement: Retirement::default(),
         legacy_retirement: Retirement::default(),
-        herdr: None,
         refused: None,
     }
 }
@@ -793,18 +791,10 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         Ok(lock) => lock,
         Err(refusal) => return KitReport::refused(refusal),
     };
-    let (mut legacy_retirement, retirement_failure) = match coordination_retirement::install(target)
-    {
-        Ok(report) => (report, None),
-        Err(reason) => (Retirement::default(), Some(reason)),
-    };
-    let labels_retirement = labels::retire(target);
+    let retirement_failure = coordination_retirement::install(target).err();
+    let mut legacy_retirement = Retirement::default();
     let mut changed = agent_kit::hold_for_onboarding(&mut record);
     changed |= record.remember_state_route(layout::state_dir_from_process(&target.home));
-    if retirement_failure.is_none() && !record.has_retired(HCOORD_PLUGIN_ID) {
-        record.mark_retired(HCOORD_PLUGIN_ID);
-        changed = true;
-    }
     let mut components = Vec::with_capacity(ComponentId::ALL.len());
     let mut trust_codex = false;
     for id in ComponentId::ALL {
@@ -871,8 +861,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
             observed
         };
         // The entries are in place for an agent that is on: Codex is asked to
-        // trust them below, once Herdr's integration is in place too (PRD
-        // codex-hook-trust D-05, codex-herdr-hook-trust D-03).
+        // trust them below (PRD codex-hook-trust D-05).
         if id == ComponentId::CodexHook
             && failure.is_none()
             && !turning_off
@@ -898,22 +887,12 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     }
     let applied = agent_kit::apply(target, scope, &mut record);
     changed |= applied.changed;
-    // Whether this pass wrote the entries or found them, Codex trusts Hide's
-    // and, when the kit installed it, Herdr's, in one check: Herdr's
-    // integration is only in place now. A failure is the Codex part's, and the
-    // other parts are already installed.
+    // Whether this pass wrote the entries or found them, Codex trusts Hide's,
+    // after the agents' pass took out a Herdr integration the kit installed.
+    // A failure is the Codex part's, and the other parts are already installed.
     if trust_codex
         && !target.stop.load(Ordering::Relaxed)
-        && let Some(codex) = agents::adapter_of_part(ComponentId::CodexHook)
-        && let Some(failure) = codex_trust::ensure(
-            target,
-            // Herdr's entries only while Herdr says its integration is in place.
-            if applied.herdr_current(codex.herdr.target) {
-                record.herdr_hook_entries(codex.id)
-            } else {
-                &[]
-            },
-        )
+        && let Some(failure) = codex_trust::ensure(target, &[])
         && let Some(part) = components
             .iter_mut()
             .find(|part| part.id == ComponentId::CodexHook)
@@ -974,9 +953,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         codex_capability_unread: daemon.unread,
         codex_daemon_off: None,
         held_for_onboarding,
-        labels_retirement,
         legacy_retirement,
-        herdr: None,
         refused: None,
     }
 }
@@ -1112,7 +1089,7 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     }
     // Before the record goes: it is what says which integrations were Hide's.
     let herdr = match record::load(&target.home, &target.install) {
-        Ok(record) => agent_kit::remove_herdr(target, &record),
+        Ok(mut record) => agent_kit::remove_herdr(target, &mut record),
         Err(_) => Vec::new(),
     };
     if let Err(reason) = record::forget(&target.home, &target.install) {

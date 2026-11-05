@@ -7,7 +7,7 @@ import path from "node:path";
 import { corePaneFocus, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { setAgentState, spawnRoot } from "./fixture-agents";
-import { CLAUDE_FULL_ACCESS, claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS, claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openTaskFolds, screenshot, showTasks } from "./wire";
 

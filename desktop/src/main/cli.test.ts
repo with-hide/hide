@@ -155,7 +155,6 @@ describe("the install folders", () => {
       dirs: [
         "C:\\Users\\example\\.local\\bin",
         "C:\\Users\\example\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin",
-        "C:\\Users\\example\\AppData\\Local\\Programs\\Herdr\\bin",
         "C:\\Users\\example\\AppData\\Local\\Programs\\Git\\cmd",
         "C:\\Users\\example\\AppData\\Roaming\\npm",
         "C:\\Program Files\\Git\\cmd",
@@ -194,13 +193,13 @@ describe("what hide connect did on its way", () => {
   it("keeps each record's kind and flat fields for the host log, and nothing else it printed", () => {
     const stderr = [
       "a line a library printed",
-      '{"component":"hide","kind":"herdr.handoff","outcome":"handed_off","from_pid":721,"to_pid":900,"elapsed_ms":640}',
+      '{"component":"hide","kind":"daemon.replace_failed","pid":721,"message":"refused","elapsed_ms":640}',
       '{"component":"hide","kind":"daemon.replacing","pid":5,"running_build":null,"nested":{"a":1}}',
       '{"no":"kind"}',
       "",
     ].join("\n");
     expect(cliRecords(stderr)).toEqual([
-      { event: "herdr.handoff", fields: { outcome: "handed_off", from_pid: 721, to_pid: 900, elapsed_ms: 640 } },
+      { event: "daemon.replace_failed", fields: { pid: 721, message: "refused", elapsed_ms: 640 } },
       { event: "daemon.replacing", fields: { pid: 5, running_build: null } },
     ]);
   });

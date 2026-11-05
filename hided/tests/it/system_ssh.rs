@@ -117,7 +117,7 @@ mod unix {
             std::fs::write(self.local.join(".ssh/config"), config).unwrap();
             let transport = hide_node::ssh::Connector::new(Some(self.packages.clone()))
                 .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
-                .transport(&self.local, "system-ssh", alias, None)
+                .transport(&self.local, "system-ssh", alias)
                 .unwrap();
             transport.establish(
                 &HostConsent {
@@ -541,6 +541,8 @@ mod unix {
         let packages = base.join("p");
         std::fs::create_dir(&packages).unwrap();
         std::fs::write(packages.join("hided"), vec![7u8; 8 * 1024 * 1024]).unwrap();
+        // Every device gets the pane holder beside the helper.
+        std::fs::write(packages.join("hide-holder"), b"holder").unwrap();
         let ssh = base.join("ssh");
         std::fs::write(
             &ssh,
@@ -587,7 +589,7 @@ for last; do :; done
         let transport = hide_node::ssh::Connector::new(Some(packages))
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_ssh_program(ssh.clone())
-            .transport(&local, "system-ssh", "device", None)
+            .transport(&local, "system-ssh", "device")
             .unwrap();
         let attempt = Cancel::default();
         let returned = Arc::new(std::sync::atomic::AtomicBool::new(false));

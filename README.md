@@ -14,7 +14,6 @@
   <a href="LICENSE"><img alt="Functional Source License 1.1" src="https://img.shields.io/badge/license-FSL--1.1--ALv2-blue"></a>
   <img alt="macOS, Windows and Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey">
   <a href="https://discord.gg/h6zme5kybD"><img alt="Join the hide Discord" src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white"></a>
-  <a href="https://herdr.dev"><img alt="Built on Herdr" src="https://img.shields.io/badge/built%20on-Herdr-B9FF66?labelColor=0D191B"></a>
 </p>
 
 <p align="center">
@@ -41,9 +40,7 @@ It works with the agent CLIs you already signed in to: no new API key, no hosted
 </p>
 
 > [!TIP]
-> **Already on Herdr?** hide is built on [Herdr](https://herdr.dev) and opens on the server you already run, so your workspaces, panes and agents are there on first launch.
-> It never replaces your server on its own; when yours is an older Herdr, hide offers to move it to its own, a live handoff on macOS and Linux that keeps your panes running.
-> No Herdr yet? hide brings its own.
+> **Coming from [Herdr](https://herdr.dev)?** hide offers to bring in your saved Herdr workspaces and tabs on first launch, reading the save without changing it, and leaves your Herdr as it is.
 
 ## Install
 
@@ -59,7 +56,7 @@ It works with the agent CLIs you already signed in to: no new API key, no hosted
 Check the installer against its `.sha256` file before you open it.
 After that one install, hide updates itself.
 Install and sign in to the agent CLIs you want hide to start; hide never asks for their credentials.
-hide brings its own [Herdr](https://herdr.dev), and when a Herdr server is already running it opens on top of it as it is.
+hide runs its own terminals: each pane lives in a small holder process that keeps running across an app restart.
 
 [Install hide](docs/INSTALL.md) covers checksums, Gatekeeper, each system's steps, updates, uninstalling and troubleshooting, and [What each system supports](docs/INSTALL.md#what-each-system-supports) records where each system stands.
 
@@ -87,7 +84,7 @@ open /Applications/hide.app
 A local build is named after the newest release before it and its commit, such as `1.1.1-main.6afb9543`; leave `HIDE_VERSION` unset, since it is the release workflow's switch.
 Windows and Linux source builds are in [Build and install from source](docs/INSTALL.md#build-and-install-from-source).
 
-To look at hide in a browser without installing the app, `bash scripts/web-dev.sh` builds the daemon, starts it with the pinned Herdr and opens the address ([Try hide in a browser](docs/INSTALL.md#try-hide-in-a-browser)).
+To look at hide in a browser without installing the app, `bash scripts/web-dev.sh` builds the daemon, starts it and opens the address ([Try hide in a browser](docs/INSTALL.md#try-hide-in-a-browser)).
 
 </details>
 
@@ -160,7 +157,7 @@ Add any machine by its SSH alias and its agents join the same lists, and pair yo
 
 ### Still an IDE
 
-- **Real terminals.** Agents run in Herdr panes with their real layout, scrollback and focus, drawn in place.
+- **Real terminals.** Agents run in real terminal panes with their layout, scrollback and focus, drawn in place.
 - **Files and diffs.** An editor with a VS Code style Explorer, and each checkout's changes one click from its tab.
 - **A worktree per task.** GitHub issues and local notes sit in one backlog; starting one opens a worktree, an agent and its first prompt.
 - **Pull requests.** The ones waiting on you come first, and one click hands a pull request to an agent.
@@ -195,18 +192,18 @@ hide device add workbox                                               # another 
 ## Your machines, your sign-ins
 
 - **Nothing hosted.** The app, the core and Hide AI run on machines you own, so your code goes only where your agent CLIs already send it.
-- **Credentials stay with their tools.** Agent CLIs, SSH and Herdr keep their own sign-in state.
+- **Credentials stay with their tools.** Agent CLIs and SSH keep their own sign-in state.
   The one thing hide reads is Codex's `auth.json` access token and account ID, which it sends to Codex's usage endpoint to show your usage.
-- **Your Herdr is left alone.** A Herdr server that answers is used as it is and never stopped or replaced; when none answers, hide starts its bundled one, which keeps running after the app quits.
+- **Your Herdr is left alone.** Bringing in a Herdr save only reads it; a Herdr server you run keeps running beside hide.
 - **Your phone stays in your tailnet.** It reaches your machines over your own Tailscale.
 
 ## How it works
 
 ```text
-Herdr server ─ panes, terminals and agent lifecycle
-     │  versioned snapshots + terminal output
+pane holders ─ one per pane: its PTY, program and parsed terminal
+     │  terminal output + process facts
      ▼
-herdr-core (Rust) ─ the one owner of hide's state
+herdr-core (Rust) ─ the one owner of hide's state, with its own engine over the holders
      │  typed events in, snapshot deltas out
      ▼
 hided ─ the daemon and the `hide` CLI: loopback HTTP + a token WebSocket
@@ -217,14 +214,6 @@ web shell (React) ─ in the Electron app, or a browser on the same machine
 
 The core owns the state behind one snapshot boundary, and the shell only renders it and sends user events back, so the screen never keeps a competing model of the session.
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the boundaries and their reasons.
-
-### Built on Herdr
-
-<!-- herdr-provenance:start -->
-hide distributes the [upstream Herdr release v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5).
-The bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-`herdr-update.yml` proposes an upstream stable release with `--repo herdrdev/herdr` only when run by hand, since the pin holds while Hide moves to its own engine; updates must pass contract and runtime checks.
-<!-- herdr-provenance:end -->
 
 ## Performance
 
@@ -248,7 +237,7 @@ These are one machine's numbers on macOS, taken without quiescing it: they leave
 | [Status model](docs/status-model.md) | How an agent's group and read state are decided |
 | [Agent hooks](docs/agent-hooks.md) | What hide writes for each agent, and where |
 | [Browser displays](docs/BROWSER_DISPLAYS.md) | `hide browser` and the pages drawn beside the work |
-| [Architecture](docs/ARCHITECTURE.md) | The core, the daemon, the desktop host and the Herdr boundary |
+| [Architecture](docs/ARCHITECTURE.md) | The core, its engine and pane holders, the daemon and the desktop host |
 | [All docs](docs/README.md) | Every current guide and what owns it |
 | [llms.txt](https://withhide.dev/llms.txt) | The same guides as one index for an agent to read |
 
@@ -282,8 +271,7 @@ pnpm --dir desktop dev              # the desktop app, unpackaged, against this 
 | `hide-ai/` | Background AI features on the operator's own agent CLIs |
 | `hide-kit/` | The install kit and every path under `~/.hide` |
 | `hide-*/` | The other supporting crates: sessions, memory, devices, projects |
-| `plugins/` | Herdr plugins shipped from this repository |
-| `contracts/` | The pinned Herdr API contract |
+| `contracts/` | The daemon's wire schema and the other pinned contracts |
 | `design/` | The Pen design library and `tokens.json` |
 | `site/` | [withhide.dev](https://withhide.dev) |
 
@@ -305,4 +293,4 @@ hide is fair source under the [Functional Source License 1.1, ALv2 Future Licens
 You may use, change and redistribute it for any purpose except offering others a commercial product or service that competes with hide, and using it in your own work, including at a company, is always allowed.
 Each release becomes available under the Apache License 2.0 two years after it is published, and releases up to and including 1.1.1 remain under the Apache License 2.0.
 [NOTICE](NOTICE) carries the copyright notice and the files derived from Herdr and other projects, which keep their own licenses.
-The bundled Herdr and other third-party components keep their own licenses, listed in [THIRD_PARTY_NOTICES](desktop/resources/THIRD_PARTY_NOTICES).
+Code taken from Herdr and other third-party components keep their own licenses, listed in [THIRD_PARTY_NOTICES](desktop/resources/THIRD_PARTY_NOTICES).

@@ -7,24 +7,27 @@
 //! nothing reaches Hide's View, and the operator's Needs You never says which
 //! agent opened something to look at. The session guidance names the Hide
 //! commands, but a skill's or a habit's `open` wins over it, so the call is
-//! refused where it is made. Like the spawn guard it is a redirect, not a
-//! security boundary: it reads one shell call at one layer, and acts only
-//! inside a Herdr pane whose checkout Hide has registered, asked through the
-//! spawn guard's [`registration`](crate::spawn_guard::registration)
+//! refused where it is made. It is a redirect, not a security boundary: it
+//! reads one shell call at one layer, and acts only inside a pane whose
+//! checkout Hide has registered, asked through
+//! [`registration`](crate::pre_tool::registration)
 //! (`docs/agent-hooks.md`, The opener guard).
 //!
-//! The call is read as the spawn guard reads it (`hide_shell`): each simple
+//! The call is read as a shell reads it (`hide_shell`): each simple
 //! command of the line, its environment assignments and wrappers set aside. An
 //! opener hidden one layer deeper (`bash -c`, `$(...)`, a script) is not looked
 //! for, except the one line `cmd /c` and `powershell -Command` take as text,
 //! which is how a Windows agent reaches `start`. Every function here is pure
-//! except [`record_refusal`].
+//! except [`pane_refusal`] and [`record_refusal`].
 
+use std::ffi::OsStr;
 use std::path::Path;
+use std::time::Instant;
 
-use hide_shell::simple_commands;
+use hide_shell::{command_words, simple_commands};
 
-use crate::spawn_guard::{append_line, command_words, log_path, now_ms};
+use crate::hook_log::{append_line, log_path, now_ms};
+use crate::pre_tool::Registration;
 
 /// What Hide's View shows a target as, and so which `hide` command shows it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -184,7 +187,7 @@ pub fn find_openings(command: &str) -> Vec<Opening> {
 const NESTING: usize = 1;
 
 fn opening_of(words: &[String], depth: usize, openings: &mut Vec<Opening>) {
-    let (words, _) = command_words(words, &|_| None, true);
+    let words = command_words(words, true);
     let Some((first, arguments)) = words.split_first() else {
         return;
     };
@@ -448,7 +451,7 @@ pub fn refusal_reason(hide: &str, openings: &[Opening]) -> String {
 
 // --- What is recorded ------------------------------------------------------------
 
-/// One refusal, as one structured line in the spawn guard's log: the pane,
+/// One refusal, as one structured line in the hooks' log: the pane,
 /// the openers and the kinds of their targets, and the runtime. Neither the
 /// command nor a path is written: either can hold a name the operator keeps
 /// private. A line that cannot be written is a refusal that already
@@ -475,6 +478,40 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, openings: &[Openin
     .to_string();
     eprintln!("{line}");
     let _ = append_line(&log_path(home), &line);
+}
+
+/// The opener guard's decision for one shell call made in the pane `pane`:
+/// the reason it is refused, or `None` to let it run. A call that hands no
+/// viewable target to the system opener runs without asking anything; one
+/// that does asks the daemon once, through `program`, whether the pane sits
+/// in a registered checkout, and runs when it does not or the daemon cannot
+/// be asked. The refusal is logged before it is returned, and stands when
+/// the log cannot be written.
+pub fn pane_refusal(
+    home: &Path,
+    runtime: &str,
+    pane: &str,
+    command: &str,
+    program: &OsStr,
+    deadline: Instant,
+) -> Option<String> {
+    if !may_hold_opening(command.as_bytes()) {
+        return None;
+    }
+    let openings = find_openings(command);
+    if openings.is_empty() {
+        return None;
+    }
+    match crate::pre_tool::registration(program, deadline) {
+        Registration::Registered => {}
+        Registration::NotRegistered => return None,
+        Registration::Unreachable(cause) => {
+            crate::pre_tool::unreachable(home, runtime, cause);
+            return None;
+        }
+    }
+    record_refusal(home, runtime, pane, &openings);
+    Some(refusal_reason(&program.to_string_lossy(), &openings))
 }
 
 #[cfg(test)]

@@ -59,7 +59,7 @@ class RoundClose(unittest.TestCase):
 
             def close(self):
                 return left
-        argv = ["holder-perf.py", "--bin", "b", "--herdr", "h", "--path", "holder", "--panes", "1",
+        argv = ["holder-perf.py", "--bin", "b", "--panes", "1",
                 "--out", str(self.out)]
         stderr = io.StringIO()
         with mock.patch.object(self.perf, "Round", Round), mock.patch.object(self.perf.sys, "platform", "darwin"), \

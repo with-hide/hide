@@ -3,12 +3,11 @@
 //! The core reaches it as it reaches any device it dials: its node is this
 //! build's Linux `hided`, installed on consent under the Linux account's
 //! helper root, answering the node contract. What differs is the pipe: one
-//! `wsl.exe -d <distro> -u <user> -e <hided> node serve --own-herdr` child
+//! `wsl.exe -d <distro> -u <user> -e <hided> node serve` child
 //! per distribution, owned by its link ([`super::over_child`]), whose stdin
 //! and stdout carry the link. No `wsl.exe` runs per request. The device's
-//! Herdr stays inside WSL and is reached through the link's own streams, and
-//! its files and Git are the node's, by their Linux paths, never through a
-//! `\\wsl$` share (D-15).
+//! panes run in holders inside WSL, and its files and Git are the node's, by
+//! their Linux paths, never through a `\\wsl$` share (D-15).
 //!
 //! The link's child first runs the start script every dialed device runs
 //! ([`super::bootstrap`], PRD system-ssh-device-link D-02): the account
@@ -29,21 +28,19 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hide_herdr_client::ApiError;
-
 use hide_node_link::call_as;
 use hide_node_link::device::{
     Attempt, CapabilityReport, DeviceTransport, DialedTransport, EstablishError, Established,
-    HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, SnapshotCheck, Wake,
-    WslDistribution, WslListing,
+    HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, Wake, WslDistribution,
+    WslListing,
 };
-use hide_node_link::protocol::{Call, Hello, KitAction};
+use hide_node_link::protocol::{Call, Hello};
 use hide_platform::wsl::Distribution;
 use serde_json::json;
 
 use super::{
-    ChildLink, DEFAULT_CLI_DIR, HelperPackages, PaneHook, RemoteHost, TerminalHook, UnaskedStart,
-    bootstrap, helper_protocol_refusal, lock_recover,
+    ChildLink, HelperPackages, PaneHook, RemoteHost, TerminalHook, UnaskedStart, bootstrap,
+    helper_protocol_refusal, lock_recover,
 };
 
 /// `wsl.exe` calls this process runs at once, across every distribution: a
@@ -59,11 +56,6 @@ const RUNNING_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the account probe may take: it may be what starts the
 /// distribution, and a cold start of WSL's virtual machine takes seconds.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long the bridged Herdr has to answer before the kit is asked to
-/// start it.
-const HERDR_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long the kit pass a connection runs before its services may take.
-const KIT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// How this process reaches WSL: the `wsl.exe` it runs and where it reads
 /// the distributions; a test's stand-in for both on a system without WSL.
@@ -135,14 +127,11 @@ pub struct WslDevice {
     distro: String,
     access: WslAccess,
     packages: HelperPackages,
-    engine: super::DeviceEngine,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
-    /// The link the latest attempt started, which carries the device's
-    /// Herdr; reaching Herdr never starts `wsl.exe`.
+    /// The link the latest attempt started, which the device's test reads;
+    /// reading it never starts `wsl.exe`.
     link: Arc<Mutex<Option<RemoteHost>>>,
-    /// The Herdr socket inside WSL the node bridges, as its Hello said.
-    herdr_socket: Arc<Mutex<Option<String>>>,
 }
 
 impl WslDevice {
@@ -150,7 +139,6 @@ impl WslDevice {
         distro: &str,
         access: WslAccess,
         packages: HelperPackages,
-        engine: super::DeviceEngine,
         panes: Option<PaneHook>,
         terminals: Option<TerminalHook>,
     ) -> Result<Self, String> {
@@ -161,11 +149,9 @@ impl WslDevice {
             distro: distro.to_owned(),
             access,
             packages,
-            engine,
             panes,
             terminals,
             link: Arc::default(),
-            herdr_socket: Arc::default(),
         })
     }
 
@@ -245,35 +231,10 @@ fn covers(bound: &HostIdentity, observed: &HostIdentity) -> bool {
         && machine == observed.machine_id.as_deref()
 }
 
-impl DeviceTransport for WslDevice {
-    fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(WslHerdr(Arc::clone(&self.link)))
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-
-    fn cached_herdr_socket(&self) -> Option<String> {
-        lock_recover(&self.herdr_socket).clone()
-    }
-}
-
-/// The device's Herdr through its current link; no link, no Herdr, and
-/// nothing is started to find one.
-struct WslHerdr(Arc<Mutex<Option<RemoteHost>>>);
-
-impl hide_herdr_client::ApiConnector for WslHerdr {
-    fn connect(&self) -> Result<Box<dyn hide_herdr_client::ApiStream>, ApiError> {
-        let link = lock_recover(&self.0).clone().ok_or_else(|| {
-            ApiError::Transport("The WSL distribution's helper is not connected".to_owned())
-        })?;
-        link.herdr_connector().connect()
-    }
-}
+impl DeviceTransport for WslDevice {}
 
 impl DialedTransport for WslDevice {
-    fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport {
+    fn capability_test(&self, operation_id: &str) -> CapabilityReport {
         let mut report = CapabilityReport::new(
             operation_id,
             RemoteHostIdentity {
@@ -306,31 +267,22 @@ impl DialedTransport for WslDevice {
         let link = lock_recover(&self.link).clone();
         let Some(link) = link.filter(|link| link.closed_reason().is_none()) else {
             report.fail(
-                RemoteStage::Herdr,
+                RemoteStage::Protocol,
                 "The distribution's helper is not connected",
                 true,
                 false,
             );
             return report;
         };
-        let socket = self.cached_herdr_socket().unwrap_or_default();
-        let snapshot = hide_herdr_client::request_with_connector(
-            &link.herdr_connector(),
-            "session.snapshot",
-            json!({}),
-            Duration::from_secs(10),
-        );
-        match snapshot
-            .map_err(|error| error.to_string())
-            .and_then(|value| {
-                check(&value, &self.target(), &socket).map_err(|error| error.to_string())
-            }) {
-            Ok(protocol) => {
-                report.pass(RemoteStage::Herdr, socket.clone());
-                report.pass(RemoteStage::Protocol, format!("protocol {protocol}"));
-            }
-            Err(reason) => {
-                report.fail(RemoteStage::Herdr, reason, true, false);
+        match link.protocol() {
+            Some(protocol) => report.pass(RemoteStage::Protocol, format!("protocol {protocol}")),
+            None => {
+                report.fail(
+                    RemoteStage::Protocol,
+                    "The distribution's helper has not greeted the core",
+                    true,
+                    false,
+                );
                 return report;
             }
         }
@@ -428,17 +380,12 @@ impl DialedTransport for WslDevice {
                     observed: Box::new(identity),
                 });
             }
-            let payload = self.packages.payload_for(&facts.os, &facts.arch, self.engine)?;
+            let payload = self.packages.payload_for(&facts.os, &facts.arch)?;
             stage("install");
             let installed =
                 bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
             stage("start");
-            bootstrap::start(
-                &mut *pipe,
-                &installed.helper_relative,
-                &bootstrap::HerdrChoice::Account,
-                None,
-            )?;
+            bootstrap::start(&mut *pipe, &installed.helper_relative, None)?;
             Ok((installed, identity))
         })(&mut pipe);
         let (installed, identity) = match started {
@@ -477,62 +424,12 @@ impl DialedTransport for WslDevice {
         }
         host.take_readers(hello.protocol, readers)
             .map_err(EstablishError::Helper)?;
-        let own = self.engine == super::DeviceEngine::Holders;
-        let socket = match own {
-            false => hello
-                .herdr_socket
-                .clone()
-                .ok_or_else(|| "the WSL helper bridges no Herdr socket".to_owned()),
-            true => Err("the distribution's panes run on the core's own engine".to_owned()),
-        };
-        *lock_recover(&self.herdr_socket) = socket.clone().ok();
         *lock_recover(&self.link) = Some(host.clone());
-        // Only a Herdr that does not answer needs the kit before the
-        // services start; otherwise the core runs its pass after ready. A
-        // distribution of the core's own engine has no Herdr to ask.
-        let herdr_answers = own
-            || hide_herdr_client::request_with_connector(
-                &host.herdr_connector(),
-                "session.snapshot",
-                json!({}),
-                HERDR_CHECK_TIMEOUT,
-            )
-            .is_ok();
-        let kit = (!herdr_answers).then(|| {
-            stage("kit");
-            call_as::<hide_kit::KitReport>(
-                &host,
-                Call::Kit {
-                    action: KitAction::Apply,
-                    cli_dir: consent
-                        .cli_dir
-                        .clone()
-                        .unwrap_or_else(|| DEFAULT_CLI_DIR.to_owned()),
-                    herdr_socket: socket.clone().ok(),
-                    preserve_herdr_server: false,
-                    retirement_projects: Vec::new(),
-                },
-                KIT_TIMEOUT,
-            )
-            .map(Box::new)
-            .map_err(|error| error.to_string())
-        });
-        let terminals = if own {
-            stage("holders");
-            super::start_holders_at(&host, self.terminals.clone())
-        } else {
-            if self.panes.is_some() {
-                stage("panes");
-                super::start_panes_at(socket.clone(), &host);
-            }
-            match self.terminals.clone() {
-                None => Err("this process takes no device terminals".to_owned()),
-                Some(hook) => {
-                    stage("terminals");
-                    super::start_terminals_at(socket, &host, hook)
-                }
-            }
-        };
+        // The distribution's panes run on the core's own engine, in pane
+        // holders its node runs; the core runs its kit pass after ready.
+        let kit = None;
+        stage("holders");
+        let terminals = super::start_holders_at(&host, self.terminals.clone());
         // The link is the core's from here (see the SSH device's).
         cancel.disarm();
         if cancel.is_cancelled() {

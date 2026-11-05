@@ -184,7 +184,7 @@ impl Runtime {
                     self.push_diagnostic(
                         "pane.focus.refused",
                         format!(
-                            "Herdr did not confirm pane focus {}: {message}; Hide keeps it",
+                            "The engine did not confirm pane focus {}: {message}; Hide keeps it",
                             pending.target_id
                         ),
                     );
@@ -437,7 +437,6 @@ impl Runtime {
     pub(super) fn terminal_pane_snapshot(&self, pane_id: &str) -> TerminalPaneSnapshot {
         let idle = PaneTerminalState {
             state: "idle".to_owned(),
-            mode: None,
             generation: 0,
             attempt: 0,
             message: None,
@@ -871,7 +870,7 @@ impl Runtime {
             // only the controlling client's wheel reaches the program itself.
             Ok(_) => self.hold_scroll_elsewhere(
                 pane_id,
-                "Herdr has no history to move for this pane, and only the client controlling it can scroll the program",
+                "The engine has no history to move for this pane, and only the client controlling it can scroll the program",
             ),
             Err(crate::find::pane::ViewportScrollError::Refused(message)) => {
                 self.hold_scroll_elsewhere(pane_id, &message)
@@ -923,7 +922,7 @@ impl Runtime {
                 .live
                 .as_ref()
                 .map(|context| crate::find::pane::PaneApiRoute::local(context, pane_id))
-                .ok_or_else(|| "This pane needs a live Herdr connection".to_owned());
+                .ok_or_else(|| "This pane needs a live engine connection".to_owned());
         }
         let (device, source_pane_id) = self
             .snapshot
@@ -1042,7 +1041,7 @@ impl Runtime {
                         self.push_diagnostic(
                             "lineage.relocated",
                             format!(
-                                "Herdr acknowledged moving delegated pane {pane_id} to its own tab in {elapsed_ms} ms"
+                                "The engine acknowledged moving delegated pane {pane_id} to its own tab in {elapsed_ms} ms"
                             ),
                         );
                     }
@@ -1162,7 +1161,7 @@ impl Runtime {
             ) => {
                 self.push_diagnostic(
                     "pane.unchanged",
-                    format!("Herdr changed nothing for pane {pane_id} in {elapsed_ms} ms"),
+                    format!("The engine changed nothing for pane {pane_id} in {elapsed_ms} ms"),
                 );
                 true
             }
@@ -1371,55 +1370,6 @@ impl Runtime {
         self.clear_selected_terminal_state();
         self.select_terminal_pane(pane_id);
     }
-    /// Opens or focuses the file tab for one path in a checkout Hide is
-    /// already showing. The caller owns the context check and the persistence,
-    /// because a reveal has already made that decision by the time it gets
-    /// here and would otherwise make it twice.
-    /// The tab the operator is looking at: the focused checkout's visible tab.
-    ///
-    /// Another checkout's visible tab is that checkout's memory, not a tab on
-    /// screen, so it does not renew an attach.
-    pub(crate) fn process_info_attached_tabs(&self, target: Option<&str>) -> Vec<String> {
-        let Some(target) = target else {
-            return self.recent_visible_tabs.clone();
-        };
-        if !self.device_in_front(target) {
-            return Vec::new();
-        }
-        self.snapshot
-            .status
-            .remote
-            .iter()
-            .find(|status| status.target_id == target)
-            .and_then(|status| status.session.as_ref())
-            .and_then(|session| {
-                session.focused_tab_id.clone().or_else(|| {
-                    session
-                        .focused_checkout_id
-                        .as_ref()
-                        .and_then(|checkout| session.active_tab_ids.get(checkout))
-                        .cloned()
-                })
-            })
-            .into_iter()
-            .collect()
-    }
-
-    pub(crate) fn process_info_focused_pane(&self, target: Option<&str>) -> Option<String> {
-        match target {
-            None => self.snapshot.focused.pane_id.clone(),
-            Some(target) => self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .find(|status| status.target_id == target)
-                .and_then(|status| status.session.as_ref())
-                .and_then(|session| session.focused_pane_id.as_deref())
-                .and_then(|id| crate::address::pane_of(id, target))
-                .map(str::to_owned),
-        }
-    }
 
     pub(super) fn focused_visible_tab_id(&self) -> Option<String> {
         self.snapshot
@@ -1504,7 +1454,6 @@ impl Runtime {
             if let Some(state) = self.terminal_states.get_mut(&pane_id) {
                 state.state = "released".to_owned();
                 state.message = Some(message.clone());
-                state.mode = None;
                 state.exit_category = None;
                 state.retry_decision = "on_next_visit".to_owned();
             }

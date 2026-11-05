@@ -8,7 +8,7 @@ use herdr_core::device_command::DeviceCommand;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
-pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--socket <path>] [--json]\nhide device remove <device id> [--json]\nhide device retry <device id> [--wait] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--json]\nhide device remove <device id> [--json]\nhide device retry <device id> [--wait] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -30,7 +30,6 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut json = false;
     let mut wait = false;
     let mut name = None;
-    let mut socket = None;
     let mut words = Vec::new();
     while let Some(arg) = args.next() {
         let slot = match arg.as_str() {
@@ -43,7 +42,6 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 continue;
             }
             "--name" if verb == Some("add") && name.is_none() => &mut name,
-            "--socket" if verb == Some("add") && socket.is_none() => &mut socket,
             word if !word.starts_with('-') => {
                 words.push(word.to_owned());
                 continue;
@@ -60,7 +58,6 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         (Some("add"), [alias]) => DeviceCommand::Add {
             ssh_alias: alias.clone(),
             name,
-            herdr_socket_path: socket,
         },
         (Some("remove"), [device_id]) => DeviceCommand::Remove {
             device_id: device_id.clone(),
@@ -248,21 +245,13 @@ mod tests {
     }
 
     #[test]
-    fn add_takes_an_alias_with_an_optional_name_and_socket() {
+    fn add_takes_an_alias_with_an_optional_name() {
         assert_eq!(
-            parse_words(&[
-                "add",
-                "studio",
-                "--name",
-                "Studio",
-                "--socket",
-                "/tmp/h.sock"
-            ]),
+            parse_words(&["add", "studio", "--name", "Studio"]),
             Ok(DeviceCli {
                 command: DeviceCommand::Add {
                     ssh_alias: "studio".into(),
                     name: Some("Studio".into()),
-                    herdr_socket_path: Some("/tmp/h.sock".into()),
                 },
                 json: false,
                 wait: false,
@@ -272,7 +261,7 @@ mod tests {
         assert!(parse_words(&["add", "a", "b"]).is_err());
         assert!(parse_words(&["add", "a", "--name"]).is_err());
         assert!(parse_words(&["list", "--name", "x"]).is_err());
-        assert!(parse_words(&["remove", "studio", "--socket", "/x"]).is_err());
+        assert!(parse_words(&["add", "studio", "--socket", "/x"]).is_err());
     }
 
     #[test]

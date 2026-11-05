@@ -90,7 +90,7 @@ impl Runtime {
         let Some(target) = target else {
             self.set_request_error(
                 "home.unavailable",
-                "The device's Herdr is not connected, so Home cannot open there",
+                "The device's engine is not connected, so Home cannot open there",
                 true,
                 request_id.as_deref(),
             );

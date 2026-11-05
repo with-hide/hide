@@ -1239,8 +1239,6 @@ mod tests {
                 schema_version: SCHEMA_VERSION,
                 home: None,
                 node_id: crate::node::test_node(),
-                herdr_socket_path: None,
-                herdr_bin_path: None,
                 app_state_path: folder
                     .path()
                     .join("state.json")
@@ -1479,9 +1477,9 @@ mod tests {
         let mut runtime = runtime(&node);
         let terminals = Arc::new(GrantingTerminals::default());
         runtime.set_terminals(Arc::clone(&terminals) as _);
-        let herdr = crate::fake_herdr::FakeHerdr::start("thread-input", |method, _| {
-            assert_eq!(method, "pane.send_input");
-            json!({"type": "ok"})
+        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+            assert_eq!(method, "submit_text");
+            crate::engine::fake::reply(())
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
         observe(&mut runtime, "idle", 1, "t1", true);
@@ -1499,12 +1497,11 @@ mod tests {
             text: "이거 봐줘".to_owned(),
             paths: vec![file.clone()],
         });
-        let sent = herdr.requests();
+        let sent = herdr.calls_of("submit_text");
         assert_eq!(sent.len(), 1, "{sent:?}");
-        let params = &sent[0]["params"];
-        assert_eq!(params["pane_id"], "w1:p1");
+        let params = &sent[0];
+        assert_eq!(params["pane"], "w1:p1");
         assert_eq!(params["text"], format!("\"{file}\" 이거 봐줘"));
-        assert_eq!(params["keys"], json!(["enter"]));
         assert_eq!(
             terminals.permits.lock().unwrap().as_slice(),
             &[(
@@ -1532,7 +1529,7 @@ mod tests {
             text: "계속".to_owned(),
             paths: Vec::new(),
         });
-        assert_eq!(herdr.requests().len(), 1);
+        assert_eq!(herdr.calls_of("submit_text").len(), 1);
         assert_eq!(
             thread(&runtime)
                 .input
@@ -1548,9 +1545,9 @@ mod tests {
         let node = Arc::new(ScriptedNode::default());
         let mut runtime = runtime(&node);
         runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
-        let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("thread-gone", |method, _| {
-            assert_eq!(method, "pane.send_input");
-            Err(("pane_not_found".to_owned(), "no such pane".to_owned()))
+        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+            assert_eq!(method, "submit_text");
+            crate::engine::fake::refused("pane_not_found", "no such pane")
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
         observe(&mut runtime, "idle", 1, "t1", true);
@@ -1575,7 +1572,7 @@ mod tests {
 
         // The core still sees the pane, Herdr does not.
         send(&mut runtime);
-        assert_eq!(herdr.requests().len(), 1);
+        assert_eq!(herdr.calls_of("submit_text").len(), 1);
         assert_eq!(refusal(&runtime), gone);
 
         // Herdr's next read has no such pane.
@@ -1584,7 +1581,11 @@ mod tests {
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         assert_eq!(thread(&runtime).pane, ThreadPane::Gone);
         send(&mut runtime);
-        assert_eq!(herdr.requests().len(), 1, "a closed pane is not asked");
+        assert_eq!(
+            herdr.calls_of("submit_text").len(),
+            1,
+            "a closed pane is not asked"
+        );
         assert_eq!(refusal(&runtime), gone);
     }
 
@@ -1600,9 +1601,9 @@ mod tests {
             .hold
             .store(true, std::sync::atomic::Ordering::SeqCst);
         runtime.set_terminals(Arc::clone(&terminals) as _);
-        let herdr = crate::fake_herdr::FakeHerdr::start("thread-moved", |method, _| {
-            assert_eq!(method, "pane.send_input");
-            json!({"type": "ok"})
+        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+            assert_eq!(method, "submit_text");
+            crate::engine::fake::reply(())
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
         observe(&mut runtime, "idle", 1, "t1", true);
@@ -1635,7 +1636,11 @@ mod tests {
                 .input
                 .is_some_and(|input| input.state != ThreadInputState::Sending)
         });
-        assert!(herdr.requests().is_empty(), "{:?}", herdr.requests());
+        assert!(
+            herdr.calls_of("submit_text").is_empty(),
+            "{:?}",
+            herdr.calls_of("submit_text")
+        );
         assert_eq!(
             thread(&shared.lock().unwrap())
                 .input
@@ -1652,8 +1657,8 @@ mod tests {
         let node = Arc::new(ScriptedNode::default());
         let mut runtime = runtime(&node);
         runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
-        let herdr = crate::fake_herdr::FakeHerdr::start("thread-closed", |method, _| {
-            panic!("nothing reaches Herdr, asked {method}");
+        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+            panic!("nothing reaches the engine, asked {method}");
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
         observe(&mut runtime, "idle", 1, "t1", true);
@@ -1668,7 +1673,7 @@ mod tests {
             text: "계속".to_owned(),
             paths: Vec::new(),
         });
-        assert!(herdr.requests().is_empty());
+        assert!(herdr.calls_of("submit_text").is_empty());
         assert_eq!(
             thread(&runtime)
                 .input
@@ -1689,13 +1694,13 @@ mod tests {
         let mut runtime = runtime(&node);
         let terminals = Arc::new(GrantingTerminals::default());
         runtime.set_terminals(Arc::clone(&terminals) as _);
-        let local = crate::fake_herdr::FakeHerdr::start("thread-input-local", |method, _| {
-            unreachable!("a device thread's input reached this machine's Herdr: {method}")
+        let local = crate::engine::fake::FakeEngine::start(|method, _| {
+            unreachable!("a device thread's input reached this machine's engine: {method}")
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&local));
-        let device = crate::fake_herdr::FakeHerdr::start("thread-input-mini", |method, _| {
-            assert_eq!(method, "pane.send_input");
-            json!({"type": "ok"})
+        let device = crate::engine::fake::FakeEngine::start(|method, _| {
+            assert_eq!(method, "submit_text");
+            crate::engine::fake::reply(())
         });
         runtime
             .snapshot
@@ -1705,7 +1710,6 @@ mod tests {
                 target_id: "mini".to_owned(),
                 state: "connected".to_owned(),
                 message: None,
-                herdr_version: None,
                 session: None,
                 files: crate::model::RemoteFileListSnapshot::idle(),
                 catalog: Default::default(),
@@ -1737,10 +1741,10 @@ mod tests {
             text: "계속해".to_owned(),
             paths: Vec::new(),
         });
-        let sent = device.requests();
+        let sent = device.calls_of("submit_text");
         assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["params"]["pane_id"], "w1:p1");
-        assert_eq!(sent[0]["params"]["text"], "계속해");
+        assert_eq!(sent[0]["pane"], "w1:p1");
+        assert_eq!(sent[0]["text"], "계속해");
         assert_eq!(
             terminals.permits.lock().unwrap().as_slice(),
             &[(pane.to_owned(), "계속해".len() + 1)]

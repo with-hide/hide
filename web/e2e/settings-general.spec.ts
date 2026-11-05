@@ -94,41 +94,6 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
   }
 });
 
-// Herdr only: About's Details are the facts of the Herdr server Hide is connected to, which the core's own engine has none of.
-test("About shows the real Herdr values behind a closed Details @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startFixture();
-  let daemon: Daemon | null = null;
-  try {
-    daemon = await startHided(herdr, "settings-about");
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    await page.locator("[data-open-settings]").click();
-    const sheet = page.locator('[data-settings="true"]');
-    await expect(sheet).toBeVisible();
-
-    // B9: About's Details is closed until opened, and then holds the runtime facts.
-    await sheet.locator('[data-settings-tab="about"]').click();
-    await expect(sheet.locator("[data-settings-page-title]")).toHaveText("About");
-    const details = sheet.locator("[data-settings-details]");
-    await expect(details).not.toHaveAttribute("open", "");
-    await expect(details.getByText("Protocol")).toBeHidden();
-    await details.locator("summary").click();
-    await expect(details).toHaveAttribute("open", "");
-    for (const label of ["Process", "State file", "Socket", "Binary", "Recent"]) await expect(details.getByText(label, { exact: true })).toBeVisible();
-
-    // A healthy Herdr shows its real version and protocol, never "unavailable".
-    await expect(details.locator("[data-herdr-version]")).toHaveText(/^\d+\.\d+\.\d+/);
-    await expect(details.locator("[data-herdr-protocol]")).toHaveAttribute("data-herdr-protocol", "matches");
-    await expect(details.locator("[data-herdr-protocol]")).toHaveText(/^\d+$/);
-    await expect(sheet.locator('[data-settings-group="about"] [data-herdr-state="connected"]')).toContainText(/Connected · \d+\.\d+\.\d+/);
-    await screenshot(page, "settings-about-dark");
-  } finally {
-    daemon?.stop();
-    herdr.stop();
-  }
-});
-
 test("Sleep after, the issue link and the worktree names live in Agents and Hide AI with their stored values", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   const herdr = await startFixture();

@@ -312,7 +312,6 @@ fn browser_authority_records_remote_session_and_catalog_revocations_before_reads
         target_id: "mini".into(),
         state: "connecting".into(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -338,7 +337,6 @@ fn browser_authority_records_remote_session_and_catalog_revocations_before_reads
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     };
     let store = runtime.workspace_views.as_mut().unwrap();
     store.views.entry("mini", path);
@@ -386,7 +384,6 @@ fn a_device_that_stops_answering_carries_since_when() {
         target_id: "mini".into(),
         state: "connecting".into(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -404,7 +401,6 @@ fn a_device_that_stops_answering_carries_since_when() {
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     };
     let since = |runtime: &Runtime| runtime.snapshot.status.remote[0].unreachable_since_unix_ms;
     runtime.ingest_remote_session("mini", Ok(raw.clone()));
@@ -1413,8 +1409,6 @@ fn removing_a_device_forgets_its_workspace_views() {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: "studio".to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     let store = runtime.workspace_views.as_mut().unwrap();

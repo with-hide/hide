@@ -193,9 +193,8 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
   const projects = [board("alpha", "알파", [root, child]), board("beta", "베타", [other])];
   const party = (pane: string) => ({ device_id: "local", pane_id: pane, session: `digest-${pane}` });
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {}, overview_graph: {
-    available: true, limit: 2000, retained_count: 2, truncated: false, retention_ms: 86400000,
-    letters: [{ id: "l1", sender: party("r"), recipient: party("o"), kind: "request", at_unix_ms: 10 }, { id: "l2", sender: party("o"), recipient: party("r"), kind: "report", at_unix_ms: 20 }, { id: "l3", sender: party("o"), recipient: party("r"), kind: "progress", at_unix_ms: 30 }],
-    direct_inputs: [{ id: "d1", sender: party("c"), recipient: party("r"), at_unix_ms: 40 }],
+    available: true, limit: 2000, retained_count: 4, truncated: false, retention_ms: 86400000,
+    letters: [{ id: "l1", sender: party("r"), recipient: party("o"), kind: "request", at_unix_ms: 10 }, { id: "l2", sender: party("o"), recipient: party("r"), kind: "report", at_unix_ms: 20 }, { id: "l3", sender: party("o"), recipient: party("r"), kind: "progress", at_unix_ms: 30 }, { id: "l4", sender: party("c"), recipient: party("r"), kind: "progress", at_unix_ms: 40 }],
     sessions: ["r", "c", "o"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: pane === "r" ? "opus" : null, launch_effort: pane === "r" ? "high" : null })),
   } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, agents: [root, child, other], focusedPaneId: null, connection: "live", linkSummaries: null });

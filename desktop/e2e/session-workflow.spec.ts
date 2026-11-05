@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { setAgentState } from "../../web/e2e/fixture-agents";
 import { showTabOf, withControl } from "../../web/e2e/daemon-actions";
-import { continueFixtureTranscript } from "../../web/e2e/herdr-fixture";
+import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { startWork } from "../../web/e2e/session-work-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
 import { fitWindow, launchShell, startStack, test } from "./fixture";
@@ -51,7 +51,7 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     // The raised ask leads with the parent's request, its own first line while the label gave no summary (PRD pane-last-request B1, B3).
     await expect(raisedRow.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
     const terminal = await host.boundingBox();
-    const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: fixture.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
+    const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
       await page.getByRole("button", { name: /^Settings \(/ }).click();
       await page.locator('[data-settings-tab="general"]').click();

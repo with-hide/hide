@@ -6,14 +6,12 @@ import { Disclosure, Group, Note, Row, Status, Value, type Tone } from "../compo
 import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime, formatPercent } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { diagnosticsInputOf, diagnosticsText, environmentTone, herdrLine, herdrProtocolText, shownIn } from "../settings";
+import { diagnosticsInputOf, diagnosticsText, environmentTone, herdrLine, shownIn } from "../settings";
 import { useShellStore } from "../store";
 import type { UpdateStatus } from "../host";
 import { checkedAgo, checkForUpdates, restartIntoUpdate, setPreviewUpdates, useUpdateStatus } from "../updates";
-import { UpdateCommand } from "../HerdrTakeover";
-import { pathHerdrUpdate } from "../herdrTakeoverRules";
 
-/** What this hide is: its version, the Herdr behind it, and the details folded away unless something is wrong. */
+/** What this hide is: its version and update, and the details folded away unless something is wrong. */
 export function AboutTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const daemon = useShellStore((s) => s.daemon);
@@ -22,7 +20,6 @@ export function AboutTab({ actions }: { actions: Actions }) {
   const environment = useShellStore((s) => s.rest?.status?.environment);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const line = herdrLine(herdr, t);
-  const protocol = herdrProtocolText(herdr, t);
   const copyDiagnostics = () => {
     const text = diagnosticsText(diagnosticsInputOf(useShellStore.getState(), navigator.userAgent));
     void actions.copyText(text, "diagnostics").then((copied) => setCopy(copied ? "copied" : "failed"));
@@ -33,7 +30,6 @@ export function AboutTab({ actions }: { actions: Actions }) {
         <Value>{daemon ? daemon.version : t("settings.unavailable")}</Value>
       </Row>
       <UpdateRows />
-      <HerdrRows actions={actions} />
       <Disclosure title={t("settings.details")} data-settings-details="true">
         <Row label={t("settings.process")}>
           <Value>{daemon ? t("settings.processValue", { pid: String(daemon.pid), schema: String(daemon.schema_version) }) : t("settings.unavailable")}</Value>
@@ -58,18 +54,10 @@ export function AboutTab({ actions }: { actions: Actions }) {
               </Note>
             ) : null
           }
-        />
-        <Row label={t("settings.version")}>
-          <Value data-herdr-version="true">{shownIn(herdr?.received_version, t)}</Value>
-        </Row>
-        <Row label={t("settings.protocol")}>
-          <Value data-herdr-protocol={protocol.matches ? "matches" : "mismatch"}>{protocol.text}</Value>
-        </Row>
-        <Row label={t("settings.socket")}>
-          <Value>{shownIn(herdr?.socket_path ?? daemon?.herdr_socket_path, t)}</Value>
-        </Row>
-        <Row label={t("settings.binary")}>
-          <Value>{shownIn(daemon?.herdr_bin_path, t)}</Value>
+        >
+          <Status tone={line.tone === "ok" ? "ok" : "warn"} data-engine-state={herdr?.state ?? "unavailable"}>
+            {line.text}
+          </Status>
         </Row>
         {(environment ?? []).map((row) => (
           <Row key={row.key} label={<span className="font-mono">{row.key}</span>} detail={row.message ? <Note>{row.message}</Note> : null}>
@@ -85,50 +73,6 @@ export function AboutTab({ actions }: { actions: Actions }) {
         </Row>
       </Disclosure>
     </Group>
-  );
-}
-
-/**
- * The Herdr server Hide works on and the operator's own `herdr` (PRD herdr-takeover): a version only where one was
- * read, and a button only where there is something to do, the server's move or the command that brings the terminal's
- * `herdr` up. The terminal line is absent when the operator's terminal finds no `herdr`. A server on another protocol
- * never reaches here: the screen that holds Hide offers its move, restart or update.
- */
-function HerdrRows({ actions }: { actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const herdr = useShellStore((s) => s.rest?.status?.herdr);
-  const takeover = useShellStore((s) => s.rest?.status?.herdr_takeover ?? null);
-  const versions = useShellStore((s) => s.rest?.status?.herdr_versions ?? null);
-  const line = herdrLine(herdr, t);
-  const server = (herdr?.state === "connected" || herdr?.state === "stale") && herdr.received_version ? herdr.received_version : null;
-  const same = server !== null && versions !== null && server === versions.hide;
-  const movable = takeover?.kind === "move" && takeover.same_protocol && takeover.stage !== "moved";
-  const path = versions?.path_herdr ?? null;
-  const update = pathHerdrUpdate(versions);
-  // A daemon that reads versions looks again as About opens, so a `herdr` the operator just updated reads as it is now.
-  const reads = versions !== null;
-  useEffect(() => {
-    if (reads) actions.herdrTakeover("look");
-  }, [actions, reads]);
-  return (
-    <>
-      <Row label={t("settings.herdrServer")}>
-        {/* A daemon without a Herdr of its own cannot say whether the server is Hide's, so it keeps the connection line. */}
-        <Status tone={server === null || versions === null ? line.tone : same ? "ok" : "muted"} data-herdr-state={herdr?.state ?? "unavailable"} data-herdr-server={server ?? ""}>
-          {server === null ? line.text : versions === null ? `${line.text} · ${server}` : t(same ? "settings.herdrServer.same" : "settings.herdrServer.differs", { version: server, hide: versions.hide })}
-        </Status>
-        {movable ? (
-          <Button variant="secondary" size="sm" onClick={() => actions.herdrTakeover("move")} disabled={takeover.stage === "moving"} aria-busy={takeover.stage === "moving"} data-herdr-takeover-move={takeover.stage}>
-            {t(takeover.stage === "moving" ? "herdrTakeover.move.moving" : takeover.stage === "failed" ? "herdrTakeover.retry" : "herdrTakeover.move.button")}
-          </Button>
-        ) : null}
-      </Row>
-      {path ? (
-        <Row label={t("settings.pathHerdr")} detail={path.behind && update ? <UpdateCommand update={update} actions={actions} /> : null} data-path-herdr={path.behind ? "behind" : "current"}>
-          {path.behind ? <Status tone="muted">{t("settings.pathHerdr.refused", { version: path.version })}</Status> : <Value>{path.version}</Value>}
-        </Row>
-      ) : null}
-    </>
   );
 }
 

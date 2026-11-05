@@ -1,7 +1,7 @@
 """One command: every adapter's journey cells on one isolated candidate.
 
-The candidate is this checkout's hided on private state, with either the
-pinned Herdr or its own holders, under the runtime's process guardian.
+The candidate is this checkout's hided on private state, with
+its own pane holders, under the runtime's process guardian.
 Local agents run inside its write sandbox. See docs/VERIFICATION.md,
 Agent journey.
 """
@@ -19,26 +19,21 @@ import tempfile
 import time
 import traceback
 
-from agent_live_check.cli import default_herdr, operator_routing
 from agent_live_check.credential_snapshot import CredentialSnapshotUnavailable
-from agent_live_check.mid_turn import allow_hook_route
 from agent_live_check.overlay import prepare as prepare_overlay
 from agent_live_check.processes import OwnedProcesses, ProcessError
 from agent_live_check.protection import (ConfigGuard, ProtectionError, beneath, private_directory,
                                          write_private)
-from agent_live_check.runtime import Runtime, clean_env
+from agent_live_check.runtime import clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher, tool_path
-
-if WINDOWS:
-    from agent_live_check.windows import UserPath
 
 from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service
 from .controller import Controller
 from .contract import load_contract
-from .daemon import Daemon
 from .journey import STEPS, Journey, token
 from .own_runtime import OwnRuntime
+from .routes import allow_hook_route, operator_routing
 from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
                     disable_hide_ai, opencode_model, operator_trust, route, wrapper)
 from .report import save, table_lines
@@ -80,9 +75,6 @@ def parser():
                        help="Passed through the product's own model flag; default is the account's model")
     value.add_argument("--mode", choices=("local", "ci"), default="local")
     value.add_argument("--run-dir", type=Path, help="New directory below this checkout's agents/runs")
-    value.add_argument("--engine", choices=("herdr", "own"), default="herdr",
-                       help="Pane engine to measure; own enables the development holder switch")
-    value.add_argument("--herdr-bin", type=Path, help="Previously fetched pinned Herdr; bytes are checked")
     value.add_argument("--fixture-bin", type=Path,
                        help="CI only: folder holding the compiled claude and codex stand-ins (web/e2e/shims)")
     value.add_argument("--controller-provider", type=Path,
@@ -232,12 +224,11 @@ def package(runtime):
     `bundled_kit_dir`), so this run's binaries are cloned into a private
     `hide.app/Contents/Resources` under the probe, which goes with the run.
     The operator's installed app is never read or started. On Windows the
-    pinned Herdr's ConPTY runtime goes beside it, as the package carries it.
+    pane holder's pinned ConPTY runtime goes beside it, as the package carries it.
     """
     resources = runtime.probe / "package/hide.app/Contents/Resources"
     private_directory(resources)
-    terminal = (("hide-holder", runtime.checkout / "target/debug" / exe("hide-holder"))
-                if runtime.engine == "own" else ("herdr", runtime.herdr_bin))
+    terminal = ("hide-holder", runtime.checkout / "target/debug" / exe("hide-holder"))
     for name, source in (("hided", runtime.hided), ("hide", runtime.hide),
                          ("hide-agent-hooks", runtime.checkout / "target/debug" / exe("hide-agent-hooks")),
                          terminal):
@@ -250,17 +241,16 @@ def package(runtime):
             shutil.copyfile(source, resources / exe(name))
             (resources / exe(name)).chmod(0o700)
     if WINDOWS:
-        source = (runtime.checkout / "target/debug/holder-conpty" if runtime.engine == "own"
-                  else runtime.herdr_bin.parent / "conpty")
+        source = runtime.checkout / "target/debug/holder-conpty"
         shutil.copytree(source, resources / source.name)
     runtime.hided, runtime.hide = resources / exe("hided"), resources / exe("hide")
     return resources
 
 
-def wait_kit(daemon, ids, engine="herdr"):
-    """The candidate kit's own report, as Settings reads it: Hide's hook and
-    each agent's engine integration in the private home, once each is
-    installed or failed. Returns each failed piece's reason by agent."""
+def wait_kit(daemon, ids):
+    """The candidate kit's own report, as Settings reads it: Hide's hook for
+    each agent in the private home, once each is installed or failed.
+    Returns each failed piece's reason by agent."""
     def report(rest):
         devices = (rest.get("navigator") or {}).get("devices") or []
         device = next((device for device in devices if device.get("kind") == "local"), None)
@@ -268,20 +258,18 @@ def wait_kit(daemon, ids, engine="herdr"):
         failed = {}
         for key in ids:
             row = rows.get(key)
-            if not row or (engine == "herdr" and not row.get("herdr")):
+            if not row:
                 return None
-            names = ("hook", "herdr") if engine == "herdr" else ("hook",)
-            for name in names:
-                piece = row.get(name)
-                # No hook: the agent takes the skill only.
-                if piece is None:
-                    continue
-                if piece.get("state") == "failed":
-                    failed.setdefault(key, []).append(f"{name}: {piece.get('reason')}")
-                elif piece.get("state") != "installed":
-                    return None
+            piece = row.get("hook")
+            # No hook: the agent takes the skill only.
+            if piece is None:
+                continue
+            if piece.get("state") == "failed":
+                failed.setdefault(key, []).append(f"hook: {piece.get('reason')}")
+            elif piece.get("state") != "installed":
+                return None
         return {"failed": failed}
-    return daemon.wait(report, KIT_SECONDS, "the kit to install each agent's engine integrations")["failed"]
+    return daemon.wait(report, KIT_SECONDS, "the kit to install each agent's hook")["failed"]
 
 
 def prepare_local(runtime, report, table, rows, measured, operator, root, fake, services):
@@ -303,7 +291,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
     executables = {key: shutil.which(rows[key]["herdr_kind"]) for key in measured}
     sandbox = WriteSandbox(run, runtime.short, operator, runtime.state, checkout=runtime.checkout,
                            routing=operator_routing(os.environ),
-                           executables=[runtime.herdr_bin if runtime.engine == "herdr" else runtime.hided.with_name(exe("hide-holder")),
+                           executables=[runtime.hided.with_name(exe("hide-holder")),
                                         Path(sys.executable),
                                         *(Path(value) for value in executables.values() if value)],
                            protected=[path for path in known if path not in shared])
@@ -520,8 +508,6 @@ def budget_failures(agents):
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    if WINDOWS and args.engine == "own":
-        refuse("b4-default 대기(CI Job holder breakaway): native journey also requires ownership of holders outside the Windows job")
     checkout = Path(__file__).resolve().parents[2]
     operator = Path.home().resolve()
     local = args.mode == "local"
@@ -562,9 +548,6 @@ def main(argv=None):
                 if args.agents:
                     refuse(f"fixture_bin_imitates_claude_code_and_codex_only: {key}")
                 unmeasured[key] = ci.FIXTURE_ONLY
-    herdr = (args.herdr_bin or default_herdr(checkout, operator)) if args.engine == "herdr" else None
-    if args.engine == "herdr" and not herdr.is_file():
-        refuse("pinned_herdr_missing: run zsh scripts/fetch-herdr-runtime.sh, or pass --herdr-bin")
     reader = checkout / "target/debug/examples" / exe("journey_conversation")
     if not reader.is_file():
         refuse("build_the_reader_first: bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation")
@@ -581,13 +564,13 @@ def main(argv=None):
         refuse("report_directory_must_be_new_and_local_only")
     commit = measured_source(checkout)
     run_id = slug.removeprefix("agent-journey-") if not args.run_dir else run.name
-    excluded = cells.excluded_agents(args.engine, fake)
+    excluded = cells.excluded_agents(fake)
     measured = [key for key in selected if key not in unmeasured and key not in excluded]
     private_directory(run)
     rows = {row["id"]: row for row in contract}
-    table = cells.plan(contract, selected, engine=args.engine, fake_model=fake)
-    report = {"format": 1, "mode": args.mode, "engine": args.engine, "fixture": bool(fixture_bin), "selected": selected, "models": models,
-              "herdr": {}, "agents": [], "table": table, "systems": systems(args.mode), "configuration": {},
+    table = cells.plan(contract, selected, fake_model=fake)
+    report = {"format": 1, "mode": args.mode, "fixture": bool(fixture_bin), "selected": selected, "models": models,
+              "holders": {}, "agents": [], "table": table, "systems": systems(args.mode), "configuration": {},
               **({"fixture_limits": ci.FIXTURE_LIMITS} if fixture_bin else {}),
               **({"fake_model": True, "fake_model_limits": fake_lane.LIMITS} if fake else {}),
               "leftover_copies": leftover_copies(checkout, run), "measured_commit": commit, "created": [],
@@ -600,7 +583,7 @@ def main(argv=None):
                            run_seconds=run_seconds(fake or fixture_bin, len(measured)))
     previous = {signum: signal.signal(signum, lambda *_: owner.cancelled.set())
                 for signum in STOP_SIGNALS}
-    runtime = guard = daemon = user_path = None
+    runtime = guard = daemon = None
     watch = None
     # One fake model per agent, so each one's log counts that agent's requests alone.
     servers = {}
@@ -614,8 +597,7 @@ def main(argv=None):
         # HOME, which the kit trusts as its anchor: a state folder elsewhere it
         # inspects from the drive root, and a Windows runner's D:\ lets every
         # account change its entries.
-        runtime_type = OwnRuntime if args.engine == "own" else Runtime
-        runtime = runtime_type(checkout, run, operator, owner, herdr_bin=herdr, home=home,
+        runtime = OwnRuntime(checkout, run, operator, owner, home=home,
                           state=None if local else home / ".hide/state", private_env=local and fake)
         fake_key = "journey-fake-key-" + os.urandom(24).hex() if local and fake else fake_lane.KEY
         if fake:
@@ -647,22 +629,18 @@ def main(argv=None):
         else:
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
                                               services, diagnostics)
-        if WINDOWS and not local and args.engine == "herdr":
-            # Before Herdr opens a pane, which reads its PATH from the
-            # account's registry: the agents' wrappers are found through it.
-            user_path = UserPath(runtime.bin)
-        report["herdr"] = runtime.start()
+        report["holders"] = runtime.start()
         if sandbox:
             for current in getattr(runtime, "journey_sandboxes", [sandbox]):
                 allow_hook_route(current, runtime)
                 allow_one_shot_references(current, runtime)
         if ready:
-            daemon = runtime.control if args.engine == "own" else Daemon(runtime.state, owner.cancelled)
+            daemon = runtime.control
             # The operator's first-run answer, once the daemon asks for it.
             daemon.wait(lambda rest: (rest.get("ui_state") or {}).get("agent_onboarding") == "pending",
                         KIT_SECONDS, "the first-run agent question")
             daemon.dispatch("agent_onboarding_apply", {"agents": ready, "finish": True})
-            for key, pieces in wait_kit(daemon, ready, args.engine).items():
+            for key, pieces in wait_kit(daemon, ready).items():
                 # The product's own answer: the agent cannot start as Hide sets it up.
                 cells.settle(table, key, "start", cells.FAIL, "the kit did not install " + "; ".join(pieces))
                 ready.remove(key)
@@ -751,18 +729,9 @@ def main(argv=None):
                                                  for frame in traceback.extract_tb(error.__traceback__)[-4:]],
                                           **({"path": error.path} if isinstance(error, ProtectionError) and error.path else {})})
     finally:
-        # First, so nothing that fails later in the cleanup leaves it behind.
-        path_left = None
-        if user_path:
-            try:
-                user_path.close()
-            except OSError as error:
-                path_left = f"user_path_not_restored: {error}"
         for server in servers.values():
             server.shutdown()
             server.server_close()
-        if daemon and args.engine == "herdr":
-            daemon.close()
         for key, (launch, environment, port) in services.items():
             # Before the owner closes: the server outlives every terminal, and the run started it.
             # Its own stop runs past the run's deadline too, as the rest of the teardown does.
@@ -777,11 +746,6 @@ def main(argv=None):
             except Exception as error:
                 agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
         if runtime:
-            # Herdr's own log lives in the private home the cleanup removes.
-            log = runtime.home / "config/herdr/herdr-server.log"
-            if log.is_file() and not log.is_symlink():
-                with open(log, "rb") as stream:
-                    write_private(run / "herdr-server.log", stream.read(1024 * 1024))
             # Why a hook or plugin handed a prompt no letter or Memory: each cause the
             # helper met (`cli`, `deadline`, ...) and when it last did. HOME is the
             # private home only in CI mode; locally it stays the operator's.
@@ -811,9 +775,6 @@ def main(argv=None):
                     report["failures"].append({"type": "DiagnosticError", "reason": diagnostic.result["failure"]})
             except Exception as error:
                 report["failures"].append({"type": "DiagnosticError", "reason": type(error).__name__})
-        if path_left:
-            report["cleanup"]["confirmed"] = False
-            report["cleanup"].setdefault("failures", []).append(path_left)
         for key, (_, _, port) in services.items():
             # The owner's close ended every process the run owns, the server
             # included; one still answering now outlived the run.

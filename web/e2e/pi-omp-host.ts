@@ -37,22 +37,6 @@ fs.mkdirSync(sessions, { recursive: true });
 const session = path.join(sessions, "2026-10-08T20-05-41-366Z_01a11d1f-1f76-701d-87bb-b31dc28aab3b.jsonl");
 fs.writeFileSync(session, "");
 
-// Herdr's integration reports the pane's state and the session file; Herdr takes them only once it has
-// detected the agent in the pane, so the stand-in reports again until Herdr lists its session.
-const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
-  .result.agents.find((row) => row.pane_id === pane)?.agent_session?.value;
-function announce() {
-  for (let attempt = 1; listed() !== session; attempt += 1) {
-    if (attempt > 50) throw new Error("Herdr never took the stand-in's session");
-    const seq = Date.now() * 1000 + attempt * 2;
-    execFileSync(config.herdr, ["pane", "report-agent", pane, "--source", "herdr:" + agent, "--agent", agent,
-      "--state", "idle", "--agent-session-path", session, "--seq", String(seq)], { timeout: 10000 });
-    execFileSync(config.herdr, ["pane", "report-agent-session", pane, "--source", "herdr:" + agent, "--agent", agent,
-      "--agent-session-path", session, "--session-start-source", "startup", "--seq", String(seq + 1)], { timeout: 10000 });
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
-}
-
 // The context each host hands a handler: the pane's TUI session, or one of omp's in-process subagents.
 const main = { hasUI: true, mode: "tui", cwd: process.cwd(), sessionManager: { getSessionFile: () => session, getSessionId: () => "01a11d1f" },
   ...(agent === "omp" ? { agent: { kind: "main", id: "Main", name: "main", depth: 0 } } : {}) };
@@ -117,9 +101,7 @@ const subs = new Map();
 let extension;
 
 (async () => {
-  // Only a Herdr pane is told what runs in it; on the core's own engine the extension's own session report is how
-  // Hide learns the session.
-  if (config.herdr) announce();
+  // The extension's own session report is how Hide learns the session.
   // The kit writes a .ts file that is plain JavaScript; Node reads it as the ES module both hosts load.
   const copy = path.join(folder, "hide.mjs");
   fs.copyFileSync(config.extension[agent], copy);
@@ -144,7 +126,7 @@ let extension;
 });
 `;
 
-export type HostConfig = { herdr?: string; stateDir: string; extension: { pi: string; omp: string }; dir: string };
+export type HostConfig = { stateDir: string; extension: { pi: string; omp: string }; dir: string };
 
 /** Writes the stand-in as `pi` and `omp` in `bin`, configured by `config`. */
 export function installPiOmpHosts(bin: string, config: HostConfig): void {

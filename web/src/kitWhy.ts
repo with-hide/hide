@@ -28,8 +28,6 @@ const WHY_KEYS = new Map<string, { plain?: MessageKey; at?: MessageKey }>([
   ["not_changed", { plain: "kitWhy.not_changed" }],
   ["codex_untrusted", { plain: "kitWhy.codex_untrusted" }],
   ["record_unsaved", { plain: "kitWhy.record_unsaved" }],
-  ["herdr_absent", { plain: "kitWhy.herdr_absent" }],
-  ["update_herdr", { plain: "kitWhy.update_herdr" }],
   ["retirement_pending", { plain: "kitWhy.retirement_pending" }],
 ]);
 
@@ -59,14 +57,12 @@ const UNAVAILABLE_KEYS = new Map<KitUnavailable, MessageKey>([
 
 const PROFILE_REFUSAL_KEYS = new Map<HerdrProfileRefusal, MessageKey>([
   ["no_consent", "herdrProfileRefusal.no_consent"],
-  ["disabled", "herdrProfileRefusal.disabled"],
   ["invalid_target", "herdrProfileRefusal.invalid_target"],
   ["discovery_pending", "herdrProfileRefusal.discovery_pending"],
   ["device_limit", "herdrProfileRefusal.device_limit"],
-  ["profile_moved", "herdrProfileRefusal.profile_moved"],
 ]);
 
-/** Why Hide declined to connect a saved Herdr profile; a code this build does not know gets the general sentence. */
+/** Why Hide declined to connect a first-run machine; a code this build does not know gets the general sentence. */
 export function profileRefusalText(refusal: HerdrProfileRefusal, t: Translate): string {
   return t(PROFILE_REFUSAL_KEYS.get(refusal) ?? "herdrProfileRefusal.other");
 }

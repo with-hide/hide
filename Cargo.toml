@@ -2,7 +2,6 @@
 members = [
     "hide-agent-adapter",
     "herdr-core",
-    "hide-herdr-client",
     "hide-holder",
     "hide-holder-protocol",
     "hide-host",

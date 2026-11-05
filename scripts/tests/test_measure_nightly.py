@@ -28,7 +28,7 @@ def write(path, doc):
 def complete_run(run):
     """Every file a finished `topology` run at operator scale writes, with known figures."""
     write(run / "identity.txt", "\n".join([
-        "worktree_head=" + "c" * 40, "hided_sha256=" + "d" * 64, "herdr_version=herdr 0.9.3",
+        "worktree_head=" + "c" * 40, "hided_sha256=" + "d" * 64, "engine=own",
         "chrome_version=Google Chrome 154.0", "scenario=topology", "scale=operator", "isolated_headless=true",
         "started_at=2026-10-14T17:30:00Z", "17:30  up 1 day, 2 users, load averages: 1.50 1.20 1.00", ""]))
     write(run / "scale.json", {"scale": "operator", "workspaces": 43, "tabs": 62, "panes": 66, "agents_reported": 30,
@@ -41,7 +41,7 @@ def complete_run(run):
         {"kind": "split", "screen_ms": 30.0, "frame_ms": 45.0, "timeout": False},
         {"kind": "split", "screen_ms": None, "frame_ms": None, "timeout": True}]})
     write(run / "isolated" / "hide-state" / "Logs" / "core.jsonl", json.dumps({"event": {
-        "kind": "pane_op.timing", "op": "split", "outcome": "applied", "herdr_ack_ms": 5, "layout_event_ms": 12, "sent_ms": 14}}) + "\n")
+        "kind": "pane_op.timing", "op": "split", "outcome": "applied", "drawn_ms": 5, "applied_ms": 12, "sent_ms": 14}}) + "\n")
     for name in ("memory-settled.json", "memory-after-topology.json"):
         write(run / name, {"hided_rss_kb": 40960, "chrome_tree_rss_kb": 409600, "page": {"js_heap_used_bytes": 1, "live_terminals": 2}})
 
@@ -69,9 +69,9 @@ class Verdict(unittest.TestCase):
         self.assertEqual((record["echo"]["p50_ms"], record["echo"]["p95_ms"], record["echo"]["max_ms"]), (25, 48, 50))
         self.assertIsNone(record["echo"]["pass"], "the guide names no agreed echo limit")
         self.assertEqual(record["topology"]["operations"]["split"]["timeouts"], 1)
-        self.assertEqual(record["stages"]["split"]["herdr_share_ms"]["p50"], 7.0)
+        self.assertEqual(record["stages"]["split"]["sent_ms"]["p50"], 14.0)
         self.assertEqual(record["fixture"]["panes"], 66)
-        self.assertFalse(record["frames"]["covered"])
+        self.assertEqual((record["engine"], record["lane"]), ("own", "topology at operator scale, own engine"))
 
     def test_an_invalid_echo_is_a_failure_the_report_files(self):
         echo = json.loads((self.run / "echo-1.json").read_text())
@@ -90,23 +90,8 @@ class Verdict(unittest.TestCase):
         self.assertEqual(status, 1)
         (failure,) = record["failures"]
         self.assertEqual(failure["name"], FIXTURE_CHECK)
-        self.assertIn("panes: the private server has 65, the scale asks for 66", failure["error"])
+        self.assertIn("panes: the daemon has 65, the scale asks for 66", failure["error"])
         self.assertIn("isolated_headless", failure["error"])
-
-    def test_an_own_engine_run_with_no_herdr_passes_and_names_its_engine(self):
-        identity = (self.run / "identity.txt").read_text().replace("herdr_version=herdr 0.9.3\n", "")
-        write(self.run / "identity.txt", identity + "engine=own\n")
-        status, record = judge(self.run)
-        self.assertEqual(status, 0)
-        self.assertEqual((record["failures"], record["missing"]), ([], []))
-        self.assertEqual(record["engine"], "own")
-        self.assertEqual(record["lane"], "topology at operator scale, own engine")
-        self.assertIsNone(record["identity"]["herdr_version"])
-
-    def test_a_run_that_names_no_engine_ran_on_herdr(self):
-        status, record = judge(self.run)
-        self.assertEqual(status, 0)
-        self.assertEqual((record["engine"], record["lane"]), ("herdr", "topology at operator scale"))
 
     def test_a_run_that_stopped_fails_without_naming_a_measurement(self):
         for name in ("echo-1.json", "topology.json", "memory-after-topology.json"):

@@ -1,4 +1,7 @@
-"""Private Herdr/hided and short-lived probe workspaces, without a renderer."""
+"""A private hided and its short-lived probe workspaces, without a renderer.
+
+The journey's `OwnRuntime` runs the panes in the core's own engine; this
+base holds the private home, state and daemon every run shares."""
 
 import hashlib
 from dataclasses import dataclass
@@ -6,17 +9,14 @@ import json
 import os
 import re
 from pathlib import Path
-import sys
 import tempfile
 import threading
 import time
 import urllib.request
-import zipfile
 
 from .processes import COMMAND_SECONDS, GUARDIAN_FAILURES, MAX_FAILURE_REASON, MAX_OUTPUT, OwnedProcesses, ProcessError
-from .authentication import require_no_login
 from .protection import ProtectionError, beneath, private_directory, validate_isolation, write_private
-from .system import READY, WINDOWS, PaneShell, exe, git, home_env, remove_pane_files, remove_tree, temp_env, tool_path
+from .system import PaneShell, exe, git, home_env, remove_pane_files, remove_tree, temp_env, tool_path
 from .timing import Deadline, ObservationTimeout
 
 
@@ -94,21 +94,6 @@ def clean_env(*, private=False) -> dict[str, str]:
                             "XDG_STATE_HOME", "XDG_CACHE_HOME", "ZDOTDIR", "BASH_ENV", "ENV")}
 
 
-def herdr_matches_pin(herdr, manifest):
-    """Whether `herdr` is the pinned release's binary for this system. The
-    Windows pin is the release's zip (herdr.exe and its ConPTY runtime), so
-    there the zip beside the unpacked folder must have the pinned digest
-    (scripts/fetch-herdr-runtime.ps1's cache) and hold this herdr.exe."""
-    if not WINDOWS:
-        pin = manifest["linux_x86_64"] if sys.platform.startswith("linux") else manifest
-        return hashlib.sha256(herdr.read_bytes()).hexdigest() == pin["sha256"]
-    archive = herdr.parent.parent / "herdr.zip"
-    if not archive.is_file() or hashlib.sha256(archive.read_bytes()).hexdigest() != manifest["windows_x86_64"]["sha256"]:
-        return False
-    with zipfile.ZipFile(archive) as bundle:
-        return bundle.read("herdr.exe") == herdr.read_bytes()
-
-
 class ResidentOutput:
     """Drain each resident pipe, with a hard byte cap and private evidence."""
 
@@ -154,11 +139,8 @@ class ResidentOutput:
 
 class Runtime:
     def __init__(self, checkout: Path, run: Path, operator: Path, owner: OwnedProcesses,
-                 *, herdr_bin: Path | None = None, fixture_bin: Path | None = None, engine="herdr",
-                 socket: Path | None = None, state: Path | None = None, home: Path | None = None, private_env=False):
-        if engine not in ("herdr", "own"):
-            raise ProtectionError("unknown_pane_engine")
-        self.engine = engine
+                 *, fixture_bin: Path | None = None,
+                 state: Path | None = None, home: Path | None = None, private_env=False):
         self.checkout, self.run, self.operator, self.owner = checkout, run, operator, owner
         # The journey keeps the daemon home under the probe, where a sandboxed
         # agent may read the candidate's hooks; the bell check keeps it apart.
@@ -166,15 +148,13 @@ class Runtime:
         self.state = state or run / "state"
         self.probe = run / "probe"
         self.bin = run / "bin"
-        self.short = Path(tempfile.mkdtemp(prefix="acl-", **({"dir": "/tmp"} if engine == "own" else {}))).resolve()
-        # Holder socket names live below state. The checkout's evidence path
-        # can exceed a Unix socket address before the pane name is appended.
-        if engine == "own":
-            self.state = self.short / "state"
+        # A Unix holder socket address is short; a Windows named pipe is not.
+        self.short = Path(tempfile.mkdtemp(prefix="acl-", **({} if os.name == "nt" else {"dir": "/tmp"}))).resolve()
+        # Holder socket names live below state, so the checkout's long
+        # evidence path never reaches one.
+        self.state = self.short / "state"
         self.shell = PaneShell()
-        self.socket = socket or self.short / "herdr.sock"
         self.fixture_bin = fixture_bin
-        self.herdr_bin = herdr_bin.resolve() if herdr_bin else None
         self.hided = checkout / "target/debug" / exe("hided")
         self.hide = checkout / "target/debug" / exe("hide")
         self.servers = []
@@ -186,9 +166,7 @@ class Runtime:
         self.started = False
         self.configuration = {}
         try:
-            validate_isolation(run, self.home, self.socket, self.state, operator,
-                               Path(os.environ["HERDR_SOCKET_PATH"]) if os.environ.get("HERDR_SOCKET_PATH") else None,
-                               self.short, short_state=engine == "own")
+            validate_isolation(run, self.home, self.state, operator, self.short)
             for path in (self.home, self.state, self.probe, self.bin, run / "agent-tmp",
                          *(Path(value) for value in home_env(self.home).values())):
                 private_directory(path)
@@ -196,28 +174,14 @@ class Runtime:
             for file in (self.hided, self.hide):
                 if file.is_symlink() or not file.is_file() or not os.access(file, os.X_OK):
                     raise ProtectionError("build_this_worktrees_hided_and_hide_first")
-            if engine == "herdr":
-                manifest = json.loads((checkout / "contracts/herdr-bundle.json").read_text())
-                if not self.herdr_bin or not herdr_matches_pin(self.herdr_bin, manifest):
-                    raise ProtectionError("herdr_binary_does_not_match_pin")
-                self.expected_version = manifest["version"]
             base = clean_env(private=private_env)
             base.update(**home_env(self.home), **self.shell.environment(self.home),
                         **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
-                        HERDR_SOCKET_PATH=str(self.socket), HERDR_BIN_PATH=str(self.herdr_bin),
-                        HERDR_CONFIG_PATH=str(run / "herdr.toml"),
-                        HERDR_SESSION_PATH=str(run / "herdr-session.json"),
                         **temp_env(run / "agent-tmp"),
                         PATH=tool_path(self.bin))
-            if engine == "own":
-                base = {key: value for key, value in base.items() if not key.startswith("HERDR_")}
-                base["HIDE_DEV_PANE_HOLDER"] = "1"
             self.env = base
             for name, data in self.shell.files():
                 write_private(self.home / name, data)
-            if engine == "herdr":
-                write_private(run / "herdr.toml", ("[update]\nversion_check = false\n[sound]\nenabled = false\n"
-                                               + self.shell.herdr_config()).encode())
             self.daemon_env = {**base, "HIDE_PORT": "0",
                                "HIDE_KEEP_ALIVE": "1", "HIDED_UI_DIR": str(checkout / "web/dist")}
             self.daemon_env.pop("XDG_STATE_HOME", None)
@@ -239,19 +203,24 @@ class Runtime:
                 remove_tree(self.probe)
             raise
 
-    def command(self, args, *, check=True, seconds=15, deadline=None):
-        code, out, err = self.owner.run([str(self.herdr_bin), *map(str, args)],
-                                         env=self.env, seconds=seconds, check=False, deadline=deadline)
-        if code and check:
-            raise ProcessError(f"herdr_command_exit_{code}")
-        return code, out, err
+    # The panes run in an engine a subclass names: the journey's OwnRuntime.
+    def open_workspace(self, cwd, environment):
+        raise NotImplementedError
 
-    def json(self, args, *, seconds=15, deadline=None):
-        _, out, _ = self.command(args, seconds=seconds, deadline=deadline)
-        value = json.loads(out)
-        if "error" in value or not isinstance(value.get("result"), dict):
-            raise ProcessError("herdr_refused_request")
-        return value["result"]
+    def wait_shell(self, pane):
+        raise NotImplementedError
+
+    def pane_at_shell(self, pane, deadline):
+        raise NotImplementedError
+
+    def send(self, pane, text, *, deadline=None):
+        raise NotImplementedError
+
+    def close_workspace(self, workspace):
+        raise NotImplementedError
+
+    def stop_panes(self):
+        raise NotImplementedError
 
     def wait(self, predicate, seconds):
         end = min(self.owner.deadline, time.monotonic() + seconds)
@@ -270,18 +239,6 @@ class Runtime:
         return child
 
     def start(self) -> dict:
-        if self.engine == "herdr":
-            _, version, _ = self.command(["--version"])
-            if version.strip().split()[-1] != self.expected_version:
-                raise ProtectionError("herdr_version_mismatch")
-            self.owner.run([sys.executable, str(self.checkout / "scripts/check-herdr-schema.py"),
-                            "--herdr-bin", str(self.herdr_bin)],
-                           env=self.env, cwd=self.checkout)
-            self.resident(self.herdr_bin, ["server"], self.env, "herdr")
-            self.started = True
-            self.wait(lambda: self.socket.exists(), 15)
-            if self.json(["api", "snapshot"])["snapshot"]["workspaces"]:
-                raise ProtectionError("private_server_not_empty")
         self.resident(self.hided, [], self.daemon_env, "hided")
 
         def health():
@@ -295,15 +252,10 @@ class Runtime:
             except OSError:
                 return False
         self.wait(health, 20)
-        if self.engine == "own":
-            holder = self.hided.with_name(exe("hide-holder"))
-            if not holder.is_file():
-                raise ProtectionError("build_this_worktrees_hide_holder_first")
-            return {"engine": "own", "holder_sha256": hashlib.sha256(holder.read_bytes()).hexdigest(),
-                    "hided_sha256": hashlib.sha256(self.hided.read_bytes()).hexdigest()}
-        manifests = self.json(["server", "agent-manifests", "--json"])
-        return {"version": version.strip(), "sha256": hashlib.sha256(self.herdr_bin.read_bytes()).hexdigest(),
-                "manifests": manifests["manifests"], "last_result": manifests.get("last_result"),
+        holder = self.hided.with_name(exe("hide-holder"))
+        if not holder.is_file():
+            raise ProtectionError("build_this_worktrees_hide_holder_first")
+        return {"holder_sha256": hashlib.sha256(holder.read_bytes()).hexdigest(),
                 "hided_sha256": hashlib.sha256(self.hided.read_bytes()).hexdigest()}
 
     def new_workspace(self, recipe: dict, scene: str, agent_home: Path, wrapper: Path, overlay: dict):
@@ -348,7 +300,7 @@ class Runtime:
         # hooks. Only the actual pane's shell receives it, before native start.
         reference_input = self.run / (name + ".reference-input")
         ready = self.run / (name + ".reference-ready")
-        # One line with no line break, which cmd.exe's `set /p` reads whole.
+        # One line with no line break.
         write_private(reference_input, str(reference).encode())
         try:
             self.send(pane, self.shell.read_variable("HIDE_CAP_REF", reference_input, ready))
@@ -368,22 +320,6 @@ class Runtime:
         if not reference.with_suffix(".claimed").is_file():
             raise ProtectionError("private_pane_reference_not_claimed: claim_file_missing")
         return workspace, pane, cwd
-
-    def open_workspace(self, cwd, environment):
-        args = ["workspace", "create", "--cwd", str(cwd), "--label", "Local bell check", "--no-focus"]
-        for key, value in environment.items():
-            args.extend(["--env", f"{key}={value}"])
-        created = self.json(args)
-        return created["workspace"]["workspace_id"], created["root_pane"]["pane_id"]
-
-    def wait_shell(self, pane):
-        self.wait(lambda: READY in self.screen(pane), 10)
-
-    def pane_at_shell(self, pane, deadline):
-        return READY in self.screen(pane, seconds=deadline.command_seconds(), deadline=deadline.end)
-
-    def stop_panes(self):
-        """Herdr owns its panes until its server ends; native holders override this."""
 
     def bootstrap(self, pane, name):
         started = time.monotonic()
@@ -428,42 +364,10 @@ class Runtime:
                 "budget_seconds": BOOTSTRAP_SECONDS, "last_refusal": last_reason,
             }).encode())
 
-    def screen(self, pane, *, seconds=15, deadline=None):
-        return self.command(["pane", "read", pane, "--source", "detection", "--lines", "120"],
-                            seconds=seconds, deadline=deadline)[1]
-
-    def agent(self, pane, *, seconds=15, deadline=None):
-        agents = self.json(["agent", "list"], seconds=seconds, deadline=deadline)["agents"]
-        return next((agent for agent in agents if agent["pane_id"] == pane), None)
-
-    def send_text(self, pane, text):
-        self.command(["pane", "send-text", pane, text])
-
-    def pane_ids(self):
-        return {pane["pane_id"] for pane in self.json(["api", "snapshot"])["snapshot"].get("panes", [])}
-
-    def close_pane(self, pane):
-        code, _, error = self.command(["pane", "close", pane], check=False)
-        return code, error
-
-    def shell_pid(self, pane):
-        return int(self.json(["pane", "process-info", pane])["process_info"]["shell_pid"])
-
-    def send(self, pane, text, *, deadline: Deadline | None = None):
-        if deadline is None:
-            require_no_login(self.screen(pane))
-            self.command(["pane", "run", pane, text])
-            return
-        require_no_login(self.screen(pane, seconds=deadline.command_seconds(), deadline=deadline.end))
-        # The authentication read and mandatory transport cleanup can finish
-        # after their budget. Never start input using that expired evidence.
-        self.command(["pane", "run", pane, text], seconds=deadline.command_seconds(), deadline=deadline.end)
-        deadline.remaining()
-
     def send_letter(self, pane, intent, body):
         if pane not in self.pane_credentials:
             raise ProtectionError("unowned_letter_recipient")
-        environment = {**self.daemon_env, "HERDR_PANE_ID": pane,
+        environment = {**self.daemon_env, "HIDE_PANE_ID": pane,
                        "HIDE_CAP_REF": str(self.pane_credentials[pane])}
         _, output, _ = self.owner.run([str(self.hide), "request", "send", pane,
                                       "--intent", intent, "--kind", "report", "--body", body],
@@ -477,7 +381,7 @@ class Runtime:
         """The line hided's doorbell typed for the letter, or None before it rang."""
         if pane not in self.pane_credentials:
             raise ProtectionError("unowned_letter_reader")
-        environment = {**self.daemon_env, "HERDR_PANE_ID": pane,
+        environment = {**self.daemon_env, "HIDE_PANE_ID": pane,
                        "HIDE_CAP_REF": str(self.pane_credentials[pane])}
         _, output, _ = self.owner.run([str(self.hide), "request", "show", letter_id],
                                      env=environment, seconds=seconds, deadline=deadline)
@@ -488,12 +392,6 @@ class Runtime:
         if line is not None and not isinstance(line, str):
             raise ProcessError("private_mailbox_show_format")
         return line
-
-    def close_workspace(self, workspace):
-        if workspace not in self.workspaces:
-            raise ProtectionError("unowned_workspace_close_refused")
-        self.command(["workspace", "close", workspace])
-        self.workspaces.remove(workspace)
 
     def close(self) -> dict:
         failures = []
@@ -513,11 +411,6 @@ class Runtime:
                     self.owner.run([str(self.hide), "stop"], env=self.daemon_env, seconds=COMMAND_SECONDS)
                 except Exception as error:
                     failures.append(f"hide stop: {error}")
-            if self.started:
-                try:
-                    self.command(["server", "stop"])
-                except Exception as error:
-                    failures.append(f"herdr server stop: {error}")
             try:
                 self.stop_panes()
                 panes_confirmed = True

@@ -33,7 +33,6 @@ mod device_analytics;
 mod device_catalog;
 mod device_sign_in;
 mod devices;
-mod direct_observation;
 mod disk_sweep;
 mod documents;
 mod drawn_ahead;
@@ -47,7 +46,6 @@ pub(crate) mod group_starts;
 mod guardrails;
 mod herdr_import;
 mod herdr_profiles;
-mod herdr_takeover;
 mod hide_notes;
 mod home;
 mod hosts;
@@ -135,7 +133,6 @@ use agent_sleep::{AgentSleepSetPayload, AgentWakePayload, SleepingSessionPayload
 use control_lane::ControlLane;
 pub(crate) use control_lane::LaneStart;
 use events::*;
-pub(crate) use op_timing::HerdrArrival;
 use operations::*;
 #[cfg(test)]
 pub(crate) use terminal::NoTerminals;
@@ -310,7 +307,7 @@ fn ordered_strip(
             *entry = queues
                 .get_mut(owner(entry))
                 .and_then(VecDeque::pop_front)
-                .expect("every Herdr slot has a Herdr tab from its own workspace to fill it")
+                .expect("every engine slot has an engine tab from its own workspace to fill it")
                 .clone();
         }
     }
@@ -1253,9 +1250,6 @@ pub struct Runtime {
     /// The last connection test of each device, kept apart from the device
     /// rows because those are rebuilt with every catalog.
     remote_device_tests: HashMap<String, crate::model::DeviceTestSnapshot>,
-    /// Each device whose Herdr server its node last found older than the
-    /// pin after a kit pass (PRD device-herdr-update B8).
-    device_herdr_behind: HashMap<String, crate::model::HerdrBehindSnapshot>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -1406,9 +1400,6 @@ pub struct Runtime {
     /// (`runtime/first_run.rs`); session-only, since a relaunch reopens the
     /// step and its next Continue asks again.
     first_run_apply: Option<first_run::FirstRunApply>,
-    /// Moving the operator's older Herdr server onto this app's Herdr
-    /// (`runtime/herdr_takeover.rs`); session-only.
-    herdr_takeover: herdr_takeover::Takeover,
     /// Moving this machine's Herdr save into the core's own engine
     /// (`runtime/herdr_import.rs`); session-only.
     herdr_import: herdr_import::Import,
@@ -1558,9 +1549,6 @@ pub struct Runtime {
     /// Advances on every `set_live`, so a worker started against an earlier
     /// local Herdr connection cannot settle an operation on the current one.
     live_generation: u64,
-    /// A shell-requested read-only `agent.list` refresh, drained by the
-    /// coordinator on its next pass.
-    status_refresh_requested: bool,
     /// The checkout each tab Hide created was created for, keyed by the tab
     /// id Herdr acknowledged; it decides the tab's checkout instead of the
     /// pane cwd (`session.rs`, `CreatedTabCheckout`).
@@ -2013,7 +2001,9 @@ pub struct Runtime {
     /// development switch on (`own_devices`); `None` runs them on Herdr.
     own_devices: Option<own_devices::OwnDevices>,
     herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
-    herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
+    /// Where each ssh config Host the first-run step listed leads, as
+    /// `user@host:port`, by alias.
+    ssh_host_endpoints: BTreeMap<String, String>,
     /// The connection attempt each first-run Connect started, by device and
     /// generation: the only sign-ins the step ends as it goes away, never
     /// one the device row or another screen started. At most one per device.
@@ -2361,7 +2351,6 @@ impl Runtime {
             inbound_arrivals: HashMap::new(),
             retired_remote_syncs: Vec::new(),
             remote_device_tests: HashMap::new(),
-            device_herdr_behind: HashMap::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),
@@ -2419,7 +2408,6 @@ impl Runtime {
             unknown_kit_agents_limit_reported: false,
             local_kit_pending: None,
             first_run_apply: None,
-            herdr_takeover: herdr_takeover::Takeover::default(),
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             local_kit_next_status: None,
@@ -2476,7 +2464,6 @@ impl Runtime {
             reopen_in_flight: None,
             reopen_after_close: None,
             live_generation: 0,
-            status_refresh_requested: false,
             created_tab_checkouts: BTreeMap::new(),
             created_device_tabs: BTreeMap::new(),
             republish_waker: None,
@@ -2650,7 +2637,7 @@ impl Runtime {
             agent_definitions: None,
             own_devices: None,
             herdr_profiles_job: None,
-            herdr_profile_endpoints: BTreeMap::new(),
+            ssh_host_endpoints: BTreeMap::new(),
             first_run_attempts: BTreeMap::new(),
             purpose_operation_target: None,
             created_purpose_writes_in_flight: HashMap::new(),
@@ -2828,7 +2815,7 @@ impl Runtime {
             self.push_diagnostic(
                 "tab.active_unresolved",
                 format!(
-                    "Herdr workspace {workspace_id} reports active tab {tab_id}, which is not in any checkout's tab list"
+                    "Engine workspace {workspace_id} reports active tab {tab_id}, which is not in any checkout's tab list"
                 ),
             );
         }
@@ -3182,20 +3169,6 @@ pub fn validate_options(options: &CoreOptions) -> Result<(), &'static str> {
     }
     if options.app_state_path.trim().is_empty() {
         return Err("app_state_path must not be empty");
-    }
-    if options
-        .herdr_socket_path
-        .as_ref()
-        .is_some_and(|path| path.trim().is_empty())
-    {
-        return Err("herdr_socket_path must be null or non-empty");
-    }
-    if options
-        .herdr_bin_path
-        .as_ref()
-        .is_some_and(|path| path.trim().is_empty())
-    {
-        return Err("herdr_bin_path must be null or non-empty");
     }
     if options
         .home

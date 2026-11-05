@@ -286,7 +286,7 @@ export function landingDevices(nowMs: number, width: number): { rest: SnapshotRe
     remote("macbook", "MacBook", "macos-arm64", { ssh_alias: null, dials_in: true }),
     remote("workbox", "workbox", "linux-x86_64", {}),
   ];
-  const connected = (target: string) => ({ target_id: target, state: "connected", message: null, herdr_version: "0.9.3", session: null });
+  const connected = (target: string) => ({ target_id: target, state: "connected", message: null, session: null });
   const rest = {
     ...scene.rest,
     navigator: { ...navigator, devices },

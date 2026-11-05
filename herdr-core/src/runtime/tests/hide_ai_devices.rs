@@ -27,7 +27,6 @@ fn kit_on(runtime: &mut Runtime, machine: &str, ids: &[&str]) {
                 location: None,
             },
             hook: None,
-            herdr: None,
             partial: false,
             features: Vec::new(),
             sessions: None,

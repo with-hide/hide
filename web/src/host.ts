@@ -116,9 +116,6 @@ export type BrowserBridge = {
   onEvent(listener: (event: BrowserHostEvent) => void): () => void;
 };
 
-/** How a Herdr restart went: `stop_failed` changed nothing; `unavailable` is a host with no bundled Herdr. */
-export type HerdrRestart = "restarted" | "stop_failed" | "failed" | "unavailable" | "refused";
-
 /** A path on this computer as the host found it: its physical path in the wire spelling (`/` between names, `C:/...` on Windows) and whether it is a folder; null when it does not exist. */
 export type ProbedPath = { real: string; kind: "file" | "directory" } | null;
 
@@ -205,15 +202,6 @@ export type HostBridge = {
    * window; the host logs the outcome without the path and shows nothing (B16).
    */
   openInEditor(path: string): void;
-  /**
-   * Restarts the operator's Herdr server on this app's Herdr where Herdr
-   * cannot hand it over live (PRD herdr-takeover B12), once the operator
-   * confirmed what ends; a second call while one runs answers with it.
-   * `failed` has already put the start failure on the window's status page.
-   */
-  restartHerdr(): Promise<HerdrRestart>;
-  /** Quits the app, as the app menu's Quit does; hided keeps running. */
-  quit(): void;
   /** Opens the practice window in `language`, on `chapter` when one is named, or brings the open one forward (`practice/channel.ts`). */
   openPractice(language: string, chapter?: string): void;
   browser: BrowserBridge;

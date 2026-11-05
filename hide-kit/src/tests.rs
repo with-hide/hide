@@ -1,4 +1,4 @@
-//! The kit against a HOME fixture and a stand-in Herdr socket. Nothing here
+//! The kit against a HOME fixture. Nothing here
 //! reads or writes the account running the tests.
 
 use std::io::{BufRead, BufReader, Write};
@@ -80,150 +80,11 @@ impl Drop for ArmedIndexReadHook {
     }
 }
 
-/// A Herdr that keeps a plugin registry in memory and answers `plugin.list`
-/// and `plugin.unlink` the way Herdr 0.9.1 does.
-struct FakeHerdr {
-    socket: PathBuf,
-    plugins: Arc<Mutex<Vec<Value>>>,
-    calls: Arc<Mutex<Vec<String>>>,
-}
-
-impl FakeHerdr {
-    fn start(dir: &Path) -> Self {
-        let socket = dir.join("herdr.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        let plugins = Arc::new(Mutex::new(Vec::<Value>::new()));
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let (registry, log) = (plugins.clone(), calls.clone());
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { break };
-                let mut line = String::new();
-                if BufReader::new(&stream).read_line(&mut line).is_err() {
-                    continue;
-                }
-                let request: Value = serde_json::from_str(&line).unwrap();
-                let method = request["method"].as_str().unwrap().to_owned();
-                log.lock().unwrap().push(method.clone());
-                let mut plugins = registry.lock().unwrap();
-                let result = match method.as_str() {
-                    "plugin.list" => json!({ "type": "plugin_list", "plugins": *plugins }),
-                    "plugin.unlink" => {
-                        let id = request["params"]["plugin_id"].as_str().unwrap().to_owned();
-                        let before = plugins.len();
-                        plugins.retain(|existing| existing["plugin_id"] != id.as_str());
-                        json!({ "type": "plugin_unlinked", "plugin_id": id, "removed": plugins.len() < before })
-                    }
-                    other => panic!("unexpected method {other}"),
-                };
-                let response = json!({ "id": request["id"], "result": result });
-                let _ = writeln!(stream, "{response}");
-            }
-        });
-        Self {
-            socket,
-            plugins,
-            calls,
-        }
-    }
-}
-
-fn plugin(id: &str, root: &str, kind: &str) -> Value {
-    json!({
-        "plugin_id": id,
-        "name": "Agent Context Labels",
-        "version": "0.2.0",
-        "plugin_root": root,
-        "manifest_path": format!("{root}/herdr-plugin.toml"),
-        "enabled": true,
-        "source": { "kind": kind },
-    })
-}
-
 fn executable(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, body).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
-
-/// The `herdr` CLI: plugin calls go to `$HOME/herdr.log`, integration calls
-/// to `herdr-integration.log`, and each integration's state lives in
-/// `herdr-fake/<target>` (`current` or `outdated`; no file is not installed)
-/// the way `herdr integration status` lists it, both beside the fixture's
-/// HOME so a pass that changes nothing in HOME is still seen to. A file
-/// `herdr-fails` in HOME makes an install fail.
-const FAKE_HERDR: &str = r#"#!/bin/sh
-if [ "$1" = integration ]; then
-  fixture="$(dirname "$HOME")"
-  echo "$@" >> "$fixture/herdr-integration.log"
-  dir="$fixture/herdr-fake"
-  mkdir -p "$dir"
-  case "$2" in
-    status)
-      # `herdr-late-writer` in HOME: another tool adds an entry to Codex's
-      # hook file after Herdr's install, by the time the kit asks for status.
-      if [ -e "$HOME/herdr-late-writer" ] && [ -e "$dir/codex" ] && [ -f "$HOME/.codex/hooks.json" ]; then
-        python3 - "$HOME/.codex/hooks.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-document = json.load(open(path))
-groups = document["hooks"]["SessionStart"]
-c = "bash /foreign/late.sh"
-if not any(h.get("command") == c for g in groups for h in g.get("hooks", [])):
-    groups.append({"hooks": [{"command": c, "timeout": 10, "type": "command"}]})
-json.dump(document, open(path, "w"), indent=2)
-PY
-      fi
-      for t in pi omp claude codex copilot devin droid kimi opencode kilo hermes qodercli qwen cursor mastracode antigravity-cli grok letta; do
-        case "$(cat "$dir/$t" 2>/dev/null)" in
-          current) echo "$t: current (v1) (/x/$t)" ;;
-          outdated) echo "$t: outdated (v0 < v1) (/x/$t)" ;;
-          *) echo "$t: not installed (/x/$t)" ;;
-        esac
-      done ;;
-    install)
-      if [ -e "$HOME/herdr-fails" ]; then echo "disk full" >&2; exit 1; fi
-      echo current > "$dir/$3"
-      # Herdr's Codex integration also adds its entry to `hooks.json`, as
-      # Herdr 0.9.1 does: one group of its own on `SessionStart`, left alone
-      # when it is already there. A file `herdr-many` in HOME makes it add
-      # nine, and `herdr-edits` makes it also drop the first group that is not
-      # its own, the way another writer's change would look.
-      if [ "$3" = codex ] && [ -d "$HOME/.codex" ]; then
-        python3 - "$HOME" <<'PY'
-import json, os, sys
-home = sys.argv[1]
-codex = os.path.join(home, ".codex")
-path = os.path.join(codex, "hooks.json")
-command = "bash '%s' session" % os.path.join(codex, "herdr-agent-state.sh")
-try:
-    document = json.load(open(path))
-except (OSError, ValueError):
-    document = {}
-groups = document.setdefault("hooks", {}).setdefault("SessionStart", [])
-def has(c):
-    return any(h.get("command") == c for g in groups for h in g.get("hooks", []))
-if os.path.exists(os.path.join(home, "herdr-edits")):
-    for g in list(groups):
-        if not any(h.get("command") == command for h in g.get("hooks", [])):
-            groups.remove(g)
-            break
-extra = [command] + (["bash /extra/%d.sh" % n for n in range(8)] if os.path.exists(os.path.join(home, "herdr-many")) else [])
-for c in extra:
-    if not has(c):
-        groups.append({"hooks": [{"command": c, "timeout": 10, "type": "command"}]})
-with open(path, "w") as f:
-    json.dump(document, f, indent=2)
-PY
-      fi ;;
-    uninstall)
-      if [ -e "$HOME/herdr-uninstall-fails" ]; then echo "disk full" >&2; exit 1; fi
-      rm -f "$dir/$3" ;;
-  esac
-  exit 0
-fi
-echo "$@" >> "$HOME/herdr.log"
-"#;
 
 const OTHER_TOOL: &str = r#"{
   "model": "opus",
@@ -239,7 +100,6 @@ struct Fixture {
     _dir: tempfile::TempDir,
     root: PathBuf,
     target: KitTarget,
-    herdr: FakeHerdr,
 }
 
 impl Fixture {
@@ -270,16 +130,12 @@ impl Fixture {
         executable(&kit.join("hide"), "#!/bin/sh\n");
         executable(&kit.join("hide-agent-hooks"), "#!/bin/sh\n");
         program(&root.join("launchctl"), "#!/bin/sh\nexit 113\n");
-        program(&root.join("bin/herdr"), FAKE_HERDR);
-        let herdr = FakeHerdr::start(&root);
         let target = KitTarget {
             home: home.clone(),
             install: hide_agent_hooks::route::APP_INSTALL.to_owned(),
             kit_dir: kit,
             cli_dir: home.join(".local/bin"),
             owned_roots: vec![root.join("helper-root")],
-            herdr_socket: herdr.socket.clone(),
-            herdr_bin: Some(root.join("bin/herdr")),
             codex: None,
             login_shell: None,
             legacy_coordination_home: None,
@@ -292,7 +148,6 @@ impl Fixture {
             _dir: dir,
             root,
             target,
-            herdr,
         }
     }
 
@@ -300,57 +155,8 @@ impl Fixture {
         &self.target.home
     }
 
-    /// What the fake Herdr holds of one integration: `current`, `outdated`
-    /// or `none`.
-    fn integration(&self, target: &str) -> String {
-        std::fs::read_to_string(self.root.join("herdr-fake").join(target))
-            .map(|state| state.trim().to_owned())
-            .unwrap_or_else(|_| "none".to_owned())
-    }
-
-    /// An integration the operator put there before Hide looked.
-    fn operator_installed(&self, target: &str, state: &str) {
-        let dir = self.root.join("herdr-fake");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(target), format!("{state}\n")).unwrap();
-    }
-
-    /// The `herdr integration install|uninstall` calls the kit made, in order.
-    fn integration_changes(&self) -> Vec<String> {
-        std::fs::read_to_string(self.root.join("herdr-integration.log"))
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| !line.starts_with("integration status"))
-            .map(str::to_owned)
-            .collect()
-    }
-
     fn settings(&self) -> String {
         std::fs::read_to_string(self.home().join(".claude/settings.json")).unwrap()
-    }
-
-    /// The retired labels plugin as an older Hide left it: the kit's copy,
-    /// the plugin's state folder, and Herdr's entry for it.
-    fn legacy_plugin(&self, kind: &str) {
-        let copy = labels_home(self.home());
-        executable(&copy.join("hide-agent-context-labels"), "#!/bin/sh\n");
-        std::fs::write(
-            copy.join("herdr-plugin.toml"),
-            "id = \"hide.agent-context-labels\"\n",
-        )
-        .unwrap();
-        let state = plugin_state_dir(self.home());
-        std::fs::create_dir_all(&state).unwrap();
-        std::fs::write(state.join("display-state.json"), "{}").unwrap();
-        let root = match kind {
-            "github" => "/somewhere/herdr/plugins/github/agent-context-labels".to_owned(),
-            _ => copy.display().to_string(),
-        };
-        self.herdr
-            .plugins
-            .lock()
-            .unwrap()
-            .push(plugin(LABELS_PLUGIN_ID, &root, kind));
     }
 }
 
@@ -415,10 +221,6 @@ fn a_first_apply_installs_every_part_and_keeps_other_tools_entries() {
         std::fs::read_link(fixture.home().join(".local/bin/hide")).unwrap(),
         fixture.target.kit_dir.join("hide")
     );
-    // A machine that never had the labels plugin is not asked about it; the
-    // standalone hcoord plugin is looked for once.
-    assert_eq!(*fixture.herdr.calls.lock().unwrap(), ["plugin.list"]);
-    assert!(report.labels_retirement.is_empty());
     assert!(!fixture.home().join(".hide/hcoord").exists());
     let record: Value = serde_json::from_str(
         &std::fs::read_to_string(fixture.home().join(".hide/kit/installed.json")).unwrap(),
@@ -438,16 +240,8 @@ fn a_first_apply_installs_every_part_and_keeps_other_tools_entries() {
             "claude_code_hook",
             "cli",
             "coordination_retirement",
-            "herdr:claude-code",
             "skill:claude"
         ],
-        "{record}"
-    );
-    // The standalone plugin is looked for on every platform, so its
-    // retirement is recorded on every platform.
-    assert_eq!(
-        record["retired"],
-        serde_json::json!(["hide.hcoord"]),
         "{record}"
     );
 }
@@ -459,7 +253,6 @@ fn a_second_apply_of_the_same_build_changes_nothing() {
     let settings = fixture.settings();
     let record_path = fixture.home().join(".hide/kit/installed.json");
     let record_written = std::fs::metadata(&record_path).unwrap().modified().unwrap();
-    let calls = fixture.herdr.calls.lock().unwrap().len();
 
     let report = apply(&fixture.target, &Scope::automatic());
 
@@ -468,7 +261,6 @@ fn a_second_apply_of_the_same_build_changes_nothing() {
         std::fs::metadata(&record_path).unwrap().modified().unwrap(),
         record_written
     );
-    assert_eq!(fixture.herdr.calls.lock().unwrap().len(), calls);
     assert!(report.components.iter().all(|part| matches!(
         part.state,
         ComponentState::Installed | ComponentState::Absent
@@ -543,7 +335,7 @@ fn an_older_hook_is_replaced_on_the_next_apply() {
 }
 
 #[test]
-fn a_first_apply_writes_the_spawn_guard_entry_and_the_next_pass_adds_it_to_an_earlier_install() {
+fn a_first_apply_writes_the_pre_tool_entry_and_the_next_pass_adds_it_to_an_earlier_install() {
     let fixture = Fixture::new();
     apply(&fixture.target, &Scope::automatic());
     let document: Value = serde_json::from_str(&fixture.settings()).unwrap();
@@ -742,183 +534,6 @@ fn another_installations_hide_is_left_until_its_command_is_gone() {
     assert_eq!(std::fs::read_link(&link).unwrap(), package_hide);
 }
 
-/// PRD labels-in-hided B2: an upgrade takes the plugin out of Herdr and off
-/// the disk, and the record of having installed it means nothing any more.
-#[test]
-fn an_upgrade_takes_the_linked_labels_plugin_its_copy_and_its_state_out() {
-    let fixture = Fixture::new();
-    fixture.legacy_plugin("local");
-    let record = fixture.home().join(".hide/kit/installed.json");
-    std::fs::write(&record, r#"{"format":1,"installed":["labels"]}"#).unwrap();
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    assert!(fixture.herdr.plugins.lock().unwrap().is_empty());
-    assert!(!labels_home(fixture.home()).exists());
-    assert!(!plugin_state_dir(fixture.home()).exists());
-    assert_eq!(
-        report.labels_retirement.removed,
-        [
-            "Herdr plugin link (linked folder)",
-            "kit copy",
-            "state folder"
-        ]
-    );
-    assert!(report.labels_retirement.failures.is_empty());
-    assert_eq!(state(&report, ComponentId::Cli), ComponentState::Installed);
-
-    // Nothing is left to take out, and Herdr is not asked again.
-    let calls = fixture.herdr.calls.lock().unwrap().len();
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert!(report.labels_retirement.is_empty());
-    assert_eq!(fixture.herdr.calls.lock().unwrap().len(), calls);
-}
-
-#[test]
-fn a_github_install_of_the_labels_plugin_is_taken_out_through_the_herdr_command() {
-    let fixture = Fixture::new();
-    fixture.legacy_plugin("github");
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    assert_eq!(
-        std::fs::read_to_string(fixture.home().join("herdr.log")).unwrap(),
-        "plugin uninstall hide.agent-context-labels\n"
-    );
-    assert_eq!(
-        report.labels_retirement.removed[0],
-        "Herdr plugin link (GitHub)"
-    );
-}
-
-#[test]
-fn with_herdr_down_the_labels_plugin_files_stay_until_its_link_is_gone() {
-    let mut fixture = Fixture::new();
-    fixture.legacy_plugin("local");
-    fixture.target.herdr_socket = fixture.root.join("no-herdr.sock");
-
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert!(
-        report.labels_retirement.failures[0].contains("plugin.list"),
-        "{report:?}"
-    );
-    assert!(labels_home(fixture.home()).exists());
-    assert!(plugin_state_dir(fixture.home()).exists());
-    assert_eq!(state(&report, ComponentId::Cli), ComponentState::Installed);
-
-    fixture.target.herdr_socket = fixture.herdr.socket.clone();
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert!(report.labels_retirement.failures.is_empty());
-    assert!(fixture.herdr.plugins.lock().unwrap().is_empty());
-    assert!(!labels_home(fixture.home()).exists());
-}
-
-/// A process holding `lock` exclusively, as a running labels watcher does,
-/// once it holds it.
-#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
-fn lock_holder(lock: &Path, ready: &Path) -> std::process::Child {
-    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
-    std::fs::write(lock, "").unwrap();
-    let watcher = std::process::Command::new("perl")
-        .args([
-            "-e",
-            r#"use Fcntl ":flock"; open(my $f, ">>", $ARGV[0]) or die; flock($f, LOCK_EX) or die; open(my $r, ">", $ARGV[1]); close($r); sleep 60;"#,
-        ])
-        .arg(lock)
-        .arg(ready)
-        .spawn()
-        .unwrap();
-    let started = std::time::Instant::now();
-    while !ready.exists() {
-        assert!(started.elapsed() < std::time::Duration::from_secs(10));
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    watcher
-}
-
-/// A watcher is found by the lock it holds under this home, whatever its
-/// executable is called now, and it is stopped before its state goes.
-#[test]
-fn a_running_labels_watcher_is_found_by_its_lock_and_stopped() {
-    let fixture = Fixture::new();
-    fixture.legacy_plugin("local");
-    let lock = plugin_state_dir(fixture.home()).join("watcher.lock");
-    let mut watcher = lock_holder(&lock, &fixture.root.join("watcher-ready"));
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    let status = watcher.wait().unwrap();
-    assert!(!status.success(), "the watcher was ended by a signal");
-    assert!(
-        report
-            .labels_retirement
-            .removed
-            .contains(&format!("watcher process {}", watcher.id())),
-        "{report:?}"
-    );
-    assert!(!plugin_state_dir(fixture.home()).exists());
-}
-
-/// The boundary is the home: a watcher holding another home's lock (the
-/// operator's, seen from a test home) is never signalled, while this home's
-/// plugin is still taken out.
-#[test]
-fn a_watcher_holding_another_homes_lock_is_left_running() {
-    let fixture = Fixture::new();
-    fixture.legacy_plugin("local");
-    let other_home = fixture.root.join("other-home");
-    let lock = plugin_state_dir(&other_home).join("watcher.lock");
-    let mut watcher = lock_holder(&lock, &fixture.root.join("other-ready"));
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    let still_running = watcher.try_wait().unwrap().is_none();
-    let _ = watcher.kill();
-    let _ = watcher.wait();
-    assert!(
-        still_running,
-        "another home's watcher was signalled: {report:?}"
-    );
-    assert!(
-        !report
-            .labels_retirement
-            .removed
-            .iter()
-            .any(|part| part.starts_with("watcher process")),
-        "{report:?}"
-    );
-    assert!(!plugin_state_dir(fixture.home()).exists());
-    assert!(plugin_state_dir(&other_home).exists());
-}
-
-/// A watcher the pass cannot stop keeps its state folder, because the lock
-/// inside it is the only way a later pass finds the watcher (D-12, B2).
-/// The holder here is this test process, which the pass never signals, as
-/// a watcher lsof cannot name or SIGKILL cannot end would be.
-#[test]
-fn a_watcher_that_cannot_be_stopped_keeps_its_state_folder() {
-    use hide_platform::fs::lock::{Mode, Waited, lock_file};
-    let fixture = Fixture::new();
-    fixture.legacy_plugin("local");
-    let lock = plugin_state_dir(fixture.home()).join("watcher.lock");
-    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
-    let held = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock)
-        .unwrap();
-    let held = match lock_file(held, Mode::Exclusive, Duration::ZERO, &|| false).unwrap() {
-        Waited::Locked(lock) => lock,
-        other => panic!("the test could not take the lock: {other:?}"),
-    };
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    assert!(!report.labels_retirement.failures.is_empty(), "{report:?}");
-    assert!(lock.exists(), "the watcher's lock is gone: {report:?}");
-    drop(held);
-}
-
 #[cfg(target_os = "macos")]
 #[test]
 fn the_kit_runs_nothing_from_a_folder_another_account_can_change() {
@@ -1060,34 +675,6 @@ fn removing_the_kit_takes_only_hides_parts_and_keeps_preserved_data() {
     assert_eq!(other_tool_entry(&settings), other_tool_entry(OTHER_TOOL));
     assert!(!fixture.home().join(".local/bin/hide").exists());
     assert!(!fixture.home().join(".hide/kit/installed.json").exists());
-}
-
-/// The standalone hcoord plugin is taken out of Herdr once, and the result
-/// goes to the report the core logs (B16).
-#[test]
-fn the_standalone_hcoord_plugin_is_unlinked_once() {
-    let fixture = Fixture::new();
-    fixture.herdr.plugins.lock().unwrap().push(plugin(
-        HCOORD_PLUGIN_ID,
-        "/work/hide/plugins/hcoord",
-        "local",
-    ));
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    assert_eq!(
-        report.legacy_retirement.removed,
-        ["hcoord Herdr plugin link (linked folder)"]
-    );
-    assert!(fixture.herdr.plugins.lock().unwrap().is_empty());
-    let calls = fixture.herdr.calls.lock().unwrap().len();
-    let again = apply(&fixture.target, &Scope::automatic());
-    assert!(again.legacy_retirement.is_empty());
-    assert_eq!(
-        fixture.herdr.calls.lock().unwrap().len(),
-        calls,
-        "asked once per machine"
-    );
 }
 
 /// This Mac's pass takes the labels-era folders and the share folder they
@@ -1737,7 +1324,6 @@ fn open_legacy_requests_and_active_watches_leave_the_entire_home_unchanged() {
         let report = apply(&fixture.target, &Scope::automatic());
         refusal(&report, RefusalCause::Record);
         assert_eq!(home_tree(fixture.home()), before);
-        assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     }
 }
 
@@ -1758,7 +1344,6 @@ fn supervisor_revision_head_and_unreadable_referenced_runs_block_before_mutation
         let report = apply(&fixture.target, &Scope::automatic());
         refusal(&report, RefusalCause::Record);
         assert_eq!(home_tree(fixture.home()), before);
-        assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     }
 }
 
@@ -1942,7 +1527,6 @@ fn a_selected_sasu_revision_disappearing_refuses_instead_of_using_the_empty_base
         home_tree(&fixture.root),
         observed.lock().unwrap().take().unwrap()
     );
-    assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     assert!(!fixture.home().join("service-called").exists());
     assert!(!fixture.home().join("status-called").exists());
 }
@@ -2076,7 +1660,6 @@ fn confirmed_and_legacy_closed_hook_receipts_allow_read_only_retirement_prefligh
         let before = home_tree(&fixture.root);
         retirement_preflight(&fixture.target).unwrap();
         assert_eq!(home_tree(&fixture.root), before);
-        assert!(fixture.herdr.calls.lock().unwrap().is_empty());
         assert!(!fixture.home().join("service-called").exists());
         assert!(!fixture.home().join("status-called").exists());
     }
@@ -2302,7 +1885,6 @@ fn intermediate_kit_links_refuse_before_services_status_or_any_mutation() {
             before_home,
             "preflight wrote to HOME"
         );
-        assert!(fixture.herdr.calls.lock().unwrap().is_empty());
         assert!(!fixture.home().join("service-called").exists());
         assert!(!fixture.home().join("status-called").exists());
         assert!(!outside.join(".lock").exists());
@@ -2378,7 +1960,6 @@ fn writable_retirement_records_refuse_before_services_status_or_any_mutation() {
                 before_home,
                 "{record} {mode:o}: HOME changed"
             );
-            assert!(fixture.herdr.calls.lock().unwrap().is_empty());
             assert!(!fixture.home().join("service-called").exists());
             assert!(!fixture.home().join("status-called").exists());
         }
@@ -2411,133 +1992,6 @@ fn isolated_plugin_registry(test: &str) -> bool {
         String::from_utf8_lossy(&output.stderr)
     );
     true
-}
-
-#[test]
-fn retirement_without_a_herdr_server_finishes_when_no_plugin_is_registered() {
-    if isolated_plugin_registry(
-        "tests::retirement_without_a_herdr_server_finishes_when_no_plugin_is_registered",
-    ) {
-        return;
-    }
-    for refused_socket in [false, true] {
-        for registry in [
-            None,
-            Some(json!([])),
-            Some(json!([plugin("other.plugin", "/foreign", "local")])),
-        ] {
-            let mut fixture = Fixture::new();
-            old_coordination(&fixture, json!({}), json!({}));
-            fixture.target.herdr_socket = fixture.root.join("offline.sock");
-            fixture.target.herdr_bin = None;
-            if refused_socket {
-                drop(UnixListener::bind(&fixture.target.herdr_socket).unwrap());
-            }
-            let path = fixture.home().join(".config/herdr/plugins.json");
-            let bytes = registry.map(|value| serde_json::to_vec(&value).unwrap());
-            if let Some(bytes) = &bytes {
-                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-                std::fs::write(&path, bytes).unwrap();
-            }
-            let report = apply(&fixture.target, &Scope::automatic());
-            assert_eq!(
-                state(&report, ComponentId::CoordinationRetirement),
-                ComponentState::Installed,
-                "{report:?}"
-            );
-            assert_eq!(std::fs::read(&path).ok(), bytes);
-            assert!(!fixture.home().join(".hide/hcoord").exists());
-            let before = home_tree(fixture.home());
-            assert_eq!(
-                state(
-                    &apply(&fixture.target, &Scope::automatic()),
-                    ComponentId::CoordinationRetirement
-                ),
-                ComponentState::Installed
-            );
-            assert_eq!(home_tree(fixture.home()), before);
-        }
-    }
-}
-
-#[test]
-fn offline_plugin_retirement_refuses_an_unreadable_registry_and_resumes_after_repair() {
-    if isolated_plugin_registry(
-        "tests::offline_plugin_retirement_refuses_an_unreadable_registry_and_resumes_after_repair",
-    ) {
-        return;
-    }
-    for bytes in [b"invalid".as_slice(), b"{}", b"[{}]"] {
-        let mut fixture = Fixture::new();
-        old_coordination(&fixture, json!({}), json!({}));
-        fixture.target.herdr_socket = fixture.root.join("absent.sock");
-        let path = fixture.home().join(".config/herdr/plugins.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, bytes).unwrap();
-        let report = apply(&fixture.target, &Scope::automatic());
-        assert_eq!(
-            state(&report, ComponentId::CoordinationRetirement),
-            ComponentState::Failed,
-            "{report:?}"
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert!(fixture.home().join(".hide/hcoord/ledger.json").exists());
-        assert!(!fixture.home().join("herdr.log").exists());
-        std::fs::write(path, "[]").unwrap();
-        assert_eq!(
-            state(
-                &apply(&fixture.target, &Scope::automatic()),
-                ComponentId::CoordinationRetirement
-            ),
-            ComponentState::Installed
-        );
-    }
-}
-
-#[test]
-fn offline_plugin_retirement_requires_confirmed_removal_and_preserves_foreign_entries() {
-    if isolated_plugin_registry(
-        "tests::offline_plugin_retirement_requires_confirmed_removal_and_preserves_foreign_entries",
-    ) {
-        return;
-    }
-    let mut fixture = Fixture::new();
-    old_coordination(&fixture, json!({}), json!({}));
-    fixture.target.herdr_socket = fixture.root.join("absent.sock");
-    let path = fixture.home().join(".config/herdr/plugins.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let foreign = json!([plugin("other.plugin", "/foreign", "local")]);
-    let original = json!([plugin(HCOORD_PLUGIN_ID, "/old", "local"), foreign[0]]);
-    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
-    // The boundary first returns success without unregistering: retirement
-    // must retain its failed step instead of preserving a false completion.
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert_eq!(
-        state(&report, ComponentId::CoordinationRetirement),
-        ComponentState::Failed,
-        "{report:?}"
-    );
-    assert_eq!(
-        serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap(),
-        original
-    );
-    program(
-        fixture.target.herdr_bin.as_ref().unwrap(),
-        &format!(
-            "#!/bin/sh\n[ \"$*\" = 'plugin uninstall hide.hcoord' ] || exit 1\nprintf '%s' '{}' > \"$HOME/.config/herdr/plugins.json\"\n",
-            foreign
-        ),
-    );
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert_eq!(
-        state(&report, ComponentId::CoordinationRetirement),
-        ComponentState::Installed,
-        "{report:?}"
-    );
-    assert_eq!(
-        serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap(),
-        foreign
-    );
 }
 
 #[test]
@@ -2630,7 +2084,6 @@ fn assert_preflight_refusal_preserves_fixture(fixture: &Fixture, daemon: Option<
         "{report:?}"
     );
     assert_eq!(home_tree(&fixture.root), before, "preflight changed a file");
-    assert!(fixture.herdr.calls.lock().unwrap().is_empty());
     assert!(!fixture.home().join("service-called").exists());
     assert!(!fixture.home().join("status-called").exists());
     if let Some(daemon) = daemon {

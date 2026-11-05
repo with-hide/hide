@@ -5,7 +5,7 @@ export default defineConfig({
   // Builds the fixtures' C programs once, before any test (e2e/shims/build.ts).
   globalSetup: "./e2e/global-setup.ts",
   timeout: 30_000,
-  // Each spec starts its own isolated Herdr server, hided and Chromium; running
+  // Each spec starts its own isolated hided, pane holders and Chromium; running
   // them in parallel makes them contend for the runner's cores, and a timing
   // assertion that fails under load reads as a product failure. One worker
   // keeps a runner deterministic; CI deals the tests out across runners

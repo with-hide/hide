@@ -1892,11 +1892,6 @@ export type Device = {
   machine_name?: string | null;
   /** A node that dials the core rather than a device the core dials (`DeviceSnapshot::dials_in`). */
   dials_in?: boolean;
-  /**
-   * The device's Herdr server stays on an older release than Hide's pinned
-   * Herdr (`DeviceSnapshot::herdr_behind`); null while it runs the pin or newer.
-   */
-  herdr_behind?: HerdrBehind | null;
 };
 
 /**
@@ -1906,7 +1901,7 @@ export type Device = {
  * A retry over ssh's last line, in `message`, is `cannot_connect`; the
  * retries ssh says nothing useful for carry their own value, for a sentence.
  */
-export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "needs_new_engine" | "hide_updated";
+export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "hide_updated";
 
 /**
  * What a device's connection waits on (`contracts/snapshot-wire-enums.json`:
@@ -1925,10 +1920,6 @@ export type DeviceSignIn = { question: number; key_command: string | null } & (
 /** The operator's reply to what ssh asks, on whichever screen shows it: the device row, a node window's strip, the move dialog. */
 export type SignInReply = { reply: "text"; text: string } | { reply: "accept" } | { reply: "cancel" };
 
-/** Why a device's Herdr stays older than Hide's (`contracts/snapshot-wire-enums.json`: `herdr_behind_cause`). */
-export type HerdrBehindCause = "cannot_hand_off" | "handoff_failed";
-
-export type HerdrBehind = { server_version: string; version: string; cause: HerdrBehindCause };
 
 /** One part of the install kit (`contracts/snapshot-wire-enums.json`: `kit_component_id`). */
 export type KitComponentId = "cli" | "claude_code_hook" | "codex_hook" | "coordination_retirement";
@@ -1940,23 +1931,21 @@ export type KitComponentState = "installed" | "outdated" | "not_installed" | "re
 export type KitAgentAvailability = "available" | "not_installed" | "unsupported_system";
 
 /** The first-run wizard's steps (`contracts/snapshot-wire-enums.json`: `first_run_step`). */
-export type FirstRunStep = "herdr" | "agents" | "devices" | "notifications" | "project" | "done";
+export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | "done";
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
 export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
-export type HerdrProfileRefusal = "no_consent" | "disabled" | "invalid_target" | "discovery_pending" | "device_limit" | "profile_moved";
+export type HerdrProfileRefusal = "no_consent" | "invalid_target" | "discovery_pending" | "device_limit";
 
-/** A machine the first-run Devices step offers: a saved Herdr profile, an ssh config Host, both as one row, or this PC's WSL. */
+/** A machine the first-run Devices step offers: an ssh config Host, or this PC's WSL. */
 export type HerdrProfile = {
-  id: string; label: string; target: string; session: string; enabled: boolean;
-  /** Herdr saved it. */
-  herdr: boolean;
-  /** The ssh config Host the row is, or the one the profile's target is. */
+  id: string; label: string; target: string;
+  /** The ssh config Host the row is. */
   ssh_host: string | null;
   /** `user@host:port` as `ssh -G` resolved the Host. */
   address: string | null;
-  /** Set on the one row that is this PC's default WSL distribution, not a saved profile (PRD wsl-device B1). */
+  /** Set on the one row that is this PC's default WSL distribution, not a Host (PRD wsl-device B1). */
   wsl_distro?: string | null;
   added_as: string | null; problem: string | null; device_id: string | null;
   connect_state: string;
@@ -2002,8 +1991,6 @@ export type KitAgent = {
   chosen: boolean;
   skill: KitPiece;
   hook: KitPiece | null;
-  /** Herdr's own integration for the agent; every supported agent has one, so null only from a device helper whose build predates the field. */
-  herdr?: KitPiece | null;
   /** Hide does only some of what it does for Claude Code with this agent: the row wears the Partial chip, on or off. */
   partial?: boolean;
   /** Every feature of the Partial popover in the table's order (`hide_kit::Feature` ids); `supported` is what this build does. */
@@ -2021,8 +2008,6 @@ export type KitFeatureId =
   | "letters"
   | "bell"
   | "memory"
-  | "spawn_guard"
-  | "herdr_integration"
   | "sleep"
   | "fork"
   | "start"
@@ -2067,8 +2052,6 @@ export type KitRefusal = {
 };
 
 export type Kit = {
-  /** The device could not start its pinned Herdr; retry an install pass. */
-  herdr_start_failed?: boolean;
   unavailable: KitUnavailable | null;
   busy: boolean;
   /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
@@ -2124,7 +2107,6 @@ export type RemoteStatus = {
   /** `connected`, `not_connected`, `stale`, `disabled`, `socket_missing`, or a failure word. */
   state: string;
   message: string | null;
-  herdr_version: string | null;
   /** The last session read from that host; kept while `stale`. */
   session?: RemoteSession | null;
   /** How far the device's helper has confirmed its projects (`device_catalog`). */
@@ -2153,26 +2135,6 @@ export type HerdrStatus = {
 };
 
 /**
- * The operator's own older Herdr server on this machine and how far moving it
- * went (PRD herdr-takeover): `kind` is `move`, `restart` (Herdr cannot hand it
- * over here), `update_hide` (a newer protocol) or `look` (a server Hide cannot
- * use could not be read: always `failed`, with no versions); `stage` is
- * `offered`, `moving` (a move starts on its own), `failed`, or `moved` while
- * the wizard shows the result or the operator's own `herdr` is not settled.
- * `path_herdr` is that `herdr` after a move left it behind: Hide `updating`
- * it, `updated`, or `behind` when the operator has to run the command.
- */
-export type HerdrTakeover = {
-  kind: "move" | "restart" | "update_hide" | "look";
-  stage: "offered" | "moving" | "failed" | "moved";
-  server_version: string;
-  version: string;
-  same_protocol: boolean;
-  failure: "refused" | "not_confirmed" | "unreadable" | "stop_failed" | null;
-  path_herdr: { stage: "updating" | "updated" | "behind"; version: string } | null;
-};
-
-/**
  * What this machine's Herdr save offers to move into Hide's own engine, and what the last move came to (PRD
  * engine-bundle-4-herdr-removal D-6 to D-8). `move` while Hide's own Herdr runs, which moving stops (the question);
  * `import` for any other save, read only; `result` when only the last move's left-out workspaces wait to be read.
@@ -2192,18 +2154,6 @@ export type HerdrImport = {
   refused: { label: string; reason: string }[];
   /** The device whose save this is; absent for this machine's (B18). */
   device?: string;
-};
-
-/**
- * The Herdr this app ships and the operator's own `herdr`, as Settings > About
- * names them; `path_herdr` is null when the operator's terminal finds none.
- * `behind` says its commands are refused by a server on Hide's protocol, and
- * `update_command` is the one command that brings it up, which Hide runs after
- * a move unless it asks for `sudo`.
- */
-export type HerdrVersions = {
-  hide: string;
-  path_herdr: { version: string; behind: boolean; update_command: string } | null;
 };
 
 export type EnvironmentStatus = {
@@ -3142,7 +3092,6 @@ export type OverviewGraphMetadata = {
   truncated: boolean;
   retention_ms: number;
   letters: OverviewGraphLetter[];
-  direct_inputs?: { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; at_unix_ms: number }[];
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null; launch_effort: string | null }[];
 };
 
@@ -3286,20 +3235,17 @@ export type SnapshotRest = {
   status?: {
     server_discovery?: { loading: boolean; failure: string | null };
     herdr?: HerdrStatus;
-    /** What Hide offers for the operator's own older Herdr server on this machine (PRD herdr-takeover); absent when nothing. */
-    herdr_takeover?: HerdrTakeover | null;
     /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
     herdr_import?: HerdrImport | null;
     /** What each device of Hide's own engine offers, each naming its `device` (B18). */
     herdr_import_devices?: HerdrImport[];
-    herdr_versions?: HerdrVersions | null;
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];
     agent_hooks?: AgentHooks;
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
-    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent while the development switch `HIDE_DEV_PANE_HOLDER` is off. */
+    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
     herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];

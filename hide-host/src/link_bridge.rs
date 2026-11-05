@@ -2,10 +2,10 @@
 //! core-host-node-remote-core D-18, D-19, B15; PRD wsl-device B9): each
 //! stream the core opens with `link_open` is one local connection to the end
 //! it names, its bytes carried by the link both ways. On a node that dialed
-//! its core, the node's own Herdr socket is one end and the browser relay of
-//! the node's daemon, which carries a caller's CDP to this machine's desktop
-//! window, another. On every node, a server on this machine's loopback is
-//! the third, which a Browser View of the core's machine shows. Nothing on
+//! its core, the browser relay of the node's daemon, which carries a
+//! caller's CDP to this machine's desktop window, is one end. On every node,
+//! a server on this machine's loopback is the other, which a Browser View of
+//! the core's machine shows. Nothing on
 //! the core's machine listens for any of them; the link is the only way in,
 //! and it ends every stream when it ends.
 //!
@@ -16,7 +16,6 @@
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 use std::thread::Scope;
 use std::time::Duration;
@@ -24,7 +23,6 @@ use std::time::Duration;
 use base64::Engine as _;
 use hide_node_link::panes::{MAX_CHUNK, NodeEvent};
 use hide_node_link::protocol::LinkEnd;
-use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use serde_json::Value;
 
 use crate::error::{ErrorCode, HostError, HostResult};
@@ -50,48 +48,28 @@ pub trait BrowserGateway: Send + Sync {
     fn relay_address(&self) -> SocketAddr;
 }
 
-/// One end's connection.
-enum Connection {
-    Local(LocalStream),
-    Tcp(TcpStream),
-}
+/// One end's connection: every end is a TCP server on this machine.
+struct Connection(TcpStream);
 
 impl Connection {
     fn writer(&self) -> io::Result<Box<dyn Write + Send>> {
-        Ok(match self {
-            Self::Local(stream) => Box::new(stream.duplicate()),
-            Self::Tcp(stream) => Box::new(stream.try_clone()?),
-        })
+        Ok(Box::new(self.0.try_clone()?))
     }
 
     fn reader(&self) -> io::Result<Box<dyn Read + Send>> {
-        Ok(match self {
-            Self::Local(stream) => Box::new(stream.duplicate()),
-            Self::Tcp(stream) => Box::new(stream.try_clone()?),
-        })
+        Ok(Box::new(self.0.try_clone()?))
     }
 
     fn closer(&self) -> io::Result<Closer> {
-        Ok(match self {
-            Self::Local(stream) => Closer::Local(stream.shutdown_handle()),
-            Self::Tcp(stream) => Closer::Tcp(stream.try_clone()?),
-        })
+        Ok(Closer(self.0.try_clone()?))
     }
 }
 
-enum Closer {
-    Local(ShutdownHandle),
-    Tcp(TcpStream),
-}
+struct Closer(TcpStream);
 
 impl Closer {
     fn close(&self) {
-        match self {
-            Self::Local(handle) => handle.shutdown(),
-            Self::Tcp(stream) => {
-                let _ = stream.shutdown(Shutdown::Both);
-            }
-        }
+        let _ = self.0.shutdown(Shutdown::Both);
     }
 }
 
@@ -109,27 +87,20 @@ struct Open {
 
 /// The link streams of one node link.
 pub struct LinkBridge<'a> {
-    herdr: Option<PathBuf>,
     browser: Option<&'a dyn BrowserGateway>,
     streams: Mutex<HashMap<u64, std::sync::Arc<Open>>>,
     write_timeout: Duration,
 }
 
 impl<'a> LinkBridge<'a> {
-    /// A bridge to this node's own Herdr at `herdr` and its daemon's
-    /// browser relay, whichever it has.
-    pub fn new(herdr: Option<PathBuf>, browser: Option<&'a dyn BrowserGateway>) -> Self {
+    /// A bridge to this node's daemon's browser relay, when it has one, and
+    /// to its loopback.
+    pub fn new(browser: Option<&'a dyn BrowserGateway>) -> Self {
         Self {
-            herdr,
             browser,
             streams: Mutex::new(HashMap::new()),
             write_timeout: WRITE_TIMEOUT,
         }
-    }
-
-    /// The socket of this node's own Herdr, the one server it bridges.
-    pub fn herdr_socket(&self) -> Option<&Path> {
-        self.herdr.as_deref()
     }
 
     /// The browser gateway of this node's desktop window.
@@ -139,18 +110,6 @@ impl<'a> LinkBridge<'a> {
 
     fn connect(&self, end: LinkEnd) -> HostResult<Connection> {
         match end {
-            LinkEnd::Herdr => {
-                let socket = self.herdr.as_deref().ok_or_else(|| unreached(end))?;
-                let connection = LocalStream::connect(socket).map_err(|error| {
-                    let code = if error.kind() == io::ErrorKind::NotFound {
-                        ErrorCode::NotFound
-                    } else {
-                        ErrorCode::Io
-                    };
-                    HostError::new(code, format!("The node's Herdr did not answer: {error}"))
-                })?;
-                Ok(Connection::Local(connection))
-            }
             LinkEnd::BrowserRelay => {
                 let browser = self.browser.ok_or_else(|| unreached(end))?;
                 let connection =
@@ -162,7 +121,7 @@ impl<'a> LinkBridge<'a> {
                             )
                         },
                     )?;
-                Ok(Connection::Tcp(connection))
+                Ok(Connection(connection))
             }
             LinkEnd::Loopback { address } => {
                 // A page stream reaches this machine's own loopback and
@@ -180,7 +139,7 @@ impl<'a> LinkBridge<'a> {
                             format!("The page server on this machine did not answer: {error}"),
                         )
                     })?;
-                Ok(Connection::Tcp(connection))
+                Ok(Connection(connection))
             }
         }
     }
@@ -344,7 +303,6 @@ impl<'a> LinkBridge<'a> {
 
 fn name(end: LinkEnd) -> &'static str {
     match end {
-        LinkEnd::Herdr => "Herdr",
         LinkEnd::BrowserRelay => "browser relay",
         LinkEnd::Loopback { .. } => "page",
     }
@@ -358,7 +316,6 @@ pub fn unreached(end: LinkEnd) -> HostError {
     HostError::new(
         ErrorCode::Unsupported,
         match end {
-            LinkEnd::Herdr => "This node's Herdr is not reached through its link",
             LinkEnd::BrowserRelay => "This node has no browser relay",
             LinkEnd::Loopback { .. } => "This node holds no link to carry a page",
         },
@@ -383,32 +340,30 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use std::time::Instant;
 
-    use hide_platform::ipc::LocalListener;
-
     use super::*;
 
-    /// A Herdr that takes the stream and never reads holds a write once its
+    /// A server that takes the stream and never reads holds a write once its
     /// buffer is full. The write fails at the bridge's deadline instead of
     /// holding its caller (a worker of the link's control lane), the stream
-    /// ends, and this holds on every system: a Windows pipe takes no write
-    /// timeout, so the deadline cannot come from the stream.
+    /// ends, and this holds on every system.
     #[test]
     fn a_write_to_an_end_that_stops_reading_ends_the_stream_at_its_deadline() {
-        let folder = tempfile::Builder::new().prefix("lb").tempdir().unwrap();
-        let socket = folder.path().join("h.sock");
-        let listener = LocalListener::bind(&socket).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
         let (release, released) = mpsc::channel::<()>();
-        let herdr = std::thread::spawn(move || {
+        let server = std::thread::spawn(move || {
             let stream = listener.accept().unwrap();
             let _ = released.recv_timeout(Duration::from_secs(60));
             drop(stream);
         });
-        let mut bridge = LinkBridge::new(Some(socket), None);
+        let mut bridge = LinkBridge::new(None);
         bridge.write_timeout = Duration::from_millis(500);
         let output = Mutex::new(Vec::<u8>::new());
         let chunk = base64::engine::general_purpose::STANDARD.encode(vec![7_u8; MAX_CHUNK]);
         std::thread::scope(|scope| {
-            bridge.open(scope, &output, 1, LinkEnd::Herdr).unwrap();
+            bridge
+                .open(scope, &output, 1, LinkEnd::Loopback { address })
+                .unwrap();
             // No buffer on any system holds a gigabyte of a silent peer's.
             let mut refused = None;
             for _ in 0..(1 << 30) / MAX_CHUNK {
@@ -429,6 +384,6 @@ mod tests {
             bridge.stop();
         });
         drop(release);
-        herdr.join().unwrap();
+        server.join().unwrap();
     }
 }

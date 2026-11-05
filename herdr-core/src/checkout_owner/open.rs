@@ -570,7 +570,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, refused, reply};
     use crate::live::{RemoteControlAction, RemoteControlOutcome, execute_remote_control};
 
     /// PRD wsl-device B15, B17: the folder registered is the one hided
@@ -608,8 +608,7 @@ mod tests {
             refused(hide_node_link::ErrorCode::Io),
             "workspace.create_failed"
         );
-        let missing =
-            SessionFetchError::SocketMissing("Herdr socket file does not exist at /x.sock".into());
+        let missing = SessionFetchError::SocketMissing("no engine runs at /x.sock".into());
         let read = WorkspaceCreationFailure::from_session_read("before", &missing);
         assert_eq!(read.kind, "workspace.control_unavailable");
         // The sentence stays for the diagnostic log.
@@ -666,23 +665,16 @@ mod tests {
 
     #[test]
     fn local_tab_control_opens_the_checkouts_bound_workspace_when_none_is_open() {
-        let herdr = FakeHerdr::start("owner-open-worktree", |method, _| match method {
-            "worktree.open" => json!({
-                "type": "worktree_opened",
-                "already_open": false,
-                "workspace": {"workspace_id": "w9", "number": 9, "label": "repo-feat", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "idle"},
-                "worktree": {"path": "/repo-feat", "is_bare": false, "is_detached": false, "is_prunable": false, "is_linked_worktree": true, "label": "repo-feat"},
-                "tab": {"tab_id": "w9:t1", "workspace_id": "w9", "number": 1, "label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"},
-                "root_pane": {"pane_id": "w9:p1", "terminal_id": "fixture-terminal", "workspace_id": "w9", "tab_id": "w9:t1", "focused": true, "agent_status": "idle", "revision": 1}
+        let herdr = FakeEngine::start(|method, _| match method {
+            "open_worktree" => reply(crate::engine::OpenedWorktree {
+                tab_label: "1".to_owned(),
+                workspace_id: "w9".to_owned(),
+                label: "repo-feat".to_owned(),
+                tab_id: "w9:t1".to_owned(),
+                pane_id: "w9:p1".to_owned(),
+                already_open: false,
             }),
-            "tab.rename" => json!({
-                "type": "tab_info",
-                "tab": {"tab_id": "w9:t1", "workspace_id": "w9", "number": 1, "label": "Tab 2", "focused": true, "pane_count": 1, "agent_status": "idle"}
-            }),
-            "workspace.rename" => json!({
-                "type": "workspace_info",
-                "workspace": {"workspace_id": "w9", "number": 9, "label": "feat", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "idle"}
-            }),
+            "rename_tab" | "rename_workspace" => reply(()),
             other => panic!("unexpected {other}"),
         });
 
@@ -718,17 +710,14 @@ mod tests {
             herdr.calls(),
             [
                 (
-                    "worktree.open".to_owned(),
-                    json!({"cwd": "/repo", "path": "/repo-feat", "focus": true})
+                    "open_worktree",
+                    json!({"repository_root": "/repo", "path": "/repo-feat", "focus": true})
                 ),
                 (
-                    "workspace.rename".to_owned(),
-                    json!({"workspace_id": "w9", "label": "feat"})
+                    "rename_workspace",
+                    json!({"workspace": "w9", "label": "feat"})
                 ),
-                (
-                    "tab.rename".to_owned(),
-                    json!({"tab_id": "w9:t1", "label": "Tab 2"})
-                ),
+                ("rename_tab", json!({"tab": "w9:t1", "label": "Tab 2"})),
             ]
         );
     }
@@ -736,20 +725,16 @@ mod tests {
     #[test]
     fn a_second_request_for_an_open_owner_adds_a_tab_there_instead_of_another_workspace() {
         for focus in [true, false] {
-            let herdr = FakeHerdr::start("owner-already-open", |method, _| match method {
-                "worktree.open" => json!({
-                    "type": "worktree_opened",
-                    "already_open": true,
-                    "workspace": {"workspace_id": "w9", "number": 9, "label": "hide", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "idle"},
-                    "worktree": {"path": "/repo", "is_bare": false, "is_detached": false, "is_prunable": false, "is_linked_worktree": false, "label": "hide"},
-                    "tab": {"tab_id": "w9:t1", "workspace_id": "w9", "number": 1, "label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"},
-                    "root_pane": {"pane_id": "w9:p1", "terminal_id": "fixture-terminal", "workspace_id": "w9", "tab_id": "w9:t1", "focused": true, "agent_status": "idle", "revision": 1}
+            let herdr = FakeEngine::start(|method, _| match method {
+                "open_worktree" => reply(crate::engine::OpenedWorktree {
+                    tab_label: "1".to_owned(),
+                    workspace_id: "w9".to_owned(),
+                    label: "hide".to_owned(),
+                    tab_id: "w9:t1".to_owned(),
+                    pane_id: "w9:p1".to_owned(),
+                    already_open: true,
                 }),
-                "tab.create" => json!({
-                    "type": "tab_created",
-                    "tab": {"tab_id": "w9:t2", "workspace_id": "w9", "number": 2, "label": "Tab 2", "focused": true, "pane_count": 1, "agent_status": "idle"},
-                    "root_pane": {"pane_id": "w9:p2", "terminal_id": "fixture-terminal-2", "workspace_id": "w9", "tab_id": "w9:t2", "focused": true, "agent_status": "idle", "revision": 1}
-                }),
+                "create_tab" => reply(("w9:t2".to_owned(), "w9:p2".to_owned())),
                 other => panic!("unexpected {other}"),
             });
 
@@ -778,7 +763,7 @@ mod tests {
                     launched: true,
                 }
             );
-            assert_eq!(herdr.methods(), ["worktree.open", "tab.create"]);
+            assert_eq!(herdr.methods(), ["open_worktree", "create_tab"]);
             assert_eq!(herdr.calls()[0].1["focus"], focus);
             assert_eq!(herdr.calls()[1].1["focus"], focus);
         }
@@ -786,8 +771,8 @@ mod tests {
 
     #[test]
     fn a_refused_owner_open_fails_the_request_and_creates_nothing_elsewhere() {
-        let herdr = FakeHerdr::start_with_errors("owner-refused", |method, _| match method {
-            "worktree.open" => Err(("not_found".to_owned(), "no such checkout".to_owned())),
+        let herdr = FakeEngine::start(|method, _| match method {
+            "open_worktree" => refused("not_found", "no such checkout"),
             other => panic!("unexpected {other}"),
         });
 
@@ -808,7 +793,7 @@ mod tests {
 
         assert!(!failure.is_ambiguous());
         assert!(failure.message().contains("no such checkout"));
-        assert_eq!(herdr.methods(), ["worktree.open"]);
+        assert_eq!(herdr.methods(), ["open_worktree"]);
     }
 
     #[test]
@@ -818,38 +803,25 @@ mod tests {
             let listed_mark = mark.clone();
             let marked = Arc::new(Mutex::new(false));
             let marked_in_server = marked.clone();
-            let herdr = FakeHerdr::start("owner-folder", move |method, params| match method {
-                "workspace.list" => {
-                    let tokens = if *marked_in_server.lock().unwrap() {
-                        json!({"hide_owner": listed_mark})
-                    } else {
-                        json!({})
-                    };
-                    json!({"type": "workspace_list", "workspaces": [
-                        {"workspace_id": "w1", "number": 1, "label": "other", "focused": false, "pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1", "agent_status": "idle"},
-                        {"workspace_id": "w4", "number": 4, "label": "notes", "focused": false, "pane_count": 1, "tab_count": 1, "active_tab_id": "w4:t1", "agent_status": "idle", "tokens": tokens}
-                    ]})
+            let herdr = FakeEngine::start(move |method, params| match method {
+                "workspace_tokens" => {
+                    assert_eq!(params["token"], crate::checkout_owner::OWNER_TOKEN);
+                    let token = marked_in_server
+                        .lock()
+                        .unwrap()
+                        .then(|| listed_mark.clone());
+                    reply(vec![("w1".to_owned(), None), ("w4".to_owned(), token)])
                 }
-                "workspace.create" => json!({
-                    "type": "workspace_created",
-                    "workspace": {"workspace_id": "w4", "number": 4, "label": "notes", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w4:t1", "agent_status": "idle"},
-                    "tab": {"tab_id": "w4:t1", "workspace_id": "w4", "number": 1, "label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"},
-                    "root_pane": {"pane_id": "w4:p1", "terminal_id": "fixture-terminal", "workspace_id": "w4", "tab_id": "w4:t1", "focused": true, "agent_status": "idle", "revision": 1}
-                }),
-                "workspace.report_metadata" => {
-                    assert_eq!(params["tokens"]["hide_owner"], json!(listed_mark));
+                "create_workspace" => {
+                    reply(("w4".to_owned(), "w4:t1".to_owned(), "w4:p1".to_owned()))
+                }
+                "report_workspace_token" => {
+                    assert_eq!(params["value"], json!(listed_mark));
                     *marked_in_server.lock().unwrap() = true;
-                    json!({"type": "ok"})
+                    reply(())
                 }
-                "tab.rename" => json!({
-                    "type": "tab_info",
-                    "tab": {"tab_id": "w4:t1", "workspace_id": "w4", "number": 1, "label": "Tab 1", "focused": true, "pane_count": 1, "agent_status": "idle"}
-                }),
-                "tab.create" => json!({
-                    "type": "tab_created",
-                    "tab": {"tab_id": "w4:t2", "workspace_id": "w4", "number": 2, "label": "Tab 2", "focused": true, "pane_count": 1, "agent_status": "idle"},
-                    "root_pane": {"pane_id": "w4:p2", "terminal_id": "fixture-terminal-2", "workspace_id": "w4", "tab_id": "w4:t2", "focused": true, "agent_status": "idle", "revision": 1}
-                }),
+                "rename_tab" => reply(()),
+                "create_tab" => reply(("w4:t2".to_owned(), "w4:p2".to_owned())),
                 other => panic!("unexpected {other}"),
             });
             let owner = OwnerOpen::Folder {
@@ -894,12 +866,12 @@ mod tests {
             assert_eq!(
                 herdr.methods(),
                 [
-                    "workspace.list",
-                    "workspace.create",
-                    "workspace.report_metadata",
-                    "tab.rename",
-                    "workspace.list",
-                    "tab.create"
+                    "workspace_tokens",
+                    "create_workspace",
+                    "report_workspace_token",
+                    "rename_tab",
+                    "workspace_tokens",
+                    "create_tab"
                 ]
             );
         }

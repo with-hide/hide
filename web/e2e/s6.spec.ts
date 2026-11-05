@@ -13,7 +13,7 @@ import path from "node:path";
 import { corePaneFocus, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { spawnChild } from "./fixture-agents";
-import { claudeProjects, writeFixtureTranscript } from "./herdr-fixture";
+import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
 import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { chooseLane, countSent, enterWorkspace, pinState, screenshot, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";

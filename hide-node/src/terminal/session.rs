@@ -1,15 +1,11 @@
 //! One pane's terminal session as the service holds it: the transport it
-//! was opened over, its reader and its writer. Two transports exist: the
-//! pinned Herdr's official `herdr terminal session` client, whose NDJSON
-//! lines [`Transport::lines`] reads and writes, and a pane's holder
-//! (`super::holder`), whose frames its own reader and writer speak. Control
-//! is writable; observe is concurrent and read-only. Dropping a session
-//! releases it and ends only what its transport started (D-20).
+//! was opened over, its reader and its writer. A pane's holder
+//! (`super::holder`) is the transport; its frames are what its reader and
+//! writer speak. Dropping a session releases it and ends only what its
+//! transport started (D-20).
 
 use std::collections::HashSet;
-use std::io::{self, BufRead, BufReader, Lines, Read, Write};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{SendError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Condvar, Mutex};
@@ -18,42 +14,25 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::Key;
 use hide_node_link::terminal::GridSize;
-use hide_platform::process::OwnedChild;
 use serde_json::json;
 
 use super::echo_timing::EchoClock;
-use super::protocol::{self, Mode, SessionEvent};
+use super::protocol::SessionEvent;
 
-/// Opens a pane's session; the node's own Herdr in production, a stand-in
-/// in tests, and beside it a pane's holder when the node runs them
-/// (`super::holder::PaneAttacher`).
+/// Opens a pane's session: a pane's holder in production
+/// (`super::holder::PaneAttacher`), a stand-in in tests.
 pub trait Attacher: Send + Sync {
-    /// Opens the pane's Herdr terminal session at `rows` by `cols`.
-    fn open(&self, pane_id: &str, mode: Mode, rows: u16, cols: u16)
-    -> Result<SessionParts, String>;
-
     /// Opens the pane's session over the transport it is held by. `size` is
     /// `None` only for a pane [`Attacher::keeps_own_size`] says keeps its
     /// own, which is attached at the size it has.
     fn open_transport(
         &self,
         pane_id: &str,
-        mode: Mode,
         size: Option<GridSize>,
-    ) -> Result<Transport, OpenFailure> {
-        let Some(size) = size else {
-            return Err(OpenFailure::retried(format!(
-                "Pane {pane_id} has no reported terminal size, so it cannot be attached"
-            )));
-        };
-        self.open(pane_id, mode, size.rows, size.cols)
-            .map(|parts| Transport::lines(parts, mode))
-            .map_err(OpenFailure::retried)
-    }
+    ) -> Result<Transport, OpenFailure>;
 
     /// Whether the pane keeps its own size and attaches at it with no size
-    /// from a view. A Herdr pane does not: Herdr sizes its PTY from the
-    /// attach, so a guessed size would cost a frame at the wrong grid.
+    /// from a view.
     fn keeps_own_size(&self, _pane_id: &str) -> bool {
         false
     }
@@ -125,10 +104,6 @@ pub enum Submissions {
     /// Whole, its gap kept at the program's terminal: a holder that names
     /// `Capability::Submit`.
     Whole,
-    /// Never: a Herdr session, whose terminal Herdr owns. The Herdr engine
-    /// types its own text through Herdr's `agent.prompt`, and a fork's
-    /// released keys go to it as they were typed.
-    AsTyped,
     /// Refused: a holder built before `Capability::Submit`. A submission for
     /// it is refused with nothing sent, and a fork's released keys are
     /// dropped and reported, since typed together a submit among them can
@@ -139,11 +114,7 @@ pub enum Submissions {
 /// An opened session as the service holds it.
 pub struct Transport {
     pub events: Box<dyn SessionEvents>,
-    /// The writer of a control session; `None` for a read-only one.
-    pub writer: Option<Box<dyn SessionWriter>>,
-    /// What stays open for the session's whole life and is never written:
-    /// an observer's stdin, whose end closing ends its child.
-    pub kept: Option<Box<dyn Send>>,
+    pub writer: Box<dyn SessionWriter>,
     pub cleanup: Cleanup,
     /// The pane's size as the transport found it, when it says.
     pub size: Option<GridSize>,
@@ -155,123 +126,15 @@ pub struct Transport {
 
 impl Transport {
     /// Ends an open that lost its generation, before another open may begin.
-    pub(super) fn close(self, pane: &str) {
+    pub(super) fn close(self) {
         let Self {
             events,
             writer,
-            kept,
             cleanup,
             ..
         } = self;
-        run_cleanup(cleanup, pane);
-        drop((events, writer, kept));
-    }
-
-    /// A Herdr session's NDJSON lines: its reader's lines are its events,
-    /// and in control mode its writer takes the input, resize, scroll and
-    /// release lines; an observer's writer is kept, never written.
-    pub fn lines(parts: SessionParts, mode: Mode) -> Self {
-        let SessionParts {
-            reader,
-            writer,
-            cleanup,
-        } = parts;
-        let (writer, kept) = match mode {
-            Mode::Control => (writer, None),
-            Mode::Observe => (None, writer),
-        };
-        Self {
-            events: Box::new(LineEvents(BufReader::new(reader).lines())),
-            writer: writer.map(|stdin| Box::new(LineWriter(stdin)) as Box<dyn SessionWriter>),
-            kept: kept.map(|stdin| Box::new(stdin) as Box<dyn Send>),
-            cleanup,
-            size: None,
-            reads_keys: false,
-            submissions: Submissions::AsTyped,
-        }
-    }
-}
-
-/// A Herdr session's NDJSON lines as events.
-struct LineEvents(Lines<BufReader<Box<dyn Read + Send>>>);
-
-impl SessionEvents for LineEvents {
-    fn next_event(&mut self) -> SessionEvent {
-        match self.0.next() {
-            None => SessionEvent::Closed { reason: None },
-            Some(Ok(line)) => {
-                protocol::parse_line(&line).unwrap_or_else(|message| SessionEvent::Closed {
-                    reason: Some(message),
-                })
-            }
-            Some(Err(error)) => SessionEvent::Closed {
-                reason: Some(format!("terminal session stream failed: {error}")),
-            },
-        }
-    }
-}
-
-/// A Herdr control session's stdin, written as NDJSON lines.
-struct LineWriter(Box<dyn Write + Send>);
-
-impl LineWriter {
-    fn line(&mut self, line: &str) -> io::Result<()> {
-        self.0.write_all(line.as_bytes())?;
-        self.0.flush()
-    }
-}
-
-impl SessionWriter for LineWriter {
-    fn input(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.line(&protocol::input_line(bytes))
-    }
-
-    /// Only the core's own engine types a paste, never into a Herdr
-    /// session.
-    fn paste(&mut self, _text: &[u8]) -> io::Result<()> {
-        Err(io::Error::other("a Herdr session takes no paste"))
-    }
-
-    /// Never sent: a Herdr session does not read named keys.
-    fn keys(&mut self, _keys: &[Key]) -> io::Result<()> {
-        Err(io::Error::other("a Herdr session takes no named keys"))
-    }
-
-    /// Never sent: a Herdr session takes no submission
-    /// ([`Submissions::AsTyped`]).
-    fn submit(&mut self, _submit: &hide_holder_protocol::Submit) -> io::Result<()> {
-        Err(io::Error::other("a Herdr session takes no submission"))
-    }
-
-    fn resize(&mut self, size: GridSize) -> io::Result<()> {
-        let line = protocol::resize_line(size.rows, size.cols).map_err(io::Error::other)?;
-        self.line(&line)
-    }
-
-    /// Herdr draws the whole screen again on a resize to the size it has.
-    fn redraw(&mut self, size: GridSize) -> io::Result<()> {
-        self.resize(size)
-    }
-
-    fn scroll(
-        &mut self,
-        lines: i32,
-        column: Option<u16>,
-        row: Option<u16>,
-        modifiers: u8,
-    ) -> io::Result<()> {
-        match protocol::scroll_line(lines, column, row, modifiers) {
-            Some(line) => self.line(&line),
-            None => Ok(()),
-        }
-    }
-
-    fn release(&mut self) -> io::Result<()> {
-        self.line(&protocol::release_line())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
+        run_cleanup(cleanup);
+        drop((events, writer));
     }
 }
 
@@ -354,98 +217,10 @@ impl Drop for ChildHold {
     }
 }
 
-/// What an open session hands the node: its output, its input in control
-/// mode, and what ends it.
-pub struct SessionParts {
-    pub reader: Box<dyn Read + Send>,
-    pub writer: Option<Box<dyn Write + Send>>,
-    pub cleanup: Cleanup,
-}
-
+/// What ends a session's transport once it is released.
 pub enum Cleanup {
-    Child(OwnedChild),
     Other(Box<dyn FnOnce() + Send>),
     None,
-}
-
-/// The node's Herdr, reached by the CLI `herdr terminal session` client.
-pub struct LocalAttacher {
-    herdr_bin: Option<PathBuf>,
-    socket_path: PathBuf,
-}
-
-impl LocalAttacher {
-    pub fn new(herdr_bin: Option<PathBuf>, socket_path: PathBuf) -> Self {
-        Self {
-            herdr_bin,
-            socket_path,
-        }
-    }
-}
-
-impl Attacher for LocalAttacher {
-    fn open(
-        &self,
-        pane_id: &str,
-        mode: Mode,
-        rows: u16,
-        cols: u16,
-    ) -> Result<SessionParts, String> {
-        let Some(herdr_bin) = self.herdr_bin.as_ref() else {
-            return Err(
-                "herdr binary was not found; install herdr or set its path in the app options"
-                    .to_owned(),
-            );
-        };
-        let mut command = Command::new(herdr_bin);
-        // Both modes get a stdin pipe: an observer never writes to it, but
-        // its end closing when this process dies, however it dies, is what
-        // ends the child (B20).
-        command
-            .args(protocol::session_arguments(mode, pane_id, rows, cols))
-            .env("HERDR_SOCKET_PATH", &self.socket_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let mut child = OwnedChild::spawn(&mut command).map_err(|error| {
-            format!(
-                "herdr terminal session {} could not be spawned: {error}",
-                mode.as_str()
-            )
-        })?;
-        let stdin = child
-            .take_stdin()
-            .ok_or_else(|| "terminal session stdin was not piped".to_owned())?;
-        let reader = child
-            .take_stdout()
-            .ok_or_else(|| "terminal session stdout was not piped".to_owned())?;
-        let writer: Option<Box<dyn Write + Send>> = match mode {
-            Mode::Control => Some(Box::new(stdin)),
-            // Kept open, never written, for the child's whole life.
-            Mode::Observe => Some(Box::new(ObserverStdin { _stdin: stdin })),
-        };
-        Ok(SessionParts {
-            reader: Box::new(reader),
-            writer,
-            cleanup: Cleanup::Child(child),
-        })
-    }
-}
-
-/// An observer's stdin: held so its end closes with this process, refused
-/// for any write.
-struct ObserverStdin {
-    _stdin: std::process::ChildStdin,
-}
-
-impl Write for ObserverStdin {
-    fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::other("an observer takes no input"))
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 /// Input a control session's writer holds unwritten at most: the cap D-18
@@ -594,12 +369,8 @@ struct Unwritten {
 /// A session the node holds for a pane.
 pub(super) struct Session {
     pub(super) generation: u64,
-    pub(super) mode: Mode,
     writer: Option<Sender<WriterCommand>>,
     unwritten: Arc<Unwritten>,
-    /// What the transport keeps open for the session's life (an observer's
-    /// stdin), closed with the session.
-    _kept: Option<Box<dyn Send>>,
     cleanup: Cleanup,
     /// Its child counted live until the reaper has seen it exit.
     child: Option<ChildHold>,
@@ -618,14 +389,12 @@ impl Session {
     pub(super) fn start(
         pane_id: &str,
         generation: u64,
-        mode: Mode,
         transport: Transport,
         on_write_failure: Box<dyn Fn(String) + Send>,
     ) -> Result<(Self, Box<dyn SessionEvents>), String> {
         let Transport {
             events,
             writer,
-            kept,
             cleanup,
             size: _,
             reads_keys,
@@ -633,33 +402,24 @@ impl Session {
         } = transport;
         let unwritten = Arc::new(Unwritten::default());
         let echo = Arc::new(EchoClock::new(pane_id));
-        let writer = match (mode, writer) {
-            (Mode::Control, Some(writer)) => match spawn_session_writer(
-                pane_id,
-                writer,
-                Arc::clone(&unwritten),
-                Arc::clone(&echo),
-                on_write_failure,
-            ) {
-                Ok(writer) => Some(writer),
-                Err(error) => {
-                    run_cleanup(cleanup, pane_id);
-                    return Err(error);
-                }
-            },
-            (Mode::Control, None) => {
-                run_cleanup(cleanup, pane_id);
-                return Err("terminal control stream has no writer".to_owned());
+        let writer = match spawn_session_writer(
+            pane_id,
+            writer,
+            Arc::clone(&unwritten),
+            Arc::clone(&echo),
+            on_write_failure,
+        ) {
+            Ok(writer) => writer,
+            Err(error) => {
+                run_cleanup(cleanup);
+                return Err(error);
             }
-            (Mode::Observe, _) => None,
         };
         Ok((
             Self {
                 generation,
-                mode,
-                writer,
+                writer: Some(writer),
                 unwritten,
-                _kept: kept,
                 cleanup,
                 child: None,
                 pane_id: pane_id.to_owned(),
@@ -835,23 +595,6 @@ impl Session {
     }
 }
 
-/// Starts the writer thread for a Herdr session's stdin.
-#[cfg(test)]
-fn spawn_writer(
-    pane_id: &str,
-    stdin: Box<dyn Write + Send>,
-    unwritten: Arc<Unwritten>,
-    on_failure: Box<dyn Fn(String) + Send>,
-) -> Result<Sender<WriterCommand>, String> {
-    spawn_session_writer(
-        pane_id,
-        Box::new(LineWriter(stdin)),
-        unwritten,
-        Arc::new(EchoClock::new(pane_id)),
-        on_failure,
-    )
-}
-
 fn spawn_session_writer(
     pane_id: &str,
     mut writer: Box<dyn SessionWriter>,
@@ -990,19 +733,15 @@ fn spawn_session_writer(
 /// message and a read failure are each the session closing, with the reason.
 pub(super) fn spawn_reader(
     pane_id: &str,
-    mode: Mode,
     mut events: Box<dyn SessionEvents>,
     mut on_event: impl FnMut(SessionEvent) -> bool + Send + 'static,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name(format!("hide-node-terminal-{}-{pane_id}", mode.as_str()))
+        .name(format!("hide-node-terminal-{pane_id}"))
         .spawn(move || {
             loop {
                 let event = events.next_event();
-                let closed = matches!(
-                    event,
-                    SessionEvent::Closed { .. } | SessionEvent::Ended { .. }
-                );
+                let closed = matches!(event, SessionEvent::Ended { .. });
                 if !on_event(event) || closed {
                     return;
                 }
@@ -1049,7 +788,7 @@ impl Drop for Session {
                     .unwrap_or_else(|e| e.into_inner())
                     .take()
                     .expect("one reaper");
-                run_cleanup(cleanup, &pane_id);
+                run_cleanup(cleanup);
                 drop(child);
             })
         {
@@ -1058,7 +797,7 @@ impl Drop for Session {
             if let Some(Reaping { cleanup, child }) =
                 reaping.lock().unwrap_or_else(|e| e.into_inner()).take()
             {
-                run_cleanup(cleanup, &self.pane_id);
+                run_cleanup(cleanup);
                 drop(child);
             }
             crate::diagnostic!(json!({
@@ -1076,52 +815,18 @@ struct Reaping {
     child: Option<ChildHold>,
 }
 
-fn run_cleanup(cleanup: Cleanup, pane_id: &str) {
+fn run_cleanup(cleanup: Cleanup) {
     match cleanup {
-        Cleanup::Child(mut child) => reap_child(&mut child, pane_id),
         Cleanup::Other(shutdown) => shutdown(),
         Cleanup::None => {}
     }
 }
 
-#[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn reap_child(child: &mut OwnedChild, pane_id: &str) {
-    for _ in 0..20 {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(error) => {
-                crate::diagnostic!(json!({
-                    "component": "terminal_session",
-                    "kind": "terminal.session_status_failed",
-                    "pane_id": pane_id,
-                    "message": error.to_string(),
-                }));
-                break;
-            }
-        }
-    }
-    if let Err(error) = child.kill_tree() {
-        crate::diagnostic!(json!({
-            "component": "terminal_session",
-            "kind": "terminal.session_kill_failed",
-            "pane_id": pane_id,
-            "message": error.to_string(),
-        }));
-    }
-    if let Err(error) = child.wait() {
-        crate::diagnostic!(json!({
-            "component": "terminal_session",
-            "kind": "terminal.session_wait_failed",
-            "pane_id": pane_id,
-            "message": error.to_string(),
-        }));
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::tests::{FakeEvents, FakeWriter};
     use super::*;
+    use std::io::Write;
     use std::sync::Mutex;
     use std::sync::mpsc::Receiver;
 
@@ -1146,6 +851,36 @@ mod tests {
                 .collect();
             let _ = self.flushed.send(lines);
             Ok(())
+        }
+    }
+
+    /// Starts the writer thread over a stand-in writer into `stdin`.
+    fn spawn_writer(
+        pane_id: &str,
+        stdin: Box<dyn Write + Send>,
+        unwritten: Arc<Unwritten>,
+        on_failure: Box<dyn Fn(String) + Send>,
+    ) -> Result<Sender<WriterCommand>, String> {
+        spawn_session_writer(
+            pane_id,
+            Box::new(FakeWriter(stdin)),
+            unwritten,
+            Arc::new(EchoClock::new(pane_id)),
+            on_failure,
+        )
+    }
+
+    /// A transport whose writer writes into `stdin` and whose events end at
+    /// once.
+    fn stand_in(stdin: Box<dyn Write + Send>) -> Transport {
+        let (_, events) = channel::<SessionEvent>();
+        Transport {
+            events: Box::new(FakeEvents(events)),
+            writer: Box::new(FakeWriter(stdin)),
+            cleanup: Cleanup::None,
+            size: None,
+            reads_keys: false,
+            submissions: Submissions::Refused,
         }
     }
 
@@ -1241,18 +976,10 @@ mod tests {
         let (session, _reader) = Session::start(
             "fixture:p1",
             1,
-            Mode::Control,
-            Transport::lines(
-                SessionParts {
-                    reader: Box::new(std::io::empty()),
-                    writer: Some(Box::new(Stalled {
-                        go: Arc::clone(&go),
-                        taken: Arc::clone(&taken),
-                    })),
-                    cleanup: Cleanup::None,
-                },
-                Mode::Control,
-            ),
+            stand_in(Box::new(Stalled {
+                go: Arc::clone(&go),
+                taken: Arc::clone(&taken),
+            })),
             Box::new(|_| {}),
         )
         .unwrap();
@@ -1331,18 +1058,10 @@ mod tests {
         let (session, _reader) = Session::start(
             "fixture:p1",
             1,
-            Mode::Control,
-            Transport::lines(
-                SessionParts {
-                    reader: Box::new(std::io::empty()),
-                    writer: Some(Box::new(Stalled {
-                        go: Arc::clone(&go),
-                        taken: Arc::default(),
-                    })),
-                    cleanup: Cleanup::None,
-                },
-                Mode::Control,
-            ),
+            stand_in(Box::new(Stalled {
+                go: Arc::clone(&go),
+                taken: Arc::default(),
+            })),
             Box::new(|_| {}),
         )
         .unwrap();
@@ -1354,26 +1073,6 @@ mod tests {
         refused_without_its_callback(session);
         *go.0.lock().unwrap() = true;
         go.1.notify_all();
-    }
-
-    #[test]
-    fn a_paste_into_a_read_only_session_does_not_call_back_under_the_lock() {
-        let (session, _reader) = Session::start(
-            "fixture:p1",
-            1,
-            Mode::Observe,
-            Transport::lines(
-                SessionParts {
-                    reader: Box::new(std::io::empty()),
-                    writer: None,
-                    cleanup: Cleanup::None,
-                },
-                Mode::Observe,
-            ),
-            Box::new(|_| {}),
-        )
-        .unwrap();
-        refused_without_its_callback(session);
     }
 
     #[test]

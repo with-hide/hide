@@ -626,7 +626,10 @@ mod tests {
         assert_eq!(facts.panes.len(), 1);
         lay(&mut facts, &mut payload("s-1"));
         lay(&mut facts, &mut empty);
-        assert!(facts.panes.is_empty(), "the agent Herdr listed is gone");
+        assert!(
+            facts.panes.is_empty(),
+            "the agent the engine listed is gone"
+        );
         facts.record("w1:p1", &report(Some("s-1"), None)).unwrap();
         let mut closed: SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [], "panes": []})).unwrap();

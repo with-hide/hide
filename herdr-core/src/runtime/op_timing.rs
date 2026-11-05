@@ -4,16 +4,11 @@
 //! another way.
 //!
 //! The stages, each in milliseconds after the request:
-//! - `herdr_ack`: Herdr answered the request.
 //! - `drawn`: the snapshot that first showed the expected layout was read
-//!   for the browser: a layout drawn ahead of Herdr, or, for a created pane,
-//!   the engine's own layout already holding it (and for a new tab, showing
-//!   its tab), which is how the core's own engine shows one, so the stage
-//!   reads the same on both engines.
-//! - `first_event` / `layout_event`: the first Herdr event, and the first
-//!   layout event, naming the operation's tab or panes reached the
-//!   coordinator.
-//! - `applied`: Herdr's own layout showing the change was ingested.
+//!   for the browser: a layout drawn ahead of the engine, or, for a created
+//!   pane, the engine's own layout already holding it (and for a new tab,
+//!   showing its tab).
+//! - `applied`: the engine's own layout showing the change was ingested.
 //! - `sent`: the snapshot carrying that layout was read for the browser.
 //! - `first_frame`: the first terminal frame of the pane the operation is
 //!   about: any frame of a created pane, or for the pane whose grid the
@@ -22,8 +17,7 @@
 //!   before `applied`. A change that leaves that pane's grid where it was
 //!   sends no resize and gets no frame, so its record ends `incomplete`.
 //!
-//! Herdr's share is `layout_event - herdr_ack`; Hide's is the rest. The record
-//! carries ids and times only, never terminal content or paths. It is bounded:
+//! The record carries ids and times only, never terminal content or paths. It is bounded:
 //! at most `OP_TIMING_LIMIT` open records, each closed `OP_TIMING_EXPIRY` after
 //! its request at the latest.
 
@@ -35,31 +29,17 @@ pub(super) const OP_TIMING_LIMIT: usize = 64;
 // many watches.
 const _: () = assert!(OP_TIMING_LIMIT <= hide_node_link::terminal::MAX_FRAME_WATCHES);
 const OP_TIMING_EXPIRY: Duration = Duration::from_secs(10);
-/// Herdr events kept for an operation that learns its tab or pane only from
-/// the answer, when the event can arrive first.
-const ARRIVAL_HISTORY: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Stage {
-    HerdrAck,
     Drawn,
-    FirstEvent,
-    LayoutEvent,
     Applied,
     Sent,
     FirstFrame,
 }
 
 impl Stage {
-    const ALL: [Stage; 7] = [
-        Stage::HerdrAck,
-        Stage::Drawn,
-        Stage::FirstEvent,
-        Stage::LayoutEvent,
-        Stage::Applied,
-        Stage::Sent,
-        Stage::FirstFrame,
-    ];
+    const ALL: [Stage; 4] = [Stage::Drawn, Stage::Applied, Stage::Sent, Stage::FirstFrame];
 
     fn index(self) -> usize {
         self as usize
@@ -67,25 +47,12 @@ impl Stage {
 
     fn field(self) -> &'static str {
         match self {
-            Stage::HerdrAck => "herdr_ack_ms",
             Stage::Drawn => "drawn_ms",
-            Stage::FirstEvent => "first_event_ms",
-            Stage::LayoutEvent => "layout_event_ms",
             Stage::Applied => "applied_ms",
             Stage::Sent => "sent_ms",
             Stage::FirstFrame => "first_frame_ms",
         }
     }
-}
-
-/// A Herdr event as the coordinator received it: which tab or pane it
-/// names, whether it carries a layout, and when it arrived.
-#[derive(Clone, Debug)]
-pub(crate) struct HerdrArrival {
-    pub(crate) tab_id: Option<String>,
-    pub(crate) pane_id: Option<String>,
-    pub(crate) layout: bool,
-    pub(crate) received_at: Instant,
 }
 
 #[derive(Debug)]
@@ -102,7 +69,7 @@ struct OpTiming {
     resize_sent: bool,
     requested_at: Instant,
     requested_at_unix_ms: u64,
-    stages: [Option<Instant>; 7],
+    stages: [Option<Instant>; 4],
     /// The prediction is on screen but not yet read for the browser.
     drawn_pending: bool,
 }
@@ -117,27 +84,6 @@ impl OpTiming {
 
     fn has(&self, stage: Stage) -> bool {
         self.stages[stage.index()].is_some()
-    }
-
-    fn names(&self, arrival: &HerdrArrival) -> bool {
-        arrival
-            .tab_id
-            .as_deref()
-            .is_some_and(|tab| self.tab_id.as_deref() == Some(tab))
-            || arrival
-                .pane_id
-                .as_deref()
-                .is_some_and(|pane| self.pane_ids.iter().any(|id| id == pane))
-    }
-
-    fn observe(&mut self, arrival: &HerdrArrival) {
-        if arrival.received_at < self.requested_at || !self.names(arrival) {
-            return;
-        }
-        self.stamp(Stage::FirstEvent, arrival.received_at);
-        if arrival.layout {
-            self.stamp(Stage::LayoutEvent, arrival.received_at);
-        }
     }
 
     fn emit(&self, outcome: &str) {
@@ -168,7 +114,6 @@ impl OpTiming {
 #[derive(Debug, Default)]
 pub(super) struct OpTimings {
     open: VecDeque<OpTiming>,
-    arrivals: VecDeque<HerdrArrival>,
 }
 
 impl OpTimings {
@@ -200,7 +145,7 @@ impl OpTimings {
             resize_sent: false,
             requested_at: now,
             requested_at_unix_ms: now_unix_ms,
-            stages: [None; 7],
+            stages: [None; 4],
             drawn_pending: false,
         });
     }
@@ -242,10 +187,8 @@ impl OpTimings {
         }
     }
 
-    /// Names the tab and the pane the answer revealed, and reads the events
-    /// already received for them.
+    /// Names the tab and the pane the answer revealed.
     pub(super) fn learn(&mut self, id: &str, tab_id: Option<&str>, pane_id: Option<&str>) {
-        let arrivals = std::mem::take(&mut self.arrivals);
         if let Some(record) = self.record(id) {
             if let Some(tab) = tab_id {
                 record.tab_id = Some(tab.to_owned());
@@ -255,11 +198,7 @@ impl OpTimings {
             {
                 record.pane_ids.push(pane.to_owned());
             }
-            for arrival in &arrivals {
-                record.observe(arrival);
-            }
         }
-        self.arrivals = arrivals;
     }
 
     /// Sets the pane whose first frame ends the record: any frame of a
@@ -293,19 +232,7 @@ impl OpTimings {
         started
     }
 
-    pub(super) fn observe_arrivals(&mut self, arrivals: &[HerdrArrival]) {
-        for arrival in arrivals {
-            for record in &mut self.open {
-                record.observe(arrival);
-            }
-            if self.arrivals.len() >= ARRIVAL_HISTORY {
-                self.arrivals.pop_front();
-            }
-            self.arrivals.push_back(arrival.clone());
-        }
-    }
-
-    /// Herdr's session now lays out these tabs: a tab creation waiting for
+    /// The engine's session now lays out these tabs: a tab creation waiting for
     /// its tab's layout is applied.
     pub(super) fn applied_tabs<'a>(&mut self, tab_ids: impl Iterator<Item = &'a str>, at: Instant) {
         if !self.open.iter().any(|record| record.kind == "tab.create") {
@@ -420,10 +347,6 @@ pub(super) fn pane_close_op_id(close_key: &str) -> String {
 }
 
 impl super::Runtime {
-    pub(crate) fn observe_herdr_arrivals(&mut self, arrivals: &[HerdrArrival]) {
-        self.op_timings.observe_arrivals(arrivals);
-    }
-
     pub(super) fn begin_op_timing(
         &mut self,
         id: &str,
@@ -461,43 +384,6 @@ impl super::Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn arrival(tab: Option<&str>, pane: Option<&str>, layout: bool, at: Instant) -> HerdrArrival {
-        HerdrArrival {
-            tab_id: tab.map(str::to_owned),
-            pane_id: pane.map(str::to_owned),
-            layout,
-            received_at: at,
-        }
-    }
-
-    #[test]
-    fn an_event_that_arrives_before_the_answer_counts_once_the_answer_names_the_tab() {
-        let start = Instant::now();
-        let mut timings = OpTimings::default();
-        timings.begin("tab-create-1", "tab.create", None, &[], start, 0);
-        timings.observe_arrivals(&[arrival(
-            Some("w1:t2"),
-            None,
-            true,
-            start + Duration::from_millis(9),
-        )]);
-        timings.stamp(
-            "tab-create-1",
-            Stage::HerdrAck,
-            start + Duration::from_millis(12),
-        );
-        timings.learn("tab-create-1", Some("w1:t2"), Some("w1:p3"));
-        let record = timings.record("tab-create-1").unwrap();
-        assert_eq!(
-            record.stages[Stage::LayoutEvent.index()],
-            Some(start + Duration::from_millis(9))
-        );
-        assert_eq!(
-            record.stages[Stage::FirstEvent.index()],
-            Some(start + Duration::from_millis(9))
-        );
-    }
 
     #[test]
     fn a_record_ends_once_applied_sent_and_its_panes_frame_has_landed() {

@@ -81,9 +81,6 @@ jobs:
     with:
       lane: nightly-macos
       runner: macos-15
-      herdr-platform: macos-aarch64
-      # And once more on the core's own engine (PRD engine-bundle-3-core-owns D-14).
-      own-engine: true
       shards: 1
       grep: "@platform"
 
@@ -98,8 +95,6 @@ jobs:
     with:
       lane: nightly-windows
       runner: windows-latest
-      herdr-platform: windows-x86_64
-      own-engine: true
       shards: 1
       grep: "@platform"
 
@@ -116,7 +111,6 @@ jobs:
       contents: read
     with:
       runner: macos-15
-      herdr-platform: macos-aarch64
 
   # The agy contract on all three systems (one system's on that system's hand
   # run); a pull request runs only its Windows leg.
@@ -193,14 +187,11 @@ jobs:
     with:
       lane: nightly-${{ matrix.system }}
       runner: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-      herdr-platform: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
       # The whole suite on macOS, in the two shards `pr.yml` gives it, the
       # @platform tests elsewhere, in one.
       shards: ${{ matrix.system == 'macos' && 2 || 1 }}
       grep: ${{ matrix.system != 'macos' && '@platform' || '' }}
       keep-screenshots: ${{ matrix.system != 'macos' }}
-      # Windows CI Job forbids holder breakaway; b4-default owns its lifetime fix.
-      own-engine: ${{ matrix.system != 'windows' }}
 
   # One fixed fixture measured against the release hided on macOS
   # (docs/PERFORMANCE_TESTING.md, "The nightly performance lane"). A failed

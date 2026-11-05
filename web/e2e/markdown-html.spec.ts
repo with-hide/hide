@@ -97,7 +97,7 @@ test("the repository README opens as drawn HTML and shows a block source under t
     await expect.poll(() => logo.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
     await expect(logo).toHaveAttribute("src", /^blob:/);
     // The file opens at its first line, with the logo in view, once it and the badges have loaded.
-    await expect(page.locator('.cm-md-html img[alt="Built on Herdr"]')).toHaveJSProperty("complete", true);
+    await expect(page.locator('.cm-md-html img[alt="macOS, Windows and Linux"]')).toHaveJSProperty("complete", true);
     expect(await page.locator(".cm-scroller").first().evaluate((element) => element.scrollTop)).toBe(0);
     await expect(logo).toBeInViewport();
     await expect(page.locator(".cm-content")).toContainText("Run more agents. Hold less.");
@@ -166,7 +166,7 @@ test("a badge that cannot be reached ends in its alt text and the logo still dra
   await page.route("https://img.shields.io/github/**", () => {});
   try {
     await page.locator(`[data-explorer-row="${stack.repo}/README.md"]`).click();
-    for (const alt of ["Latest release", "Functional Source License 1.1", "macOS, Windows and Linux", "Built on Herdr"]) {
+    for (const alt of ["Latest release", "Functional Source License 1.1", "macOS, Windows and Linux"]) {
       await expect(page.locator(".cm-md-alt[data-state='failed']", { hasText: alt })).toBeVisible({ timeout: 30_000 });
     }
     const logo = page.locator('.cm-md-html img[alt="hide owl app icon"]');
