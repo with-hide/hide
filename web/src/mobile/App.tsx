@@ -10,7 +10,10 @@ import { Button } from "../components/ui/button";
 import { closeDetail, openStartSheet, pairNow } from "./connection";
 import { Detail } from "./Detail";
 import { GroupRows } from "./ListRows";
+import { MissionDetail } from "./MissionDetail";
+import { MissionsScreen } from "./MissionsScreen";
 import { StartSheet } from "./StartSheet";
+import { TabBar } from "./TabBar";
 import {
   GROUP_TITLE,
   REFUSAL_NOTICE,
@@ -32,11 +35,16 @@ export function App() {
   const detail = usePhone((s) => s.detail);
   const name = usePhone((s) => s.macName);
   const deviceProtocol = usePhone((s) => s.deviceProtocol);
+  const tab = usePhone((s) => s.tab);
+  const missionOpen = usePhone((s) => s.missionOpen);
   if (screen === "version") return <VersionScreen t={t} name={name} protocol={deviceProtocol} app={String(PHONE_PROTOCOL)} />;
   if (screen === "pair") return <PairScreen />;
   if (screen === "refused") return <Guidance refused />;
   if (screen === "unpaired") return <Guidance refused={false} />;
-  return detail ? <Detail onBack={closeDetail} /> : <ListScreen />;
+  // A worker or a Conductor opened from a mission step is the agent's own detail, on either tab (B36).
+  if (detail) return <Detail onBack={closeDetail} />;
+  if (tab === "missions") return missionOpen ? <MissionDetail /> : <MissionsScreen />;
+  return <ListScreen />;
 }
 
 /** The page the QR opens (B11). */
@@ -104,7 +112,7 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
   }, [groups, connected]);
   const dim = unreachable && !connected;
   return (
-    <main className="phone-safe-bottom flex min-h-full flex-col">
+    <main className="flex min-h-full flex-col">
       <header className="phone-safe-top px-xl" data-phone-connected={connected ? "true" : "false"}>
         <div className="flex items-center justify-between pt-lg">
           <h1 className="text-headline font-semibold text-foreground">hide</h1>
@@ -158,6 +166,7 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
           );
         })}
       </div>
+      <TabBar active="agents" />
       <StartSheet />
     </main>
   );

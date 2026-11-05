@@ -8,7 +8,8 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, LineMode, RowMark, SleepingSession } from "../snapshot";
+import type { WorkerEscalation } from "../missions";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -92,6 +93,34 @@ export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
   }
   return all;
 }
+
+/**
+ * One step of a mission as the phone receives it (`hided/src/mobile/missions.rs`): what the shared mission rules read (`MissionNodeBrief`), the
+ * worker's kind and row, and the escalation the core raised for its worker. Nothing else of the core's node reaches the phone.
+ */
+export type PhoneMissionNode = MissionNodeBrief & {
+  delivery: MissionDelivery | null;
+  base_pr: number | null;
+  stage: number | null;
+  worker_agent: string | null;
+  /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
+  agent: AgentKey | null;
+  escalation: WorkerEscalation | null;
+};
+
+/** A mission as the phone receives it: the shared rules' `MissionBrief`, with what the two screens draw. */
+export type PhoneMission = MissionBrief<PhoneMissionNode> & {
+  title: string;
+  device_id: string;
+  /** The device a mission away from the paired Mac runs on; null on the Mac. */
+  device_label: string | null;
+  question: MissionQuestion | null;
+  answer: MissionAnswer | null;
+  answer_failed: MissionAnswerFailure | null;
+  conductor: { present: boolean; takes_answers: boolean; name: string; agent_kind: string; agent: AgentKey | null };
+  started_at_unix_ms: number | null;
+  stale: boolean;
+};
 
 export type Notifications = "on" | "off" | "unasked";
 
@@ -180,6 +209,10 @@ export type ServerFrame =
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.
    */
   | { type: "agents"; groups: AgentGroup[]; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
+  /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read. */
+  | { type: "missions"; items: PhoneMission[]; failed: boolean }
+  /** hided's answer to `answer_mission`; what the core does with it comes back on the mission itself. */
+  | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean }
   | {
       type: "conversation";
@@ -226,6 +259,8 @@ export type PhoneMessage =
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
+  /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
+  | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   | { type: "start_sheet"; open: boolean }
   | { type: "start_agent"; request_id: string; text: string; target: string; kind: StartKind; model?: string }
   | { type: "push_subscription"; subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }
@@ -248,7 +283,7 @@ export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
 type LimitKey = "mobile.input.tooLong" | "mobile.start.tooLong" | "mobile.refusal.phoneLimit";
 
 /** The other input, refusal, row and start sentences carry no value. */
-type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}`>, LimitKey>;
+type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}`>, LimitKey>;
 
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
@@ -312,6 +347,20 @@ export function inputFailure(reason: string | null): Notice {
       return { key: "mobile.input.offline" };
     default:
       return { key: "mobile.input.failed" };
+  }
+}
+
+/** The line under a mission's answer for one hided refused or the connection lost (B35); a changed question, a missing Conductor and a lost device come back on the mission, in the desktop's words. */
+export function missionAnswerFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "in_flight":
+      return { key: "mobile.mission.answer.inFlight" };
+    case "gone":
+      return { key: "mobile.mission.answer.gone" };
+    case "offline":
+      return { key: "mobile.mission.answer.offline" };
+    default:
+      return { key: "mobile.mission.answer.failed" };
   }
 }
 

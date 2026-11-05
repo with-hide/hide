@@ -13,6 +13,7 @@ import {
   inputFailure,
   listedAgents,
   macNameOf,
+  missionAnswerFailure,
   parseFragment,
   refusalOf,
   replyProblem,
@@ -23,6 +24,7 @@ import {
   type DetailView,
   type LookRow,
   type PhoneMessage,
+  type PhoneMission,
   type QuickKey,
   type ServerFrame,
 } from "./protocol";
@@ -286,6 +288,10 @@ function connect(): void {
       onStartResult(frame);
       return;
     }
+    if (frame.type === "mission_result") {
+      onMissionResult(frame);
+      return;
+    }
     if (frame.type === "sleep_result") {
       if (usePhone.getState().sleepAction?.requestId === frame.request_id) clearSleepTimer();
       applyFrame(frame);
@@ -314,6 +320,7 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   const state = usePhone.getState();
   failPendingSleep();
   failLoadingLook();
+  if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   patch({ connected: false, unreachable: !refused || state.refusal === "mobile_off" });
@@ -478,6 +485,51 @@ export function actOnSleepingSession(sleepId: string, type: "wake_sleeping_sessi
 export function wakeAgent(key: AgentKey, fresh = false): void {
   const requestId = newRequestId();
   sendSleepCommand(sleepTarget(key), requestId, { type: "wake_agent", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, ...(fresh ? { fresh } : {}) });
+}
+
+/** What the decision's answer sends: a choice counted from 1, a written line, or the desktop's own "send again" for one typed without confirmation. */
+export type MissionAnswerChoice = { option: number } | { text: string } | { resend: true };
+
+/** An answer whose outcome is unknown keeps its request id, so a resend of the same press lands once (B35). */
+let lastMissionAnswer: { key: string; requestId: string } | null = null;
+
+/**
+ * The operator's answer to a mission's decision: the desktop's `mission_answer`, by request id. The page draws it sent until the core keeps it,
+ * refuses it, or asks something else; a refusal the operator can act on comes back on the mission, in the desktop's words.
+ */
+export function answerMission(mission: PhoneMission, choice: MissionAnswerChoice, words: string): boolean {
+  const state = usePhone.getState();
+  if (state.missionAnswer) return false;
+  const key = mission.question?.key ?? 0;
+  const intent = JSON.stringify([mission.id, key, choice]);
+  const requestId = lastMissionAnswer?.key === intent ? lastMissionAnswer.requestId : newRequestId();
+  lastMissionAnswer = { key: intent, requestId };
+  const sent = send({ type: "answer_mission", request_id: requestId, mission: mission.id, key, ...choice });
+  patch(sent
+    ? { missionAnswer: { requestId, mission: mission.id, pressed: { key, text: words, failed: mission.answer_failed, resend: "resend" in choice } }, missionAnswerError: null }
+    : { missionAnswerError: { mission: mission.id, notice: missionAnswerFailure("offline") } });
+  return sent;
+}
+
+/** Drops the sent answer's own drawing once the core's state stands for it. */
+export function settleMissionAnswer(): void {
+  patch({ missionAnswer: null });
+}
+
+function onMissionResult(frame: Extract<ServerFrame, { type: "mission_result" }>): void {
+  const sent = usePhone.getState().missionAnswer;
+  // Only the answer to the press this page is waiting on.
+  if (!sent || frame.request_id !== sent.requestId) return;
+  if (!frame.ok) {
+    // Nothing reached the core: the text stays in its field and the same press may go again.
+    lastMissionAnswer = null;
+    patch({ missionAnswer: null, missionAnswerError: { mission: sent.mission, notice: missionAnswerFailure(frame.reason) } });
+    return;
+  }
+  lastMissionAnswer = null;
+  const drafts = { ...usePhone.getState().missionDrafts };
+  delete drafts[sent.mission];
+  patch({ missionDrafts: drafts, missionAnswerError: null });
 }
 
 /** Sends a reply with Enter after it; the caller clears its field only on success (B26, B27). */

@@ -326,3 +326,29 @@ test.describe("Korean phone screens", () => {
     await expect(trigger).toBeFocused();
   });
 });
+
+test("the missions tab lists a mission, and its answer reaches the device as one request that a refusal does not lose", async ({ page, relay }) => {
+  await pair(page, relay);
+  await expect(page.locator('[data-phone-tab="missions"]')).toHaveAttribute("data-phone-tab-count", "1");
+  await page.locator('[data-phone-tab="missions"]').click();
+  await expect(page.locator('[data-phone-mission-group="turn"] [data-phone-mission="mission-one"]')).toContainText("Ship the release");
+  await expect(page.locator("[data-phone-tabs]")).toBeVisible();
+  await page.locator('[data-phone-mission="mission-one"]').click();
+  await expect(page.locator("[data-phone-tabs]")).toHaveCount(0);
+  await expect(page.locator("[data-phone-question]")).toHaveText("Sign the build?");
+
+  // A refusal comes back in words, the written answer stays, and the same press goes again.
+  relay.state.refuseMission = "gone";
+  await page.locator("[data-phone-answer-input]").fill("sign it after lunch");
+  await page.locator("[data-phone-answer-send]").click();
+  await expect(page.locator("[data-phone-answer-error]")).toContainText("no longer open");
+  await expect(page.locator("[data-phone-answer-input]")).toHaveValue("sign it after lunch");
+
+  relay.state.refuseMission = "";
+  await page.locator('[data-phone-option="1"]').click();
+  await expect(page.locator("[data-phone-decision]")).toHaveAttribute("data-phone-decision", "sending");
+  const answers = () => relay.received.filter((frame) => frame.type === "answer_mission");
+  await expect.poll(() => answers().length).toBe(2);
+  expect(answers()).toMatchObject([{ mission: "mission-one", key: 2, text: "sign it after lunch" }, { mission: "mission-one", key: 2, option: 1 }]);
+  expect(answers()[0]!.request_id).not.toBe(answers()[1]!.request_id);
+});

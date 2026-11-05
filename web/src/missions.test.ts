@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords } from "./missions";
+import { attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -406,13 +406,13 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
       // A blocked label its Conductor can handle stays on the card.
       p3: { request: { verb: "blocked", verb_since_unix_ms: 1, line: "Needs a token", end: "blocked", request: null, later_by: null, pull_requests: [] } },
     };
-    const row = (n: MissionNode) => (n.pane_id ? ((rows[n.pane_id] as AgentRow | undefined) ?? null) : null);
+    const row = (n: MissionNode) => workerEscalation(n.pane_id ? (rows[n.pane_id] as AgentRow | undefined) : null);
     const items = turnItems(mission("m", { decision: "Rail or slot?", nodes }), row);
     expect(items.map((item) => item.kind)).toEqual(["decision", "attention", "worker_blocked"]);
     expect(items[1]).toMatchObject({ node: { key: "outside" }, attention: { reason: "pr_closed", pr: 1232 } });
     expect(items[2]).toMatchObject({ node: { key: "api" }, cause: "child_blocked", line: "Login expired" });
     const raisedOnly = { ...rows.p2!, request: undefined };
-    expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => raisedOnly as AgentRow)[0]).toMatchObject({ kind: "worker_blocked", line: null });
+    expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => workerEscalation(raisedOnly as AgentRow))[0]).toMatchObject({ kind: "worker_blocked", line: null });
   });
 
   it("lists what waits for main in the Conductor's merge order while the mission waits to merge, a branch-only one as a join", () => {

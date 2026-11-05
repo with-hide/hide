@@ -299,6 +299,8 @@ async fn relay_pairs_encrypts_reconnects_scopes_revokes_and_stops() {
     )
     .await;
     receive(&mut device, &mut second, "agents").await;
+    // A connection's first list is followed by the missions frame, so it is read before the next message is judged.
+    receive(&mut device, &mut second, "missions").await;
     // Socket teardown must retain the already applied reply's request record.
     assert!(matches!(
         running.mobile.reserve_input(phone_id, "lost-answer"),

@@ -1,6 +1,7 @@
 import { CheckIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { CellTone, HeadCell } from "../missions";
+import type { MissionStatus } from "../snapshot";
 import { cn } from "../lib/utils";
 
 // One colour per node state (PRD mission-plan-visibility D-11, B35): a chip's
@@ -37,6 +38,15 @@ export const TONE_TEXT: Record<CellTone, string> = {
   hold: "text-mission-hold",
   waiting: "text-muted-foreground",
   cancelled: "text-mission-cancelled",
+};
+
+/** A mission state's pill colours, the same on the map's head and in both lists. */
+export const STATE_PILL_TONE: Record<MissionStatus, string> = {
+  planning: "bg-muted text-muted-foreground",
+  running: "bg-mission-working/15 text-mission-working",
+  merge_wait: "bg-mission-hold/15 text-mission-hold",
+  done: "bg-muted text-muted-foreground",
+  cancelled: "bg-muted text-mission-cancelled",
 };
 
 /** Past this many, a bar draws each run of one state as one stretch instead of a cell per item. */

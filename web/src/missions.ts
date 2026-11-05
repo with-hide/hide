@@ -10,14 +10,14 @@ import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
 }
 
 /** Whether a mission is still the Conductor's to carry: planned, running or waiting on a merge. */
-export function missionOpen(mission: Mission): boolean {
+export function missionOpen(mission: Pick<Mission, "status">): boolean {
   return mission.status === "planning" || mission.status === "running" || mission.status === "merge_wait";
 }
 
@@ -50,7 +50,7 @@ export function missionOfPane(rest: SnapshotRest | null | undefined, agents: Age
 }
 
 /** What the record counts (B21): done nodes of those still in the plan, and the ones dropped. */
-export function missionCounts(mission: Mission): { done: number; total: number; dropped: number } {
+export function missionCounts(mission: { nodes: readonly Pick<MissionNode, "status">[] }): { done: number; total: number; dropped: number } {
   const dropped = mission.nodes.filter((node) => node.status === "dropped").length;
   return { done: mission.nodes.filter((node) => node.status === "done").length, total: mission.nodes.length - dropped, dropped };
 }
@@ -126,7 +126,7 @@ export const STAGE_STEPS = 4;
  * listed, so a node reads as its agent does everywhere; else the node's
  * state, a node that waits on another dashed.
  */
-export function nodeMark(node: MissionNode, worker: RowMark | null): RowMark {
+export function nodeMark(node: Pick<MissionNode, "status" | "blocked" | "agent_runtime">, worker: RowMark | null): RowMark {
   // A working node whose worker Hide put to sleep is not at work, row or none.
   if (workerAsleep(node)) return "asleep";
   if (worker && node.status === "working") return worker;
@@ -200,7 +200,7 @@ function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageK
  */
 export type NodeTone = "done" | "working" | "hold" | "waiting" | "cancelled" | "dropped";
 
-export function nodeTone(mission: Mission, node: MissionNode): NodeTone {
+export function nodeTone(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status" | "blocked" | "attention">): NodeTone {
   if (node.status === "dropped") return "dropped";
   if (mission.status === "cancelled" && node.status !== "done") return "cancelled";
   if (openAttention(mission, node)) return "hold";
@@ -222,12 +222,12 @@ export function nodeTone(mission: Mission, node: MissionNode): NodeTone {
 export type CellTone = Exclude<NodeTone, "dropped"> | "review";
 
 /** The nodes top down by what they wait on, a dropped node where it stood (B17). */
-export function orderedNodes(mission: Mission): MissionNode[] {
+export function orderedNodes<N extends MissionNodeBrief>(mission: { nodes: readonly N[] }): N[] {
   return orderByDependencies(mission.nodes, (node) => node.key, (node) => node.depends_on).map(({ item }) => item);
 }
 
 /** The chip's and the head's bar (B8, B24): one cell per node in the plan, in order. */
-export function missionCells(mission: Mission): CellTone[] {
+export function missionCells(mission: MissionBrief): CellTone[] {
   return orderedNodes(mission).flatMap((node) => {
     const tone = nodeTone(mission, node);
     return tone === "dropped" ? [] : [tone];
@@ -271,7 +271,7 @@ export function missionToneOf(status: Mission["status"], deciding: boolean): Cel
 }
 
 /** The nodes a worker is at now, in order (B9, B10); one whose worker sleeps is not. */
-export function liveNodes(mission: Mission): MissionNode[] {
+export function liveNodes<N extends MissionNodeBrief>(mission: { nodes: readonly N[] }): N[] {
   return orderedNodes(mission).filter((node) => node.status === "working" && !workerAsleep(node));
 }
 
@@ -281,9 +281,9 @@ export function liveNodes(mission: Mission): MissionNode[] {
  * that waits on someone is in the first group only, and a node not started
  * or dropped is in none.
  */
-export function summaryGroups(mission: Mission): { attention: MissionNode[]; working: MissionNode[]; done: MissionNode[] } {
+export function summaryGroups<N extends MissionNodeBrief>(mission: Pick<Mission, "status"> & { nodes: readonly N[] }): { attention: N[]; working: N[]; done: N[] } {
   const nodes = orderedNodes(mission).filter((node) => node.status !== "dropped");
-  const raised = (node: MissionNode) => openAttention(mission, node) !== null;
+  const raised = (node: N) => openAttention(mission, node) !== null;
   return {
     attention: nodes.filter(raised),
     working: nodes.filter((node) => !raised(node) && node.status === "working"),
@@ -315,7 +315,7 @@ const PR_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.p
 const DIRECT_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.check", "mission.stage.review", "mission.stage.main"];
 
 /** Where a node's work is, named (B10): a change node's step of four, else its kind's one word. */
-export function stageWord(node: MissionNode): MessageKey {
+export function stageWord(node: Pick<MissionNode, "kind" | "delivery" | "stage">): MessageKey {
   if (node.kind === "research") return "mission.stage.research";
   if (node.kind === "verify") return "mission.stage.verify";
   const stages = node.delivery === "direct" ? DIRECT_STAGES : PR_STAGES;
@@ -389,7 +389,7 @@ export type NodeLook = "waiting" | "working" | "done" | "external" | "cancelled"
  * answer of an agent's life (`agent_runtime`, as `hide agent show` gives
  * it): nothing works it until a letter wakes it.
  */
-export function workerAsleep(node: MissionNode): boolean {
+export function workerAsleep(node: Pick<MissionNode, "status" | "agent_runtime">): boolean {
   return node.status === "working" && node.agent_runtime === "asleep";
 }
 
@@ -566,7 +566,7 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
 }
 
 /** The changes left to merge or join, in the order the core gives them (B18, B25). */
-export function landingOrder(mission: Mission): MissionNode[] {
+export function landingOrder<N extends MissionNodeBrief>(mission: { nodes: readonly N[]; landing_order: readonly string[] }): N[] {
   const byKey = new Map(mission.nodes.map((node) => [node.key, node]));
   return mission.landing_order.flatMap((key) => {
     const node = byKey.get(key);
@@ -585,16 +585,27 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
  * waits for main. What waits on the Conductor stays on its card, and a
  * finished or cancelled mission has nothing here.
  */
-export type TurnItem =
+export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "decision" }
   | { kind: "takeover" }
-  | { kind: "attention"; node: MissionNode; attention: MissionAttention }
-  | { kind: "worker_blocked"; node: MissionNode; cause: EscalationCause; line: string | null }
-  | { kind: "landing"; nodes: MissionNode[]; git: boolean };
+  | { kind: "attention"; node: N; attention: MissionAttention }
+  | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
+  | { kind: "landing"; nodes: N[]; git: boolean };
 
-export function turnItems(mission: Mission, workerRow: (node: MissionNode) => AgentRow | null): TurnItem[] {
+/** A worker row the core raised past its parent: the cause, and the line its blocked turn left. */
+export type WorkerEscalation = { cause: EscalationCause; line: string | null };
+
+/** The escalation of a node's worker row, as the `내 차례` rule reads it; none for a row that was not raised. */
+export function workerEscalation(row: Pick<AgentRow, "escalation" | "request"> | null | undefined): WorkerEscalation | null {
+  if (!row?.escalation) return null;
+  const request = row.request;
+  return { cause: row.escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null };
+}
+
+/** `escalationOf` answers for a node's worker: the desktop reads its row, the phone the escalation its core sent with the node. */
+export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, escalationOf: (node: N) => WorkerEscalation | null): TurnItem<N>[] {
   if (!missionOpen(mission)) return [];
-  const items: TurnItem[] = [];
+  const items: TurnItem<N>[] = [];
   if (mission.decision) items.push({ kind: "decision" });
   else if (!mission.conductor.present) items.push({ kind: "takeover" });
   for (const node of orderedNodes(mission)) {
@@ -602,11 +613,8 @@ export function turnItems(mission: Mission, workerRow: (node: MissionNode) => Ag
     if (attention?.to === "operator") items.push({ kind: "attention", node, attention });
   }
   for (const node of orderedNodes(mission)) {
-    const escalation = node.status === "working" ? workerRow(node)?.escalation : null;
-    if (escalation) {
-      const request = workerRow(node)?.request;
-      items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null });
-    }
+    const escalation = node.status === "working" ? escalationOf(node) : null;
+    if (escalation) items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
   }
   if (mission.status === "merge_wait") {
     const nodes = landingOrder(mission);
@@ -698,7 +706,7 @@ export function attentionReasonText(reason: MissionAttentionReason, pr: number |
  * none for a dropped node or in a cancelled mission, whose work stays as it
  * was left.
  */
-export function openAttention(mission: Mission, node: MissionNode): MissionAttention | null {
+export function openAttention(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status" | "attention">): MissionAttention | null {
   return mission.status === "cancelled" || node.status === "dropped" ? null : node.attention;
 }
 

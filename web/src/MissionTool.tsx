@@ -17,8 +17,8 @@ import { cn } from "./lib/utils";
 import { PILL } from "./MissionMap";
 import { MissionStartGuide } from "./MissionStartGuide";
 import { MissionTakeOver } from "./MissionTakeOver";
-import { groupMissions, CLOSED_SHOWN, missionEntry, projectMissions, shownMission, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
-import { attentionReasonText, liveNodes, missionCells, missionCounts, type TurnItem } from "./missions";
+import { groupMissions, CLOSED_SHOWN, missionEntry, missionPillKey, projectMissions, rowLine, shownMission, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
+import { attentionReasonText, missionCells, missionCounts, workerEscalation, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { frontProject } from "./projectStatus";
 import { CandidateAdd, CandidateRows, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
@@ -42,8 +42,8 @@ export function useProjectMissions(project: Workspace | null): MissionEntry[] | 
     if (missions?.failed) return null;
     if (!project) return [];
     const rows = agentsByPane(allAgents(local, remote));
-    const workerRow = (node: MissionNode) => (node.pane_id ? (rows.get(node.pane_id) ?? null) : null);
-    return projectMissions(missions?.items ?? [], project).map((mission) => missionEntry(mission, workerRow));
+    const escalationOf = (node: MissionNode) => workerEscalation(node.pane_id ? rows.get(node.pane_id) : null);
+    return projectMissions(missions?.items ?? [], project).map((mission) => missionEntry(mission, escalationOf));
   }, [missions, project, local, remote]);
 }
 
@@ -220,20 +220,11 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
   );
 }
 
-const TURN_PILL: Record<TurnItem["kind"], "missionTool.pill.decision" | "missionTool.pill.takeover" | "mission.attention" | "missionTool.pill.blocked" | "missionTool.pill.merge"> = {
-  decision: "missionTool.pill.decision",
-  takeover: "missionTool.pill.takeover",
-  attention: "mission.attention",
-  worker_blocked: "missionTool.pill.blocked",
-  landing: "missionTool.pill.merge",
-};
-
 /** The state pill: what waits on the operator, `!` in the decision colour, else the map head's own pill. */
 function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
   if (turn) {
-    const key = turn.kind === "landing" && turn.git ? "missionTool.pill.join" : TURN_PILL[turn.kind];
-    return <span className="flex shrink-0 items-center gap-xxs rounded-full bg-mission-hold/15 px-sm text-caption font-semibold text-mission-hold" data-mission-row-pill={turn.kind}><span aria-hidden="true">!</span>{t(key)}</span>;
+    return <span className="flex shrink-0 items-center gap-xxs rounded-full bg-mission-hold/15 px-sm text-caption font-semibold text-mission-hold" data-mission-row-pill={turn.kind}><span aria-hidden="true">!</span>{t(missionPillKey(mission, turn))}</span>;
   }
   const pill = PILL[mission.status];
   return (
@@ -244,38 +235,35 @@ function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   );
 }
 
-/** The row's one line (B6): what waits on the operator, else the node at work, else the plan being made. */
+/** The row's one line (B6), as `rowLine` decides it and the phone's list words it too. */
 function RowLine({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
-  if (turn) {
-    switch (turn.kind) {
-      case "decision":
-        return <Line data="decision">{mission.decision}</Line>;
-      case "takeover": {
-        // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
-        const { done, total } = missionCounts(mission);
-        const left = total - done;
-        return <Line data="takeover">{left > 0 ? t("missionTool.takeoverLeft", { count: left }) : t("missionTool.takeoverReport")}</Line>;
-      }
-      case "worker_blocked":
-        return <Line data="worker_blocked">{turn.node.title} · {turn.line ?? t(`mission.turn.cause.${turn.cause}`)}</Line>;
-      case "attention":
-        return <Line data="attention">{turn.node.title} · {attentionReasonText(turn.attention.reason, turn.attention.pr, t)}</Line>;
-      case "landing":
-        return <LandingLine nodes={turn.nodes} join={turn.git} />;
+  const line = rowLine(mission, turn);
+  if (!line) return null;
+  switch (line.kind) {
+    case "decision":
+      return <Line data="decision">{line.text}</Line>;
+    // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
+    case "takeover":
+      return <Line data="takeover">{line.left > 0 ? t("missionTool.takeoverLeft", { count: line.left }) : t("missionTool.takeoverReport")}</Line>;
+    case "worker_blocked":
+      return <Line data="worker_blocked">{line.node.title} · {line.line ?? t(`mission.turn.cause.${line.cause}`)}</Line>;
+    case "attention":
+      return <Line data="attention">{line.node.title} · {attentionReasonText(line.attention.reason, line.attention.pr, t)}</Line>;
+    case "landing":
+      return <LandingLine nodes={line.nodes} join={line.join} />;
+    case "planning":
+      return <Line data="planning">{t("mission.planning")}</Line>;
+    case "now": {
+      const title = line.others > 0 ? t("mission.line.others", { title: line.first.title, count: line.others }) : line.first.title;
+      return (
+        <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-mission-row-line="now">
+          {line.first.worker ? <AgentMark kind={line.first.worker.agent} /> : null}
+          <span className="min-w-0 truncate">{t("missionTool.now", { title })}</span>
+        </span>
+      );
     }
   }
-  if (mission.status === "planning" && mission.nodes.length === 0) return <Line data="planning">{t("mission.planning")}</Line>;
-  const live = liveNodes(mission);
-  const first = live[0];
-  if (!first) return null;
-  const title = live.length > 1 ? t("mission.line.others", { title: first.title, count: live.length - 1 }) : first.title;
-  return (
-    <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-mission-row-line="now">
-      {first.worker ? <AgentMark kind={first.worker.agent} /> : null}
-      <span className="min-w-0 truncate">{t("missionTool.now", { title })}</span>
-    </span>
-  );
 }
 
 function Line({ data, children }: { data: string; children: ReactNode }) {
