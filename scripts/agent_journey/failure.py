@@ -9,6 +9,9 @@ one for the run; the step times are the agent's `steps` in the report
 """
 
 from datetime import datetime, timezone
+import functools
+import os
+from pathlib import Path
 import re
 import time
 
@@ -19,11 +22,12 @@ from agent_live_check.protection import write_private
 # (agent_live_check.processes.MAX_OUTPUT), so one cell's step rarely nears it.
 CELL_BYTES = 256 * 1024
 RUN_BYTES = 4 * 1024 * 1024
-# An account's home in a path, on macOS, Linux or Windows, with a JSON
-# string's doubled backslashes or a short name such as RUNNER~1 included:
-# what the run keeps names no account (scripts/check-no-workstation-identity.py).
-# Each home's prefix is split so this file names no home itself.
-HOME = re.compile(r"(?:/Users" r"/|/home" r"/|\b[A-Za-z]:(?:\\+|/)Users(?:\\+|/))[^/\\\s\"':]+")
+# Any account's home in a path, on macOS, Linux or Windows in either case,
+# with a JSON string's doubled backslashes or a short name such as RUNNER~1;
+# a name with a space is only found as the running account's own home
+# (`account_homes`). Each prefix is split so this file names no home itself.
+SEPARATOR = r"(?:\\+|/)"
+OTHER_HOME = r"(?:/Users" r"/|/home" r"/|\b[A-Za-z]:" + SEPARATOR + "Users" + SEPARATOR + r")[^/\\\s\"':]+"
 
 
 def now_ms():
@@ -34,9 +38,25 @@ def moment(ms):
     return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="milliseconds")
 
 
+def account_homes():
+    """The home of the account running the journey, as each variable and the
+    system name it: the one home whose name can hold a space."""
+    values = {os.environ.get("HOME"), os.environ.get("USERPROFILE"), str(Path.home())}
+    return tuple(sorted((value for value in values if value and value.strip("/\\")), key=len, reverse=True))
+
+
+@functools.lru_cache(maxsize=4)
+def homes_pattern(homes):
+    def written(home):
+        # Every separator as a path or a JSON string may write it.
+        parts = [re.escape(part) for part in re.split(r"[\\/]+", home) if part]
+        return (SEPARATOR if home[:1] in "/\\" else "") + SEPARATOR.join(parts) + r"(?![\w.-])"
+    return re.compile("|".join([*map(written, homes), OTHER_HOME]), re.IGNORECASE)
+
+
 def scrub(text):
-    """`text` with every account home written as `~`."""
-    return HOME.sub("~", text)
+    """`text` with every account home written as `~` (scripts/check-no-workstation-identity.py)."""
+    return homes_pattern(account_homes()).sub("~", text)
 
 
 class FailureLogs:
@@ -47,27 +67,41 @@ class FailureLogs:
         self.run_bytes = run_bytes
 
     def mark(self):
-        return self.output.mark()
+        """Where a step begins: the start of the line hided is writing, so
+        what a failed cell keeps starts on a whole line."""
+        return self.output.line_start()
 
     def keep(self, path, mark, step, cell):
-        """Writes what hided wrote since `mark`, where `step` began, to `path`:
-        its last whole lines within the caps, under one line saying what it
-        holds and whether it was cut. Returns the file's name."""
+        """Writes the whole lines hided wrote since `mark`, where `step`
+        began, to `path`, its home paths written as `~`, under one line saying
+        what it holds; past the cell's cap or what is left of the run's, the
+        file, that line included, keeps the last whole lines that fit and says
+        it was cut. Returns the file's name, or None when the run's budget has
+        no room even for that line."""
         data = self.output.since(mark)
+        # A line still being written may stop inside a home or a character.
+        data = data[:data.rfind(b"\n") + 1]
+        lines = scrub(data.decode("utf-8", errors="replace")).encode().splitlines(keepends=True)
         cap = min(self.cell_bytes, self.left)
-        header = (f"journey: hided's output from step {step['step']} (began {moment(step['started_ms'])}) "
-                  f"to the failure of cell {cell} ({moment(now_ms())}), {len(data)} bytes")
-        if len(data) > cap:
-            kept = data[len(data) - cap:] if cap else b""
-            # From the first whole line: the cut lands inside one.
-            kept = kept[kept.index(b"\n") + 1:] if b"\n" in kept else b""
-            header += (f"; cut: the run's {self.run_bytes}-byte budget for failed cells' logs had {cap} bytes left"
-                       if cap < self.cell_bytes else f"; cut at the cell's {cap}-byte cap")
-            header += f", so it keeps its last {len(kept)} bytes of whole lines"
-            data = kept
-        self.left -= len(data)
+        head = (f"journey: hided's output from step {step['step']} (began {moment(step['started_ms'])}) "
+                f"to the failure of cell {cell} ({moment(now_ms())}), {len(data)} bytes of whole lines")
+        text = (head + "\n").encode() + b"".join(lines)
+        if len(text) > cap:
+            limit = (f"the run's {self.run_bytes}-byte budget for failed cells' logs, {cap} bytes of it left"
+                     if cap < self.cell_bytes else f"the cell's {cap}-byte cap")
+            text = (head + f"; cut to its last whole lines at {limit}\n").encode()
+            if len(text) > cap:
+                return None
+            room, kept = cap - len(text), []
+            for line in reversed(lines):
+                if len(line) > room:
+                    break
+                kept.append(line)
+                room -= len(line)
+            text += b"".join(reversed(kept))
+        self.left -= len(text)
         path.unlink(missing_ok=True)
-        write_private(path, (header + "\n" + scrub(data.decode("utf-8", errors="replace"))).encode())
+        write_private(path, text)
         return path.name
 
 

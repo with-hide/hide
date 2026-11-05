@@ -122,10 +122,11 @@ class ResidentOutput:
             thread.start()
             self.threads.append(thread)
 
-    def mark(self):
-        """How many bytes the resident has written so far."""
+    def line_start(self):
+        """Where the line the resident is writing now began: past the last
+        newline it wrote, so a mark taken here never splits a line."""
         with self.lock:
-            return len(self.data)
+            return self.data.rfind(b"\n") + 1
 
     def since(self, mark):
         """What the resident wrote after `mark`, as drained so far."""

@@ -224,7 +224,11 @@ class Journey:
         if not self.running:
             return None
         step, mark = self.running
-        return self.failure_logs.keep(self.run / f"{self.id}-{name}-hided.log", mark, step, name)
+        kept = self.failure_logs.keep(self.run / f"{self.id}-{name}-hided.log", mark, step, name)
+        if not kept:
+            self.record.setdefault("hided_logs_not_kept", []).append(
+                {"cell": name, "reason": f"the run's {self.failure_logs.run_bytes}-byte budget for failed cells' logs is spent"})
+        return kept
 
     def settle(self, name, verdict, evidence=None, pane=None):
         """`pane` the pane the cell measured when it is not the agent's own,
