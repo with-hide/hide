@@ -748,7 +748,8 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
  * A node's warnings as its card says them (hide-private issue 552): the
  * short word the card shows, the first warning's with `+n` for the rest,
  * and each warning in full for its hover and accessible name, said as told
- * to the Conductor only once its letter was queued. Null with no
+ * to the Conductor once its letter was queued and as the Conductor's turn to
+ * be told before. Null with no
  * warning, and for a dropped node or a cancelled mission, which warn of
  * nothing.
  */
@@ -763,7 +764,7 @@ export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"
   const more = warnings.length - 1;
   return {
     short: more > 0 ? `${words(first, "short")} +${more}` : words(first, "short"),
-    full: warnings.map((warning) => (warning.told_unix_ms != null ? t("mission.warning", { what: words(warning, "full") }) : words(warning, "full"))),
+    full: warnings.map((warning) => t(warning.told_unix_ms != null ? "mission.warning" : "mission.warning.untold", { what: words(warning, "full") })),
   };
 }
 

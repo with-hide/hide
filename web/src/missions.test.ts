@@ -583,7 +583,7 @@ describe("a node's warnings", () => {
 
   it("says a warning told only once its letter was queued", () => {
     const untold = { ...warned, warnings: [{ ...warned.warnings![1]!, told_unix_ms: null }] };
-    expect(warningWords(mission("m"), untold, t)?.full).toEqual(["no push for 95 minutes"]);
+    expect(warningWords(mission("m"), untold, t)?.full).toEqual(["Conductor to be told: no push for 95 minutes"]);
   });
 
   it("is none without a warning, on a dropped node or in a cancelled mission", () => {
