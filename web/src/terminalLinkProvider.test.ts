@@ -3,7 +3,8 @@ import type { ProbedPath } from "./host";
 import type { CellRow } from "./selection";
 import { useShellStore } from "./store";
 import { linkCandidates, TOKEN_CANDIDATES } from "./terminalLinks";
-import type { SnapshotRest } from "./snapshot";
+import type { AgentRow, SnapshotRest } from "./snapshot";
+import { followWraps } from "./terminalWrap";
 import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import { PROBE_CACHE_CAP, PROBE_NEW_LIMIT, PROBE_TTL_MS, clearProbeCache, osc8Handler, owningCheckout, paneContext, pathLookups, probePaths, registerTerminalLinks, resolveGroups } from "./terminalLinkProvider";
 
@@ -355,4 +356,65 @@ it("a ⌘-click on macOS and a Ctrl-click elsewhere still hand a link to the ope
     platform.mockRestore();
   }
   expect(actions.openLink.mock.calls).toEqual([["https://example.test/a", true, "w1:p1"], ["https://example.test/a", true, "w1:p1"], ["https://example.test/a", true, "w1:p1"]]);
+});
+
+/** A terminal of `cols` columns showing `rows`, following the wraps its stream says; `say` feeds one. */
+function screenShowing(rows: string[], cols: number) {
+  let provider: ILinkProvider | undefined;
+  let wrapHandler: ((data: string) => boolean | Promise<boolean>) | undefined;
+  const lines = rows.map((text) => {
+    const cells = [...text];
+    return { getCell: (x: number) => ({ getWidth: () => 1, getChars: () => cells[x] ?? "" }) };
+  });
+  const term = {
+    cols,
+    rows: rows.length,
+    buffer: { active: { length: rows.length, getLine: (y: number) => lines[y] } },
+    parser: { registerOscHandler: (_ident: number, callback: (data: string) => boolean) => { wrapHandler = callback; return { dispose() {} }; } },
+    hasSelection: () => false,
+    registerLinkProvider: (given: ILinkProvider) => {
+      provider = given;
+      return { dispose() {} };
+    },
+  } as unknown as Terminal;
+  followWraps(term);
+  return {
+    term,
+    say: (data: string) => wrapHandler!(data),
+    texts: (y: number) => new Promise<string[]>((resolve) => provider!.provideLinks(y, (links) => resolve((links ?? []).map((link) => link.text)))),
+  };
+}
+
+// hide-private issue 312, decided per pane: a pane with no agent follows
+// the holder's wraps; an agent's TUI hard-wraps its own long lines, so its
+// pane keeps the last-column rule.
+describe("a URL that fills its row", () => {
+  const rows = ["http://127.0.0.1:41811/a.html", "osc8 label"];
+  const url = "http://127.0.0.1:41811/a.html";
+
+  it("stays one link in a pane whose holder says the row ended with a line break", async () => {
+    const screen = screenShowing(rows, 29);
+    registerTerminalLinks(screen.term, "w1:p1", { hovered: false }, () => ({ openLink: vi.fn(), openTerminalPath: vi.fn() }));
+    screen.say("29;2;");
+    expect(await screen.texts(1)).toEqual([url]);
+    screen.say("29;2;1");
+    expect(await screen.texts(1)).toEqual([`${url}osc8`]);
+  });
+
+  it("joins the next row at the last column when the wraps are unknown or the pane runs an agent", async () => {
+    const screen = screenShowing(rows, 29);
+    registerTerminalLinks(screen.term, "w1:p1", { hovered: false }, () => ({ openLink: vi.fn(), openTerminalPath: vi.fn() }));
+    expect(await screen.texts(1)).toEqual([`${url}osc8`]);
+    // Said for another grid: a local resize before the holder's next full frame.
+    screen.say("30;2;");
+    expect(await screen.texts(1)).toEqual([`${url}osc8`]);
+    screen.say("29;2;");
+    const before = useShellStore.getState().agents;
+    useShellStore.setState({ agents: [{ pane_id: "w1:p1" } as AgentRow] });
+    try {
+      expect(await screen.texts(1)).toEqual([`${url}osc8`]);
+    } finally {
+      useShellStore.setState({ agents: before });
+    }
+  });
 });

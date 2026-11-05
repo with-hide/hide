@@ -6,9 +6,9 @@
 // ratatui frames, skips a row the capture shares unchanged, starts a full
 // screen with a display reset so any earlier state of the receiver is gone,
 // splits a screen between rows into fragments of at most `MAX_FRAGMENT`
-// bytes, writes overline, and drops the drawn cursor, the surface patches,
-// the profiling and the IME anchor repeat, which only Herdr's own client
-// uses.
+// bytes, writes overline, says which rows soft-wrap (`WRAP_OSC`), and drops
+// the drawn cursor, the surface patches, the profiling and the IME anchor
+// repeat, which only Herdr's own client uses.
 
 //! Screen fragments: the ANSI that draws a captured screen on a receiver,
 //! whole or as the cells that changed since the last one.
@@ -20,6 +20,14 @@
 //! reverse video off, and a clear. It never turns on an input mode or asks
 //! the receiver anything, so a terminal that draws it answers nothing (PRD
 //! engine-bundle-2-pane-holder D-7).
+//!
+//! A full fragment, and a delta whose rows soft-wrap differently from the
+//! last sent, also says which rows soft-wrap, as [`WRAP_OSC`], unless the
+//! pane cannot know (a Windows pane, `Capture::without_wraps`): the cells are
+//! placed with autowrap off, so the receiver cannot tell a row the program's
+//! text ran past from one it ended with a line break. A program's own OSC
+//! never reaches the receiver, since a fragment is drawn from the parsed
+//! cells, so only the holder writes this one.
 
 use std::cmp;
 use std::io::Write;
@@ -36,6 +44,16 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 /// a write in the last column must not wrap), plain attributes, a clear.
 const RESET: &[u8] = b"\x1b[?1049l\x1b[!p\x1b[?7l\x1b[?5l\x1b[r\x1b[0m\x1b[H\x1b[2J";
 
+/// The private OSC that says which rows of the screen soft-wrap:
+/// `ESC ] 7719 ; <cols> ; <rows> ; <hex> ESC \`, where hex digit `k` holds
+/// rows `4k` to `4k + 3`, row `4k + j` in bit `1 << j`, with trailing zero
+/// digits left out (empty when no row wraps). The web shell reads it
+/// (`web/src/terminalWrap.ts`); a terminal that does not know it drops it.
+pub const WRAP_OSC: u16 = 7719;
+
+/// The most bytes [`WRAP_OSC`] takes: its frame, two sizes, a digit per four rows.
+const MAX_WRAP: usize = 24 + hide_holder_protocol::MAX_ROWS as usize / 4;
+
 /// The most bytes one cell can encode to: a move, the longest attributes,
 /// a hyperlink closed and opened, and its text.
 const MAX_CELL: usize = 16 + 64 + 8 + (MAX_LINK + 8) + MAX_TEXT;
@@ -45,7 +63,11 @@ const TAIL: usize = 64;
 
 // One row always fits a fragment, so a screen is split, never refused.
 const _: () = assert!(
-    MAX_CELL * hide_holder_protocol::MAX_COLS as usize + SYNC_START.len() + RESET.len() + TAIL
+    MAX_CELL * hide_holder_protocol::MAX_COLS as usize
+        + SYNC_START.len()
+        + RESET.len()
+        + MAX_WRAP
+        + TAIL
         < MAX_FRAGMENT
 );
 
@@ -82,12 +104,23 @@ impl Encoder {
                 // After the reset, whose soft reset shows the cursor again.
                 out.push(RESET);
                 out.push(b"\x1b[?25l");
+                if let Some(wrapped) = &frame.wrapped {
+                    write_wrapped(&mut out, &frame, wrapped);
+                }
                 write_all_cells(&mut out, &frame);
                 self.shape = 0;
                 wrote = true;
             }
             Some(previous) => {
                 out.push(b"\x1b[?25l");
+                if let Some(wrapped) = frame
+                    .wrapped
+                    .as_ref()
+                    .filter(|_| frame.wrapped != previous.wrapped)
+                {
+                    write_wrapped(&mut out, &frame, wrapped);
+                    wrote = true;
+                }
                 wrote |= write_changed_cells(&mut out, &frame, previous);
             }
         }
@@ -308,6 +341,25 @@ fn write_changed_cells(out: &mut Pieces, frame: &Frame, previous: &Frame) -> boo
     wrote
 }
 
+/// Writes [`WRAP_OSC`] for `frame`.
+fn write_wrapped(out: &mut Pieces, frame: &Frame, wrapped: &[bool]) {
+    let mut bytes = Vec::with_capacity(24 + wrapped.len() / 4);
+    let _ = write!(bytes, "\x1b]{WRAP_OSC};{};{};", frame.cols, frame.rows);
+    let used = wrapped
+        .iter()
+        .rposition(|wraps| *wraps)
+        .map_or(0, |last| last / 4 + 1);
+    for digit in wrapped.chunks(4).take(used) {
+        let bits = digit
+            .iter()
+            .enumerate()
+            .fold(0u8, |bits, (j, wraps)| bits | (u8::from(*wraps) << j));
+        bytes.push(b"0123456789abcdef"[usize::from(bits)]);
+    }
+    bytes.extend_from_slice(b"\x1b\\");
+    out.push(&bytes);
+}
+
 fn write_cursor(out: &mut Pieces, frame: &Frame, last_shape: &mut u8, full: bool) {
     let cursor = frame.cursor;
     let mut bytes = Vec::new();
@@ -342,6 +394,119 @@ mod tests {
             ),
             "\x1b[0;4:3;53;39;49m"
         );
+    }
+
+    fn pane(cols: u16, rows: u16) -> crate::pane::Pane {
+        crate::pane::Pane::new(hide_holder_protocol::Size { rows, cols }, None).unwrap()
+    }
+
+    fn wrap_sequences(encoded: &Encoded) -> Vec<String> {
+        let text = String::from_utf8_lossy(&encoded.pieces.concat()).into_owned();
+        text.match_indices("\x1b]7719;")
+            .map(|(at, _)| {
+                let rest = &text[at + 2..];
+                rest[..rest.find("\x1b\\").unwrap()].to_owned()
+            })
+            .collect()
+    }
+
+    // The URL of with-hide/hide-private#312 fills a 29-column row exactly.
+    const URL: &str = "http://127.0.0.1:41811/a.html";
+
+    #[test]
+    fn a_full_screen_says_which_rows_soft_wrap() {
+        let mut ended = pane(29, 4);
+        ended.feed(format!("{URL}\r\nosc8 label").as_bytes(), &mut Vec::new());
+        let mut wrapped = pane(29, 4);
+        wrapped.feed(format!("{URL}osc8 label").as_bytes(), &mut Vec::new());
+
+        let ended = Encoder::default().encode(ended.take(true).unwrap(), true);
+        let wrapped = Encoder::default().encode(wrapped.take(true).unwrap(), true);
+
+        assert_eq!(wrap_sequences(&ended), ["7719;29;4;"]);
+        assert_eq!(wrap_sequences(&wrapped), ["7719;29;4;1"]);
+    }
+
+    #[test]
+    fn a_delta_says_the_wraps_again_only_when_they_change() {
+        let mut pane = pane(29, 6);
+        let mut encoder = Encoder::default();
+        pane.feed(URL.as_bytes(), &mut Vec::new());
+        assert_eq!(
+            wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7719;29;6;"]
+        );
+
+        // The row is marked wrapped when the next character lands, on the row after it.
+        pane.feed(b"osc8", &mut Vec::new());
+        let wrapped = encoder.encode(pane.take(false).unwrap(), false);
+        assert!(!wrapped.full);
+        assert_eq!(wrap_sequences(&wrapped), ["7719;29;6;1"]);
+
+        // Output that changes cells but no wrap carries no wrap bytes.
+        pane.feed(b" label\r\nplain", &mut Vec::new());
+        let unchanged_wraps = encoder.encode(pane.take(false).unwrap(), false);
+        assert!(!unchanged_wraps.pieces.is_empty());
+        assert!(wrap_sequences(&unchanged_wraps).is_empty());
+
+        // Nothing changed: no bytes at all.
+        assert!(
+            encoder
+                .encode(pane.take(false).unwrap(), false)
+                .pieces
+                .is_empty()
+        );
+
+        // A line erased and rewritten short ends with a break again.
+        pane.feed(b"\x1b[H\x1b[2Kshort", &mut Vec::new());
+        assert_eq!(
+            wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7719;29;6;"]
+        );
+    }
+
+    #[test]
+    fn rows_past_the_fourth_land_in_later_digits() {
+        let mut pane = pane(4, 12);
+        // Rows 0, 1 and 9 wrap.
+        pane.feed(b"abcdefghijk\r\n\n\n\n\n\n\nlmnopq", &mut Vec::new());
+        assert_eq!(
+            wrap_sequences(&Encoder::default().encode(pane.take(true).unwrap(), true)),
+            ["7719;4;12;302"]
+        );
+    }
+
+    #[test]
+    fn a_capture_whose_wraps_did_not_move_shares_the_last_ones() {
+        let mut pane = pane(29, 4);
+        pane.feed(format!("{URL}osc8").as_bytes(), &mut Vec::new());
+        let first = pane.take(true).unwrap().wrapped.unwrap();
+        pane.feed(b" label", &mut Vec::new());
+        let same = pane.take(false).unwrap().wrapped.unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &same));
+        pane.feed(b"\x1b[H\x1b[2K", &mut Vec::new());
+        let moved = pane.take(false).unwrap().wrapped.unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&same, &moved));
+        assert_eq!(&*moved, [false, false, false, false]);
+    }
+
+    #[test]
+    fn a_pane_that_cannot_know_its_wraps_says_nothing_of_them() {
+        let mut pane = pane(29, 4);
+        pane.without_wraps();
+        pane.feed(format!("{URL}osc8 label").as_bytes(), &mut Vec::new());
+        let mut encoder = Encoder::default();
+        assert!(wrap_sequences(&encoder.encode(pane.take(true).unwrap(), true)).is_empty());
+        pane.feed(b"\r\nmore", &mut Vec::new());
+        assert!(wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)).is_empty());
+    }
+
+    #[test]
+    fn a_program_cannot_write_the_wrap_sequence_itself() {
+        let mut pane = pane(29, 4);
+        pane.feed(b"\x1b]7719;29;4;f\x1b\\short", &mut Vec::new());
+        let encoded = Encoder::default().encode(pane.take(true).unwrap(), true);
+        assert_eq!(wrap_sequences(&encoded), ["7719;29;4;"]);
     }
 
     #[test]

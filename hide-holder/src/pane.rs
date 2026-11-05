@@ -262,6 +262,12 @@ impl Pane {
         self.sync_since.map(|since| since + SYNC_LIMIT)
     }
 
+    /// Says nothing of which rows soft-wrap; see [`Capture::without_wraps`].
+    #[cfg_attr(not(windows), allow(dead_code))] // only a Windows holder drops them
+    pub fn without_wraps(&mut self) {
+        self.capture.without_wraps();
+    }
+
     /// The screen as it is now; `everything` reads every row again.
     pub fn take(&mut self, everything: bool) -> Result<Frame, hide_vt::Error> {
         let everything = everything || std::mem::take(&mut self.everything);
