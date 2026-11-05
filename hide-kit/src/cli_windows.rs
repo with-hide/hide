@@ -133,6 +133,13 @@ fn reached(target: &KitTarget) -> Option<PathBuf> {
         .ok()
         .and_then(|bytes| shim_folder(&bytes));
     match named {
+        // This installation's own way, whatever case or separators its two
+        // folders were spelled with: an installation is named by its root's
+        // spelling (`install_of_root`), which a path rebuilt from the
+        // command folder need not repeat.
+        Some(folder) if matches!(form(target), Ok(Form::Relative(ref own)) if *own == folder) => {
+            Some(wanted(target))
+        }
         Some(folder) if folder != JUNCTION => {
             Some(lexical(&target.cli_dir.join(folder)).join("hide.exe"))
         }
@@ -496,8 +503,8 @@ mod tests {
     fn a_shim_names_a_folder_only_by_a_plain_relative_way() {
         assert_eq!(
             relative(
-                Path::new(r"C:\Users\한글\.local\bin"),
-                Path::new(r"c:\users\한글\.hide\host-helper\current")
+                Path::new(r"C:\work\한글\.local\bin"),
+                Path::new(r"c:\WORK\한글\.hide\host-helper\current")
             )
             .as_deref(),
             Some(r"..\..\.hide\host-helper\current")
@@ -508,15 +515,15 @@ mod tests {
         );
         assert_eq!(
             relative(
-                Path::new(r"C:\Users\me\bin"),
-                Path::new(r"C:\Users\me\100%\current")
+                Path::new(r"C:\work\me\bin"),
+                Path::new(r"C:\work\me\100%\current")
             ),
             None
         );
         assert_eq!(
             relative(
-                Path::new(r"C:\Users\me\bin"),
-                Path::new(r"C:\Users\me\설치\current")
+                Path::new(r"C:\work\me\bin"),
+                Path::new(r"C:\work\me\설치\current")
             ),
             None
         );
