@@ -381,10 +381,21 @@ fn program_names(name: &str) -> Vec<OsString> {
     if !cfg!(windows) || Path::new(name).extension().is_some() {
         return vec![OsString::from(name)];
     }
-    let extensions = std::env::var("PATHEXT")
+    names_with_extensions(name, &path_extensions())
+}
+
+/// The extensions Windows tries on a name without one, as `PATHEXT` lists
+/// them, or the ones Windows has always run when it names none.
+pub(crate) fn path_extensions() -> String {
+    std::env::var("PATHEXT")
         .ok()
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_owned());
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_owned())
+}
+
+/// `name` with each extension `extensions` lists (`PATHEXT`'s form), in its
+/// order.
+pub(crate) fn names_with_extensions(name: &str, extensions: &str) -> Vec<OsString> {
     extensions
         .split(';')
         .filter(|extension| extension.starts_with('.'))
@@ -392,7 +403,7 @@ fn program_names(name: &str) -> Vec<OsString> {
         .collect()
 }
 
-fn is_program(candidate: &Path) -> bool {
+pub(crate) fn is_program(candidate: &Path) -> bool {
     candidate.is_file() && crate::fs::permissions::is_executable(candidate).unwrap_or(false)
 }
 

@@ -28,6 +28,8 @@ impl NodeLink for Node {
             Call::ShellIntegration => {
                 json!({"command": ["/bin/sh"], "readiness": "plain", "env": {}})
             }
+            // Asked before every start: the program takes its arguments.
+            Call::AgentInstalled { .. } => json!("program"),
             Call::Project { .. } | Call::Worktrees { .. } => {
                 return Err(LinkError::NotConnected(
                     "this node answers only the spawn's reads".to_owned(),

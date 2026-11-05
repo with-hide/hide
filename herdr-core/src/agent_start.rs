@@ -781,6 +781,7 @@ mod tests {
                     .unwrap_or_default(),
                 codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                 wakes: false,
+                program: None,
             })
             .unwrap()
     }

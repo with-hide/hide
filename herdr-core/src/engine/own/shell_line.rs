@@ -1,9 +1,8 @@
 // Derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr, commit 2ecf19a):
 // `shell_quote` of src/platform/macos.rs and src/platform/linux.rs,
 // `interactive_unix_shell_command` and `quote_powershell_arg` of
-// src/platform/mod.rs, `powershell_agent_script` and
-// `quote_windows_command_line_arg` of src/platform/windows.rs,
-// `validate_resume_argv` of src/agent_resume.rs, and
+// src/platform/mod.rs, `powershell_agent_script` of
+// src/platform/windows.rs, `validate_resume_argv` of src/agent_resume.rs, and
 // `stripped_terminal_title` of src/terminal/title.rs.
 // Copyright 2025 herdr contributors. Licensed under the Apache License,
 // Version 2.0; see NOTICE at the repository root.
@@ -12,7 +11,8 @@
 // shell's, and cmd.exe is given no line, since the own engine's panes run
 // PowerShell on Windows; a resume line says, when the agent ended with a
 // failure, that it did, in a form zsh, bash, fish and PowerShell all read;
-// the Windows title prefix is dropped on every system.
+// the Windows title prefix is dropped on every system; the Windows command
+// line's quoting moved to hide-shell's `quote::windows_argument`.
 
 //! The line the core's own engine types into a pane's shell to start an
 //! agent (PRD engine-bundle-3-core-owns D-4, D-16): the agent's program and
@@ -121,35 +121,6 @@ fn powershell_quote(value: &str) -> String {
     Syntax::PowerShell.single_quoted(value)
 }
 
-/// A Windows command line argument, for `Start-Process -ArgumentList`.
-fn windows_quote(value: &str) -> String {
-    if !value.is_empty()
-        && !value
-            .chars()
-            .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '"'))
-    {
-        return value.to_owned();
-    }
-    let mut quoted = String::from("\"");
-    let mut backslashes = 0;
-    for ch in value.chars() {
-        if ch == '\\' {
-            backslashes += 1;
-            continue;
-        }
-        if ch == '"' {
-            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
-        } else {
-            quoted.push_str(&"\\".repeat(backslashes));
-        }
-        backslashes = 0;
-        quoted.push(ch);
-    }
-    quoted.push_str(&"\\".repeat(backslashes * 2));
-    quoted.push('"');
-    quoted
-}
-
 /// Herdr's PowerShell start: a script the program names runs in the shell,
 /// anything else as one process on the pane's console, its arguments handed
 /// over as one Windows command line, which PowerShell 5.1's own passing of
@@ -171,7 +142,7 @@ fn powershell_script(program: &str, args: &[String]) -> String {
 fn powershell_parts(program: &str, args: &[String]) -> (String, String) {
     let command_line = args
         .iter()
-        .map(|arg| windows_quote(arg))
+        .map(|arg| hide_shell::quote::windows_argument(arg))
         .collect::<Vec<_>>()
         .join(" ");
     let program = powershell_quote(program);

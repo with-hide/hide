@@ -164,16 +164,28 @@ pub(super) fn screen_rules(definition: &Definition) -> Option<ScreenRules> {
 }
 
 /// The words a start of `definition` types: its program, its `[start]`
-/// arguments, then the caller's.
+/// arguments, then the caller's. The program is the file `file` names, with
+/// the words before its arguments, when the node read it for this program's
+/// name (`AgentLaunch::program`), else the program's name.
 pub(super) fn start_argv(
     definition: &Definition,
+    file: Option<&crate::engine::StartProgram>,
     args: Vec<String>,
 ) -> Result<Vec<String>, String> {
     let program = definition
         .executables
         .first()
         .ok_or_else(|| format!("the {} definition names no program", definition.id))?;
-    Ok(std::iter::once(program.clone())
+    let head = match file {
+        Some(file) if file.name.eq_ignore_ascii_case(program) => {
+            std::iter::once(file.program.clone())
+                .chain(file.leading.iter().cloned())
+                .collect()
+        }
+        _ => vec![program.clone()],
+    };
+    Ok(head
+        .into_iter()
         .chain(definition.start_args.iter().cloned())
         .chain(args)
         .collect())
@@ -191,7 +203,7 @@ pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Opt
         (_, _, Some(last)) => last.clone(),
         _ => return None,
     };
-    start_argv(definition, args).ok()
+    start_argv(definition, None, args).ok()
 }
 
 /// The session a program's arguments resume, by `definition`'s `[resume]

@@ -2159,6 +2159,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .ok_or_else(|| format!("no agent definition names {}", launch.kind))?;
         let argv = agents::start_argv(
             definition,
+            launch.program.as_ref(),
             crate::codex_launch::start_arguments(
                 &definition.id,
                 launch.codex_daemon,
@@ -2189,7 +2190,7 @@ impl<'g> Engine for OwnEngine<'g> {
             launch.args.clone(),
         )
         .map_err(|message| refused("agent_start_refused", message))?;
-        let argv = agents::start_argv(definition, args)
+        let argv = agents::start_argv(definition, launch.program.as_ref(), args)
             .map_err(|message| refused("agent_start_refused", message))?;
         // Herdr's condition for a start: the shell holds the terminal alone.
         let processes = self.processes(pane)?;
@@ -3831,6 +3832,7 @@ mod tests {
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
+            program: None,
         }
     }
 

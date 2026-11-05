@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -679,7 +679,7 @@ impl RequestFailure {
 impl Session {
     fn spawn(program: &Program, cwd: &Path) -> Result<Self, AiError> {
         let home = CodexHome::create()?;
-        let mut command = Command::new(program.path());
+        let mut command = program.command();
         program.apply(&mut command);
         command
             .args(CodexAppServerBackend::spawn_arguments())

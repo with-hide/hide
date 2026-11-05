@@ -467,8 +467,16 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, 
             diagnostic = Diagnostic(runtime)
             diagnostics.append((agent, diagnostic))
             program = diagnostic.launcher(runtime, program)
-        launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""),
-                            runtime.probe / f"fixture-{kind}.config" if fixture_bin else None, fake_env)
+        journey_config = runtime.probe / f"fixture-{kind}.config" if fixture_bin else None
+        installed = ci.runs_as_installed(rows[key], fixture_bin)
+        # The journey's own runs of an agent run as installed (`--version`,
+        # OpenCode's service) go through a wrapper no pane finds.
+        launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""), journey_config, fake_env,
+                            folder=runtime.run / "launchers" if installed else None)
+        if installed:
+            ci.share_with_daemon(runtime, ci.agent_environment(runtime, kind, os.environ.get("PATH", ""),
+                                                                journey_config, fake_env))
+            agent["started_as"] = "installed"
         environment = {**clean_env(), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
         if kind == "opencode":
             agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)

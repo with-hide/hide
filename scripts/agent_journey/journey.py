@@ -15,7 +15,7 @@ import time
 
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
-from agent_live_check.system import WINDOWS, git, same_path
+from agent_live_check.system import git, same_path
 
 from . import cells, composer, failure, fork, kit, memory, provider_limit, stop_observer, title, usage
 from .requests import model_requests
@@ -113,15 +113,6 @@ def brief(value):
 
 # A brief's cap in bytes (herdr-core `delivery::BODY_LIMIT`, `invalid_brief`).
 BRIEF_CAP = 16 * 1024
-
-
-def rides_start():
-    """Whether Hide carries a brief as the start's prompt on this system. On
-    Windows the journey starts every CLI through a .cmd launcher
-    (agent_live_check.system.launcher), as npm's shim of a CLI is, and a start
-    through cmd.exe carries no prompt (herdr-core `start_prompt`), so the
-    brief is typed there."""
-    return not WINDOWS
 
 
 def long_brief(value):
@@ -421,7 +412,7 @@ class Journey:
         # record has to confirm: as the start's prompt argument where the
         # agent declares that, as long as a start carries, and typed
         # otherwise; the untrusted start keeps the agent's prompt argument.
-        launched = self.own_rungs and self.launches() and rides_start()
+        launched = self.own_rungs and self.launches()
         sent = long_brief(first) if launched else brief(first)
         args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
                                             sent if self.brief_start else prompt(first),
@@ -469,8 +460,8 @@ class Journey:
     def launch_brief(self, repository):
         """A brief that starts with `@` naming a missing file, in a start of
         its own in a worktree of a repository the account never trusted: the
-        start carries it once, past any screen of the agent's, or on Windows
-        it is typed once (`rides_start`), and the agent records it exactly."""
+        start carries it once, past any screen of the agent's, and the agent
+        records it exactly."""
         if not cells.measurable(self.table, self.id, "launch_brief"):
             return
         value = token()
@@ -493,13 +484,9 @@ class Journey:
             turn, read, record["activities"] = self.wait_turn(0, value)
             spawn_record = self.spawn_record(name)
             record["brief_input"], record["read"] = (spawn_record or {}).get("brief_input"), read
-            # A launched brief is the agent's own record line for line; a
-            # typed one is confirmed by Hide's canonical rule, which an agent's
-            # screen may reflow (Grok on Windows drops its line breaks, omp
-            # draws a tab as three spaces).
-            checks = [spawned, turn, cells.brief_verdict(spawn_record, rides_start())]
-            if rides_start():
-                checks.append(cells.record_verdict(read, sent, value))
+            # A launched brief is the agent's own record line for line.
+            checks = [spawned, turn, cells.brief_verdict(spawn_record, True),
+                      cells.record_verdict(read, sent, value)]
             self.settle("launch_brief", cells.start_verdict(*checks),
                         self.evidence("launch-brief", record))
         finally:
