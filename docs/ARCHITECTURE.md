@@ -356,9 +356,9 @@ The tasks are derived, never stored, and rebuilt only with the scope cache's com
 Text search and pixel geometry stay in the web; filters select from the core's priority order without deriving a new status.
 The cache includes pane close flags and labels so a pane-only change refreshes an open sheet; it adds no close action or runtime enforcement path.
 Catalog rebuilding restores cached scope fields before equality checks so an unchanged source does not create a publication merely by constructing new project objects.
-`sidebar.rs` retains payload and snapshot assembly, `request_view.rs` retains request block assembly and timestamp persistence, and `pet.rs` selects a pose from the local summary.
+`sidebar.rs` retains payload and snapshot assembly, and `request_view.rs` retains request block assembly and timestamp persistence.
 These functions operate on the facts already projected by the core, including remote rows; they introduce no reader, timer, worker or I/O under the runtime lock.
-The existing `sidebar::tests`, `request_view::tests`, `pet::tests` and `runtime::tests::lineage` exercise these shared rules through their original projection callers.
+The existing `sidebar::tests`, `request_view::tests` and `runtime::tests::lineage` exercise these shared rules through their original projection callers.
 `runtime/session_state.rs` owns durable live resolution: a successful UI-state save acknowledgement publishes the saved resolution, an activity fingerprint rejects stale acknowledgements, and new input, delivery or working activity restores a row.
 The same coalesced writer acknowledges dormant conversation and live resolution records from the exact saved frame, applying both results before announcing a change outside the runtime lock.
 The owner-thread clock checks the end of the 24-hour Resolved window through the existing tick; it does not create a timer or per-frame publication.

@@ -126,8 +126,7 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
   const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    // Both suites run from their package folder, one below the repository.
-    fs.copyFileSync(path.resolve("..", "assets", "pet-theme", "default", "assets", "sleeping.png"), path.join(herdr.root, "fixture", "mock.png"));
+    fs.copyFileSync(path.resolve("e2e/fixtures/image.png"), path.join(herdr.root, "fixture", "mock.png"));
     daemon = await startHided(herdr, "view-feedback-image");
     const pane = herdr.panes[0]!;
     // Only the agent in the pane the operator is in changes what the Workspace in front shows.
@@ -158,7 +157,7 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
     // The picked area stays outlined while its note is open.
     await screenshot(page, "comment-image-area-note-open");
     await expect(sheet.locator("[data-view-area-outline]")).toHaveCount(1);
-    await field.fill("Crop the owl tighter.");
+    await field.fill("Crop the corner tighter.");
     await page.keyboard.press("ControlOrMeta+Enter");
     await expect(page.locator('[data-view-region-pin="1"]')).toBeVisible();
     await expect(front(page).locator("[data-view-comments]")).toHaveText("1");
@@ -169,7 +168,7 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
     await expect(row).toHaveAttribute("data-view-feedback-state", "sent");
     const inbox = await hide(["inbox"]);
     expect(inbox).toContain("mock.png");
-    expect(inbox).toContain("Crop the owl tighter.");
+    expect(inbox).toContain("Crop the corner tighter.");
     const shot = /Screenshot: (\S+\.png)/.exec(inbox)?.[1];
     expect(shot, inbox).toBeTruthy();
     expect(fs.readFileSync(shot!).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");

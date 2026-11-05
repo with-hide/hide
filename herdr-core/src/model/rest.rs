@@ -180,7 +180,6 @@ section!(RestSections, Snapshot, s, {
     pane_layouts: Vec<PaneLayoutSnapshot> => s.pane_layouts,
     ui_state: UiStateSnapshot => s.ui_state,
     ime: ImeSnapshot => s.ime,
-    pet: PetSnapshot => s.pet,
     recent_closed: RecentClosedSnapshot => s.recent_closed,
     workspace_view: Option<WorkspaceViewSnapshot> => s.workspace_view,
     browser_views: Vec<BrowserViewInventoryRow> => s.browser_views; generation s.browser_views_revision,

@@ -282,7 +282,6 @@ class WorkstationIdentityTests(unittest.TestCase):
         paths = {
             "docs/verification/run.txt": "tracked_run_artifact",
             "docs/screenshots/run.png": "tracked_run_artifact",
-            "spikes/example/evidence/run.bin": "tracked_run_artifact",
             "profile/Cookies": "browser_profile_artifact",
             "profile/History": "browser_profile_artifact",
             "profile/Login Data": "browser_profile_artifact",
@@ -294,7 +293,7 @@ class WorkstationIdentityTests(unittest.TestCase):
             "browser-profile/arbitrary.bin": "browser_profile_artifact",
             "profile/Session_1234": "browser_profile_artifact",
         }
-        self.tracked(".gitignore", "docs/\nspikes/\nprofile/\nbrowser-profile/\n")
+        self.tracked(".gitignore", "docs/\nprofile/\nbrowser-profile/\n")
         for path in paths:
             self.tracked(path, "private-content-marker")
         for scope in ("checkout", "index"):
@@ -401,21 +400,6 @@ class WorkstationIdentityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(self.classes(result), ["tracked_blob_too_large"])
         self.assertEqual(self.check("index", checker).returncode, 0)
-
-    def test_only_the_named_large_source_reads_past_the_blob_limit(self):
-        self.tracked("design/hide-screens.pen", "neutral\n")
-        self.tracked("other.pen", "neutral\n")
-        checker = self.checker_with_limit("MAX_BYTES", 1024)
-        for name in ("design/hide-screens.pen", "other.pen"):
-            with (self.root / name).open("r+b") as target:
-                target.truncate(1024 + 1)
-            self.git("add", "-f", "--", name)
-        for scope in ("checkout", "index"):
-            result = self.check(scope, checker)
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(self.classes(result), ["tracked_blob_too_large"])
-            self.assertNotIn("design/hide-screens.pen", result.stderr)
-            self.assertIn("other.pen", result.stderr)
 
     def test_diagnostic_limit_is_reported_instead_of_truncated_success(self):
         self.tracked("fixture.txt", (home("macos", "private-fixture-person") + "\n") * 201)

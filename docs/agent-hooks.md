@@ -795,7 +795,7 @@ Grok's native hooks carry the opener guard, subagent count and letter routes.
 Its events follow the hook guide Grok ships; retired Cursor layouts are retained only for ownership cleanup.
 Grok's `SessionStart` does not fire for a subagent, so it is where the pane's count starts over and the pane first reports itself instrumented.
 
-Grok's file is Hide's own, `~/.grok/hooks/hide.json`, beside Herdr's and Orca's files in that folder (`{"hooks": {"<Event>": [{"matcher"?, "hooks": [{"type": "command", "command", "timeout"}]}]}}`, seconds); a switch-off deletes the file and nothing else there.
+Grok's file is Hide's own, `~/.grok/hooks/hide.json`, beside other tools' files in that folder (`{"hooks": {"<Event>": [{"matcher"?, "hooks": [{"type": "command", "command", "timeout"}]}]}}`, seconds); a switch-off deletes the file and nothing else there.
 The folder `~/.grok/hooks` is created when `~/.grok` exists, and nothing is created when it does not: the row says Grok has not made its folder yet.
 An older build's entries are replaced by the next pass; entries the operator edited read Outdated and stay until Reinstall, as OpenCode's edited plugin does.
 
@@ -846,7 +846,7 @@ A guidance hook also needs the agent's own settings folder, which Hide does not 
 
 ### Antigravity: Hide's hook block
 
-agy reads every named block of `~/.gemini/config/hooks.json` beside the others, so Hide writes one block of its own, `hide`, and touches no other (Herdr's `herdr`, Orca's `orca-status` and the operator's stay byte for byte; PRD antigravity-first-class D-04).
+agy reads every named block of `~/.gemini/config/hooks.json` beside the others, so Hide writes one block of its own, `hide`, and touches no other (other tools' blocks and the operator's stay byte for byte; PRD antigravity-first-class D-04).
 The block holds four events in agy's own format (`{"hide": {"<Event>": [{"type": "command", "command", "timeout"}]}}`, seconds, and a group with a `matcher` for `PreToolUse`), with the behavior read from agy 1.4.0 and measured live on 2026-10-16:
 
 | Event | What Hide answers |

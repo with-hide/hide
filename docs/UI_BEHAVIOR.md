@@ -802,8 +802,8 @@ Hide draws no count of the subagents an agent runs inside its own session, on an
 A subagent has no pane of its own, so it is not a delegated child: it has no row to open and the operator can neither enter it nor act on it, so the number is not a state they would act on (design principle 13).
 The child marks on screen mean only the agents Hide started, which have their own panes and tree rows: the descendant mark `! N` in the tree popover, the tree button with its `자식 에이전트 N` tooltip, and the child popover.
 A subagent count beside them would give "child" two meanings on one row.
-The count reaches the core and is used off the screen.
-Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, projects them as `PaneChildren.subagents` beside `instrumented`, which no web code reads, and sums `working` for the pet's badge (docs/status-model.md, The subagent badge; the desktop app draws no pet today).
+The count reaches the core and no surface reads it.
+Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, projects them as `PaneChildren.subagents` beside `instrumented`, which no web code reads.
 docs/agent-hooks.md owns the hook.
 `working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero, so `done` is a running tally of the session.
 Each count is separately knowable, and a count the core cannot read is `None`, never zero, because a zero would claim the agent works alone; an agent whose adapter declares no count has none to read.

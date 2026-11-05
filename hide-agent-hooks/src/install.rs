@@ -1113,7 +1113,7 @@ mod tests {
       "hooks": {
         "SubagentStart": [
           {"hooks": [{"type": "command", "command": "/opt/principles/inject.sh SubagentStart", "timeout": 5}]},
-          {"hooks": [{"type": "command", "command": "/opt/orca/codex-hook.sh", "timeout": 10}]}
+          {"hooks": [{"type": "command", "command": "/opt/other-tool/codex-hook.sh", "timeout": 10}]}
         ],
         "Stop": [
           {"hooks": [{"type": "command", "command": "/opt/checkpoint.sh"}]}

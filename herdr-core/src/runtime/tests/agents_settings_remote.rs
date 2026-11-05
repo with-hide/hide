@@ -1561,8 +1561,11 @@ fn a_broken_sync_update_keeps_the_last_valid_agents_and_says_it_is_disconnected(
     let mut runtime = runtime();
     runtime.ingest_session(Ok(working_payload()));
     assert_eq!(runtime.snapshot().navigator.agents.len(), 1);
-    assert_eq!(runtime.snapshot().pet.pose, "carrying");
-    assert_eq!(runtime.snapshot().pet.badges.working, 1);
+    assert_ne!(
+        runtime.agent_worked_at_unix_ms, 0,
+        "a working agent stamps the clock the usage limit reads"
+    );
+    runtime.agent_worked_at_unix_ms = 0;
 
     runtime.ingest_session(Err(SessionFetchError::SocketMissing(
         "Herdr socket file does not exist".to_owned(),
@@ -1573,22 +1576,20 @@ fn a_broken_sync_update_keeps_the_last_valid_agents_and_says_it_is_disconnected(
         1,
         "the last valid agent list is retained rather than blanked"
     );
-    assert_eq!(down.pet.pose, "disconnected");
-    assert_eq!(down.pet.connection, "socket_missing");
+    assert_eq!(down.status.herdr.state, "socket_missing");
     assert!(
-        down.pet.connection_message.is_some(),
+        down.status.herdr.message.is_some(),
         "a missing socket is stated, never a silent idle"
     );
     assert_eq!(
-        down.pet.badges.working, 0,
-        "a server that stopped answering cannot keep a working badge lit"
+        runtime.agent_worked_at_unix_ms, 0,
+        "a server that stopped answering says nothing of its agents working"
     );
-    assert_eq!(down.pet.badges.disconnected, 1);
 
     // The next valid sync update recovers on its own.
     runtime.ingest_session(Ok(working_payload()));
-    assert_eq!(runtime.snapshot().pet.pose, "carrying");
-    assert_eq!(runtime.snapshot().pet.connection, "connected");
+    assert_eq!(runtime.snapshot().status.herdr.state, "connected");
+    assert_ne!(runtime.agent_worked_at_unix_ms, 0);
 }
 
 /// AC2, AC4, SC3. An operator focus writes the pane's read record to the

@@ -2009,7 +2009,7 @@
                     "type": "string"
                 }
             },
-            "description": "`hide pane send`: the pane typed into and what reached it. Each field says what Herdr took, never what the program in the pane did with it: `enter_sent` is an Enter written, not a prompt accepted.",
+            "description": "`hide pane send`: the pane typed into and what reached it. Each field says what the pane took, never what the program in the pane did with it: `enter_sent` is an Enter written, not a prompt accepted.",
             "properties": {
                 "enter_sent": {
                     "type": "boolean"
@@ -2211,7 +2211,7 @@
                             ]
                         },
                         "pane": {
-                            "description": "Herdr's pane id on `machine`.",
+                            "description": "The pane's id on `machine`.",
                             "type": "string"
                         },
                         "project": {
@@ -2845,7 +2845,7 @@
         },
         "worktree_removed": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide workspace remove`: the worktree removed, with its Herdr workspace and panes closed first.",
+            "description": "`hide workspace remove`: the worktree removed, with its workspace and panes closed first.",
             "properties": {
                 "branch": {
                     "description": "Its local branch, when it had one.",
@@ -5234,7 +5234,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ddf71c3311401278941182f7bdcb2f0074f69e71241d97598a02460cb59891f3",
+    "digest": "sha256:5c21f96b0a4a662434b16a272c103d5e559716d9089e3d7d603678df336cbd85",
     "envelopes": {
         "agent": {
             "answer": "value",

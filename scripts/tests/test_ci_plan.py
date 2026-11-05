@@ -579,7 +579,7 @@ class NamedPaths(unittest.TestCase):
 
     def test_paths_no_lane_reads_plan_policy_alone(self):
         for path in (
-            "site/index.html", "spikes/web-shell/measure/summarize.py", "agents/prd/x/prd.md",
+            "site/index.html", "agents/prd/x/prd.md",
             ".gitignore", "web/.gitignore", "LICENSE", "NOTICE", ".github/pull_request_template.md", ".github/dependabot.yml",
             ".github/ISSUE_TEMPLATE/bug.yml", ".github/DISCUSSION_TEMPLATE/ideas.yml", ".github/APPROVED_CONTRIBUTORS",
             "scripts/tests/test_ci_plan.py", "scripts/check-harness-ignore-anchor.sh",

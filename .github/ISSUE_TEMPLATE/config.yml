@@ -6,6 +6,3 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/with-hide/hide/security/advisories/new
     about: Report privately. Do not open a public issue for a vulnerability.
-  - name: Herdr runtime itself
-    url: https://herdr.dev/docs
-    about: A problem inside Herdr rather than in how hide drives it belongs upstream.

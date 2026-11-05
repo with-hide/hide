@@ -318,7 +318,7 @@ impl GuidanceAgent {
             Self::Augment => Layout::event_map(folder.join("settings.json"), true),
             Self::Junie => Layout::event_map(folder.join("config.json"), true),
             // Grok merges every `~/.grok/hooks/*.json`, so Hide's is a file of
-            // its own beside Herdr's and Orca's.
+            // its own beside the other tools' files.
             Self::Grok => Layout::event_map(folder.join("hooks").join("hide.json"), true),
             // agy reads one global `hooks.json` whose top-level keys are
             // named blocks; Herdr's is `herdr`, Hide's is `hide`. Hide creates

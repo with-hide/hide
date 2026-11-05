@@ -40,7 +40,7 @@ pub const REGISTRY: [EnvironmentVariableSpec; 4] = [
         key: HERDR_SOCKET_PATH_KEY,
         required: false,
         format: "absolute Unix-domain socket path",
-        absent_behavior: "Use the default local Herdr socket path",
+        absent_behavior: "Moving from Herdr reads Herdr's account default socket",
     },
     EnvironmentVariableSpec {
         key: CODEX_HOME_KEY,
@@ -120,13 +120,16 @@ fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentR
             HERDR_SOCKET_PATH_KEY => match value {
                 None => (
                     "default",
-                    "Herdr socket override is absent; the default local socket is used",
+                    "Herdr socket override is absent; moving from Herdr reads Herdr's default socket",
                 ),
                 Some(value) if value.is_empty() || !Path::new(&value).is_absolute() => (
                     "invalid",
-                    "Herdr socket override is invalid; the configured default remains in use",
+                    "Herdr socket override is invalid; moving from Herdr cannot read it",
                 ),
-                Some(_) => ("available", "Herdr socket override is available"),
+                Some(_) => (
+                    "available",
+                    "Herdr socket override is available for moving from Herdr",
+                ),
             },
             CODEX_HOME_KEY => {
                 let resolved = AgentId::Codex.adapter().home(

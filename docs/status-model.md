@@ -1,6 +1,6 @@
 # Status Model
 
-How Herdr's raw agent state becomes a group in the sidebar, a pet pose, and a badge row.
+How Herdr's raw agent state becomes a group in the sidebar and a count on a checkout row.
 
 The state of an agent is five axes, not one word.
 What it needs from the operator, whether it is running, whether it has reported a completion, whether the operator has looked at it, and whose work it is are independent, and mixing them into one string is what made the same agent read differently in different views.
@@ -25,7 +25,7 @@ A Hide-started agent whose task kind has a home (a Memory card's promotion, `mem
 The coordination ledger's record of the spawn is the only source of the fact (`coordination::started`), and the task kind is a closed enum (`coordination::TaskKind`) whose exhaustive `home()` match makes a new kind fail to compile until it names its home.
 A kind this build does not know, or a record with no task, loads with the rest of the ledger and reads as no home: that one agent stays an operator row with its mark and a `hide_ai.task_kind_unknown` diagnostic (D-19).
 The row stays in the agent data, so ⌘K, tabs, the pane header's owl and `hide agent list` find it as before; what changes is which lists enumerate it.
-`agent_state::listed_for_operator` is the one decision: a `HideAi` row is a member of the sidebar's tree roots, the device's tasks, Overview's requests and graph, the phone's list, the checkout counts and the pet only while it is in Needs You, and no tree draws it even then (the raised Needs You and the 태스크 list do).
+`agent_state::listed_for_operator` is the one decision: a `HideAi` row is a member of the sidebar's tree roots, the device's tasks, Overview's requests and graph, the phone's list and the checkout counts only while it is in Needs You, and no tree draws it even then (the raised Needs You and the 태스크 list do).
 Its group is Needs You or Seen and never Working or Done, so it moves no Working or Done badge, rail count or notification.
 It is in Needs You when the agent itself asks (a question, approval or block, read like any row's) or when the home has a turn for the operator.
 The home's turn is computed by the core from what the home's own tracker already follows (the Memory promotion module for `memory_promote`, `runtime/suggestion_apply.rs` for `suggestion_apply`), the attempt's pull request in the machine's PR catalog, and published on the row as `hide_ai.turn`:
@@ -364,7 +364,7 @@ Each of the four groups above is then a group of the rows the operator's lists e
 
 Done is deliberately separate from Needs You: a stop to read is "look when you have a moment", an unread demand is "act now".
 
-A read, unanswered question or approval is Seen in this group, so the app icon badge, desktop and phone notifications and the pet, which follow the group, count only unread asks (needs-you-cleanup D-09, D-10).
+A read, unanswered question or approval is Seen in this group, so the app icon badge, desktop and phone notifications, which follow the group, count only unread asks (needs-you-cleanup D-09, D-10).
 The lists the operator reads to answer, the 태스크 list's 내 차례 in 상태별 and in each project's band, the project chip `내 차례 N` and the phone's 내 차례, still stand it in Needs You, drawn read (A device's tasks), so the count there can be larger than the badge on purpose.
 
 An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.
@@ -630,49 +630,6 @@ Core status tests own the Done mark, representative priority, unique-pane counts
 Core close tests own the separation between work confirmation and unknown-status blocking, including local and remote close refusal.
 Manual acceptance in the desktop app covers fixed semantic colors and the shared disconnected override, mixed states, Done-to-Idle acknowledgment, right-side disclosure, unchanged terminal selection on collapse, empty and missing workspaces, and disconnect/recovery.
 Run evidence belongs under `agents/runs/`, never in `docs/`.
-
-## Pet pose priority
-
-An error or an unread demand takes precedence over ordinary work, so a `!` or `?` is never hidden by a background task.
-The behavior layer adds the clawd-style priority used for pose selection (`herdr_core::pet::expanded_state`):
-
-```
-error > notification > sweeping > attention > carrying/juggling > working > thinking > idle/roam > sleeping
-```
-
-The current Herdr data has no separate sweeping or thinking token, so those slots remain reserved and fall through to the existing status.
-One working pane maps to `carrying`, two or more to `juggling`.
-After eight idle seconds the pet can roam; after sixty idle seconds it runs `yawning -> dozing -> collapsing -> sleeping`.
-Any pointer activity produces `waking` before returning to the normal priority.
-The pose ladder is the one place an error is counted apart from the rest of Needs You, because the ladder puts it a rung higher; no count on any surface is drawn from that split.
-
-A lost Herdr connection outranks all of it: `herdr_core::pet::pose` reports `disconnected`, because a server that stopped answering cannot say anything true about agent state.
-The last valid agent list is retained so counts do not blink to empty, but every retained agent is counted as disconnected - a stale yellow "act now" badge for a dead server is the failure this prevents.
-
-## Badges
-
-The pet's badge row counts three of the sidebar's groups, in the same order; Seen has no badge:
-
-| Order | Color | Group |
-| --- | --- | --- |
-| 1 | yellow | Needs You |
-| 2 | green | Done |
-| 3 | blue | Working |
-
-A count of zero hides that badge.
-
-The pet's "act now" number is the whole Needs You count and its done number is the whole Done count, so a badge can never disagree with the section it stands for.
-`herdr-core/src/agent_state/tally.rs` counts the groups the projection already decided rather than reading tokens or axes a second time.
-The pet dashboard's count tiles read the same four groups, plus the rows whose server stopped answering.
-
-## The subagent badge
-
-The pet's badge row carries one more count after the three groups: the in-process subagents Hide's hook reports as working, in purple.
-The pet is its only reader: the desktop app draws no pet today, and the web shell draws no subagent count on any surface ([UI_BEHAVIOR.md, Subagent count](UI_BEHAVIOR.md#subagent-count)).
-`agent_state/tally.rs::subagents_active` sums the `working` count the hook reported to the core (`PaneHookTokens`, laid from `agent_hooks::facts`) over the agents on an answering server, with saturation, and returns zero while disconnected; a pane whose agent has gone is not counted even if its token lingers, and an instrumented pane whose count is unknown adds nothing rather than a zero.
-It is the one count the hook can vouch for; Herdr's own wire carries no ambient counts, and nothing here scans transcripts or output.
-
-Regression owner: `subagent_counts_sum_the_hook_tokens_of_listed_agents_and_go_quiet_while_disconnected`, which feeds the counts as the core lays them.
 
 ## Uninstrumented is not an unknown activity
 
