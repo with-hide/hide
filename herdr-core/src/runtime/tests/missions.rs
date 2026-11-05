@@ -3244,10 +3244,11 @@ fn a_check_holds_only_on_its_folders_current_commit_and_its_command() {
     );
 }
 
-/// Review finding 5: a pull request's CI gets one rerun per head however
-/// many runs GitHub reports; the node stays in progress throughout.
+/// Review finding 5, D-15: a pull request's CI gets one rerun per head
+/// however many runs GitHub reports, and the line still follows the run that
+/// finished last on that head; the node stays in progress throughout.
 #[test]
-fn a_failed_ci_rerun_reads_no_more_runs_on_that_head() {
+fn a_ci_line_follows_the_last_run_on_its_head_after_its_rerun() {
     use crate::mission_criteria::CriterionState;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -3279,9 +3280,9 @@ fn a_failed_ci_rerun_reads_no_more_runs_on_that_head() {
     read(&mut runtime, PullRequestChecks::Failed);
     assert_eq!(line_state(&runtime, "ci"), CriterionState::Fail);
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
-    // A later pass on that head is not read; a new head starts over.
+    // Someone runs it again on that head and it passes: the line passes.
     read(&mut runtime, PullRequestChecks::Passing);
-    assert_eq!(line_state(&runtime, "ci"), CriterionState::Fail);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Pass);
 }
 
 /// Review finding 6: a mission whose change reaches main as its branch,

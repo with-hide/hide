@@ -190,6 +190,10 @@ pub struct Criterion {
     /// A failed CI on `commit` runs again (GitHub reads it pending).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rerunning: bool,
+    /// The CI on `commit` failed after its rerun and sent the node back to
+    /// work, which it does once per head (D-15).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sent_back: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip: Option<Skip>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,6 +241,7 @@ impl Criterion {
             commit: None,
             reruns: 0,
             rerunning: false,
+            sent_back: false,
             skip: None,
             rule: None,
             checkers: Vec::new(),
@@ -430,18 +435,12 @@ impl Criterion {
         true
     }
 
-    /// Whether the line failed again after its one rerun on this commit:
-    /// it stays failed, whatever a later run on the same commit says, until
-    /// a new commit or the operator's skip (D-14, B13).
-    fn spent(&self) -> bool {
-        self.state == CriterionState::Fail && self.reruns >= RERUN_LIMIT
-    }
-
-    /// The CI GitHub reports for the pull request's head (B8, B13, D-15).
-    /// On one head the first failure gets one rerun: the next answer after
-    /// it is that rerun, a pass counting it and a failure spending it, which
-    /// sends the node back to work; a failure after the rerun passed spends
-    /// it too. A spent line stays failed until a new head.
+    /// The CI GitHub reports for the pull request's head (B8, B13, D-15):
+    /// the line follows the run that finished last on that head, whoever
+    /// started it. On one head the first failure gets one rerun: the next
+    /// answer after it is that rerun, a pass counting it and a failure
+    /// spending it; a failure after the rerun passed spends it too. Spending
+    /// it sends the node back to work, once per head.
     pub(crate) fn read_ci(
         &mut self,
         head: &str,
@@ -453,11 +452,18 @@ impl Criterion {
             .commit
             .as_deref()
             .is_some_and(|before| same_commit(before, head));
-        let before = (self.state, self.reruns, self.rerunning, self.commit.clone());
+        let before = (
+            self.state,
+            self.reruns,
+            self.rerunning,
+            self.sent_back,
+            self.commit.clone(),
+        );
         if !same {
             self.commit = Some(head.to_owned());
             self.reruns = 0;
             self.rerunning = false;
+            self.sent_back = false;
             self.state = CriterionState::Open;
             if self.skip.is_some() {
                 // A skip was for the commit the operator was asked about.
@@ -465,11 +471,11 @@ impl Criterion {
             }
         }
         let mut spent = false;
-        if self.skip.is_none() && !self.spent() {
+        if self.skip.is_none() {
             match checks {
                 Checks::Passing => {
-                    if self.state == CriterionState::Fail {
-                        self.reruns = self.reruns.saturating_add(1);
+                    if self.state == CriterionState::Fail && self.reruns < RERUN_LIMIT {
+                        self.reruns += 1;
                     }
                     self.rerunning = false;
                     self.state = CriterionState::Pass;
@@ -479,8 +485,9 @@ impl Criterion {
                 Checks::Failed => {
                     let rerun_failed = self.state == CriterionState::Fail && self.rerunning;
                     let after_rerun = self.state != CriterionState::Fail && self.reruns > 0;
-                    if rerun_failed || after_rerun {
+                    if (rerun_failed || after_rerun) && !self.sent_back {
                         self.reruns = self.reruns.max(RERUN_LIMIT);
+                        self.sent_back = true;
                         spent = true;
                     }
                     self.rerunning = false;
@@ -489,7 +496,14 @@ impl Criterion {
                 Checks::None | Checks::Unknown => {}
             }
         }
-        let changed = before != (self.state, self.reruns, self.rerunning, self.commit.clone());
+        let changed = before
+            != (
+                self.state,
+                self.reruns,
+                self.rerunning,
+                self.sent_back,
+                self.commit.clone(),
+            );
         if changed {
             self.by = Some(Recorded {
                 role: Role::Hide,
@@ -762,26 +776,31 @@ mod tests {
         assert_eq!((again.state, again.reruns), (CriterionState::Open, 0));
     }
 
-    /// B13, D-14: one rerun per head however often GitHub's runs go round;
-    /// a spent line stays failed on that head until a new one.
+    /// B13, D-14, D-15: one rerun per head however often GitHub's runs go
+    /// round, and a spent line still follows the run that finished last on
+    /// its head: a run someone started again that passed is a pass
+    /// (with-hide/hide #2075, #2077), and the node is sent back once.
     #[test]
-    fn a_ci_gets_one_rerun_per_head_through_any_number_of_runs() {
+    fn a_ci_gets_one_rerun_per_head_and_follows_the_last_run_after_it() {
         let mut line = Criterion::new("ci", CriterionKind::Ci);
         line.read_ci(A, PullRequestChecks::Failed, 1);
         line.read_ci(A, PullRequestChecks::Pending, 2);
         assert!(line.read_ci(A, PullRequestChecks::Failed, 3).spent);
         line.read_ci(A, PullRequestChecks::Pending, 4);
-        assert!(!line.read_ci(A, PullRequestChecks::Passing, 5).changed);
-        assert_eq!((line.state, line.reruns), (CriterionState::Fail, 1));
+        assert!(line.read_ci(A, PullRequestChecks::Passing, 5).changed);
+        assert_eq!(line.state, CriterionState::Pass);
+        let again = line.read_ci(A, PullRequestChecks::Failed, 6);
+        assert!(again.changed && !again.spent, "the node was sent back once");
+        assert_eq!(line.state, CriterionState::Fail);
         // A pass on its rerun, then another failure on the same head,
-        // spends it as well.
+        // spends it as well, and a later pass is still read.
         let mut passed = Criterion::new("ci", CriterionKind::Ci);
         passed.read_ci(A, PullRequestChecks::Failed, 1);
         passed.read_ci(A, PullRequestChecks::Passing, 2);
         passed.read_ci(A, PullRequestChecks::Pending, 3);
         assert!(passed.read_ci(A, PullRequestChecks::Failed, 4).spent);
         passed.read_ci(A, PullRequestChecks::Passing, 5);
-        assert_eq!(passed.state, CriterionState::Fail);
+        assert_eq!(passed.state, CriterionState::Pass);
         passed.read_ci(B, PullRequestChecks::Passing, 6);
         assert_eq!((passed.state, passed.reruns), (CriterionState::Pass, 0));
     }

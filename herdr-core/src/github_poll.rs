@@ -546,7 +546,7 @@ fn list_verdict(
     ])?;
     let runs = crate::github::runs::parse_head_runs(&answer, 1)
         .map_err(|_| unreadable("runs_unreadable"))?;
-    let runs = crate::github::runs::word(runs[0]);
+    let runs = crate::github::runs::word(runs[0].checks);
     Ok(combine(Some(&listed), Some(&runs)))
 }
 
@@ -1041,8 +1041,9 @@ mod tests {
     #[test]
     fn a_replacement_run_passing_after_a_cancelled_one_asks_one_read() {
         let suite = |conclusion: &str, updated: &str| {
+            let run = updated.len() + conclusion.len();
             format!(
-                r#"{{"status":"COMPLETED","conclusion":"{conclusion}","updatedAt":"{updated}","workflowRun":{{"event":"pull_request","workflow":{{"databaseId":22}}}}}}"#
+                r#"{{"status":"COMPLETED","conclusion":"{conclusion}","updatedAt":"{updated}","workflowRun":{{"databaseId":{run},"event":"pull_request","workflow":{{"databaseId":22}}}}}}"#
             )
         };
         let cancelled = suite("CANCELLED", "2026-11-04T16:41:23Z");

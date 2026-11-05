@@ -926,7 +926,7 @@ pub fn head_runs_query(repository: &str, commits: &[String]) -> Option<String> {
     }
     let (owner, name) = repository.split_once('/')?;
     let objects = commits.iter().enumerate().map(|(index, sha)| format!(
-        "c{index}: object(oid:\"{sha}\") {{ ... on Commit {{ checkSuites(first:{HEAD_RUNS_SUITE_LIMIT}) {{ totalCount nodes {{ status conclusion updatedAt workflowRun {{ event workflow {{ databaseId }} }} }} }} }} }}"
+        "c{index}: object(oid:\"{sha}\") {{ ... on Commit {{ checkSuites(first:{HEAD_RUNS_SUITE_LIMIT}) {{ totalCount nodes {{ status conclusion updatedAt workflowRun {{ databaseId event workflow {{ databaseId }} }} }} }} }} }}"
     )).collect::<Vec<_>>().join(" ");
     Some(format!(
         "query=query HideHeadRuns {{ repository(owner:\"{owner}\",name:\"{name}\") {{ {objects} }} }}"

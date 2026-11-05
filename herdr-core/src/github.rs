@@ -10,7 +10,7 @@
 //! list` reaches the network and routinely takes a second or more, which would
 //! otherwise be a second of coordinator latency for every Herdr pane event.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -993,21 +993,17 @@ fn list_pull_requests(
     })??;
     let mut pull_requests = parse_pull_requests(&every).map_err(GhFailure::network)?;
     let mut open_checks = parse_open_checks(&open).map_err(GhFailure::network)?;
-    let mut by_runs = HashSet::new();
+    let mut actions_jobs = HashMap::new();
     for pull_request in &mut pull_requests {
         // An open pull request's checks are the open list's or nothing: a
         // remembered value could be of a commit it has since moved past.
         if is_open(pull_request) {
             match open_checks.remove(&pull_request.number) {
-                Some(open) => {
-                    if open.actions {
-                        by_runs.insert(pull_request.number);
+                Some(mut open) => {
+                    if let Some(jobs) = open.actions_jobs.take() {
+                        actions_jobs.insert(pull_request.number, jobs);
                     }
-                    pull_request.checks = open.rollup;
-                    pull_request.work.failed_checks = open.failed;
-                    pull_request.work.pending_checks = open.pending;
-                    pull_request.work.check_counts = open.counts;
-                    pull_request.work.running_checks = open.running;
+                    open.apply(pull_request);
                 }
                 None => pull_request.checks = PullRequestChecks::Unknown,
             }
@@ -1020,23 +1016,25 @@ fn list_pull_requests(
     }
     Ok(Listed {
         pull_requests,
-        by_runs,
+        actions_jobs,
     })
 }
 
-/// A project's pull requests as its two lists read them, and the open ones
-/// whose rollup listed GitHub Actions jobs, which their runs judge instead.
+/// A project's pull requests as its two lists read them, and the rollup rows
+/// of the open ones whose rollup listed GitHub Actions jobs, by number, which
+/// their runs judge instead.
 struct Listed {
     pull_requests: Vec<PullRequestSnapshot>,
-    by_runs: HashSet<u32>,
+    actions_jobs: HashMap<u32, Vec<GhCheck>>,
 }
 
 /// Adds to each open pull request's checks what GitHub Actions' runs on its
 /// head add up to (`runs`), which the open list's job rows cannot say: a
 /// cancelled run's jobs stay listed beside its replacement's, and a run queued
-/// before its first job is not listed. When the runs cannot be read, a pull
-/// request whose rollup listed Actions jobs reads `Unknown` rather than what
-/// the jobs alone would say, and the reason goes to the diagnostic log.
+/// before its first job is not listed. Its card then counts only the jobs of
+/// the runs that decide. When the runs cannot be read, a pull request whose
+/// rollup listed Actions jobs reads `Unknown` rather than what the jobs alone
+/// would say, and the reason goes to the diagnostic log.
 fn judge_head_runs(
     run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
     repository: Result<&str, &GhFailure>,
@@ -1068,12 +1066,25 @@ fn judge_head_runs(
         let runs = pull_request
             .head_oid
             .as_ref()
-            .and_then(|head| judged.get(head).copied());
-        pull_request.checks = match runs {
-            Some(runs) => runs::worse(pull_request.checks, runs),
-            None if listed.by_runs.contains(&pull_request.number) => PullRequestChecks::Unknown,
-            None => pull_request.checks,
-        };
+            .and_then(|head| judged.get(head));
+        let jobs = listed.actions_jobs.remove(&pull_request.number);
+        match (runs, jobs) {
+            (Some(runs), jobs) => {
+                if let (Some(counted), Some(jobs)) = (&runs.counted, jobs) {
+                    let counted = jobs
+                        .into_iter()
+                        .filter(|job| {
+                            !job.is_actions_job()
+                                || job.run_id().is_none_or(|run| counted.contains(&run))
+                        })
+                        .collect();
+                    OpenChecks::of(Some(counted)).apply(pull_request);
+                }
+                pull_request.checks = runs::worse(pull_request.checks, runs.checks);
+            }
+            (None, Some(_)) => pull_request.checks = PullRequestChecks::Unknown,
+            (None, None) => {}
+        }
     }
 }
 
@@ -1082,7 +1093,7 @@ fn read_head_runs(
     run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
     repository: Result<&str, &GhFailure>,
     heads: &[String],
-) -> Result<HashMap<String, PullRequestChecks>, GhFailure> {
+) -> Result<HashMap<String, runs::HeadRuns>, GhFailure> {
     let mut judged = HashMap::new();
     if heads.is_empty() {
         return Ok(judged);
@@ -2766,7 +2777,7 @@ fn parse_merged_pull_request_proofs(output: &str) -> Result<Vec<MergedPullReques
         .collect())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "__typename")]
 enum GhCheck {
     CheckRun {
@@ -2808,6 +2819,20 @@ impl GhCheck {
     /// A job of a GitHub Actions workflow run.
     fn is_actions_job(&self) -> bool {
         matches!(self, GhCheck::CheckRun { workflow: Some(workflow), .. } if !workflow.is_empty())
+    }
+
+    /// The workflow run a job belongs to, from the address GitHub gives it
+    /// (`…/actions/runs/<run>/job/<job>`), the one place the rollup names it.
+    fn run_id(&self) -> Option<u64> {
+        let GhCheck::CheckRun {
+            details_url: Some(url),
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let (_, rest) = url.split_once("/actions/runs/")?;
+        rest.split('/').next()?.parse().ok()
     }
 
     /// A check that has not finished.
@@ -2934,32 +2959,7 @@ fn parse_open_checks(output: &str) -> Result<HashMap<u32, OpenChecks>, String> {
         .map_err(|error| format!("gh pr list returned checks Hide could not read: {error}"))?;
     Ok(listed
         .into_iter()
-        .map(|row| {
-            let rollup = row.status_check_rollup.as_deref();
-            (
-                row.number,
-                OpenChecks {
-                    rollup: rollup_checks(rollup),
-                    actions: rollup.into_iter().flatten().any(GhCheck::is_actions_job),
-                    counts: rollup.map(count_checks),
-                    failed: rollup
-                        .into_iter()
-                        .flatten()
-                        .filter_map(GhCheck::failure)
-                        .collect(),
-                    pending: rollup
-                        .into_iter()
-                        .flatten()
-                        .filter(|check| check.is_pending())
-                        .count() as u32,
-                    running: rollup
-                        .into_iter()
-                        .flatten()
-                        .filter(|check| check.is_running())
-                        .count() as u32,
-                },
-            )
-        })
+        .map(|row| (row.number, OpenChecks::of(row.status_check_rollup)))
         .collect())
 }
 
@@ -2967,13 +2967,39 @@ fn parse_open_checks(output: &str) -> Result<HashMap<u32, OpenChecks>, String> {
 /// checks that failed by name, and how many are still running.
 struct OpenChecks {
     rollup: PullRequestChecks,
-    /// The rollup listed GitHub Actions jobs, which `rollup` leaves out.
-    actions: bool,
     counts: Option<crate::model::PrCheckCounts>,
     failed: Vec<PrFailedCheck>,
     pending: u32,
     /// The pending checks that reported: all but `EXPECTED`.
     running: u32,
+    /// The rollup's rows when it listed GitHub Actions jobs, which their
+    /// workflow runs judge: `rollup` leaves them out, and the counts are
+    /// taken again from the jobs of the runs that decide (`judge_head_runs`).
+    actions_jobs: Option<Vec<GhCheck>>,
+}
+
+impl OpenChecks {
+    fn of(rollup: Option<Vec<GhCheck>>) -> Self {
+        let checks = rollup.as_deref();
+        let all = || checks.into_iter().flatten();
+        Self {
+            rollup: rollup_checks(checks),
+            counts: checks.map(count_checks),
+            failed: all().filter_map(GhCheck::failure).collect(),
+            pending: all().filter(|check| check.is_pending()).count() as u32,
+            running: all().filter(|check| check.is_running()).count() as u32,
+            actions_jobs: rollup.filter(|checks| checks.iter().any(GhCheck::is_actions_job)),
+        }
+    }
+
+    /// What the card shows of these checks.
+    fn apply(self, pull_request: &mut PullRequestSnapshot) {
+        pull_request.checks = self.rollup;
+        pull_request.work.failed_checks = self.failed;
+        pull_request.work.pending_checks = self.pending;
+        pull_request.work.check_counts = self.counts;
+        pull_request.work.running_checks = self.running;
+    }
 }
 
 fn count_checks(checks: &[GhCheck]) -> crate::model::PrCheckCounts {
@@ -4137,10 +4163,37 @@ mod tests {
         )
     }
 
+    /// A job row of the open list's rollup, of run `run` of `workflow`, with
+    /// the address GitHub gives a job.
+    fn run_job(workflow: &str, run: u64, name: &str, status: &str, conclusion: &str) -> String {
+        format!(
+            r#"{{"__typename":"CheckRun","workflowName":"{workflow}","name":"{name}","status":"{status}","conclusion":{conclusion},"detailsUrl":"https://github.com/acme/app/actions/runs/{run}/job/{run}0"}}"#
+        )
+    }
+
     /// One workflow run on the head, as its check suite says.
     fn suite(workflow: u64, event: &str, status: &str, conclusion: &str, updated: &str) -> String {
+        run_suite(
+            workflow,
+            workflow * 1000,
+            event,
+            status,
+            conclusion,
+            updated,
+        )
+    }
+
+    /// The same, for run `run`.
+    fn run_suite(
+        workflow: u64,
+        run: u64,
+        event: &str,
+        status: &str,
+        conclusion: &str,
+        updated: &str,
+    ) -> String {
         format!(
-            r#"{{"status":"{status}","conclusion":{conclusion},"updatedAt":"{updated}","workflowRun":{{"event":"{event}","workflow":{{"databaseId":{workflow}}}}}}}"#
+            r#"{{"status":"{status}","conclusion":{conclusion},"updatedAt":"{updated}","workflowRun":{{"databaseId":{run},"event":"{event}","workflow":{{"databaseId":{workflow}}}}}}}"#
         )
     }
 
@@ -4150,6 +4203,10 @@ mod tests {
     /// Reads one open pull request at `head('a')` whose rollup lists `jobs`
     /// and whose head carries the workflow runs `suites`.
     fn open_checks(jobs: &[String], suites: &[String]) -> PullRequestChecks {
+        open_pull(jobs, suites).checks
+    }
+
+    fn open_pull(jobs: &[String], suites: &[String]) -> PullRequestSnapshot {
         let gh = TwoLists::with_runs(
             &format!("[{}]", listed_at(7, "feature", "OPEN", &head('a'))),
             &format!(
@@ -4158,7 +4215,127 @@ mod tests {
             ),
             &suites.join(","),
         );
-        checks_of(&gh.read(&KnownChecks::new()).expect("both lists answer"), 7)
+        gh.read(&KnownChecks::new())
+            .expect("both lists answer")
+            .into_iter()
+            .find(|pull_request| pull_request.number == 7)
+            .expect("pull request listed")
+    }
+
+    fn failed_names(pull_request: &PullRequestSnapshot) -> Vec<&str> {
+        pull_request
+            .work
+            .failed_checks
+            .iter()
+            .filter_map(|check| check.name.as_deref())
+            .collect()
+    }
+
+    /// with-hide/hide #2077's card at its merge: the cancelled run's jobs,
+    /// its closing `verify` failed among them, are not counted beside the
+    /// run that passed, so the card says what the mark says.
+    #[test]
+    fn the_card_counts_only_the_jobs_of_the_run_that_decides() {
+        let design = run_job(
+            "Design contract",
+            1,
+            "static-design",
+            "COMPLETED",
+            r#""SUCCESS""#,
+        );
+        let design_run = run_suite(
+            DESIGN,
+            1,
+            "pull_request",
+            "COMPLETED",
+            r#""SUCCESS""#,
+            "2026-11-04T15:14:14Z",
+        );
+        let cancelled = [
+            run_job("verify", 100, "desktop e2e", "COMPLETED", r#""CANCELLED""#),
+            run_job("verify", 100, "verify", "COMPLETED", r#""FAILURE""#),
+        ];
+        let cancelled_run = run_suite(
+            VERIFY,
+            100,
+            "pull_request",
+            "COMPLETED",
+            r#""CANCELLED""#,
+            "2026-11-04T16:41:23Z",
+        );
+        let passed = open_pull(
+            &[
+                design.clone(),
+                cancelled[0].clone(),
+                cancelled[1].clone(),
+                run_job("verify", 200, "desktop e2e", "COMPLETED", r#""SUCCESS""#),
+                run_job("verify", 200, "verify", "COMPLETED", r#""SUCCESS""#),
+            ],
+            &[
+                design_run.clone(),
+                cancelled_run.clone(),
+                run_suite(
+                    VERIFY,
+                    200,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                    "2026-11-04T18:31:38Z",
+                ),
+            ],
+        );
+        assert_eq!(passed.checks, PullRequestChecks::Passing);
+        assert_eq!(
+            passed.work.check_counts,
+            Some(crate::model::PrCheckCounts {
+                total: 3,
+                passed: 3,
+                ..Default::default()
+            })
+        );
+        assert!(failed_names(&passed).is_empty());
+
+        // While the replacement runs, its jobs are what the card counts.
+        let running = open_pull(
+            &[
+                design.clone(),
+                cancelled[0].clone(),
+                cancelled[1].clone(),
+                run_job("verify", 300, "desktop e2e", "IN_PROGRESS", "null"),
+            ],
+            &[
+                design_run.clone(),
+                cancelled_run.clone(),
+                run_suite(
+                    VERIFY,
+                    300,
+                    "pull_request",
+                    "IN_PROGRESS",
+                    "null",
+                    "2026-11-04T16:42:00Z",
+                ),
+            ],
+        );
+        assert_eq!(running.checks, PullRequestChecks::Pending);
+        assert_eq!(
+            running.work.check_counts,
+            Some(crate::model::PrCheckCounts {
+                total: 2,
+                passed: 1,
+                running: 1,
+                ..Default::default()
+            })
+        );
+        assert!(failed_names(&running).is_empty());
+        assert_eq!(running.work.running_checks, 1);
+
+        // With no replacement, the cancelled run is what failed.
+        let alone = open_pull(
+            &[design, cancelled[0].clone(), cancelled[1].clone()],
+            &[design_run, cancelled_run],
+        );
+        assert_eq!(alone.checks, PullRequestChecks::Failed);
+        assert_eq!(failed_names(&alone), ["desktop e2e", "verify"]);
     }
 
     /// with-hide/hide #2077 at its merge: the first verify run was cancelled,
@@ -4535,7 +4712,7 @@ mod tests {
             &verdicts_and_runs(
                 "none",
                 "none",
-                r#"{"status":"COMPLETED","conclusion":"CANCELLED","updatedAt":"2026-11-04T16:41:23Z","workflowRun":{"event":"pull_request","workflow":{"databaseId":22}}},{"status":"COMPLETED","conclusion":"SUCCESS","updatedAt":"2026-11-04T18:31:38Z","workflowRun":{"event":"pull_request","workflow":{"databaseId":22}}}"#,
+                r#"{"status":"COMPLETED","conclusion":"CANCELLED","updatedAt":"2026-11-04T16:41:23Z","workflowRun":{"databaseId":100,"event":"pull_request","workflow":{"databaseId":22}}},{"status":"COMPLETED","conclusion":"SUCCESS","updatedAt":"2026-11-04T18:31:38Z","workflowRun":{"databaseId":200,"event":"pull_request","workflow":{"databaseId":22}}}"#,
                 &asked,
             ),
             "acme/app",

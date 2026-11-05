@@ -9,7 +9,7 @@
 //! unfinished run keeps the workflow pending, and a workflow whose every run
 //! was cancelled failed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use hide_node_link::gh::HEAD_RUNS_SUITE_LIMIT;
 use serde::Deserialize;
@@ -17,14 +17,28 @@ use serde::Deserialize;
 use super::{FAILED_CONCLUSIONS, parse_rfc3339_ms};
 use crate::model::PullRequestChecks;
 
-/// The verdict of each of `count` commits, in the order the query named them,
-/// from a `HideHeadRuns` answer. A commit GitHub does not know, or one with
-/// more runs than were read, is `Unknown`; an answer that does not read is an
-/// error.
-pub(crate) fn parse_head_runs(
-    output: &str,
-    count: usize,
-) -> Result<Vec<PullRequestChecks>, String> {
+/// What one commit's workflow runs add up to, and which runs decide it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HeadRuns {
+    pub checks: PullRequestChecks,
+    /// The runs whose jobs a pull request's card counts: each workflow's
+    /// unfinished runs, else the run that decides it. `None` when the runs
+    /// were not judged, so no job is set aside.
+    pub counted: Option<HashSet<u64>>,
+}
+
+impl HeadRuns {
+    const UNKNOWN: Self = Self {
+        checks: PullRequestChecks::Unknown,
+        counted: None,
+    };
+}
+
+/// What each of `count` commits' runs add up to, in the order the query named
+/// them, from a `HideHeadRuns` answer. A commit GitHub does not know, or one
+/// with more runs than were read, is `Unknown`; an answer that does not read
+/// is an error.
+pub(crate) fn parse_head_runs(output: &str, count: usize) -> Result<Vec<HeadRuns>, String> {
     #[derive(Deserialize)]
     struct Answer {
         data: Data,
@@ -57,7 +71,7 @@ pub(crate) fn parse_head_runs(
                 .remove(&format!("c{index}"))
                 .ok_or_else(|| format!("the runs query left out commit {index}"))?;
             let Some(commit) = commit else {
-                return Ok(PullRequestChecks::Unknown);
+                return Ok(HeadRuns::UNKNOWN);
             };
             if commit.suites.total > HEAD_RUNS_SUITE_LIMIT {
                 crate::diagnostic!(serde_json::json!({
@@ -66,7 +80,7 @@ pub(crate) fn parse_head_runs(
                     "runs": commit.suites.total,
                     "cap": HEAD_RUNS_SUITE_LIMIT,
                 }));
-                return Ok(PullRequestChecks::Unknown);
+                return Ok(HeadRuns::UNKNOWN);
             }
             verdict(&commit.suites.nodes)
         })
@@ -86,6 +100,8 @@ struct Suite {
 
 #[derive(Deserialize)]
 struct WorkflowRun {
+    #[serde(rename = "databaseId")]
+    id: u64,
     event: String,
     workflow: Workflow,
 }
@@ -103,46 +119,69 @@ fn judges_the_pull_request(event: &str) -> bool {
     event == "push" || event.starts_with("pull_request")
 }
 
-fn verdict(suites: &[Suite]) -> Result<PullRequestChecks, String> {
-    let mut workflows: BTreeMap<u64, Vec<&Suite>> = BTreeMap::new();
+fn verdict(suites: &[Suite]) -> Result<HeadRuns, String> {
+    let mut workflows: BTreeMap<u64, Vec<(&Suite, &WorkflowRun)>> = BTreeMap::new();
     for suite in suites {
         if let Some(run) = &suite.run
             && judges_the_pull_request(&run.event)
         {
-            workflows.entry(run.workflow.id).or_default().push(suite);
+            workflows
+                .entry(run.workflow.id)
+                .or_default()
+                .push((suite, run));
         }
     }
-    let mut checks = PullRequestChecks::None;
+    let mut judged = HeadRuns {
+        checks: PullRequestChecks::None,
+        counted: Some(HashSet::new()),
+    };
     for runs in workflows.values() {
-        checks = worse(checks, workflow_verdict(runs)?);
+        let (checks, counted) = workflow_verdict(runs)?;
+        judged.checks = worse(judged.checks, checks);
+        judged.counted.get_or_insert_default().extend(counted);
     }
-    Ok(checks)
+    Ok(judged)
 }
 
-fn workflow_verdict(runs: &[&Suite]) -> Result<PullRequestChecks, String> {
-    if runs.iter().any(|run| run.status != "COMPLETED") {
-        return Ok(PullRequestChecks::Pending);
+/// One workflow's verdict and the runs it was read from.
+fn workflow_verdict(
+    runs: &[(&Suite, &WorkflowRun)],
+) -> Result<(PullRequestChecks, Vec<u64>), String> {
+    let unfinished: Vec<u64> = runs
+        .iter()
+        .filter(|(suite, _)| suite.status != "COMPLETED")
+        .map(|(_, run)| run.id)
+        .collect();
+    if !unfinished.is_empty() {
+        return Ok((PullRequestChecks::Pending, unfinished));
     }
-    let mut last: Option<(u64, &Suite)> = None;
-    for run in runs {
-        if run.conclusion.as_deref() == Some("CANCELLED") {
-            continue;
-        }
-        let at = parse_rfc3339_ms(&run.updated_at)
-            .ok_or_else(|| format!("a run's time does not read: {}", run.updated_at))?;
-        if last.is_none_or(|(before, _)| at >= before) {
-            last = Some((at, run));
+    let mut last: Option<(u64, &Suite, u64)> = None;
+    let mut last_cancelled: Option<(u64, u64)> = None;
+    for (suite, run) in runs {
+        let at = parse_rfc3339_ms(&suite.updated_at)
+            .ok_or_else(|| format!("a run's time does not read: {}", suite.updated_at))?;
+        if suite.conclusion.as_deref() == Some("CANCELLED") {
+            if last_cancelled.is_none_or(|(before, _)| at >= before) {
+                last_cancelled = Some((at, run.id));
+            }
+        } else if last.is_none_or(|(before, ..)| at >= before) {
+            last = Some((at, suite, run.id));
         }
     }
-    let Some((_, run)) = last else {
-        // Every run was cancelled and none replaced it.
-        return Ok(PullRequestChecks::Failed);
+    let Some((_, suite, id)) = last else {
+        // Every run was cancelled and none replaced it: the last of them is
+        // what failed.
+        return Ok((
+            PullRequestChecks::Failed,
+            last_cancelled.map(|(_, id)| id).into_iter().collect(),
+        ));
     };
-    Ok(match run.conclusion.as_deref() {
+    let checks = match suite.conclusion.as_deref() {
         Some("SUCCESS" | "NEUTRAL" | "SKIPPED") => PullRequestChecks::Passing,
         Some(value) if FAILED_CONCLUSIONS.contains(&value) => PullRequestChecks::Failed,
         _ => PullRequestChecks::Unknown,
-    })
+    };
+    Ok((checks, vec![id]))
 }
 
 /// What two parts of one commit's checks add up to: a failure first, then
@@ -179,8 +218,9 @@ mod tests {
     use super::*;
 
     fn suite(workflow: u64, event: &str, status: &str, conclusion: &str, updated: &str) -> String {
+        let run = parse_rfc3339_ms(updated).expect("a time");
         format!(
-            r#"{{"status":"{status}","conclusion":{conclusion},"updatedAt":"{updated}","workflowRun":{{"event":"{event}","workflow":{{"databaseId":{workflow}}}}}}}"#
+            r#"{{"status":"{status}","conclusion":{conclusion},"updatedAt":"{updated}","workflowRun":{{"databaseId":{run},"event":"{event}","workflow":{{"databaseId":{workflow}}}}}}}"#
         )
     }
 
@@ -190,7 +230,7 @@ mod tests {
             suites.len(),
             suites.join(",")
         );
-        parse_head_runs(&answer, 1).expect("an answer")[0]
+        parse_head_runs(&answer, 1).expect("an answer")[0].checks
     }
 
     const VERIFY: u64 = 22;
@@ -264,7 +304,7 @@ mod tests {
         );
         assert_eq!(
             parse_head_runs(&answer, 2).expect("an answer"),
-            [PullRequestChecks::Unknown, PullRequestChecks::Unknown]
+            [HeadRuns::UNKNOWN, HeadRuns::UNKNOWN]
         );
         assert!(parse_head_runs(&answer, 3).is_err(), "a commit left out");
         assert!(parse_head_runs("{}", 1).is_err());

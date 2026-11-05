@@ -1383,6 +1383,8 @@ export type MissionCriterion = {
   commit?: string;
   reruns?: number;
   rerunning?: boolean;
+  /** The CI on `commit` failed after its rerun and sent the node back to work, once per head. */
+  sent_back?: boolean;
   /** `decision` is the operator's answered question a check command or CI skip rests on (`⤳ operator 결정`). */
   skip?: { reason: string; decision?: number };
   rule?: MissionCheckRule;

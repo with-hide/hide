@@ -840,6 +840,7 @@ Each workflow is judged by its runs instead, read as check suites by one fixed G
 Only runs the pull request or a push started count (`pull_request*` and `push` events), which are the runs GitHub's own pull request checks list; a run started by hand or on a schedule on the same commit is someone else's.
 A commit with more than 100 suites, or one GitHub does not know, is `Unknown` (the first writes `checks.runs_capped`).
 When the runs cannot be read, an open pull request whose rollup listed Actions jobs reads `Unknown` and one `pull_requests.runs_unread` diagnostic names the reason; the rest of the read stands.
+The card counts the same runs: its check counts, its failed checks by name and its running checks take GitHub Actions' jobs only from each workflow's unfinished runs, else from the run that decides it (the last cancelled one when every run was cancelled), each job placed in its run by the run number in the address GitHub gives it (`…/actions/runs/<run>/job/<job>`); a job whose address names no run is counted as before.
 The advisory poll and the settled recheck read a head the same way: the check runs list with GitHub Actions' runs left out of its verdict, then the same query for that one commit.
 
 ### Pull request visual states
