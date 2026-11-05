@@ -5,11 +5,13 @@
 //! conversation.
 //!
 //! The helper is this program started again in its helper mode
-//! (`--console-input <shell pid>`, `main.rs`). It is started on the watch's
-//! first recheck of a program, at least [`crate::watch::LINE_EDITING_RECHECK`]
-//! after the program took the pane's foreground, so a short command never
-//! starts one, and it is asked on rechecks only; the facts in between carry
-//! the last answer. It lives until the console first reads keys under the
+//! (`--console-input <shell pid>`, `main.rs`). It is started the first time
+//! the watch reads a program at least [`LINE_EDITING_RECHECK`] after the
+//! program took the pane's foreground, on a recheck or, for a program that
+//! keeps writing and so is never rechecked, on the facts, so a short command
+//! never starts one; after that first ask it is asked on rechecks only, and
+//! the facts in between carry the last answer. It lives until the console
+//! first reads keys under the
 //! program, for at most [`crate::watch::LINE_EDITING_RECHECK_FOR`], one per
 //! pane. After that the program is read as it was last read until another
 //! program takes the foreground: a program that once read keys is not
@@ -23,7 +25,7 @@ use hide_holder_protocol::LineEditing;
 use hide_platform::process::console_input::ConsoleInput;
 
 use crate::log::Log;
-use crate::watch::{LINE_EDITING_RECHECK_FOR, LineAsk};
+use crate::watch::{LINE_EDITING_RECHECK, LINE_EDITING_RECHECK_FOR, LineAsk};
 
 /// The argument that starts this program as the helper.
 pub const HELPER_ARGUMENT: &str = "--console-input";
@@ -45,6 +47,8 @@ struct Program {
     since: Instant,
     helper: Option<ConsoleInput>,
     starts: u32,
+    /// The console has been asked about this program, or a helper tried.
+    asked: bool,
     /// The last answer, and the one given once the program read keys, the
     /// wait passed its bound or the helper could not be had.
     last: LineEditing,
@@ -62,9 +66,9 @@ impl ConsoleLines {
 
     /// Whether the console edits lines under `program`, the pane's foreground
     /// program (`None` while the shell holds it, which is read as not known,
-    /// as before: only a started program's reading keys is waited on). Only
-    /// a [`LineAsk::Recheck`] asks the console; a program is not known until
-    /// the first one has.
+    /// as before: only a started program's reading keys is waited on). The
+    /// console is asked on a [`LineAsk::Recheck`], and on the first read of
+    /// any kind past [`LINE_EDITING_RECHECK`]; a program is not known before.
     pub fn read(&mut self, program: Option<u32>, ask: LineAsk) -> LineEditing {
         let Some(pid) = program else {
             self.program = None;
@@ -78,20 +82,30 @@ impl ConsoleLines {
                 since: Instant::now(),
                 helper: None,
                 starts: 0,
+                asked: false,
                 last: LineEditing::Unknown,
                 settled: false,
             }),
         };
-        if current.settled || ask == LineAsk::Facts {
+        if current.settled {
             return current.last;
         }
+        // Past the start's deadline, on any read, a program still editing
+        // lines is not frozen as editing them: it is not known from then
+        // on, as a console that cannot be read is. Not logged: every long
+        // command (a build) edits lines that long, and nothing failed.
         if current.since.elapsed() >= LINE_EDITING_RECHECK_FOR {
-            // Past the start's deadline a program still editing lines is
-            // not frozen as editing them: it is not known from then on, as
-            // a console that cannot be read is.
-            unread(log, pid, "wait_bound", None);
             return current.settle(LineEditing::Unknown);
         }
+        // A program that keeps writing is read on the facts alone, since
+        // the writer rechecks only after a quiet spell: its first such read
+        // asks, so a start whose screen moved past its settle and then
+        // stopped in the line is not read not known (Pi 1.0.4).
+        let first = !current.asked && current.since.elapsed() >= LINE_EDITING_RECHECK;
+        if ask == LineAsk::Facts && !first {
+            return current.last;
+        }
+        current.asked = true;
         let helper = match &mut current.helper {
             Some(helper) => helper,
             None if current.starts >= STARTS_PER_PROGRAM => {
@@ -155,5 +169,31 @@ impl Program {
         self.settled = true;
         self.helper = None;
         answer
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A program still editing lines past the start's deadline is read not
+    /// known from then on, by the facts as by a recheck, and keeps no
+    /// helper: frozen as editing, an agent past a slow start would refuse
+    /// every letter until it ended.
+    #[test]
+    fn a_program_past_the_start_wait_is_not_known_and_keeps_no_helper() {
+        let log = Log::open(None, "p").unwrap();
+        let mut lines = ConsoleLines::new(std::process::id(), log);
+        assert_eq!(lines.read(Some(7), LineAsk::Facts), LineEditing::Unknown);
+        let program = lines.program.as_mut().unwrap();
+        assert!(!program.asked, "a program is asked only past the recheck");
+        program.since = Instant::now()
+            .checked_sub(LINE_EDITING_RECHECK_FOR)
+            .unwrap();
+        program.last = LineEditing::Edits;
+        assert_eq!(lines.read(Some(7), LineAsk::Facts), LineEditing::Unknown);
+        let program = lines.program.as_ref().unwrap();
+        assert!(program.settled && program.helper.is_none());
+        assert_eq!(lines.read(Some(7), LineAsk::Recheck), LineEditing::Unknown);
     }
 }

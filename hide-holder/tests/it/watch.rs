@@ -6,7 +6,7 @@
 //! facts are the pane's whole state. That an idle pane's watch sends nothing
 //! and wakes nothing is `idle.rs`'s.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Capability, CloseReason, Closed, Facts, HolderMessage, PROTOCOL_VERSION, ScreenRead,
@@ -14,7 +14,7 @@ use hide_holder_protocol::{
 };
 use hide_platform::ipc::LocalStream;
 
-use crate::role::{CONSOLE_PIDS, END, GO};
+use crate::role::{CONSOLE_PIDS, END, GO, PRINT_FOR, QUIET};
 #[cfg(unix)]
 use crate::support::wait_until;
 use crate::support::{
@@ -261,6 +261,7 @@ struct LineInputPane {
     holder: crate::support::Holder,
     go: std::path::PathBuf,
     end: std::path::PathBuf,
+    quiet: std::path::PathBuf,
     /// Written on Windows only (`role.rs`).
     #[cfg_attr(unix, allow(dead_code))]
     pids: std::path::PathBuf,
@@ -268,33 +269,41 @@ struct LineInputPane {
 
 impl LineInputPane {
     fn start() -> Self {
+        Self::printing_first(None)
+    }
+
+    /// A pane whose program writes for `print` before it waits in its line.
+    fn printing_first(print: Option<Duration>) -> Self {
         let home = Home::new();
         let folder = home.prepare(current_version(), &source());
         let go = home.path().join("go");
         let end = home.path().join("end");
+        let quiet = home.path().join("quiet");
         let pids = home.path().join("console-pids");
         let role = std::ffi::OsString::from("line_input_when_told");
-        let (go_value, end_value, pids_value) = (
+        let (go_value, end_value, quiet_value, pids_value) = (
             go.clone().into_os_string(),
             end.clone().into_os_string(),
+            quiet.clone().into_os_string(),
             pids.clone().into_os_string(),
         );
-        let holder = start_ready(
-            &folder.program,
-            &home.socket("p"),
-            &shell(),
-            &[
-                (ROLE, &role),
-                (GO, &go_value),
-                (END, &end_value),
-                (CONSOLE_PIDS, &pids_value),
-            ],
-        );
+        let millis = print.map(|print| std::ffi::OsString::from(print.as_millis().to_string()));
+        let mut env = vec![
+            (ROLE, &role),
+            (GO, &go_value),
+            (END, &end_value),
+            (CONSOLE_PIDS, &pids_value),
+        ];
+        if let Some(millis) = &millis {
+            env.extend([(PRINT_FOR, millis), (QUIET, &quiet_value)]);
+        }
+        let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &env);
         Self {
             _home: home,
             holder,
             go,
             end,
+            quiet,
             pids,
         }
     }
@@ -357,6 +366,35 @@ fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
     assert_eq!(facts.line_editing, None);
     std::fs::write(&pane.end, b"").unwrap();
     older.wait("the shell again", |facts| facts.foreground.is_none());
+}
+
+/// A program that writes as it starts, past a start's settle, and then
+/// waits in its line is read editing the line while it still writes: the
+/// writer asks the terminal again only after a quiet spell, and a program
+/// first read not known as it stopped would have had a start typed into its
+/// line (Pi 1.0.4, nightly 41789009557). On Windows the facts themselves
+/// ask the console once the program has held the foreground a recheck long.
+#[test]
+fn a_program_that_writes_before_it_waits_in_its_line_is_read_editing_it_while_it_writes() {
+    use hide_holder_protocol::{ClientMessage, LineEditing};
+
+    let pane = LineInputPane::printing_first(Some(Duration::from_secs(5)));
+    let mut connection = pane.holder.open();
+    let mut watch = Watch::accepting(
+        &pane.holder.socket,
+        vec![Capability::Facts, Capability::LineEditing],
+    );
+    watch.wait("the shell's facts", |facts| facts.foreground.is_none());
+    connection.send(ClientMessage::Input(role_line())).unwrap();
+    watch.wait("the program in the terminal's line", |facts| {
+        facts.foreground.is_some() && facts.line_editing == Some(LineEditing::Edits)
+    });
+    assert!(
+        !pane.quiet.exists(),
+        "the program was read editing its line only once it stopped writing"
+    );
+    std::fs::write(&pane.end, b"").unwrap();
+    watch.wait("the shell again", |facts| facts.foreground.is_none());
 }
 
 /// Programs that end in the console's line input, while the holder's helper

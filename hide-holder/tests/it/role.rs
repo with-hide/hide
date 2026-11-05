@@ -25,6 +25,11 @@ pub const END: &str = "HIDE_HOLDER_TEST_END";
 /// console as it stops editing lines (Windows).
 pub const CONSOLE_PIDS: &str = "HIDE_HOLDER_TEST_CONSOLE_PIDS";
 
+/// How many milliseconds `line_input_when_told` writes before it waits in
+/// its line, when set, and the file it writes once it stops.
+pub const PRINT_FOR: &str = "HIDE_HOLDER_TEST_PRINT_FOR";
+pub const QUIET: &str = "HIDE_HOLDER_TEST_QUIET";
+
 #[test]
 fn play() {
     let Ok(role) = std::env::var(ROLE) else {
@@ -288,6 +293,20 @@ fn line_input_when_told() {
     let go = std::path::PathBuf::from(std::env::var_os(GO).unwrap());
     let end = std::path::PathBuf::from(std::env::var_os(END).unwrap());
     let deadline = Instant::now() + ROLE_LIFE;
+    // Asked to, it first writes for a while, as a start draws its screen,
+    // and marks when it stops.
+    if let (Some(millis), Some(quiet)) = (std::env::var_os(PRINT_FOR), std::env::var_os(QUIET)) {
+        let until =
+            Instant::now() + Duration::from_millis(millis.to_str().unwrap().parse().unwrap());
+        let mut out = std::io::stdout();
+        while Instant::now() < until {
+            out.write_all(b"drawing\r\n").unwrap();
+            out.flush().unwrap();
+            #[allow(clippy::disallowed_methods)] // the role's own pace
+            thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::write(quiet, b"").unwrap();
+    }
     while !go.exists() && !end.exists() && Instant::now() < deadline {
         #[allow(clippy::disallowed_methods)] // the role's own pace
         thread::sleep(Duration::from_millis(5));
