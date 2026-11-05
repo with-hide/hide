@@ -642,8 +642,9 @@ jobs:
     with:
       lane: windows
       runner: windows-latest
-      shards: 1
-      grep: "@platform"
+      # TEMPORARY (with-hide/hide-private#516): the start tests 20 times each.
+      shards: 7
+      grep: "starts (through spawn|from a typed command) with a visible state"
 
   # The web shell is the same code on every operating system, so the whole
   # suite runs once, on Linux, where runners are plentiful. What differs by
@@ -662,11 +663,9 @@ jobs:
     with:
       lane: linux
       runner: ubuntu-latest
-      # Median per test from twenty successful main runs, 2026-10-26..28:
-      # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
-      # six at most 641.9 s. Six is the smallest count within 720 s.
-      # Test-work weights exclude setup/queues; the step still caps at 20 min.
-      shards: 6
+      # TEMPORARY (with-hide/hide-private#516): the start tests 20 times each.
+      shards: 7
+      grep: "starts (through spawn|from a typed command) with a visible state"
 
   # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
   # docs/TESTING.md), in `remote-mailbox.yml`. It has its own job because it was
@@ -847,8 +846,9 @@ jobs:
     with:
       lane: windows
       runner: windows-latest
-      shards: 1
-      grep: "@platform"
+      # TEMPORARY (with-hide/hide-private#516): the start tests 20 times each.
+      shards: 7
+      grep: "starts (through spawn|from a typed command) with a visible state"
       keep-screenshots: true
 
   # A real WSL 2 distribution on the Windows runner, connected as a device
