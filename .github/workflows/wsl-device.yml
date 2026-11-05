@@ -136,6 +136,15 @@ jobs:
           "openssh_server_install_seconds=$([int]((Get-Date) - $started).TotalSeconds)"
           $config = Join-Path $env:ProgramData 'ssh\sshd_config'
           (Get-Content $config) -replace '^#?Port .*', "Port $port" | Set-Content -Encoding ascii $config
+          # The redirection guard Windows' OpenSSH installer turns on for
+          # sshd.exe (PowerShell/openssh-portable install-sshd.ps1), which
+          # this capability's install leaves off: every process of a session
+          # then refuses a junction no administrator made, as on a PC whose
+          # OpenSSH turned it on (with-hide/hide-private#501).
+          $ifeo = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sshd.exe'
+          New-Item -Path $ifeo -Force | Out-Null
+          New-ItemProperty -Path $ifeo -Name MitigationOptions -PropertyType Binary -Force `
+            -Value ([byte[]](0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x10)) | Out-Null
           Restart-Service sshd
           $dir = Join-Path $env:RUNNER_TEMP 'windows-ssh'
           New-Item -ItemType Directory -Force $dir | Out-Null

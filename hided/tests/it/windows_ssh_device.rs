@@ -40,7 +40,7 @@ use hide_node_link::device::{
 };
 use hide_node_link::holders::{HolderStart, PaneHolders};
 use hide_node_link::link_panes::LinkPanes;
-use hide_node_link::protocol::{Call, RootOpened, RootRef};
+use hide_node_link::protocol::{Call, KitAction, RootOpened, RootRef};
 use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalReport};
 use hide_node_link::{NodeLink, call_as};
 use serde_json::Value;
@@ -258,6 +258,16 @@ fn files_and_git(link: &dyn NodeLink, project: &str) {
 /// `line` does not spell, so its echo is never taken for its output. The
 /// pane is `walk`'s to end from its start on.
 fn terminal(walk: &mut Walk<'_>, sink: &Sink, pane: &str, cwd: &str, line: &[u8], answer: &str) {
+    start_pane(walk, sink, pane, cwd, Vec::new());
+    typed(walk, sink, pane, line, |output| {
+        output.contains(answer).then_some(())
+    });
+}
+
+/// Starts the device's interactive shell as `pane` in `cwd`, with `env` over
+/// the node's own variables, and waits until the core controls its terminal.
+/// The pane is `walk`'s to end from its start on.
+fn start_pane(walk: &mut Walk<'_>, sink: &Sink, pane: &str, cwd: &str, env: Vec<(String, String)>) {
     let panes = LinkPanes::new(
         Arc::clone(&walk.connected().node.host),
         Arc::new(|record| println!("pane record: {record}")),
@@ -270,7 +280,7 @@ fn terminal(walk: &mut Walk<'_>, sink: &Sink, pane: &str, cwd: &str, line: &[u8]
         pane: pane.to_owned(),
         program: None,
         cwd: cwd.to_owned(),
-        env: Vec::new(),
+        env,
         rows: 24,
         cols: 80,
         notice: None,
@@ -299,12 +309,27 @@ fn terminal(walk: &mut Walk<'_>, sink: &Sink, pane: &str, cwd: &str, line: &[u8]
             .any(|report| matches!(report, TerminalReport::State { pane: reported, state } if reported == pane && state.state == "controlling"))
             .then_some(())
     });
+}
+
+/// Types `line` into `pane`'s terminal and waits until `until` finds what it
+/// looks for in everything the terminals have shown.
+fn typed<T>(
+    walk: &Walk<'_>,
+    sink: &Sink,
+    pane: &str,
+    line: &[u8],
+    until: impl Fn(&str) -> Option<T>,
+) -> T {
+    let terminals = walk
+        .connected()
+        .node
+        .terminals
+        .as_ref()
+        .expect("terminals ride the link");
     terminals.key(KeyTarget::Pane(pane.to_owned()), line.to_vec(), 1);
     wait_for("the typed line's output", || {
-        String::from_utf8_lossy(&sink.output.lock().unwrap())
-            .contains(answer)
-            .then_some(())
-    });
+        until(&String::from_utf8_lossy(&sink.output.lock().unwrap()))
+    })
 }
 
 /// The processes running a program file under `folder`: the device's node,
@@ -651,6 +676,65 @@ fn reconnect(
     walk.end();
 }
 
+/// This runner's own OpenSSH Server as a Windows device: the core's build
+/// folder, the core account's ssh config naming the server
+/// `windows-device`, and a device home of the fixture's below the account's
+/// (`HIDE_DEV_DEVICE_HOME`'s rule), so nothing reaches the runner account's
+/// own Hide folders.
+struct WindowsServer {
+    _fixture: tempfile::TempDir,
+    packages: PathBuf,
+    local: PathBuf,
+    run: tempfile::TempDir,
+    run_name: String,
+}
+
+impl WindowsServer {
+    fn new() -> Self {
+        let ssh = variable("HIDE_E2E_WINDOWS_SSH_DIR");
+        let fixture = tempfile::Builder::new().prefix("wsd").tempdir().unwrap();
+        let packages = fixture.path().join("packages");
+        own_package(&packages);
+        let local = fixture.path().join("local");
+        std::fs::create_dir_all(local.join(".ssh")).unwrap();
+        std::fs::write(
+            local.join(".ssh").join("config"),
+            format!(
+                "Host windows-device\n  HostName 127.0.0.1\n  Port {}\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile {}\n",
+                std::fs::read_to_string(ssh.join("port")).unwrap().trim(),
+                std::env::var("USERNAME").unwrap(),
+                config_path(&ssh.join("client")),
+                config_path(&ssh.join("known_hosts")),
+                config_path(&ssh.join("known_hosts")),
+            ),
+        )
+        .unwrap();
+        // The device's home of its own, below the account's home as the start
+        // script requires; the start script makes `home` inside it.
+        let profile = variable("USERPROFILE");
+        let dev = profile.join(".hide-dev");
+        std::fs::create_dir_all(&dev).unwrap();
+        let run = tempfile::Builder::new()
+            .prefix("wsd")
+            .tempdir_in(&dev)
+            .unwrap();
+        let run_name = run.path().file_name().unwrap().to_str().unwrap().to_owned();
+        Self {
+            _fixture: fixture,
+            packages,
+            local,
+            run,
+            run_name,
+        }
+    }
+
+    /// The connector the Windows app builds, reaching the device home.
+    fn connector(&self, sink: Arc<Sink>) -> hide_node::ssh::Connector {
+        connector(&self.packages, sink)
+            .with_device_home(Some(format!("~/.hide-dev/{}/home", self.run_name)))
+    }
+}
+
 /// c1: this runner's own OpenSSH Server as a Windows device of a Windows
 /// core on its own engine. The connection installs the core's own
 /// `hided.exe`, `hide-holder.exe` and `holder-conpty`, found beside it under
@@ -660,39 +744,13 @@ fn reconnect(
 #[test]
 #[ignore = "the runner's OpenSSH Server and a key it takes; the windows wsl lane sets them up"]
 fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
-    let ssh = variable("HIDE_E2E_WINDOWS_SSH_DIR");
-    let fixture = tempfile::Builder::new().prefix("wsd").tempdir().unwrap();
-    let packages = fixture.path().join("packages");
-    own_package(&packages);
-    let local = fixture.path().join("local");
-    std::fs::create_dir_all(local.join(".ssh")).unwrap();
-    std::fs::write(
-        local.join(".ssh").join("config"),
-        format!(
-            "Host windows-device\n  HostName 127.0.0.1\n  Port {}\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile {}\n",
-            std::fs::read_to_string(ssh.join("port")).unwrap().trim(),
-            std::env::var("USERNAME").unwrap(),
-            config_path(&ssh.join("client")),
-            config_path(&ssh.join("known_hosts")),
-            config_path(&ssh.join("known_hosts")),
-        ),
-    )
-    .unwrap();
-    // The device's home of its own, below the account's home as the start
-    // script requires; the start script makes `home` inside it.
-    let profile = variable("USERPROFILE");
-    let dev = profile.join(".hide-dev");
-    std::fs::create_dir_all(&dev).unwrap();
-    let run = tempfile::Builder::new()
-        .prefix("wsd")
-        .tempdir_in(&dev)
-        .unwrap();
-    let run_name = run.path().file_name().unwrap().to_str().unwrap().to_owned();
-    let device = WindowsDevice::new(run.path());
+    let server = WindowsServer::new();
+    let run_name = server.run_name.clone();
+    let local = server.local.clone();
+    let device = WindowsDevice::new(server.run.path());
 
     let sink = Arc::new(Sink::default());
-    let connector = connector(&packages, sink.clone())
-        .with_device_home(Some(format!("~/.hide-dev/{run_name}/home")));
+    let connector = server.connector(sink.clone());
     let row = Arc::new(Row::default());
     let mut walk = Walk::new(&device);
     let started = Instant::now();
@@ -702,7 +760,7 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
         "windows-device",
         started.elapsed(),
         connected,
-        folder_bytes(&packages),
+        folder_bytes(&server.packages),
     );
     assert!(row.asked().is_empty(), "{:?}", row.asked());
     assert!(
@@ -765,6 +823,199 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
         Arc::new(Row::default()),
         &device,
     );
+}
+
+/// The bytes of the desktop app's `hide.cmd` (`hide-kit/src/cli_windows.rs`),
+/// which reach its `hide.exe` through the `.hide-kit` junction beside it.
+const APP_SHIM: &[u8] = b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0.hide-kit\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
+
+/// `FILE_ATTRIBUTE_REPARSE_POINT`: a junction, a symbolic link or any other
+/// entry the system redirects through.
+const REPARSE_POINT: u32 = 0x400;
+
+/// Every reparse point under `folder`, which is not followed into.
+fn reparse_points(folder: &Path) -> Vec<PathBuf> {
+    use std::os::windows::fs::MetadataExt;
+    let mut found = Vec::new();
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            let metadata = std::fs::symlink_metadata(&path).unwrap();
+            if metadata.file_attributes() & REPARSE_POINT != 0 {
+                found.push(path);
+            } else if metadata.is_dir() {
+                folders.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Makes `link` a junction to `target` the way a standard user's program
+/// makes one: `runas /trustlevel:0x20000` runs `mklink` with a token that
+/// is no administrator's, so the redirection guard records its maker as
+/// untrusted, as it does for the desktop app's own junction. `runas` returns
+/// once it has started the command, so the junction is waited for.
+fn untrusted_junction(link: &Path, target: &Path) {
+    let (link_name, target_name) = (link.display().to_string(), target.display().to_string());
+    assert!(
+        !link_name.contains(' ') && !target_name.contains(' '),
+        "runas takes one command line: {link_name} {target_name}"
+    );
+    let status = Command::new(r"C:\Windows\System32\runas.exe")
+        .arg("/trustlevel:0x20000")
+        .arg(format!("cmd.exe /d /c mklink /J {link_name} {target_name}"))
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "runas: {status}");
+    wait_for("the standard user's junction", || {
+        std::fs::symlink_metadata(link).is_ok().then_some(())
+    });
+}
+
+/// The device's kit for the command folder `~/.local/bin`, as the core asks
+/// for it once the operator allowed it; the report it answers.
+fn kit_apply(walk: &Walk<'_>) -> Value {
+    let report: Value = call_as(
+        &*walk.connected().node.host,
+        Call::Kit {
+            action: KitAction::Apply,
+            cli_dir: "~/.local/bin".to_owned(),
+            retirement_projects: Vec::new(),
+        },
+        TIMEOUT,
+    )
+    .unwrap_or_else(|error| panic!("the device's kit: {error}"));
+    assert!(report["refused"].is_null(), "{report}");
+    report
+}
+
+/// The word after the last `hide-exit-` the terminals showed: what the
+/// pane's `hide` line of the redirection guard walk answered.
+fn hide_answer(output: &str) -> Option<String> {
+    let (_, after) = output.rsplit_once("hide-exit-")?;
+    let word: String = after
+        .chars()
+        .take_while(|letter| letter.is_ascii_alphanumeric() || *letter == '-')
+        .collect();
+    // The line is complete once a letter that is no part of the word follows.
+    (after.len() > word.len()).then_some(word)
+}
+
+/// with-hide/hide-private#501, win-device-links: a Windows device reaches
+/// its own installation's programs through no link. Windows' OpenSSH
+/// installer turns the redirection guard on for `sshd.exe`
+/// (`install-sshd.ps1`, and the lane does the same), and every process of an
+/// ssh session then refuses a junction no administrator made, with "The path
+/// cannot be traversed because it contains an untrusted mount point".
+///
+/// The desktop app's `hide` holds the account's command folder first, its
+/// junction made by a standard user as the app makes it. The device's kit
+/// leaves it, and a pane of the device whose `PATH` starts with that folder
+/// still runs the device's own `hide`, from the helper root's `current`
+/// folder; neither the helper root nor the command folder holds a reparse
+/// point of the device's. Once the app's command is gone, the device's kit
+/// takes the name, and its `hide.cmd` answers in a plain ssh shell there.
+#[test]
+#[ignore = "the runner's OpenSSH Server, its redirection guard and a key it takes; the windows wsl lane sets them up"]
+fn a_windows_device_reaches_its_programs_through_no_link_under_the_redirection_guard() {
+    let server = WindowsServer::new();
+    let device = WindowsDevice::new(server.run.path());
+    let sink = Arc::new(Sink::default());
+    let connector = server.connector(sink.clone());
+    let mut walk = Walk::new(&device);
+    walk.connect(establish(
+        &connector,
+        &server.local,
+        "windows-device",
+        Arc::new(Row::default()),
+    ));
+    let wire_home = walk
+        .connected()
+        .node
+        .hello
+        .home
+        .clone()
+        .expect("the node names its home");
+    let home = hide_platform::path::from_wire(&wire_home).unwrap();
+    let cli = home.join(".local").join("bin");
+    let root = hide_kit::layout::helper_root(&home);
+
+    // The desktop app's command, as its kit writes it into the account's
+    // command folder: the shim and a junction to the package's resources.
+    let resources = home.join("app").join("resources");
+    std::fs::create_dir_all(&resources).unwrap();
+    std::fs::write(resources.join("app.asar"), b"").unwrap();
+    std::fs::write(home.join("app").join("hide.exe"), b"").unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_BIN_EXE_hided")).with_file_name("hide.exe"),
+        resources.join("hide.exe"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(&cli).unwrap();
+    std::fs::write(cli.join("hide.cmd"), APP_SHIM).unwrap();
+    let app_junction = cli.join(".hide-kit");
+    untrusted_junction(&app_junction, &resources);
+
+    let report = kit_apply(&walk);
+    // The account's `PATH` starts with its command folder, as the installers
+    // that use `~\.local\bin` leave it.
+    let path = format!("{};{}", cli.display(), std::env::var("PATH").unwrap());
+    start_pane(
+        &mut walk,
+        &sink,
+        "windows-device-hide",
+        &wire_home,
+        vec![("PATH".to_owned(), path)],
+    );
+    let own = root.join(hide_kit::CURRENT).join("hide.exe");
+    // The answer's words are split in the line, so its echo never reads as
+    // the answer.
+    let line = format!(
+        "hide --version; Write-Output ('hide-' + 'exit-' + $LASTEXITCODE + '-' + ((Get-Command hide).Source -eq '{}'))\r",
+        own.display()
+    );
+    let answer = typed(
+        &walk,
+        &sink,
+        "windows-device-hide",
+        line.as_bytes(),
+        hide_answer,
+    );
+    assert_eq!(
+        answer,
+        "0-True",
+        "the pane's hide is not the device's own {}: {}",
+        own.display(),
+        String::from_utf8_lossy(&sink.output.lock().unwrap())
+    );
+    assert_eq!(reparse_points(&root), Vec::<PathBuf>::new(), "{report}");
+    assert_eq!(reparse_points(&cli), vec![app_junction.clone()], "{report}");
+
+    // The app's command goes, as removing the app leaves the folder; the
+    // device's kit then takes the name.
+    hide_platform::fs::link::remove_link(&app_junction).unwrap();
+    std::fs::remove_file(cli.join("hide.cmd")).unwrap();
+    let report = kit_apply(&walk);
+    assert_eq!(reparse_points(&cli), Vec::<PathBuf>::new(), "{report}");
+    let shell = Command::new(Path::new(OPENSSH).join("ssh.exe"))
+        .arg("-F")
+        .arg(server.local.join(".ssh").join("config"))
+        .args(["-o", "BatchMode=yes", "windows-device"])
+        .arg(format!("{} --version", cli.join("hide.cmd").display()))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        shell.status.success(),
+        "the device's hide.cmd in a plain ssh shell: {}{}",
+        String::from_utf8_lossy(&shell.stdout),
+        String::from_utf8_lossy(&shell.stderr)
+    );
+    walk.end();
 }
 
 /// `sshd` inside the distribution, started by this test and ended with it.
