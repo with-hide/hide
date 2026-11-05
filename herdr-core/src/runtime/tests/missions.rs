@@ -2265,15 +2265,18 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     runtime.mission_answer_sent("mission-1", 1, Ok(()));
     // A late second report for the same prompt changes nothing.
     runtime.mission_answer_sent("mission-1", 1, Err(SendFailure::MaybeTyped("herdr_format")));
-    assert!(
-        runtime.missions.book.missions[0]
-            .answer
-            .as_ref()
-            .unwrap()
-            .delivered
+    // Typed, the answer takes the decision away; the Conductor need not clear it.
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(
+        (
+            mission.decision.as_deref(),
+            mission.question.is_none(),
+            mission.answer.is_none()
+        ),
+        (None, true, true)
     );
     assert!(runtime.mission_answers_due().is_empty());
-    // A question cleared after it adds no answer of its own.
+    // The Conductor clearing it as well adds no answer of its own.
     command(
         &mut runtime,
         "sender",
@@ -2302,6 +2305,49 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
         (mission.answer.is_none(), mission.answer_failed),
         (true, Some(AnswerFailure::SendFailed))
     );
+}
+
+/// A book written while a typed answer stayed until the Conductor cleared
+/// its decision is settled when it is read: the banner does not wait on
+/// that Conductor, and the answer is never typed a second time (B29).
+#[test]
+fn a_book_holding_a_typed_answer_settles_its_decision_when_read() {
+    let fixture = conducting();
+    // Its own file: the fixture's store saves its book in the background.
+    let path = fixture._root.path().join("older-missions.json");
+    let mut guard = fixture.runtime.lock().unwrap();
+    running(&mut guard);
+    command(
+        &mut guard,
+        "sender",
+        json!({"op": "decide", "line": "Which base?"}),
+    )
+    .unwrap();
+    assert!(guard.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
+    let encoded =
+        crate::missions::encode(&std::sync::Arc::new(guard.missions.book.clone())).unwrap();
+    let mut written: Value = serde_json::from_slice(&encoded).unwrap();
+    assert!(
+        written["missions"][0]["answer"].get("delivered").is_none(),
+        "the book no longer writes it"
+    );
+    written["missions"][0]["answer"]["delivered"] = json!(true);
+    std::fs::write(&path, serde_json::to_vec(&written).unwrap()).unwrap();
+    let store = crate::missions::MissionStore::new(path);
+    let restored = store.restore();
+    assert!(matches!(restored, crate::missions::Restored::Read(_)));
+    guard.install_mission_store(store, restored);
+    let mission = &guard.missions.book.missions[0];
+    assert_eq!(
+        (
+            mission.decision.as_deref(),
+            mission.question.is_none(),
+            mission.answer.is_none()
+        ),
+        (None, true, true)
+    );
+    assert!(guard.mission_answers_due().is_empty());
+    drop(guard.missions.store.take());
 }
 
 #[test]

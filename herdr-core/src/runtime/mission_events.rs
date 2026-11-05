@@ -313,7 +313,7 @@ impl Runtime {
             .as_ref()
             .filter(|answer| answer.key == key_before)
         {
-            if !answer.delivered && !answer.unconfirmed {
+            if !answer.unconfirmed {
                 // The Conductor changed its question before reading this.
                 let mut event =
                     MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
@@ -565,11 +565,7 @@ impl Runtime {
         for mission in &self.missions.book.missions {
             // An answer that may already be in the conversation waits for
             // the operator to send it again; nothing types it on its own.
-            let Some(answer) = mission
-                .answer
-                .as_ref()
-                .filter(|answer| !answer.delivered && !answer.unconfirmed)
-            else {
+            let Some(answer) = mission.answer.as_ref().filter(|answer| !answer.unconfirmed) else {
                 continue;
             };
             let asked = mission
@@ -642,9 +638,10 @@ impl Runtime {
             .get(&work.mission)
             .is_some_and(|mission| {
                 mission.status.open()
-                    && mission.answer.as_ref().is_some_and(|answer| {
-                        answer.key == work.key && !answer.delivered && !answer.unconfirmed
-                    })
+                    && mission
+                        .answer
+                        .as_ref()
+                        .is_some_and(|answer| answer.key == work.key && !answer.unconfirmed)
             });
         if !waiting {
             return Err(Hold::Letter);
@@ -662,7 +659,7 @@ impl Runtime {
             .book
             .get_mut(mission)
             .and_then(|mission| mission.answer.as_mut())
-            .filter(|answer| answer.key == key && !answer.delivered)
+            .filter(|answer| answer.key == key)
         else {
             return;
         };
@@ -679,7 +676,7 @@ impl Runtime {
                 && mission
                     .answer
                     .as_ref()
-                    .is_some_and(|answer| !answer.delivered && !answer.unconfirmed)
+                    .is_some_and(|answer| !answer.unconfirmed)
         });
         if !waiting || !self.missions.answers_held.insert(mission.to_owned()) {
             return false;
@@ -698,7 +695,8 @@ impl Runtime {
     }
 
     /// The doorbell typed the answer, or failed to: a typed answer is in the
-    /// history as the operator's, from the banner; one that failed before
+    /// history as the operator's, from the banner, and takes the decision
+    /// away with it (B29); one that failed before
     /// it was typed goes back with its reason so the operator can answer
     /// again (B28); one Herdr took without confirming it is kept as
     /// unconfirmed, and only the operator sends it again (B26).
@@ -718,9 +716,11 @@ impl Runtime {
         let Some(mission) = self.missions.book.get_mut(id) else {
             return;
         };
-        let Some(answer) = mission.answer.as_mut().filter(|answer| {
-            answer.key == key && !answer.delivered && (typing || !answer.unconfirmed)
-        }) else {
+        let Some(answer) = mission
+            .answer
+            .as_mut()
+            .filter(|answer| answer.key == key && (typing || !answer.unconfirmed))
+        else {
             return;
         };
         self.missions.answers_held.remove(id);
@@ -730,11 +730,13 @@ impl Runtime {
             .and_then(|question| question.node.clone());
         let mut event = match result {
             Ok(()) => {
-                answer.delivered = true;
-                answer.unconfirmed = false;
+                // The answer is in the conversation: the question is settled
+                // as the Conductor's `decide --clear` would settle it, so the
+                // banner does not wait on the Conductor remembering to.
                 let mut event =
                     MissionEvent::new(now, EventKind::Answered).line(Some(&answer.text));
                 event.source = Some(AnswerSource::Banner);
+                settle_answered(mission, now);
                 event
             }
             Err(SendFailure::NotTyped(code)) => {
@@ -830,7 +832,7 @@ pub(crate) fn end_decision(mission: &mut Mission, now: u64) -> Vec<MissionEvent>
     let undelivered = mission
         .answer
         .take()
-        .filter(|answer| !answer.delivered && !answer.unconfirmed)
+        .filter(|answer| !answer.unconfirmed)
         .map(|answer| {
             let mut event =
                 MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
@@ -842,6 +844,17 @@ pub(crate) fn end_decision(mission: &mut Mission, now: u64) -> Vec<MissionEvent>
     mission.answer_failed = None;
     mission.delay = None;
     undelivered.into_iter().collect()
+}
+
+/// Takes away a decision whose answer reached the Conductor's conversation
+/// (B29): the question, its answer and why one failed. The answer itself
+/// stays in the history as `answered`.
+pub(crate) fn settle_answered(mission: &mut Mission, now: u64) {
+    mission.decision = None;
+    mission.question = None;
+    mission.answer = None;
+    mission.answer_failed = None;
+    mission.updated_at_unix_ms = now;
 }
 
 /// A node's pull request merged, as GitHub answered (B31).

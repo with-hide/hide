@@ -196,8 +196,9 @@ it("keeps an answer Herdr may have typed as unconfirmed and types it again only 
     // Pressed, it reads as sending and offers no second press.
     expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("sending");
     expect(map.q("[data-mission-resend]")).toBeNull();
-    await map.rerender(asked({ answer: { key: 3, text: "Stack on the API PR", option: 1, state: "delivered" } }));
-    expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("delivered");
+    // The core takes it back to sending; once typed, the decision leaves the map with it.
+    await map.rerender(asked({ answer: { key: 3, text: "Stack on the API PR", option: 1, state: "sending" } }));
+    expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("sending");
     // With no Conductor there, sending again waits.
     await map.rerender({ ...unconfirmed, conductor: { ...unconfirmed.conductor, present: false } });
     expect((map.q("[data-mission-resend]") as HTMLButtonElement).disabled).toBe(true);

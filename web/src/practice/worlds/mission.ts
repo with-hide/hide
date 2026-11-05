@@ -650,7 +650,7 @@ function stageLines(model: MissionModel, stage: MissionStage): string[] {
     case ASKING:
       return [...done, ...spawn, "", `● ${YELLOW}${say("decideHead")}${RESET} ${say("decideWhy")}`, `  ${decision()}`, ...ran("hide mission decide --option … --recommend 1 --node screen", say("asked"))];
     case 6:
-      return [...ran("hide mission plan --file plan.json", say(model.drop ? "foldedDrop" : "foldedKeep")), ...ran("hide mission decide --clear", say("cleared")), ...ran("hide request send ui …", say("toldScreen"))];
+      return [...ran("hide mission plan --file plan.json", say(model.drop ? "foldedDrop" : "foldedKeep")), ...ran("hide request send ui …", say("toldScreen"))];
     case DONE:
       return [...done, "", ...ran("hide mission report …", say("reported")), `● ${GREEN}${say("report", { count: plan.filter((part) => part.pr !== null).length })}${RESET}`];
     default:
