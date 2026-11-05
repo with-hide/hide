@@ -1247,22 +1247,18 @@ pub enum AgentStart {
 }
 
 /// Whether the engine is still starting this agent: the start it made of it
-/// is pending (`launch_pending`), and the agent neither works nor finished a
-/// turn since. The own engine reads a start pending until its program takes
-/// input and its screen rests past the settle, so a screen that already reads
-/// at rest (a woken agent's pane still shows the last run's screen) is not
-/// yet an agent that takes what is typed to it: input typed then reaches a
-/// program still starting, which drops it. A pane on a restored server
-/// carries no pending start, and an unconfirmed list says nothing about the
-/// agent now.
+/// is pending (`launch_pending`) and the agent does not work. The own engine
+/// reads a start pending until its program takes input and its screen rests
+/// past the settle, so a row that already reads at rest is not yet an agent
+/// that takes what is typed to it: a woken agent's pane still shows the last
+/// run's screen, and its hook's last report, a finished turn, is the last
+/// run's too. Input typed then reaches a program still starting, which drops
+/// it. A pane on a restored server carries no pending start, and an
+/// unconfirmed list says nothing about the agent now.
 pub(crate) fn agent_starting(agent: &SessionAgentPayload) -> bool {
     !reports_nothing(agent)
         && agent.launch_pending
-        && match agent_activity(agent) {
-            AgentActivity::Unknown => true,
-            AgentActivity::Stopped => !agent_completed(agent),
-            AgentActivity::Working => false,
-        }
+        && agent_activity(agent) != AgentActivity::Working
 }
 
 /// Whether this stopped pane has actually completed work: its hook saying the

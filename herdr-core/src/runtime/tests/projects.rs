@@ -3779,11 +3779,12 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
 }
 
 /// A woken agent's pane still shows its last run's screen, which the engine
-/// reads at rest before the program it started again takes input. While the
-/// start is pending the row says Starting, so neither the operator nor a
-/// journey reads it ready and types into a program that drops the keys
-/// (journey 41929631031); work it does shows as work, a turn it finished
-/// shows as finished, and the row reads at rest once the start settles.
+/// reads at rest before the program it started again takes input, and its
+/// hook's last report, a finished turn, is the last run's. While the start
+/// is pending the row says Starting, so neither the operator nor a journey
+/// reads it ready and types into a program that drops the keys (journeys
+/// 41929631031 and 41937427750); work it does shows as work, and the row
+/// reads at rest once the start settles.
 #[test]
 fn an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests() {
     let mut runtime = runtime();
@@ -3810,10 +3811,10 @@ fn an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests() {
         "pending, working"
     );
     assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "done", 9, true))));
-    assert_ne!(
+    assert_eq!(
         status(&runtime),
         AgentStatusCode::Starting,
-        "pending, finished"
+        "pending, the last run's turn finished"
     );
     assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "idle", 10, false))));
     assert_eq!(status(&runtime), AgentStatusCode::Idle, "settled");
