@@ -42,7 +42,7 @@ function Page({ pr }: { pr: PhonePr }) {
   const project = projects.find((candidate) => candidate.id === pr.project) ?? null;
   const base = pr.base_branch ?? "";
   return (
-    <main className="flex h-full flex-col" data-phone-pr-page={pr.key}>
+    <main className="flex h-full flex-col" data-phone-pr-page={pr.key} data-phone-pr-head={pr.card?.head ?? undefined}>
       <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
         <div className="flex items-center justify-between gap-md pt-md">
           <Button variant="text" size="inline" className="min-h-(--size-touch-target) gap-xs text-body" data-phone-back="prs" onClick={closePr}>
