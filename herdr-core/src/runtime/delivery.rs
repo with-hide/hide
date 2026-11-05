@@ -3604,6 +3604,84 @@ pub(crate) mod tests {
         drop(worker);
     }
 
+    /// with-hide/hide-private#560: a tool or turn-end ask that a sync pass
+    /// meets between observing the pane and its ingest is answered from the
+    /// turn of the observation it is judged against, so the due letter rides
+    /// it rather than waiting for the bell.
+    #[test]
+    fn a_tool_or_turn_end_ask_inside_a_sync_pass_hands_over_the_due_letter() {
+        for point in [
+            hide_node_link::panes::PullPoint::Tool,
+            hide_node_link::panes::PullPoint::TurnEnd,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let (runtime, sender, _, path) = fixture(root.path());
+            let (worker, client) = Worker::store(
+                Arc::downgrade(&runtime),
+                ChangeNotifier::noop(),
+                path.clone(),
+            )
+            .unwrap();
+            let mut guard = runtime.lock().unwrap();
+            guard.install_delivery_client(client);
+            let own = crate::engine::tokens::session_digest("hook-session");
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+                {"id":"recipient","pane_id":"recipient","agent":"grok","agent_status":"working","state_change_seq":2,"lineage_session":own},
+            ]})).unwrap();
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+            let recipient = guard.delivery_observations["recipient"].actor.clone();
+            let prepared = guard
+                .prepare_delivery(
+                    crate::node::TEST_NODE,
+                    "sender",
+                    &authority(&sender).context,
+                    None,
+                    Command::Send {
+                        target: "recipient".into(),
+                        intent: "urgent".into(),
+                        body: "urgent body".into(),
+                        kind: "request".into(),
+                        now: true,
+                        force: false,
+                    },
+                )
+                .unwrap();
+            drop(guard);
+            let letter = prepared.run(Duration::from_secs(5)).unwrap();
+            let mut guard = runtime.lock().unwrap();
+            // The next sync pass has observed the pane; its ingest has not
+            // run yet when the agent's hook asks.
+            let pass = guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            let prepared = guard
+                .prepare_delivery(
+                    crate::node::TEST_NODE,
+                    "recipient",
+                    &authority(&recipient).context,
+                    None,
+                    Command::Pull {
+                        prompt_digest: None,
+                        session: Some("hook-session".into()),
+                        point,
+                        bundle: true,
+                    },
+                )
+                .unwrap();
+            // The answer is decided from the observation the ask was prepared
+            // against, whenever the worker runs it.
+            drop(guard);
+            let intake = prepared.run(Duration::from_secs(5)).unwrap();
+            assert_eq!(intake["ids"], json!([letter["id"]]), "{point:?}");
+            let _ = runtime.lock().unwrap().ingest_observed_session(
+                Ok(payload),
+                None,
+                Some(pass),
+                None,
+            );
+            drop(worker);
+        }
+    }
+
     #[test]
     fn only_hide_and_the_operator_can_use_their_own_delivery_authority() {
         let root = tempfile::tempdir().unwrap();
