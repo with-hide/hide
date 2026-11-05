@@ -2228,6 +2228,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 &definition.id,
                 Some(&launch.name),
                 agents::started_session(definition, &argv, launch.wakes),
+                agents::awaits_session_report(definition, &argv, launch.wakes),
             ),
             &line,
         )?;

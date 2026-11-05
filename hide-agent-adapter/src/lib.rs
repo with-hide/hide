@@ -285,6 +285,22 @@ impl SessionFormat {
     pub const fn reports_session_once_loaded(self) -> bool {
         matches!(self, Self::OpenCode)
     }
+    /// Whether the integration reports the session while the agent loads,
+    /// before anything is typed, so a start of it takes input on that
+    /// report rather than on time alone (with-hide/hide-private#545): Claude
+    /// Code runs its SessionStart hook as it starts and as it resumes, and
+    /// OpenCode's plugin reports a session it resumed once it loaded it
+    /// ([`Self::reports_session_once_loaded`]), while a fresh OpenCode has
+    /// no session before its first prompt. Codex reports none before its
+    /// first turn on a resume (the agent journey's resume cell), and the
+    /// others are not measured, so their starts keep the settle.
+    pub const fn reports_session_at_start(self, resumes: bool) -> bool {
+        match self {
+            Self::Claude => true,
+            Self::OpenCode => resumes,
+            _ => false,
+        }
+    }
 
     pub const fn has_session_file(self) -> bool {
         matches!(

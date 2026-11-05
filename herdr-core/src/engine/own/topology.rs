@@ -1845,8 +1845,12 @@ impl Topology {
         session: &str,
     ) -> Result<bool, EngineError> {
         let held = self.pane_mut(pane)?;
-        match held.agent.as_ref() {
-            Some(agent) if agent.kind == kind => self.set_agent_session(pane, kind, session),
+        match held.agent.as_mut() {
+            // A start that waited for this report may take input now.
+            Some(agent) if agent.kind == kind => {
+                let settles = agent.report();
+                Ok(self.set_agent_session(pane, kind, session)? || settles)
+            }
             Some(_) => Ok(false),
             None => {
                 held.pending_session = Some((kind.to_owned(), session.to_owned()));
