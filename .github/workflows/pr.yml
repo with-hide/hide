@@ -530,13 +530,15 @@ jobs:
           python scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-conpty"
       - name: The core's own engine in Windows PowerShell
         # herdr-core/src/engine/contract.rs: the core's own engine over pane
-        # holders meets the engine contract in Windows PowerShell.
+        # holders meets the engine contract in Windows PowerShell;
+        # engine/own/shell_line.rs: a start line's run is put back however the
+        # line ends.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.holder.outcome == 'success' }}
         timeout-minutes: 10
         env:
           HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}\target\debug\hide-holder.exe
           HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/^engine::contract::/)' --run-ignored only --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(/^engine::contract::/) | test(/^engine::own::shell_line::powershell_tests::/))' --run-ignored only --no-capture
       - name: Windows' own OpenSSH asks through Hide's askpass
         # hided/tests/it/system_ssh.rs (PRD system-ssh-device-link, B34): the
         # inbox ssh-keygen.exe reads a key's passphrase through `hide` as its

@@ -2233,7 +2233,6 @@ impl<'g> Engine for OwnEngine<'g> {
         let run = agents::start_run(
             definition,
             &argv,
-            launch.wakes,
             launch.integration_on,
             processes.shell_name(),
             pane,
@@ -4599,25 +4598,44 @@ mod tests {
         );
     }
 
-    /// A woken OpenCode whose shell takes no run (here nushell), or whose
-    /// machine's kit does not have its Hide integration on, is typed no run
-    /// and waits for no report it could not get or be matched by: it takes
-    /// input on the settle alone, as before.
+    /// A woken OpenCode whose shell takes no run (here nushell), whose
+    /// machine's kit does not have its Hide integration on, or that wakes
+    /// into a new session (the operator's Start new session, or a sleep
+    /// with no session to resume, both typed with no resume) is typed no
+    /// run and waits for no report it could not get or be matched by: it
+    /// takes its first input on the settle alone, as before.
     #[test]
     fn a_wake_with_no_run_to_name_waits_for_no_report() {
         use hide_node_link::holders::ScreenState;
-        for (shell, integration_on) in [("nu", true), ("zsh", false)] {
+        let fresh = |pane: &str| AgentLaunch {
+            wakes: true,
+            integration_on: true,
+            ..launch(pane, "worker", "opencode", &[])
+        };
+        for (shell, integration_on, resumes) in [
+            ("nu", true, true),
+            ("zsh", false, true),
+            ("zsh", true, false),
+        ] {
             let holders = Arc::new(Holders::default());
             holders.idle_shell(41, shell);
             let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
             let (_, _, pane) = engine
                 .create_workspace(WAIT, "/w", "w", true, Env::new())
                 .unwrap();
-            let start = engine
-                .prepare_start(opencode_wake(&pane, integration_on))
-                .unwrap();
+            let launch = if resumes {
+                opencode_wake(&pane, integration_on)
+            } else {
+                fresh(&pane)
+            };
+            let start = engine.prepare_start(launch).unwrap();
             engine.start_agent(WAIT, &start).unwrap();
-            assert_eq!(holders.typed(&pane), "opencode -s ses_1\r", "{shell}");
+            let line = if resumes {
+                "opencode -s ses_1\r"
+            } else {
+                "opencode\r"
+            };
+            assert_eq!(holders.typed(&pane), line, "{shell}");
             settle_start(&engine, &pane);
             holders.say(&pane, &running("opencode", ScreenState::Idle));
             assert_eq!(

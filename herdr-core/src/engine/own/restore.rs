@@ -880,7 +880,6 @@ impl OwnEngine<'static> {
                 super::agents::start_run(
                     definition,
                     &resume.argv,
-                    true,
                     false,
                     group.shell_name(),
                     &resume.pane,

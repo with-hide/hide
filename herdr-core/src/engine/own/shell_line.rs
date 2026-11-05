@@ -118,10 +118,13 @@ pub(super) fn takes_run(name: Option<&str>) -> bool {
 
 /// `line` run with the start's `run` named in its environment
 /// (`hide_agent_hooks::report::RUN_VARIABLE`), which the agent's hooks
-/// report back: a POSIX prefix assignment, which zsh, bash and fish 3.1
-/// read, and PowerShell's `$env:` before the line, whose programs inherit
-/// it. A run is hex digits ([`hide_agent_hooks::report::valid_run`]), so it
-/// needs no quoting. `None` leaves the line as it is.
+/// report back, and in no later command's: a POSIX prefix assignment, which
+/// sh, bash, zsh, dash, ksh and fish 3.1 read for that one command, and in
+/// PowerShell, whose programs inherit the session's `$env:`, the value set
+/// around the line and put back, or taken away when there was none, however
+/// the line ends. A run is hex digits
+/// ([`hide_agent_hooks::report::valid_run`]), so it needs no quoting. `None`
+/// leaves the line as it is.
 pub(super) fn in_run(line: String, run: Option<&str>, shell: Shell) -> String {
     let Some(run) = run.filter(|run| hide_agent_hooks::report::valid_run(run)) else {
         return line;
@@ -129,7 +132,9 @@ pub(super) fn in_run(line: String, run: Option<&str>, shell: Shell) -> String {
     let variable = hide_agent_hooks::report::RUN_VARIABLE;
     match shell {
         Shell::Posix => format!("{variable}={run} {line}"),
-        Shell::PowerShell => format!("$env:{variable}='{run}'; {line}"),
+        Shell::PowerShell => format!(
+            "$hideRun = $env:{variable}; $env:{variable} = '{run}'; try {{ {line} }} finally {{ $env:{variable} = $hideRun }}"
+        ),
     }
 }
 
@@ -345,7 +350,7 @@ mod tests {
         let line = command(&words(&["claude"]), Shell::PowerShell).unwrap();
         assert_eq!(
             in_run(line, Some("0af3"), Shell::PowerShell),
-            "$env:HIDE_AGENT_RUN='0af3'; & claude"
+            "$hideRun = $env:HIDE_AGENT_RUN; $env:HIDE_AGENT_RUN = '0af3'; try { & claude } finally { $env:HIDE_AGENT_RUN = $hideRun }"
         );
     }
 
@@ -518,5 +523,63 @@ mod real_shell_tests {
     #[ignore = "needs fish: HIDE_TEST_FISH_BIN"]
     fn fish_runs_the_resume_line_and_says_a_failure() {
         resume_line_runs_in("HIDE_TEST_FISH_BIN");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod powershell_tests {
+    use std::process::{Command, Stdio};
+
+    use super::*;
+
+    /// Windows PowerShell runs a resume line with its run: the program sees
+    /// the run, and once it ends, cleanly or with a failure, the shell's
+    /// variable is what it was before, or absent when it was absent, so no
+    /// later program in the pane inherits the run.
+    #[test]
+    #[ignore = "runs Windows PowerShell"]
+    #[allow(clippy::disallowed_methods)] // the test's own PowerShell, ended when it returns
+    fn powershell_runs_a_line_with_its_run_and_puts_the_variable_back() {
+        let words = |words: &[&str]| -> Vec<String> {
+            words.iter().map(|word| (*word).to_owned()).collect()
+        };
+        let sees_run = resume_command(
+            &words(&[
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "if ($env:HIDE_AGENT_RUN -eq '0af3') { exit 0 } else { exit 7 }",
+            ]),
+            "OpenCode",
+            Shell::PowerShell,
+        )
+        .unwrap();
+        let fails = resume_command(
+            &words(&["cmd.exe", "/c", "exit 3"]),
+            "OpenCode",
+            Shell::PowerShell,
+        )
+        .unwrap();
+        let script = [
+            "$env:HIDE_AGENT_RUN = 'before'".to_owned(),
+            in_run(sees_run, Some("0af3"), Shell::PowerShell),
+            "Write-Output \"after=$env:HIDE_AGENT_RUN\"".to_owned(),
+            "Remove-Item Env:HIDE_AGENT_RUN".to_owned(),
+            in_run(fails, Some("0af3"), Shell::PowerShell),
+            "Write-Output \"present=$(Test-Path Env:HIDE_AGENT_RUN)\"".to_owned(),
+        ]
+        .join("; ");
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+        assert_eq!(
+            out,
+            "after=before\nhide: OpenCode ended with a failure after its resume; this pane is a shell now.\npresent=False\n",
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

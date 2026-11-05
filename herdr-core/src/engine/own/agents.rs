@@ -194,12 +194,17 @@ pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Opt
     start_argv(definition, args).ok()
 }
 
-/// Whether a start of `definition` typed as `argv` (a wake when `wakes`)
-/// waits for its integration's session report before it takes input: the
-/// agent's integration reports the session while it loads
-/// ([`hide_agent_adapter::SessionFormat::reports_session_at_start`]).
-pub(super) fn awaits_session_report(definition: &Definition, argv: &[String], wakes: bool) -> bool {
-    let resumes = wakes || resumed_in(definition, argv).is_some();
+/// Whether a start of `definition` typed as `argv` waits for its
+/// integration's session report before it takes input: the agent's
+/// integration reports the session while it loads
+/// ([`hide_agent_adapter::SessionFormat::reports_session_at_start`]), and
+/// for OpenCode only a session it resumed, so only a start whose `argv`
+/// carries the definition's resume ([`resumed_in`]). Whether it is a wake
+/// does not say: a wake into a new session (the operator's Start new
+/// session, or a sleep that had no session to resume) starts a fresh
+/// OpenCode, which has no session to report before its first prompt.
+pub(super) fn awaits_session_report(definition: &Definition, argv: &[String]) -> bool {
+    let resumes = resumed_in(definition, argv).is_some();
     hide_agent_adapter::adapter(&definition.id)
         .and_then(|adapter| adapter.session)
         .is_some_and(|format| format.reports_session_at_start(resumes))
@@ -230,12 +235,11 @@ pub(super) fn new_run() -> String {
 pub(super) fn start_run(
     definition: &Definition,
     argv: &[String],
-    wakes: bool,
     integration_on: bool,
     shell: Option<&str>,
     pane: &str,
 ) -> Option<String> {
-    if !integration_on || !awaits_session_report(definition, argv, wakes) {
+    if !integration_on || !awaits_session_report(definition, argv) {
         return None;
     }
     if super::shell_line::takes_run(shell) {
@@ -1119,14 +1123,14 @@ mod tests {
         };
         let opencode = definition(&catalog, "opencode").unwrap();
         let resume = words(&["opencode", "-s", "ses_e584ebfb9ffeITTA6qYHnKhdkZ"]);
-        assert!(awaits_session_report(opencode, &resume, true));
+        assert!(awaits_session_report(opencode, &resume));
         assert!(
-            !awaits_session_report(opencode, &words(&["opencode"]), false),
-            "a fresh OpenCode has no session before its first prompt"
+            !awaits_session_report(opencode, &words(&["opencode"])),
+            "a fresh OpenCode has no session before its first prompt, woken or not"
         );
         let codex = definition(&catalog, "codex").unwrap();
         assert!(
-            !awaits_session_report(codex, &words(&["codex", "resume", "s-1"]), true),
+            !awaits_session_report(codex, &words(&["codex", "resume", "s-1"])),
             "Codex reports no session before its first turn on a resume"
         );
 
