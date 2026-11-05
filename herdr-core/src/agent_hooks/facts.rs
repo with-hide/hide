@@ -20,12 +20,13 @@
 //! an interrupt, Codex's `Interrupt`), and a pane whose agent Herdr no longer
 //! lists drops its facts.
 //!
-//! The store has its own small lock, never held across I/O or while the
-//! runtime lock is taken: the runtime takes it under its own lock to record a
-//! report, and a device's coordinator takes it alone to lay the facts on the
-//! session it is about to project. What a restart must keep (runtime,
-//! version, session and counts, not the turn) is saved on a thread of its own
-//! when it changes ([`LatestFile`]).
+//! The store has its own small lock, never held across I/O and always taken
+//! under the runtime lock (runtime, then facts): to record a report, and in
+//! each sync pass, this machine's and a device's, to lay the facts on the
+//! session in the step that observes it for delivery. What a restart must
+//! keep (runtime, version, session and counts, not the turn) is saved on a
+//! thread of its own when it changes ([`LatestFile`]), so no write happens
+//! under either lock.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
