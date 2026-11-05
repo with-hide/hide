@@ -282,7 +282,7 @@ def open_pulls():
 
 
 def read_verify(pulls):
-    """Each pull request's latest `verify` run on its pushed head, which `premerge-check.py` reads too."""
+    """Each pull request's latest `verify` run on its pushed head, which the merge queue requires to have passed."""
     with ThreadPoolExecutor(LOOKUPS_AT_ONCE) as pool:
         latest = list(pool.map(lambda pull: latest_verify(verify_runs(pull.head)), pulls))
     for pull, run in zip(pulls, latest):

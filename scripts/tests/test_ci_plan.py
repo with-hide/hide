@@ -474,6 +474,24 @@ class Selection(unittest.TestCase):
         self.assertTrue(result["full"])
         self.assertIn("comparison unavailable", result["reasons"]["rust"][0])
 
+    def test_a_merge_group_runs_the_fast_checks_and_nothing_else(self):
+        # What two changes that each passed break together without a conflict
+        # is a compile, type or baseline failure: a group runs those checks only,
+        # and main's push run after the merge runs every lane.
+        result = ci.plan("merge_group", None, None, ROOT)
+        self.assertEqual(result["lanes"], ["policy", "merge-rust", "merge-web"])
+        self.assertFalse(result["macos"]["runs"])
+        ci.aggregate(needs_for(result))
+        with self.assertRaisesRegex(ValueError, "merge-web: planned, expected success, got failure"):
+            ci.aggregate(needs_for(result, merge_web="failure"))
+        with self.assertRaisesRegex(ValueError, "rust: not planned, expected skipped"):
+            ci.aggregate(needs_for(result, rust="success"))
+        # No other run plans the group's own checks, a change to CI included.
+        for result in (ci.plan("push", None, None, ROOT), ci.select([("M", ".github/workflows/pr.yml")], CRATES, ROOT)):
+            self.assertFalse({"merge-rust", "merge-web"} & set(result["lanes"]))
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        self.assertRegex(workflow[:workflow.index("\njobs:\n")], r"\n  merge_group:\n")
+
     def test_nightly_owns_the_agent_checks_once_and_keeps_failure_reporting(self):
         # The default remains a full plan. Only the explicit caller contract
         # removes the internal duplicates; the direct jobs remain mandatory.
@@ -587,7 +605,7 @@ class NamedPaths(unittest.TestCase):
             # The design contract's generators and checks, which `design-contract.yml` runs.
             "scripts/gen-tokens.mjs",
             "scripts/check-design-contract.mjs", "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
-            "scripts/premerge-check.py", "scripts/merge-order.py", "scripts/pull_requests.py",
+            "scripts/merge-order.py", "scripts/pull_requests.py",
             "contracts/README.md", "site/README.md",
         ):
             with self.subTest(path=path):
@@ -901,7 +919,7 @@ class Workflows(unittest.TestCase):
         for event, action, expected in (("pull_request", "synchronize", True),
                                         ("pull_request", "edited", False),
                                         ("pull_request", "opened", True),
-                                        ("push", "", False), ("schedule", "", False),
+                                        ("push", "", False), ("merge_group", "", False), ("schedule", "", False),
                                         ("workflow_dispatch", "", False)):
             with self.subTest(event=event, action=action):
                 code = condition.replace("github.event_name", repr(event)).replace("github.event.action", repr(action))
@@ -972,7 +990,8 @@ class Workflows(unittest.TestCase):
 
     def test_the_most_a_pull_request_starts_is_the_count_testing_md_states(self):
         jobs = pr_jobs()
-        most = 2 + sum(runner_jobs(jobs[lane]) for lane in ci.LANES)
+        # A merge group's own two checks never run on a pull request.
+        most = 2 + sum(runner_jobs(jobs[lane]) for lane in ci.PATH_LANES)
         # The 2026-10-05 run started 23 jobs. Since then the macOS desktop
         # suite's second shard and the fifth and sixth web shards were added
         # because the suites outgrew their shards' step caps, which a smaller

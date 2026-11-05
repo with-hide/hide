@@ -172,21 +172,24 @@ Maintainer skill wrappers may automate these steps; the public commands here rem
 ## Merging into main
 
 `main` accepts pull-request merges, and the `verify` check has to pass; this repository currently uses merge commits, and there is no way around branch protection, including for maintainers.
-A pull request merges when the latest `verify` run on its head passed and `python3 scripts/premerge-check.py <number>` passes against main as it is now.
+A pull request goes into main through GitHub's merge queue once the latest `verify` run on its head passed.
 It does not have to contain the latest main, and branch protection does not ask it to.
 Requiring that sends every other green pull request back through a full `verify` and the runner queue on each merge: the 40 pull requests merged in the 24 hours to 2026-10-08 10:40 KST waited a median 29 minutes from their first green `verify` to their merge (read from the runs' and pull requests' timestamps), one was brought up to date five times and waited 264 minutes, and a pull request with nothing ahead of it merged two to seven minutes after its run.
 
-The check takes about two minutes, most of it the typecheck and Clippy on a cold worktree:
-
-1. It requires the latest `verify` run on the pull request's head to have passed.
-2. It merges the head with main in memory (`git merge-tree`) and refuses a conflict.
-3. It checks the merge result out in its own worktree beside the checkout and runs the checks where two changes that each passed can fail together without a conflict: the web and desktop typecheck, the e2e test size budgets, `cargo fmt` and Clippy, and the structural checks of the policy lane.
-   On 2026-10-05 one pull request removed an export another one imported, both had passed, and main's typecheck failed until a third pull request fixed it.
-
-A refusal says what to do instead, which is to merge main into the branch, fix it there, and let `verify` run again on the push.
+Adding a pull request to the queue is the merge: `gh pr merge <number> --match-head-commit <head>`, with no merge method, since the queue merges with a merge commit.
+GitHub refuses it when the branch moved after you read its head, or when its `verify` has not passed.
+The queue builds a group commit of main, every pull request queued ahead and this one, and runs `verify` on it, which for a group plans only the checks where two changes that each passed fail together without a conflict: `policy`, and `merge check rust` and `merge check web`, the web and desktop typecheck, the e2e test size budgets, `cargo fmt` and Clippy (`scripts/ci-plan.py`, MERGE_GROUP_LANES).
+On 2026-10-05 one pull request removed an export another one imported, both had passed, and main's typecheck failed until a third pull request fixed it.
+It builds up to five groups at once, each on the one ahead, and merges a group when it and every group ahead passed; one that fails leaves the queue, and the groups behind it are built again without it.
+A failure there says what to do: merge main into the branch, fix it, let `verify` run again on the push, and add it again.
 When that push changes nothing a lane reads beyond what the last green run checked, and main changed none of the pull request's files a lane reads since, `verify` reuses that run and runs `policy` alone ([docs/TESTING.md](docs/TESTING.md#which-lanes-a-pull-request-runs)).
-A pass prints the merge command, `gh pr merge <number> --merge --match-head-commit <head>`, which GitHub refuses if the branch moved after the check.
-Above it, a pull request that closes no issue gets a reminder, not a refusal: Hide and GitHub relate a pull request to an issue only through the `Closes #N` line, so one that finishes an issue gets that line before it merges, and one that finishes none merges as it is.
+A pull request that finishes an issue gets the `Closes #N` line before it goes in: Hide and GitHub relate a pull request to an issue only through that line, and one that finishes none goes in as it is.
+
+The queue is the ruleset `main merge queue` (merge commits, all groups green, up to five built and five merged at once, a 30-minute check timeout).
+It was first turned on 2026-10-05 with every lane on each group and turned off the next day: with the organization's 20 concurrent jobs then, a pull request waited a median 47.6 minutes from ready to merged, of which 12.6 were its own runs.
+In its place a script ran the same checks as a group runs now on the lead's Mac, one at a time under a shared lock, about five minutes each.
+The organization's plan now runs 60 jobs at once; from 2026-11-02 to 2026-11-05 a Linux or Windows job waited a median of no time and 0.8 minutes at the 90th percentile, and a green pull request waited a median 11 and a 90th-percentile 70 minutes for the lead to merge it.
+A trial on 2026-11-05 merged one queued pull request 5 minutes 20 seconds after it was added, refused one of three added together for importing a value one merged ahead had removed, and merged the other two 7 minutes 15 seconds after they were added.
 
 The check does not prove a behavior that only the two changes together break, which only the unit and end-to-end suites would see.
 Main's push run is the net for that: a push to main plans every lane, and in a burst of merges GitHub keeps one pending run, which checks the merges' combined state.
@@ -203,9 +206,9 @@ When more than one pull request is green, `python3 scripts/merge-order.py` lists
 3. Of two that break as many, the more important work goes first, which only the reviewer can weigh; the script then puts the stack with more green layers first.
 4. A pull request that breaks many goes last, and merges main once.
 
-A stack merges from the bottom: `premerge-check.py` refuses a pull request whose base is not main, and when a layer merges GitHub moves the next layer's base to main, because the repository deletes a merged branch (it did so for #1246 on 2026-10-16).
-Merge the layers one after another as far as they are green, without waiting for the whole stack.
-Each merge changes the counts, so run the script again before the next merge; the merge command is still the one `premerge-check.py` prints.
+A stack merges from the bottom: the queue takes only a pull request into main, and when a layer merges GitHub moves the next layer's base to main, because the repository deletes a merged branch (it did so for #1246 on 2026-10-16).
+Add the layers one after another as far as they are green, the next one once the layer below has merged, without waiting for the whole stack.
+Each merge changes the counts, so run the script again before adding the next one.
 
 ### When main's push run fails
 
@@ -221,16 +224,14 @@ During development, an existing Windows-only failure need not stop unrelated pul
 
 - All planned non-Windows checks passed; the failed jobs are Windows jobs and checks that only aggregate their results.
 - The reviewer records the failed run and its diagnosis owner, and checks that the pull request neither changes nor depends on the failing behavior; an unclassified failure or an unclear relationship keeps merges stopped.
-- The pull request's own latest `verify` and the canonical premerge check both passed, including every Windows lane its plan requires.
+- The pull request's own latest `verify` passed, including every Windows lane its plan requires; the merge queue's check then runs on the group as for any other merge.
 
 Windows checks keep running, and their failures remain failures for the owner to resolve.
 Whoever merges still watches main's containing push run; a new failure must meet these same conditions for unrelated merges to continue.
 Before a stable or preview release, the exact tagged commit's full push/main `verify` must pass, Windows and macOS included, and all [release gates](#releases) must pass.
 Neither the Windows exception nor the macOS rule grants a release waiver; the existing release workflow enforces that boundary.
 
-GitHub's merge queue was turned on 2026-10-05 and off again the next day: with the organization's 20 concurrent jobs, a pull request waited a median 47.6 minutes from ready to merged, of which 12.6 were its own runs.
-Its ruleset is kept disabled and `verify` no longer runs on a merge group.
-Runner capacity has to grow before the queue can help: on 2026-10-07 all 20 jobs were in use for 427 minutes, and between 13:00 and 19:00 KST a full `verify` run took a median 23.9 minutes, 10.7 of them waiting for a runner (read from each job's created and started times).
+A pull request already in the queue when main's push run fails still merges when its group passes; while merges are stopped, add none, and take one that should wait out with Remove from queue on its pull request page.
 
 ## Relay protocol gate
 
@@ -326,7 +327,6 @@ A script that stops earning its place here is deleted rather than left unreferen
 
 | Command | Checks | Needs |
 | --- | --- | --- |
-| `python3 scripts/premerge-check.py <number>` | A pull request may merge into main as main is now: its latest `verify` passed, it does not conflict, and the fast checks pass on the merge result ([Merging into main](#merging-into-main)) | `gh` logged in for this repository, and the web and Rust toolchains the checks build with |
 | `python3 scripts/merge-order.py [<number> \| --branch <name>]` | Which green pull request merges first and what each breaks ([Which green pull request merges first](#which-green-pull-request-merges-first)), or where a pull request or branch stands beside the open ones ([Starting work beside open pull requests](#starting-work-beside-open-pull-requests)); it only reads and fetches | `gh` logged in for this repository |
 | `python3 scripts/check-no-attribution.py` | No AI tooling attribution in the branch name, the commits, or a prepared PR body | A fetched `origin/main`; `--range` and `--pr-body` override the defaults |
 
