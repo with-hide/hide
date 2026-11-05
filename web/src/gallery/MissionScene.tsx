@@ -49,7 +49,7 @@ const MINUTE = 60_000;
 const no = (n: number) => `#${n}`;
 
 function node(key: string, title: string, extra: Partial<MissionNode>): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 /** Where a node is on its way to main, as the core would publish it (`herdr-core/src/runtime/mission_landing.rs`). */
@@ -202,6 +202,36 @@ function warned(one: MissionNode, now: number): MissionNode {
   return one;
 }
 
+/**
+ * The steps a Conductor wrote with the plan, by node (hide-private missions.md):
+ * a node ahead of its worker shows them as dashed cells, a node whose worker has
+ * a plan shows that plan, and the reopen fix's worker changed one of its steps.
+ */
+const PLANNED_STEPS: Record<string, string[]> = {
+  cause: ["재현 단계 찾기", "초기화 순서 읽기", "원인을 줄 번호와 함께 적기"],
+  "fix-1481": ["빈 목록 재현", "필터 상태 보존", "구현 PR"],
+  "fix-1483": ["재현 테스트", "원인 고치기", "구현 PR"],
+  "fix-1490": ["검색 입력 흐름 읽기", "지우면 처음 목록으로", "테스트와 구현 PR"],
+  api: ["페이지 나누기 설계", "API 구현", "테스트와 구현 PR"],
+  "fix-1487": ["reopen 재현 테스트", "셀 초기화 순서 고치기", "실제 세션 50개 replay", "전체 검사", "구현 PR"],
+  screen: ["새 API 연결", "목록·검색·필터 옮기기", "화면 확인과 구현 PR"],
+  "check-1487": ["실제 앱에서 reopen 확인", "결과 기록"],
+  together: ["합친 변경 로드 확인", "두 화면 같이 확인"],
+};
+
+/** The brief the reopen fix's worker was started on, invented for the boards. */
+const BRIEF = `${no(1487)} fix 노드입니다. reopen 뒤에 셀이 비는 문제를 고칩니다.\n\n브랜치 fix/1487-reopen-cells, 워크트리에서만 커밋하세요.\n원인 노드 결론: 셀 초기화가 reopen 보다 먼저 돎.\n\n할 일\n1. reopen 재현 테스트\n2. 셀 초기화 순서 고치기\n3. 실제 세션 50개 replay\n4. 전체 검사\n5. 구현 PR\n\n끝나면 report 편지로 PR 번호와 근거를 보내세요.`;
+
+/** Gives each node the Conductor's steps, and the size of its brief once a worker was bound. */
+function withSteps(nodes: MissionNode[]): MissionNode[] {
+  return nodes.map((one) => {
+    const steps = PLANNED_STEPS[one.key];
+    if (!steps || one.kind === "external") return one;
+    // The worker of the reopen fix changed its third step from the plan.
+    return { ...one, steps, brief_bytes: one.agent_id || one.pane_id ? BRIEF.length : null };
+  });
+}
+
 /** How many minutes before now each state's mission started; the rest started 44 minutes ago. */
 const STARTED_AGO: Record<string, number> = { stack: 72, done: 300, cancelled: 300, "no-pr": 180 };
 
@@ -248,6 +278,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
+  nodes.splice(0, nodes.length, ...withSteps(nodes));
   if (remote) {
     for (const one of nodes) {
       one.machine = one.key === "screen" || (shown === "remote-long" && one.key === "fix-1487") ? "mini" : one.pane_id ? "local" : null;
@@ -284,6 +315,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },
     mission_events: { mission: mission.id, events: history(mission, now), dropped: 0 },
+    mission_brief: { mission: mission.id, node: "fix-1487", text: BRIEF },
     navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local", label: remote ? "Studio Mac" : "This Mac", kit: { agents: [
       { id: "claude-code", label: "Claude Code", availability: "available", enabled: true },
       { id: "codex", label: "Codex", availability: "available", enabled: true },

@@ -28,9 +28,9 @@ export function useMissionDeviceName(machine: string | null | undefined): string
   });
 }
 
-/** A device in the worker's metadata, with the full name on hover. */
+/** A device in the worker's metadata, with the full name on hover; only a device away from the window is named, so it wears the other-device colour the workspace's header band and its pane border wear (PRD home-device-rail D-15). */
 export function MissionDevice({ name, className }: { name: string | null; className?: string }) {
-  return name ? <Hint label={name} reveals><span className={cn("flex min-w-0 max-w-full", className)}><DeviceChip label={name} variant="inline" className="max-w-full" /></span></Hint> : null;
+  return name ? <Hint label={name} reveals><span className={cn("flex min-w-0 max-w-full", className)}><DeviceChip label={name} variant="remote" className="max-w-full" /></span></Hint> : null;
 }
 
 /**
