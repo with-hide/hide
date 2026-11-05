@@ -25,6 +25,7 @@ pub mod global_guard;
 pub mod guardrails;
 pub mod guidance;
 mod hook_log;
+pub mod hook_request;
 pub mod install;
 mod lossless_json;
 pub mod memory;

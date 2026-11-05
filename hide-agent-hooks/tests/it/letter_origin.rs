@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use hide_platform::process::OwnedChild;
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 const PANE: &str = "w1:p1";
@@ -31,8 +32,10 @@ case "$2" in
 esac
 "#;
 
-/// The helper linked beside a fake `hide`, since the hook asks its sibling.
+/// The helper linked beside a fake `hide`, which confirms its letters, and a
+/// daemon answering from the same table, which hands them over.
 struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     home: PathBuf,
     hook: PathBuf,
@@ -51,7 +54,9 @@ impl Machine {
         stand_ins::place(programs::hook(), &hook);
         stand_ins::program(&bin.join("hide"), FAKE_HIDE);
         let calls = root.join("hide-calls");
+        let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
         Self {
+            daemon,
             _dir: dir,
             home,
             hook,
@@ -85,6 +90,7 @@ impl Machine {
                 command.env_remove(key);
             }
         }
+        self.daemon.route(&mut command);
         command.envs(origin.iter().copied());
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let output = child

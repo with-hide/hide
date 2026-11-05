@@ -13,6 +13,8 @@ path = "src/bin/hide-agent-hooks.rs"
 
 [dependencies]
 base64 = "=0.23.1"
+# The nonce and request id of a hook request (`hook_request`).
+getrandom = "=0.2.16"
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 # Hide AI's tool-free folder for agy, whose trust this crate records.
 hide-ai = { path = "../hide-ai" }

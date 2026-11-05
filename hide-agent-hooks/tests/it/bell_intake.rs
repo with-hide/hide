@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use hide_platform::process::OwnedChild;
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 /// The line the stand-in core rang with.
@@ -39,19 +40,25 @@ esac
 }
 
 struct Kit {
+    daemon: StandInDaemon,
     root: tempfile::TempDir,
 }
 
 impl Kit {
     /// A folder holding the helper and a `hide` beside it, as the install kit
-    /// lays them out, so the helper reaches the stand-in and nothing else.
+    /// lays them out, and a daemon answering from the same table, so the
+    /// helper reaches the stand-ins and nothing else.
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         stand_ins::place(programs::hook(), &bin.join("hide-agent-hooks"));
         stand_ins::program(&bin.join("hide"), &fake_hide());
-        Self { root }
+        let daemon = StandInDaemon::serve(
+            &bin.join("hide"),
+            &[("FAKE_HIDE_LOG", root.path().join("asked.log").into())],
+        );
+        Self { daemon, root }
     }
 
     fn log(&self) -> PathBuf {
@@ -97,6 +104,7 @@ impl Kit {
                 command.env_remove(key);
             }
         }
+        self.daemon.route(&mut command);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let mut stdin = child.take_stdin().unwrap();
         stdin.write_all(payload.to_string().as_bytes()).unwrap();

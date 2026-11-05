@@ -1,32 +1,33 @@
-//! A SessionStart capability probe through the same scoped CLI the agent will
-//! use. The hook never reads bearer bytes or trusts a pane ID on its own, and
-//! it needs no pane id at all: the daemon binds a caller in a pane to that
-//! pane and any other local caller to the registered checkout holding its cwd,
-//! so the guidance names the checkout the daemon answered with.
+//! A SessionStart capability probe, the hook request `hide workspace info
+//! --hook` sends, asked by the hook itself. The hook never reads bearer bytes
+//! or trusts a pane ID on its own, and it needs no pane id at all: the daemon
+//! binds a caller in a pane to that pane and any other local caller to the
+//! registered checkout holding its cwd, so the guidance names the checkout
+//! the daemon answered with.
 
 use std::ffi::OsString;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_platform::process::OwnedChild;
 use serde_json::Value;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(2);
-const OUTPUT_LIMIT: u64 = 16 * 1024;
 
 pub fn live_context() -> Option<String> {
     let program = cli_program()?;
-    let answer = run_cli(&program, &["workspace", "info", "--hook"])?;
-    if answer["ok"] != true {
-        return None;
-    }
+    let (answer, _) = hide_agent_hooks::delivery::ask_answer(
+        hide_agent_hooks::hook_request::HookCommand::WorkspaceInfo {},
+        Instant::now() + CLI_TIMEOUT,
+    );
+    // A failed probe leaves the session without the guidance; Memory and the
+    // report beside it record why the daemon could not be asked.
+    let answer = answer.ok()?;
     let reference = PathBuf::from(answer["reference"].as_str()?);
     format_context(&program, &reference, &answer)
 }
 
+/// The `hide` the guidance tells the agent to run: the one beside this
+/// helper, else the one on `PATH`.
 pub fn cli_program() -> Option<OsString> {
     let sibling = std::env::current_exe()
         .ok()?
@@ -38,51 +39,6 @@ pub fn cli_program() -> Option<OsString> {
         // An independently installed remote helper can use the CLI on PATH.
         Some(OsString::from("hide"))
     }
-}
-
-#[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn run_cli(program: &OsString, arguments: &[&str]) -> Option<Value> {
-    let mut command = Command::new(program);
-    if let Err(cause) = hide_agent_hooks::route::apply(&mut command) {
-        if let Ok(home) = hide_platform::host::home_dir() {
-            hide_agent_hooks::delivery::diagnose(&home, cause);
-        }
-        return None;
-    }
-    command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = OwnedChild::spawn(&mut command).ok()?;
-    let deadline = Instant::now() + CLI_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(_) => {
-                let _ = child.kill_tree();
-                let _ = child.wait();
-                return None;
-            }
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill_tree();
-            let _ = child.wait();
-            return None;
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    if !status.success() {
-        return None;
-    }
-    let mut output = Vec::new();
-    child
-        .take_stdout()?
-        .take(OUTPUT_LIMIT)
-        .read_to_end(&mut output)
-        .ok()?;
-    serde_json::from_slice(&output).ok()
 }
 
 fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Option<String> {

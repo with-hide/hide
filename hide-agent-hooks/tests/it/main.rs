@@ -27,6 +27,7 @@ mod plan_record;
 mod pre_tool;
 mod programs;
 mod session_start_probes;
+mod stand_in_daemon;
 #[path = "../../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
 mod windows_hook_command;

@@ -15,6 +15,7 @@ use hide_platform::process::OwnedChild;
 use serde_json::{Value, json};
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 const PANE: &str = "w1:p2";
@@ -41,6 +42,7 @@ esac
 }
 
 struct Kit {
+    daemon: StandInDaemon,
     root: tempfile::TempDir,
 }
 
@@ -51,7 +53,11 @@ impl Kit {
         std::fs::create_dir(&bin).unwrap();
         stand_ins::place(programs::hook(), &bin.join("hide-agent-hooks"));
         stand_ins::program(&bin.join("hide"), &fake_hide());
-        Self { root }
+        let daemon = StandInDaemon::serve(
+            &bin.join("hide"),
+            &[("FAKE_HIDE_LOG", root.path().join("asked.log").into())],
+        );
+        Self { daemon, root }
     }
 
     fn log(&self) -> PathBuf {
@@ -90,6 +96,7 @@ impl Kit {
             .env(hide_platform::host::HOME_VARIABLE, self.root.path())
             .env("FAKE_HIDE_LOG", self.log())
             .env("HIDE_PANE_ID", PANE);
+        self.daemon.route(&mut command);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let mut stdin = child.take_stdin().unwrap();
         stdin.write_all(payload.to_string().as_bytes()).unwrap();

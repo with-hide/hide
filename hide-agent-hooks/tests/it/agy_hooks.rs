@@ -16,6 +16,7 @@ use hide_platform::process::OwnedChild;
 use serde_json::{Value, json};
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 const PANE: &str = "w1:p3";
@@ -44,6 +45,7 @@ exec /bin/sleep 60
 "#;
 
 struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     root: PathBuf,
     home: PathBuf,
@@ -80,7 +82,9 @@ impl Machine {
         let policy = home.join(".hide/agent-hooks/guardrails.json");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
         std::fs::write(policy, r#"{"version":1,"projects":[]}"#).unwrap();
+        let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
         Self {
+            daemon,
             _dir: dir,
             root,
             home,
@@ -121,6 +125,7 @@ impl Machine {
                 command.env_remove(key);
             }
         }
+        self.daemon.route(&mut command);
         if let Some(pane) = pane {
             command.env("HIDE_PANE_ID", pane);
         }

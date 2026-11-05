@@ -139,10 +139,10 @@ pub fn state_dir_choice_from_process(home: &Path) -> (PathBuf, Option<StateVaria
     )
 }
 
-/// Where a device's helper and the `hide` command beside it meet (D-06).
-pub fn workspace_bridges(state_dir: &Path) -> PathBuf {
-    state_dir.join("workspace-bridges")
-}
+/// Where a device's helper and the `hide` command beside it meet (D-06);
+/// named beside the hook request that looks there, which the kit's crates
+/// sit above.
+pub use hide_agent_hooks::hook_request::workspace_bridges;
 
 /// The daemon's lifetime lock, shared with the account kit's route ownership check.
 pub fn daemon_lock(state_dir: &Path) -> PathBuf {
@@ -649,6 +649,21 @@ mod tests {
             state_dir(home, Some("/isolated"), Some("/xdg")),
             PathBuf::from("/isolated")
         );
+    }
+
+    /// A hook finds the daemon it asks in the same folder `hide` would: the
+    /// hook's crate sits under the kit and keeps its own copy of the choice
+    /// when nothing names a folder (`hide_agent_hooks::route::state_dir`).
+    #[test]
+    fn a_hook_picks_the_state_folder_hide_picks() {
+        let home = Path::new("/Users/example");
+        for xdg in [None, Some(""), Some("/xdg")] {
+            assert_eq!(
+                hide_agent_hooks::route::account_state_dir(home, xdg.map(std::ffi::OsStr::new)),
+                state_dir(home, None, xdg),
+                "{xdg:?}"
+            );
+        }
     }
 
     #[test]

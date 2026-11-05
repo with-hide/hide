@@ -73,68 +73,11 @@ pub struct PaneIdentity {
     pub shell_started: u64,
 }
 
-/// Where a runtime hook can hand letters to its model.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PullPoint {
-    #[default]
-    Prompt,
-    Tool,
-    TurnEnd,
-}
-
-/// The only commands admitted by a hook's proof-and-answer exchange.
-/// Keeping this separate from Workspace commands prevents this transport
-/// from acquiring dispatch, browser, or letter-confirmation authority.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum HookCommand {
-    WorkspaceInfo {},
-    LetterPull {
-        prompt_digest: Option<String>,
-        session: Option<String>,
-        #[serde(default)]
-        point: PullPoint,
-        /// Set by a `hide` that confirms a whole letter bundle; a device kit
-        /// older than bundles leaves it out and is handed its letters as
-        /// before (`docs/delivery.md`, One bundle per handover).
-        #[serde(default)]
-        bundle: bool,
-    },
-    Memory {
-        event: String,
-        runtime: String,
-        session: String,
-        #[serde(default)]
-        prompt: String,
-    },
-    /// What the pane's agent hook observed: its turn and its subagent
-    /// counts, for the core's status judgement (PRD engine-bundle-1 D-7).
-    /// Metadata only; it never dispatches input or letters.
-    Status {
-        report: HookStatusReport,
-    },
-}
-
-impl HookCommand {
-    /// Only session guidance keeps a reference for the commands it advertises.
-    pub fn one_shot(&self) -> bool {
-        !matches!(self, Self::WorkspaceInfo {})
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct HookRequest {
-    pub request_id: String,
-    pub command: HookCommand,
-    /// A named reference constrains the fresh proof; it never substitutes
-    /// for the node's kernel check of the caller.
-    pub token: Option<String>,
-}
-
-pub const HOOK_REQUEST_LIMIT: usize = 16 * 1024;
-pub const HOOK_RESPONSE_LIMIT: usize = 64 * 1024;
+// A hook's proof-and-answer exchange is spoken by the hook itself, so its
+// types are the hook crate's (`hide_agent_hooks::hook_request`).
+pub use hide_agent_hooks::hook_request::{
+    HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest, PullPoint,
+};
 
 /// What a node tells the core without being asked: one JSON line with an
 /// `event` field and no `id`.
