@@ -8,3 +8,10 @@ hooks = "omp"
 
 [resume]
 session = ["--resume", "{session}"]
+[input]
+# Text typed into the agent is confirmed on its screen before Enter: its own
+# end, or the chip it draws for a paste it folds (with-hide/hide-private#545).
+# omp 18.7.0 draws a paste as a box titled `📄 #1`.
+# Measured in the composer captures of hide-agent-adapter/tests/fixtures/composer.
+paste_chips = ["📄 #"]
+

@@ -28,6 +28,7 @@ fn play() {
         "stubborn_child" => stubborn_child(),
         "flood" => flood(),
         "script" => script(),
+        "composer" => composer(),
         "exit_when_told" => exit_when_told(),
         "print_when_told" => print_when_told(),
         "flood_when_told" => flood_when_told(),
@@ -226,6 +227,73 @@ fn script() {
         out.flush().unwrap();
     }
     drop(out);
+    live_out();
+}
+
+/// A stand-in agent whose first reads of its keys are lost
+/// (with-hide/hide-private#545): until the test makes `go` in the folder
+/// `HIDE_HOLDER_TEST_SCRIPT` names, it reads every key and drops it, noting
+/// each read in `discarded`, while it redraws a spinner, as a starting
+/// program that animates draws while it drops what is typed. After, it draws
+/// each key it reads in its composer line, keeps it in `heard`, and draws
+/// `SUBMITTED` for an Enter.
+fn composer() {
+    let folder = std::path::PathBuf::from(std::env::var_os(SCRIPT).unwrap());
+    let go = folder.join("go");
+    raw_terminal();
+    let draw = |bytes: &[u8]| {
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(bytes).and_then(|()| out.flush());
+    };
+    draw(b"\x1b[H\x1b[2Jcomposer starting\r\n> ");
+    thread::spawn({
+        let go = go.clone();
+        move || {
+            let mut stdin = std::io::stdin().lock();
+            let mut buffer = [0u8; 4096];
+            loop {
+                use std::io::Read;
+                let count = match stdin.read(&mut buffer) {
+                    Ok(0) | Err(_) => return,
+                    Ok(count) => count,
+                };
+                let read = &buffer[..count];
+                let (file, shown) = if go.exists() {
+                    ("heard", true)
+                } else {
+                    ("discarded", false)
+                };
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(folder.join(file))
+                    .unwrap()
+                    .write_all(read)
+                    .unwrap();
+                if shown {
+                    let mut echo = Vec::new();
+                    for &byte in read {
+                        if byte == b'\r' {
+                            echo.extend_from_slice(b"\r\nSUBMITTED\r\n> ");
+                        } else if byte.is_ascii_graphic() || byte == b' ' {
+                            echo.push(byte);
+                        }
+                    }
+                    draw(&echo);
+                }
+            }
+        }
+    });
+    let frames = ["|", "/", "-", "\\"];
+    let deadline = Instant::now() + ROLE_LIFE;
+    let mut frame = 0;
+    while !go.exists() && Instant::now() < deadline {
+        draw(format!("\x1b7\x1b[1;20H{}\x1b8", frames[frame % frames.len()]).as_bytes());
+        frame += 1;
+        #[allow(clippy::disallowed_methods)] // the spinner's own pace
+        thread::sleep(Duration::from_millis(50));
+    }
+    draw(b"\x1b7\x1b[1;1H\x1b[2Kcomposer ready\x1b8");
     live_out();
 }
 

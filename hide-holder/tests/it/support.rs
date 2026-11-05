@@ -647,6 +647,28 @@ impl Script {
     }
 }
 
+/// Starts a holder whose program plays `role`, with the folder the role
+/// keeps its files in (`SCRIPT`).
+pub fn start_role(home: &Home, role: &str, folder: &Path) -> Holder {
+    let program = home.prepare(current_version(), &source());
+    let named: OsString = role.into();
+    let folder: OsString = folder.into();
+    let socket = home.socket("p");
+    let place = socket.parent().unwrap().to_owned();
+    match start_themed(
+        &program.program,
+        &socket,
+        &role_program(role),
+        &[(ROLE, &named), (SCRIPT, &folder)],
+        &place,
+        &place,
+        None,
+    ) {
+        Start::Ready(holder) => holder,
+        Start::Failed(reason) => panic!("the holder did not start: {reason}"),
+    }
+}
+
 /// One thing a terminal is given to draw.
 pub enum Draw {
     Bytes(Vec<u8>),

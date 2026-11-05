@@ -28,8 +28,8 @@ use std::time::Instant;
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
-    HolderError, HolderKey, HolderScroll, HolderStart, PaneFacts, PaneHolders, PaneInput,
-    StyledRead, UNSUPPORTED_HOLDER,
+    HolderError, HolderKey, HolderScroll, HolderStart, LetterGuard, PaneFacts, PaneHolders,
+    PaneInput, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 use super::keys::PaneKey;
@@ -1308,6 +1308,41 @@ fn delivery_of(
     }
 }
 
+/// What shows on `definition`'s screen once `text` typed into it landed
+/// (with-hide/hide-private#545): the text's own end, the last
+/// [`TAIL_CHARS`] of its last line with its spaces left out, and the chips
+/// the agent draws for a paste it folds (`[input] paste_chips`). Nothing
+/// for an agent whose input is not declared, which is typed as before.
+fn shown_needles(
+    definition: &hide_agent_adapter::definition::Definition,
+    text: &str,
+) -> Vec<String> {
+    let Some(chips) = &definition.paste_chips else {
+        return Vec::new();
+    };
+    let last = text
+        .split(['\n', '\r', '\u{2028}', '\u{2029}'])
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default();
+    let squeezed: Vec<char> = last.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut tail: String = squeezed[squeezed.len().saturating_sub(TAIL_CHARS)..]
+        .iter()
+        .collect();
+    while tail.len() > hide_node_link::holders::MAX_NEEDLE_BYTES {
+        tail.remove(0);
+    }
+    std::iter::once(tail)
+        .chain(chips.iter().cloned())
+        .filter(|needle| !needle.is_empty())
+        .take(hide_node_link::holders::MAX_GUARD_NEEDLES)
+        .collect()
+}
+
+/// How much of a typed text's end its landing is read by: short enough that
+/// a composer's wrap seldom falls inside it, long enough to be its own.
+const TAIL_CHARS: usize = 12;
+
 /// Hide's key as the holder names it; the holder encodes it for the
 /// program's keyboard modes, as Herdr encodes a named key for its pane.
 fn holder_key(key: PaneKey) -> HolderKey {
@@ -2059,6 +2094,27 @@ impl<'g> Engine for OwnEngine<'g> {
         self.type_input(pane, PaneInput::Keys(vec![HolderKey::Enter]))
     }
 
+    /// One submission the pane's holder writes only while its screen rules
+    /// read the agent at rest; a refusal is the holder's to log and leaves
+    /// the pane as it was, so the caller sees no change it waited for.
+    fn submit_text_at_rest(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
+        self.check()?;
+        self.known(pane)?;
+        self.shared
+            .holders
+            .letter(
+                pane,
+                vec![PaneInput::Bytes(text.as_bytes().to_vec())],
+                PaneInput::Keys(vec![HolderKey::Enter]),
+                std::time::Duration::ZERO,
+                LetterGuard {
+                    shown: Vec::new(),
+                    at_rest: true,
+                },
+            )
+            .map_err(holder_error)
+    }
+
     fn press_key(&self, _wait: Wait, pane: &str, key: &str) -> Answer<()> {
         self.check()?;
         let key = holder_key(named_key(key)?);
@@ -2267,6 +2323,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 "agent prompt must not be empty".to_owned(),
             ));
         }
+        let catalog = self.shared.definitions.get();
         let (pane, paste, kind) = {
             let topology = self.topology();
             let (pane, held, agent) = topology.agent(target)?;
@@ -2295,6 +2352,12 @@ impl<'g> Engine for OwnEngine<'g> {
             PaneInput::Bytes(text.as_bytes().to_vec())
         };
         self.known(&pane)?;
+        let guard = LetterGuard {
+            shown: agents::definition(&catalog, &kind)
+                .map(|definition| shown_needles(definition, text))
+                .unwrap_or_default(),
+            at_rest: false,
+        };
         self.shared
             .holders
             .letter(
@@ -2302,6 +2365,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 prompt_text(&kind, self.shared.windows, body),
                 PaneInput::Keys(vec![HolderKey::Enter]),
                 PROMPT_SUBMIT_DELAY,
+                guard,
             )
             .map_err(holder_error)
     }
@@ -2753,6 +2817,7 @@ mod tests {
             text: Vec<PaneInput>,
             submit: PaneInput,
             _gap: Duration,
+            _guard: LetterGuard,
         ) -> Result<(), HolderError> {
             let mut letter = b"<letter>".to_vec();
             letter.extend(text.into_iter().flat_map(shown));
@@ -3977,6 +4042,15 @@ mod tests {
         let done = engine.agent_state(WAIT, "worker").unwrap();
         assert_eq!(done.status, "done", "a rest after work is done");
         assert!(done.state_change_seq > working.state_change_seq);
+        // Claude Code reports its session as it starts: its start takes
+        // input on that report, never on the rest alone
+        // (with-hide/hide-private#545).
+        assert_eq!(
+            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+            Readiness::Launching,
+            "at rest past the settle, but its hook has not reported"
+        );
+        engine.hook_session(&pane, "claude", "s-1").unwrap();
         assert_eq!(
             engine.delivery_agent(WAIT, &pane).unwrap().readiness,
             Readiness::Ready
@@ -4755,6 +4829,30 @@ mod tests {
             prompt_text("copilot", false, body()),
             vec![PaneInput::Bytes(b"\x1b[I".to_vec()), body()]
         );
+    }
+
+    /// A prompt's landing is read by the end of its last line and by the
+    /// chips its agent's definition names for a folded paste
+    /// (with-hide/hide-private#545); an agent whose input is not declared is
+    /// typed as before, with nothing to read.
+    #[test]
+    fn a_prompt_is_confirmed_by_its_own_end_or_its_agents_paste_chip() {
+        let catalog = hide_agent_adapter::definition::Catalog::read(Vec::new());
+        let claude = agents::definition(&catalog, "claude").unwrap();
+        assert_eq!(
+            shown_needles(
+                claude,
+                "# Brief\n\nReply with exactly JOURNEY-53BF4425 \n\n"
+            ),
+            ["NEY-53BF4425", "[Pasted text #"]
+        );
+        assert_eq!(
+            shown_needles(claude, "ok"),
+            ["ok", "[Pasted text #"],
+            "a short text is its own end"
+        );
+        let cursor = agents::definition(&catalog, "cursor").unwrap();
+        assert!(shown_needles(cursor, "brief").is_empty());
     }
 
     /// A fork's held prompt is handed over once its agent takes input

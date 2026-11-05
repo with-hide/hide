@@ -286,3 +286,60 @@ fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
         .send(ClientMessage::Input(b"\x03".to_vec()))
         .unwrap();
 }
+
+/// A submission guarded at rest (with-hide/hide-private#545) is refused
+/// while the pane's rules read its program working, with nothing written,
+/// and written once they read it at rest: the check and the text are one
+/// step in the holder, so a turn that began after the node's own check
+/// refuses the fork's `/fork`.
+#[test]
+fn a_submission_guarded_at_rest_is_refused_while_the_screen_reads_working() {
+    use hide_holder_protocol::{ClientMessage, Guard, Key, NoticeReason, Submit, SubmitPart};
+    let home = Home::new();
+    let script = Script::new(
+        &home,
+        vec![
+            b"\x1b[H\x1b[2Jbusy".to_vec(),
+            b"\x1b[H\x1b[2Jresting".to_vec(),
+        ],
+    );
+    let holder = script.start(&home);
+    let mut connection = holder.open_accepting(vec![
+        Capability::Screen,
+        Capability::Keys,
+        Capability::Notices,
+    ]);
+    let mut watch = Watch::open(&holder.socket);
+    watch.rules(Some(BUSY));
+    watch.wait("the working screen", |facts| {
+        facts.screen == read(ScreenState::Working, Some("busy"))
+    });
+    let fork = || {
+        ClientMessage::Submit(Submit {
+            text: vec![SubmitPart::Input(b"/fork".to_vec())],
+            gap: std::time::Duration::ZERO,
+            enter: SubmitPart::Keys(vec![Key::Enter]),
+            guard: Guard {
+                shown: Vec::new(),
+                at_rest: true,
+            },
+        })
+    };
+    connection.send(fork()).unwrap();
+    connection.wait_notice(|notice| notice.reason == NoticeReason::SubmitBusy);
+    assert!(
+        script.heard().is_empty(),
+        "nothing of a refused submission was written"
+    );
+    script.go(1);
+    watch.wait("the resting screen", |facts| {
+        facts.screen == read(ScreenState::Unknown, None)
+    });
+    connection.send(fork()).unwrap();
+    crate::support::wait_until("the second /fork", || {
+        String::from_utf8_lossy(&script.heard()).contains("/fork")
+    });
+    let heard = String::from_utf8_lossy(&script.heard()).into_owned();
+    assert!(heard.starts_with("/fork"), "{heard:?}");
+    assert_eq!(heard.matches("/fork").count(), 1, "{heard:?}");
+}

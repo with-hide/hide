@@ -143,6 +143,9 @@ pub struct HolderForeground {
 /// A key the engine presses by name, which the pane's holder encodes for
 /// its program's keyboard modes when it is written.
 pub use hide_holder_protocol::Key as HolderKey;
+/// What a letter's holder checks before its Enter: that the typed text
+/// showed, and that the screen was at rest (with-hide/hide-private#545).
+pub use hide_holder_protocol::{Guard as LetterGuard, MAX_GUARD_NEEDLES, MAX_NEEDLE_BYTES};
 
 /// What the engine types into a pane (PRD engine-bundle-3-core-owns D-21):
 /// bytes as they are, or a paste and named keys the pane's holder encodes
@@ -441,13 +444,17 @@ pub trait PaneHolders: Send + Sync {
     /// has passed, as one submission, holding
     /// the operator's keys typed into the pane meanwhile and writing them
     /// after the submit in the order typed (PRD engine-bundle-3-core-owns
-    /// D-13). Returns once the submit was handed over.
+    /// D-13). The pane's holder checks `guard` against the screen it
+    /// parsed (with-hide/hide-private#545). Returns once the submission was
+    /// handed over: whether its text showed, or the screen was at rest, the
+    /// holder decides after, and the agent's own record says.
     fn letter(
         &self,
         pane: &str,
         text: Vec<PaneInput>,
         submit: PaneInput,
         gap: std::time::Duration,
+        guard: LetterGuard,
     ) -> Result<(), HolderError>;
     /// What the node's start found of its holders, once it has looked at
     /// every record, waiting at most `timeout` for it: refused
@@ -540,6 +547,9 @@ pub enum PaneCall {
         text: Vec<PaneInput>,
         submit: PaneInput,
         gap_ms: u64,
+        /// Absent from a core built before guards, which types as before.
+        #[serde(default)]
+        guard: LetterGuard,
     },
     /// [`PaneHolders::recovered`]; answers [`HolderRecovery`].
     Recovered {

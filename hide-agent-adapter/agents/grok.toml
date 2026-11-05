@@ -15,6 +15,13 @@ hooks = "grok"
 [resume]
 session = ["--resume", "{session}"]
 
+[input]
+# Text typed into the agent is confirmed on its screen before Enter: its own
+# end, or the chip it draws for a paste it folds (with-hide/hide-private#545).
+# Grok 1.0.62 on a legacy console folds a paste into `[Pasted: 12 lines]`, and otherwise draws its first lines and `⋮ (6 more lines)`.
+# Measured in the composer captures of hide-agent-adapter/tests/fixtures/composer.
+paste_chips = ["[Pasted: ", "more lines)"]
+
 [screen]
 version = "2026.10.05.1"
 min_engine_version = 3

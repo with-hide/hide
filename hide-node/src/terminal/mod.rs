@@ -440,13 +440,15 @@ impl Service {
     /// to the pane's writer are held, at most 64 KiB and 3 s as a new pane's
     /// are, and written after it in the order typed, so none lands inside
     /// the letter and none is lost (PRD engine-bundle-3-core-owns D-13). The
-    /// hold ends on every way out, a panic included.
+    /// hold ends on every way out, a panic included. The holder checks
+    /// `guard` against its screen ([`hide_holder_protocol::Guard`]).
     fn type_letter(
         &self,
         pane: &str,
         text: Vec<Typed>,
         submit: Typed,
         gap: Duration,
+        guard: hide_holder_protocol::Guard,
     ) -> Result<(), hide_node_link::holders::HolderError> {
         struct Letter<'a> {
             service: &'a Service,
@@ -502,10 +504,21 @@ impl Service {
                 "A letter's submit gap is longer than a submission takes",
             ));
         }
+        if guard.shown.len() > hide_holder_protocol::MAX_GUARD_NEEDLES
+            || guard.shown.iter().any(|needle| {
+                needle.is_empty() || needle.len() > hide_holder_protocol::MAX_NEEDLE_BYTES
+            })
+        {
+            return Err(command::refused(
+                "pane_input_invalid",
+                "A letter's guard names more or longer needles than a submission takes",
+            ));
+        }
         let submission = hide_holder_protocol::Submit {
             text: text.into_iter().map(part).collect::<Result<_, _>>()?,
             gap,
             enter: part(submit)?,
+            guard,
         };
         self.type_input(pane, Typed::Submit(Box::new(submission)))
     }

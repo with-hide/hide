@@ -85,6 +85,11 @@ pub struct Definition {
     pub start_args: Vec<String>,
     pub resume_session: Option<Vec<String>>,
     pub resume_last: Option<Vec<String>>,
+    /// The chips the agent draws for a paste it folds (`[input]`), when its
+    /// input is declared: text typed into it is then confirmed on its
+    /// screen before Enter (with-hide/hide-private#545). `None` for an agent
+    /// whose input is not declared.
+    pub paste_chips: Option<Vec<String>>,
     pub screen: Option<Screen>,
     pub source: Source,
     /// The built-in agent a user file copied.
@@ -270,6 +275,7 @@ fn new_definition(
         start_args: file.start_args.unwrap_or_default(),
         resume_session: file.resume_session,
         resume_last: file.resume_last,
+        paste_chips: file.paste_chips,
         screen: screen.map(|rules| Screen {
             rules: Arc::new(rules),
             source: source.clone(),
@@ -316,6 +322,7 @@ fn based_on(
             .resume_session
             .or_else(|| builtin.resume_session.clone()),
         resume_last: file.resume_last.or_else(|| builtin.resume_last.clone()),
+        paste_chips: file.paste_chips.or_else(|| builtin.paste_chips.clone()),
         screen: match screen {
             Some(rules) => Some(Screen {
                 rules: Arc::new(rules),
@@ -343,6 +350,7 @@ fn screen_override(name: &str, (file, screen): (Fields, Option<Rules>)) -> Resul
             "resume",
             file.resume_session.is_some() || file.resume_last.is_some(),
         ),
+        ("input", file.paste_chips.is_some()),
     ];
     if let Some((field, _)) = other.iter().find(|(_, set)| *set) {
         return Err(format!(

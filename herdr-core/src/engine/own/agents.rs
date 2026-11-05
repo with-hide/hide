@@ -902,7 +902,12 @@ mod tests {
         assert!(!agent.launch_pending(Instant::now()));
 
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started(
+            "claude-code",
+            Some("worker"),
+            None,
+            false,
+        ));
         pane.facts(PaneFacts {
             screen: read(ScreenState::Working),
             ..at("claude", Some(false))
@@ -922,7 +927,12 @@ mod tests {
     #[test]
     fn a_start_takes_input_only_once_its_screen_rests_after_the_settle() {
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started(
+            "claude-code",
+            Some("worker"),
+            None,
+            false,
+        ));
         let at = |state| PaneFacts {
             foreground: program("claude"),
             screen: read(state),
@@ -1123,7 +1133,12 @@ mod tests {
     #[test]
     fn a_start_with_no_screen_at_rest_ends_at_its_deadline() {
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started(
+            "claude-code",
+            Some("worker"),
+            None,
+            false,
+        ));
         pane.facts(PaneFacts {
             foreground: program("claude"),
             screen: read(ScreenState::Working),

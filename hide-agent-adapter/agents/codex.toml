@@ -15,6 +15,13 @@ hooks = "codex"
 [resume]
 session = ["resume", "{session}"]
 
+[input]
+# Text typed into the agent is confirmed on its screen before Enter: its own
+# end, or the chip it draws for a paste it folds (with-hide/hide-private#545).
+# Codex draws a short paste as its lines and folds a long one into `[Pasted Content <n> chars]` (the string in the 0.166.0 binary).
+# Measured in the composer captures of hide-agent-adapter/tests/fixtures/composer.
+paste_chips = ["[Pasted Content"]
+
 [screen]
 version = "2026.10.11.1"
 min_engine_version = 3

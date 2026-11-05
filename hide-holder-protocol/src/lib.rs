@@ -109,8 +109,13 @@ pub const MAX_SUBMIT_ENTER: usize = 64;
 /// The most parts a [`Submit`]'s text has.
 pub const MAX_SUBMIT_PARTS: usize = 4;
 
-/// The longest gap a [`Submit`] asks for between its text and its submit.
+/// The longest gap a [`Submit`] asks for between its text and its submit,
+/// and the longest a guarded submission waits for its text to show
+/// ([`Guard::shown`]) before it types it again.
 pub const MAX_SUBMIT_GAP: Duration = Duration::from_secs(2);
+
+/// The most times a [`Guard::shown`] submission types its text.
+pub const MAX_SUBMIT_TYPINGS: usize = 3;
 
 /// The most bytes a node's message after its hello carries: a
 /// [`ClientMessage::Submit`] with the longest text and submit, and each
@@ -222,6 +227,10 @@ pub enum Capability {
     /// The holder reads [`ClientMessage::Submit`]; a node sends it only to a
     /// holder whose welcome names this.
     Submit,
+    /// The holder reads a [`Submit`]'s [`Guard`]; a node sends one only to a
+    /// holder whose welcome names this, since an older holder reads the
+    /// guard's byte as a malformed submission and closes the connection.
+    SubmitGuard,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -238,6 +247,7 @@ impl Capability {
             Self::LineEditing => "line_editing",
             Self::ForegroundUnread => "foreground_unread",
             Self::Submit => "submit",
+            Self::SubmitGuard => "submit_guard",
             Self::Other(name) => name,
         }
     }
@@ -252,6 +262,7 @@ impl Capability {
             "line_editing" => Self::LineEditing,
             "foreground_unread" => Self::ForegroundUnread,
             "submit" => Self::Submit,
+            "submit_guard" => Self::SubmitGuard,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -590,6 +601,13 @@ pub enum NoticeReason {
     /// The program took its waiting answers again; the notice counts the
     /// answers refused since [`NoticeReason::AnswersRefused`].
     AnswersResumed,
+    /// A [`Guard::shown`] submission's text never showed on the screen
+    /// however often it was typed ([`MAX_SUBMIT_TYPINGS`]), so its submit
+    /// was not written; the notice counts the typings and the text's bytes.
+    SubmitNotShown,
+    /// A [`Guard::at_rest`] submission found the screen's rules reading the
+    /// program working or asking, so nothing of it was written.
+    SubmitBusy,
     /// A reason this build does not know, by its code, so a node reads a
     /// newer holder's notice without failing the connection.
     Other(u16),
@@ -600,6 +618,8 @@ impl NoticeReason {
         match self {
             Self::AnswersRefused => 1,
             Self::AnswersResumed => 2,
+            Self::SubmitNotShown => 3,
+            Self::SubmitBusy => 4,
             Self::Other(code) => code,
         }
     }
@@ -608,6 +628,8 @@ impl NoticeReason {
         match code {
             1 => Self::AnswersRefused,
             2 => Self::AnswersResumed,
+            3 => Self::SubmitNotShown,
+            4 => Self::SubmitBusy,
             other => Self::Other(other),
         }
     }
@@ -617,6 +639,8 @@ impl NoticeReason {
         match self {
             Self::AnswersRefused => "answers_refused",
             Self::AnswersResumed => "answers_resumed",
+            Self::SubmitNotShown => "input_not_shown",
+            Self::SubmitBusy => "input_not_at_rest",
             Self::Other(_) => "unknown",
         }
     }
@@ -1039,6 +1063,102 @@ pub struct Submit {
     /// At most [`MAX_SUBMIT_GAP`].
     pub gap: Duration,
     pub enter: SubmitPart,
+    /// What the holder checks of the program's screen around the writes,
+    /// to a holder that names [`Capability::SubmitGuard`]; none otherwise.
+    pub guard: Guard,
+}
+
+/// What a holder checks of a [`Submit`] against the screen it parsed
+/// (with-hide/hide-private#545), each with the screen as the program drew it
+/// at that moment, so nothing the node or the core read earlier can be
+/// stale by then.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Guard {
+    /// What shows that the text landed: the text's own end, and the chips
+    /// the agent draws for a paste it folds. When any is given, the submit
+    /// is written only once one of them shows more often on the screen
+    /// than it did before the text was written, each compared line by line
+    /// with every space left out. A screen that redraws without showing one
+    /// (a spinner, a loading screen) is not a landing. Text that has not
+    /// shown after [`MAX_SUBMIT_GAP`] is typed again while none of it shows,
+    /// up to [`MAX_SUBMIT_TYPINGS`] times; text that never shows gets no
+    /// submit and a [`NoticeReason::SubmitNotShown`], so an Enter never
+    /// lands on a screen that did not take the text (a picker, a dialog).
+    /// At most [`MAX_GUARD_NEEDLES`], each 1 to [`MAX_NEEDLE_BYTES`] bytes.
+    pub shown: Vec<String>,
+    /// Nothing is written when the pane's screen rules read the program
+    /// working or asking right before the text: a turn that began after the
+    /// node's own check refuses the text ([`NoticeReason::SubmitBusy`]).
+    pub at_rest: bool,
+}
+
+/// The most needles a [`Guard`] carries, and the most bytes of one.
+pub const MAX_GUARD_NEEDLES: usize = 8;
+pub const MAX_NEEDLE_BYTES: usize = 64;
+
+impl Guard {
+    const SHOWN: u8 = 1;
+    const AT_REST: u8 = 2;
+
+    fn put(&self, payload: &mut Vec<u8>) -> io::Result<()> {
+        let shown = !self.shown.is_empty();
+        payload.push(
+            (if shown { Self::SHOWN } else { 0 }) | (if self.at_rest { Self::AT_REST } else { 0 }),
+        );
+        if !shown {
+            return Ok(());
+        }
+        if self.shown.len() > MAX_GUARD_NEEDLES {
+            return Err(too_long(
+                "guard needles",
+                self.shown.len(),
+                MAX_GUARD_NEEDLES,
+            ));
+        }
+        payload.push(u8::try_from(self.shown.len()).expect("bounded above"));
+        for needle in &self.shown {
+            if needle.is_empty() || needle.len() > MAX_NEEDLE_BYTES {
+                return Err(too_long("a guard needle", needle.len(), MAX_NEEDLE_BYTES));
+            }
+            payload.push(u8::try_from(needle.len()).expect("bounded above"));
+            payload.extend_from_slice(needle.as_bytes());
+        }
+        Ok(())
+    }
+
+    fn take(payload: &mut Payload<'_>) -> Result<Self, FrameError> {
+        let flags = payload.u8()?;
+        if flags & !(Self::SHOWN | Self::AT_REST) != 0 {
+            return Err(FrameError::Malformed(format!(
+                "an unknown submit guard {flags:#04x}"
+            )));
+        }
+        let mut shown = Vec::new();
+        if flags & Self::SHOWN != 0 {
+            let count = usize::from(payload.u8()?);
+            if count == 0 || count > MAX_GUARD_NEEDLES {
+                return Err(FrameError::Malformed(format!(
+                    "a submit guard of {count} needles"
+                )));
+            }
+            for _ in 0..count {
+                let length = usize::from(payload.u8()?);
+                if length == 0 || length > MAX_NEEDLE_BYTES {
+                    return Err(FrameError::Malformed(format!(
+                        "a guard needle of {length} bytes"
+                    )));
+                }
+                let needle = std::str::from_utf8(payload.take(length)?)
+                    .map_err(|_| FrameError::Malformed("a guard needle not UTF-8".to_owned()))?;
+                shown.push(needle.to_owned());
+            }
+        }
+        Ok(Self {
+            shown,
+            at_rest: flags & Self::AT_REST != 0,
+        })
+    }
 }
 
 /// What one part of a [`Submit`] types, encoded the way the message of the
@@ -1434,6 +1554,11 @@ pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Res
                 left -= part.put(&mut payload, left)?;
             }
             submit.enter.put(&mut payload, MAX_SUBMIT_ENTER)?;
+            // Only a guarded submission carries the guard's byte, so an
+            // unguarded one reads the same to a holder built before guards.
+            if submit.guard != Guard::default() {
+                submit.guard.put(&mut payload)?;
+            }
             write_frame(writer, kind::SUBMIT, &payload)
         }
         ClientMessage::Resize(size) => {
@@ -1660,7 +1785,17 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
                     "a submission without text or a submit".to_owned(),
                 ));
             }
-            ClientMessage::Submit(Submit { text, gap, enter })
+            let guard = if payload.0.is_empty() {
+                Guard::default()
+            } else {
+                Guard::take(&mut payload)?
+            };
+            ClientMessage::Submit(Submit {
+                text,
+                gap,
+                enter,
+                guard,
+            })
         }
         kind::RESIZE => ClientMessage::Resize(payload.size()?),
         kind::THEME => ClientMessage::Theme(Theme::take(&mut payload)?),
@@ -2542,11 +2677,25 @@ mod tests {
                 ],
                 gap: Duration::from_millis(300),
                 enter: SubmitPart::Keys(vec![Key::Enter]),
+                guard: Guard::default(),
             }),
             ClientMessage::Submit(Submit {
                 text: vec![SubmitPart::Input(b"hello".to_vec())],
                 gap: MAX_SUBMIT_GAP,
                 enter: SubmitPart::Input(b"\r".to_vec()),
+                guard: Guard {
+                    shown: vec!["llo".to_owned(), "[Pasted ~".to_owned()],
+                    at_rest: true,
+                },
+            }),
+            ClientMessage::Submit(Submit {
+                text: vec![SubmitPart::Input(b"/fork".to_vec())],
+                gap: Duration::ZERO,
+                enter: SubmitPart::Keys(vec![Key::Enter]),
+                guard: Guard {
+                    shown: Vec::new(),
+                    at_rest: true,
+                },
             }),
             ClientMessage::Resize(Size {
                 rows: 40,
@@ -2787,9 +2936,36 @@ mod tests {
                 text,
                 gap: MAX_SUBMIT_GAP,
                 enter,
+                guard: Guard::default(),
             });
             assert!(write_client(&mut Vec::new(), &submit).is_err());
         }
+        for shown in [
+            vec![String::new()],
+            vec!["x".repeat(MAX_NEEDLE_BYTES + 1)],
+            vec!["x".to_owned(); MAX_GUARD_NEEDLES + 1],
+        ] {
+            let submit = ClientMessage::Submit(Submit {
+                text: vec![SubmitPart::Input(b"hi".to_vec())],
+                gap: MAX_SUBMIT_GAP,
+                enter: SubmitPart::Input(b"\r".to_vec()),
+                guard: Guard {
+                    shown,
+                    at_rest: false,
+                },
+            });
+            assert!(write_client(&mut Vec::new(), &submit).is_err());
+        }
+        // A guard byte that names no guard this build reads.
+        let mut payload = 0u16.to_le_bytes().to_vec();
+        payload.extend([1, 0, 2, 0, 0, 0, b'h', b'i']);
+        payload.extend([2, 1, 0, 0, 0, Key::Enter.code(), 4]);
+        let mut forged = Vec::new();
+        write_frame(&mut forged, kind::SUBMIT, &payload).unwrap();
+        assert!(matches!(
+            read_client(&mut &forged[..]),
+            Err(FrameError::Malformed(_))
+        ));
         // Gap 2000 ms, one empty text part, then an Enter.
         let mut payload = 2000u16.to_le_bytes().to_vec();
         payload.extend([1, 0, 0, 0, 0, 0]);

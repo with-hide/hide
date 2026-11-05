@@ -128,11 +128,12 @@ const READ_CHUNK: usize = 64 * 1024;
 
 /// What this holder can send, and what it reads beyond version 1's input
 /// ([`Capability::Keys`]).
-const SENDS: [Capability; 4] = [
+const SENDS: [Capability; 5] = [
     Capability::Screen,
     Capability::Notices,
     Capability::Keys,
     Capability::Submit,
+    Capability::SubmitGuard,
 ];
 
 /// What this holder sends on a watch.
@@ -294,6 +295,7 @@ impl InputPath {
                         text,
                         gap: submit.gap,
                         enter,
+                        guard: submit.guard.clone(),
                     },
                     moved,
                 )
@@ -523,9 +525,29 @@ enum PtyWrite {
         text: Vec<u8>,
         gap: Duration,
         enter: Vec<u8>,
+        guard: hide_holder_protocol::Guard,
     },
     /// The holder's answers to the program's questions.
     Answers(Vec<u8>),
+    /// The program wrote output, sent by the PTY reader only while a guarded
+    /// submission waits for its text to show ([`Shown`]).
+    Output,
+}
+
+/// Whether a guarded submission waits for the program's output, so the PTY
+/// reader wakes the writer after each read only then and the output of a
+/// pane nobody types into costs no message.
+pub(crate) struct Shown {
+    waiting: std::sync::atomic::AtomicBool,
+    writes: Sender<PtyWrite>,
+}
+
+impl Shown {
+    fn output(&self) {
+        if self.waiting.load(Ordering::SeqCst) {
+            let _ = self.writes.send(PtyWrite::Output);
+        }
+    }
 }
 
 /// When this process began and when it had written itself into its record,
@@ -686,11 +708,17 @@ impl Holder {
             log: log.clone(),
         };
 
+        let shown = Arc::new(Shown {
+            waiting: std::sync::atomic::AtomicBool::new(false),
+            writes: writes.clone(),
+        });
+        let rules = SharedRules::default();
         spawn_named("pty-reader", {
             let pane = pane.clone();
             let marks = Marks {
                 outbox: outbox.clone(),
                 watch: watch_wake.clone(),
+                shown: shown.clone(),
             };
             let sender = sender.clone();
             let answers = answers.clone();
@@ -708,6 +736,10 @@ impl Holder {
             let input = input.clone();
             let answers_queued = answers.queued.clone();
             let sender = sender.clone();
+            let guarded = Guarded {
+                shown,
+                rules: rules.clone(),
+            };
             move || {
                 write_pty(
                     writer,
@@ -715,6 +747,7 @@ impl Holder {
                     &input,
                     &answers_queued,
                     &sender,
+                    &guarded,
                     panic_on_input,
                     hold_writes.as_deref(),
                 )
@@ -783,7 +816,7 @@ impl Holder {
             watch: None,
             watch_generation: 0,
             watch_wake,
-            rules: SharedRules::default(),
+            rules,
             pty_closed: false,
             ending,
             opening,
@@ -1539,10 +1572,12 @@ impl Answers {
 struct Marks {
     outbox: Arc<Mutex<Option<Arc<Outbox>>>>,
     watch: Arc<Mutex<Option<Arc<Wake>>>>,
+    shown: Arc<Shown>,
 }
 
 impl Marks {
     fn changed(&self) {
+        self.shown.output();
         let outbox = self
             .outbox
             .lock()
@@ -1658,12 +1693,14 @@ fn read_pty(
 /// Once the PTY refuses a connection's input, the rest it sent is dropped,
 /// since that connection is closed; another connection's input is tried
 /// again.
+#[allow(clippy::too_many_arguments)] // the writer's one entry, each part its own
 fn write_pty(
     mut writer: Box<dyn std::io::Write + Send>,
     writes: &Receiver<PtyWrite>,
     input: &InputPath,
     answers_queued: &AtomicUsize,
     events: &Sender<Event>,
+    guarded: &Guarded,
     panic_on_input: bool,
     hold_writes: Option<&std::path::Path>,
 ) {
@@ -1698,32 +1735,27 @@ fn write_pty(
                 text,
                 gap,
                 enter,
+                guard,
             } => {
-                // Herdr's `agent.prompt`: the gap runs from the text's
-                // flush, the program's answers go on meanwhile, and the
-                // input after it waits until the submit was written.
-                write_input(&mut *writer, events, generation, &text, &mut refused);
-                // Read before the gap's start, so the submit is written no
-                // sooner than a gap after this.
-                let text_at = std::time::SystemTime::now();
-                let due = Instant::now() + gap;
-                while refused != Some(generation) {
-                    let left = due.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        break;
-                    }
-                    match writes.recv_timeout(left) {
-                        Ok(PtyWrite::Answers(bytes)) => {
-                            let _ = writer.write_all(&bytes).and_then(|()| writer.flush());
-                            answers_queued.fetch_sub(bytes.len(), Ordering::SeqCst);
-                        }
-                        Ok(other) => waiting.push_back(other),
-                        Err(RecvTimeoutError::Timeout) => break,
-                        Err(RecvTimeoutError::Disconnected) => return,
-                    }
-                }
-                write_input(&mut *writer, events, generation, &enter, &mut refused);
+                let mut wait = Waiting {
+                    writer: &mut *writer,
+                    writes,
+                    waiting: &mut waiting,
+                    answers_queued,
+                };
+                let outcome = submit(
+                    &mut wait,
+                    events,
+                    guarded,
+                    &input.pane,
+                    generation,
+                    (&text, gap, &enter, &guard),
+                    &mut refused,
+                );
                 input.queued.fetch_sub(length, Ordering::SeqCst);
+                let Some(outcome) = outcome else {
+                    return;
+                };
                 // One line a submission, never one a key.
                 input.log.event(
                     "holder.submitted",
@@ -1731,16 +1763,23 @@ fn write_pty(
                         ("generation", generation.into()),
                         (
                             "text_at_unix_ms",
-                            text_at
+                            outcome
+                                .text_at
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map_or(0, |since| since.as_millis() as u64)
                                 .into(),
                         ),
                         ("gap_ms", (gap.as_millis() as u64).into()),
-                        ("written", (refused != Some(generation)).into()),
+                        ("typings", outcome.typings.into()),
+                        ("refused", outcome.refused.unwrap_or("").into()),
+                        (
+                            "written",
+                            (outcome.refused.is_none() && refused != Some(generation)).into(),
+                        ),
                     ],
                 );
             }
+            PtyWrite::Output => {}
             PtyWrite::Answers(bytes) => {
                 // A PTY that refuses answers refuses everything; the pane's
                 // end follows, and nothing waits for them.
@@ -1749,6 +1788,159 @@ fn write_pty(
             }
         }
     }
+}
+
+/// What the PTY writer reads a guarded submission's screen by.
+struct Guarded {
+    shown: Arc<Shown>,
+    rules: SharedRules,
+}
+
+/// The writer while a submission waits: it writes the program's answers at
+/// once, since a program may draw nothing until they come, and keeps every
+/// other write in order for after the submission.
+struct Waiting<'a> {
+    writer: &'a mut (dyn std::io::Write + Send),
+    writes: &'a Receiver<PtyWrite>,
+    waiting: &'a mut VecDeque<PtyWrite>,
+    answers_queued: &'a AtomicUsize,
+}
+
+impl Waiting<'_> {
+    /// Waits until `until`, or until `done` says so after the program wrote
+    /// output; `None` once the writes have no sender left (the holder ends).
+    fn until(&mut self, until: Instant, mut done: impl FnMut() -> bool) -> Option<bool> {
+        loop {
+            if done() {
+                return Some(true);
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Some(false);
+            }
+            match self.writes.recv_timeout(left) {
+                Ok(PtyWrite::Answers(bytes)) => {
+                    let _ = self
+                        .writer
+                        .write_all(&bytes)
+                        .and_then(|()| self.writer.flush());
+                    self.answers_queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                }
+                Ok(PtyWrite::Output) => {}
+                Ok(other) => self.waiting.push_back(other),
+                Err(RecvTimeoutError::Timeout) => return Some(false),
+                Err(RecvTimeoutError::Disconnected) => return None,
+            }
+        }
+    }
+}
+
+/// How one submission went.
+struct Submitted {
+    /// When its text was last written, before its gap began.
+    text_at: std::time::SystemTime,
+    typings: usize,
+    /// Why its submit was not written: `busy` or `not_shown`.
+    refused: Option<&'static str>,
+}
+
+/// Herdr's `agent.prompt`, with its guard
+/// (`hide_holder_protocol::Guard`, with-hide/hide-private#545): refused
+/// while the screen's rules read the program working or asking, the text
+/// typed again while none of it shows, and the submit written a gap after
+/// the text once it showed, never when it did not. The gap runs from the
+/// text's flush, the program's answers go on meanwhile, and the input after
+/// it waits until the submit was written. `None` when the holder ends.
+fn submit(
+    wait: &mut Waiting<'_>,
+    events: &Sender<Event>,
+    guarded: &Guarded,
+    pane: &Mutex<Pane>,
+    generation: u64,
+    (text, gap, enter, guard): (&[u8], Duration, &[u8], &hide_holder_protocol::Guard),
+    refused: &mut Option<u64>,
+) -> Option<Submitted> {
+    let notice = |reason, count: usize, detail: &str| {
+        let _ = events.send(Event::Notice(Notice::new(
+            reason,
+            count as u64,
+            text.len() as u64,
+            detail,
+        )));
+    };
+    let screen_shows = || -> usize {
+        pane.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .observe(true)
+            .map_or(0, |observed| {
+                crate::guard::shown(&observed.screen, &guard.shown)
+            })
+    };
+    // A screen the rules cannot read is not read busy: the node's own check
+    // stands, as it did before the guard.
+    if guard.at_rest && crate::watch::busy(pane, &guarded.rules).unwrap_or(false) {
+        notice(
+            NoticeReason::SubmitBusy,
+            0,
+            "the screen read the program working or asking; nothing was typed",
+        );
+        return Some(Submitted {
+            text_at: std::time::SystemTime::now(),
+            typings: 0,
+            refused: Some("busy"),
+        });
+    }
+    let before = (!guard.shown.is_empty()).then(screen_shows);
+    guarded
+        .shown
+        .waiting
+        .store(before.is_some(), Ordering::SeqCst);
+    let mut typings = 0;
+    let outcome = loop {
+        write_input(&mut *wait.writer, events, generation, text, refused);
+        typings += 1;
+        // Read before the gap's start, so the submit is written no sooner
+        // than a gap after this.
+        let text_at = std::time::SystemTime::now();
+        let written = Instant::now();
+        let Some(before) = before else {
+            break Some((text_at, written));
+        };
+        if *refused == Some(generation) {
+            break Some((text_at, written));
+        }
+        let landed = wait.until(written + hide_holder_protocol::MAX_SUBMIT_GAP, || {
+            screen_shows() > before
+        })?;
+        if landed {
+            break Some((text_at, written));
+        }
+        if typings == hide_holder_protocol::MAX_SUBMIT_TYPINGS {
+            break None;
+        }
+    };
+    guarded.shown.waiting.store(false, Ordering::SeqCst);
+    let Some((text_at, written)) = outcome else {
+        notice(
+            NoticeReason::SubmitNotShown,
+            typings,
+            "the typed text never showed on the screen; its submit was not written",
+        );
+        return Some(Submitted {
+            text_at: std::time::SystemTime::now(),
+            typings,
+            refused: Some("not_shown"),
+        });
+    };
+    if *refused != Some(generation) {
+        wait.until(written + gap, || false)?;
+    }
+    write_input(&mut *wait.writer, events, generation, enter, refused);
+    Some(Submitted {
+        text_at,
+        typings,
+        refused: None,
+    })
 }
 
 /// Writes a connection's input unless the PTY already refused that
@@ -1777,6 +1969,7 @@ impl PtyWrite {
         match self {
             Self::Input { bytes, .. } | Self::Answers(bytes) => bytes.len(),
             Self::Submit { text, enter, .. } => (text.len() + enter.len()).max(SUBMIT_COST),
+            Self::Output => 0,
         }
     }
 }

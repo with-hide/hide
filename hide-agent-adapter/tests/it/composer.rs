@@ -373,3 +373,98 @@ fn every_measured_agent_takes_one_paste_except_grok_on_windows() {
     assert!(!AgentId::Grok.takes_one_paste(true));
     assert!(!AgentId::Cursor.takes_one_paste(false));
 }
+
+/// Each declared agent's typed text shows on its screen by its own end, and
+/// its paste by a chip its definition names (`[input] paste_chips`) or by
+/// its last line, as the pane's holder reads a landing before it presses
+/// Enter (with-hide/hide-private#545); the empty composer shows neither, so
+/// a chip is never read on a screen that did not take the paste.
+#[test]
+fn each_declared_agent_shows_typed_text_and_a_paste_as_its_definition_says() {
+    fn lines(screen: &str) -> Vec<String> {
+        let mut plain = String::new();
+        let mut chars = screen.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() || c == '~' {
+                            break;
+                        }
+                    }
+                } else {
+                    chars.next();
+                }
+                continue;
+            }
+            plain.push(c);
+        }
+        plain
+            .lines()
+            .map(|line| line.chars().filter(|c| !c.is_whitespace()).collect())
+            .collect()
+    }
+    fn shows(screen: &str, needles: &[&str]) -> bool {
+        let needles: Vec<String> = needles
+            .iter()
+            .map(|needle| needle.chars().filter(|c| !c.is_whitespace()).collect())
+            .collect();
+        lines(screen)
+            .iter()
+            .any(|line| needles.iter().any(|needle| line.contains(needle.as_str())))
+    }
+    let catalog = hide_agent_adapter::definition::Catalog::read(Vec::new());
+    let captures = [
+        ("claude-code", vec!["claude"]),
+        ("codex", vec!["codex"]),
+        ("grok", vec!["grok", "grok-legacy"]),
+        ("opencode", vec!["opencode"]),
+        ("pi", vec!["pi"]),
+        ("omp", vec!["omp"]),
+        ("antigravity", vec!["agy"]),
+    ];
+    let mut declared: Vec<&str> = catalog
+        .definitions
+        .iter()
+        .filter(|definition| definition.paste_chips.is_some())
+        .map(|definition| definition.id.as_str())
+        .collect();
+    declared.sort_unstable();
+    let mut measured: Vec<&str> = captures.iter().map(|(id, _)| *id).collect();
+    measured.sort_unstable();
+    assert_eq!(
+        declared, measured,
+        "every declared agent is measured here, and only those"
+    );
+    for (id, prefixes) in captures {
+        let definition = catalog.definitions.iter().find(|d| d.id == id).unwrap();
+        let chips: Vec<&str> = definition
+            .paste_chips
+            .iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        let pasted: Vec<&str> = chips.iter().copied().chain(["pastedline12"]).collect();
+        for prefix in prefixes {
+            assert!(
+                shows(&screen(&format!("{prefix}-1-typed")), &["hello안녕하세요"]),
+                "{prefix}: the typed text's end"
+            );
+            assert!(
+                shows(&screen(&format!("{prefix}-3-pasted")), &pasted),
+                "{prefix}: a chip of {chips:?} or the paste's last line"
+            );
+            // Grok's legacy capture starts from its suggestion, not empty.
+            let empty = if prefix == "grok-legacy" {
+                "grok-legacy-0-suggested".to_owned()
+            } else {
+                format!("{prefix}-0-empty")
+            };
+            assert!(
+                !shows(&screen(&empty), &pasted),
+                "{prefix}: the empty composer shows no paste"
+            );
+        }
+    }
+}
