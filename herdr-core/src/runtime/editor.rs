@@ -1900,7 +1900,6 @@ impl Runtime {
                 }
             }),
             failed_terminals: request.failed_terminals.clone(),
-            retain_for_reopen: request.retain_for_reopen,
             allow_replacement_create: operation.allow_replacement_create,
             key: request.key.clone(),
             connection_generation: request.connection_generation,
@@ -1930,60 +1929,12 @@ impl Runtime {
         request: &crate::recent_closed::capture::CloseEffectRequest,
         result: Result<(), crate::engine::EngineError>,
     ) -> bool {
-        if !request.retain_for_reopen && !self.close_operations.contains_key(&request.key) {
-            return false;
-        }
-        if !self.close_operations.contains_key(&request.key) {
-            // A result can outlive the runtime that created its reservation.
-            // Rehydrate that reservation without putting it back on the
-            // confirmed stack, then let the same identity checks and
-            // topology gate handle the result.
-            let tab_id = match &request.target {
-                crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
-                    pane_id.clone()
-                }
-                crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id } => tab_id.clone(),
-            };
-            self.ensure_pending_close_from_request(
-                &crate::recent_closed::capture::CloseCaptureRequest {
-                    failed_terminals: request.failed_terminals.clone(),
-                    retain_for_reopen: request.retain_for_reopen,
-                    key: request.key.clone(),
-                    connection_generation: request.connection_generation,
-                    context: ClosedContext {
-                        workspace_id: String::new(),
-                        workspace_label: String::new(),
-                        workspace_ids_before_close: Vec::new(),
-                        tab_ids_before_close: Vec::new(),
-                        pane_ids_before_close: Vec::new(),
-                        checkout_id: String::new(),
-                        checkout_path: String::new(),
-                        tab_id,
-                        tab_label: request.key.clone(),
-                        tab_index: 0,
-                        agent_area: None,
-                        agent_group: None,
-                        replacement_in_tab: false,
-                        tab_name: ClosedTabName::Unnamed,
-                    },
-                    panes: Vec::new(),
-                    target: request.target.clone(),
-                },
-            );
-            let item = self
-                .recent_closed
-                .iter()
-                .position(|item| item.key() == request.key)
-                .and_then(|index| self.recent_closed.remove(index));
-            if let Some(operation) = self.close_operations.get_mut(&request.key) {
-                operation.item = item;
-                operation.phase = "transmitting".to_owned();
-                operation.stage = "close_request".to_owned();
-                operation.retryable = false;
-                operation.deadline_at_unix_ms =
-                    Some(unix_milliseconds().saturating_add(CLOSE_STAGE_TIMEOUT_MS));
-            }
-        }
+        // An answer for a close that is no longer pending confirms nothing new.
+        // The core's own engine takes the target out of its layout before its
+        // close call returns, so the session that shows it gone can complete
+        // the close first; putting it back in flight would take its entry off
+        // the reopen list and wait for a session the engine has no reason to
+        // send again (with-hide/hide-private#418).
         let Some(operation) = self.close_operations.get(&request.key).cloned() else {
             return false;
         };
