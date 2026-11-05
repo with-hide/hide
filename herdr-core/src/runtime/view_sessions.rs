@@ -736,6 +736,9 @@ impl Runtime {
                     path: display.path.clone(),
                     url: display.url.clone(),
                     committed: display.committed,
+                    output: (display.kind == crate::view_layout::DisplayKind::File)
+                        .then(|| output_kind(hide_platform::path::wire_name(&display.path)))
+                        .flatten(),
                     unseen: display.unseen.is_some(),
                     at_unix_ms: at(display),
                 }
@@ -768,13 +771,26 @@ pub(super) fn is_output(display: &Display) -> bool {
             None => return false,
         },
     };
-    name.rsplit_once('.').is_some_and(|(stem, extension)| {
-        !stem.is_empty()
-            && OUTPUT_EXTENSIONS
+    output_kind(name).is_some()
+}
+
+/// What kind of 결과물 a file name is by its extension: the name of its
+/// `OUTPUT_EXTENSIONS` row (`image`, `pdf`, `video`, `board`, `document`), or
+/// none for any other file. The one table decides it for the Desk's outputs
+/// and for what a phone does with a View.
+fn output_kind(name: &str) -> Option<&'static str> {
+    let (stem, extension) = name.rsplit_once('.')?;
+    if stem.is_empty() {
+        return None;
+    }
+    OUTPUT_EXTENSIONS
+        .iter()
+        .find(|(_, extensions)| {
+            extensions
                 .iter()
-                .flat_map(|(_, extensions)| extensions.iter())
                 .any(|output| output.eq_ignore_ascii_case(extension))
-    })
+        })
+        .map(|(kind, _)| *kind)
 }
 
 /// The files that are a 결과물, by extension: each row a kind of output.

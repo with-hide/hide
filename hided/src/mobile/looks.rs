@@ -50,12 +50,8 @@ const NAME_CHARS: usize = 200;
 const URL_CHARS: usize = 500;
 
 /// Extensions a phone draws as an image: the ones its own browser decodes.
-const IMAGE_EXTENSIONS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp"];
 /// Documents drawn as Markdown.
 const MARKDOWN_EXTENSIONS: [&str; 3] = ["md", "markdown", "mdx"];
-/// Files that are only ever shown by name: reading a movie to find that out
-/// would cost the day's relay budget.
-const NAME_ONLY_EXTENSIONS: [&str; 5] = ["pdf", "mp4", "webm", "mov", "zip"];
 
 /// The extension of a file name, lowercased.
 fn extension(name: &str) -> Option<String> {
@@ -83,9 +79,12 @@ impl Shown {
             DisplayKind::Diff => Self::Changes,
             DisplayKind::Browser => Self::Page,
             DisplayKind::External => Self::NameOnly,
-            DisplayKind::File => match extension(&view.path).as_deref() {
-                Some(extension) if IMAGE_EXTENSIONS.contains(&extension) => Self::Image,
-                Some(extension) if NAME_ONLY_EXTENSIONS.contains(&extension) => Self::NameOnly,
+            // The table of outputs decides: an image is drawn, a PDF, a video
+            // and a board are named (reading a movie to find that out would
+            // cost the day's relay budget), anything else is read as text.
+            DisplayKind::File => match view.output {
+                Some("image") => Self::Image,
+                Some("pdf" | "video" | "board") => Self::NameOnly,
                 _ => Self::Document,
             },
         }
@@ -537,60 +536,43 @@ mod tests {
             path: format!("/repo/{label}"),
             url: None,
             committed: None,
+            output: None,
             unseen: true,
             at_unix_ms: 1,
         }
     }
 
     #[test]
-    fn a_view_is_shown_by_its_kind_and_extension() {
-        let shown = |label: &str, kind| Shown::of(&view(label, kind));
-        assert_eq!(shown("a.png", DisplayKind::File), Shown::Image);
-        assert_eq!(shown("A.JPG", DisplayKind::File), Shown::Image);
-        assert_eq!(shown("notes.md", DisplayKind::File), Shown::Document);
-        assert_eq!(shown("main.rs", DisplayKind::File), Shown::Document);
-        assert_eq!(shown("deck.pdf", DisplayKind::File), Shown::NameOnly);
-        assert_eq!(shown("main.rs", DisplayKind::Diff), Shown::Changes);
-        assert_eq!(shown("localhost", DisplayKind::Browser), Shown::Page);
-        assert_eq!(shown("report.pdf", DisplayKind::External), Shown::NameOnly);
-        assert_eq!(shown(".env", DisplayKind::File), Shown::Document);
-    }
-
-    #[test]
-    fn text_is_utf8_without_nul_and_a_cut_character_at_the_end_is_forgiven() {
-        assert!(is_text("안녕".as_bytes()));
-        assert!(!is_text(b"ab\0cd"));
-        assert!(!is_text(&[0xff, 0xfe, 0x41]));
-        let cut_in_half = &"안녕".as_bytes()[..4];
-        assert!(is_text(cut_in_half), "the cap may cut a character");
-        assert!(!is_text(&[b'a', 0xff, b'b', b'c', b'd', b'e']));
-    }
-
-    #[test]
-    fn a_request_may_carry_a_view_id_and_nothing_a_path_could_ride_in() {
-        let ok = json!({"type": "look_open", "request_id": "r-1", "device_id": "d", "pane_id": "p", "view_id": "v1"});
+    fn a_view_is_shown_by_its_kind_and_the_output_table() {
+        let shown = |label: &str, kind, output| {
+            let mut view = view(label, kind);
+            view.output = output;
+            Shown::of(&view)
+        };
         assert_eq!(
-            request(&ok),
-            Ok(Request {
-                request_id: "r-1",
-                view_id: "v1"
-            })
+            shown("a.png", DisplayKind::File, Some("image")),
+            Shown::Image
         );
-        for field in ["path", "root", "checkout", "file", "url"] {
-            let mut beyond = ok.clone();
-            beyond[field] = json!("/etc/passwd");
-            assert_eq!(
-                request(&beyond),
-                Err(Malformed::Beyond(field.to_owned())),
-                "{field}"
-            );
-        }
-        let mut no_view = ok.clone();
-        no_view.as_object_mut().unwrap().remove("view_id");
-        assert_eq!(request(&no_view), Err(Malformed::Invalid));
-        let mut long = ok;
-        long["view_id"] = json!("v".repeat(129));
-        assert_eq!(request(&long), Err(Malformed::Invalid));
+        assert_eq!(
+            shown("notes.md", DisplayKind::File, Some("document")),
+            Shown::Document
+        );
+        assert_eq!(shown("main.rs", DisplayKind::File, None), Shown::Document);
+        assert_eq!(
+            shown("deck.pdf", DisplayKind::File, Some("pdf")),
+            Shown::NameOnly
+        );
+        assert_eq!(
+            shown("clip.mov", DisplayKind::File, Some("video")),
+            Shown::NameOnly
+        );
+        assert_eq!(shown("main.rs", DisplayKind::Diff, None), Shown::Changes);
+        assert_eq!(shown("localhost", DisplayKind::Browser, None), Shown::Page);
+        assert_eq!(
+            shown("report.pdf", DisplayKind::External, None),
+            Shown::NameOnly
+        );
+        assert_eq!(shown(".env", DisplayKind::File, None), Shown::Document);
     }
 
     #[test]

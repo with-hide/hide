@@ -674,6 +674,11 @@ pub struct LookView {
     /// Which Changes group a diff shows; absent for anything else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub committed: Option<bool>,
+    /// What a file is as a 결과물 by its extension (`image`, `pdf`, `video`,
+    /// `board`, `document`); absent for any other file and for a View that
+    /// is not a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<&'static str>,
     pub unseen: bool,
     /// When the agent opened it while unseen, else when it was last looked at.
     pub at_unix_ms: u64,

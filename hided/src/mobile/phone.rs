@@ -382,6 +382,15 @@ fn spawn_detail(
     })
 }
 
+/// The Views the agent in `pane_id` has open, asked of the core on a blocking
+/// thread: its owner thread answers, and no worker of the runtime waits for it.
+async fn agent_looks(mobile: &Arc<Mobile>, pane_id: &str) -> Result<herdr_core::LookViews, String> {
+    let (core, pane_id) = (Arc::clone(mobile.core()), pane_id.to_owned());
+    tokio::task::spawn_blocking(move || core.agent_looks(&pane_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 /// The list of Views the agent has open, when it differs from the last one
 /// sent: a View opened, closed or looked at moves it.
 async fn looks_step(
@@ -389,16 +398,10 @@ async fn looks_step(
     key: &AgentKey,
     told: &mut Option<herdr_core::LookViews>,
 ) -> Option<Value> {
-    let (core, pane_id) = (Arc::clone(mobile.core()), key.pane_id.clone());
-    let read = tokio::task::spawn_blocking(move || core.agent_looks(&pane_id)).await;
-    let looks = match read {
-        Ok(Ok(looks)) => looks,
-        Ok(Err(message)) => {
+    let looks = match agent_looks(mobile, &key.pane_id).await {
+        Ok(looks) => looks,
+        Err(message) => {
             looks_failed(&message);
-            return None;
-        }
-        Err(error) => {
-            looks_failed(&error.to_string());
             return None;
         }
     };
@@ -836,7 +839,7 @@ async fn handle(
             mobile.set_viewing(connection, None);
             None
         }
-        "look_open" => look_open(mobile, phone_id, message, open, frames, projection),
+        "look_open" => look_open(mobile, phone_id, message, open, frames, projection).await,
         "look_ack" => {
             match (
                 open.look.as_ref(),
@@ -850,7 +853,7 @@ async fn handle(
             None
         }
         "look_seen" => {
-            look_seen(mobile, phone_id, message, projection);
+            look_seen(mobile, phone_id, message, projection).await;
             None
         }
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
@@ -945,41 +948,62 @@ fn look_refused(message: &Value, state: &str) -> Value {
     })
 }
 
+/// Why a `look_*` request was turned away: the `state` its answer carries and
+/// the `reason` `scope.refused` records.
+#[derive(Debug, Eq, PartialEq)]
+struct LookRefusal {
+    state: &'static str,
+    reason: String,
+}
+
+/// The first checks of a `look_open` or `look_seen`, which need nothing from
+/// the core (PRD mobile-companion-ui D-16): the request carries no field
+/// beyond the ids, and the agent is one the phone's list holds.
+fn look_scope<'a>(
+    message: &'a Value,
+    projection: &Projection,
+) -> Result<(AgentKey, looks::Request<'a>), LookRefusal> {
+    let request = looks::request(message).map_err(|error| match error {
+        looks::Malformed::Beyond(field) => LookRefusal {
+            state: "refused",
+            reason: format!("look_field:{field}"),
+        },
+        looks::Malformed::Invalid => LookRefusal {
+            state: "refused",
+            reason: "look_request".to_owned(),
+        },
+    })?;
+    let key = key_of(message)
+        .filter(|key| projection.find(key).is_some())
+        .ok_or_else(|| LookRefusal {
+            state: "gone",
+            reason: "not_an_agent".to_owned(),
+        })?;
+    Ok((key, request))
+}
+
 /// The View a `look_open` or `look_seen` names, checked in the order that
-/// keeps the phone to the Views of an agent it can see (PRD
-/// mobile-companion-ui D-16): the request carries no field beyond the ids,
-/// the agent is in the list, the phone is still let in, and the View is among
-/// the Views the core lists that agent has open now. Every refusal is
-/// recorded as `scope.refused`; `Err` is the answer to send.
-fn look_target(
+/// keeps the phone to the Views of an agent it can see: `look_scope`, the
+/// phone still let in, and the View among the Views the core lists that agent
+/// has open now. Every refusal is recorded as `scope.refused`; `Err` is the
+/// answer to send.
+async fn look_target(
     mobile: &Arc<Mobile>,
     phone_id: &str,
     message: &Value,
     projection: &Projection,
 ) -> Result<(String, herdr_core::LookView), Value> {
-    let request = match looks::request(message) {
-        Ok(request) => request,
-        Err(looks::Malformed::Beyond(field)) => {
-            refusal_logged(
-                "scope.refused",
-                Some(phone_id),
-                &format!("look_field:{field}"),
-            );
-            return Err(look_refused(message, "refused"));
+    let (key, request) = match look_scope(message, projection) {
+        Ok(scope) => scope,
+        Err(refusal) => {
+            refusal_logged("scope.refused", Some(phone_id), &refusal.reason);
+            return Err(look_refused(message, refusal.state));
         }
-        Err(looks::Malformed::Invalid) => {
-            refusal_logged("scope.refused", Some(phone_id), "look_request");
-            return Err(look_refused(message, "refused"));
-        }
-    };
-    let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
-        refusal_logged("scope.refused", Some(phone_id), "not_an_agent");
-        return Err(look_refused(message, "gone"));
     };
     if mobile.still_admitted(phone_id).is_err() {
         return Err(look_refused(message, "refused"));
     }
-    let looks = match mobile.core().agent_looks(&key.pane_id) {
+    let looks = match agent_looks(mobile, &key.pane_id).await {
         Ok(looks) => looks,
         Err(failure) => {
             looks_failed(&failure);
@@ -997,7 +1021,7 @@ fn look_target(
 }
 
 /// `look_open`: starts sending the View's content; the next one replaces it.
-fn look_open(
+async fn look_open(
     mobile: &Arc<Mobile>,
     phone_id: &str,
     message: &Value,
@@ -1005,7 +1029,7 @@ fn look_open(
     frames: &mpsc::Sender<Value>,
     projection: &Arc<Projection>,
 ) -> Option<Value> {
-    let (request_id, view) = match look_target(mobile, phone_id, message, projection) {
+    let (request_id, view) = match look_target(mobile, phone_id, message, projection).await {
         Ok(target) => target,
         Err(answer) => return Some(answer),
     };
@@ -1019,8 +1043,8 @@ fn look_open(
 
 /// `look_seen`: the phone showed the View, so it is seen, on the phone and on
 /// the desktop (B24). Repeating it changes nothing.
-fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projection: &Projection) {
-    if let Ok((_, view)) = look_target(mobile, phone_id, message, projection) {
+async fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projection: &Projection) {
+    if let Ok((_, view)) = look_target(mobile, phone_id, message, projection).await {
         mobile.mark_seen(&view);
     }
 }
@@ -1323,6 +1347,46 @@ async fn input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_look_request_names_an_agent_and_a_view_id_and_nothing_a_path_could_ride_in() {
+        let projection = sleeping_projection(None);
+        let ask = |field: Option<&str>, pane: &str| {
+            let mut message = json!({
+                "type": "look_open", "request_id": "r-1", "device_id": "test-node",
+                "pane_id": pane, "view_id": "view-1",
+            });
+            if let Some(field) = field {
+                message[field] = json!("/etc/passwd");
+            }
+            message
+        };
+        let refused = |message: &Value| look_scope(message, &projection).err();
+        assert!(look_scope(&ask(None, "w1:p1"), &projection).is_ok());
+        for field in ["path", "root", "checkout", "file"] {
+            assert_eq!(
+                refused(&ask(Some(field), "w1:p1")),
+                Some(LookRefusal {
+                    state: "refused",
+                    reason: format!("look_field:{field}")
+                })
+            );
+        }
+        // An agent the list does not hold is gone, whatever View it names.
+        assert_eq!(
+            refused(&ask(None, "w9:p9")),
+            Some(LookRefusal {
+                state: "gone",
+                reason: "not_an_agent".to_owned()
+            })
+        );
+        let mut no_view = ask(None, "w1:p1");
+        no_view.as_object_mut().unwrap().remove("view_id");
+        assert_eq!(
+            refused(&no_view).map(|refusal| refusal.reason),
+            Some("look_request".to_owned())
+        );
+    }
 
     #[test]
     fn a_phone_can_act_only_on_a_current_local_sleep_intent() {

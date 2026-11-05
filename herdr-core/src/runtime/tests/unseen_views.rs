@@ -942,6 +942,10 @@ fn the_phones_list_is_the_views_the_agent_opened_that_are_open() {
         (crate::node::TEST_NODE, CHECKOUT)
     );
     assert_eq!(notes_row.label, "notes.md");
+    // The phone's treatment of a file comes from the one table of outputs.
+    assert_eq!(notes_row.output, Some("document"));
+    let login_row = listed.views.iter().find(|v| v.display_id == login).unwrap();
+    assert_eq!(login_row.output, None);
     // The same set the desktop's `N views` lists for that pane.
     let desktop: Vec<(String, bool)> = pane_views(&guard, "recipient")
         .into_iter()
