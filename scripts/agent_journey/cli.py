@@ -846,7 +846,7 @@ def main(argv=None):
         code = 1
     report["exit_code"] = code
     save(run, report)
-    drop_on_pass(run, code)
+    drop_on_pass(run, code, interrupted)
     print("\n".join(table_lines(report)))
     print(f"{run / 'report.md'}\n{run / 'report.json'}\nexit={code}")
     return code

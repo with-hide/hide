@@ -138,13 +138,17 @@ class FailedCell(unittest.TestCase):
 
 
 class PassedRun(unittest.TestCase):
-    def test_a_passed_run_keeps_no_hided_log_and_any_other_run_keeps_it(self):
-        for code, kept in ((0, False), (1, True), (2, True), (3, True)):
+    def test_a_run_nothing_failed_in_keeps_no_hided_log_and_any_other_run_keeps_it(self):
+        # Exit codes as docs/VERIFICATION.md, Cells, reasons and exit codes, gives them:
+        # 3 is a run with a not-measured cell and no failure, as every stand-in run
+        # is, or an interrupted one.
+        for code, interrupted, kept in ((0, False, False), (3, False, False), (3, True, True),
+                                        (2, True, True), (1, False, True), (2, False, True)):
             run = Path(tempfile.mkdtemp())
             self.addCleanup(shutil.rmtree, run)
             (run / "hided.log").write_text("{}\n")
-            drop_on_pass(run, code)
-            self.assertEqual((run / "hided.log").exists(), kept, code)
+            drop_on_pass(run, code, interrupted)
+            self.assertEqual((run / "hided.log").exists(), kept, (code, interrupted))
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ closes, so a job killed before its close kept none. A failed cell instead
 keeps, the moment it fails, what hided wrote while its step ran, as
 `<agent>-<cell>-hided.log` beside its pane capture, under a cap per cell and
 one for the run; the step times are the agent's `steps` in the report
-(with-hide/hide-private#548). A run that passed keeps no `hided.log`.
+(with-hide/hide-private#548). A run nothing failed in keeps no `hided.log`.
 """
 
 from datetime import datetime, timezone
@@ -71,8 +71,9 @@ class FailureLogs:
         return path.name
 
 
-def drop_on_pass(run, code):
-    """A run that passed (exit 0) keeps no `hided.log`: only a run that did
-    not pass is read for why."""
-    if code == 0:
+def drop_on_pass(run, code, interrupted):
+    """A run nothing failed in keeps no `hided.log`: exit 0, or 3 for a cell
+    not measured (every stand-in run has some) when the run was not stopped.
+    A failed cell, setup, cleanup or budget, or a stop, keeps it to be read."""
+    if code == 0 or (code == 3 and not interrupted):
         (run / "hided.log").unlink(missing_ok=True)
