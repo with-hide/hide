@@ -771,14 +771,22 @@ mod sys {
         for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
             *slot = *byte as libc::c_char;
         }
+        // Where the system can, the socket is close-on-exec from the moment
+        // it exists, so a program another thread starts never inherits it.
+        #[cfg(not(target_vendor = "apple"))]
+        let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+        #[cfg(target_vendor = "apple")]
+        let kind = libc::SOCK_STREAM;
         // SAFETY: a plain socket call; the descriptor is owned at once.
-        let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+        let fd = unsafe { libc::socket(libc::AF_UNIX, kind, 0) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: `fd` was just created and nothing else owns it.
         let socket = unsafe { OwnedFd::from_raw_fd(fd) };
-        // SAFETY: flag calls on the descriptor `socket` owns.
+        // macOS has no atomic flag; interprocess sets it the same way there.
+        // SAFETY: a flag call on the descriptor `socket` owns.
+        #[cfg(target_vendor = "apple")]
         if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -809,9 +817,9 @@ mod sys {
             tv_sec: timeout.map_or(0, |timeout| {
                 libc::time_t::try_from(timeout.as_secs()).unwrap_or(libc::time_t::MAX)
             }),
-            tv_usec: timeout.map_or(0, |timeout| {
-                libc::suseconds_t::try_from(timeout.subsec_micros()).unwrap_or(0)
-            }),
+            // Under a million, which `suseconds_t` holds on every system (an
+            // `i32` on macOS, an `i64` on Linux).
+            tv_usec: timeout.map_or(0, |timeout| timeout.subsec_micros() as libc::suseconds_t),
         };
         // SAFETY: `value` is a `timeval` that outlives the call.
         let set = unsafe {
