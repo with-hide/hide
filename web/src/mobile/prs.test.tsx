@@ -8,7 +8,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { HEAD, card, pr, project, standing } from "./prFixture";
+import { HEAD, card, keyOf, pr, project, standing } from "./prFixture";
 import type { PhonePr, PhonePrFeedback, ServerFrame } from "./protocol";
 
 vi.hoisted(() => {
@@ -108,11 +108,11 @@ it("lists the open pull requests in four groups with the desktop's line, no badg
       ["ready", "1"], ["running", "1"], ["failed", "1"], ["review", "1"],
     ]);
     expect(container.querySelector("[data-phone-prs-open]")!.textContent).toBe("with-hide/hide · 4 open");
-    expect(container.querySelector('[data-phone-pr="p1#2050"]')).toBeNull();
-    const failed = container.querySelector('[data-phone-pr="p1#2088"]')!;
+    expect(container.querySelector(`[data-phone-pr="${keyOf(2050)}"]`)).toBeNull();
+    const failed = container.querySelector(`[data-phone-pr="${keyOf(2088)}"]`)!;
     expect(failed.getAttribute("data-phone-pr-reason")).toBe("failed");
     expect(failed.textContent).toContain("web-e2e");
-    expect(container.querySelector('[data-phone-pr="p1#2090"] [data-phone-pr-line]')!.textContent).toContain("Merge");
+    expect(container.querySelector(`[data-phone-pr="${keyOf(2090)}"] [data-phone-pr-line]`)!.textContent).toContain("Merge");
   } finally {
     await unmount();
   }
@@ -127,7 +127,7 @@ it("says there are no open pull requests, keeps the last list dimmed under one l
     const stale = project({ github: [{ failure_category: "network_or_rate_limit", available: false, loading: false, stale: true, last_success_at_unix_ms: 1_000 }] });
     await prs([pr(1)], stale);
     expect(container.querySelector('[data-phone-prs-state="stale"]')).not.toBeNull();
-    expect(container.querySelector('[data-phone-pr="p1#1"]')).not.toBeNull();
+    expect(container.querySelector(`[data-phone-pr="${keyOf(1)}"]`)).not.toBeNull();
 
     const signedOut = project({ github: [{ failure_category: "not_logged_in", available: false, loading: false, stale: false, last_success_at_unix_ms: null }] });
     await prs([], signedOut);
@@ -142,7 +142,7 @@ it("opens a page that reads the card, shows its files and lines and GitHub's add
   const { container, click, sent, q, unmount } = await connect([pr(1), blocked]);
   try {
     await click('[data-phone-tab="prs"]');
-    await click('[data-phone-pr="p1#1"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
     expect(sent("read_pr")).toHaveLength(1);
     expect(sent("read_pr")[0]).toMatchObject({ type: "read_pr", pr: "p1#1" });
     expect(container.querySelector("[data-phone-tabs]")).toBeNull();
@@ -154,7 +154,7 @@ it("opens a page that reads the card, shows its files and lines and GitHub's add
     expect((q("[data-phone-pr-merge]") as HTMLButtonElement).disabled).toBe(false);
 
     await click('[data-phone-back="prs"]');
-    await click('[data-phone-pr="p1#7"]');
+    await click(`[data-phone-pr="${keyOf(7)}"]`);
     expect((q("[data-phone-pr-merge]") as HTMLButtonElement).disabled).toBe(true);
     expect(q("[data-phone-pr-merge-why]")!.getAttribute("data-phone-pr-merge-why")).toBe("ci");
   } finally {
@@ -166,7 +166,7 @@ it("asks once with nothing preselected, sends one merge for the head and method 
   const { click, sent, q, serve, unmount } = await connect([pr(1)]);
   try {
     await click('[data-phone-tab="prs"]');
-    await click('[data-phone-pr="p1#1"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
     await click("[data-phone-pr-merge]");
     const sheet = q("[data-phone-pr-confirm]")!;
     expect(sheet.getAttribute("data-phone-pr-confirm")).toBe("merge");
@@ -203,7 +203,7 @@ it("closes the confirmation without sending when the head moved while it was ope
   const { click, sent, q, serve, prs, unmount } = await connect([pr(1)]);
   try {
     await click('[data-phone-tab="prs"]');
-    await click('[data-phone-pr="p1#1"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
     await click("[data-phone-pr-merge]");
     expect(q("[data-phone-pr-confirm]")).not.toBeNull();
     await prs([pr(1, { card: card({ head: "b".repeat(40) }) })]);
@@ -230,7 +230,7 @@ it("words the merge queue where the repository has one, and sends no method for 
   const { click, sent, q, unmount } = await connect([queued]);
   try {
     await click('[data-phone-tab="prs"]');
-    await click('[data-phone-pr="p1#1"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
     expect(q("[data-phone-pr-merge]")!.getAttribute("data-phone-pr-merge")).toBe("queue");
     expect(q("[data-phone-pr-merge]")!.textContent).toBe("Add to merge queue");
     await click("[data-phone-pr-merge]");
@@ -247,7 +247,7 @@ it("shows what a refused or finished merge did in the desktop's words, and reads
   const { click, sent, q, prs, unmount } = await connect([refused]);
   try {
     await click('[data-phone-tab="prs"]');
-    await click('[data-phone-pr="p1#1"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
     expect(q("[data-phone-pr-write]")!.getAttribute("data-phone-pr-write-reason")).toBe("not_mergeable");
     // GitHub's refusal would only repeat, so Merge stays off until the card is read again.
     expect((q("[data-phone-pr-merge]") as HTMLButtonElement).disabled).toBe(true);
@@ -280,7 +280,7 @@ it("hands a pull request to an agent with the desktop card's prompt, the remembe
   const { click, sent, q, serve, prs, unmount } = await connect([pr(1, { checkout: false })]);
   try {
     await click('[data-phone-tab="prs"]');
-    await click('[data-phone-pr="p1#1"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
     await click("[data-phone-pr-delegate]");
     expect(sent("start_sheet").at(-1)).toMatchObject({ open: true });
     const read = sent("read_pr_feedback")[0]!;
@@ -327,7 +327,7 @@ it("keeps the last list and page dimmed under the unreachable line, and turns Me
     await lose();
     expect(container.querySelector("[data-phone-unreachable]")).not.toBeNull();
     expect(container.querySelectorAll("[data-phone-pr]")).toHaveLength(2);
-    await click('[data-phone-pr="p1#1"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
     expect((q("[data-phone-pr-merge]") as HTMLButtonElement).disabled).toBe(true);
     expect((q("[data-phone-pr-delegate]") as HTMLButtonElement).disabled).toBe(true);
     expect((q("[data-phone-pr-look-again]") as HTMLButtonElement).disabled).toBe(true);

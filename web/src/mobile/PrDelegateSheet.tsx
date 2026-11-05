@@ -10,7 +10,9 @@
 import { Loader2Icon } from "lucide-react";
 import { useEffect } from "react";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../components/ui/sheet";
+import { Textarea } from "../components/ui/textarea";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { delegatePrompt } from "../prDelegate";
 import { closeDelegate, editDelegate, fillDelegatePrompt, readFeedbackAgain, submitDelegate } from "./connection";
@@ -58,18 +60,19 @@ export function PrDelegateSheet() {
           </p>
         ) : null}
         <Field label={t("issue.worktreeBranch")}>
-          <input
+          <Input
+            mono
             value={branch}
             readOnly
             disabled
             data-phone-pr-delegate-branch="true"
-            className="h-(--size-touch-target) w-full min-w-0 truncate rounded-lg border border-border bg-input px-md font-mono text-title text-foreground disabled:opacity-100"
+            className="h-(--size-touch-target) truncate rounded-lg border-border bg-input px-md text-title disabled:opacity-100"
           />
         </Field>
         {pr && !pr.checkout ? <p className="text-body text-muted-foreground" data-phone-pr-delegate-new-worktree="true">{t("prWork.newWorktree")}</p> : null}
         <AgentChoice selection={selection} choice={sheet?.choice ?? { target: null, kind: null, model: undefined }} disabled={pending} onChange={(choice) => editDelegate({ choice })} name="pr-delegate" />
         <Field label={t("issue.firstPrompt")}>
-          <textarea
+          <Textarea
             value={sheet?.prompt ?? ""}
             onChange={(event) => editDelegate({ prompt: event.target.value })}
             rows={6}
@@ -77,7 +80,7 @@ export function PrDelegateSheet() {
             autoCorrect="off"
             data-phone-pr-delegate-prompt="true"
             aria-invalid={tooLong || undefined}
-            className="min-h-(--size-touch-target) w-full resize-none rounded-lg border border-border bg-input px-md py-sm text-title text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            className="min-h-(--size-touch-target) rounded-lg border-border bg-input px-md py-sm text-title"
           />
         </Field>
         {read?.phase === "failed" ? (

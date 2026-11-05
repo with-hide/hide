@@ -6,12 +6,14 @@
 // (`herdr-core/src/agent_state/work/board.rs`): a merge-ready row has no agent
 // beside it, because a finished agent is not listed on a pull request.
 
-import { card, pr, project } from "../mobile/prFixture";
+import { card, keyOf, pr, project } from "../mobile/prFixture";
 import type { PhonePr, PhonePrFeedback } from "../mobile/protocol";
 import type { PrsState } from "../mobile/store";
 
-export const READY_PR = "p1#2090";
-export const AGENT_PR = "p1#2091";
+export const READY_PR = keyOf(2090);
+export const AGENT_PR = keyOf(2091);
+/** The failing pull request the hand-over sheet opens on. */
+export const FAILED_PR = keyOf(2088);
 /** The agent row of the list that works on the holder PR (`mobilePhoneSceneData.ts`, 홀더 메모리 측정). */
 const HOLDER_AGENT = { device_id: "local", pane_id: "w2" };
 

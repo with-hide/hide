@@ -201,11 +201,14 @@
   "web/src/gallery/AreaFocusScene.tsx": {
     "textarea": 1
   },
+  "web/src/mobile/AgentChoice.tsx": {
+    "select": 2
+  },
   "web/src/mobile/App.tsx": {
     "button": 1
   },
   "web/src/mobile/StartSheet.tsx": {
-    "select": 3,
+    "select": 1,
     "textarea": 1
   },
   "web/src/overviewGraphNodes.tsx": {

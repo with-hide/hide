@@ -30,10 +30,13 @@ export const card = (over: Partial<PhonePrCard> = {}): PhonePrCard => ({
   ...over,
 });
 
+/** The list's key of fixture pull request `number` (`<project id>#<number>`). */
+export const keyOf = (number: number): string => `p1#${number}`;
+
 /** An open pull request of the operator's own that is clean and approved: the board says `merge`. */
 export function pr(number: number, over: Partial<PhonePr> = {}): PhonePr {
   return {
-    key: `p1#${number}`,
+    key: keyOf(number),
     project: "p1",
     number,
     title: `Change ${number}`,

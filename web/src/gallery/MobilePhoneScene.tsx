@@ -17,7 +17,7 @@ import { confirmOf } from "../mobile/prModel";
 import { patch, usePhone } from "../mobile/store";
 import "../mobile/mobile.css";
 import { RELEASE_MISSION, phoneMissions } from "./mobilePhoneMissionsData";
-import { AGENT_PR, READY_PR, phoneFeedback, phonePrs } from "./mobilePhonePrsData";
+import { AGENT_PR, FAILED_PR, READY_PR, phoneFeedback, phonePrs } from "./mobilePhonePrsData";
 import { PHONE_LOOK_SCENES, PHONE_MAC, PHONE_ROOM, phoneDevices, phoneGroups, phoneLookDetail, phoneLookGroups, seedPairedMac, type PhoneLookScene } from "./mobilePhoneSceneData";
 
 export type PhoneSceneState = "phone-list" | "phone-devices" | "phone-missions" | "phone-mission" | PhonePrScene | PhoneLookScene;
@@ -27,7 +27,7 @@ const PHONE_PR_SCENES = ["phone-prs", "phone-pr", "phone-pr-agent", "phone-pr-me
 type PhonePrScene = (typeof PHONE_PR_SCENES)[number];
 
 /** The pull request a page state opens: the failing one for the hand-over, the one an agent works on for its row, else the one that can merge. */
-const PR_PAGE: Partial<Record<PhoneSceneState, string>> = { "phone-pr": READY_PR, "phone-pr-agent": AGENT_PR, "phone-pr-merge": READY_PR, "phone-pr-delegate": "p1#2088" };
+const PR_PAGE: Partial<Record<PhoneSceneState, string>> = { "phone-pr": READY_PR, "phone-pr-agent": AGENT_PR, "phone-pr-merge": READY_PR, "phone-pr-delegate": FAILED_PR };
 
 /** The core's own start catalog for a hand-over: the kind and model the desktop remembered. */
 const CATALOG = {
