@@ -6675,6 +6675,15 @@ fn a_review_failed_twice_in_a_row_warns_the_conductor_alone_until_it_passes() {
     // stands.
     assert!(shown.nodes[0].attention.is_none());
     assert!(!runtime.raise_to_operator(now + 3 * 60 * 60_000));
+    // The same plan applied again keeps the review line, so the count and
+    // the warning stand, with no second letter.
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    runtime.drive_mission_health(now);
+    assert_eq!(
+        warnings_of(&runtime),
+        (vec![WarningKind::ReviewFails], letters.clone()),
+        "a replan keeps the warning"
+    );
     review(&mut runtime, false, 3);
     assert_eq!(
         warnings_of(&runtime).1,
@@ -6683,6 +6692,77 @@ fn a_review_failed_twice_in_a_row_warns_the_conductor_alone_until_it_passes() {
     );
     review(&mut runtime, true, 4);
     assert_eq!(warnings_of(&runtime), (vec![], vec![]));
+}
+
+/// with-hide/hide-private#552 review: a warning raised while the
+/// Conductor's letters are full stands untold, and the evaluation after the
+/// queue has room tells it, once.
+#[test]
+fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
+    use crate::missions::{PENDING_WAKE_LIMIT, PendingWake, WakeEvent, WarningKind};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    let minute = 60_000;
+    let worked = crate::runtime::unix_milliseconds() - 120 * minute;
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.nodes[0].worked_at_unix_ms = Some(worked);
+    mission.wakes = (0..PENDING_WAKE_LIMIT)
+        .map(|at| PendingWake {
+            seq: at as u64 + 1,
+            node: "docs".into(),
+            pr: None,
+            event: WakeEvent::NewHead,
+            head: None,
+            to: None,
+            reason: None,
+            why: None,
+            action: None,
+            warning: None,
+            key: Some(format!("filler:{at}")),
+        })
+        .collect();
+    runtime.warn_missions(worked + 90 * minute);
+    assert_eq!(warnings_of(&runtime), (vec![WarningKind::NoPush], vec![]));
+    let fix = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().nodes[0].clone();
+    assert_eq!(fix(&runtime).warnings[0].told_unix_ms, None);
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .wakes
+        .clear();
+    assert!(runtime.warn_missions(worked + 91 * minute));
+    let (_, letters) = warnings_of(&runtime);
+    assert_eq!(letters.len(), 1, "told once there is room");
+    assert_eq!(
+        fix(&runtime).warnings[0].told_unix_ms,
+        Some(worked + 91 * minute)
+    );
+    assert!(!runtime.warn_missions(worked + 92 * minute));
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .wakes
+        .clear();
+    assert!(!runtime.warn_missions(worked + 93 * minute));
+    assert_eq!(warnings_of(&runtime).1, Vec::<String>::new(), "told once");
 }
 
 /// with-hide/hide-private#552 c2: a change at work with no push for ninety
