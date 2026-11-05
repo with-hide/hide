@@ -3225,6 +3225,99 @@ fn a_mission_made_before_criteria_is_not_gated() {
     assert!(runtime.mission_view_of("mission-1").unwrap().exempt);
 }
 
+/// A node's planned steps ride its view from the plan on, and the brief its
+/// worker was spawned on is kept by the node when the worker is bound, so it
+/// stays after the ledger lets the spawn and its letter go; only its size
+/// rides the map, and the text is read when the panel's folded box opens.
+#[test]
+fn a_nodes_steps_show_from_the_plan_and_its_brief_is_kept_when_the_worker_binds() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["it works"], "steps": ["Find the cause", "Fix it", "Open the PR"]},
+            {"key": "docs", "title": "Docs", "kind": "research", "criteria": ["it is said"]},
+        ]}}),
+    )
+    .unwrap();
+    assert_eq!(
+        node_view(&runtime, "fix").steps,
+        ["Find the cause", "Fix it", "Open the PR"]
+    );
+    assert!(node_view(&runtime, "docs").steps.is_empty());
+    // A step too long is refused with its reason and its next action.
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["it works"], "steps": ["x".repeat(crate::missions::STEP_CHARS + 1)]},
+        ]}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_steps_invalid", Some("fix"))
+    );
+    assert!(crate::missions::next_action("mission_steps_invalid").contains("80 characters"));
+
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    assert_eq!(node_view(&runtime, "fix").brief_bytes, None);
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    let mut record: crate::coordination::SpawnRecord = serde_json::from_value(json!({
+        "id": "spawn-1", "parent": "agent-1", "intent": "mission-1:fix", "name": "worker",
+        "kind": "codex", "repo": "/checkouts/fixture", "branch": "fix", "requested_path": null,
+        "args": [], "path": null, "pane": null, "child": "agent-2",
+    }))
+    .unwrap();
+    record.brief = Some("Node fix: find the cause, then fix it.".into());
+    record.briefed = true;
+    ledger.spawns.push(record);
+    runtime.publish_delivery(Arc::new(ledger), true);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").brief_bytes, Some(38));
+    // The text is not in the map's view; the folded box asks for it.
+    assert!(runtime.snapshot.mission_brief.text.is_none());
+    assert!(
+        runtime.mission_brief_read(super::super::mission_brief::BriefReadPayload {
+            mission: "mission-1".into(),
+            node: "fix".into(),
+        })
+    );
+    assert_eq!(
+        runtime.snapshot.mission_brief.text.as_deref(),
+        Some("Node fix: find the cause, then fix it.")
+    );
+    // The ledger forgetting the spawn and its letter leaves the node's copy.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.spawns.clear();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(node_view(&runtime, "fix").brief_bytes, Some(38));
+    // A node with no brief reads as none, never an empty box.
+    assert!(
+        runtime.mission_brief_read(super::super::mission_brief::BriefReadPayload {
+            mission: "mission-1".into(),
+            node: "docs".into(),
+        })
+    );
+    assert_eq!(runtime.snapshot.mission_brief.text, None);
+}
+
 fn outside_plan() -> Value {
     json!({"op": "plan", "plan": {"nodes": [
         {"key": "parser", "title": "The parser PR", "kind": "external", "external": {"pr": 1232}},

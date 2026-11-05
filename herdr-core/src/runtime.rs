@@ -59,6 +59,7 @@ mod memory_branch;
 pub(crate) mod memory_evidence;
 pub(crate) mod memory_promotion;
 mod memory_verify;
+pub(crate) mod mission_brief;
 mod mission_cleanup;
 pub(crate) mod mission_criteria;
 pub(crate) mod mission_events;
