@@ -80,6 +80,8 @@ name: verify
 
 on:
   pull_request:
+    # Merge queue trial: pull requests into mq-test run merge-check.yml only.
+    branches-ignore: [mq-test]
     # `ready_for_review` starts the run that plans and runs the lanes; `edited`
     # reruns the body's checks (`policy` alone when the last green run stands).
     types: [opened, synchronize, reopened, ready_for_review, edited]

@@ -1,0 +1,64 @@
+# Merge queue trial: the checks scripts/premerge-check.py runs on a merge with
+# main, run by GitHub on each merge queue group instead of on a lead's Mac.
+name: merge check
+
+on:
+  pull_request:
+    branches: [mq-test]
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: merge check rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: workspace
+          save: false
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
+      - name: rust fmt and clippy
+        run: bash scripts/verify-cargo.sh lint
+
+  web:
+    name: merge check web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install zsh
+        run: sudo apt-get install -y --no-install-recommends zsh
+      - name: node modules
+        run: bash scripts/verify-web.sh install
+      - name: web typecheck
+        run: bash scripts/verify-web.sh web typecheck
+      - name: desktop typecheck
+        run: bash scripts/verify-web.sh desktop typecheck
+      - name: e2e size budgets
+        run: |
+          (cd web && node scripts/check-e2e-test-size.mjs e2e)
+          (cd desktop && node ../web/scripts/check-e2e-test-size.mjs e2e)
+      - name: structural checks
+        run: |
+          bash scripts/check-harness-ignore-anchor.sh
+          bash scripts/check-capability-readers-off-lock.sh
+          bash scripts/check-no-workstation-identity.sh
+          bash scripts/check-worktree-removal-boundary.sh
+          python3 scripts/check-core-touches-no-machine.py
+          python3 scripts/check-ai-prompt-language.py
+          python3 scripts/check-agent-screen-rules.py
