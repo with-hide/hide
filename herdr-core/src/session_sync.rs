@@ -89,9 +89,6 @@ pub(crate) struct SessionSyncContext {
     engine: SharedEngine,
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
-    /// The core's hook facts, which a device's coordinator lays on its
-    /// session; this machine's are laid by the runtime itself.
-    hook_facts: Option<crate::agent_hooks::facts::SharedHookFacts>,
 }
 
 impl SessionSyncContext {
@@ -109,7 +106,6 @@ impl SessionSyncContext {
             engine: Arc::clone(&context.engine),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
-            hook_facts: None,
         }
     }
 
@@ -134,17 +130,7 @@ impl SessionSyncContext {
             engine,
             runtime,
             notifier,
-            hook_facts: None,
         }
-    }
-
-    /// A device's coordinator lays the core's hook facts on its session.
-    pub(crate) fn with_hook_facts(
-        mut self,
-        facts: crate::agent_hooks::facts::SharedHookFacts,
-    ) -> Self {
-        self.hook_facts = Some(facts);
-        self
     }
 
     /// A device whose node dials this core: its machine is read through
