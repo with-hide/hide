@@ -1,6 +1,6 @@
 import { CheckIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { CellTone, HeadCell } from "../missions";
+import type { CellTone, HeadCell, StepTone } from "../missions";
 import { cn } from "../lib/utils";
 
 // One colour per node state (PRD mission-plan-visibility D-11, B35): a chip's
@@ -27,6 +27,13 @@ export const HEAD_FILL: Record<HeadCell, string> = {
   attention: "bg-mission-hold",
   done: "bg-mission-done",
   cancelled: "bg-mission-cancelled",
+};
+
+/** A node step's cell on its card: finished, being worked, or a dashed outline for a step only planned. */
+export const STEP_FILL: Record<StepTone, string> = {
+  done: "bg-mission-done",
+  working: "bg-mission-working",
+  plan: "border border-dashed border-border",
 };
 
 /** A word in a state's colour: a chip or a result. */

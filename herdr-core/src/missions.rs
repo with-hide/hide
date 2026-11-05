@@ -55,6 +55,11 @@ const DEPENDENCY_LIMIT: usize = 16;
 const TOUCH_LIMIT: usize = 32;
 const TITLE_LIMIT: usize = 200;
 const LINE_LIMIT: usize = 600;
+/// Steps a node's plan entry names: as many as a worker's own `hide task`
+/// plan takes, which starts from them.
+pub const STEP_LIMIT: usize = 8;
+/// A step's longest line, counted in characters: a card shows it whole.
+pub const STEP_CHARS: usize = 80;
 /// A record's summary, one line the map shows whole, counted in characters.
 const SUMMARY_LIMIT: usize = 160;
 const REPORT_LIMIT: usize = 16 * 1024;
@@ -679,6 +684,17 @@ pub struct MissionNode {
     /// The node's finish lines (PRD mission-map-git-criteria D-09).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub criteria: Vec<Criterion>,
+    /// How the Conductor planned the node's work, a few lines it wrote with
+    /// the plan: the worker's own plan starts from them and, once it
+    /// exists, replaces them on the map (never a second list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<String>,
+    /// The first prompt the node's worker was spawned on, kept when the
+    /// Conductor binds the worker: the delivery ledger lets its letter go a
+    /// day after it finished, and the panel shows the brief as long as the
+    /// node is on the map. At most the ledger's letter size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<External>,
     /// How often a later node's defect opened it again (D-21).
@@ -1742,6 +1758,11 @@ pub struct NodeInput {
     /// before them names it, is one line.
     #[serde(default, deserialize_with = "lines")]
     pub criteria: Vec<String>,
+    /// How the node's work goes, three to five short lines (at most
+    /// `STEP_LIMIT`, each `STEP_CHARS` characters). Left out, a replan keeps
+    /// the lines the node has; an empty list clears them.
+    #[serde(default)]
+    pub steps: Option<Vec<String>>,
     /// The reviews and verifications other agents give (D-07).
     #[serde(default)]
     pub checks: Vec<CheckInput>,
@@ -1938,6 +1959,12 @@ pub(crate) fn apply_plan(
                 &node.key,
             ));
         }
+        if node.steps.as_ref().is_some_and(|steps| !valid_steps(steps)) {
+            return Err(crate::coordination::refusal(
+                "mission_steps_invalid",
+                &node.key,
+            ));
+        }
         check_checkers(node)?;
         if node.kind == NodeKind::Change && node.delivery.is_none() {
             return Err("mission_delivery_required".into());
@@ -2016,6 +2043,8 @@ pub(crate) fn apply_plan(
                 change: None,
                 review: None,
                 criteria: Vec::new(),
+                steps: Vec::new(),
+                brief: None,
                 external: None,
                 reopened: 0,
                 issues: Vec::new(),
@@ -2054,6 +2083,9 @@ pub(crate) fn apply_plan(
                 with_check && input.kind == NodeKind::Change,
                 same_check,
             );
+            if let Some(steps) = &input.steps {
+                node.steps = steps.iter().map(|step| step.trim().to_owned()).collect();
+            }
             node.external.clone_from(&input.external);
             node.issues.clone_from(&input.issues);
             node.paths.clone_from(&input.paths);
@@ -2083,6 +2115,17 @@ pub(crate) fn apply_plan(
     Ok(next)
 }
 
+/// A node's steps: at most `STEP_LIMIT`, each one line of text.
+fn valid_steps(steps: &[String]) -> bool {
+    steps.len() <= STEP_LIMIT
+        && steps.iter().all(|step| {
+            let step = step.trim();
+            !step.is_empty()
+                && step.chars().count() <= STEP_CHARS
+                && !step.chars().any(char::is_control)
+        })
+}
+
 /// An external node names one pull request or branch and nothing a worker
 /// would do (B19); no other node names one.
 fn check_node_kind(node: &NodeInput) -> Result<(), String> {
@@ -2097,6 +2140,7 @@ fn check_node_kind(node: &NodeInput) -> Result<(), String> {
     let bare = node.worker.is_none()
         && node.delivery.is_none()
         && node.criteria.is_empty()
+        && node.steps.as_ref().is_none_or(Vec::is_empty)
         && node.checks.is_empty();
     if external != node.external.is_some() || (external && (!named || !bare)) {
         return Err(crate::coordination::refusal(
@@ -2446,6 +2490,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_criteria_too_many" => {
             "Give the node at most three criteria of its own; Hide adds the check command, CI and the reviews itself"
+        }
+        "mission_steps_invalid" => {
+            "Give the node at most 8 steps in its plan entry (\"steps\": [\"...\"]), three to five usually, each one line of at most 80 characters with no line break"
         }
         "mission_checkers_invalid" => {
             "Name each of review and verify at most once per node, each with one to five agents in \"by\""
@@ -2949,6 +2996,7 @@ pub(crate) mod tests {
             delivery: (kind == NodeKind::Change).then_some(Delivery::Pr),
             worker: None,
             criteria: vec![format!("{key} works")],
+            steps: None,
             checks: Vec::new(),
             external: None,
             issues: Vec::new(),
@@ -3206,6 +3254,46 @@ pub(crate) mod tests {
         assert!(decode(&other).is_err());
         let ok = encode(&Arc::new(MissionBook::default())).unwrap();
         assert_eq!(decode(&ok).unwrap().book, MissionBook::default());
+    }
+
+    #[test]
+    fn a_plan_keeps_a_nodes_steps_and_refuses_too_many_or_unreadable_ones() {
+        let refused = |plan: PlanInput| {
+            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            crate::coordination::split_refusal(&code).0.to_owned()
+        };
+        let with = |steps: Vec<String>| {
+            let mut one = node("a", NodeKind::Change, &[]);
+            one.steps = Some(steps);
+            plan(vec![one])
+        };
+        let lines = |count: usize| (0..count).map(|n| format!("step {n}")).collect::<Vec<_>>();
+        let planned = apply_plan(&mission(), &with(lines(STEP_LIMIT)), 2).unwrap();
+        assert_eq!(planned.nodes[0].steps, lines(STEP_LIMIT));
+        assert_eq!(
+            refused(with(lines(STEP_LIMIT + 1))),
+            "mission_steps_invalid"
+        );
+        assert_eq!(
+            refused(with(vec!["x".repeat(STEP_CHARS + 1)])),
+            "mission_steps_invalid"
+        );
+        assert_eq!(refused(with(vec!["  ".into()])), "mission_steps_invalid");
+        assert_eq!(refused(with(vec!["a\nb".into()])), "mission_steps_invalid");
+        // The limit counts characters, so a Korean line of the same length fits.
+        assert!(apply_plan(&mission(), &with(vec!["가".repeat(STEP_CHARS)]), 2).is_ok());
+        // A replan that leaves the steps out keeps them; an empty list clears them.
+        let kept = apply_plan(&planned, &plan(vec![node("a", NodeKind::Change, &[])]), 3).unwrap();
+        assert_eq!(kept.nodes[0].steps, lines(STEP_LIMIT));
+        let cleared = apply_plan(&planned, &with(Vec::new()), 3).unwrap();
+        assert!(cleared.nodes[0].steps.is_empty());
+        // An outside node has no work to plan.
+        let mut outside = node("pr", NodeKind::External, &[]);
+        outside.delivery = None;
+        outside.criteria.clear();
+        outside.external = Some(External::Pr(7));
+        outside.steps = Some(lines(3));
+        assert_eq!(refused(plan(vec![outside])), "mission_external_invalid");
     }
 
     #[test]

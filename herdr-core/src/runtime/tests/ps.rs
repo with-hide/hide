@@ -307,6 +307,8 @@ fn mission(
             review: None,
             criteria: Vec::new(),
             criteria_met: 0,
+            steps: Vec::new(),
+            brief_bytes: None,
             criteria_skipped: 0,
             external: None,
             unread: false,

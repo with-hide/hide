@@ -30,6 +30,7 @@ import {
   missionOpen,
   nodeLook,
   nodeQuestion,
+  nodeSteps,
   nodeResumable,
   openAttention,
   ownCriteria,
@@ -37,8 +38,9 @@ import {
 } from "./missions";
 import { AttentionChoices } from "./components/mission-attention";
 import { ProgressCells } from "./components/mission-tone";
-import { PlanChecklist } from "./components/plan-checklist";
+import { PlanChecklist, PlannedSteps } from "./components/plan-checklist";
 import { planCells, planCount } from "./plans";
+import { formatBytes } from "./i18n/format";
 import { sessionOfAgent } from "./sessionWork";
 import type { MessageKey } from "./i18n/catalogs";
 import type { Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, PlanView } from "./snapshot";
@@ -64,6 +66,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
       <Ways mission={mission} node={node} actions={actions} />
       <HideRecord mission={mission} node={node} events={events} />
       <Events node={node} events={events} />
+      <Brief key={node.key} mission={mission} node={node} actions={actions} />
     </div>
   );
 }
@@ -266,27 +269,48 @@ function Now({ mission, node, events }: { mission: Mission; node: MissionNode; e
 }
 
 /**
- * Its worker's own plan (PRD hide-plan D-17, D-18): `계획`, a cell per step,
- * `n/m` and `크게 ›`, which opens the plan's map in the 보기 slot as the pane
- * chip's does, over the checklist. A finished, dropped or cancelled node
- * keeps the plan its worker left, folded under `펼치기`.
+ * How the node's work goes, `작업 방식`: its worker's own plan once it exists
+ * (PRD hide-plan D-17, D-18), `n/m`, a cell per step and `크게 ›`, which opens
+ * the plan's map in the 보기 slot as the pane chip's does, over the
+ * checklist, with `바뀜` on a step the worker changed from the Conductor's;
+ * else the steps the Conductor planned, as a list of steps not begun. A
+ * finished, dropped or cancelled node keeps the plan its worker left, folded
+ * under `펼치기`.
  */
 function Plan({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
   const look = nodeLook(mission, node);
-  const plan = node.plan;
-  if (!plan) return null;
+  const work = nodeSteps(node);
+  if (!work) return null;
   const ended = look === "done" || look === "dropped" || look === "cancelled";
   // Picking another node gives a new fold, so each finished node opens folded.
-  return <PlanPart key={node.key} plan={plan} folded={ended} actions={actions} />;
+  return node.plan ? (
+    <PlanPart key={node.key} plan={node.plan} planned={node.steps} folded={ended} actions={actions} />
+  ) : (
+    <PlannedPart steps={node.steps} />
+  );
 }
 
-function PlanPart({ plan, folded, actions }: { plan: PlanView; folded: boolean; actions: Actions }) {
+/** The Conductor's steps before the worker has put its own plan up: a list of steps not begun, under the count. */
+function PlannedPart({ steps }: { steps: readonly string[] }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <section className="flex min-w-0 flex-col gap-xs" data-panel-part="plan" data-panel-plan="planned">
+      <div className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
+        <h4 className="shrink-0">{t("mission.panel.approach")}</h4>
+        <span className="shrink-0" data-panel-plan-count="planned">{t("mission.steps.planned", { count: steps.length })}</span>
+      </div>
+      <div className="min-w-0 text-caption"><PlannedSteps steps={steps} /></div>
+    </section>
+  );
+}
+
+function PlanPart({ plan, planned, folded, actions }: { plan: PlanView; planned: readonly string[]; folded: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(!folded);
   return (
     <section className="flex min-w-0 flex-col gap-xs" data-panel-part="plan" data-panel-plan={open ? "open" : "folded"}>
       <div className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
-        <h4 className="shrink-0">{t("plan.title")}</h4>
+        <h4 className="shrink-0">{t("mission.panel.approach")}</h4>
         <ProgressCells tones={planCells(plan)} size="chip" />
         <span className="shrink-0 font-mono tabular-nums" data-panel-plan-count="true">{planCount(plan)}</span>
         {folded ? (
@@ -300,7 +324,7 @@ function PlanPart({ plan, folded, actions }: { plan: PlanView; folded: boolean; 
           <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
         </Button>
       </div>
-      {open ? <div className="min-w-0 text-caption"><PlanChecklist plan={plan} /></div> : null}
+      {open ? <div className="min-w-0 text-caption"><PlanChecklist plan={plan} planned={planned} /></div> : null}
     </section>
   );
 }
@@ -606,6 +630,41 @@ function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | 
           })}
         </ol>
       ) : null}
+    </section>
+  );
+}
+
+/**
+ * The brief its worker was started on, the panel's last part and folded
+ * until the operator opens it: `지시 원문 · 2.4 KB`. The map carries only the
+ * size, so opening asks the core for the text, which arrives for this node
+ * alone. Nothing is drawn for a node whose worker was never started.
+ */
+function Brief({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const brief = useShellStore((s) => s.rest?.mission_brief);
+  if (node.brief_bytes == null) return null;
+  const text = open && brief?.mission === mission.id && brief.node === node.key ? brief.text : null;
+  const size = formatBytes(requireInterfaceLanguage(i18n.language), node.brief_bytes);
+  return (
+    <section className="flex min-w-0 flex-col gap-xs border-t border-border pt-sm" data-panel-part="brief" data-panel-brief={open ? "open" : "folded"}>
+      <Button
+        variant="text"
+        size="inline"
+        className="w-fit text-caption"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) actions.readMissionBrief(mission.id, node.key);
+          setOpen(!open);
+        }}
+        data-panel-brief-toggle="true"
+      >
+        <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) transition-transform", open && "rotate-90")} />
+        {t("mission.brief.title")}
+        <span className="text-muted-foreground" data-panel-brief-size="true">· {size}</span>
+      </Button>
+      {text ? <pre className="max-h-(--size-relationship-list-max) min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-xs border border-border bg-background p-sm font-mono text-caption text-subtle-foreground" data-panel-brief-text="true">{text}</pre> : null}
     </section>
   );
 }

@@ -185,6 +185,13 @@ pub struct NodeView {
     /// The node's finish lines as they stand now: a check command passed on
     /// an older commit shows open (B7, B32).
     pub criteria: Vec<Criterion>,
+    /// The steps its Conductor planned for the node, the card's and the
+    /// panel's start until the worker's own plan (`plan`) exists.
+    pub steps: Vec<String>,
+    /// The size of the brief its worker was started on; none until the
+    /// Conductor bound a worker. The text is read on request
+    /// (`runtime/mission_brief.rs`).
+    pub brief_bytes: Option<u32>,
     /// Lines that pass or were skipped, of `criteria`, which is what the
     /// gate counts, and how many were skipped; B28's `기준 n/m ⤳k` shows
     /// `criteria_met - criteria_skipped` as `n`.
@@ -1427,6 +1434,17 @@ impl Runtime {
                     ));
                 }
                 let mut next = self.prospective_node(current, &bound, &patch, now)?;
+                // The worker bound now keeps the words it was started on, so
+                // the panel still shows them after the ledger lets the letter
+                // go; a worker whose spawn kept no brief leaves the last.
+                if next.agent_id != bound.agent_id
+                    && let Some(brief) = next
+                        .agent_id
+                        .as_deref()
+                        .and_then(|worker| self.worker_brief(worker))
+                {
+                    next.brief = Some(brief);
+                }
                 // Done is held against the node as this command leaves it:
                 // a done set now, or a done node given another pull request
                 // or worker (B9).
@@ -2709,6 +2727,11 @@ impl Runtime {
                     change: node.change.clone(),
                     review: node.review.clone(),
                     criteria,
+                    steps: node.steps.clone(),
+                    brief_bytes: node
+                        .brief
+                        .as_ref()
+                        .map(|brief| u32::try_from(brief.len()).unwrap_or(u32::MAX)),
                     criteria_met,
                     criteria_skipped,
                     external: node.external.clone(),

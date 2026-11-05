@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords } from "./missions";
+import { nodeSteps, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -15,7 +15,7 @@ const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8"));
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
@@ -590,5 +590,30 @@ describe("a node's warnings", () => {
     expect(warningWords(mission("m"), node("n"), t)).toBeNull();
     expect(warningWords(mission("m"), { ...warned, status: "dropped" }, t)).toBeNull();
     expect(warningWords(mission("m", { status: "cancelled" }), warned, t)).toBeNull();
+  });
+});
+
+describe("nodeSteps", () => {
+  const step = (key: string, title: string, status: "done" | "working" | "planned" | "dropped") => ({ key, title, depends_on: [], status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null });
+  const plan = (steps: ReturnType<typeof step>[], current: string | null, finished = false) => ({
+    pane_id: "", session: { device_id: "mac", agent: "codex", session_id: "s" }, steps,
+    review: "approved" as const, ask: null, progress: { current, next: null, done: steps.filter((one) => one.status === "done").length, total: steps.length, finished }, created_at_unix_ms: 1, updated_at_unix_ms: 2,
+  });
+
+  it("is the Conductor's steps, all only planned, until a worker's plan exists", () => {
+    expect(nodeSteps(node("a"))).toBeNull();
+    expect(nodeSteps(node("a", { steps: ["One", "Two"] }))).toEqual({ source: "plan", now: null, steps: [{ title: "One", tone: "plan", changed: false }, { title: "Two", tone: "plan", changed: false }] });
+  });
+
+  it("is the worker's plan once it exists, a dropped step left out, and marks only a step the Conductor did not plan", () => {
+    const worker = plan([step("a", "One", "done"), step("b", "Two, changed", "working"), step("c", "Gone", "dropped"), step("d", "Three", "planned")], "b");
+    expect(nodeSteps(node("a", { steps: ["One", "Two", "Three"], plan: worker }))).toEqual({
+      source: "worker",
+      now: "Two, changed",
+      steps: [{ title: "One", tone: "done", changed: false }, { title: "Two, changed", tone: "working", changed: true }, { title: "Three", tone: "plan", changed: false }],
+    });
+    // Nothing was planned to change from, and a finished plan has no current step.
+    const finished = nodeSteps(node("a", { plan: plan([step("a", "One", "done")], null, true) }));
+    expect(finished).toMatchObject({ now: null, steps: [{ title: "One", tone: "done", changed: false }] });
   });
 });

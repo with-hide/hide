@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: `Node ${key}`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title: `Node ${key}`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 function mission(extra: Partial<Mission> = {}): Mission {
@@ -687,7 +687,7 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
   } finally { await map.unmount(); }
 });
 
-it("counts a worker's plan at the end of its card's run line, and keeps a finished node's plan folded in its panel with its map one press away (operator decision 2026-11-02)", async () => {
+it("draws a worker's plan as one bar of cells on its card with the step being worked under it, and keeps a finished node's plan folded in its panel with its map one press away (operator decision 2026-11-02)", async () => {
   const step = (key: string, status: "done" | "working" | "planned") => ({ key, title: `Step ${key}`, depends_on: [], status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null });
   const plan = (session_id: string, done: number, total: number) => ({
     pane_id: "", session: { device_id: "mac", agent: "codex", session_id },
@@ -702,8 +702,10 @@ it("counts a worker's plan at the end of its card's run line, and keeps a finish
   ];
   const map = await mount({ items: [mission({ nodes })] });
   try {
-    // One number at the end of the run line, never a line of its own.
-    expect(["live", "over", "none"].map((key) => card(map, key).querySelector("[data-node-run] [data-node-plan-count]")?.textContent ?? null)).toEqual(["· 3/5", "· 4/4", null]);
+    // One bar of cells under the title and no number on the card; the count is in its name.
+    expect(["live", "over", "none"].map((key) => card(map, key).querySelector("[data-progress-cells]")?.getAttribute("data-progress-cells") ?? null)).toEqual(["done done done working plan", "done done done done", null]);
+    expect(card(map, "live").querySelector("[data-node-plan-count]")).toBeNull();
+    expect(["live", "over"].map((key) => card(map, key).querySelector("[data-node-steps-now]")?.textContent ?? null)).toEqual(["Now Step s3", null]);
     expect(card(map, "live").getAttribute("aria-label")).toContain("Task steps 3/5");
     await act(async () => card(map, "live").click());
     const live = map.q('[data-mission-detail="live"]')!;
@@ -725,6 +727,51 @@ it("counts a worker's plan at the end of its card's run line, and keeps a finish
     expect([...over.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => row.dataset.stepStatus)).toEqual(["done", "done", "done", "done"]);
     await act(async () => over.querySelector<HTMLElement>("[data-panel-plan-large]")!.click());
     expect(map.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "plan", session: plan("over-session", 4, 4).session } }]);
+  } finally { await map.unmount(); }
+});
+
+it("shows the steps the Conductor planned before a worker starts, marks a worker's step that differs from them, and folds the brief until it is opened", async () => {
+  const step = (key: string, title: string, status: "done" | "working" | "planned") => ({ key, title, depends_on: [], status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null });
+  const plan = {
+    pane_id: "", session: { device_id: "mac", agent: "codex", session_id: "fix-session" },
+    steps: [step("a", "Find the cause", "done"), step("b", "Keep it in the core", "working"), step("c", "Open the PR", "planned")],
+    review: "approved" as const, ask: null, progress: { current: "b", next: "c", done: 1, total: 3, finished: false }, created_at_unix_ms: 1, updated_at_unix_ms: 2,
+  };
+  const planned = ["Find the cause", "Keep it in the URL", "Open the PR"];
+  const nodes = [
+    node("ahead", { steps: ["Reproduce it", "Fix it", "Open the PR"] }),
+    node("fix", { status: "working", steps: planned, plan, brief_bytes: 2458, worker: { agent: "codex", model: "gpt-5.5", effort: "high", effort_auto: false } }),
+  ];
+  const text = "Node fix: keep the filter after a reload.\n\nFinish lines: c1, check.";
+  const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_brief: { mission: "mission-1", node: "fix", text } });
+  try {
+    // Before a worker starts: dashed cells, the count and that nothing began, and the Conductor's steps in the panel.
+    const ahead = card(map, "ahead");
+    expect(ahead.querySelector("[data-progress-cells]")?.getAttribute("data-progress-cells")).toBe("plan plan plan");
+    expect(ahead.querySelector("[data-node-steps-waiting]")?.textContent).toBe("3 planned steps · Not started");
+    expect(ahead.getAttribute("aria-label")).toContain("3 planned steps");
+    await act(async () => ahead.click());
+    const before = map.q('[data-mission-detail="ahead"]')!;
+    expect(before.querySelector("[data-panel-plan]")?.getAttribute("data-panel-plan")).toBe("planned");
+    expect([...before.querySelectorAll("[data-plan-row]")].map((row) => row.textContent)).toEqual(["Reproduce it", "Fix it", "Open the PR"]);
+    expect(before.querySelector('[data-panel-part="plan"] h4')?.textContent).toBe("How it goes");
+    // No worker, no brief: nothing to fold.
+    expect(before.querySelector("[data-panel-part=\"brief\"]")).toBeNull();
+    // The worker's plan is the one list once it exists: a step it changed is marked, one it kept is not.
+    expect(card(map, "fix").querySelector("[data-node-steps]")?.getAttribute("data-node-steps")).toBe("worker");
+    await act(async () => card(map, "fix").click());
+    const fix = map.q('[data-mission-detail="fix"]')!;
+    expect([...fix.querySelectorAll("[data-plan-row]")].map((row) => [row.getAttribute("data-plan-row"), row.querySelector("[data-step-differs]") !== null])).toEqual([["a", false], ["b", true], ["c", false]]);
+    // The brief is the panel's last part, folded with its size; opening asks the core once and shows the text.
+    const brief = fix.querySelector('[data-panel-part="brief"]')!;
+    expect(fix.lastElementChild).toBe(brief);
+    expect([brief.getAttribute("data-panel-brief"), brief.querySelector("[data-panel-brief-toggle]")?.textContent, brief.querySelector("[data-panel-brief-text]")]).toEqual(["folded", "Instructions· 2.4 KB", null]);
+    await act(async () => brief.querySelector<HTMLElement>("[data-panel-brief-toggle]")!.click());
+    expect(map.events.filter((event) => event.kind === "mission_brief_read").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "fix" }]);
+    expect(brief.querySelector("[data-panel-brief-text]")?.textContent).toBe(text);
+    // Another node's text is never drawn under this node.
+    await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, mission_brief: { mission: "mission-1", node: "other", text: "not this one" } } })));
+    expect(brief.querySelector("[data-panel-brief-text]")).toBeNull();
   } finally { await map.unmount(); }
 });
 
