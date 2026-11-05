@@ -96,7 +96,11 @@ impl Runtime {
         pulls: Option<&GithubProjectSnapshot>,
     ) -> Vec<String> {
         let head = self.node_head(mission, node, pulls);
-        let mut out: Vec<String> = crate::mission_criteria::unmet(&node.criteria, head.as_deref())
+        let heads = crate::mission_criteria::Heads {
+            work: head.as_deref(),
+            pull: pull_head(node, pulls),
+        };
+        let mut out: Vec<String> = crate::mission_criteria::unmet(&node.criteria, heads)
             .into_iter()
             .map(str::to_owned)
             .collect();
@@ -126,12 +130,17 @@ impl Runtime {
         mission: &Mission,
         node: &MissionNode,
     ) -> Vec<crate::mission_criteria::Criterion> {
-        let head = self.node_head(mission, node, self.mission_pulls(mission));
+        let pulls = self.mission_pulls(mission);
+        let head = self.node_head(mission, node, pulls);
+        let heads = crate::mission_criteria::Heads {
+            work: head.as_deref(),
+            pull: pull_head(node, pulls),
+        };
         node.criteria
             .iter()
             .map(|line| {
                 let mut line = line.clone();
-                line.state = line.shown(head.as_deref());
+                line.state = line.shown(heads);
                 line
             })
             .collect()
@@ -720,6 +729,14 @@ pub(super) fn read_mission_ci(
     (changed, spent)
 }
 
+/// The head of `node`'s pull request as `pulls` names it, which its CI line
+/// is judged against.
+fn pull_head<'a>(node: &MissionNode, pulls: Option<&'a GithubProjectSnapshot>) -> Option<&'a str> {
+    node.current_pr()
+        .and_then(|number| pull_in(pulls, number))
+        .and_then(|pull| pull.head_oid.as_deref())
+}
+
 /// The CI `project` reports for `node`'s pull request: a line where it has
 /// checks, none where it has none, unchanged where the list does not say.
 fn read_node_ci(
@@ -743,7 +760,9 @@ fn read_node_ci(
             node.criteria.remove(line);
             out.changed = true;
         }
-        (PullRequestChecks::None | PullRequestChecks::Unknown, ..) | (_, _, None) => {}
+        // Checks not known add no line, but a line read on another head
+        // opens again on this one (D-15).
+        (PullRequestChecks::None | PullRequestChecks::Unknown, None, _) | (_, _, None) => {}
         (checks, line, Some(head)) => {
             let line = match line {
                 Some(line) => line,

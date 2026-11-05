@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 pub(crate) mod card;
+pub(crate) mod runs;
 
 use crate::model::{
     ExtraQuery, GithubFailureCategory, GithubProjectSnapshot, GithubSnapshot, GithubStatusSnapshot,
@@ -368,10 +369,15 @@ fn read_project(
         let issues = scope.spawn(|| read_issues(node, root, links, unresolved));
         let repository = scope.spawn(|| issue_repository(node, root).map_err(GhFailure::network));
         let listed = list_pull_requests(&run, known);
-        (listed, repository.join(), issues.join())
+        let repository = repository
+            .join()
+            .unwrap_or_else(|_| Err(GhFailure::network("gh repository reader failed".to_owned())));
+        let listed = listed.map(|mut listed| {
+            judge_head_runs(&run, repository.as_deref(), &mut listed);
+            listed.pull_requests
+        });
+        (listed, repository, issues.join())
     });
-    let repository = repository
-        .unwrap_or_else(|_| Err(GhFailure::network("gh repository reader failed".to_owned())));
     let issues =
         issues.unwrap_or_else(|_| Err(GhFailure::network("gh issue reader failed".to_owned())));
     let mut pull_requests = match listed {
@@ -963,7 +969,7 @@ fn parse_facts(output: &str) -> Result<HashMap<u32, PullRequestFacts>, String> {
 fn list_pull_requests(
     run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
     known: &KnownChecks,
-) -> Result<Vec<PullRequestSnapshot>, GhFailure> {
+) -> Result<Listed, GhFailure> {
     let list = |state: &str, fields: &str| {
         run(&[
             "pr",
@@ -987,17 +993,17 @@ fn list_pull_requests(
     })??;
     let mut pull_requests = parse_pull_requests(&every).map_err(GhFailure::network)?;
     let mut open_checks = parse_open_checks(&open).map_err(GhFailure::network)?;
+    let mut actions_jobs = HashMap::new();
     for pull_request in &mut pull_requests {
         // An open pull request's checks are the open list's or nothing: a
         // remembered value could be of a commit it has since moved past.
         if is_open(pull_request) {
             match open_checks.remove(&pull_request.number) {
-                Some(open) => {
-                    pull_request.checks = open.rollup;
-                    pull_request.work.failed_checks = open.failed;
-                    pull_request.work.pending_checks = open.pending;
-                    pull_request.work.check_counts = open.counts;
-                    pull_request.work.running_checks = open.running;
+                Some(mut open) => {
+                    if let Some(jobs) = open.actions_jobs.take() {
+                        actions_jobs.insert(pull_request.number, jobs);
+                    }
+                    open.apply(pull_request);
                 }
                 None => pull_request.checks = PullRequestChecks::Unknown,
             }
@@ -1008,7 +1014,102 @@ fn list_pull_requests(
                 .unwrap_or(PullRequestChecks::Unknown);
         }
     }
-    Ok(pull_requests)
+    Ok(Listed {
+        pull_requests,
+        actions_jobs,
+    })
+}
+
+/// A project's pull requests as its two lists read them, and the rollup rows
+/// of the open ones whose rollup listed GitHub Actions jobs, by number, which
+/// their runs judge instead.
+struct Listed {
+    pull_requests: Vec<PullRequestSnapshot>,
+    actions_jobs: HashMap<u32, Vec<GhCheck>>,
+}
+
+/// Adds to each open pull request's checks what GitHub Actions' runs on its
+/// head add up to (`runs`), which the open list's job rows cannot say: a
+/// cancelled run's jobs stay listed beside its replacement's, and a run queued
+/// before its first job is not listed. Its card then counts only the jobs
+/// shown to be of the runs that decide. When the runs cannot be read, every
+/// open pull request reads `Unknown`: nothing then says no run is queued on
+/// its head, so neither a pass nor "no checks" is known, and the reason goes
+/// to the diagnostic log.
+fn judge_head_runs(
+    run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
+    repository: Result<&str, &GhFailure>,
+    listed: &mut Listed,
+) {
+    let mut heads: Vec<String> = listed
+        .pull_requests
+        .iter()
+        .filter(|pull_request| is_open(pull_request))
+        .filter_map(|pull_request| pull_request.head_oid.clone())
+        .filter(|head| hide_node_link::gh::is_commit(head))
+        .collect();
+    heads.sort_unstable();
+    heads.dedup();
+    let judged = read_head_runs(run, repository, &heads).unwrap_or_else(|failure| {
+        crate::diagnostic!(serde_json::json!({
+            "component": "github",
+            "kind": "pull_requests.runs_unread",
+            "repository": repository.ok(),
+            "heads": heads,
+            "message": failure.reason,
+        }));
+        HashMap::new()
+    });
+    for pull_request in listed
+        .pull_requests
+        .iter_mut()
+        .filter(|pull_request| is_open(pull_request))
+    {
+        let runs = pull_request
+            .head_oid
+            .as_ref()
+            .and_then(|head| judged.get(head));
+        let jobs = listed.actions_jobs.remove(&pull_request.number);
+        match (runs, jobs) {
+            (Some(runs), jobs) => {
+                if let (Some(counted), Some(jobs)) = (&runs.counted, jobs) {
+                    let counted = jobs
+                        .into_iter()
+                        .filter(|job| {
+                            !job.is_actions_job()
+                                || job.run_id().is_some_and(|run| counted.contains(&run))
+                        })
+                        .collect();
+                    OpenChecks::of(Some(counted)).apply(pull_request);
+                }
+                pull_request.checks = runs::worse(pull_request.checks, runs.checks);
+            }
+            (None, _) => pull_request.checks = PullRequestChecks::Unknown,
+        }
+    }
+}
+
+/// What the workflow runs on each of `heads` add up to, read in batches.
+fn read_head_runs(
+    run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
+    repository: Result<&str, &GhFailure>,
+    heads: &[String],
+) -> Result<HashMap<String, runs::HeadRuns>, GhFailure> {
+    let mut judged = HashMap::new();
+    if heads.is_empty() {
+        return Ok(judged);
+    }
+    let repository = repository.map_err(Clone::clone)?;
+    for batch in heads.chunks(hide_node_link::gh::HEAD_RUNS_COMMIT_LIMIT) {
+        let query = hide_node_link::gh::head_runs_query(repository, batch).ok_or_else(|| {
+            GhFailure::network("the repository name cannot be asked about its runs".to_owned())
+        })?;
+        let answer = run(&["api", "graphql", "-f", &query])?;
+        let verdicts =
+            runs::parse_head_runs(&answer, repository, batch).map_err(GhFailure::network)?;
+        judged.extend(batch.iter().cloned().zip(verdicts));
+    }
+    Ok(judged)
 }
 
 /// How long after a pull request settles its checks are read again while the
@@ -2678,7 +2779,7 @@ fn parse_merged_pull_request_proofs(output: &str) -> Result<Vec<MergedPullReques
         .collect())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "__typename")]
 enum GhCheck {
     CheckRun {
@@ -2688,6 +2789,9 @@ enum GhCheck {
         name: Option<String>,
         #[serde(default, rename = "detailsUrl")]
         details_url: Option<String>,
+        /// Set for a GitHub Actions job, whose workflow run judges it.
+        #[serde(default, rename = "workflowName")]
+        workflow: Option<String>,
     },
     StatusContext {
         state: String,
@@ -2714,6 +2818,25 @@ const FAILED_CONCLUSIONS: [&str; 6] = [
 const FAILED_STATES: [&str; 2] = ["FAILURE", "ERROR"];
 
 impl GhCheck {
+    /// A job of a GitHub Actions workflow run.
+    fn is_actions_job(&self) -> bool {
+        matches!(self, GhCheck::CheckRun { workflow: Some(workflow), .. } if !workflow.is_empty())
+    }
+
+    /// The workflow run a job belongs to, from the address GitHub gives it
+    /// (`…/actions/runs/<run>/job/<job>`), the one place the rollup names it.
+    fn run_id(&self) -> Option<u64> {
+        let GhCheck::CheckRun {
+            details_url: Some(url),
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let (_, rest) = url.split_once("/actions/runs/")?;
+        rest.split('/').next()?.parse().ok()
+    }
+
     /// A check that has not finished.
     fn is_pending(&self) -> bool {
         match self {
@@ -2746,6 +2869,7 @@ impl GhCheck {
                 conclusion,
                 name,
                 details_url,
+                ..
             } if status == "COMPLETED"
                 && conclusion
                     .as_deref()
@@ -2767,10 +2891,16 @@ impl GhCheck {
     }
 }
 
+/// What a pull request's rollup adds up to without GitHub Actions' jobs,
+/// which their workflow runs judge instead (`judge_head_runs`).
 fn rollup_checks(checks: Option<&[GhCheck]>) -> PullRequestChecks {
     let Some(checks) = checks else {
         return PullRequestChecks::Unknown;
     };
+    let checks: Vec<&GhCheck> = checks
+        .iter()
+        .filter(|check| !check.is_actions_job())
+        .collect();
     if checks.is_empty() {
         return PullRequestChecks::None;
     }
@@ -2831,31 +2961,7 @@ fn parse_open_checks(output: &str) -> Result<HashMap<u32, OpenChecks>, String> {
         .map_err(|error| format!("gh pr list returned checks Hide could not read: {error}"))?;
     Ok(listed
         .into_iter()
-        .map(|row| {
-            let rollup = row.status_check_rollup.as_deref();
-            (
-                row.number,
-                OpenChecks {
-                    rollup: rollup_checks(rollup),
-                    counts: rollup.map(count_checks),
-                    failed: rollup
-                        .into_iter()
-                        .flatten()
-                        .filter_map(GhCheck::failure)
-                        .collect(),
-                    pending: rollup
-                        .into_iter()
-                        .flatten()
-                        .filter(|check| check.is_pending())
-                        .count() as u32,
-                    running: rollup
-                        .into_iter()
-                        .flatten()
-                        .filter(|check| check.is_running())
-                        .count() as u32,
-                },
-            )
-        })
+        .map(|row| (row.number, OpenChecks::of(row.status_check_rollup)))
         .collect())
 }
 
@@ -2868,6 +2974,34 @@ struct OpenChecks {
     pending: u32,
     /// The pending checks that reported: all but `EXPECTED`.
     running: u32,
+    /// The rollup's rows when it listed GitHub Actions jobs, which their
+    /// workflow runs judge: `rollup` leaves them out, and the counts are
+    /// taken again from the jobs of the runs that decide (`judge_head_runs`).
+    actions_jobs: Option<Vec<GhCheck>>,
+}
+
+impl OpenChecks {
+    fn of(rollup: Option<Vec<GhCheck>>) -> Self {
+        let checks = rollup.as_deref();
+        let all = || checks.into_iter().flatten();
+        Self {
+            rollup: rollup_checks(checks),
+            counts: checks.map(count_checks),
+            failed: all().filter_map(GhCheck::failure).collect(),
+            pending: all().filter(|check| check.is_pending()).count() as u32,
+            running: all().filter(|check| check.is_running()).count() as u32,
+            actions_jobs: rollup.filter(|checks| checks.iter().any(GhCheck::is_actions_job)),
+        }
+    }
+
+    /// What the card shows of these checks.
+    fn apply(self, pull_request: &mut PullRequestSnapshot) {
+        pull_request.checks = self.rollup;
+        pull_request.work.failed_checks = self.failed;
+        pull_request.work.pending_checks = self.pending;
+        pull_request.work.check_counts = self.counts;
+        pull_request.work.running_checks = self.running;
+    }
 }
 
 fn count_checks(checks: &[GhCheck]) -> crate::model::PrCheckCounts {
@@ -3923,6 +4057,8 @@ mod tests {
     struct TwoLists {
         every: Result<String, GhFailure>,
         open: Result<String, GhFailure>,
+        /// The check suites every commit the runs query names carries.
+        runs: String,
         asked: Mutex<Vec<Vec<String>>>,
     }
 
@@ -3931,7 +4067,16 @@ mod tests {
             Self {
                 every: Ok(every.to_owned()),
                 open: Ok(open.to_owned()),
+                runs: String::new(),
                 asked: Mutex::default(),
+            }
+        }
+
+        /// The same lists, with the open head's workflow runs as `suites`.
+        fn with_runs(every: &str, open: &str, suites: &str) -> Self {
+            Self {
+                runs: suites.to_owned(),
+                ..Self::new(every, open)
             }
         }
 
@@ -3942,6 +4087,22 @@ mod tests {
                     .map(|argument| (*argument).to_owned())
                     .collect(),
             );
+            if arguments[..2] == ["api", "graphql"] {
+                let commits = arguments[3].matches("object(oid:").count();
+                let suites = self.runs.matches("\"status\"").count();
+                let answer: Vec<String> = (0..commits)
+                    .map(|index| {
+                        format!(
+                            r#""c{index}":{{"checkSuites":{{"totalCount":{suites},"nodes":[{}]}}}}"#,
+                            self.runs
+                        )
+                    })
+                    .collect();
+                return Ok(format!(
+                    r#"{{"data":{{"repository":{{{}}}}}}}"#,
+                    answer.join(",")
+                ));
+            }
             let state = arguments[arguments.iter().position(|a| *a == "--state").unwrap() + 1];
             match state {
                 "all" => self.every.clone(),
@@ -3950,8 +4111,13 @@ mod tests {
             }
         }
 
+        /// The pull requests as a project's read takes them: the two lists,
+        /// then the runs on the open heads.
         fn read(&self, known: &KnownChecks) -> Result<Vec<PullRequestSnapshot>, GhFailure> {
-            list_pull_requests(&|arguments| self.run(arguments), known)
+            let run = |arguments: &[&str]| self.run(arguments);
+            let mut listed = list_pull_requests(&run, known)?;
+            judge_head_runs(&run, Ok("acme/app"), &mut listed);
+            Ok(listed.pull_requests)
         }
     }
 
@@ -3980,7 +4146,7 @@ mod tests {
         let gh = TwoLists::new(
             &format!(
                 "[{},{},{}]",
-                listed_at(1, "a", "OPEN", "h1"),
+                listed_at(1, "a", "OPEN", &head('1')),
                 listed_at(2, "b", "MERGED", "h2"),
                 listed_at(3, "c", "CLOSED", "h3"),
             ),
@@ -3990,6 +4156,420 @@ mod tests {
         assert_eq!(checks_of(&read, 1), PullRequestChecks::Failed);
         assert_eq!(checks_of(&read, 2), PullRequestChecks::Unknown);
         assert_eq!(checks_of(&read, 3), PullRequestChecks::Unknown);
+    }
+
+    /// A job row of the open list's rollup, of GitHub Actions' `workflow`.
+    fn job(workflow: &str, name: &str, status: &str, conclusion: &str) -> String {
+        format!(
+            r#"{{"__typename":"CheckRun","workflowName":"{workflow}","name":"{name}","status":"{status}","conclusion":{conclusion}}}"#
+        )
+    }
+
+    /// A job row of the open list's rollup, of run `run` of `workflow`, with
+    /// the address GitHub gives a job.
+    fn run_job(workflow: &str, run: u64, name: &str, status: &str, conclusion: &str) -> String {
+        format!(
+            r#"{{"__typename":"CheckRun","workflowName":"{workflow}","name":"{name}","status":"{status}","conclusion":{conclusion},"detailsUrl":"https://github.com/acme/app/actions/runs/{run}/job/{run}0"}}"#
+        )
+    }
+
+    /// One workflow run on the head, as its check suite says.
+    fn suite(workflow: u64, event: &str, status: &str, conclusion: &str, updated: &str) -> String {
+        run_suite(
+            workflow,
+            workflow * 1000,
+            event,
+            status,
+            conclusion,
+            updated,
+        )
+    }
+
+    /// The same, for run `run`.
+    fn run_suite(
+        workflow: u64,
+        run: u64,
+        event: &str,
+        status: &str,
+        conclusion: &str,
+        updated: &str,
+    ) -> String {
+        format!(
+            r#"{{"status":"{status}","conclusion":{conclusion},"updatedAt":"{updated}","workflowRun":{{"databaseId":{run},"event":"{event}","workflow":{{"databaseId":{workflow}}}}}}}"#
+        )
+    }
+
+    const DESIGN: u64 = 11;
+    const VERIFY: u64 = 22;
+
+    /// Reads one open pull request at `head('a')` whose rollup lists `jobs`
+    /// and whose head carries the workflow runs `suites`.
+    fn open_checks(jobs: &[String], suites: &[String]) -> PullRequestChecks {
+        open_pull(jobs, suites).checks
+    }
+
+    fn open_pull(jobs: &[String], suites: &[String]) -> PullRequestSnapshot {
+        let gh = TwoLists::with_runs(
+            &format!("[{}]", listed_at(7, "feature", "OPEN", &head('a'))),
+            &format!(
+                r#"[{{"number":7,"statusCheckRollup":[{}]}}]"#,
+                jobs.join(",")
+            ),
+            &suites.join(","),
+        );
+        gh.read(&KnownChecks::new())
+            .expect("both lists answer")
+            .into_iter()
+            .find(|pull_request| pull_request.number == 7)
+            .expect("pull request listed")
+    }
+
+    fn failed_names(pull_request: &PullRequestSnapshot) -> Vec<&str> {
+        pull_request
+            .work
+            .failed_checks
+            .iter()
+            .filter_map(|check| check.name.as_deref())
+            .collect()
+    }
+
+    /// with-hide/hide #2077's card at its merge: the cancelled run's jobs,
+    /// its closing `verify` failed among them, are not counted beside the
+    /// run that passed, so the card says what the mark says.
+    #[test]
+    fn the_card_counts_only_the_jobs_of_the_run_that_decides() {
+        let design = run_job(
+            "Design contract",
+            1,
+            "static-design",
+            "COMPLETED",
+            r#""SUCCESS""#,
+        );
+        let design_run = run_suite(
+            DESIGN,
+            1,
+            "pull_request",
+            "COMPLETED",
+            r#""SUCCESS""#,
+            "2026-11-04T15:14:14Z",
+        );
+        let cancelled = [
+            run_job("verify", 100, "desktop e2e", "COMPLETED", r#""CANCELLED""#),
+            run_job("verify", 100, "verify", "COMPLETED", r#""FAILURE""#),
+        ];
+        let cancelled_run = run_suite(
+            VERIFY,
+            100,
+            "pull_request",
+            "COMPLETED",
+            r#""CANCELLED""#,
+            "2026-11-04T16:41:23Z",
+        );
+        // A job whose address names no run is not shown to be the deciding
+        // run's, so it is not counted either.
+        let unplaced = job("verify", "verify", "COMPLETED", r#""FAILURE""#);
+        let passed = open_pull(
+            &[
+                design.clone(),
+                cancelled[0].clone(),
+                cancelled[1].clone(),
+                unplaced,
+                run_job("verify", 200, "desktop e2e", "COMPLETED", r#""SUCCESS""#),
+                run_job("verify", 200, "verify", "COMPLETED", r#""SUCCESS""#),
+            ],
+            &[
+                design_run.clone(),
+                cancelled_run.clone(),
+                run_suite(
+                    VERIFY,
+                    200,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                    "2026-11-04T18:31:38Z",
+                ),
+            ],
+        );
+        assert_eq!(passed.checks, PullRequestChecks::Passing);
+        assert_eq!(
+            passed.work.check_counts,
+            Some(crate::model::PrCheckCounts {
+                total: 3,
+                passed: 3,
+                ..Default::default()
+            })
+        );
+        assert!(failed_names(&passed).is_empty());
+
+        // While the replacement runs, its jobs are what the card counts.
+        let running = open_pull(
+            &[
+                design.clone(),
+                cancelled[0].clone(),
+                cancelled[1].clone(),
+                run_job("verify", 300, "desktop e2e", "IN_PROGRESS", "null"),
+            ],
+            &[
+                design_run.clone(),
+                cancelled_run.clone(),
+                run_suite(
+                    VERIFY,
+                    300,
+                    "pull_request",
+                    "IN_PROGRESS",
+                    "null",
+                    "2026-11-04T16:42:00Z",
+                ),
+            ],
+        );
+        assert_eq!(running.checks, PullRequestChecks::Pending);
+        assert_eq!(
+            running.work.check_counts,
+            Some(crate::model::PrCheckCounts {
+                total: 2,
+                passed: 1,
+                running: 1,
+                ..Default::default()
+            })
+        );
+        assert!(failed_names(&running).is_empty());
+        assert_eq!(running.work.running_checks, 1);
+
+        // With no replacement, the cancelled run is what failed.
+        let alone = open_pull(
+            &[design, cancelled[0].clone(), cancelled[1].clone()],
+            &[design_run, cancelled_run],
+        );
+        assert_eq!(alone.checks, PullRequestChecks::Failed);
+        assert_eq!(failed_names(&alone), ["desktop e2e", "verify"]);
+    }
+
+    /// with-hide/hide #2077 at its merge: the first verify run was cancelled,
+    /// its jobs and its closing `verify` job still listed beside the second
+    /// run's, which passed on the same head.
+    #[test]
+    fn a_cancelled_run_does_not_fail_the_checks_when_a_later_run_on_the_head_passed() {
+        let checks = open_checks(
+            &[
+                job(
+                    "Design contract",
+                    "static-design",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                ),
+                job(
+                    "verify",
+                    "desktop e2e macos 1/2",
+                    "COMPLETED",
+                    r#""CANCELLED""#,
+                ),
+                job("verify", "verify", "COMPLETED", r#""FAILURE""#),
+                job(
+                    "verify",
+                    "desktop e2e macos 1/2",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                ),
+                job("verify", "verify", "COMPLETED", r#""SUCCESS""#),
+            ],
+            &[
+                suite(
+                    DESIGN,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                    "2026-11-04T15:14:14Z",
+                ),
+                suite(
+                    VERIFY,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""CANCELLED""#,
+                    "2026-11-04T16:41:23Z",
+                ),
+                suite(
+                    VERIFY,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                    "2026-11-04T18:31:38Z",
+                ),
+            ],
+        );
+        assert_eq!(checks, PullRequestChecks::Passing);
+    }
+
+    #[test]
+    fn a_cancelled_run_leaves_the_checks_pending_while_its_replacement_has_not_finished() {
+        let cancelled = [
+            job(
+                "Design contract",
+                "static-design",
+                "COMPLETED",
+                r#""SUCCESS""#,
+            ),
+            job("verify", "rust workspace", "COMPLETED", r#""CANCELLED""#),
+            job("verify", "verify", "COMPLETED", r#""FAILURE""#),
+        ];
+        let before = [
+            suite(
+                DESIGN,
+                "pull_request",
+                "COMPLETED",
+                r#""SUCCESS""#,
+                "2026-11-04T21:16:00Z",
+            ),
+            suite(
+                VERIFY,
+                "pull_request",
+                "COMPLETED",
+                r#""CANCELLED""#,
+                "2026-11-04T21:43:17Z",
+            ),
+        ];
+        // Queued before its jobs exist: the rollup does not list it yet.
+        let queued = suite(
+            VERIFY,
+            "pull_request",
+            "QUEUED",
+            "null",
+            "2026-11-04T21:43:18Z",
+        );
+        assert_eq!(
+            open_checks(&cancelled, &[before[0].clone(), before[1].clone(), queued]),
+            PullRequestChecks::Pending
+        );
+        let mut running = cancelled.to_vec();
+        running.push(job("verify", "rust workspace", "IN_PROGRESS", "null"));
+        let started = suite(
+            VERIFY,
+            "pull_request",
+            "IN_PROGRESS",
+            "null",
+            "2026-11-04T21:45:02Z",
+        );
+        assert_eq!(
+            open_checks(&running, &[before[0].clone(), before[1].clone(), started]),
+            PullRequestChecks::Pending
+        );
+    }
+
+    #[test]
+    fn a_cancelled_run_with_no_replacement_fails_the_checks() {
+        let checks = open_checks(
+            &[
+                job(
+                    "Design contract",
+                    "static-design",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                ),
+                job("verify", "rust workspace", "COMPLETED", r#""CANCELLED""#),
+                job("verify", "verify", "COMPLETED", r#""FAILURE""#),
+            ],
+            &[
+                suite(
+                    DESIGN,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""SUCCESS""#,
+                    "2026-11-04T21:16:00Z",
+                ),
+                suite(
+                    VERIFY,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""CANCELLED""#,
+                    "2026-11-04T21:43:17Z",
+                ),
+            ],
+        );
+        assert_eq!(checks, PullRequestChecks::Failed);
+    }
+
+    /// with-hide/hide#2080 review: without the runs nothing says a run is
+    /// not queued on a head, so no open pull request reads passing or as
+    /// having no checks, which would take a mission's ci line away.
+    #[test]
+    fn unread_runs_leave_every_open_pull_request_unknown() {
+        let gh = TwoLists::new(
+            &format!(
+                "[{},{},{}]",
+                listed_at(1, "a", "OPEN", &head('1')),
+                listed_at(2, "b", "OPEN", &head('2')),
+                listed_at(3, "c", "OPEN", &head('3'))
+            ),
+            &format!(
+                r#"[{{"number":1,"statusCheckRollup":[{}]}},{},{{"number":3,"statusCheckRollup":[]}}]"#,
+                job("verify", "verify", "COMPLETED", r#""SUCCESS""#),
+                rollup(2, "SUCCESS")
+            ),
+        );
+        let run = |arguments: &[&str]| {
+            if arguments[1] == "graphql" {
+                Err(GhFailure::network("offline".to_owned()))
+            } else {
+                gh.run(arguments)
+            }
+        };
+        let mut listed = list_pull_requests(&run, &KnownChecks::new()).expect("both lists answer");
+        judge_head_runs(&run, Ok("acme/app"), &mut listed);
+        for number in 1..=3 {
+            assert_eq!(
+                checks_of(&listed.pull_requests, number),
+                PullRequestChecks::Unknown,
+                "pull request {number}"
+            );
+        }
+    }
+
+    /// with-hide/hide-private#394, PR #1910 at `e4789df09`: the first verify
+    /// run was cancelled before it made a job and its replacement was queued,
+    /// so the rollup held one finished check of another workflow.
+    #[test]
+    fn a_queued_run_with_no_jobs_yet_keeps_the_checks_pending() {
+        let design = job(
+            "Design contract",
+            "static-design",
+            "COMPLETED",
+            r#""SUCCESS""#,
+        );
+        let design_run = suite(
+            DESIGN,
+            "pull_request",
+            "COMPLETED",
+            r#""SUCCESS""#,
+            "2026-10-30T17:07:00Z",
+        );
+        let queued = suite(
+            VERIFY,
+            "pull_request",
+            "QUEUED",
+            "null",
+            "2026-10-30T17:08:00Z",
+        );
+        assert_eq!(
+            open_checks(
+                std::slice::from_ref(&design),
+                &[
+                    design_run.clone(),
+                    suite(
+                        VERIFY,
+                        "pull_request",
+                        "COMPLETED",
+                        r#""CANCELLED""#,
+                        "2026-10-30T17:07:30Z"
+                    ),
+                    queued.clone(),
+                ],
+            ),
+            PullRequestChecks::Pending
+        );
+        assert_eq!(
+            open_checks(std::slice::from_ref(&design), &[design_run, queued]),
+            PullRequestChecks::Pending,
+            "only some of the head's runs have made jobs"
+        );
     }
 
     #[test]
@@ -4042,7 +4622,24 @@ mod tests {
         status: &'static str,
         asked: &'a Mutex<Vec<String>>,
     ) -> impl Fn(&[&str]) -> Result<String, GhFailure> + Sync + 'a {
+        verdicts_and_runs(runs, status, "", asked)
+    }
+
+    /// The same, with the commit's workflow runs as `suites`; the runs query
+    /// is not counted among the reads asked.
+    fn verdicts_and_runs<'a>(
+        runs: &'static str,
+        status: &'static str,
+        suites: &'static str,
+        asked: &'a Mutex<Vec<String>>,
+    ) -> impl Fn(&[&str]) -> Result<String, GhFailure> + Sync + 'a {
         move |arguments: &[&str]| {
+            if arguments[1] == "graphql" {
+                return Ok(format!(
+                    r#"{{"data":{{"repository":{{"c0":{{"checkSuites":{{"totalCount":{},"nodes":[{suites}]}}}}}}}}}}"#,
+                    suites.matches("\"status\"").count()
+                ));
+            }
             let endpoint = arguments.last().expect("an endpoint").to_string();
             asked.lock().unwrap().push(endpoint.clone());
             if endpoint.ends_with("/status") {
@@ -4108,6 +4705,31 @@ mod tests {
         );
     }
 
+    /// with-hide/hide #2077 merged while its line read failed: the recheck
+    /// reads the cancelled run's jobs beside the replacement's that passed.
+    #[test]
+    fn a_settled_recheck_judges_actions_by_the_run_that_finished_last() {
+        let asked = Mutex::default();
+        let mut pulls = vec![settled_at(
+            2077,
+            &head('1'),
+            "2026-11-04T18:32:44Z",
+            PullRequestChecks::Failed,
+        )];
+        recheck_settled(
+            &verdicts_and_runs(
+                "none",
+                "none",
+                r#"{"status":"COMPLETED","conclusion":"CANCELLED","updatedAt":"2026-11-04T16:41:23Z","workflowRun":{"databaseId":100,"event":"pull_request","workflow":{"databaseId":22}}},{"status":"COMPLETED","conclusion":"SUCCESS","updatedAt":"2026-11-04T18:31:38Z","workflowRun":{"databaseId":200,"event":"pull_request","workflow":{"databaseId":22}}}"#,
+                &asked,
+            ),
+            "acme/app",
+            &mut pulls,
+            at("2026-11-04T18:33:00Z"),
+        );
+        assert_eq!(pulls[0].checks, PullRequestChecks::Passing);
+    }
+
     #[test]
     fn a_settled_recheck_that_says_nothing_keeps_the_remembered_checks() {
         let now = at("2026-10-29T17:28:30Z");
@@ -4170,7 +4792,7 @@ mod tests {
     #[test]
     fn what_was_read_is_kept_for_the_next_read_and_survives_a_failed_one() {
         let gh = TwoLists::new(
-            &format!("[{}]", listed_at(1, "a", "OPEN", "h1")),
+            &format!("[{}]", listed_at(1, "a", "OPEN", &head('1'))),
             &format!("[{}]", rollup(1, "SUCCESS")),
         );
         let read = gh.read(&KnownChecks::new()).expect("both lists answer");
@@ -4180,10 +4802,7 @@ mod tests {
             ..GithubProjectSnapshot::default()
         };
         let kept = carried_checks(&answer, KnownChecks::new());
-        assert_eq!(
-            kept.get(&(1, "h1".to_owned())),
-            Some(&PullRequestChecks::Passing)
-        );
+        assert_eq!(kept.get(&(1, head('1'))), Some(&PullRequestChecks::Passing));
         let failed = GithubProjectSnapshot::default();
         assert_eq!(carried_checks(&failed, kept.clone()), kept);
     }

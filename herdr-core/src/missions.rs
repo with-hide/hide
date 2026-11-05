@@ -2360,7 +2360,16 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
             ));
         }
     }
-    let stored: Stored = serde_json::from_value(value).map_err(decoded)?;
+    let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
+    for line in stored
+        .book
+        .missions
+        .iter_mut()
+        .flat_map(|mission| mission.nodes.iter_mut())
+        .flat_map(|node| node.criteria.iter_mut())
+    {
+        line.carry_spent_rerun();
+    }
     if stored.book.missions.len() > MISSION_LIMIT
         || stored
             .book
@@ -3071,6 +3080,48 @@ pub(crate) mod tests {
         assert_eq!(
             replanned.nodes[0].criteria[0].state,
             crate::mission_criteria::CriterionState::Pass
+        );
+    }
+
+    /// with-hide/hide#2080 review: a ci line an earlier build saved with its
+    /// rerun spent (failed, its rerun counted) had sent its node back, so
+    /// after a restart a later failure on that head does not send it again.
+    #[test]
+    fn a_ci_line_saved_spent_before_a_restart_does_not_send_its_node_back_again() {
+        let head = "a".repeat(40);
+        let planned =
+            apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let mut value = serde_json::to_value(Stored {
+            schema_version: SCHEMA_VERSION,
+            book: MissionBook {
+                missions: vec![planned],
+                next: 2,
+            },
+        })
+        .unwrap();
+        value["missions"][0]["nodes"][0]["criteria"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "key": "ci", "kind": "ci", "state": "fail", "commit": head, "reruns": 1
+            }));
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let Restored::Read(mut book) = MissionStore::new(path).restore() else {
+            panic!("the book reads");
+        };
+        let line = book.missions[0].nodes[0]
+            .criteria
+            .iter_mut()
+            .find(|line| line.key == "ci")
+            .expect("the ci line");
+        line.read_ci(&head, crate::model::PullRequestChecks::Passing, 1);
+        line.read_ci(&head, crate::model::PullRequestChecks::Pending, 2);
+        assert!(
+            !line
+                .read_ci(&head, crate::model::PullRequestChecks::Failed, 3)
+                .spent
         );
     }
 

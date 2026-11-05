@@ -612,7 +612,8 @@ pub fn allowed(arguments: &[&str]) -> bool {
                 || is_issue_attempt_query(arguments[3])
                 || is_pr_facts_query(arguments[3])
                 || is_pr_card_query(arguments[3])
-                || is_checkout_checks_query(arguments[3])))
+                || is_checkout_checks_query(arguments[3])
+                || is_head_runs_query(arguments[3])))
 }
 
 /// A conditional read prints the response headers and no body: only the
@@ -660,8 +661,10 @@ pub fn pull_digest_arguments(repository: &str) -> Option<Vec<String>> {
 
 /// The result a commit's check runs add up to, in the words the PR mark uses,
 /// by the same rule as the core's `rollup_checks`: any failed run fails it,
-/// else any unfinished run leaves it pending.
-pub const CHECK_RUNS_VERDICT_JQ: &str = "[.check_runs[]|if .status!=\"completed\" then \"pending\" elif (.conclusion|IN(\"failure\",\"timed_out\",\"cancelled\",\"action_required\",\"startup_failure\",\"stale\")) then \"failed\" elif (.conclusion|IN(\"success\",\"neutral\",\"skipped\")) then \"passing\" else \"unknown\" end]|if any(.==\"failed\") then \"failed\" elif any(.==\"pending\") then \"pending\" elif any(.==\"unknown\") then \"unknown\" elif length==0 then \"none\" else \"passing\" end";
+/// else any unfinished run leaves it pending. GitHub Actions' check runs are
+/// left out: they are judged by their workflow runs ([`head_runs_query`]),
+/// because a cancelled run's jobs stay listed beside its replacement's.
+pub const CHECK_RUNS_VERDICT_JQ: &str = "[.check_runs[]|select(.app.slug!=\"github-actions\")|if .status!=\"completed\" then \"pending\" elif (.conclusion|IN(\"failure\",\"timed_out\",\"cancelled\",\"action_required\",\"startup_failure\",\"stale\")) then \"failed\" elif (.conclusion|IN(\"success\",\"neutral\",\"skipped\")) then \"passing\" else \"unknown\" end]|if any(.==\"failed\") then \"failed\" elif any(.==\"pending\") then \"pending\" elif any(.==\"unknown\") then \"unknown\" elif length==0 then \"none\" else \"passing\" end";
 
 /// The same for a commit's combined status (a commit with no statuses reports
 /// `pending` with a count of zero, which is no result).
@@ -891,22 +894,66 @@ pub fn checkout_checks_query(repository: &str, commits: &[String]) -> Option<Str
 }
 
 fn is_checkout_checks_query(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("query=query HideCheckoutChecks { repository(owner:\"")
-    else {
-        return false;
-    };
-    let Some((owner, rest)) = rest.split_once("\",name:\"") else {
-        return false;
-    };
-    let Some((name, rest)) = rest.split_once('"') else {
-        return false;
-    };
-    let commits: Vec<String> = rest
+    commits_query_parts(value, "HideCheckoutChecks").is_some_and(|(repository, commits)| {
+        checkout_checks_query(&repository, &commits).is_some_and(|query| query == value)
+    })
+}
+
+/// The most head commits one [`head_runs_query`] asks about.
+pub const HEAD_RUNS_COMMIT_LIMIT: usize = 50;
+
+/// The most check suites one commit's runs are read with. A commit with more
+/// cannot be judged from the ones read, so the core says it does not know.
+pub const HEAD_RUNS_SUITE_LIMIT: usize = 100;
+
+/// A fixed read of the workflow runs on up to [`HEAD_RUNS_COMMIT_LIMIT`]
+/// exact commits: each check suite (one per GitHub Actions run) with the
+/// workflow and event that started it, its state, and when it last changed.
+/// A run queued before its jobs exist is a suite already, while no check run
+/// of it is listed yet.
+pub fn head_runs_query(repository: &str, commits: &[String]) -> Option<String> {
+    if !is_repository(repository)
+        || commits.is_empty()
+        || commits.len() > HEAD_RUNS_COMMIT_LIMIT
+        || commits.iter().any(|sha| !is_commit(sha))
+        || commits
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != commits.len()
+    {
+        return None;
+    }
+    let (owner, name) = repository.split_once('/')?;
+    let objects = commits.iter().enumerate().map(|(index, sha)| format!(
+        "c{index}: object(oid:\"{sha}\") {{ ... on Commit {{ checkSuites(first:{HEAD_RUNS_SUITE_LIMIT}) {{ totalCount nodes {{ status conclusion updatedAt workflowRun {{ databaseId event workflow {{ databaseId }} }} }} }} }} }}"
+    )).collect::<Vec<_>>().join(" ");
+    Some(format!(
+        "query=query HideHeadRuns {{ repository(owner:\"{owner}\",name:\"{name}\") {{ {objects} }} }}"
+    ))
+}
+
+fn is_head_runs_query(value: &str) -> bool {
+    commits_query_parts(value, "HideHeadRuns").is_some_and(|(repository, commits)| {
+        head_runs_query(&repository, &commits).is_some_and(|query| query == value)
+    })
+}
+
+/// The repository and commits a fixed per-commit query names, read back so
+/// the query can be built again and compared whole.
+fn commits_query_parts(value: &str, query: &str) -> Option<(String, Vec<String>)> {
+    let rest = value
+        .strip_prefix("query=query ")?
+        .strip_prefix(query)?
+        .strip_prefix(" { repository(owner:\"")?;
+    let (owner, rest) = rest.split_once("\",name:\"")?;
+    let (name, rest) = rest.split_once('"')?;
+    let commits = rest
         .split("object(oid:\"")
         .skip(1)
         .filter_map(|part| part.split_once('"').map(|(sha, _)| sha.to_owned()))
         .collect();
-    checkout_checks_query(&format!("{owner}/{name}"), &commits).is_some_and(|query| query == value)
+    Some((format!("{owner}/{name}"), commits))
 }
 
 fn is_checks_verdict_read(arguments: &[&str]) -> bool {
@@ -1089,6 +1136,29 @@ mod tests {
         assert!(checkout_checks_query("example/fixture", &["main".into()]).is_none());
         assert!(checkout_checks_query("example/fixture", &vec!["a".repeat(40); 2]).is_none());
         assert!(checkout_checks_query("../fixture", &commits).is_none());
+    }
+
+    #[test]
+    fn head_runs_allow_only_fixed_exact_sha_reads_up_to_the_cap() {
+        let commits: Vec<_> = (0..HEAD_RUNS_COMMIT_LIMIT)
+            .map(|i| format!("{i:040x}"))
+            .collect();
+        let query = head_runs_query("example/fixture", &commits).unwrap();
+        assert!(allowed(&["api", "graphql", "-f", &query]));
+        assert!(!allowed(&[
+            "api",
+            "graphql",
+            "-f",
+            &query.replace("updatedAt", "updatedAt body")
+        ]));
+        let over: Vec<_> = (0..=HEAD_RUNS_COMMIT_LIMIT)
+            .map(|i| format!("{i:040x}"))
+            .collect();
+        assert!(head_runs_query("example/fixture", &over).is_none());
+        assert!(head_runs_query("example/fixture", &[]).is_none());
+        assert!(head_runs_query("example/fixture", &["main".into()]).is_none());
+        assert!(head_runs_query("example/fixture", &vec!["a".repeat(40); 2]).is_none());
+        assert!(head_runs_query("../fixture", &commits[..1]).is_none());
     }
 
     /// Detail paging may vary only its repository, issue and bounded cursor;

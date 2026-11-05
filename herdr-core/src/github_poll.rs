@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hide_node_link::gh::{
     CHECK_RUNS_TAIL, ChecksList, GhAnswer, checks_verdict_arguments, conditional_read_arguments,
-    pull_digest_arguments,
+    head_runs_query, pull_digest_arguments,
 };
 use hide_node_link::protocol::Call;
 
@@ -504,9 +504,7 @@ fn checks_verdict(
         .nth(1)
         .and_then(|rest| rest.split('/').next())
         .ok_or_else(|| unreadable("endpoint_refused"))?;
-    let arguments = checks_verdict_arguments(repository, commit, list)
-        .ok_or_else(|| unreadable("endpoint_refused"))?;
-    verdict_word(&ask(&arguments)?)
+    list_verdict(ask, repository, commit, list)
 }
 
 /// What one commit's check runs and statuses add up to, read now, by the
@@ -517,14 +515,39 @@ pub(crate) fn commit_checks(
     repository: &str,
     commit: &str,
 ) -> Result<&'static str, AskFailure> {
-    let read = |list| {
-        let arguments = checks_verdict_arguments(repository, commit, list)
-            .ok_or_else(|| unreadable("endpoint_refused"))?;
-        verdict_word(&ask(&arguments)?)
-    };
-    let runs = read(ChecksList::CheckRuns)?;
-    let status = read(ChecksList::Status)?;
+    let runs = list_verdict(ask, repository, commit, ChecksList::CheckRuns)?;
+    let status = list_verdict(ask, repository, commit, ChecksList::Status)?;
     Ok(combine(Some(&runs), Some(&status)))
+}
+
+/// What one of a commit's two check lists adds up to. The check runs are
+/// other apps' runs one by one and GitHub Actions' by their workflow runs
+/// (`github::runs`), which a cancelled run's jobs listed beside its
+/// replacement's cannot mislead.
+fn list_verdict(
+    ask: Ask<'_>,
+    repository: &str,
+    commit: &str,
+    list: ChecksList,
+) -> Result<&'static str, AskFailure> {
+    let arguments = checks_verdict_arguments(repository, commit, list)
+        .ok_or_else(|| unreadable("endpoint_refused"))?;
+    let listed = verdict_word(&ask(&arguments)?)?;
+    if list == ChecksList::Status {
+        return Ok(listed);
+    }
+    let query = head_runs_query(repository, &[commit.to_owned()])
+        .ok_or_else(|| unreadable("endpoint_refused"))?;
+    let answer = ask(&[
+        "api".to_owned(),
+        "graphql".to_owned(),
+        "-f".to_owned(),
+        query,
+    ])?;
+    let runs = crate::github::runs::parse_head_runs(&answer, repository, &[commit.to_owned()])
+        .map_err(|_| unreadable("runs_unreadable"))?;
+    let runs = crate::github::runs::word(runs[0].checks);
+    Ok(combine(Some(&listed), Some(&runs)))
 }
 
 fn verdict_word(output: &str) -> Result<&'static str, AskFailure> {
@@ -545,17 +568,19 @@ fn unreadable(reason: &str) -> AskFailure {
     }
 }
 
-/// The result a commit's check runs and statuses add up to, as the core's
-/// rollup does: a failure first, then anything unfinished, then anything
-/// unrecognised.
+/// The result two of a commit's verdicts add up to, by the core's one rule
+/// (`github::runs::worse`): a failure first, then anything unfinished, then
+/// anything unrecognised.
 fn combine(runs: Option<&&'static str>, status: Option<&&'static str>) -> &'static str {
-    let both = [runs.copied(), status.copied()];
-    for word in ["failed", "pending", "unknown", "passing"] {
-        if both.contains(&Some(word)) {
-            return word;
-        }
-    }
-    "none"
+    use crate::model::PullRequestChecks as Checks;
+    let checks = |word: Option<&&'static str>| match word.copied() {
+        Some("failed") => Checks::Failed,
+        Some("pending") => Checks::Pending,
+        Some("unknown") => Checks::Unknown,
+        Some("passing") => Checks::Passing,
+        _ => Checks::None,
+    };
+    crate::github::runs::word(crate::github::runs::worse(checks(runs), checks(status)))
 }
 
 fn is_list(endpoint: &str) -> bool {
@@ -711,6 +736,14 @@ mod tests {
 
         fn ask(&self, arguments: &[String]) -> Result<String, AskFailure> {
             self.asked.borrow_mut().push(arguments.to_vec());
+            if arguments[1] == "graphql" {
+                // The head's workflow runs: none unless a test scripted them.
+                let mut answers = self.answers.borrow_mut();
+                return answers
+                    .get_mut("runs:")
+                    .and_then(VecDeque::pop_front)
+                    .unwrap_or_else(|| Ok(runs_answer("")));
+            }
             let digest = arguments.iter().any(|argument| argument == "--jq");
             let endpoint = arguments.last().cloned().unwrap_or_default();
             let mut answers = self.answers.borrow_mut();
@@ -732,11 +765,13 @@ mod tests {
             })
         }
 
-        /// The conditional reads asked, by endpoint; digest reads are counted apart.
+        /// The conditional reads asked, by endpoint; digest and runs reads are
+        /// counted apart.
         fn asked_endpoints(&self) -> Vec<String> {
             self.asked
                 .borrow()
                 .iter()
+                .filter(|arguments| arguments[1] != "graphql")
                 .filter(|arguments| !arguments.iter().any(|argument| argument == "--jq"))
                 .filter_map(|arguments| arguments.last().cloned())
                 .collect()
@@ -753,6 +788,14 @@ mod tests {
         fn take_asked(&self) -> Vec<Vec<String>> {
             std::mem::take(&mut *self.asked.borrow_mut())
         }
+    }
+
+    /// A runs query's answer for one commit carrying `suites`.
+    fn runs_answer(suites: &str) -> String {
+        format!(
+            r#"{{"data":{{"repository":{{"c0":{{"checkSuites":{{"totalCount":{},"nodes":[{suites}]}}}}}}}}}}"#,
+            suites.matches("\"status\"").count()
+        )
     }
 
     fn run(
@@ -991,6 +1034,37 @@ mod tests {
             "a re-run starting"
         );
         assert!(checks_answer("passing", "passing").is_empty());
+    }
+
+    /// with-hide/hide #2077: the cancelled run's jobs stay in the list, so
+    /// only the workflow runs say the replacement passed.
+    #[test]
+    fn a_replacement_run_passing_after_a_cancelled_one_asks_one_read() {
+        let suite = |conclusion: &str, updated: &str| {
+            let run = updated.len() + conclusion.len();
+            format!(
+                r#"{{"status":"COMPLETED","conclusion":"{conclusion}","updatedAt":"{updated}","workflowRun":{{"databaseId":{run},"event":"pull_request","workflow":{{"databaseId":22}}}}}}"#
+            )
+        };
+        let cancelled = suite("CANCELLED", "2026-11-04T16:41:23Z");
+        let passed = suite("SUCCESS", "2026-11-04T18:31:38Z");
+        let script = Script::new();
+        script.will("/app/commits", ok("runs-1"));
+        script.will("/app/commits", ok("status-1"));
+        script.will("/app/commits", ok("runs-2"));
+        script.will("digest:check-runs", Ok("none\n".to_owned()));
+        script.will("digest:check-runs", Ok("none\n".to_owned()));
+        script.will("digest:/status", Ok("none\n".to_owned()));
+        script.will("runs:", Ok(runs_answer(&cancelled)));
+        script.will("runs:", Ok(runs_answer(&format!("{cancelled},{passed}"))));
+        let mut state = PollState::default();
+        let now = Instant::now();
+        let request = request(vec![project("/app", &[HEAD])]);
+        run(&mut state, &script, &request, now, 1000);
+        assert_eq!(
+            run(&mut state, &script, &request, now, 1060).changed,
+            ["/app"]
+        );
     }
 
     #[test]

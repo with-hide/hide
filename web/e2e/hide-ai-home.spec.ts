@@ -42,6 +42,7 @@ if (key === "repo view") { console.log('{"nameWithOwner":"acme/repo"}'); process
 if (key === "issue list") { console.log("[]"); process.exit(0); }
 // The signed-in login, the review asks and the merge-queue facts that the pull request read takes with the list (PRD work-tab-pr-lens D-25).
 if (key === "api user") { console.log("example-user"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (key === "api graphql") { console.log('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}'); process.exit(0); }
 if (key === "pr list") {
   if (args.join(" ").includes("review-requested:@me")) { console.log("[]"); process.exit(0); }

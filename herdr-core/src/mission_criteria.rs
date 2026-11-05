@@ -190,6 +190,10 @@ pub struct Criterion {
     /// A failed CI on `commit` runs again (GitHub reads it pending).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rerunning: bool,
+    /// The CI on `commit` failed after its rerun and sent the node back to
+    /// work, which it does once per head (D-15).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sent_back: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip: Option<Skip>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,10 +241,24 @@ impl Criterion {
             commit: None,
             reruns: 0,
             rerunning: false,
+            sent_back: false,
             skip: None,
             rule: None,
             checkers: Vec::new(),
             found_by: None,
+        }
+    }
+
+    /// A ci line an earlier build saved before `sent_back` existed: failed
+    /// with its rerun counted is how it recorded a spent rerun, which had
+    /// sent the node back to work already. Read on every restore; a line
+    /// this build saved in that state has `sent_back` set anyway.
+    pub(crate) fn carry_spent_rerun(&mut self) {
+        if self.kind == CriterionKind::Ci
+            && self.state == CriterionState::Fail
+            && self.reruns >= RERUN_LIMIT
+        {
+            self.sent_back = true;
         }
     }
 
@@ -249,16 +267,24 @@ impl Criterion {
         matches!(self.kind, CriterionKind::Check | CriterionKind::Ci)
     }
 
-    /// The state the line shows when the node's work folder is at `head`: a
-    /// check command passes only for the commit that folder is at now, so
-    /// one that passed on an older commit, or with no folder Hide can read,
-    /// is open again (B7, D-16).
-    pub fn shown(&self, head: Option<&str>) -> CriterionState {
+    /// The state the line shows against `heads`: a check command passes
+    /// only for the commit the node's work folder is at now, so one that
+    /// passed on an older commit, or with no folder Hide can read, is open
+    /// again (B7, D-16); a CI verdict holds only for the head it was read
+    /// on, so once a read names another head the line is open, whatever
+    /// that head's checks are known to be (D-15).
+    pub fn shown(&self, heads: Heads<'_>) -> CriterionState {
+        let on = |head: &str| {
+            self.commit
+                .as_deref()
+                .is_some_and(|commit| same_commit(commit, head))
+        };
         match (self.kind, self.state) {
-            (CriterionKind::Check, CriterionState::Pass)
-                if !head
-                    .zip(self.commit.as_deref())
-                    .is_some_and(|(head, commit)| same_commit(commit, head)) =>
+            (CriterionKind::Check, CriterionState::Pass) if !heads.work.is_some_and(on) => {
+                CriterionState::Open
+            }
+            (CriterionKind::Ci, CriterionState::Pass | CriterionState::Fail)
+                if heads.pull.is_some_and(|head| !on(head)) =>
             {
                 CriterionState::Open
             }
@@ -267,9 +293,9 @@ impl Criterion {
     }
 
     /// Whether the line lets its node be done.
-    pub(crate) fn met(&self, head: Option<&str>) -> bool {
+    pub(crate) fn met(&self, heads: Heads<'_>) -> bool {
         matches!(
-            self.shown(head),
+            self.shown(heads),
             CriterionState::Pass | CriterionState::Skipped
         )
     }
@@ -430,18 +456,12 @@ impl Criterion {
         true
     }
 
-    /// Whether the line failed again after its one rerun on this commit:
-    /// it stays failed, whatever a later run on the same commit says, until
-    /// a new commit or the operator's skip (D-14, B13).
-    fn spent(&self) -> bool {
-        self.state == CriterionState::Fail && self.reruns >= RERUN_LIMIT
-    }
-
-    /// The CI GitHub reports for the pull request's head (B8, B13, D-15).
-    /// On one head the first failure gets one rerun: the next answer after
-    /// it is that rerun, a pass counting it and a failure spending it, which
-    /// sends the node back to work; a failure after the rerun passed spends
-    /// it too. A spent line stays failed until a new head.
+    /// The CI GitHub reports for the pull request's head (B8, B13, D-15):
+    /// the line follows the run that finished last on that head, whoever
+    /// started it. On one head the first failure gets one rerun: the next
+    /// answer after it is that rerun, a pass counting it and a failure
+    /// spending it; a failure after the rerun passed spends it too. Spending
+    /// it sends the node back to work, once per head.
     pub(crate) fn read_ci(
         &mut self,
         head: &str,
@@ -453,11 +473,18 @@ impl Criterion {
             .commit
             .as_deref()
             .is_some_and(|before| same_commit(before, head));
-        let before = (self.state, self.reruns, self.rerunning, self.commit.clone());
+        let before = (
+            self.state,
+            self.reruns,
+            self.rerunning,
+            self.sent_back,
+            self.commit.clone(),
+        );
         if !same {
             self.commit = Some(head.to_owned());
             self.reruns = 0;
             self.rerunning = false;
+            self.sent_back = false;
             self.state = CriterionState::Open;
             if self.skip.is_some() {
                 // A skip was for the commit the operator was asked about.
@@ -465,22 +492,29 @@ impl Criterion {
             }
         }
         let mut spent = false;
-        if self.skip.is_none() && !self.spent() {
+        if self.skip.is_none() {
             match checks {
                 Checks::Passing => {
-                    if self.state == CriterionState::Fail {
-                        self.reruns = self.reruns.saturating_add(1);
+                    let after_failure = self.state == CriterionState::Fail || self.rerunning;
+                    if after_failure && self.reruns < RERUN_LIMIT {
+                        self.reruns += 1;
                     }
                     self.rerunning = false;
                     self.state = CriterionState::Pass;
                 }
-                Checks::Pending if self.state == CriterionState::Fail => self.rerunning = true,
-                Checks::Pending => self.state = CriterionState::Open,
+                Checks::Pending => {
+                    // A run after a failure is the rerun; the line is open
+                    // while it is queued or running.
+                    self.rerunning |= self.state == CriterionState::Fail;
+                    self.state = CriterionState::Open;
+                }
                 Checks::Failed => {
-                    let rerun_failed = self.state == CriterionState::Fail && self.rerunning;
-                    let after_rerun = self.state != CriterionState::Fail && self.reruns > 0;
-                    if rerun_failed || after_rerun {
+                    let rerun_failed = self.rerunning;
+                    let after_rerun =
+                        !self.rerunning && self.state != CriterionState::Fail && self.reruns > 0;
+                    if (rerun_failed || after_rerun) && !self.sent_back {
                         self.reruns = self.reruns.max(RERUN_LIMIT);
+                        self.sent_back = true;
                         spent = true;
                     }
                     self.rerunning = false;
@@ -489,7 +523,14 @@ impl Criterion {
                 Checks::None | Checks::Unknown => {}
             }
         }
-        let changed = before != (self.state, self.reruns, self.rerunning, self.commit.clone());
+        let changed = before
+            != (
+                self.state,
+                self.reruns,
+                self.rerunning,
+                self.sent_back,
+                self.commit.clone(),
+            );
         if changed {
             self.by = Some(Recorded {
                 role: Role::Hide,
@@ -611,12 +652,22 @@ pub(crate) fn add_defect(
     Ok(key)
 }
 
-/// The keys of the lines that keep a node from being done when its work
-/// folder is at `head`.
-pub(crate) fn unmet<'a>(lines: &'a [Criterion], head: Option<&str>) -> Vec<&'a str> {
+/// The commits a node's lines are judged against now.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Heads<'a> {
+    /// The commit the node's work folder is on, which a check command's
+    /// line is for; `None` when Hide cannot read it.
+    pub work: Option<&'a str>,
+    /// The head of the node's pull request as the last read names it, which
+    /// its CI line is for; `None` when no read names it.
+    pub pull: Option<&'a str>,
+}
+
+/// The keys of the lines that keep a node from being done against `heads`.
+pub(crate) fn unmet<'a>(lines: &'a [Criterion], heads: Heads<'_>) -> Vec<&'a str> {
     lines
         .iter()
-        .filter(|line| !line.met(head))
+        .filter(|line| !line.met(heads))
         .map(|line| line.key.as_str())
         .collect()
 }
@@ -624,6 +675,14 @@ pub(crate) fn unmet<'a>(lines: &'a [Criterion], head: Option<&str>) -> Vec<&'a s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A work folder at `head`, with no pull request read.
+    fn work(head: Option<&str>) -> Heads<'_> {
+        Heads {
+            work: head,
+            pull: None,
+        }
+    }
     use crate::model::PullRequestChecks;
 
     fn by(role: Role) -> Recorded {
@@ -663,11 +722,11 @@ mod tests {
             by(Role::Worker),
         )
         .unwrap();
-        assert!(line.met(Some(A)));
-        assert_eq!(line.shown(Some(B)), CriterionState::Open);
-        assert!(!line.met(Some(B)));
+        assert!(line.met(work(Some(A))));
+        assert_eq!(line.shown(work(Some(B))), CriterionState::Open);
+        assert!(!line.met(work(Some(B))));
         // A work folder Hide cannot read proves nothing (D-16).
-        assert_eq!(line.shown(None), CriterionState::Open);
+        assert_eq!(line.shown(work(None)), CriterionState::Open);
     }
 
     #[test]
@@ -745,6 +804,21 @@ mod tests {
         assert_eq!(again[1].state, CriterionState::Pass);
     }
 
+    /// with-hide/hide#2080 review: a run queued or running again after a
+    /// failure leaves the line open, not failed, while it still counts as
+    /// the rerun.
+    #[test]
+    fn a_ci_line_is_open_while_a_run_after_its_failure_has_not_finished() {
+        let mut line = Criterion::new("ci", CriterionKind::Ci);
+        line.read_ci(A, PullRequestChecks::Failed, 1);
+        line.read_ci(A, PullRequestChecks::Pending, 2);
+        assert_eq!((line.state, line.rerunning), (CriterionState::Open, true));
+        assert!(
+            line.read_ci(A, PullRequestChecks::Failed, 3).spent,
+            "its rerun failed"
+        );
+    }
+
     #[test]
     fn a_ci_fail_then_pass_on_one_head_counts_its_rerun() {
         let mut line = Criterion::new("ci", CriterionKind::Ci);
@@ -762,26 +836,31 @@ mod tests {
         assert_eq!((again.state, again.reruns), (CriterionState::Open, 0));
     }
 
-    /// B13, D-14: one rerun per head however often GitHub's runs go round;
-    /// a spent line stays failed on that head until a new one.
+    /// B13, D-14, D-15: one rerun per head however often GitHub's runs go
+    /// round, and a spent line still follows the run that finished last on
+    /// its head: a run someone started again that passed is a pass
+    /// (with-hide/hide #2075, #2077), and the node is sent back once.
     #[test]
-    fn a_ci_gets_one_rerun_per_head_through_any_number_of_runs() {
+    fn a_ci_gets_one_rerun_per_head_and_follows_the_last_run_after_it() {
         let mut line = Criterion::new("ci", CriterionKind::Ci);
         line.read_ci(A, PullRequestChecks::Failed, 1);
         line.read_ci(A, PullRequestChecks::Pending, 2);
         assert!(line.read_ci(A, PullRequestChecks::Failed, 3).spent);
         line.read_ci(A, PullRequestChecks::Pending, 4);
-        assert!(!line.read_ci(A, PullRequestChecks::Passing, 5).changed);
-        assert_eq!((line.state, line.reruns), (CriterionState::Fail, 1));
+        assert!(line.read_ci(A, PullRequestChecks::Passing, 5).changed);
+        assert_eq!(line.state, CriterionState::Pass);
+        let again = line.read_ci(A, PullRequestChecks::Failed, 6);
+        assert!(again.changed && !again.spent, "the node was sent back once");
+        assert_eq!(line.state, CriterionState::Fail);
         // A pass on its rerun, then another failure on the same head,
-        // spends it as well.
+        // spends it as well, and a later pass is still read.
         let mut passed = Criterion::new("ci", CriterionKind::Ci);
         passed.read_ci(A, PullRequestChecks::Failed, 1);
         passed.read_ci(A, PullRequestChecks::Passing, 2);
         passed.read_ci(A, PullRequestChecks::Pending, 3);
         assert!(passed.read_ci(A, PullRequestChecks::Failed, 4).spent);
         passed.read_ci(A, PullRequestChecks::Passing, 5);
-        assert_eq!(passed.state, CriterionState::Fail);
+        assert_eq!(passed.state, CriterionState::Pass);
         passed.read_ci(B, PullRequestChecks::Passing, 6);
         assert_eq!((passed.state, passed.reruns), (CriterionState::Pass, 0));
     }
@@ -794,7 +873,7 @@ mod tests {
         lines[1]
             .record(true, None, None, Some(A.into()), false, by(Role::Worker))
             .unwrap();
-        assert!(plan_lines(&lines, &["works".into()], &[], true, true)[1].met(Some(A)));
+        assert!(plan_lines(&lines, &["works".into()], &[], true, true)[1].met(work(Some(A))));
         let changed = plan_lines(&lines, &["works".into()], &[], true, false);
         assert_eq!(changed[1].state, CriterionState::Open);
         assert_eq!(changed[1].commit, None);
@@ -811,6 +890,6 @@ mod tests {
             add_defect(&mut lines, "x".into(), "b".into(), by(Role::Conductor)),
             Err("mission_defects_too_many".into())
         );
-        assert_eq!(unmet(&lines, None).len(), DEFECT_LIMIT);
+        assert_eq!(unmet(&lines, Heads::default()).len(), DEFECT_LIMIT);
     }
 }

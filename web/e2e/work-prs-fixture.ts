@@ -144,6 +144,7 @@ if (a === "api" && args[1] === "--method" && args[2] === "PUT") {
   out({ message: "Updating pull request branch." });
   process.exit(0);
 }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (a === "api" && b === "graphql") {
   const query = args.join(" ");
   if (query.includes("HidePrFacts")) { if (failing("merge_queue")) fail("GraphQL: Field 'mergeQueueEntry' doesn't exist on type 'PullRequest'"); out({ data: { repository: { pullRequests: { nodes: [] } } } }); process.exit(0); }
