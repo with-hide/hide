@@ -774,6 +774,7 @@ impl<'g> Engine for FakeEngine<'g> {
                 "kind": launch.kind,
                 "args": launch.args,
                 "codex_daemon": debug(&launch.codex_daemon),
+                "program": launch.program.as_ref().map(|file| json!([file.program, file.leading])),
             }),
         )
     }

@@ -216,7 +216,12 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
         .spawn(move || {
             let node = context.node.as_ref();
             let folders = |path: &str| crate::node_access::is_directory(node, path);
-            let result = run_herdr_reopen(context.engine.as_ref(), &folders, &request)
+            let program = |kind: &str| crate::start_prompt::start_program(node, kind);
+            let asks = ReopenNode {
+                folders: &folders,
+                program: &program,
+            };
+            let result = run_herdr_reopen(context.engine.as_ref(), &asks, &request)
                 .map(FileReopenResultOrHerdr::Herdr);
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
@@ -282,11 +287,18 @@ fn run_file_reopen(
     })
 }
 
-/// `folders` says whether a closed pane's folder is still a directory on the
-/// node that held it.
+/// What a reopen asks of the node that held the closed panes.
+struct ReopenNode<'a> {
+    /// Whether a closed pane's folder is still a directory there.
+    folders: &'a dyn Fn(&str) -> bool,
+    /// The file a start of an agent names there
+    /// (`start_prompt::start_program`).
+    program: &'a dyn Fn(&str) -> Option<crate::engine::StartProgram>,
+}
+
 fn run_herdr_reopen(
     engine: &dyn Engine,
-    folders: &dyn Fn(&str) -> bool,
+    node: &ReopenNode<'_>,
     request: &ReopenRequest,
 ) -> Result<ReopenOutcome, String> {
     match &request.item {
@@ -295,7 +307,7 @@ fn run_herdr_reopen(
             context,
             pane,
             placement,
-        } => reopen_pane(engine, folders, key, context, pane, placement, request),
+        } => reopen_pane(engine, node, key, context, pane, placement, request),
         ClosedItem::Tab {
             key,
             context,
@@ -303,7 +315,7 @@ fn run_herdr_reopen(
             panes,
         } => reopen_tab(
             engine,
-            folders,
+            node,
             key,
             context,
             reopen_owner(request)?,
@@ -545,7 +557,7 @@ fn repair_incomplete_tab_layout(
 
 fn reopen_pane(
     engine: &dyn Engine,
-    folders: &dyn Fn(&str) -> bool,
+    node: &ReopenNode<'_>,
     key: &str,
     context: &ClosedContext,
     pane: &ClosedPane,
@@ -553,7 +565,12 @@ fn reopen_pane(
     request: &ReopenRequest,
 ) -> Result<ReopenOutcome, String> {
     let mut notices = Vec::new();
-    let cwd = restored_cwd(folders, &pane.cwd, &context.checkout_path, &mut notices);
+    let cwd = restored_cwd(
+        node.folders,
+        &pane.cwd,
+        &context.checkout_path,
+        &mut notices,
+    );
     let (restored_pane_id, restored_tab_id) = if request.tab_exists {
         let current_layout = export_reopen_layout(engine, &context.tab_id)?;
         let marker = reopen_intent_marker(key, ReopenIntentStage::Pane);
@@ -670,6 +687,7 @@ fn reopen_pane(
                 agent,
                 request.codex_daemon,
                 &request.permissions,
+                (node.program)(&agent.kind),
                 &mut notices,
             )
         })
@@ -762,7 +780,7 @@ fn reopen_owner(request: &ReopenRequest) -> Result<&OwnerOpen, String> {
 #[allow(clippy::too_many_arguments)] // one closed tab with its owner, layout and folders
 fn reopen_tab(
     engine: &dyn Engine,
-    folders: &dyn Fn(&str) -> bool,
+    node: &ReopenNode<'_>,
     key: &str,
     context: &ClosedContext,
     owner: &OwnerOpen,
@@ -781,7 +799,7 @@ fn reopen_tab(
     let Some(root) = root.resolve_panes(
         &pane_map,
         &context.checkout_path,
-        folders,
+        node.folders,
         &mut common_notices,
     ) else {
         return Err("the closed tab contained no panes".into());
@@ -806,7 +824,7 @@ fn reopen_tab(
     let mut agents = Vec::new();
     for (index, (pane, new_id)) in terminal_panes.iter().zip(new_ids.iter()).enumerate() {
         let mut pane_notices = Vec::new();
-        if !folders(&pane.cwd) {
+        if !(node.folders)(&pane.cwd) {
             pane_notices.push(format!(
                 "{} no longer exists; reopened in the checkout root",
                 pane.cwd
@@ -821,6 +839,7 @@ fn reopen_tab(
                 agent,
                 codex_daemon,
                 permissions,
+                (node.program)(&agent.kind),
                 &mut pane_notices,
             ));
         }
@@ -871,9 +890,10 @@ fn restored_cwd(
 
 /// Starts `agent` in a restored pane with its conversation, or a new one when
 /// the resume does not take, each with the launch choice it was started
-/// with and the machine's permission choice; answers what started, or none
-/// when only the shell was kept.
-#[allow(clippy::too_many_arguments)] // the pane's identity plus its machine's two start facts
+/// with and the machine's permission choice, naming `program` where the
+/// node gave the file its start runs; answers what started, or none when
+/// only the shell was kept.
+#[allow(clippy::too_many_arguments)] // the pane's identity plus its machine's three start facts
 fn start_or_degrade_agent(
     engine: &dyn Engine,
     key: &str,
@@ -882,6 +902,7 @@ fn start_or_degrade_agent(
     agent: &ClosedAgent,
     codex_daemon: crate::codex_launch::CodexDaemon,
     permissions: &crate::agent_permission::AgentPermissions,
+    program: Option<crate::engine::StartProgram>,
     notices: &mut Vec<String>,
 ) -> Option<ReopenedAgent> {
     let name = format!("reopen-{key}-{index}");
@@ -922,7 +943,7 @@ fn start_or_degrade_agent(
             &agent.kind,
             args,
             codex_daemon,
-            None,
+            program.clone(),
         );
         if result.is_ok() || (pane_was_clear && agent_is_running(engine, pane_id, &agent.kind)) {
             return Some(started(agent.session_id.as_ref()));
@@ -950,7 +971,7 @@ fn start_or_degrade_agent(
         &agent.kind,
         launch,
         codex_daemon,
-        None,
+        program,
     ) && !(pane_was_clear && agent_is_running(engine, pane_id, &agent.kind))
     {
         notices.push(format!(
@@ -1062,6 +1083,7 @@ mod tests {
             // No saved choice: full access, on the resume and on the new
             // start that follows its refusal alike.
             &Default::default(),
+            None,
             &mut notices,
         );
         let choice = [
@@ -1136,6 +1158,7 @@ mod tests {
                     ("codex".to_owned(), AgentPermission::Ask),
                 ]
                 .into(),
+                None,
                 &mut notices,
             );
             assert!(notices.is_empty(), "{kind}: {notices:?}");
@@ -1271,7 +1294,10 @@ mod tests {
 
         let outcome = reopen_pane(
             herdr.engine().as_ref(),
-            &|path| Path::new(path).is_dir(),
+            &ReopenNode {
+                folders: &|path| Path::new(path).is_dir(),
+                program: &|_| None,
+            },
             "nested-intent",
             &context,
             &pane,
@@ -1461,7 +1487,10 @@ mod tests {
 
         let outcome = reopen_pane(
             herdr.engine().as_ref(),
-            &|path| Path::new(path).is_dir(),
+            &ReopenNode {
+                folders: &|path| Path::new(path).is_dir(),
+                program: &|_| None,
+            },
             "first-attempt",
             &context,
             &pane,

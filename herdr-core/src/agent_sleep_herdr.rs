@@ -431,7 +431,7 @@ pub(crate) fn start_agent(
         args: request.args.clone(),
         codex_daemon: request.codex_daemon,
         wakes: true,
-        program: None,
+        program: crate::start_prompt::start_program(node, &request.kind),
     }) {
         Ok(start) => start,
         // A Codex whose daemon Hide has not read answers its own code
@@ -1194,6 +1194,62 @@ mod tests {
                 detail: "agent_name_taken: agent name one is already used".into(),
             }
         );
+    }
+
+    /// A Wake names the file the pane's node says its start runs, as a
+    /// start does: on Windows PowerShell would find npm's `.ps1` by the
+    /// name, and Windows PowerShell 5.1 hands Claude Code's
+    /// `--settings '{"...":true}'` on without its quotes. A node that starts
+    /// the program by its name leaves the Wake by its name.
+    #[test]
+    fn a_wake_names_the_file_its_node_starts_the_program_from() {
+        struct Starts(Value);
+        impl NodeLink for Starts {
+            fn call(
+                &self,
+                call: Call,
+                _: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                match call {
+                    Call::AgentInstalled { name } if name == "claude" => {
+                        Ok(crate::node_access::LinkAnswer::Parsed(self.0.clone()))
+                    }
+                    other => panic!("the node was asked {other:?}"),
+                }
+            }
+        }
+        let exe = "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe";
+        for (form, named) in [
+            (
+                json!({"direct": {"program": exe, "leading": []}}),
+                json!([exe, []]),
+            ),
+            (json!("program"), Value::Null),
+        ] {
+            let herdr = FakeEngine::start(|method, _| match method {
+                "pane_processes" => process_info(42, 42),
+                "start_agent" => started(),
+                other => panic!("unexpected {other}"),
+            });
+            let outcome = start_agent(
+                herdr.engine().as_ref(),
+                &Starts(form),
+                &WakeRequest {
+                    codex_daemon: Default::default(),
+                    pane_id: "w1:p1".into(),
+                    kind: "claude".into(),
+                    name: "one".into(),
+                    mode: WakeMode::Resume,
+                    args: vec!["--resume".into(), "abc".into()],
+                    cwd: None,
+                    session_id: None,
+                },
+            );
+            assert_eq!(outcome, WakeOutcome::Started);
+            let starts = herdr.calls_of("start_agent");
+            assert_eq!(starts.len(), 1);
+            assert_eq!(starts[0]["program"], named);
+        }
     }
 
     #[test]

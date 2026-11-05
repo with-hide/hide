@@ -90,6 +90,33 @@ pub(crate) fn start_form(
     )
 }
 
+/// How long a start waits for its node to say how the program starts.
+pub(crate) const START_FORM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// The file a start of `kind` names on the pane's node now ([`start_form`]),
+/// for a start that carries no first input, a Wake's, a fork's or a
+/// reopen's: on Windows the program npm's launcher runs, since PowerShell
+/// would find npm's `.ps1` by the name and Windows PowerShell 5.1 drops the
+/// quotes inside an argument it hands on (`--settings '{"key":true}'`).
+/// `None` where the node starts the program by its name, did not find it,
+/// or could not be asked, which is logged; the start then goes by its name.
+pub(crate) fn start_program(
+    node: &dyn crate::node_access::NodeLink,
+    kind: &str,
+) -> Option<crate::engine::StartProgram> {
+    let kind = hide_agent_adapter::canonical_kind(kind);
+    match start_form(node, kind, START_FORM_TIMEOUT) {
+        Ok(form) => form.and_then(|form| crate::engine::StartProgram::of(kind, &form)),
+        Err(error) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_start", "kind": "start.form_unread",
+                "agent_kind": kind, "cause": error.to_string(),
+            }));
+            None
+        }
+    }
+}
+
 /// The UTF-16 units of the command line a start of `program` with these
 /// words gives Windows, its terminating null included, as `Start-Process`
 /// builds it (the program quoted, then the arguments quoted for the C
