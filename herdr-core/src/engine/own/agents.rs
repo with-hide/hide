@@ -427,8 +427,15 @@ pub(super) enum StartReady {
     /// Its definition names no ready screen.
     #[default]
     Unnamed,
+    /// Not shown, or shown only before the screen read anything else.
     Waiting,
-    /// Shown since this start; it stays shown however the screen reads next.
+    /// The screen reads ready, but has read nothing else since the program
+    /// showed, so it may still be the last run's screen (a woken agent's
+    /// pane shows it until the program draws): taken as ready while it
+    /// reads so, and waited for again once it reads anything else.
+    Showing,
+    /// Shown after the screen read something else since the program
+    /// showed; it stays shown however the screen reads next.
     Shown,
 }
 
@@ -567,13 +574,17 @@ pub(super) fn apply(
         current.live.rest_unread = known.is_none_or(|definition| definition.screen.is_none());
         let ready = match known.and_then(|definition| definition.start_ready.as_deref()) {
             None => StartReady::Unnamed,
-            Some(_) if current.live.ready == StartReady::Shown => StartReady::Shown,
-            Some(ready) => match &facts.screen {
-                ScreenRead::Read {
+            Some(ready) => {
+                let reads = matches!(&facts.screen, ScreenRead::Read {
                     rule: Some(rule), ..
-                } if rule == ready => StartReady::Shown,
-                _ => StartReady::Waiting,
-            },
+                } if rule == ready);
+                match (current.live.ready, reads) {
+                    (StartReady::Shown, _) => StartReady::Shown,
+                    (StartReady::Waiting, true) => StartReady::Shown,
+                    (StartReady::Unnamed | StartReady::Showing, true) => StartReady::Showing,
+                    (_, false) => StartReady::Waiting,
+                }
+            }
         };
         if ready != current.live.ready {
             current.live.ready = ready;
@@ -1075,19 +1086,37 @@ mod tests {
         assert!(!agent.launch_pending(Instant::now()));
         assert_eq!(agent.live.started, None);
 
-        let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
-        pane.facts(at(Some(&ready)));
-        assert!(
-            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
-            "within its settle"
-        );
         pane.facts(at(None));
         pane.agent.as_mut().unwrap().live.started = Some(Instant::now() - START_SETTLE);
         assert!(
             !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
             "a ready screen once shown stays shown"
         );
+
+        // A woken OpenCode's pane still shows the last run's model line
+        // when its program shows: taken as ready only until the program
+        // draws something else, then waited for again.
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
+        pane.facts(at(Some(&ready)));
+        let agent = pane.agent.as_mut().unwrap();
+        assert!(agent.launch_pending(Instant::now()), "within its settle");
+        agent.live.started = Some(Instant::now() - START_SETTLE);
+        assert!(
+            !agent.launch_pending(Instant::now()),
+            "a screen that read ready from the first reads ready"
+        );
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
+        pane.facts(at(Some(&ready)));
+        pane.facts(at(None));
+        pane.agent.as_mut().unwrap().live.started = Some(Instant::now() - START_SETTLE);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "the program drew its loading screen over the last run's"
+        );
+        pane.facts(at(Some(&ready)));
+        assert!(!pane.agent.as_ref().unwrap().launch_pending(Instant::now()));
     }
 
     /// A terminal whose foreground the system could not say keeps the

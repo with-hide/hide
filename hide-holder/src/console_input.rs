@@ -5,13 +5,16 @@
 //! conversation.
 //!
 //! The helper is this program started again in its helper mode
-//! (`--console-input <shell pid>`, `main.rs`). It runs only while a start
-//! can wait on the answer: from the moment a program takes the pane's
-//! foreground until the console first reads keys under it, for at most
-//! [`crate::watch::LINE_EDITING_RECHECK_FOR`]. After that the program is
-//! read as it was last read until another program takes the foreground,
-//! since a program that once read keys is not waiting to start, and a helper
-//! kept for every running agent would be a process per pane.
+//! (`--console-input <shell pid>`, `main.rs`). It is started on the watch's
+//! first recheck of a program, at least [`crate::watch::LINE_EDITING_RECHECK`]
+//! after the program took the pane's foreground, so a short command never
+//! starts one, and it is asked on rechecks only; the facts in between carry
+//! the last answer. It lives until the console first reads keys under the
+//! program, for at most [`crate::watch::LINE_EDITING_RECHECK_FOR`], one per
+//! pane. After that the program is read as it was last read until another
+//! program takes the foreground: a program that once read keys is not
+//! waiting to start, and a helper kept for every running agent would be a
+//! process per pane.
 
 use std::process::Command;
 use std::time::Instant;
@@ -20,7 +23,7 @@ use hide_holder_protocol::LineEditing;
 use hide_platform::process::console_input::ConsoleInput;
 
 use crate::log::Log;
-use crate::watch::LINE_EDITING_RECHECK_FOR;
+use crate::watch::{LINE_EDITING_RECHECK_FOR, LineAsk};
 
 /// The argument that starts this program as the helper.
 pub const HELPER_ARGUMENT: &str = "--console-input";
@@ -59,8 +62,10 @@ impl ConsoleLines {
 
     /// Whether the console edits lines under `program`, the pane's foreground
     /// program (`None` while the shell holds it, which is read as not known,
-    /// as before: only a started program's reading keys is waited on).
-    pub fn read(&mut self, program: Option<u32>) -> LineEditing {
+    /// as before: only a started program's reading keys is waited on). Only
+    /// a [`LineAsk::Recheck`] asks the console; a program is not known until
+    /// the first one has.
+    pub fn read(&mut self, program: Option<u32>, ask: LineAsk) -> LineEditing {
         let Some(pid) = program else {
             self.program = None;
             return LineEditing::Unknown;
@@ -77,15 +82,20 @@ impl ConsoleLines {
                 settled: false,
             }),
         };
-        if current.settled {
+        if current.settled || ask == LineAsk::Facts {
             return current.last;
         }
         if current.since.elapsed() >= LINE_EDITING_RECHECK_FOR {
-            return current.settle(current.last);
+            // Past the start's deadline a program still editing lines is
+            // not frozen as editing them: it is not known from then on, as
+            // a console that cannot be read is.
+            unread(log, pid, "wait_bound", None);
+            return current.settle(LineEditing::Unknown);
         }
         let helper = match &mut current.helper {
             Some(helper) => helper,
             None if current.starts >= STARTS_PER_PROGRAM => {
+                unread(log, pid, "helper_starts_spent", None);
                 return current.settle(LineEditing::Unknown);
             }
             None => {
@@ -95,7 +105,7 @@ impl ConsoleLines {
                 {
                     Ok(helper) => current.helper.insert(helper),
                     Err(error) => {
-                        unread(log, pid, "helper_not_started", &error);
+                        unread(log, pid, "helper_not_started", Some(&error));
                         return current.settle(LineEditing::Unknown);
                     }
                 }
@@ -108,9 +118,9 @@ impl ConsoleLines {
             }
             Ok(false) => current.settle(LineEditing::ReadsKeys),
             Err(error) => {
-                // The next read starts another helper, within the bound.
+                // The next recheck starts another helper, within the bound.
                 current.helper = None;
-                unread(log, pid, "helper_unanswered", &error);
+                unread(log, pid, "helper_unanswered", Some(&error));
                 current.last
             }
         }
@@ -126,15 +136,15 @@ fn helper_command(shell: u32) -> std::io::Result<Command> {
     Ok(command)
 }
 
-fn unread(log: &Log, program: u32, reason: &str, error: &std::io::Error) {
-    log.event(
-        "holder.console_input_unread",
-        &[
-            ("program", u64::from(program).into()),
-            ("reason", reason.into()),
-            ("error", error.to_string().into()),
-        ],
-    );
+fn unread(log: &Log, program: u32, reason: &str, error: Option<&std::io::Error>) {
+    let mut fields: Vec<(&str, serde_json::Value)> = vec![
+        ("program", u64::from(program).into()),
+        ("reason", reason.into()),
+    ];
+    if let Some(error) = error {
+        fields.push(("error", error.to_string().into()));
+    }
+    log.event("holder.console_input_unread", &fields);
 }
 
 impl Program {

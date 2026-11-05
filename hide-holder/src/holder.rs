@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT, Hello,
-    HolderMessage, LineEditing, Notice, NoticeReason, Opening as FirstMessage, Size, SubmitPart,
-    Unknown, Watching, Welcome, agree, read_client, read_opening, write_holder,
+    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, SubmitPart, Unknown,
+    Watching, Welcome, agree, read_client, read_opening, write_holder,
 };
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
 use hide_platform::process::{Session, SessionEnd};
@@ -1025,14 +1025,14 @@ impl Holder {
     fn line_editing(&self, master: PtyMaster) -> LineEditingRead {
         #[cfg(unix)]
         {
-            Box::new(move |_program| master.line_editing())
+            Box::new(move |_program, _ask| master.line_editing())
         }
         #[cfg(windows)]
         {
             let _ = master;
             let mut console =
                 crate::console_input::ConsoleLines::new(self.program, self.log.clone());
-            Box::new(move |program| console.read(program))
+            Box::new(move |program, ask| console.read(program, ask))
         }
     }
 
@@ -1592,7 +1592,8 @@ impl PtyMaster {
     /// this holder keeps (`hide_platform::process::master_line_input`):
     /// unknown when the terminal could not be asked, its pane having ended.
     #[cfg(unix)]
-    fn line_editing(&self) -> LineEditing {
+    fn line_editing(&self) -> hide_holder_protocol::LineEditing {
+        use hide_holder_protocol::LineEditing;
         use hide_platform::process::{LineInput, master_line_input};
         let guard = self.lock();
         let read = guard

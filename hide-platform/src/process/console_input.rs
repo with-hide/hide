@@ -143,9 +143,9 @@ impl ConsoleInput {
 
 /// The helper's side: attaches this process to the console `console` runs
 /// in, says so, and answers, for each byte read from `asks`, whether that
-/// console edits lines, until `asks` ends. An interrupt typed into the pane
-/// is ignored; the console's close ends this process, which is what the
-/// owner reads as the helper ending.
+/// console edits lines, until `asks` ends. A Ctrl+C or Ctrl+Break typed into
+/// the pane is ignored, from before the attach; the console's close ends
+/// this process, which is what the owner reads as the helper ending.
 pub fn serve(console: u32, mut asks: impl Read, mut answers: impl Write) -> io::Result<()> {
     let mut say = |byte: u8| {
         answers.write_all(&[byte])?;
@@ -184,8 +184,10 @@ mod sys {
         CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Console::{
-        AttachConsole, ENABLE_LINE_INPUT, FreeConsole, GetConsoleMode, SetConsoleCtrlHandler,
+        AttachConsole, CTRL_BREAK_EVENT, CTRL_C_EVENT, ENABLE_LINE_INPUT, FreeConsole,
+        GetConsoleMode, SetConsoleCtrlHandler,
     };
+    use windows_sys::core::BOOL;
 
     /// The console's input buffer, open for this process.
     pub(super) struct Input(HANDLE);
@@ -197,19 +199,29 @@ mod sys {
         }
     }
 
+    /// Handles the pane's interrupts as done, so they do not end the helper;
+    /// every other event (the console's close) takes the default, which ends
+    /// it.
+    unsafe extern "system" fn ignore_interrupts(event: u32) -> BOOL {
+        BOOL::from(event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
+    }
+
     /// Leaves the console this process was given, attaches to the one
     /// `console` runs in and opens its input buffer.
     pub(super) fn attach(console: u32) -> io::Result<Input> {
-        // SAFETY: plain calls with no pointers but the terminated name. A
-        // helper started with no console of its own fails `FreeConsole`
-        // harmlessly. Ignoring interrupts (a null handler) is inherited by
-        // children, and the helper starts none.
+        // SAFETY: plain calls with no pointers but the terminated name and a
+        // handler that lives as long as the program. A helper started with
+        // no console of its own fails `FreeConsole` harmlessly. The handler
+        // is in place before the attach, so no interrupt finds the helper
+        // without it.
         unsafe {
+            if SetConsoleCtrlHandler(Some(ignore_interrupts), 1) == 0 {
+                return Err(io::Error::last_os_error());
+            }
             FreeConsole();
             if AttachConsole(console) == 0 {
                 return Err(io::Error::last_os_error());
             }
-            SetConsoleCtrlHandler(None, 1);
             let name: Vec<u16> = "CONIN$".encode_utf16().chain(Some(0)).collect();
             let handle = CreateFileW(
                 name.as_ptr(),
