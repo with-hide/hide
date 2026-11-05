@@ -15,7 +15,7 @@
 
 use crate::missions::{
     AttentionReason, Delivery, FixReason, Mission, MissionNode, MissionScope, MissionStatus,
-    NodeKind, NodeStatus, cause_key,
+    NodeKind, NodeStatus, WarningKind, cause_key,
 };
 use crate::model::{
     GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestChecks, PullRequestSnapshot,
@@ -495,6 +495,117 @@ pub(crate) fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
     !pull.badge.is_settled() && !pull.is_draft && needs(pull).is_empty()
 }
 
+/// The thresholds a node's warnings are judged by, Settings › Mission's
+/// (with-hide/hide-private#552).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WarnRule {
+    /// The review's failures in a row that warn.
+    pub review_fails: u32,
+    /// How long a node at work goes with no push before it warns.
+    pub quiet_ms: u64,
+}
+
+/// A change to the warnings a node carries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WarnAct {
+    /// The node warns of `kind` from now, standing on the fact at `from`.
+    Raise {
+        node: usize,
+        kind: WarningKind,
+        from: u64,
+    },
+    /// What the warning stood on went.
+    Clear { node: usize, kind: WarningKind },
+}
+
+/// How the warnings of `mission`'s nodes change at `now` (with-hide/hide-private#552):
+/// a node at work in a running mission warns once its review failed
+/// `review_fails` times in a row, and once it went `quiet_ms` with no push
+/// while it had work of its own, a change by pull request whose pull request
+/// does not just wait on others. The first goes when the review passes or
+/// is skipped, the second when a new push arrives, and both when the node
+/// is no longer at work. A pull request GitHub's answer does not hold now
+/// decides nothing, so a stale answer raises no quiet warning on a node
+/// with one; a node that has none yet is judged without it.
+pub(crate) fn warn_acts(
+    mission: &Mission,
+    pulls: Option<&GithubProjectSnapshot>,
+    now: u64,
+    rule: WarnRule,
+) -> Vec<WarnAct> {
+    let runs = matches!(
+        mission.status,
+        MissionStatus::Running | MissionStatus::MergeWait
+    );
+    let mut acts = Vec::new();
+    for (at, node) in mission.nodes.iter().enumerate() {
+        let works = runs && node.status == NodeStatus::Working && node.kind != NodeKind::External;
+        let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
+        let fails = works && node.review_fails() >= rule.review_fails.max(1);
+        match standing(WarningKind::ReviewFails) {
+            Some(_) if !fails => acts.push(WarnAct::Clear {
+                node: at,
+                kind: WarningKind::ReviewFails,
+            }),
+            None if fails => acts.push(WarnAct::Raise {
+                node: at,
+                kind: WarningKind::ReviewFails,
+                from: last_review_at(node).unwrap_or(now),
+            }),
+            _ => {}
+        }
+        let quiet = node.quiet_since();
+        match standing(WarningKind::NoPush) {
+            Some(warning) if !works || quiet.is_some_and(|since| since > warning.from_unix_ms) => {
+                acts.push(WarnAct::Clear {
+                    node: at,
+                    kind: WarningKind::NoPush,
+                });
+            }
+            None if works
+                && node.kind == NodeKind::Change
+                && node.delivery == Some(Delivery::Pr)
+                && quiet.is_some_and(|since| now.saturating_sub(since) >= rule.quiet_ms)
+                && worker_waits(node, pulls) == Some(false) =>
+            {
+                acts.push(WarnAct::Raise {
+                    node: at,
+                    kind: WarningKind::NoPush,
+                    from: quiet.unwrap_or(now),
+                });
+            }
+            _ => {}
+        }
+    }
+    acts
+}
+
+/// When a checker last answered the node's review.
+fn last_review_at(node: &MissionNode) -> Option<u64> {
+    node.criteria
+        .iter()
+        .filter(|line| line.kind == crate::mission_criteria::CriterionKind::Review)
+        .flat_map(|line| &line.checkers)
+        .filter_map(|checker| checker.at_unix_ms)
+        .max()
+}
+
+/// Whether the node's worker has nothing to push for now: its current pull
+/// request is merged, or waits on CI, a review or the merge with nothing
+/// failed and no line of the node failed. None while GitHub's answer does
+/// not hold the pull request.
+fn worker_waits(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> Option<bool> {
+    let Some(number) = node.current_pr() else {
+        return Some(false);
+    };
+    let pull = find(pulls?, number)?;
+    let failed = node
+        .criteria
+        .iter()
+        .any(|line| line.state == crate::mission_criteria::CriterionState::Fail);
+    Some(pull.badge == PullRequestBadge::Merged || (waits_on_others(pull) && !failed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -896,5 +1007,165 @@ mod tests {
         );
         m.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
         assert_eq!(evaluate(&m, &running()), [Act::Done { node: 0 }]);
+    }
+
+    const RULE: WarnRule = WarnRule {
+        review_fails: 2,
+        quiet_ms: 90 * 60_000,
+    };
+    const MINUTE: u64 = 60_000;
+
+    /// A running mission's one change at work since 0, with a review line
+    /// one checker answered at 5.
+    fn reviewed() -> Mission {
+        let mut m = running(&["a"]);
+        m.nodes[0].started_at_unix_ms = Some(0);
+        let mut review = crate::mission_criteria::Criterion::new(
+            "review",
+            crate::mission_criteria::CriterionKind::Review,
+        );
+        review.checkers.push(crate::mission_criteria::Checker {
+            worker: crate::missions::Worker {
+                agent: "codex".into(),
+                model: None,
+                effort: None,
+                effort_auto: false,
+            },
+            agent_id: Some("checker".into()),
+            state: crate::mission_criteria::CriterionState::Fail,
+            evidence: None,
+            summary: None,
+            at_unix_ms: Some(5),
+            pane_id: None,
+            machine: None,
+        });
+        m.nodes[0].criteria.push(review);
+        m
+    }
+
+    fn warn(kind: WarningKind, from: u64) -> crate::missions::NodeWarning {
+        crate::missions::NodeWarning {
+            kind,
+            from_unix_ms: from,
+            since_unix_ms: from,
+        }
+    }
+
+    /// with-hide/hide-private#552: the review failing twice in a row warns,
+    /// once, and the review passing takes it away.
+    #[test]
+    fn a_review_failed_twice_in_a_row_warns_until_it_passes() {
+        let mut m = reviewed();
+        m.nodes[0].criteria[1].fails_in_a_row = 1;
+        assert!(warn_acts(&m, None, 10, RULE).is_empty());
+        m.nodes[0].criteria[1].fails_in_a_row = 2;
+        assert_eq!(
+            warn_acts(&m, None, 10, RULE),
+            [WarnAct::Raise {
+                node: 0,
+                kind: WarningKind::ReviewFails,
+                from: 5,
+            }]
+        );
+        // Standing, a third failure raises nothing more.
+        m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
+        m.nodes[0].criteria[1].fails_in_a_row = 3;
+        assert!(warn_acts(&m, None, 10, RULE).is_empty());
+        m.nodes[0].criteria[1].fails_in_a_row = 0;
+        assert_eq!(
+            warn_acts(&m, None, 10, RULE),
+            [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::ReviewFails,
+            }]
+        );
+    }
+
+    /// with-hide/hide-private#552: a change at work warns at ninety minutes
+    /// with no push, not a moment before, and a new push takes it away.
+    #[test]
+    fn a_change_ninety_minutes_without_a_push_warns_until_the_next_push() {
+        let mut m = reviewed();
+        assert!(warn_acts(&m, None, 90 * MINUTE - 1, RULE).is_empty());
+        assert_eq!(
+            warn_acts(&m, None, 90 * MINUTE, RULE),
+            [WarnAct::Raise {
+                node: 0,
+                kind: WarningKind::NoPush,
+                from: 0,
+            }]
+        );
+        m.nodes[0].warnings.push(warn(WarningKind::NoPush, 0));
+        assert!(warn_acts(&m, None, 200 * MINUTE, RULE).is_empty());
+        m.nodes[0].pushed_at_unix_ms = Some(100 * MINUTE);
+        assert_eq!(
+            warn_acts(&m, None, 101 * MINUTE, RULE),
+            [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::NoPush,
+            }]
+        );
+        // Counted again from that push.
+        m.nodes[0].warnings.clear();
+        assert!(warn_acts(&m, None, 189 * MINUTE, RULE).is_empty());
+        assert_eq!(warn_acts(&m, None, 190 * MINUTE, RULE).len(), 1);
+    }
+
+    /// with-hide/hide-private#552: a pull request that only waits on CI, a
+    /// review or the merge is no quiet worker's; a failed line or check
+    /// gives the worker something to push again, and a stale answer
+    /// decides nothing.
+    #[test]
+    fn a_pull_request_that_waits_on_others_raises_no_quiet_warning() {
+        let mut m = reviewed();
+        m.nodes[0].prs = vec![7];
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
+        let late = 120 * MINUTE;
+        let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
+        assert!(warn_acts(&m, Some(&waiting), late, RULE).is_empty());
+        assert!(warn_acts(&m, None, late, RULE).is_empty());
+        let mut failing = waiting.clone();
+        failing.pull_requests[0].checks = PullRequestChecks::Failed;
+        assert_eq!(warn_acts(&m, Some(&failing), late, RULE).len(), 1);
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
+        assert_eq!(warn_acts(&m, Some(&waiting), late, RULE).len(), 1);
+    }
+
+    /// with-hide/hide-private#552: only a node at work in a running mission
+    /// warns; one that finished drops what it carried, a node back at work
+    /// counts its quiet from then, and research has nothing to push.
+    #[test]
+    fn only_a_change_at_work_warns() {
+        let mut m = reviewed();
+        m.nodes[0].criteria[1].fails_in_a_row = 2;
+        m.nodes[0].warnings = vec![
+            warn(WarningKind::ReviewFails, 5),
+            warn(WarningKind::NoPush, 0),
+        ];
+        m.nodes[0].status = NodeStatus::Done;
+        assert_eq!(
+            warn_acts(&m, None, 100 * MINUTE, RULE),
+            [
+                WarnAct::Clear {
+                    node: 0,
+                    kind: WarningKind::ReviewFails,
+                },
+                WarnAct::Clear {
+                    node: 0,
+                    kind: WarningKind::NoPush,
+                },
+            ]
+        );
+        m.nodes[0].warnings.clear();
+        m.nodes[0].criteria[1].fails_in_a_row = 0;
+        m.nodes[0].status = NodeStatus::Working;
+        m.nodes[0].back_to_work(100 * MINUTE);
+        assert!(warn_acts(&m, None, 189 * MINUTE, RULE).is_empty());
+        m.status = MissionStatus::Cancelled;
+        assert!(warn_acts(&m, None, 300 * MINUTE, RULE).is_empty());
+        m.status = MissionStatus::Running;
+        m.nodes[0].kind = NodeKind::Research;
+        m.nodes[0].delivery = None;
+        assert!(warn_acts(&m, None, 300 * MINUTE, RULE).is_empty());
     }
 }

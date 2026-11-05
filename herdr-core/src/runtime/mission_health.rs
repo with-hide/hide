@@ -17,11 +17,11 @@ use serde_json::json;
 
 use super::Runtime;
 use crate::mission_events::{EventKind, MissionEvent};
-use crate::mission_health::{Act, Facts, NodeFacts, WorkerLife, evaluate};
+use crate::mission_health::{Act, Facts, NodeFacts, WarnAct, WorkerLife, evaluate, warn_acts};
 use crate::missions::{
     Attention, AttentionReason, FixReason, HideAction, HideMark, Mission, MissionEnd, MissionNode,
-    MissionStatus, NodePatch, NodeStatus, OperatorAction, PendingWake, WOKEN_LIMIT, WakeEvent,
-    Woken,
+    MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, PendingWake, WOKEN_LIMIT,
+    WakeEvent, Woken,
 };
 
 /// Raises one mission holds at once; a new one past it is refused and
@@ -173,6 +173,7 @@ pub(super) fn raise_for(
                 reason: Some(reason),
                 why: None,
                 action: None,
+                warning: None,
                 key: Some(raise_key.clone()),
             },
         );
@@ -241,6 +242,7 @@ pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
                 reason: Some(reason),
                 why: None,
                 action: None,
+                warning: None,
                 key: Some(key),
             },
         );
@@ -440,6 +442,9 @@ impl Runtime {
         for id in ids {
             changed |= self.mission_health(&id, now);
         }
+        // A review's failure or a push moves a node's warnings now; the
+        // quiet that only time makes is the minute decision's.
+        changed |= self.warn_missions(now);
         // A raise with no Conductor to wait on, or whose Conductor just
         // left, reaches the operator now rather than at the minute (D-08).
         changed |= self.raise_to_operator(now);
@@ -508,6 +513,100 @@ impl Runtime {
         }
         self.save_missions();
         true
+    }
+
+    /// Brings each mission's node warnings to what `warn_acts` answers at
+    /// `now` (with-hide/hide-private#552), run where a fact moved and in the
+    /// minute decision, which is the only clock a quiet without a push
+    /// needs. Each warning raised writes its Conductor one letter, keyed by
+    /// the node, its round and the fact the warning stands on, so the same
+    /// warning is one letter after a restart too; a warning is never the
+    /// operator's. A mission whose device does not answer is left as it is
+    /// (B29). Whether the book changed.
+    pub(crate) fn warn_missions(&mut self, now: u64) -> bool {
+        let rule = self.snapshot.ui_state.conductor_settings.warn_rule();
+        let mut changed = false;
+        for index in 0..self.missions.book.missions.len() {
+            let mission = &self.missions.book.missions[index];
+            if self.mission_stale(mission) {
+                continue;
+            }
+            let pulls = self
+                .mission_project_pulls(mission)
+                .filter(|project| !project.status.stale && project.pull_requests_read);
+            let acts = warn_acts(mission, pulls, now, rule);
+            if acts.is_empty() {
+                continue;
+            }
+            let mission = &mut self.missions.book.missions[index];
+            for act in acts {
+                match act {
+                    WarnAct::Raise { node, kind, from } => {
+                        let target = &mut mission.nodes[node];
+                        target.warnings.push(NodeWarning {
+                            kind,
+                            from_unix_ms: from,
+                            since_unix_ms: now,
+                        });
+                        let key = act_key(target, &format!("warn:{}:{from}", kind.as_str()));
+                        let (key_node, pr) = (target.key.clone(), target.current_pr());
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.warned",
+                            "mission": mission.id, "node": key_node, "warning": kind.as_str(),
+                        }));
+                        mission.wake_seq += 1;
+                        super::missions::push_wake(
+                            mission,
+                            PendingWake {
+                                seq: mission.wake_seq,
+                                node: key_node,
+                                pr,
+                                event: WakeEvent::Warning,
+                                head: None,
+                                to: None,
+                                reason: None,
+                                why: None,
+                                action: None,
+                                warning: Some(kind),
+                                key: Some(key),
+                            },
+                        );
+                    }
+                    WarnAct::Clear { node, kind } => {
+                        let target = &mut mission.nodes[node];
+                        target.warnings.retain(|warning| warning.kind != kind);
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.warning_cleared",
+                            "mission": mission.id, "node": target.key, "warning": kind.as_str(),
+                        }));
+                    }
+                }
+            }
+            // A warning gone before its letter went says nothing the
+            // Conductor needs.
+            let standing: Vec<(String, crate::missions::WarningKind)> = mission
+                .nodes
+                .iter()
+                .flat_map(|node| {
+                    node.warnings
+                        .iter()
+                        .map(|warning| (node.key.clone(), warning.kind))
+                })
+                .collect();
+            mission.wakes.retain(|wake| {
+                wake.event != WakeEvent::Warning
+                    || wake
+                        .warning
+                        .is_some_and(|kind| standing.contains(&(wake.node.clone(), kind)))
+            });
+            mission.updated_at_unix_ms = now;
+            changed = true;
+        }
+        if changed {
+            self.save_missions();
+            self.flush_mission_wakes();
+        }
+        changed
     }
 
     /// The facts one evaluation of `mission` reads.
@@ -701,13 +800,13 @@ impl Runtime {
         let node = &mut mission.nodes[at];
         node.attach_pr(pr);
         if let Some(seen) = seen {
-            super::missions::note_seen(node, seen);
+            super::missions::note_seen(node, seen, now);
         }
         if node.status == NodeStatus::Done {
             node.status = NodeStatus::Working;
             node.finished_at_unix_ms = None;
             node.in_main = None;
-            node.back_to_work();
+            node.back_to_work(now);
         }
         let mark = HideMark {
             action: HideAction::Attached,
@@ -857,6 +956,7 @@ impl Runtime {
                 reason: None,
                 why: Some(why),
                 action: None,
+                warning: None,
                 key: Some(act.clone()),
             },
         );
@@ -932,6 +1032,7 @@ impl Runtime {
                             reason: None,
                             why: None,
                             action: None,
+                            warning: None,
                             key: Some(wake_key),
                         },
                     );
@@ -1154,7 +1255,7 @@ impl Runtime {
                 next.finished_at_unix_ms = None;
                 next.in_main = None;
                 next.resumed = Some(next.resumed_cause());
-                next.back_to_work();
+                next.back_to_work(now);
             }
             OperatorAction::Attach => {
                 let pr = attention
@@ -1164,7 +1265,7 @@ impl Runtime {
                     .ok_or("mission_attention_moved")?;
                 next.attach_pr(pr);
                 if let Some(seen) = self.pull_seen_of(mission, pr) {
-                    super::missions::note_seen(&mut next, seen);
+                    super::missions::note_seen(&mut next, seen, now);
                 }
             }
             OperatorAction::Leave => {}
@@ -1209,6 +1310,7 @@ impl Runtime {
                     reason: attention.as_ref().map(|attention| attention.reason),
                     why: None,
                     action: Some(payload.action),
+                    warning: None,
                     key: None,
                 },
             );

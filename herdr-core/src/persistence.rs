@@ -1936,6 +1936,32 @@ mod tests {
         assert!(!restored.conductor_settings.clean_merged);
     }
 
+    /// with-hide/hide-private#552: Settings › Mission kept before the
+    /// warnings reads their thresholds as two failed reviews and ninety
+    /// minutes, and one outside their range is not kept.
+    #[test]
+    fn mission_settings_from_before_the_warnings_read_their_thresholds() {
+        let stored = |settings: &str| {
+            format!(
+                r#"{{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+                "conductor_settings":{settings}}}"#
+            )
+        };
+        let (state, _sizes, disposition) = decode(
+            stored(r#"{"concurrency":3,"default_scope":"merge","candidates":[],"default_strength":"fast","other_vendor":false,"clean_merged":true}"#)
+                .as_bytes(),
+        );
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        let rule = state.conductor_settings.warn_rule();
+        assert_eq!((rule.review_fails, rule.quiet_ms), (2, 90 * 60_000));
+        let (state, _sizes, disposition) = decode(
+            stored(r#"{"concurrency":3,"default_scope":"merge","candidates":[],"warn_quiet_minutes":0}"#)
+                .as_bytes(),
+        );
+        assert_ne!(disposition, LoadDisposition::Loaded);
+        assert_eq!(state.conductor_settings.concurrency, 4);
+    }
+
     #[test]
     fn corrupt_and_unknown_schema_states_fall_back_without_blocking() {
         for source in [

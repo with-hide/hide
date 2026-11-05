@@ -22,7 +22,7 @@ use crate::missions::{
     AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, External,
     MISSION_LIMIT, Mission, MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope,
     MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question,
-    Restored, Verdict, WakeEvent, Worker,
+    Restored, Verdict, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -212,6 +212,12 @@ pub struct NodeView {
     pub attention: Option<AttentionView>,
     /// What Hide itself did to the node last (D-07, D-15).
     pub hide: Option<crate::missions::HideMark>,
+    /// Its review's failures in a row (with-hide/hide-private#552).
+    pub review_fails: u32,
+    /// When Hide last read a new head on one of its pull requests.
+    pub pushed_at_unix_ms: Option<u64>,
+    /// The warnings it carries, its Conductor's alone: the card's `⚠`.
+    pub warnings: Vec<crate::missions::NodeWarning>,
 }
 
 /// One of a node's pull requests as its card draws it.
@@ -382,7 +388,11 @@ pub(super) fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
 
 /// Records what `project`'s list says of each of `mission`'s pull requests
 /// it holds; whether anything moved.
-fn refresh_seen(mission: &mut Mission, project: &crate::model::GithubProjectSnapshot) -> bool {
+fn refresh_seen(
+    mission: &mut Mission,
+    project: &crate::model::GithubProjectSnapshot,
+    now: u64,
+) -> bool {
     let mut moved = false;
     for node in &mut mission.nodes {
         for number in node.prs.clone() {
@@ -393,14 +403,14 @@ fn refresh_seen(mission: &mut Mission, project: &crate::model::GithubProjectSnap
             else {
                 continue;
             };
-            moved |= note_seen(node, seen_of(pull));
+            moved |= note_seen(node, seen_of(pull), now);
         }
     }
     moved
 }
 
 /// The letter one recorded wake sends.
-fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
+pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
     let pr = wake
         .pr
         .map_or_else(|| "The PR".to_owned(), |number| format!("PR #{number}"));
@@ -485,6 +495,27 @@ fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 mission.id, mission.title, wake.node
             )
         }
+        WakeEvent::Warning => {
+            let warning = node.and_then(|node| {
+                node.warnings
+                    .iter()
+                    .find(|warning| Some(warning.kind) == wake.warning)
+            });
+            let what = match (wake.warning, node, warning) {
+                (Some(WarningKind::ReviewFails), Some(node), _) => {
+                    format!("failed its review {} times in a row", node.review_fails())
+                }
+                (Some(WarningKind::NoPush), _, Some(warning)) => format!(
+                    "has worked {} minutes with no push",
+                    warning.since_unix_ms.saturating_sub(warning.from_unix_ms) / 60_000
+                ),
+                _ => "shows signs its worker is stuck".to_owned(),
+            };
+            format!(
+                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is not told.",
+                wake.node, mission.id, mission.title, wake.node, mission.id
+            )
+        }
     }
 }
 
@@ -526,14 +557,18 @@ fn attention_words(
     }
 }
 
-/// Keeps `seen` as what GitHub last said of its pull request; whether it
-/// moved.
-pub(super) fn note_seen(node: &mut MissionNode, seen: PrSeen) -> bool {
-    match node
+/// Keeps `seen` as what GitHub last said of its pull request, read at
+/// `now`; whether it moved. A head Hide had not read of it is the node's
+/// last push (with-hide/hide-private#552).
+pub(super) fn note_seen(node: &mut MissionNode, seen: PrSeen, now: u64) -> bool {
+    let held = node
         .pr_seen
         .iter_mut()
-        .find(|held| held.number == seen.number)
-    {
+        .find(|held| held.number == seen.number);
+    if seen.head.is_some() && held.as_ref().is_none_or(|held| held.head != seen.head) {
+        node.pushed_at_unix_ms = Some(now);
+    }
+    match held {
         Some(held) if *held == seen => false,
         Some(held) => {
             *held = seen;
@@ -571,6 +606,7 @@ pub(super) fn record_wake(
         reason: None,
         why: None,
         action: None,
+        warning: None,
         key,
     };
     push_wake(mission, wake)
@@ -1261,8 +1297,7 @@ impl Runtime {
                         && let Some(seen) =
                             self.pull_seen(&current.device_id, &current.project, number)
                     {
-                        next.pr_seen.retain(|held| held.number != number);
-                        next.pr_seen.push(seen);
+                        note_seen(&mut next, seen, now);
                     }
                 }
                 // The Conductor moving the node settles what waited on it
@@ -1276,7 +1311,7 @@ impl Runtime {
                 // back, so one named in the same command finishes it again.
                 if current.nodes[index].status.finished() && next.status == NodeStatus::Working {
                     next.resumed = Some(current.nodes[index].resumed_cause());
-                    next.back_to_work();
+                    next.back_to_work(now);
                 }
                 let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
@@ -1943,7 +1978,7 @@ impl Runtime {
             // too; a cancelled mission is woken, read for CI and closed by
             // nothing (D-51).
             if mission.status == MissionStatus::Cancelled {
-                changed |= refresh_seen(&mut self.missions.book.missions[index], project);
+                changed |= refresh_seen(&mut self.missions.book.missions[index], project, now);
                 continue;
             }
             let (ci_changed, spent) = super::mission_criteria::read_mission_ci(
@@ -2080,7 +2115,7 @@ impl Runtime {
                     .is_none();
             let mission = &mut self.missions.book.missions[index];
             for (node_index, seen) in seen_updates {
-                note_seen(&mut mission.nodes[node_index], seen);
+                note_seen(&mut mission.nodes[node_index], seen, now);
             }
             // A mission waiting on the operator's merges is done once every
             // pull request of its stack is merged, whether or not a Conductor
@@ -2492,6 +2527,9 @@ impl Runtime {
                         }
                     }),
                     hide: node.hide.clone(),
+                    review_fails: node.review_fails(),
+                    pushed_at_unix_ms: node.pushed_at_unix_ms,
+                    warnings: node.warnings.clone(),
                 }
             })
             .collect();

@@ -203,9 +203,19 @@ pub struct Criterion {
     /// The node whose work found a defect (D-21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub found_by: Option<String>,
+    /// A review's failures recorded in a row: one more for each checker's
+    /// failure, none again once the line passes or is skipped
+    /// (with-hide/hide-private#552). The line keeps only each checker's
+    /// last answer, so this is what remembers the rounds before it.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub fails_in_a_row: u32,
 }
 
 fn is_zero(value: &u8) -> bool {
+    *value == 0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
@@ -246,6 +256,7 @@ impl Criterion {
             rule: None,
             checkers: Vec::new(),
             found_by: None,
+            fails_in_a_row: 0,
         }
     }
 
@@ -440,6 +451,13 @@ impl Criterion {
         checker.summary = summary;
         checker.at_unix_ms = Some(now);
         self.settle();
+        if self.kind == CriterionKind::Review {
+            if !pass {
+                self.fails_in_a_row = self.fails_in_a_row.saturating_add(1);
+            } else if self.state == CriterionState::Pass {
+                self.fails_in_a_row = 0;
+            }
+        }
         Ok(true)
     }
 
@@ -453,6 +471,7 @@ impl Criterion {
         self.skip = Some(skip);
         self.state = CriterionState::Skipped;
         self.by = Some(by);
+        self.fails_in_a_row = 0;
         true
     }
 
@@ -802,6 +821,62 @@ mod tests {
         let again = plan_lines(&[review], &["works".into()], &[input], false, true);
         assert_eq!(again[1].checkers[0].state, CriterionState::Pass);
         assert_eq!(again[1].state, CriterionState::Pass);
+    }
+
+    /// with-hide/hide-private#552: each failure recorded on the review line
+    /// counts one more in a row, and the line passing starts the count over;
+    /// a checker passing while the line still fails does not.
+    #[test]
+    fn a_review_counts_its_failures_in_a_row_until_it_passes() {
+        let input = CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::All,
+            by: vec![worker("codex"), worker("claude")],
+        };
+        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
+        let mut review = lines[1].clone();
+        assert_eq!(review.fails_in_a_row, 0);
+        let fail = |review: &mut Criterion, slot: usize, why: &str, at: u64| {
+            review
+                .record_checker(slot, false, Some(why.into()), None, at)
+                .unwrap()
+        };
+        assert!(fail(&mut review, 0, "round 1", 1));
+        assert_eq!(review.fails_in_a_row, 1);
+        // The same answer sent again is the same record.
+        assert!(!fail(&mut review, 0, "round 1", 2));
+        assert_eq!(review.fails_in_a_row, 1);
+        // One checker passing leaves the line failed, and the count stands.
+        review.record_checker(1, true, None, None, 3).unwrap();
+        assert_eq!(
+            (review.state, review.fails_in_a_row),
+            (CriterionState::Fail, 1)
+        );
+        fail(&mut review, 0, "round 2", 4);
+        assert_eq!(review.fails_in_a_row, 2);
+        review.record_checker(0, true, None, None, 5).unwrap();
+        assert_eq!(
+            (review.state, review.fails_in_a_row),
+            (CriterionState::Pass, 0)
+        );
+        fail(&mut review, 1, "round 3", 6);
+        assert_eq!(review.fails_in_a_row, 1);
+        // A skip goes past the line, and the count with it.
+        review.skip("operator".into(), None, by(Role::Conductor));
+        assert_eq!(review.fails_in_a_row, 0);
+    }
+
+    /// A line saved before the count reads as none in a row.
+    #[test]
+    fn a_review_line_from_before_the_count_reads_none_in_a_row() {
+        let line: Criterion =
+            serde_json::from_str(r#"{"key":"review","kind":"review","state":"fail"}"#).unwrap();
+        assert_eq!(line.fails_in_a_row, 0);
+        assert!(
+            !serde_json::to_string(&line)
+                .unwrap()
+                .contains("fails_in_a_row")
+        );
     }
 
     /// with-hide/hide#2080 review: a run queued or running again after a
