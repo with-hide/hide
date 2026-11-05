@@ -415,19 +415,6 @@ impl<'g> Engine for FakeEngine<'g> {
         )
     }
 
-    fn create_replacement_tab(
-        &self,
-        _wait: Wait,
-        workspace: &str,
-        cwd: &str,
-        env: Env,
-    ) -> Answer<(String, String)> {
-        self.ask(
-            "create_replacement_tab",
-            json!({"workspace": workspace, "cwd": cwd, "env": env}),
-        )
-    }
-
     fn launch_tab(
         &self,
         _wait: Wait,

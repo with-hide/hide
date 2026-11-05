@@ -1235,7 +1235,6 @@ mod tests {
             tab_index: 0,
             agent_area: None,
             agent_group: None,
-            replacement_shell: false,
             replacement_in_tab: false,
             tab_name: crate::recent_closed::ClosedTabName::Unnamed,
         };
@@ -1316,7 +1315,6 @@ mod tests {
             tab_index: 0,
             agent_area: None,
             agent_group: None,
-            replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
         };
@@ -1425,7 +1423,6 @@ mod tests {
             tab_index: 0,
             agent_area: None,
             agent_group: None,
-            replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
         };
@@ -1547,7 +1544,6 @@ mod tests {
             tab_index: 0,
             agent_area: None,
             agent_group: None,
-            replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
         };
@@ -1661,7 +1657,6 @@ mod tests {
             tab_index: 0,
             agent_area: None,
             agent_group: None,
-            replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
         };

@@ -238,15 +238,6 @@ pub(crate) trait Engine: Send + Sync {
         focus: bool,
         env: Env,
     ) -> Answer<(String, String)>;
-    /// A new unfocused, unnamed tab in `workspace` that stands in for one
-    /// closed: its id and its pane.
-    fn create_replacement_tab(
-        &self,
-        wait: Wait,
-        workspace: &str,
-        cwd: &str,
-        env: Env,
-    ) -> Answer<(String, String)>;
     /// A tab of one pane running `command`, created in `workspace` or
     /// replacing `replace`: its id and its pane.
     #[allow(clippy::too_many_arguments)] // one tab's place, name, focus and program

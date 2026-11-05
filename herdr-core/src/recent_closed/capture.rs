@@ -9,8 +9,8 @@ use crate::engine::{Engine, EngineError, Wait};
 
 use crate::live::{CONTROL_WAIT, LiveContext, failed, fetch_session};
 use crate::recent_closed::reopen::{
-    ReopenIntentStage, export_reopen_layout, layout_has_reopen_marker, pane_ids_with_reopen_marker,
-    reopen_intent_env, reopen_intent_marker,
+    ReopenIntentStage, export_reopen_layout, pane_ids_with_reopen_marker, reopen_intent_env,
+    reopen_intent_marker,
 };
 use crate::recent_closed::{ClosedContext, ClosedItem, ClosedPane, PanePlacement};
 use crate::sidebar::SessionSnapshotPayload;
@@ -238,10 +238,9 @@ impl From<&str> for ReplacementFailure {
     }
 }
 
-/// Makes, or on a retry finds by its marker, the shell a close needs first,
-/// and answers it with a fresh session that holds it: a new tab in the
-/// primary workspace, or a pane in the closing tab beside the pane `target`
-/// closes when `replacement_in_tab`.
+/// Makes, or on a retry finds by its marker, the shell a close needs first
+/// in the closing tab, beside the pane `target` closes, and answers it with a
+/// fresh session that holds it.
 fn prepare_close_replacement(
     engine: &dyn Engine,
     key: &str,
@@ -249,78 +248,10 @@ fn prepare_close_replacement(
     target: &CloseCaptureTarget,
     allow_create: bool,
 ) -> Result<(String, SessionSnapshotPayload), ReplacementFailure> {
-    if context.replacement_in_tab {
-        let CloseCaptureTarget::Pane { pane_id } = target else {
-            return Err("a shell inside the tab needs the pane it stands beside".into());
-        };
-        return prepare_shell_in_tab(engine, key, context, pane_id, allow_create);
-    }
-    let started = Instant::now();
-    let snapshot = fetch_session(engine).map_err(|error| error.message().to_owned())?;
-    if !snapshot
-        .workspaces
-        .iter()
-        .any(|workspace| workspace.workspace_id == context.workspace_id)
-    {
-        return Err("primary workspace disappeared before replacement".into());
-    }
-    let candidates = snapshot
-        .tabs
-        .iter()
-        .filter(|tab| {
-            tab.workspace_id == context.workspace_id
-                && !context.tab_ids_before_close.contains(&tab.tab_id)
-        })
-        .collect::<Vec<_>>();
-    if candidates.len() > 64 {
-        return Err("too many tabs to inspect for replacement intent".into());
-    }
-    let marker = reopen_intent_marker(key, ReopenIntentStage::CloseReplacement);
-    let mut owned = None;
-    for tab in candidates {
-        if started.elapsed() > Duration::from_secs(5) {
-            return Err("replacement inspection timed out".into());
-        }
-        let layout = export_reopen_layout(engine, &tab.tab_id)?;
-        if layout.tab_id != tab.tab_id || layout.workspace_id != tab.workspace_id {
-            return Err("The tab changed during start confirmation. Retry confirmation.".into());
-        }
-        if layout_has_reopen_marker(&layout, &marker) {
-            if owned.is_some() {
-                return Err("multiple shells carry the same close intent".into());
-            }
-            owned = Some(tab.tab_id.clone());
-        }
-    }
-    let tab_id = match owned {
-        Some(id) => id,
-        None if !allow_create => {
-            return Err(
-                "The replacement shell disappeared; retry after making room for a tab".into(),
-            );
-        }
-        None => {
-            engine
-                .create_replacement_tab(
-                    CONTROL_WAIT,
-                    &context.workspace_id,
-                    &context.checkout_path,
-                    reopen_intent_env(key, ReopenIntentStage::CloseReplacement),
-                )
-                .map_err(failed("tab.create"))?
-                .0
-        }
+    let CloseCaptureTarget::Pane { pane_id } = target else {
+        return Err("a shell inside the tab needs the pane it stands beside".into());
     };
-    let mut snapshot = fetch_session(engine).map_err(|error| error.message().to_owned())?;
-    if !snapshot
-        .tabs
-        .iter()
-        .any(|tab| tab.tab_id == tab_id && tab.workspace_id == context.workspace_id)
-    {
-        return Err("replacement shell is not confirmed in the primary workspace".into());
-    }
-    place_replacement_at_its_checkout(&mut snapshot, &tab_id, &context.checkout_path);
-    Ok((tab_id, snapshot))
+    prepare_shell_in_tab(engine, key, context, pane_id, allow_create)
 }
 
 /// The shell a named tab keeps when its last agent pane closes: split from
@@ -351,7 +282,7 @@ fn prepare_shell_in_tab(
     }) {
         return Err(held("replacement shell is not confirmed in its tab".into()));
     }
-    // As for a new tab's shell (below), its folder is the one it was made at.
+    // Its folder is the one it was made at.
     if let Some(pane) = snapshot
         .panes
         .iter_mut()
@@ -402,32 +333,6 @@ fn split_shell_in_tab(
                     }),
             },
         })
-}
-
-/// Herdr reads a new pane's cwd off its process, which still has the
-/// server's own until the shell has started in the folder it was asked for,
-/// so a snapshot read right after `tab.create` can name the wrong folder
-/// (`SessionReplica::await_cwd` waits it out for the event stream). This
-/// snapshot is ingested at once to place the shell beside the tab it
-/// replaces, and a pane at the server's folder lands outside the checkout,
-/// where nothing can place it; the folder the shell was created at is the
-/// one it is placed by.
-fn place_replacement_at_its_checkout(
-    snapshot: &mut SessionSnapshotPayload,
-    tab_id: &str,
-    checkout_path: &str,
-) {
-    let replacement_panes = snapshot
-        .layouts
-        .iter()
-        .filter(|layout| layout.tab_id == tab_id)
-        .flat_map(|layout| layout.panes.iter().map(|pane| pane.pane_id.as_str()))
-        .collect::<Vec<_>>();
-    for pane in &mut snapshot.panes {
-        if replacement_panes.contains(&pane.pane_id.as_str()) {
-            pane.cwd = Some(checkout_path.to_owned());
-        }
-    }
 }
 
 pub(crate) fn run_close_effect(

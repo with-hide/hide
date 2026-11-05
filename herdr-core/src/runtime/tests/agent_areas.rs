@@ -136,36 +136,6 @@ fn requested_new_tab_area_survives_a_focus_change_before_topology_arrives() {
 }
 
 #[test]
-fn replacement_predicate_requires_primary_provenance_a_linked_sibling_and_its_last_tab() {
-    let (mut runtime, _) = setup();
-    let primary = crate::domain::WorktreeProjection {
-        repo_key: "repo".into(),
-        repo_name: "repo".into(),
-        repo_root: "/repo".into(),
-        checkout_path: "/repo".into(),
-        is_linked_worktree: false,
-    };
-    runtime
-        .herdr_worktrees
-        .insert("w-order".into(), primary.clone());
-    runtime.herdr_worktrees.insert(
-        "linked".into(),
-        crate::domain::WorktreeProjection {
-            is_linked_worktree: true,
-            ..primary
-        },
-    );
-    assert!(!runtime.primary_needs_shell("w-order", "w-order:t1"));
-    runtime
-        .herdr_workspace_tab_order
-        .insert("w-order".into(), vec!["w-order:t1".into()]);
-    assert!(runtime.primary_needs_shell("w-order", "w-order:t1"));
-    assert!(!runtime.primary_needs_shell("linked", "w-order:t1"));
-    runtime.herdr_worktrees.remove("linked");
-    assert!(!runtime.primary_needs_shell("w-order", "w-order:t1"));
-}
-
-#[test]
 fn external_focused_new_tab_preserves_canvas_then_existing_tab_focus_is_followed() {
     let (mut runtime, checkout) = setup();
     let before_pane = runtime.snapshot.terminal.pane_id.clone();
@@ -392,35 +362,13 @@ fn pending_agent_admissions_are_counted_before_the_next_effect() {
 }
 
 #[test]
-fn protected_close_and_reopen_at_capacity_refuse_before_any_worker_or_selection_change() {
+fn reopen_at_capacity_refuses_before_any_worker() {
     let (mut runtime, _) = setup();
     let ids = (1..=64)
         .map(|n| format!("w-order:t{n}"))
         .collect::<Vec<_>>();
     let tabs = ids.iter().map(String::as_str).collect::<Vec<_>>();
     ingest(&mut runtime, &tabs);
-    let primary = crate::domain::WorktreeProjection {
-        repo_key: "repo".into(),
-        repo_name: "repo".into(),
-        repo_root: "/agent-groups".into(),
-        checkout_path: "/agent-groups".into(),
-        is_linked_worktree: false,
-    };
-    runtime
-        .herdr_worktrees
-        .insert("w-order".into(), primary.clone());
-    runtime.herdr_worktrees.insert(
-        "linked".into(),
-        crate::domain::WorktreeProjection {
-            is_linked_worktree: true,
-            ..primary
-        },
-    );
-    // The other checkout tabs may belong to other Herdr workspaces. Its
-    // protected primary workspace has only the target remaining.
-    runtime
-        .herdr_workspace_tab_order
-        .insert("w-order".into(), vec!["w-order:t1".into()]);
     let tab = runtime
         .snapshot
         .navigator
@@ -431,22 +379,7 @@ fn protected_close_and_reopen_at_capacity_refuse_before_any_worker_or_selection_
         .find(|tab| tab.id.as_deref() == Some("w-order:t1"))
         .unwrap()
         .clone();
-    let before = runtime.snapshot.terminal.pane_id.clone();
     let context = runtime.close_context(&tab).unwrap();
-    assert!(context.replacement_shell);
-    runtime.start_close_capture(
-        crate::recent_closed::capture::CloseCaptureTarget::Tab {
-            tab_id: "w-order:t1".into(),
-        },
-        tab.clone(),
-    );
-    assert!(runtime.close_operations.is_empty());
-    assert!(runtime.panes_closing.is_empty());
-    assert_eq!(
-        runtime.snapshot.status.last_error.as_ref().unwrap().kind,
-        "agent_layout.display_limit"
-    );
-    assert_eq!(runtime.snapshot.terminal.pane_id, before);
     runtime.push_recent_closed(ClosedItem::Tab {
         key: "capacity-reopen".into(),
         context,
@@ -604,53 +537,6 @@ fn uncertain_create_retains_its_own_claim_until_a_definite_result() {
     assert!(runtime.admit_agent_tab("/agent-groups"));
 }
 
-#[test]
-fn replacement_retry_with_missing_shell_at_capacity_sends_no_effect() {
-    let (mut runtime, _) = setup();
-    let ids = (1..=64)
-        .map(|n| format!("w-order:t{n}"))
-        .collect::<Vec<_>>();
-    ingest(
-        &mut runtime,
-        &ids.iter().map(String::as_str).collect::<Vec<_>>(),
-    );
-    let tab = runtime
-        .snapshot
-        .navigator
-        .workspaces
-        .iter()
-        .flat_map(|w| &w.checkouts)
-        .flat_map(|c| &c.tabs)
-        .find(|tab| tab.id.as_deref() == Some("w-order:t1"))
-        .unwrap()
-        .clone();
-    let mut context = runtime.close_context(&tab).unwrap();
-    context.replacement_shell = true;
-    let request = crate::recent_closed::capture::CloseCaptureRequest {
-        failed_terminals: Vec::new(),
-        retain_for_reopen: true,
-        key: "retained-close".into(),
-        connection_generation: runtime.live_generation,
-        context,
-        panes: runtime.closed_panes(&tab),
-        target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
-            tab_id: "w-order:t1".into(),
-        },
-    };
-    runtime.ensure_pending_close_from_request(&request);
-    let operation = runtime.close_operations.get_mut("retained-close").unwrap();
-    operation.phase = "refused".into();
-    operation.stage = "close_request".into();
-    operation.replacement_id = Some("w-order:removed-shell".into());
-    assert!(runtime.retry_agent_close("retained-close"));
-    assert_eq!(
-        runtime.snapshot.status.last_error.as_ref().unwrap().kind,
-        "agent_layout.display_limit"
-    );
-    assert_eq!(runtime.close_operations["retained-close"].phase, "refused");
-    assert!(runtime.panes_closing.is_empty());
-}
-
 fn capacity_close_request(
     runtime: &Runtime,
     key: &str,
@@ -664,8 +550,7 @@ fn capacity_close_request(
         .flat_map(|c| &c.tabs)
         .find(|tab| tab.id.as_deref() == Some("w-order:t1"))
         .unwrap();
-    let mut context = runtime.close_context(tab).unwrap();
-    context.replacement_shell = true;
+    let context = runtime.close_context(tab).unwrap();
     crate::recent_closed::capture::CloseCaptureRequest {
         failed_terminals: Vec::new(),
         retain_for_reopen: true,
@@ -677,49 +562,6 @@ fn capacity_close_request(
             tab_id: "w-order:t1".into(),
         },
     }
-}
-
-#[test]
-fn replacement_unknown_claim_survives_refusal_and_dismissal() {
-    let (mut runtime, _) = setup();
-    let ids = (1..=63)
-        .map(|n| format!("w-order:t{n}"))
-        .collect::<Vec<_>>();
-    let tabs = ids.iter().map(String::as_str).collect::<Vec<_>>();
-    ingest(&mut runtime, &tabs);
-    let request = capacity_close_request(&runtime, "uncertain-replacement");
-    assert!(runtime.reserve_agent_effect("/agent-groups", "close:uncertain-replacement"));
-    runtime.ensure_pending_close_from_request(&request);
-    let operation = runtime.close_operations.get_mut(&request.key).unwrap();
-    operation.phase = "transmitting".into();
-    operation.replacement_effect_started = true;
-    runtime.ingest_close_effect_result(
-        &crate::recent_closed::capture::CloseEffectRequest {
-            safety: None,
-            failed_terminals: Vec::new(),
-            retain_for_reopen: true,
-            key: request.key.clone(),
-            connection_generation: runtime.live_generation,
-            target: request.target.clone(),
-            replacement: Some(request.context.clone()),
-            allow_replacement_create: true,
-        },
-        Err(crate::engine::EngineError::Refused {
-            code: "replacement_failed".into(),
-            message: "created but acknowledgement lost".into(),
-        }),
-    );
-    ingest(&mut runtime, &tabs);
-    assert!(!runtime.admit_agent_tab("/agent-groups"));
-    assert!(
-        runtime.reserve_agent_effect("/agent-groups", "close:uncertain-replacement"),
-        "the same intent reuses its own claim"
-    );
-    runtime.dismiss_agent_close(&request.key);
-    assert!(
-        !runtime.admit_agent_tab("/agent-groups"),
-        "dismiss is not proof that the effect did not happen"
-    );
 }
 
 #[test]
@@ -1183,8 +1025,11 @@ fn closing_a_tab_in_the_background_takes_its_chip_and_leaves_the_operator_in_pla
 
 /// A close that must open a replacement shell first keeps its tab, so the
 /// area never stands empty while that shell is made.
+/// Herdr refused to close a primary workspace that had linked worktrees, so
+/// Hide once opened a shell first; the core's own engine closes it like any
+/// other, and a tab the operator closes does not come back.
 #[test]
-fn a_close_that_needs_a_replacement_shell_keeps_its_tab_in_place() {
+fn closing_the_primary_checkouts_last_tab_beside_a_linked_worktree_makes_no_shell() {
     let (runtime, _) = live_tab_order_runtime("/agent-groups");
     let mut runtime = with_new_views(runtime, "agent-groups-shell");
     ingest(&mut runtime, &["w-order:t1"]);
@@ -1207,8 +1052,8 @@ fn a_close_that_needs_a_replacement_shell_keeps_its_tab_in_place() {
     );
     close_tab(&mut runtime, "w-order:t1");
     let operation = runtime.close_operations.values().next().expect("a close");
-    assert!(operation.request.context.replacement_shell);
-    assert_eq!(drawn(&mut runtime), [area("w-order:t1", &["w-order:t1"])]);
+    assert!(!operation.request.context.replacement_in_tab);
+    assert_eq!(operation.leaving_tab(), Some("w-order:t1"));
 }
 
 /// Another registered folder of this machine; returns its checkout id.
@@ -1424,32 +1269,6 @@ fn closing_the_last_tab_passes_over_a_checkout_being_removed() {
 
 /// A close that first opens a replacement shell keeps its checkout busy, so
 /// it leaves the screen where it is.
-#[test]
-fn a_close_that_opens_a_replacement_shell_stays_on_its_checkout() {
-    let (mut runtime, checkout, _) = entered_from_elsewhere(&["w-order:t1"]);
-    let primary = crate::domain::WorktreeProjection {
-        repo_key: "repo".into(),
-        repo_name: "repo".into(),
-        repo_root: "/repo".into(),
-        checkout_path: "/repo".into(),
-        is_linked_worktree: false,
-    };
-    runtime
-        .herdr_worktrees
-        .insert("w-order".into(), primary.clone());
-    runtime.herdr_worktrees.insert(
-        "linked".into(),
-        crate::domain::WorktreeProjection {
-            is_linked_worktree: true,
-            ..primary
-        },
-    );
-    close_tab(&mut runtime, "w-order:t1");
-    let operation = runtime.close_operations.values().next().expect("a close");
-    assert!(operation.request.context.replacement_shell);
-    assert_eq!(front(&runtime).as_deref(), Some(checkout.as_str()));
-}
-
 fn reopen(runtime: &mut Runtime) {
     runtime.dispatch_json(&explorer_event("reopen_closed", serde_json::json!({})));
 }

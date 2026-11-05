@@ -1597,17 +1597,6 @@ impl<'g> Engine for OwnEngine<'g> {
         self.open_tab(workspace, None, label, None, focus, cwd, env, None)
     }
 
-    fn create_replacement_tab(
-        &self,
-        _wait: Wait,
-        workspace: &str,
-        cwd: &str,
-        env: Env,
-    ) -> Answer<(String, String)> {
-        self.check()?;
-        self.open_tab(workspace, None, "", None, false, cwd, env, None)
-    }
-
     fn launch_tab(
         &self,
         _wait: Wait,

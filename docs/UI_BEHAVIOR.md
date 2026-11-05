@@ -319,11 +319,7 @@ An older build may discard Agent layout state; returning starts with all current
 A Workspace of an SSH device the core dials has the same named-group and draft controls but keeps its existing single-area restriction within each group.
 A machine that dials in to the core, which is what the machine the core moved off becomes, keeps its Agent areas as this machine does: its tree, splits and active area are the same before a move, after it and after the move back, its Herdr shows the tab of the area in use, and the panes of every area's tab are live.
 
-Closing a primary Herdr workspace's last tab or last pane while a linked worktree remains first creates a shell at the checkout root in the same area and position.
-That tab stays in its area, marked closing, until Herdr confirms the close, so the area is never empty while the shell is made.
-The existing close guards run first, and linked workspaces remain untouched.
-If shell creation fails, nothing closes; if closing is refused, the shell remains.
-Retry close reuses that intent's shell, while Dismiss ends the failed intent; detailed Herdr failures are diagnostic-only.
+Closing a primary checkout's last tab or last pane closes it like any other tab, even while a linked worktree remains, and its linked worktrees stay open.
 
 A tab the operator named is a place they keep, like a channel: its name outlives the agents in it.
 A tab is named when the operator gave it its name through Rename, which Hide records for that tab; clearing the name in Rename makes it unnamed again.

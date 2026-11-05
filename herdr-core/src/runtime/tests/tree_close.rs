@@ -666,7 +666,7 @@ fn a_node_waiting_for_a_slot_held_behind_an_unresolved_close_fails_at_once() {
     close_tree(&mut runtime, pane_target("w1:p2"), &["w1:p3"], true);
     let front = runtime.close_operations.get_mut("held-0").unwrap();
     front.phase = "failed".to_owned();
-    front.request.context.replacement_shell = true;
+    front.request.context.replacement_in_tab = true;
     sent(&mut runtime, "w1:p3");
     leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4", "w5:p5"]);
     assert!(
