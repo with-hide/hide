@@ -20,7 +20,7 @@ use crate::model::{GithubStatusSnapshot, PrFailedCheck, PullRequestSnapshot};
 
 /// How many open pull requests, and how many just-merged ones, one frame
 /// carries, in the order the board lists them; the rest are counted in
-/// `omitted` and logged (engineering #15).
+/// `omitted`, which the phone shows as a line under the list (engineering #15).
 pub const MAX_PRS: usize = 48;
 pub const MAX_SETTLED: usize = 8;
 /// The most changed files one card sends; `files_total` still says how many
