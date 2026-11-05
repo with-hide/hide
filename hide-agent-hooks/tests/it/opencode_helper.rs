@@ -12,12 +12,14 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
+use crate::stand_in_daemon::StandInDaemon;
 use crate::{programs, stand_ins};
 
 const PANE: &str = "w1:p1";
 
-/// The `hide` the helper asks: records each call beside the test's HOME and
-/// answers as Hide does for this pane.
+/// The `hide` the helper runs (a letter's confirmation) and the stand-in
+/// daemon's answers to the helper's own requests: records each call beside
+/// the test's HOME and answers as Hide does for this pane.
 const FAKE_HIDE: &str = r#"#!/bin/sh
 echo "$@" >> "${HOME%/*}/hide-calls"
 case "$1 $2" in
@@ -42,6 +44,7 @@ esac
 "#;
 
 pub(super) struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     pub(super) home: PathBuf,
     pub(super) helper: PathBuf,
@@ -64,7 +67,9 @@ impl Machine {
         let policy = home.join(".hide/agent-hooks/guardrails.json");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
         std::fs::write(policy, r#"{"version":1,"projects":[]}"#).unwrap();
+        let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
         Self {
+            daemon,
             _dir: dir,
             calls: root.join("hide-calls"),
             home,
@@ -115,6 +120,7 @@ impl Machine {
                 command.env_remove(key);
             }
         }
+        self.daemon.route(command);
         if in_pane {
             command.env("HIDE_PANE_ID", PANE);
         }

@@ -273,6 +273,25 @@ pub fn apply(command: &mut Command) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The daemon state folder this hook's requests go to: the one
+/// `HIDE_STATE_DIR` names, else the route the kit installed the hook with,
+/// else the account's own ([`crate::state_folder::state_dir`]). An installed
+/// route that does not read is `record`, as [`apply`] has it.
+pub fn state_dir(home: &Path) -> Result<PathBuf, &'static str> {
+    let read = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
+    if let Some(state) = read(STATE_VARIABLE) {
+        return Ok(PathBuf::from(state));
+    }
+    if let Some(route) = installed().as_ref().map_err(|_| "record")? {
+        return Ok(route.clone());
+    }
+    Ok(crate::state_folder::state_dir(
+        home,
+        None,
+        read("XDG_STATE_HOME").as_deref(),
+    ))
+}
+
 /// The route the kit installed this hook with, read from its arguments once.
 fn installed() -> &'static Result<Option<PathBuf>, ()> {
     static ROUTE: OnceLock<Result<Option<PathBuf>, ()>> = OnceLock::new();

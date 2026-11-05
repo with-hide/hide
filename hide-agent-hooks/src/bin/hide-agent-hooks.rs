@@ -1017,7 +1017,7 @@ fn run_hook(arguments: &[String], started: Instant) {
         argument_value("--runtime", arguments).and_then(|value| AgentRuntime::parse(&value));
     let Some(home) = home_directory() else { return };
     // Memory and the letters are asked of the core at once, each by its own
-    // `hide`, and both answers are in before the one write; Memory ends where
+    // hook request, and both answers are in before the one write; Memory ends where
     // the letter pull does, so it never makes the turn wait longer.
     let memory_deadline = started + hide_agent_hooks::memory::MEMORY_BUDGET;
     let delivery_deadline = started + INTAKE_BUDGET;
@@ -1086,7 +1086,7 @@ fn run_hook(arguments: &[String], started: Instant) {
                 .map_err(|_| runtime)
         });
         // SessionStart's Workspace probe is asked beside Memory, not after
-        // it: neither answer depends on the other, and each `hide` it runs
+        // it: neither answer depends on the other, and each request
         // keeps its own deadline. The probe is not gated on a pane id: hided
         // binds a caller outside any pane (a Codex shared daemon, a plain
         // terminal) to the registered checkout holding its cwd, and refuses

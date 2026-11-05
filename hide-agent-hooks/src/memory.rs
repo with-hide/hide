@@ -1,11 +1,12 @@
 //! A hook's Project Memory, asked of the core (PRD core-host-node-move D-12,
 //! B14). The core owns the one store and answers for the checkout the hook's
 //! pane is attested to, whichever machine the agent runs on; the hook asks
-//! through `hide workspace memory`, the same pane credential and node link
-//! its letters come by, and fails open: no answer before its deadline is a
-//! turn without Memory.
+//! with its own hook request (`crate::hook_request`, what `hide workspace
+//! memory` sends), the same pane proof and node link its letters come by,
+//! and fails open: no answer before its deadline is a turn without Memory.
 
-use crate::delivery::{self, Failure};
+use crate::delivery::{self, Failure, Stages};
+use crate::hook_request::HookCommand;
 use crate::runtime::{AgentRuntime, HookEvent, hook_stdout_with_context};
 use hide_memory::HOOK_INPUT_LIMIT_BYTES;
 use hide_memory::hook::{HookContext, HookOutcome};
@@ -182,30 +183,42 @@ pub fn memory_context_until(
     let Some(session) = session_id.filter(|session| delivery::valid_session(session)) else {
         return MemoryContext::without(HookMemoryOutcome::Unavailable);
     };
-    let arguments = [
-        "workspace",
-        "memory",
-        "--event",
-        event.name(),
-        "--runtime",
-        runtime_id,
-        "--session",
-        &session,
-    ];
     let prompt = match event {
-        HookEvent::UserPromptSubmit => prompt.as_deref().map(hide_memory::hook::prompt_prefix),
-        _ => None,
+        HookEvent::UserPromptSubmit => prompt
+            .as_deref()
+            .map(hide_memory::hook::prompt_prefix)
+            .unwrap_or_default()
+            .to_owned(),
+        _ => String::new(),
     };
-    let answer =
-        delivery::run_cli_with_input(&arguments, prompt.unwrap_or_default().as_bytes(), deadline)
-            .and_then(|value| {
-                serde_json::from_value::<HookContext>(value).map_err(|_| "format".into())
-            });
+    let budget_start = deadline
+        .checked_sub(MEMORY_BUDGET)
+        .unwrap_or_else(Instant::now);
+    let asked = Instant::now();
+    let (answer, timing) = delivery::ask_timed(
+        HookCommand::Memory {
+            event: event.name().to_owned(),
+            runtime: runtime_id.to_owned(),
+            session,
+            prompt,
+        },
+        deadline,
+    );
+    let answer = answer.and_then(|value| {
+        serde_json::from_value::<HookContext>(value).map_err(|_| "format".into())
+    });
     let answer = match answer {
         Ok(answer) => answer,
         Err(failure) => {
-            let deadline = failure.code == "deadline";
-            record(home, &failure);
+            let since = |at: Instant| at.saturating_duration_since(budget_start).as_millis() as u64;
+            let stages = Stages {
+                asked_ms: since(asked),
+                connected_ms: timing.connected.map(|took| since(asked + took)),
+                answered_ms: timing.answered.map(|took| since(asked + took)),
+                ended_ms: since(Instant::now()),
+            };
+            let deadline = matches!(failure.code, "deadline" | "timeout");
+            record(home, &failure, stages);
             return MemoryContext::without(if deadline {
                 HookMemoryOutcome::Deadline
             } else {
@@ -220,24 +233,28 @@ pub fn memory_context_until(
     }
 }
 
-fn record(home: &Path, failure: &Failure) {
-    if failure.code == "deadline" {
+/// Records a failed request with the stages it reached: an answer that did
+/// not come in time, before the hook's deadline or the request's, is
+/// `memory_deadline`, and every other failure is `memory_unavailable` with
+/// the step it stopped at kept beside it, so the record says where.
+fn record(home: &Path, failure: &Failure, stages: Stages) {
+    if matches!(failure.code, "deadline" | "timeout") {
         note(
             home,
             "memory_deadline",
             "memory.deadline",
             failure.code,
             false,
+            Some(stages),
         );
     } else {
-        // Every other failure is one cause; the step it stopped at is kept
-        // beside it, so the record says where.
         note(
             home,
             "memory_unavailable",
             "memory.unavailable",
             failure.code,
             true,
+            Some(stages),
         );
     }
 }
@@ -251,14 +268,15 @@ pub fn record_panic(home: &Path) {
         "memory.panicked",
         "panicked",
         false,
+        None,
     );
 }
 
-fn note(home: &Path, cause: &str, kind: &str, code: &str, step: bool) {
-    if delivery::claim_at(home, cause, step.then_some(code)) {
+fn note(home: &Path, cause: &str, kind: &str, code: &str, step: bool, stages: Option<Stages>) {
+    if delivery::claim_at(home, cause, step.then_some(code), stages) {
         eprintln!(
             "{}",
-            serde_json::json!({"component":"memory_hook","kind":kind,"code":code,"diagnostic_saved":true})
+            serde_json::json!({"component":"memory_hook","kind":kind,"code":code,"stages":stages,"diagnostic_saved":true})
         );
     }
 }
@@ -298,12 +316,19 @@ mod tests {
     }
 
     /// A Memory request that failed is one cause, with the step it stopped
-    /// at kept beside it; a panic and a deadline name themselves.
+    /// at kept beside it; a panic and an answer that did not come in time
+    /// name themselves, and each keeps the stages its request reached.
     #[test]
     fn a_failed_memory_request_records_the_step_it_stopped_at() {
         let home = tempfile::tempdir().unwrap();
-        record(home.path(), &Failure::from("connect"));
-        record(home.path(), &Failure::from("deadline"));
+        let stages = Stages {
+            asked_ms: 4,
+            connected_ms: Some(9),
+            answered_ms: None,
+            ended_ms: 1_250,
+        };
+        record(home.path(), &Failure::from("connect"), stages);
+        record(home.path(), &Failure::from("timeout"), stages);
         record_panic(home.path());
         let path = home
             .path()
@@ -316,6 +341,12 @@ mod tests {
         assert_eq!(
             recorded["step"],
             serde_json::json!({"memory_unavailable": "connect"})
+        );
+        // The record names the stage the time went to: connected at 9 ms,
+        // no answer by the end of the budget.
+        assert_eq!(
+            recorded["stages"]["memory_deadline"],
+            serde_json::json!({"asked_ms": 4, "connected_ms": 9, "ended_ms": 1_250})
         );
     }
 
