@@ -30,9 +30,11 @@ pub struct ToolCall {
     pub cwd: Option<PathBuf>,
 }
 
-/// The shell tools by name, across runtimes.
-const SHELL_TOOLS: [&str; 6] = [
+/// The shell tools by name, across runtimes; Claude Code's `PowerShell`
+/// carries the `Bash` tool's fields.
+const SHELL_TOOLS: [&str; 7] = [
     "Bash",
+    "PowerShell",
     "run_terminal_command",
     "Shell",
     "bash",
@@ -129,19 +131,23 @@ pub fn read_hook(payload: &[u8], truncated: bool, dialect: HookDialect) -> Optio
         .flatten()
         .find(|cwd| !cwd.is_empty())
         .map(PathBuf::from);
-    let action = action(tool?, input?)?;
+    let action = action(dialect, tool?, input?)?;
     Some(ToolCall { action, cwd })
 }
 
-/// What `tool` with `input` does, for a hook payload and for the scripts of
-/// OpenCode, Pi and omp alike.
-pub fn action(tool: &str, input: &Value) -> Option<Action> {
+/// What `tool` of `dialect`'s runtime with `input` does, for a hook payload
+/// and for the scripts of OpenCode, Pi and omp alike. A shell call carries
+/// the syntax its tool runs in, as `pre_tool::shell_syntax` decides it.
+pub fn action(dialect: HookDialect, tool: &str, input: &Value) -> Option<Action> {
     if SHELL_TOOLS.contains(&tool) {
         return COMMAND_KEYS
             .iter()
             .find_map(|key| input.get(*key))
             .and_then(Value::as_str)
-            .map(|command| Action::Shell(command.to_owned()));
+            .map(|command| Action::Shell {
+                command: command.to_owned(),
+                syntax: crate::pre_tool::shell_syntax(dialect, tool),
+            });
     }
     let paths = paths(input);
     if WRITE_TOOLS.contains(&tool) {

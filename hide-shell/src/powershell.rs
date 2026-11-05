@@ -6,8 +6,10 @@
 //! What differs from a POSIX shell is read here and nowhere else: `` ` `` is
 //! the escape character and `\` a plain one, so `.\out.png` stays a path; a
 //! single-quoted string ends only at a quote that is not doubled, the four
-//! typographic single quotes counting as quotes; a double-quoted string
-//! doubles `"` or escapes it with `` ` ``; `&` before a command is the call
+//! typographic single quotes counting as quotes; a double-quoted string,
+//! opened and closed by `"` or a typographic double quote, doubles its quote
+//! or escapes it with `` ` ``; a `` ` `` before a line end, `\n` or `\r\n`,
+//! continues the line; `&` before a command is the call
 //! operator and after one sends it to the background; `{ }` is a script
 //! block, which may run any number of times; `<# #>` is a comment, and a
 //! here-string (`@'` ... `'@`) is one word. A line PowerShell refuses to
@@ -15,7 +17,7 @@
 //! inside, a stray closing bracket, a `<`, which PowerShell reserves) reads
 //! as no commands.
 
-use crate::quote::POWERSHELL_QUOTES;
+use crate::quote::{POWERSHELL_DOUBLE_QUOTES, POWERSHELL_QUOTES};
 use crate::{Join, ShellLine};
 
 /// The keywords that open a statement whose condition sits in parentheses
@@ -82,8 +84,10 @@ impl Reader {
                 '`' => {
                     self.at += 1;
                     match self.peek(0) {
-                        // A backtick before a newline continues the line.
+                        // A backtick before a line end, `\n` or `\r\n`,
+                        // continues the line.
                         Some('\n') => self.at += 1,
+                        Some('\r') if self.peek(1) == Some('\n') => self.at += 2,
                         Some(escaped) => {
                             self.push(escaped);
                             self.at += 1;
@@ -92,7 +96,7 @@ impl Reader {
                     }
                 }
                 c if POWERSHELL_QUOTES.contains(&c) => self.single_quoted()?,
-                '"' => self.double_quoted()?,
+                c if POWERSHELL_DOUBLE_QUOTES.contains(&c) => self.double_quoted()?,
                 '@' if matches!(self.peek(1), Some('\'' | '"')) && self.opens_here_string() => {
                     self.here_string()?
                 }
@@ -267,11 +271,15 @@ impl Reader {
                         self.at += 1;
                     }
                 }
-                '"' if self.peek(1) == Some('"') => {
-                    self.word.push('"');
+                c if POWERSHELL_DOUBLE_QUOTES.contains(&c)
+                    && self
+                        .peek(1)
+                        .is_some_and(|next| POWERSHELL_DOUBLE_QUOTES.contains(&next)) =>
+                {
+                    self.word.push(self.chars[self.at + 1]);
                     self.at += 2;
                 }
-                '"' => {
+                c if POWERSHELL_DOUBLE_QUOTES.contains(&c) => {
                     self.at += 1;
                     return Ok(());
                 }

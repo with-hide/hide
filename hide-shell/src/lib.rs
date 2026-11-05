@@ -44,6 +44,50 @@ impl Syntax {
             _ => Some(Self::Posix),
         }
     }
+
+    /// A word as a path with `/` between its names. PowerShell takes `\`
+    /// and `/` alike as the separator on every system (`about_Path_Syntax`;
+    /// pwsh on macOS and Linux turns `\` into `/`), so `.\.env` is `./.env`,
+    /// `C:\repo` is `C:/repo` and `~\.ssh` is `~/.ssh`; a POSIX word is the
+    /// path as written.
+    pub fn path_word(self, word: &str) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::PowerShell if word.contains('\\') => word.replace('\\', "/").into(),
+            _ => word.into(),
+        }
+    }
+
+    /// The name a command word calls, as this shell finds it: the word's
+    /// file name without `.exe`, and in PowerShell in lower case, since
+    /// PowerShell finds a cmdlet, an alias and on Windows a program without
+    /// case (`Set-Location`, `CD`, `Git.exe`).
+    pub fn program(self, word: &str) -> String {
+        let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
+        let name = match self {
+            Self::Posix => name.to_owned(),
+            Self::PowerShell => name.to_lowercase(),
+        };
+        // `.exe` is four ASCII bytes, so cutting them keeps a character whole.
+        if name.to_ascii_lowercase().ends_with(".exe") {
+            name[..name.len() - 4].to_owned()
+        } else {
+            name
+        }
+    }
+
+    /// Whether `program`, a name [`Syntax::program`] gave, moves the
+    /// shell's working folder for the commands after it: `cd` and `pushd`,
+    /// and in PowerShell also `Set-Location` with its aliases `sl` and
+    /// `chdir`, and `Push-Location` (`about_Aliases`).
+    pub fn changes_folder(self, program: &str) -> bool {
+        match self {
+            Self::Posix => matches!(program, "cd" | "pushd"),
+            Self::PowerShell => matches!(
+                program,
+                "cd" | "pushd" | "chdir" | "sl" | "set-location" | "push-location"
+            ),
+        }
+    }
 }
 
 /// The simple commands of a shell line, each as its words with quoting
@@ -1039,6 +1083,32 @@ mod tests {
                 "ii x.png `\n  -Verb open",
                 &[&["ii", "x.png", "-Verb", "open"]],
             ),
+            // A backtick before a Windows line end continues the line too.
+            (
+                "Start-Process `\r\n .\\x.html",
+                &[&["Start-Process", r".\x.html"]],
+            ),
+            (
+                "try { ii .\\a.png } catch { echo no } finally { ls }",
+                &[&["ii", r".\a.png"], &["echo", "no"], &["ls"]],
+            ),
+            (
+                "foreach ($f in $files) { ii $f }",
+                &[&["$f", "in", "$files"], &["ii", "$f"]],
+            ),
+            (
+                "Set-Content a.txt @\"\r\nii x.png; rm y\r\n\"@",
+                &[&["Set-Content", "a.txt", "ii x.png; rm y"]],
+            ),
+            // PowerShell reads the typographic double quotes as `\"`.
+            (
+                "ii \u{201C}C:\\a b\\x.png\u{201D}",
+                &[&["ii", r"C:\a b\x.png"]],
+            ),
+            (
+                "echo \u{201E}say \u{201D}\u{201D}hi\u{201C}\u{201C}\u{201D}",
+                &[&["echo", "say \u{201D}hi\u{201C}"]],
+            ),
         ];
         for (line, posix, powershell) in table {
             assert_eq!(
@@ -1059,6 +1129,39 @@ mod tests {
                 "{line:?} in PowerShell"
             );
         }
+    }
+
+    #[test]
+    fn a_word_names_its_path_and_its_program_as_the_shell_reads_them() {
+        let ps = Syntax::PowerShell;
+        for (word, path) in [
+            (r".\.env", "./.env"),
+            (r"C:\repo\.env", "C:/repo/.env"),
+            (r"~\.ssh\id", "~/.ssh/id"),
+            ("src/a.rs", "src/a.rs"),
+        ] {
+            assert_eq!(ps.path_word(word), path, "{word}");
+        }
+        assert_eq!(Syntax::Posix.path_word(r"a\b"), r"a\b");
+        for (word, posix, powershell) in [
+            ("git", "git", "git"),
+            ("Git.EXE", "Git", "git"),
+            (r"C:\Program Files\Git\cmd\git.exe", "git", "git"),
+            ("/usr/bin/gh", "gh", "gh"),
+            ("Set-Location", "Set-Location", "set-location"),
+        ] {
+            assert_eq!(Syntax::Posix.program(word), posix, "{word}");
+            assert_eq!(ps.program(word), powershell, "{word}");
+        }
+        for program in ["cd", "pushd"] {
+            assert!(Syntax::Posix.changes_folder(program));
+            assert!(ps.changes_folder(program));
+        }
+        for program in ["set-location", "sl", "chdir", "push-location"] {
+            assert!(ps.changes_folder(program), "{program}");
+            assert!(!Syntax::Posix.changes_folder(program), "{program}");
+        }
+        assert!(!ps.changes_folder("get-content"));
     }
 
     #[test]

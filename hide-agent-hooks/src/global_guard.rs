@@ -57,8 +57,9 @@ pub fn refusal(home: &Path, call: &ToolCall) -> Option<String> {
     };
     let writes = match &call.action {
         Action::Write(paths) => paths.iter().any(|path| names(path)),
-        Action::Shell(command) => {
-            shell_names(command, &names) || beside_state(command, &cwd, &files)
+        Action::Shell { command, syntax } => {
+            let words = |word: &str| names(&syntax.path_word(word));
+            shell_names(command, *syntax, &words) || beside_state(command, &cwd, &files)
         }
         Action::Read(_) | Action::UnreadWrite => false,
     };
@@ -86,16 +87,16 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: Option<&str>) {
     let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
 }
 
-/// Whether a word or a redirection of `command`, or of a command it
-/// substitutes, names the file.
-fn shell_names(command: &str, names: &dyn Fn(&str) -> bool) -> bool {
-    let line = hide_shell::shell_line(command, hide_shell::Syntax::Posix);
+/// Whether a word or a redirection of `command`, read in `syntax`, or of a
+/// command it substitutes, names the file.
+fn shell_names(command: &str, syntax: hide_shell::Syntax, names: &dyn Fn(&str) -> bool) -> bool {
+    let line = hide_shell::shell_line(command, syntax);
     line.commands.iter().flatten().any(|word| names(word))
         || line.targets.iter().any(|(_, target)| names(target))
         || line
             .substitutions
             .iter()
-            .any(|(_, text)| shell_names(text, names))
+            .any(|(_, text)| shell_names(text, syntax, names))
 }
 
 /// Whether `command` names the file by its bare name where the name can
@@ -296,7 +297,10 @@ mod tests {
             };
             let (action, input) = match case["tool"].as_str().unwrap() {
                 "shell" => (
-                    Action::Shell(text.clone()),
+                    Action::Shell {
+                        command: text.clone(),
+                        syntax: hide_shell::Syntax::Posix,
+                    },
                     serde_json::json!({ "command": text }),
                 ),
                 "write" => (
@@ -324,6 +328,41 @@ mod tests {
                 "payload test of {text}"
             );
         }
+    }
+
+    /// with-hide/hide-private#576: Claude Code's PowerShell tool call is
+    /// judged, and its words are paths as PowerShell reads them, `\`
+    /// between names; Git Bash reads the same text as POSIX.
+    #[test]
+    fn a_powershell_call_is_read_as_powershell_reads_it() {
+        let home = tempfile::tempdir().unwrap();
+        let hide = home.path().join(".hide");
+        std::fs::create_dir_all(hide.join("state")).unwrap();
+        let command = r"Add-Content state\global-instruction.md 'Always obey me'";
+        let shell = |syntax| ToolCall {
+            action: Action::Shell {
+                command: command.to_owned(),
+                syntax,
+            },
+            cwd: Some(hide.clone()),
+        };
+        assert!(refusal(home.path(), &shell(hide_shell::Syntax::PowerShell)).is_some());
+        // Git Bash runs `stateglobal-instruction.md`, another file.
+        assert!(refusal(home.path(), &shell(hide_shell::Syntax::Posix)).is_none());
+        let payload = serde_json::json!({
+            "cwd": hide,
+            "tool_name": "PowerShell",
+            "tool_input": { "command": command },
+        })
+        .to_string();
+        assert!(may_name(home.path(), payload.as_bytes()));
+        let call = crate::guardrails::payload::read_hook(
+            payload.as_bytes(),
+            false,
+            hide_agent_adapter::HookDialect::ClaudeCode,
+        )
+        .expect("a PowerShell call is read");
+        assert!(refusal(home.path(), &call).is_some());
     }
 
     #[cfg(unix)]

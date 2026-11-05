@@ -347,20 +347,8 @@ pub fn refusal(context: &PlanContext, action: &Action) -> Option<Refused> {
         .is_some_and(|work| work.scope == "pr");
     match action {
         Action::Write(_) | Action::UnreadWrite if proposed => Some(Refused::ProposedPlan),
-        Action::Shell(command) => shell(command, proposed, merge_barred),
+        Action::Shell { command, syntax } => shell(command, *syntax, proposed, merge_barred),
         _ => None,
-    }
-}
-
-fn program(word: &str) -> String {
-    let name = Path::new(word)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if name.to_ascii_lowercase().ends_with(".exe") {
-        name[..name.len() - 4].to_owned()
-    } else {
-        name
     }
 }
 
@@ -379,14 +367,19 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     Some((args.get(at)?.as_str(), &args[at + 1..]))
 }
 
-fn shell(command: &str, proposed: bool, merge_barred: bool) -> Option<Refused> {
-    let line = shell_line(command, hide_shell::Syntax::Posix);
+fn shell(
+    command: &str,
+    syntax: hide_shell::Syntax,
+    proposed: bool,
+    merge_barred: bool,
+) -> Option<Refused> {
+    let line = shell_line(command, syntax);
     for words in &line.commands {
         let words = command_words(words, true);
         let Some((first, args)) = words.split_first() else {
             continue;
         };
-        match program(first).as_str() {
+        match syntax.program(first).as_str() {
             "git" => {
                 let Some((subcommand, rest)) = git_subcommand(args) else {
                     continue;
@@ -446,7 +439,10 @@ mod tests {
     }
 
     fn shell_action(command: &str) -> Action {
-        Action::Shell(command.to_owned())
+        Action::Shell {
+            command: command.to_owned(),
+            syntax: hide_shell::Syntax::Posix,
+        }
     }
 
     #[test]
@@ -527,6 +523,44 @@ mod tests {
         assert_eq!(refusal(&worker("pr"), &shell_action("gh pr view 12")), None);
     }
 
+    /// with-hide/hide-private#576: Claude Code's PowerShell tool call is
+    /// judged, read as PowerShell reads it, command names without case.
+    #[test]
+    fn a_powershell_call_meets_the_same_refusals() {
+        let proposed = PlanContext {
+            plan: Some(plan("proposed", 0)),
+            ..PlanContext::default()
+        };
+        let payload = |command: &str| {
+            serde_json::json!({
+                "cwd": "/r",
+                "tool_name": "PowerShell",
+                "tool_input": { "command": command },
+            })
+            .to_string()
+        };
+        let judged = |context: &PlanContext, command: &str| {
+            let call = crate::guardrails::payload::read_hook(
+                payload(command).as_bytes(),
+                false,
+                hide_agent_adapter::HookDialect::ClaudeCode,
+            )
+            .expect("a PowerShell call is read");
+            refusal(context, &call.action)
+        };
+        assert_eq!(
+            judged(&proposed, r"Set-Location .\repo; Git commit -m 'x'"),
+            Some(Refused::ProposedPlan)
+        );
+        assert_eq!(
+            judged(&PlanContext::default(), "GIT.EXE push --force origin x"),
+            Some(Refused::HistoryRewrite)
+        );
+        assert_eq!(judged(&proposed, "Get-Content README.md"), None);
+        // A line PowerShell refuses to parse runs, as it does today.
+        assert_eq!(judged(&proposed, "git commit -m 'x"), None);
+    }
+
     #[test]
     fn the_hint_names_the_current_and_next_step_and_adds_the_update_command_when_stale() {
         let fresh = PlanContext {
@@ -578,7 +612,10 @@ mod tests {
             for call in example["commands"].as_array().unwrap() {
                 let input = call["input"].as_str().unwrap().to_owned();
                 let action = match call["tool"].as_str().unwrap() {
-                    "shell" => Action::Shell(input),
+                    "shell" => Action::Shell {
+                        command: input,
+                        syntax: hide_shell::Syntax::Posix,
+                    },
                     "write" => Action::Write(vec![input]),
                     other => panic!("unknown tool {other}"),
                 };
