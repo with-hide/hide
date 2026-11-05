@@ -15,6 +15,7 @@ pub mod ledger;
 pub mod query;
 pub mod session_command;
 pub mod store;
+mod summary_scope;
 pub mod worker;
 
 use crate::node_access::{LinkError, NodeLink, call_as};
