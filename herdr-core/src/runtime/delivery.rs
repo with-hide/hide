@@ -84,10 +84,10 @@ pub(crate) struct Observation {
     /// (`lay_delivery_turns`). It stands only for the Herdr state it was laid
     /// under ([`Self::projected_turn`]).
     pub projected: Option<ProjectedTurn>,
-    /// The observe pass that last saw the pane (`observe_delivery`). The
-    /// hook's and the session read's facts of that pass are laid after it,
-    /// outside the lock, so a turn laid by an earlier pass stands for facts
-    /// this pass may already have moved, such as a question just read.
+    /// The observe pass that last saw the pane (`observe_delivery`). The same
+    /// step under the lock lays that pass's turn, so a turn laid by an
+    /// earlier pass, which stands for facts this pass may have moved (a
+    /// question just read), is never read with this observation.
     pub observed_generation: u64,
     /// Why the session the pane runs cannot be read, while its turn is
     /// [`Turn::Unread`] because the last read refused for a reason reading
@@ -96,14 +96,15 @@ pub(crate) struct Observation {
     pub unreadable: Option<String>,
 }
 
-/// One `observe_delivery` pass, as the token its own ingest carries. Only
-/// the ingest of the pass that observed a pane lays the pane's turn, from
-/// the payload and the label overlay that pass read: an ingest of another
-/// payload, such as an editor's close status with the overlay the runtime
-/// held before, certifies nothing (`lay_delivery_turns`).
+/// One `observe_delivery` pass, as the token the same step under the lock
+/// lays its turns with (`Runtime::ingest_observed_session` for this machine,
+/// [`Runtime::observe_device_session`] for a device). Only that step lays
+/// the pane's turn, from the payload and the label overlay that pass read: an
+/// ingest of another payload, such as an editor's close status with the
+/// overlay the runtime held before, certifies nothing (`lay_delivery_turns`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[must_use = "only the pass's own ingest lays its turns"]
-pub(crate) struct ObservedPass(u64);
+#[must_use = "only the pass's own step lays its turns"]
+pub(super) struct ObservedPass(u64);
 
 /// The core's turn for an agent, as laid on its observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,10 +158,11 @@ pub(crate) fn delivery_turns(
 
 impl Observation {
     /// The core's turn for the pass the pane was last observed in: none
-    /// while the read is stale, and none from the observation until that
-    /// pass lays the hook's and the session read's facts, since an earlier
-    /// pass's turn may stand for facts this one moved (a question read
-    /// while Herdr's state stays the same).
+    /// while the read is stale, and none when that pass laid no turn for
+    /// the pane (a pane a move this machine runs draws as it was before it,
+    /// `overlay_pane_moves`), since an earlier pass's turn may stand for
+    /// facts this one moved (a question read while Herdr's state stays the
+    /// same).
     pub(crate) fn projected_turn(&self) -> Option<&ProjectedTurn> {
         self.projected.as_ref().filter(|projected| {
             !self.telemetry_stale
@@ -200,7 +202,12 @@ impl Runtime {
     /// `labels` is the device's label overlay, whose session reads say what
     /// an agent waits for; without one, an agent whose read reports turns is
     /// not known to wait for nothing.
-    pub(crate) fn observe_delivery(
+    ///
+    /// A sync pass calls it only inside the step that lays the pass's turns
+    /// (`ingest_observed_session`, [`Self::observe_device_session`]): a tool
+    /// or turn-end ask, or a bell, that met an observation whose turn is not
+    /// laid yet would read the agent as not working (with-hide/hide-private#560).
+    pub(super) fn observe_delivery(
         &mut self,
         device: &str,
         payload: &SessionSnapshotPayload,
@@ -419,13 +426,45 @@ impl Runtime {
         self.lay_delivery_turns(device, pass, delivery_turns(&laid));
     }
 
+    /// A device coordinator's pass, in one step under the lock: observes the
+    /// device's `payload` for delivery as its Herdr listed it, draws the
+    /// sleeping agents that Herdr no longer lists, lays the pass's label
+    /// `overlay` and the hook's facts on it, and lays each observed pane's
+    /// turn from them. Answers each agent pane's hook tokens, by the device's
+    /// own pane id. Memory work only; the session's projection is built
+    /// outside the lock.
+    pub(crate) fn observe_device_session(
+        &mut self,
+        device: &str,
+        payload: &mut SessionSnapshotPayload,
+        overlay: Option<&LabelOverlay>,
+    ) -> std::collections::BTreeMap<String, crate::agent_hooks::PaneHookTokens> {
+        let pass = self.observe_delivery(device, payload, None, overlay);
+        self.settle_node_agent_sleep(device, payload);
+        if let Some(overlay) = overlay {
+            overlay.apply(payload);
+        }
+        // The device's hooks report to the core, never to its Herdr, so their
+        // facts are laid here the way the labels are (`agent_hooks::facts`).
+        let tokens = self
+            .hook_facts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .lay(
+                payload,
+                |pane| crate::address::scoped_pane_id(device, pane),
+                |pane| crate::address::is_pane_of(pane, device),
+            );
+        self.lay_delivery_turns(device, pass, delivery_turns(payload));
+        tokens
+    }
+
     /// Lays the core's turn on each pane of `device` that `pass` observed,
     /// from agents that carry the hook's and the session read's facts
-    /// (`delivery_turns`) of that same pass. Runs where those facts are laid:
-    /// the ingest of the local sync pass and a device's coordinator, so a
-    /// hook event's republish moves it too. A pane a later pass observed
-    /// again waits for that pass's own lay.
-    pub(crate) fn lay_delivery_turns(
+    /// (`delivery_turns`) of that same pass. Runs in the step under the lock
+    /// that made the observation, where those facts are laid, so a hook
+    /// event's republish moves it too.
+    pub(super) fn lay_delivery_turns(
         &mut self,
         device: &str,
         pass: ObservedPass,
@@ -3602,6 +3641,119 @@ pub(crate) mod tests {
         );
         drop(guard);
         drop(worker);
+    }
+
+    /// with-hide/hide-private#560: a sync pass observes a pane for delivery
+    /// only in the step under the lock that lays its turn, so a tool or
+    /// turn-end ask the agent's hook makes at any moment of the pass is
+    /// judged against a laid turn and takes the due letter, rather than
+    /// reading the agent as not working and leaving it to the bell.
+    #[test]
+    fn a_tool_or_turn_end_ask_anywhere_in_a_sync_pass_hands_over_the_due_letter() {
+        use hide_node_link::panes::PullPoint;
+        for point in [PullPoint::Tool, PullPoint::TurnEnd] {
+            let root = tempfile::tempdir().unwrap();
+            let (runtime, sender, _, path) = fixture(root.path());
+            let (worker, client) = Worker::store(
+                Arc::downgrade(&runtime),
+                ChangeNotifier::noop(),
+                path.clone(),
+            )
+            .unwrap();
+            let mut guard = runtime.lock().unwrap();
+            guard.install_delivery_client(client);
+            let own = crate::engine::tokens::session_digest("hook-session");
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+                {"id":"recipient","pane_id":"recipient","agent":"grok","agent_status":"working","state_change_seq":2,"lineage_session":own},
+            ]})).unwrap();
+            // The fixture's checkouts are drawn by hand, and an ingest of a
+            // payload with no layout would take the callers' context away.
+            let drawn = guard.snapshot.navigator.workspaces.clone();
+            let ingest = |guard: &mut Runtime| {
+                let _ = guard.ingest_observed_session(payload.clone(), None, None, None);
+                guard.snapshot.navigator.workspaces = drawn.clone();
+            };
+            ingest(&mut guard);
+            let recipient = guard.delivery_observations["recipient"].actor.clone();
+            let prepared = guard
+                .prepare_delivery(
+                    crate::node::TEST_NODE,
+                    "sender",
+                    &authority(&sender).context,
+                    None,
+                    Command::Send {
+                        target: "recipient".into(),
+                        intent: "urgent".into(),
+                        body: "urgent body".into(),
+                        kind: "request".into(),
+                        now: true,
+                        force: false,
+                    },
+                )
+                .unwrap();
+            drop(guard);
+            let letter = prepared.run(Duration::from_secs(5)).unwrap();
+            let ask = || {
+                let prepared = runtime
+                    .lock()
+                    .unwrap()
+                    .prepare_delivery(
+                        crate::node::TEST_NODE,
+                        "recipient",
+                        &authority(&recipient).context,
+                        None,
+                        Command::Pull {
+                            prompt_digest: None,
+                            session: Some("hook-session".into()),
+                            point,
+                            bundle: true,
+                        },
+                    )
+                    .unwrap();
+                prepared.run(Duration::from_secs(5)).unwrap()["ids"].clone()
+            };
+            // The next pass has read the engine and takes its catalog inputs
+            // under the lock before it ingests.
+            runtime.lock().unwrap().begin_catalog_coordinator();
+            assert_eq!(ask(), json!([letter["id"]]), "{point:?} before the ingest");
+            let observed = runtime.lock().unwrap().delivery_observe_generation;
+            ingest(&mut runtime.lock().unwrap());
+            assert!(
+                runtime.lock().unwrap().delivery_observe_generation > observed,
+                "the ingest observed the pane again"
+            );
+            assert_eq!(ask(), json!([letter["id"]]), "{point:?} after the ingest");
+            drop(worker);
+        }
+    }
+
+    /// with-hide/hide-private#560, a device's side: its coordinator's first
+    /// step under the lock observes the device's panes and lays their turns
+    /// from the overlay and the hook's facts, so nothing it releases the
+    /// lock for (the projection, the ingest) leaves an observation unlaid.
+    #[test]
+    fn a_device_pass_lays_each_turn_in_the_step_that_observes_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, _) = fixture(root.path());
+        let mut guard = runtime.lock().unwrap();
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"worker","pane_id":"worker","agent":"grok","agent_status":"working","state_change_seq":3,"lineage_session":"worker-session"},
+        ]})).unwrap();
+        for _ in 0..2 {
+            let mut read = payload.clone();
+            let _ = guard.observe_device_session("device", &mut read, None);
+            let observation =
+                &guard.delivery_observations[&crate::address::scoped_pane_id("device", "worker")];
+            let projected = observation
+                .projected_turn()
+                .expect("the step that observed the pane laid its turn");
+            assert_eq!(projected.generation, observation.observed_generation);
+            assert_eq!(
+                projected.turn.activity,
+                crate::agent_state::AgentActivity::Working
+            );
+        }
     }
 
     #[test]

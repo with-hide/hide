@@ -11,7 +11,9 @@ null_structured_output, api_401, api_403, api_429, api_500, api_400,
 structured_output_retries, context_limit, no_result_frame, init_frame_only,
 slow, no_account, auth_broken, auth_without_field, thinking_leak (the usage
 reports thinking tokens), fenced_result (a plain answer in a code fence, no
-structured_output) and prose_result (a plain answer that holds no JSON).
+structured_output), prose_result (a plain answer that holds no JSON) and
+verbose_array (the ok answer inside the array of events a user config with
+verbose on makes `--output-format json` print).
 FAKE_ARGS_FILE records the argument vector, FAKE_STDIN_FILE the prompt body,
 FAKE_THINKING_FILE the MAX_THINKING_TOKENS value the child received ("unset"
 when it had none). FAKE_STARTED_FILE is created once a slow turn has started
@@ -19,8 +21,8 @@ waiting.
 
 A `/usage` run receives a whitelisted environment, so it reads no FAKE_*
 variable. It takes its mode from a `usage-mode` file in its working directory
-(text, cost, slow, exit, is_error, not_json) and writes what it received -
-argv to `usage-args.json`, the environment's key set to `usage-env.json` -
+(text, cost, slow, exit, is_error, not_json, verbose_array) and writes what
+it received - argv to `usage-args.json`, the environment's key set to `usage-env.json` -
 into that same directory; a slow read creates `usage-started` there once it
 has started waiting.
 """
@@ -31,6 +33,9 @@ import time
 
 MODE = os.environ.get("FAKE_MODE", "ok")
 ARGS = sys.argv[1:]
+# The shape `--output-format json` has when the user's config has verbose on:
+# every event of the run in one array, the result frame last.
+VERBOSE_ARRAY = MODE == "verbose_array"
 
 if path := os.environ.get("FAKE_ARGS_FILE"):
     with open(path, "w", encoding="utf-8") as handle:
@@ -42,6 +47,10 @@ if path := os.environ.get("FAKE_THINKING_FILE"):
 
 
 def emit(obj, code=0):
+    if VERBOSE_ARRAY and obj.get("type") == "result":
+        obj = [{"type": "system", "subtype": "init", "session_id": "s-1"},
+               {"type": "assistant", "message": {"content": []}},
+               obj]
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
     sys.exit(code)
@@ -68,6 +77,7 @@ if ARGS[:2] == ["-p", "/usage"]:
     local = {"type": "result", "subtype": "success", "is_error": False,
              "duration_api_ms": 0, "num_turns": 0, "total_cost_usd": 0,
              "local_command": "usage", "session_id": "s-usage"}
+    VERBOSE_ARRAY = usage_mode == "verbose_array"
     if usage_mode == "slow":
         open("usage-started", "w").close()
         time.sleep(60)

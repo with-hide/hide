@@ -32,8 +32,9 @@ pub const HOOK_VERSION: u32 = 8;
 /// The installed Claude Code and Codex command version, independent of the
 /// pane reporting protocol. Version 10 adds passive Post observation slots;
 /// version 11 adds the permission and interrupt events (PRD engine-bundle-1
-/// D-10).
-pub const HOOK_ENTRY_VERSION: u32 = 11;
+/// D-10); version 12's Windows guard tests for the helper without a cmdlet
+/// (with-hide/hide-private#318).
+pub const HOOK_ENTRY_VERSION: u32 = 12;
 
 /// The intent table at the front of `PURPOSE_CONTEXT`, as a literal so the
 /// `hide` skill (`hide_kit::agents::GUIDE_SKILL`) carries the very same text.

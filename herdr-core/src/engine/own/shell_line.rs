@@ -19,48 +19,32 @@
 //! its arguments, each quoted for the shell that reads it, as Herdr's
 //! `agent.start` types it.
 
-/// The shell a line is typed into.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Shell {
-    Posix,
-    PowerShell,
-}
+use hide_shell::Syntax;
 
-impl Shell {
-    /// The shell a pane's program name says, or, when the name is unknown
-    /// or could not be read, the own engine's shell on the pane's machine:
-    /// PowerShell when `windows` (the machine whose holder runs the pane,
-    /// a device's system and not the core's) and a POSIX shell elsewhere.
-    /// cmd.exe reads neither line, so it has none: a pane a caller made run
-    /// it takes no start.
-    pub(super) fn of(name: Option<&str>, windows: bool) -> Option<Self> {
-        let Some(name) = name.filter(|name| !name.is_empty()) else {
-            return Some(if windows {
-                Self::PowerShell
-            } else {
-                Self::Posix
-            });
-        };
-        let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
-        let name = name.trim_start_matches('-').to_ascii_lowercase();
-        match name.strip_suffix(".exe").unwrap_or(&name) {
-            "pwsh" | "powershell" => Some(Self::PowerShell),
-            "cmd" => None,
-            _ => Some(Self::Posix),
-        }
+/// The shell a pane's program name says, or, when the name is unknown or
+/// could not be read, the own engine's shell on the pane's machine:
+/// PowerShell when `windows` (the machine whose holder runs the pane, a
+/// device's system and not the core's) and a POSIX shell elsewhere. cmd.exe
+/// reads neither line, so it has none: a pane a caller made run it takes no
+/// start.
+pub(super) fn shell_of(name: Option<&str>, windows: bool) -> Option<Syntax> {
+    match name.filter(|name| !name.is_empty()) {
+        Some(name) => Syntax::of_program(name),
+        None if windows => Some(Syntax::PowerShell),
+        None => Some(Syntax::Posix),
     }
 }
 
 /// `argv` as one command line `shell` reads, with no Enter.
-pub(super) fn command(argv: &[String], shell: Shell) -> Option<String> {
+pub(super) fn command(argv: &[String], shell: Syntax) -> Option<String> {
     let (program, args) = argv.split_first()?;
     Some(match shell {
-        Shell::Posix => std::iter::once(program)
+        Syntax::Posix => std::iter::once(program)
             .chain(args)
             .map(|word| posix_quote(word))
             .collect::<Vec<_>>()
             .join(" "),
-        Shell::PowerShell => powershell_script(program, args),
+        Syntax::PowerShell => powershell_script(program, args),
     })
 }
 
@@ -70,21 +54,21 @@ pub(super) fn command(argv: &[String], shell: Shell) -> Option<String> {
 /// and then ended with a failure (PRD D-7, B13). An agent that ends cleanly
 /// prints nothing. The POSIX line names no exit code, which zsh and bash
 /// spell `$?` and fish refuses to read, so one line serves all three.
-pub(super) fn resume_command(argv: &[String], agent: &str, shell: Shell) -> Option<String> {
+pub(super) fn resume_command(argv: &[String], agent: &str, shell: Syntax) -> Option<String> {
     let (program, args) = argv.split_first()?;
     let agent: String = agent
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '))
         .collect();
     Some(match shell {
-        Shell::Posix => format!(
+        Syntax::Posix => format!(
             "{} || printf 'hide: %s ended with a failure after its resume; this pane is a shell now.\\n' {}",
             command(argv, shell)?,
             posix_quote(&agent)
         ),
         // `Start-Process` itself succeeds whatever its program's exit code,
         // so the code is read from the process it hands back.
-        Shell::PowerShell => {
+        Syntax::PowerShell => {
             let (script, process) = powershell_parts(program, args);
             format!(
                 // The name is a string literal here, never a bare word,
@@ -101,8 +85,8 @@ pub(super) fn resume_command(argv: &[String], agent: &str, shell: Shell) -> Opti
 /// The longest of the lines `line` writes for each shell a pane may run,
 /// Enter included: a start or a resume is bounded as the shell it meets will
 /// type it. `None` when no shell takes it.
-pub(super) fn longest(line: impl Fn(Shell) -> Option<String>) -> Option<usize> {
-    [Shell::Posix, Shell::PowerShell]
+pub(super) fn longest(line: impl Fn(Syntax) -> Option<String>) -> Option<usize> {
+    [Syntax::Posix, Syntax::PowerShell]
         .into_iter()
         .filter_map(line)
         .map(|line| line.len() + 1)
@@ -121,7 +105,7 @@ fn posix_quote(value: &str) -> String {
     {
         return value.to_owned();
     }
-    hide_shell::quote::posix_single_quoted(value)
+    Syntax::Posix.single_quoted(value)
 }
 
 fn powershell_quote(value: &str) -> String {
@@ -134,7 +118,7 @@ fn powershell_quote(value: &str) -> String {
     {
         return value.to_owned();
     }
-    hide_shell::quote::powershell_single_quoted(value)
+    Syntax::PowerShell.single_quoted(value)
 }
 
 /// Herdr's PowerShell start: a script the program names runs in the shell,
@@ -258,15 +242,15 @@ mod tests {
             "@options",
         ]);
         assert_eq!(
-            command(&argv, Shell::Posix).as_deref(),
+            command(&argv, Syntax::Posix).as_deref(),
             Some("pi '' 'two words' 'a'\\''b' '$HOME' 'semi;colon' @options")
         );
         assert_eq!(
-            command(&argv, Shell::PowerShell).unwrap(),
+            command(&argv, Syntax::PowerShell).unwrap(),
             "if((Get-Command pi -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& pi '' 'two words' 'a''b' '$HOME' 'semi;colon' '@options'}else{Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" a''b $HOME semi;colon @options' -NoNewWindow -Wait}"
         );
         assert_eq!(
-            command(&words(&["claude"]), Shell::PowerShell).unwrap(),
+            command(&words(&["claude"]), Syntax::PowerShell).unwrap(),
             "& claude"
         );
     }
@@ -274,18 +258,18 @@ mod tests {
     #[test]
     fn the_shell_is_told_by_its_name_and_else_by_the_panes_machine() {
         for windows in [false, true] {
-            assert_eq!(Shell::of(Some("-zsh"), windows), Some(Shell::Posix));
-            assert_eq!(Shell::of(Some("fish"), windows), Some(Shell::Posix));
+            assert_eq!(shell_of(Some("-zsh"), windows), Some(Syntax::Posix));
+            assert_eq!(shell_of(Some("fish"), windows), Some(Syntax::Posix));
             assert_eq!(
-                Shell::of(Some("pwsh.exe"), windows),
-                Some(Shell::PowerShell)
+                shell_of(Some("pwsh.exe"), windows),
+                Some(Syntax::PowerShell)
             );
             assert_eq!(
-                Shell::of(Some("/usr/local/bin/pwsh"), windows),
-                Some(Shell::PowerShell)
+                shell_of(Some("/usr/local/bin/pwsh"), windows),
+                Some(Syntax::PowerShell)
             );
             assert_eq!(
-                Shell::of(Some("C:\\Windows\\System32\\cmd.exe"), windows),
+                shell_of(Some("C:\\Windows\\System32\\cmd.exe"), windows),
                 None
             );
         }
@@ -293,8 +277,8 @@ mod tests {
         // name), is the pane's machine's shell, whatever the core runs on:
         // a Mac core types PowerShell's line into a Windows device's pane.
         for name in [None, Some("")] {
-            assert_eq!(Shell::of(name, true), Some(Shell::PowerShell));
-            assert_eq!(Shell::of(name, false), Some(Shell::Posix));
+            assert_eq!(shell_of(name, true), Some(Syntax::PowerShell));
+            assert_eq!(shell_of(name, false), Some(Syntax::Posix));
         }
     }
 
@@ -303,7 +287,7 @@ mod tests {
         let line = resume_command(
             &words(&["claude", "--resume", "abc"]),
             "Claude Code",
-            Shell::Posix,
+            Syntax::Posix,
         )
         .unwrap();
         assert_eq!(
@@ -313,7 +297,7 @@ mod tests {
         let line = resume_command(
             &words(&["claude", "--resume", "abc"]),
             "it's",
-            Shell::PowerShell,
+            Syntax::PowerShell,
         )
         .unwrap();
         assert_eq!(
@@ -368,7 +352,7 @@ mod real_shell_tests {
             std::env::var_os(variable).unwrap_or_else(|| panic!("{variable} names the shell"));
         let home = tempfile::tempdir().unwrap();
         let argv: Vec<String> = argv.iter().map(|word| (*word).to_owned()).collect();
-        let line = resume_command(&argv, "Claude Code", Shell::Posix).unwrap();
+        let line = resume_command(&argv, "Claude Code", Syntax::Posix).unwrap();
         let output = Command::new(shell)
             .arg("-c")
             .arg(&line)

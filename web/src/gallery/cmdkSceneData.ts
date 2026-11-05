@@ -35,6 +35,7 @@ const tab = (checkout: string, panes: string[]) => ({ id: `t-${checkout}`, works
 
 export const RICH = {
   navigator: {
+    siblings_shown: 5,
     agent_scope: scopes.overall,
     focused_device_id: "local",
     devices: [{ agent_scope: scopes.device, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null }],

@@ -3,7 +3,8 @@ import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import { paneCommandLine } from "./pane-fixture";
 import { waitForTerminal } from "./group-start-helper";
-import { tabLayout, tabPanes, tabsOf, withControl } from "./daemon-actions";
+import { corePaneFocus, coreTerminalPane, shownTab, tabLayout, tabPanes, tabsOf, withControl } from "./daemon-actions";
+import { dumpOnFailure } from "./failure-dump";
 import { startFixture } from "./engine-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -42,7 +43,13 @@ test("Opening a new terminal and splitting it keeps one tab and both terminal id
     const first = await page.locator("[data-pane-view]").getAttribute("data-pane-view");
     await terminalRuns(page, fixture, first!);
     await page.keyboard.press(chord("split_right"));
-    await expect(page.locator("[data-pane-view]")).toHaveCount(2);
+    // A split the page could not place sends nothing and says why only in
+    // its own notes; they and the core's focus go with the failure
+    // (with-hide/hide-private#476).
+    await dumpOnFailure("split", async () => ({
+      page: await page.evaluate(() => window.__hideProbe?.diagnostics().slice(-5)),
+      core: await read((rest) => ({ terminal: coreTerminalPane(rest), focused: corePaneFocus(rest), shown: shownTab(rest) }), "the core's focus"),
+    }), () => expect(page.locator("[data-pane-view]")).toHaveCount(2));
     await expect.poll(() => sent.get("create_pane")).toBe(1);
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab);
     const ids = await page.locator("[data-pane-view]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-pane-view")!).sort());

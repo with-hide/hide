@@ -40,6 +40,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_conducted"
             | "mission_criteria_missing"
             | "mission_criteria_too_many"
+            | "mission_steps_invalid"
             | "mission_criteria_unmet"
             | "mission_criteria_protected"
             | "mission_checkers_invalid"

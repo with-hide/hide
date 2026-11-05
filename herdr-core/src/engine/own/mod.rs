@@ -1597,17 +1597,6 @@ impl<'g> Engine for OwnEngine<'g> {
         self.open_tab(workspace, None, label, None, focus, cwd, env, None)
     }
 
-    fn create_replacement_tab(
-        &self,
-        _wait: Wait,
-        workspace: &str,
-        cwd: &str,
-        env: Env,
-    ) -> Answer<(String, String)> {
-        self.check()?;
-        self.open_tab(workspace, None, "", None, false, cwd, env, None)
-    }
-
     fn launch_tab(
         &self,
         _wait: Wait,
@@ -2211,7 +2200,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs a program; an agent starts only in an idle shell"),
             ));
         }
-        let shell = shell_line::Shell::of(processes.shell_name(), self.shared.windows).ok_or_else(|| {
+        let shell = shell_line::shell_of(processes.shell_name(), self.shared.windows).ok_or_else(|| {
             refused(
                 "agent_start_refused",
                 format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),
@@ -4444,11 +4433,7 @@ mod tests {
         let session = engine.session(WAIT).unwrap();
         let shown = session.panes.iter().find(|p| p.pane_id == pane).unwrap();
         assert_eq!(shown.cwd.as_deref(), Some("/w/sub"));
-        assert_eq!(shown.terminal_title.as_deref(), Some("✳ Fix the tests"));
-        assert_eq!(
-            shown.terminal_title_stripped.as_deref(),
-            Some("Fix the tests")
-        );
+        assert_eq!(shown.terminal_title.as_deref(), Some("Fix the tests"));
         assert_eq!(shown.agent_status, "working");
         assert_eq!(shown.foreground_process.as_deref(), Some("gemini"));
         assert_eq!(session.agents[0].agent.as_deref(), Some("gemini"));

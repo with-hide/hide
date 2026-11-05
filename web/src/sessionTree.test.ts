@@ -15,6 +15,9 @@ function tree(rows: AgentRow[]) {
 const drawn = (lines: ReturnType<typeof sessionTreeLines>) =>
   lines.map((line) => (line.kind === "agent" ? `${line.row.agent.pane_id}@${line.row.depth}` : `+${line.count}@${line.depth}`));
 
+// The core names the number on the snapshot (`navigator.siblings_shown`); the lines take it as given.
+const SIBLINGS = 5;
+
 describe("sessionTreeLines", () => {
   // root > a > b > c > d > e, with a sibling s of c under b.
   const rows = [agent("root", ["a"]), agent("a", ["b"]), agent("b", ["c", "s"]), agent("c", ["d"]), agent("d", ["e"]), agent("e"), agent("s")];
@@ -22,14 +25,14 @@ describe("sessionTreeLines", () => {
   const everyOpen = new Set(["root", "a", "b", "c", "d"]);
 
   it("opens every level the operator opened and stops at a folded row", () => {
-    expect(drawn(sessionTreeLines(rows[0]!, byPane, everyOpen, new Set()))).toEqual(["root@0", "a@1", "b@2", "c@3", "d@4", "e@5", "s@3"]);
-    expect(drawn(sessionTreeLines(rows[0]!, byPane, new Set(["root", "a", "b"]), new Set()))).toEqual(["root@0", "a@1", "b@2", "c@3", "s@3"]);
-    expect(drawn(sessionTreeLines(rows[0]!, byPane, new Set(["a", "b"]), new Set()))).toEqual(["root@0"]);
+    expect(drawn(sessionTreeLines(rows[0]!, byPane, everyOpen, new Set(), SIBLINGS))).toEqual(["root@0", "a@1", "b@2", "c@3", "d@4", "e@5", "s@3"]);
+    expect(drawn(sessionTreeLines(rows[0]!, byPane, new Set(["root", "a", "b"]), new Set(), SIBLINGS))).toEqual(["root@0", "a@1", "b@2", "c@3", "s@3"]);
+    expect(drawn(sessionTreeLines(rows[0]!, byPane, new Set(["a", "b"]), new Set(), SIBLINGS))).toEqual(["root@0"]);
   });
 
   it("keeps rows below the indent limit in the limit's column, hanging from the rail above", () => {
     expect(SESSION_INDENT_LEVELS).toBe(3);
-    const lines = sessionTreeLines(rows[0]!, byPane, everyOpen, new Set());
+    const lines = sessionTreeLines(rows[0]!, byPane, everyOpen, new Set(), SIBLINGS);
     const at = (pane: string) => lines.find((line) => line.kind === "agent" && line.row.agent.pane_id === pane)!.place;
     expect(at("c")).toEqual({ depth: 3, last: false, rails: [false, false] });
     // c has a later sibling (s), so its column's rail runs past d and e.
@@ -42,7 +45,7 @@ describe("sessionTreeLines", () => {
     const kids = ["k1", "k2", "k3", "k4", "k5", "k6", "k7"];
     const wide = [agent("root", kids), ...kids.map((id) => agent(id))];
     const map = tree(wide);
-    expect(drawn(sessionTreeLines(wide[0]!, map, new Set(["root"]), new Set()))).toEqual(["root@0", "k1@1", "k2@1", "k3@1", "k4@1", "k5@1", "+2@1"]);
-    expect(drawn(sessionTreeLines(wide[0]!, map, new Set(["root"]), new Set(["root"])))).toHaveLength(8);
+    expect(drawn(sessionTreeLines(wide[0]!, map, new Set(["root"]), new Set(), SIBLINGS))).toEqual(["root@0", "k1@1", "k2@1", "k3@1", "k4@1", "k5@1", "+2@1"]);
+    expect(drawn(sessionTreeLines(wide[0]!, map, new Set(["root"]), new Set(["root"]), SIBLINGS))).toHaveLength(8);
   });
 });

@@ -38,13 +38,10 @@ pub struct ClosedContext {
     pub agent_area: Option<(String, usize)>,
     #[serde(default)]
     pub agent_group: Option<String>,
-    /// A shell is made before the close: a new tab when the primary
-    /// workspace's last tab closes, or a pane in the closing tab when
-    /// `replacement_in_tab` says so.
-    pub replacement_shell: bool,
-    /// The shell goes into the closing tab beside its last agent, so the tab
-    /// and the name the operator gave it stay (docs/UI_BEHAVIOR.md, Agent
-    /// areas). Set only together with `replacement_shell`.
+    /// A shell is made in the closing tab beside its last agent before the
+    /// close, so the tab and the name the operator gave it stay
+    /// (docs/UI_BEHAVIOR.md, Agent areas). A record saved with the old
+    /// `replacement_shell` field loads with that field ignored.
     #[serde(default)]
     pub replacement_in_tab: bool,
     /// The name the operator gave the tab, the only label a reopen or a
@@ -508,7 +505,6 @@ mod tests {
             tab_index: 0,
             agent_area: None,
             agent_group: None,
-            replacement_shell: false,
             replacement_in_tab: false,
             tab_name: ClosedTabName::Unnamed,
         }

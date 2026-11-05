@@ -1561,7 +1561,6 @@ fn close_capture_request(key: &str) -> crate::recent_closed::capture::CloseCaptu
             tab_index: 0,
             agent_area: None,
             agent_group: None,
-            replacement_shell: false,
             replacement_in_tab: false,
             tab_name: Default::default(),
         },

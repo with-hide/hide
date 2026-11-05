@@ -86,7 +86,7 @@ fn wait_for<T>(what: &str, mut ready: impl FnMut() -> Option<T>) -> T {
 
 /// `wsl.exe -d <distro> -u root -e sh -c <script>`, which must succeed;
 /// answers its standard output.
-fn as_root(distro: &str, script: &str) -> String {
+pub(super) fn as_root(distro: &str, script: &str) -> String {
     let output = Command::new("wsl.exe")
         .args(["-d", distro, "-u", "root", "-e", "sh", "-c", script])
         .output()

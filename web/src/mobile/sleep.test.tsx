@@ -13,6 +13,9 @@ vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
 });
 
+// Each test loads the whole phone app afresh, which a loaded machine takes longer than the default 5 s to do.
+vi.setConfig({ testTimeout: 30_000 });
+
 class FakeSocket {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -55,7 +58,7 @@ async function openDetail(listed: PhoneAgent) {
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   await act(async () => socket.onopen?.());
   await serve({ type: "hello", mac_name: "Mac", phone_id: "phone-a", name: null, vapid_public_key: "key", notifications: "off" });
-  await serve({ type: "agents", groups: [{ group: "seen", count: 1, agents: [listed] }], interface_language: "en", color_theme: null });
+  await serve({ type: "agents", groups: [{ group: "seen", count: 1, rows: [{ kind: "agent", ...listed }] }], devices: [], interface_language: "en", color_theme: null });
   await act(async () => root.render(<App />));
   await act(async () => container.querySelector<HTMLElement>('[data-phone-agent="local|w1:p1"]')!.click());
   return { container, socket, serve, root, unmount: () => act(async () => root.unmount()) };
@@ -94,7 +97,7 @@ it("shows a sleeping agent as Sleeping with Wake instead of its shell, and Wake 
     expect(container.querySelector<HTMLButtonElement>('[data-phone-wake="wake"]')!.disabled).toBe(false);
 
     // The core's next list says it is waking: the state follows, with no Wake to press twice.
-    await serve({ type: "agents", groups: [{ group: "seen", count: 1, agents: [agent({ status_code: "waking", sleep: { state: "waking", since_unix_ms: Date.now() - 3 * 3_600_000 } })] }], interface_language: "en", color_theme: null });
+    await serve({ type: "agents", groups: [{ group: "seen", count: 1, rows: [{ kind: "agent", ...agent({ status_code: "waking", sleep: { state: "waking", since_unix_ms: Date.now() - 3 * 3_600_000 } }) }] }], devices: [], interface_language: "en", color_theme: null });
     const waking = container.querySelector('[data-phone-sleep="waking"]')!;
     expect(waking.textContent).toContain("Waking");
     expect(waking.textContent).toContain("Resuming the conversation from");

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { groupMissions, missionEntry, projectMissions, shownMission, turnCount } from "./missionList";
+import { workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionNode } from "./snapshot";
 
 // The Mission tool's list (PRD mission-tool D-08, D-09, B2, B5, B7, B23): which
 // missions it lists, the group each stands in, and the rail's number.
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
@@ -14,7 +15,7 @@ function mission(id: string, extra: Partial<Mission> = {}): Mission {
 }
 
 const noRows = () => null;
-const group = (m: Mission, rows: (node: MissionNode) => AgentRow | null = noRows) => missionEntry(m, rows).group;
+const group = (m: Mission, rows: (node: MissionNode) => AgentRow | null = noRows) => missionEntry(m, (n) => workerEscalation(rows(n))).group;
 
 describe("the missions it lists (D-09)", () => {
   it("takes the front project's missions on its device, in any of its checkouts, and no other project's", () => {
@@ -48,7 +49,7 @@ describe("the group a mission stands in (B5) and the rail's number (D-08)", () =
   });
 
   it("counts the missions in 내 차례, so the rail and the group never disagree", () => {
-    const entries = [mission("a", { decision: "?" }), mission("b"), mission("c", { status: "done", decision: "?" }), mission("d", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 1, pr_state: "pending", landing: { state: "left", action: "merge" } })], landing_order: ["x"] })].map((m) => missionEntry(m, noRows));
+    const entries = [mission("a", { decision: "?" }), mission("b"), mission("c", { status: "done", decision: "?" }), mission("d", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 1, pr_state: "pending", landing: { state: "left", action: "merge" } })], landing_order: ["x"] })].map((m) => missionEntry(m, () => null));
     expect(turnCount(entries)).toBe(2);
     expect(turnCount([])).toBe(0);
   });
@@ -62,7 +63,7 @@ describe("the list's order (B5, B7)", () => {
       mission("closed-first", { status: "done", closed_at_unix_ms: 10 }),
       mission("closed-last", { status: "cancelled", closed_at_unix_ms: 30 }),
       mission("ask", { decision: "?" }),
-    ].map((m) => missionEntry(m, noRows));
+    ].map((m) => missionEntry(m, () => null));
     expect(groupMissions(entries).map(({ group: name, entries: rows }) => [name, rows.map((row) => row.mission.id)])).toEqual([
       ["turn", ["ask"]],
       ["running", ["new-run", "old-run"]],

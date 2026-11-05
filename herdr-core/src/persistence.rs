@@ -1931,9 +1931,23 @@ mod tests {
         let mut state = UiStateSnapshot::default();
         state.conductor_settings.clean_merged = false;
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the settings");
+        // The map's default direction is not written, so a build from before it reads this file.
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("map_flow"));
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
         assert!(!restored.conductor_settings.clean_merged);
+        assert_eq!(
+            restored.conductor_settings.map_flow,
+            crate::missions::MapFlow::Down
+        );
+        state.conductor_settings.map_flow = crate::missions::MapFlow::Across;
+        save(&path, &state, &PaneTerminalSizes::new()).expect("persist the turned map");
+        let (restored, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(
+            restored.conductor_settings.map_flow,
+            crate::missions::MapFlow::Across
+        );
     }
 
     /// with-hide/hide-private#552: Settings › Mission kept before the

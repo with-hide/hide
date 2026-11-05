@@ -44,9 +44,9 @@ In Claude Code every tool call reaches the helper, an MCP tool, a search, a suba
 In Codex the matcher keeps to the shell, the native questions and those file tools.
 Codex matches a tool by its whole name: with a hook on `request_user_input` alone, the async question tool of 0.162.1 never reached the helper (measured 2026-10-15 in an isolated `CODEX_HOME`), so each question tool is named.
 An entry of Hide's whose matcher differs from the one written today reads Outdated at its own version, so the next kit pass rewrites it and records its Codex trust.
-The version-eleven marker makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
+The version-twelve marker (the Windows guard's .NET check, [Installing](#installing)) makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
 Already-running sessions pick up the changed hooks when restarted.
-The installed-command version (`HOOK_ENTRY_VERSION`, now 11) is separate from the pane-report protocol (`HOOK_VERSION`, still 8).
+The installed-command version (`HOOK_ENTRY_VERSION`, now 12) is separate from the pane-report protocol (`HOOK_VERSION`, still 8).
 A pane already reporting protocol 8 keeps its connection and child counts both before and after that kit pass; updating a command does not invalidate a readable report.
 
 Every entry carries `--runtime claude-code|codex` and `--source hide-subagents@<version>` inside its command (in Claude Code's Windows entry, inside its `args`).
@@ -313,7 +313,7 @@ One corpus (`tests/fixtures/global-guard-corpus.json`) is run by the guard and b
 A file tool's read passes; a shell call cannot be told apart from a write, so one naming the file is refused, read or not.
 Each refusal writes one `global_instruction` `guard.refused` line to `spawn-guard.log` with the runtime and the pane, never the command or its paths.
 OpenCode, Pi and omp take the same refusal through the plugin helper: their plugin and extension send a call naming the file to the helper whether or not a project guardrail is on.
-Like the guardrails it is a guard, not a security boundary: a script that spells the name another way is not seen, Claude Code's PowerShell tool on Windows reaches no pre-tool hook, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
+Like the guardrails it is a guard, not a security boundary: a script that spells the name another way is not seen, a call of Claude Code's PowerShell tool reaches the hook but is not judged by this guard yet (with-hide/hide-private#576), and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
 The core follows a link at the file only to an existing regular `.md` or `.txt` file: through a link it never makes a file or a folder, and a link to anything else is read as an unreadable file, given to no session.
 A move of the core carries the text the core reads through such a link as a regular file, since the link would point nowhere on the receiving machine, and leaves a link whose file the core reads as too large or unreadable behind with a `global_instruction.link_left` diagnostic and its reason.
 
@@ -372,13 +372,15 @@ What is refused, in a pane of a registered checkout, is an opener command whose 
 - `xdg-open`, `gio open`, `sensible-browser`, `x-www-browser`, `www-browser`, `wslview` and the desktops' `gnome-open`, `kde-open`, `kde-open5`, `exo-open` and `gvfs-open`;
 - cmd's `start` (and Git Bash's `start` script, which calls it), PowerShell's `Start-Process` with its aliases `start` and `saps`, `Invoke-Item` and its alias `ii`, and `explorer`, matched without case as Windows matches them; cmd's `/` switches and an empty window title are skipped, and any viewable operand is a target, since `start chrome x.html` shows `x.html` as `start x.html` does;
 - `python -m webbrowser <url>`, the system opener through Python;
-- each of these as the line `cmd /c` (`/k`, Git Bash's `//c`) or `powershell -Command` (`pwsh`, `-c`) is handed, one level deep.
+- each of these as the line `cmd /c` (`/k`, Git Bash's `//c`) or `powershell -Command` (`pwsh`, `-c`) is handed, one level deep: PowerShell's line as PowerShell reads it, and cmd's, whose own syntax Hide does not read, in the syntax of the call it came in.
 
 A viewable target is an `http:`, `https:` or `file:` URL, or a path whose extension Hide's View shows: `html` and `htm`; `png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `avif`, `svg` and `ico`; `pdf`; `md`, `markdown` and `mdx`; `txt`, `log`, `csv`, `json`, `yaml` and `yml`; `mp4`, `webm` and `mov`.
 A pattern (`out/*.png`) is refused with a `<path>` to fill once per file it matches, since `hide file open` takes one path.
 Everything else runs untouched: a folder (`open .`), a reveal (`open -R`, `explorer /select,`), a header search (`open -h`), `open -f`, an app with no target (`open -a Simulator`), an app bundle, a project (`.xcodeproj`), a source file, `--help`, a browser program run directly (`google-chrome --headless`, `firefox x.html`), which is a QA tool as often as a viewer, and an opener hidden in `bash -c`, `$(...)` or a script.
-The guard reads the whole call as a shell would read it (`hide-shell`), one top-level simple command at a time (`&&`, `||`, `;`, `|`, `&`, newline), with quotes, backslashes, heredoc bodies and comments set aside, so a commit message or a heredoc that quotes `open x.html` is not an opening.
-A heredoc inside `$(...)` is read as text to its delimiter line, so a quote or a parenthesis in its body does not count, and text that still ends inside a quote, a backtick or a `$(` is a syntax error a shell would not run, so it holds no opening.
+The guard reads the whole call as the shell that runs it would read it (`hide-shell`, in the syntax [Which shell reads a call](#which-shell-reads-a-call) names), one top-level simple command at a time (`&&`, `||`, `;`, `|`, `&`, newline, and in PowerShell a `{ }` block), with quotes, escapes, heredoc bodies and here-strings and comments set aside, so a commit message or a heredoc that quotes `open x.html` is not an opening.
+In PowerShell `\` is a plain character and `` ` `` the escape, so `ii .\out.png` names `.\out.png`; in Git Bash, a POSIX shell, the same text names `.out.png`, as Git Bash would run it.
+The command the refusal offers is written for the same shell, so its path is the one the agent wrote: `hide file open .\out.png` for PowerShell, `hide file open 'C:\a b\x.png'` for `Invoke-Item 'C:\a b\x.png'`, and a quoted `hide` called with `&` there.
+A heredoc inside `$(...)` is read as text to its delimiter line, so a quote or a parenthesis in its body does not count, and text that still ends inside a quote, a backtick or a `$(` (in PowerShell also a block, a here-string, a `<# #>` comment, a stray closing bracket or a `<`) is a syntax error the shell would not run, so it holds no opening and the call runs.
 An opening chained behind another command (`npm run build && open dist/index.html`) is refused as a whole and nothing in the chain runs, since the hook sees the tool call and not one command of it; the reason says to run the other commands separately.
 
 The registered-checkout test is `hide workspace bootstrap` through the sibling `hide`, the same daemon-owned call `SessionStart` makes, needing no renderer, and it is asked only for a call about to be refused.
@@ -393,6 +395,23 @@ Each refusal appends one `opener.refused` line to the hooks' log, `~/.hide/agent
 The per-call cost is what an ordinary shell call pays: the payload is read within 0.5 seconds, and a call is parsed only when it holds both a word of an opener (`open`, `start`, `saps`, `invoke-item`, `explorer`, `browser`, `wslview`, or `ii` as a word) and a viewable mark (a URL scheme, or a `.` followed by one of the extensions above and no further letter or digit), so any other call costs one process start and the [project guardrails](#project-guardrails)' policy read.
 OpenCode's plugin and Pi's and omp's extension apply the same test in JavaScript before they start the helper.
 `hide-agent-hooks/tests/it/opener_guard.rs` runs the helper for Claude Code, Codex and Grok beside a stand-in `hide`, `tests/it/agy_hooks.rs` for agy and `tests/it/opencode_helper.rs` for the OpenCode, Pi and omp helper, the plugins' host tests check that the call reaches the helper, and `src/opener_guard.rs` holds the reading's table tests.
+
+## Which shell reads a call
+
+A shell call is read in the syntax of the shell that runs it, decided once, by `pre_tool::shell_syntax` from the runtime, its tool and the system, and carried in the call (`pre_tool::Call::syntax`); a guard reads the call in that syntax and never guesses it, and every difference between the syntaxes is read in `hide-shell` (`hide_shell::Syntax`).
+The tool decides, not the shell of the pane: an agent starts a shell of its own for each call.
+
+| Runtime | Tool | macOS, Linux | Windows | Source |
+| --- | --- | --- | --- | --- |
+| Claude Code | `Bash` | POSIX | POSIX (Git Bash) | tools reference, "PowerShell tool"; hooks reference: on Windows without Git Bash Claude Code "doesn't register the Bash tool at all" |
+| Claude Code | `PowerShell` | PowerShell | PowerShell | tools reference, "PowerShell tool": on by default on Windows, `pwsh` on macOS and Linux when enabled; its payload has the `Bash` tool's fields |
+| Codex | `Bash` | POSIX | PowerShell | `codex-rs/shell-command/src/shell_detect.rs`, `default_user_shell`: PowerShell on every Windows |
+| Grok | `run_terminal_command` | POSIX | PowerShell | Grok's hooks guide and `detect_windows_shell` (above); Git Bash only through `GROK_SHELL` |
+| agy | `run_command` | POSIX | PowerShell, unconfirmed | no capture of a Windows call yet |
+| OpenCode, Pi, omp | `bash`, `shell` | POSIX | POSIX | their bash tool runs a POSIX shell; unconfirmed on Windows |
+
+No payload names its shell beyond the tool: Claude Code's `Bash` and `PowerShell` calls carry the same fields, and no hook variable says which shell a call runs in.
+Claude Code's Windows hook entry has no matcher, so a `PowerShell` tool call reaches the helper as a `Bash` call does; the opener guard reads it, and the guardrails, the global instruction's guard and the plan record take only the `Bash` call so far, read as POSIX (with-hide/hide-private#576).
 
 ## Folder trust for the worktrees Hide makes
 
@@ -482,8 +501,8 @@ A plain folder project takes only Guard files.
 `git checkout <word>` reads `<word>` as Git does: a local branch of that name first, then a path that is there, then a commit; anything after `--` is paths.
 A repository nested in a checkout, a submodule or a clone, is a folder of the checkout around it, so its files take that checkout's protections and no protection locks an agent out of it; a `git` or `gh` command run there works on the nested repository, which no protection guards; only a project whose own repository cannot be read refuses, and then only a write or a `git` command a protection that is on needs the repository for.
 Paths are compared after links are followed, and with or without case as the folder compares names, judged from the entries the folder already holds so the hook writes nothing there, and taken as ignoring case when no entry tells (B24).
-A `cd` or `pushd` earlier in a shell line moves where the commands after it run (a bare `cd` goes home), and `git -C <dir>` moves one command; the line is read as the [opener guard](#the-opener-guard) reads it, a POSIX shell's words one simple command at a time with quotes, heredoc bodies and comments set aside.
-A PowerShell command's backslash path (`.\.env`, `C:\repo`) is therefore not resolved: on Windows the file tools and the `git` and `gh` commands that name no backslash path are guarded, and the rest is the gap [INSTALL.md](INSTALL.md#what-each-system-supports) records.
+A `cd` or `pushd` earlier in a shell line moves where the commands after it run (a bare `cd` goes home), and `git -C <dir>` moves one command; the line is read as a POSIX shell reads it (`hide_shell::Syntax::Posix`), one simple command at a time with quotes, heredoc bodies and comments set aside, whichever shell runs it: the guardrails do not take the [syntax of the call](#which-shell-reads-a-call) yet (with-hide/hide-private#576).
+A PowerShell command's backslash path (`.\.env`, `C:\repo`) is therefore not resolved, and a call of Claude Code's PowerShell tool is not judged: on Windows the file tools and the `git` and `gh` commands that name no backslash path are guarded, and the rest is the gap [INSTALL.md](INSTALL.md#what-each-system-supports) records.
 In Git Bash, the shell Claude Code runs on Windows, a backslash path is read as that shell runs it: quoted (`git -C 'C:\repo'`) it is the path, unquoted its backslashes are escapes, there and in the hook alike; a drive mount (`/c/work/...`, `/cygdrive/c/...`) is the drive's path (`hide_platform::path::shell_drive_path`).
 
 The refusal reaches the agent in English, in its runtime's deny shape, and names the protection, what the call did and what to do instead: `Not run: the "Guard files" protection is on for this project in Hide. This call reads or changes a path on the project's protected list. Ask the operator ...`.
@@ -824,7 +843,7 @@ It asks for them as `hide inbox --hook --session <id> --turn-end` does, prints `
 A Stop with `stopHookActive: true` makes no letter pull and allows the turn to end even if confirmation failed; it still updates the subagent count.
 Prompt, tool and Stop intake share the session parser: either `sessionId` or `session_id` is accepted, equal pairs are accepted, and conflicting pairs take no letters and record `session_conflict` without either value.
 The core recognizes a bell's turn and keeps the normal five-minute wait for letters arriving during an operator's turn ([delivery.md](delivery.md#safe-intake-and-manual-fallback)).
-`GuidanceAgent::version()` is per agent: Grok and Antigravity write `hide-guidance@9`, retired Cursor layouts stay at 7 and the other retired layouts at 6 for removal only.
+`GuidanceAgent::version()` is per agent: Grok writes `hide-guidance@10` and Antigravity `hide-guidance@11`, both raised when their Windows check stopped using a cmdlet, retired Cursor layouts stay at 7 and the other retired layouts at 6 for removal only.
 An older active entry reads Outdated until the kit replaces it with the captured state route.
 The bell line names `hide inbox` for a session still running older hook entries.
 Grok 1.0.62 keeps the loaded entries after the file changes; `/hooks`, then `r`, reloads them without restarting the session (measured with separate command tags before and after reload in an isolated session).
@@ -1109,7 +1128,9 @@ Every entry's command is guarded, so a session whose app or helper was moved or 
 | Windows | Claude Code | `"command": "powershell.exe", "args": ["-NoProfile", "-NonInteractive", "-Command", "<guard>"]` |
 | Windows | Codex, Grok | `"command": "<guard>"` |
 
-On Windows `<guard>` is `if (Test-Path -LiteralPath '<kit folder>\hide-agent-hooks.exe' -PathType Leaf) { & '<kit folder>\hide-agent-hooks.exe' hook ... }`, with a quote inside the path doubled, as PowerShell reads it.
+On Windows `<guard>` is `if ([System.IO.File]::Exists('<kit folder>\hide-agent-hooks.exe')) { & '<kit folder>\hide-agent-hooks.exe' hook ... }`, with a quote inside the path doubled, as PowerShell reads it.
+The test for the helper is a .NET call, not the `Test-Path` cmdlet entries before command version 12 used: Windows PowerShell loads a cmdlet's module on its first use and, on an account with no module cache, first builds that cache for every installed module ("Preparing modules for first use"), which on a fresh CI runner took four hooks started together 38 to 48 s, past the 8 s a hook is given (with-hide/hide-private#318).
+No Windows guard Hide installs, Grok's and agy's included, calls a cmdlet: `install::tests::a_windows_guard_calls_no_cmdlet` and `guidance::tests::the_windows_guidance_commands_call_no_cmdlet` read each one as PowerShell does and find no command but the helper, and the Windows lane runs each with an empty module cache inside its hook timeout (`windows_hook_command::a_windows_guard_with_an_empty_module_cache_answers_inside_its_hook_timeout`).
 The forms follow what each runtime documents or, where its documentation is silent, what its source does:
 
 - Claude Code passes a command string to `sh -c` on macOS and Linux, to Git Bash on Windows, or to PowerShell when Git Bash is not installed, and spawns `command` with `args` directly, with no shell, on every system (hooks reference, "Exec form and shell form", <https://code.claude.com/docs/en/hooks>; `args` since 2.1.139, below the 2.1.278 Memory needs). A string would meet two different shells on two Windows machines, so the Windows entry names PowerShell in exec form and the guard always runs in PowerShell.
@@ -1180,7 +1201,12 @@ A pane that names no installation, a Herdr pane or a plain terminal, lets every 
 
 A `hide` that another installation put first on the pane's `PATH` hands the call to `HIDE_INSTALL_CLI` (`hided::pane_install`), so the call speaks its own daemon's protocol.
 In a pane of an installation other than the app, `hide` asks the device bridges first and this account's daemon after (`workspace_cli::bootstrap`), since the daemon would bind the pane by its folder alone.
-The call names the pane's installation, and a daemon of another one refuses it with `other_install` before it looks at the folder (`pane_auth`), so a pane whose own Hide does not answer never runs its calls against another.
+The call names the pane's installation, and a daemon or device node of another one refuses it with `other_install` before it looks at the folder (`pane_auth`, `hide_host::panes`).
+The refusal alone cannot hold against an earlier build, which ignores the name it does not know and binds the pane by its folder, so the answer names its installation too and the call takes a reference only from an answer naming the pane's own (`workspace_cli::read_bootstrap_answer`); an answer naming none or another is `install_unconfirmed`, its reference is never used, and a node that answers so neither succeeds for the pane nor makes it ambiguous.
+A refusal of another installation's node (`other_install`) is no answer either, in any bridge order, so it never replaces the reason of the daemon or a node that may be the pane's own.
+A pane whose own Hide does not answer therefore never runs its calls against another, whatever build the other runs.
+The same holds against an earlier build of the pane's own installation: in the app's case that is the time between the bundle being replaced and the next app launch, whose `hide connect` replaces the daemon, and the refusal says to quit and reopen Hide.
+The added answer field moves no schema or protocol number: an earlier `hide` reads only `ok`, `reason` and `reference`.
 The `hide` link in the command folder stays with the installation that holds it while that installation's command is there: the other's part reads Not on this machine, "another Hide on this account holds it", and takes the name back once that command is gone.
 
 The kit record keeps the app's parts, command and hook route where earlier builds read them, and every other installation's under `installs`.
@@ -1206,6 +1232,7 @@ It runs `tests/opencode/plugin2.test.mjs` the same way, which loads the generate
 
 Pi's and omp's extension is tested at the same three layers, none of which runs the operator's Pi or omp.
 `hide-agent-hooks/src/plugin/tests.rs` holds the file tests for all three script files, and `tests/it/pi_extension.rs` pins both files' bytes and runs `tests/pi-extension/extension.test.mjs` in Node once per agent, which loads the generated file and replays the event and context shapes captured from Pi 1.0.4 and omp 18.7.0 (`tests/fixtures/pi-extension/`) against a stand-in helper: what stays out, the hidden message, confirmation after the reply and once across omp's re-entry, the budgets, omp's counts and `ask`, and that no handler throws.
+Both Node tests start the same stand-in helper (`tests/it/host_helper.rs`), POSIX sh with builtins only, which logs each call and answers from the answers file the test writes (`tests/stand-in-answers.mjs`): the scripts kill a helper past its budget, so the stand-in costs what the helper costs, and one that started a JavaScript runtime per call spent the 1.5 s letters budget on a loaded machine before it logged the call.
 `tests/it/opencode_helper.rs` checks through the built helper, beside a stand-in `hide`, which session Memory is asked for (Pi's and omp's host id, never the session file; OpenCode's own id), which Memory context a prompt asks for (the index with the first prompt, cards after), its prompt on stdin, and that the letters ride whatever Memory answers.
 Which session a receipt is signed for and what the core answers are `hide-memory`'s tests (`src/hook.rs`) and the core's (`herdr-core/src/memory_hook.rs`, `hided/tests/it/remote_core.rs`).
 `web/e2e/pi-omp-extension.spec.ts` lets the kit write both files into a private `HOME`, runs a Pi stand-in and an omp stand-in (`web/e2e/pi-omp-host.ts`) in the two panes of an isolated engine, and checks a letter in each direction on the next prompt and its confirmation once written, the opener guard's refusal in both, and omp's subagent counts with a subagent prompt that takes no letter.

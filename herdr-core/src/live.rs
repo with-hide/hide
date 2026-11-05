@@ -1041,7 +1041,6 @@ pub(crate) fn spawn_remote_control_checked(
                         safety: Some(safety),
                         failed_terminals,
                         target,
-                        retain_for_reopen: false,
                         allow_replacement_create: false,
                         replacement: None,
                         key: request_id.clone(),

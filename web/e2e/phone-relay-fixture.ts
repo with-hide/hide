@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { fixtureExecutable } from "./platform-fixture.ts";
 import { ownUntilWorkerExit } from "./worker-owned.ts";
+import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 import type { PhoneAgent, ServerFrame } from "../src/mobile/protocol";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -84,12 +85,20 @@ export async function startPhoneRelay(port = 0) {
   const errors: string[] = [];
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
-  const state = { protocol: 1, offline: false, refusal: "", sleeping: false, push: false, dropInputReply: false };
+  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, dropInputReply: false, refuseMission: "" };
   const wire = { binaryFrames: 0 };
-  const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, groups: [
-    { group: "needs_you", count: 1, agents: [{ ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent] },
-    { group: "working", count: 2, agents: [] },
+  const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, devices: [{ device_id: "local", label: null, local: true, connected: true, needs_you: 1, working: 2 }], groups: [
+    { group: "needs_you", count: 1, rows: [{ kind: "agent", ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent & { kind: "agent" }] },
+    { group: "working", count: 2, rows: [] },
   ] });
+  // One mission that waits on the Conductor's question, as the core's `missions` frame lists it.
+  const missions = (): ServerFrame => ({ type: "missions", failed: false, items: [{
+    id: "mission-one", title: "Ship the release", device_id: "test-device", device_label: null, status: "running", decision: "Sign the build?",
+    question: { key: 2, why: "The certificate expired", options: ["Sign it", "Wait"], recommend: 1, node: null, asked_at_unix_ms: 1 },
+    answer: null, answer_failed: null, landing_order: [], created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, stale: false,
+    conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: "claude", agent: null },
+    nodes: [{ key: "a", title: "Bump the version", kind: "change", depends_on: [], status: "done", blocked: null, delivery: "pr", pr: 7, pr_state: "merged", base_pr: null, stage: null, attention: null, landing: null, agent_runtime: "ended", worker_agent: "claude", agent: null, escalation: null }],
+  }] });
   const server = createServer((request, response) => {
     void (async () => {
       const pathname = new URL(request.url!, "http://localhost").pathname;
@@ -118,6 +127,7 @@ export async function startPhoneRelay(port = 0) {
       await send(id, { type: "hello", mac_name: pairing.name, phone_id: "phone-one", name: "Phone", vapid_public_key: vapid.getPublicKey().toString("base64url"), notifications: "unasked" });
       await send(id, { type: "meta", push_mode: state.push ? "app_closed" : "off", other_phones: 0 });
       await send(id, groups());
+      await send(id, missions());
     } else if (data.type === "ping") await send(id, { type: "pong", id: Number(data.id) });
     else if (data.type === "open" || data.type === "view") {
       await send(id, { type: "conversation", device_id: agent.device_id, pane_id: agent.pane_id, state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "The encrypted connection is ready.", truncated: false, at_ms: 1 }], before: null });
@@ -131,6 +141,7 @@ export async function startPhoneRelay(port = 0) {
     }
     else if (data.type === "start_sheet" && data.open) await send(id, { type: "start_catalog", targets: [{ id: "home:test-device", device_id: "test-device", place: null, device_label: null, connected: true }], core_platform: "macos aarch64", kinds: [{ id: "claude", models: [] }], remembered: { kind: "claude", models: {} } });
     else if (data.type === "start_agent") await send(id, { type: "start_result", request_id: String(data.request_id), ok: true, reason: null, device_id: agent.device_id, pane_id: agent.pane_id });
+    else if (data.type === "answer_mission") await send(id, { type: "mission_result", request_id: String(data.request_id), mission: String(data.mission), ok: !state.refuseMission, reason: state.refuseMission || null });
     else if (data.type === "wake_agent") { state.sleeping = false; await send(id, { type: "sleep_result", request_id: String(data.request_id), sleep_id: `${agent.device_id}|${agent.pane_id}`, ok: true, reason: null }); await send(id, groups()); }
   };
   relay.on("connection", (ws) => {

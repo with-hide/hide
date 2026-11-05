@@ -1386,12 +1386,14 @@ fn conductor_settings_change_only_what_an_edit_sends() {
     assert!(runtime.dispatch_json(&event(json!({"other_vendor": false}))));
     assert!(runtime.snapshot.ui_state.conductor_settings.clean_merged);
     assert!(runtime.dispatch_json(&event(json!({"clean_merged": false}))));
+    assert!(runtime.dispatch_json(&event(json!({"map_flow": "across"}))));
     let settings = &runtime.snapshot.ui_state.conductor_settings;
     assert_eq!(settings.concurrency, 6);
     assert_eq!(settings.default_scope, crate::missions::MissionScope::Merge);
     assert_eq!(settings.default_strength, Strength::Thorough);
     assert!(!settings.other_vendor);
     assert!(!settings.clean_merged);
+    assert_eq!(settings.map_flow, crate::missions::MapFlow::Across);
 }
 
 /// A mission whose node `fix` is done with pull request 7, which GitHub
@@ -2152,6 +2154,52 @@ fn a_decision_carries_its_reason_choices_recommendation_and_node_and_refuses_wha
     .unwrap();
     assert_eq!(answer["mission"]["question"]["key"], 2);
     assert_eq!(answer["mission"]["question"]["options"], json!(null));
+}
+
+/// The phone's missions are read from the record the core publishes, so the
+/// field names of `MissionView` and of the phone's whitelist cannot drift
+/// apart without this failing.
+#[test]
+fn the_phone_reads_the_mission_the_core_published_with_its_decision_and_steps() {
+    use crate::agent_state::phone::{PhoneMissions, project};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let ask = json!({"op": "decide", "line": "Which base?", "why": "Two PRs touch it",
+        "options": ["main", "#1503"], "recommend": 2, "node": "fix"});
+    command(&mut runtime, "sender", ask).unwrap();
+    runtime.refresh_missions();
+    let rest = json!({
+        "navigator": {"agents": []},
+        "missions": serde_json::to_value(&runtime.snapshot.missions).unwrap(),
+    });
+    let phone = PhoneMissions::project(
+        &rest,
+        crate::node::TEST_NODE,
+        &project(&rest, crate::node::TEST_NODE),
+    );
+    assert!(!phone.failed);
+    let mission = phone.find("mission-1").expect("the mission is listed");
+    assert_eq!(mission.title, "Fix the bug");
+    assert_eq!(mission.decision.as_deref(), Some("Which base?"));
+    let question = mission.question.as_ref().expect("its question");
+    assert_eq!(
+        (question.options.clone(), question.recommend),
+        (vec!["main".to_owned(), "#1503".to_owned()], Some(2))
+    );
+    assert_eq!(
+        mission
+            .nodes
+            .iter()
+            .map(|node| node.key.as_str())
+            .collect::<Vec<_>>(),
+        runtime.snapshot.missions.items[0]
+            .nodes
+            .iter()
+            .map(|node| node.key.as_str())
+            .collect::<Vec<_>>(),
+    );
+    assert!(mission.conductor.takes_answers || !mission.conductor.present);
 }
 
 #[test]
@@ -3223,6 +3271,99 @@ fn a_mission_made_before_criteria_is_not_gated() {
     )
     .unwrap();
     assert!(runtime.mission_view_of("mission-1").unwrap().exempt);
+}
+
+/// A node's planned steps ride its view from the plan on, and the brief its
+/// worker was spawned on is kept by the node when the worker is bound, so it
+/// stays after the ledger lets the spawn and its letter go; only its size
+/// rides the map, and the text is read when the panel's folded box opens.
+#[test]
+fn a_nodes_steps_show_from_the_plan_and_its_brief_is_kept_when_the_worker_binds() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["it works"], "steps": ["Find the cause", "Fix it", "Open the PR"]},
+            {"key": "docs", "title": "Docs", "kind": "research", "criteria": ["it is said"]},
+        ]}}),
+    )
+    .unwrap();
+    assert_eq!(
+        node_view(&runtime, "fix").steps,
+        ["Find the cause", "Fix it", "Open the PR"]
+    );
+    assert!(node_view(&runtime, "docs").steps.is_empty());
+    // A step too long is refused with its reason and its next action.
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["it works"], "steps": ["x".repeat(crate::missions::STEP_CHARS + 1)]},
+        ]}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_steps_invalid", Some("fix"))
+    );
+    assert!(crate::missions::next_action("mission_steps_invalid").contains("80 characters"));
+
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    assert_eq!(node_view(&runtime, "fix").brief_bytes, None);
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    let mut record: crate::coordination::SpawnRecord = serde_json::from_value(json!({
+        "id": "spawn-1", "parent": "agent-1", "intent": "mission-1:fix", "name": "worker",
+        "kind": "codex", "repo": "/checkouts/fixture", "branch": "fix", "requested_path": null,
+        "args": [], "path": null, "pane": null, "child": "agent-2",
+    }))
+    .unwrap();
+    record.brief = Some("Node fix: find the cause, then fix it.".into());
+    record.briefed = true;
+    ledger.spawns.push(record);
+    runtime.publish_delivery(Arc::new(ledger), true);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").brief_bytes, Some(38));
+    // The text is not in the map's view; the folded box asks for it.
+    assert!(runtime.snapshot.mission_brief.text.is_none());
+    assert!(
+        runtime.mission_brief_read(super::super::mission_brief::BriefReadPayload {
+            mission: "mission-1".into(),
+            node: "fix".into(),
+        })
+    );
+    assert_eq!(
+        runtime.snapshot.mission_brief.text.as_deref(),
+        Some("Node fix: find the cause, then fix it.")
+    );
+    // The ledger forgetting the spawn and its letter leaves the node's copy.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.spawns.clear();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(node_view(&runtime, "fix").brief_bytes, Some(38));
+    // A node with no brief reads as none, never an empty box.
+    assert!(
+        runtime.mission_brief_read(super::super::mission_brief::BriefReadPayload {
+            mission: "mission-1".into(),
+            node: "docs".into(),
+        })
+    );
+    assert_eq!(runtime.snapshot.mission_brief.text, None);
 }
 
 fn outside_plan() -> Value {

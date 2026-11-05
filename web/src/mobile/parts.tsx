@@ -30,17 +30,22 @@ export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean 
   );
 }
 
+/** The SSH device's chip: where an agent or a mission runs when that is not this Mac. */
+export function DeviceTag({ label }: { label: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-xs rounded-md bg-secondary px-sm text-body text-subtle-foreground" data-phone-device={label}>
+      <ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      {label}
+    </span>
+  );
+}
+
 export function Place({ agent, inset }: { agent: PhoneAgent; inset: string }) {
   if (!agent.place && !agent.device_label) return null;
   return (
     <span className={`flex min-w-0 items-center gap-sm ${inset} text-body text-muted-foreground`}>
       {agent.place ? <span className="min-w-0 truncate">{agent.place}</span> : null}
-      {agent.device_label ? (
-        <span className="inline-flex shrink-0 items-center gap-xs rounded-md bg-secondary px-sm text-body text-subtle-foreground" data-phone-device={agent.device_label}>
-          <ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          {agent.device_label}
-        </span>
-      ) : null}
+      {agent.device_label ? <DeviceTag label={agent.device_label} /> : null}
     </span>
   );
 }

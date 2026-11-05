@@ -186,6 +186,40 @@ impl Drop for Core {
     }
 }
 
+/// A checkout's change-list read, ready to run on any thread: it holds the
+/// checkout's root and the channel to its host, found under the lock.
+pub struct PreparedChanges {
+    request: crate::changes::ChangesRequest,
+    committed: bool,
+}
+
+impl PreparedChanges {
+    /// Reads the changed files: those not committed, or, when asked for the
+    /// committed group, those the branch has beyond its base. Blocks on the
+    /// checkout's host. The error is the read's code (`link.not_connected`,
+    /// `changes.not_a_repository`, ...); a clean tree is an empty list.
+    pub fn read(self) -> Result<Vec<crate::model::LookChange>, String> {
+        let (changes, _) = crate::changes::read(&self.request);
+        if let Some(reason) = changes.unavailable_reason {
+            return Err(reason);
+        }
+        let files = if self.committed {
+            changes.committed
+        } else {
+            changes.entries
+        };
+        Ok(files
+            .into_iter()
+            .map(|file| crate::model::LookChange {
+                path: file.relative_path,
+                status: file.status,
+                added: file.added_lines,
+                removed: file.removed_lines,
+            })
+            .collect())
+    }
+}
+
 fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -1284,6 +1318,38 @@ impl Core {
             notify_change(self);
         }
         result
+    }
+
+    /// The Views the agent in `pane_id` opened that are open now, whether
+    /// the operator has looked at each: the phone's 볼 것 tab (PRD
+    /// mobile-companion-ui D-07). One short read of the View lists under the
+    /// lock.
+    pub fn agent_looks(&self, pane_id: &str) -> crate::model::LookViews {
+        if !check_owner_thread(self, "agent_looks") {
+            return crate::model::LookViews::default();
+        }
+        lock_recover(&self.runtime).phone_looks(pane_id)
+    }
+
+    /// Prepares the read of the files changed in the checkout `device_id`
+    /// holds at `checkout_path`, for the phone's change list (PRD
+    /// mobile-companion-ui D-08): one short step under the lock, which finds
+    /// the checkout's root and its host. The Git read itself is
+    /// [`PreparedChanges::read`], run by the caller off the owner thread.
+    /// The error is a code: `checkout_unavailable` or `core_unavailable`.
+    pub fn prepare_checkout_changes(
+        &self,
+        device_id: &str,
+        checkout_path: &str,
+        committed: bool,
+    ) -> Result<PreparedChanges, String> {
+        if !check_owner_thread(self, "prepare_checkout_changes") {
+            return Err("core_unavailable".to_owned());
+        }
+        let request = lock_recover(&self.runtime)
+            .phone_changes_request(&(device_id.to_owned(), checkout_path.to_owned()))
+            .map_err(str::to_owned)?;
+        Ok(PreparedChanges { request, committed })
     }
 
     pub fn snapshot_delta(&self, have_revision: u64) -> Vec<u8> {

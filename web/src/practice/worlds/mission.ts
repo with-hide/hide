@@ -263,7 +263,7 @@ const MINUTE = 60_000;
 const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker" | "kind" | "depends_on" | "delivery"> = {
   blocked: null, agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
-  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null, prs: [], attention: null, hide: null,
+  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null, prs: [], attention: null, hide: null,
 };
 
 /** A part as the record holds it at the model's stage. */

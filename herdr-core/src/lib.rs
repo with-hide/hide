@@ -106,15 +106,17 @@ pub use ai::{
     hide_ai_asks, hide_ai_asks_of_stored, hide_ai_ready_here, hide_ai_settings_path,
     stored_hide_ai_settings,
 };
-pub use handle::Core;
+pub use handle::{Core, PreparedChanges};
+pub use model::{
+    ChangedFileStatus, LookChange, LookView, LookViews, RemoteFileListSnapshot,
+    RemoteSessionSnapshot, RemoteStatusSnapshot, RestSections, RightPanelSection,
+    SnapshotDeltaWire,
+};
 pub use model::{
     CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
     SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
 };
-pub use model::{
-    RemoteFileListSnapshot, RemoteSessionSnapshot, RemoteStatusSnapshot, RestSections,
-    RightPanelSection, SnapshotDeltaWire,
-};
 pub use runtime::WorkspaceRemoteRoute;
 pub use runtime::core_move::{MoveProject, MoveSource, MoveSourceRefusal, ReleaseSource};
 pub use runtime::serialize_snapshot_delta;
+pub use view_layout::DisplayKind;

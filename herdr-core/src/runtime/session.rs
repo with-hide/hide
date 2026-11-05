@@ -2329,30 +2329,43 @@ impl Runtime {
         fetched: Result<SessionSnapshotPayload, SessionFetchError>,
         precomputed: Option<session_sync::PrecomputedCatalog>,
     ) -> (bool, Option<PendingPaneFocusControl>) {
-        self.ingest_observed_session(fetched, precomputed, None, None)
-    }
-
-    /// [`Self::ingest_session_awaiting_focus_readback`] for the sync pass
-    /// that observed `payload` for delivery as `pass`, installing `overlay`,
-    /// the label overlay that pass read: the token, the overlay and the
-    /// payload arrive together, so this ingest alone lays the turns that
-    /// pass's observations wait on (`lay_delivery_turns`), and an ingest of
-    /// anything else lays none.
-    pub(crate) fn ingest_observed_session(
-        &mut self,
-        fetched: Result<SessionSnapshotPayload, SessionFetchError>,
-        precomputed: Option<session_sync::PrecomputedCatalog>,
-        pass: Option<super::delivery::ObservedPass>,
-        overlay: Option<crate::labels::overlay::LabelOverlay>,
-    ) -> (bool, Option<PendingPaneFocusControl>) {
-        if let Some(overlay) = overlay {
-            self.label_overlay = overlay;
-        }
         let changed = self.ingest_session_with_focus_check(
             fetched,
             precomputed,
             SessionFocusCheck::Readback(None),
-            pass,
+            None,
+        );
+        (changed, self.begin_pane_focus_readback())
+    }
+
+    /// [`Self::ingest_session_awaiting_focus_readback`] for this machine's
+    /// sync pass, which observes `payload` for delivery (`observe_delivery`,
+    /// with `host_scope`, the socket it was read from) and installs
+    /// `overlay`, the label overlay that pass read. The observation and the
+    /// turns it waits on are laid in this one step under the lock, from this
+    /// payload and overlay, so no ask or bell meets the observation without
+    /// its turn; an ingest of anything else lays none.
+    pub(crate) fn ingest_observed_session(
+        &mut self,
+        payload: SessionSnapshotPayload,
+        precomputed: Option<session_sync::PrecomputedCatalog>,
+        host_scope: Option<&str>,
+        overlay: Option<crate::labels::overlay::LabelOverlay>,
+    ) -> (bool, Option<PendingPaneFocusControl>) {
+        // Native state as Herdr listed it, before the ingest lays the pane
+        // moves and the overlay on it: no label adds UI timestamps to what
+        // delivery sees, and the overlay is only consulted for what each
+        // session read says the agent waits for.
+        let node = self.node.clone();
+        let pass = self.observe_delivery(node.as_str(), &payload, host_scope, overlay.as_ref());
+        if let Some(overlay) = overlay {
+            self.label_overlay = overlay;
+        }
+        let changed = self.ingest_session_with_focus_check(
+            Ok(payload),
+            precomputed,
+            SessionFocusCheck::Readback(None),
+            Some(pass),
         );
         (changed, self.begin_pane_focus_readback())
     }

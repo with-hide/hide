@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
+import { writeAnswers } from "../stand-in-answers.mjs";
 
 const AGENT = process.env.HIDE_EXTENSION_AGENT;
 const FIXTURE = AGENT === "pi" ? "pi-1.0.4.json" : "omp-18.7.0.json";
@@ -53,7 +54,7 @@ let answers = {};
 /** Sets the stand-in's answers for the operations `update` names; the others keep theirs until the next load. */
 function answer(update) {
   answers = { ...answers, ...update };
-  writeFileSync(ANSWERS, JSON.stringify(answers));
+  writeAnswers(ANSWERS, answers);
 }
 
 function calls() {

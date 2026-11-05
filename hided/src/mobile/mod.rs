@@ -13,6 +13,7 @@
 //! change; what it asks is one of the `mobile_*` events.
 
 pub mod conversation;
+pub mod looks;
 pub mod pane;
 pub mod phone;
 pub mod phones;
@@ -38,7 +39,7 @@ use crate::core::CoreHandle;
 use herdr_core::delivery::worker::{HumanNotice, HumanNoticeKind};
 use herdr_core::engine::EngineHandle;
 use phones::{PairRefusal, Phones};
-use projection::{AgentKey, Projection};
+use projection::{AgentKey, PhoneMissions, Projection};
 use store::{
     Method, MobileSettings, Notifications, PhoneOrigin, PhoneRecord, PushMode, PushSubscription,
     ServeRecord,
@@ -182,6 +183,10 @@ pub struct Config {
     /// The desktop windows' notifications, judged on the projection this
     /// follower reads (`desktop_notices.rs`).
     pub desktop: Arc<crate::desktop_notices::DesktopNotices>,
+    /// The boundary and the roots a phone's file read is confined by: the
+    /// ones the desktop's `file_bytes` uses (`looks.rs`).
+    pub boundary: Arc<crate::boundary::Boundary>,
+    pub roots: Arc<crate::RootFollower>,
 }
 
 pub struct Mobile {
@@ -193,6 +198,8 @@ pub struct Mobile {
     origin: RwLock<Option<String>>,
     frame: watch::Sender<Arc<Value>>,
     projection: watch::Sender<Arc<Projection>>,
+    /// The missions a phone lists, built from the same inputs as `projection`.
+    missions: watch::Sender<Arc<PhoneMissions>>,
     /// What the start sheet lists, republished when it changes.
     catalog: watch::Sender<Arc<start::Catalog>>,
     /// The core's answers to start requests, for the requests waiting on them.
@@ -283,6 +290,7 @@ impl Mobile {
             origin: RwLock::new(None),
             frame: watch::channel(Arc::new(Value::Null)).0,
             projection: watch::channel(Arc::new(Projection::default())).0,
+            missions: watch::channel(Arc::new(PhoneMissions::default())).0,
             catalog: watch::channel(Arc::new(start::Catalog::default())).0,
             answers: watch::channel(Arc::new(Vec::new())).0,
             starts: start::Desk::default(),
@@ -440,6 +448,15 @@ impl Mobile {
 
     pub fn subscribe_projection(&self) -> watch::Receiver<Arc<Projection>> {
         self.projection.subscribe()
+    }
+
+    pub fn subscribe_missions(&self) -> watch::Receiver<Arc<PhoneMissions>> {
+        self.missions.subscribe()
+    }
+
+    /// The missions a phone may name in a request now.
+    pub fn missions(&self) -> Arc<PhoneMissions> {
+        Arc::clone(&self.missions.borrow())
     }
 
     pub fn subscribe_catalog(&self) -> watch::Receiver<Arc<start::Catalog>> {
@@ -1765,6 +1782,30 @@ impl Mobile {
         }
     }
 
+    pub fn core(&self) -> &Arc<CoreHandle> {
+        &self.config.core
+    }
+
+    pub fn boundary(&self) -> Arc<crate::boundary::Boundary> {
+        Arc::clone(&self.config.boundary)
+    }
+
+    pub fn roots(&self) -> Arc<crate::RootFollower> {
+        Arc::clone(&self.config.roots)
+    }
+
+    /// Marks a View the phone showed seen, with the event Desk sends when
+    /// its lane shows an output (PRD mobile-companion-ui D-15, B24). Seen is
+    /// the View's own state, so the desktop's eye and count follow at once.
+    pub fn mark_seen(&self, view: &herdr_core::LookView) {
+        if let Err(message) = self.config.core.dispatch(looks::seen_event(view)) {
+            herdr_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "look.seen_unrecorded",
+                "view_id": view.display_id, "message": message,
+            }));
+        }
+    }
+
     pub fn terminals(&self) -> &dyn hide_node_link::terminal::TerminalNode {
         self.config.core.terminals.as_ref()
     }
@@ -1808,6 +1849,14 @@ impl Mobile {
                         false
                     } else {
                         *current = Arc::new(Projection::default());
+                        true
+                    }
+                });
+                self.missions.send_if_modified(|current| {
+                    if **current == PhoneMissions::default() {
+                        false
+                    } else {
+                        *current = Arc::new(PhoneMissions::default());
                         true
                     }
                 });
@@ -1857,6 +1906,24 @@ impl Mobile {
                         changed
                     });
                     let next = projection::project(&rest, self.node().as_str());
+                    let missions = PhoneMissions::project(&rest, self.node().as_str(), &next);
+                    self.missions.send_if_modified(|current| {
+                        if **current == missions {
+                            return false;
+                        }
+                        // Recorded when the record first goes over the cap, not on every
+                        // change while it stays over (the count is in the frame).
+                        if missions.omitted > 0 && current.omitted == 0 {
+                            herdr_core::diagnostic!(json!({
+                                "component": "mobile_phone", "kind": "missions.capped",
+                                "omitted": missions.omitted,
+                                "open_cap": herdr_core::agent_state::phone::MAX_OPEN,
+                                "closed_cap": herdr_core::agent_state::phone::MAX_CLOSED,
+                            }));
+                        }
+                        *current = Arc::new(missions);
+                        true
+                    });
                     changed = self.projection.send_if_modified(|current| {
                         if **current == next {
                             false

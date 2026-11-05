@@ -21,25 +21,28 @@
 /// single-quoted string unless doubled.
 pub const POWERSHELL_QUOTES: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
 
-/// `value` as one single-quoted POSIX shell word: each `'` closes the
-/// string, is written escaped and opens it again.
-pub fn posix_single_quoted(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-/// `value` as one single-quoted PowerShell string, every character
-/// PowerShell reads as a single quote doubled.
-pub fn powershell_single_quoted(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('\'');
-    for character in value.chars() {
-        if POWERSHELL_QUOTES.contains(&character) {
-            quoted.push(character);
+impl crate::Syntax {
+    /// `value` as one single-quoted word this shell reads back unchanged.
+    /// A POSIX shell's `'` closes the string, is written escaped and opens it
+    /// again; in PowerShell every character it reads as a single quote is
+    /// doubled.
+    pub fn single_quoted(self, value: &str) -> String {
+        match self {
+            Self::Posix => format!("'{}'", value.replace('\'', "'\\''")),
+            Self::PowerShell => {
+                let mut quoted = String::with_capacity(value.len() + 2);
+                quoted.push('\'');
+                for character in value.chars() {
+                    if POWERSHELL_QUOTES.contains(&character) {
+                        quoted.push(character);
+                    }
+                    quoted.push(character);
+                }
+                quoted.push('\'');
+                quoted
+            }
         }
-        quoted.push(character);
     }
-    quoted.push('\'');
-    quoted
 }
 
 /// The most UTF-16 units Windows takes as a process's command line, its
@@ -82,7 +85,7 @@ pub fn windows_argument(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::Syntax;
 
     #[test]
     fn a_windows_argument_escapes_quotes_and_the_backslashes_before_them() {
@@ -98,19 +101,19 @@ mod tests {
 
     #[test]
     fn a_posix_word_keeps_its_apostrophe_outside_the_quotes() {
-        assert_eq!(posix_single_quoted("it's"), "'it'\\''s'");
-        assert_eq!(posix_single_quoted(""), "''");
+        assert_eq!(Syntax::Posix.single_quoted("it's"), "'it'\\''s'");
+        assert_eq!(Syntax::Posix.single_quoted(""), "''");
     }
 
     #[test]
     fn a_powershell_string_doubles_every_quote_powershell_reads() {
-        assert_eq!(powershell_single_quoted("it's"), "'it''s'");
+        assert_eq!(Syntax::PowerShell.single_quoted("it's"), "'it''s'");
         assert_eq!(
-            powershell_single_quoted("it\u{2019}s"),
+            Syntax::PowerShell.single_quoted("it\u{2019}s"),
             "'it\u{2019}\u{2019}s'"
         );
         assert_eq!(
-            powershell_single_quoted("\u{2018}a\u{201B}"),
+            Syntax::PowerShell.single_quoted("\u{2018}a\u{201B}"),
             "'\u{2018}\u{2018}a\u{201B}\u{201B}'"
         );
     }

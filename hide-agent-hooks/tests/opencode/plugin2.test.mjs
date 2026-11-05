@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
+import { writeAnswers } from "../stand-in-answers.mjs";
 
 const DIR = process.env.HIDE_OPENCODE2_PLUGIN_DIR;
 const { default: server } = await import(pathToFileURL(path.join(DIR, "server.js")).href);
@@ -44,7 +45,7 @@ function policy(rules) {
 policy({});
 
 function answer(answers) {
-  writeFileSync(ANSWERS, JSON.stringify(answers));
+  writeAnswers(ANSWERS, answers);
 }
 
 function calls(operation) {

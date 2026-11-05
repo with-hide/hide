@@ -65,6 +65,7 @@ export function AgentsSettingsScene({ params }: { params: URLSearchParams }) {
       rest: {
         status: state === "definitions" ? { agent_definitions: LEFT_OUT } : {},
         navigator: {
+          siblings_shown: 5,
           focused_device_id: "local",
           devices: [{ id: "local", kind: "local", label: null, machine_name: "Mac", state: "local", kit: { unavailable: null, busy: false, components: [{ id: "cli", state: "installed" }], agents: agents(state), offers_reinstall: false, shares_account_with: null } }],
         },

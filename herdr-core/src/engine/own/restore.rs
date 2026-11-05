@@ -39,7 +39,7 @@ use hide_node_link::holders::HolderRecovery;
 use hide_node_link::protocol::Call;
 
 use super::agents::{self, PaneAgent};
-use super::shell_line::{self, Shell};
+use super::shell_line;
 use super::starts::STARTS_AT_ONCE;
 use super::store::{self, Read};
 use super::topology::{Pane, Topology};
@@ -869,7 +869,7 @@ impl OwnEngine<'static> {
         let group = self
             .processes(&resume.pane)
             .map_err(|error| error.to_string())?;
-        let shell = Shell::of(group.shell_name(), self.shared.windows)
+        let shell = shell_line::shell_of(group.shell_name(), self.shared.windows)
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
         let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;

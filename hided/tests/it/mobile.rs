@@ -1206,3 +1206,78 @@ async fn only_a_desktop_window_turns_agent_notifications_on() {
     }
     running.stop();
 }
+
+async fn look_result(socket: &mut Socket, request_id: &str) -> Value {
+    loop {
+        let frame = next_frame(socket).await.expect("a look result");
+        assert!(
+            !matches!(
+                frame["type"].as_str(),
+                Some("look_head" | "look_chunk" | "look_end" | "look_changes")
+            ),
+            "content reached the phone: {frame}"
+        );
+        if frame["type"] == "look_result" && frame["request_id"] == request_id {
+            return frame;
+        }
+    }
+}
+
+/// PRD mobile-companion-ui B27, D-16: a phone names a View by its id and
+/// nothing else. A request that carries a path, a root or a checkout, or
+/// names an agent Hide does not list, is answered with a refusal and sends no
+/// content. The reasons `scope.refused` records for each are decided in
+/// `phone.rs` (`look_scope`), where a unit test holds them: this process has
+/// no log file of its own to read them from.
+#[tokio::test]
+async fn a_phone_asking_for_a_path_is_refused_and_no_content_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let mut shell = renderer(&running).await;
+    let (mut socket, _phone_id, _credential) = paired_phone(&running, &mut shell).await;
+    let ask = |request_id: &str, extra: Value| {
+        let mut message = json!({
+            "type": "look_open", "request_id": request_id,
+            "device_id": "local", "pane_id": "w9:p9", "view_id": "view-1",
+        });
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        message
+    };
+    for (request_id, extra) in [
+        ("path-1", json!({"path": "/etc/passwd"})),
+        ("root-1", json!({"root": "/"})),
+        ("checkout-1", json!({"checkout": "/mnt/other/repo"})),
+        ("file-1", json!({"file": "../../secret"})),
+    ] {
+        send_phone(&mut socket, ask(request_id, extra)).await;
+        let answer = look_result(&mut socket, request_id).await;
+        assert_eq!(answer["state"], "refused", "{answer}");
+    }
+    // An agent that is not listed is gone, with or without a View id Hide knows.
+    send_phone(&mut socket, ask("agent-1", json!({}))).await;
+    assert_eq!(look_result(&mut socket, "agent-1").await["state"], "gone");
+    // A confirmation or a seen mark for what is not open is refused too, and nothing is read.
+    send_phone(
+        &mut socket,
+        json!({"type": "look_seen", "device_id": "local", "pane_id": "w9:p9", "view_id": "view-1"}),
+    )
+    .await;
+    send_phone(
+        &mut socket,
+        json!({"type": "look_ack", "request_id": "never-1"}),
+    )
+    .await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 7})).await;
+    assert_eq!(
+        next_pong(&mut socket).await,
+        json!({"type": "pong", "id": 7})
+    );
+    running.stop();
+}

@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import { deviceConnected } from "./devices";
 import type { CellTone } from "./missions";
 import { layerDependencies, orderByDependencies, type LayeredGraph } from "./projectBoard";
-import type { PlanEvidence, PlanStep, PlanView, RowMark, SnapshotRest, WorkSession } from "./snapshot";
+import type { PlanEvidence, PlanStep, PlanView, SnapshotRest, WorkSession } from "./snapshot";
 
 // A session's own plan (PRD hide-plan): what the chip, the map and a
 // mission node's detail read of the core's `PlanView`. The core decides the
@@ -58,13 +58,6 @@ export function planWorkLine(plan: PlanView): string | null {
   const current = stepOf(plan, plan.progress.current);
   if (!current || plan.progress.finished || planProposed(plan)) return null;
   return current.line ? `${current.title} · ${current.line}` : current.title;
-}
-
-/** A step's status mark: done, moving, or quiet for planned and dropped. */
-export function stepMark(step: PlanStep): RowMark {
-  if (step.status === "done") return "done";
-  if (step.status === "working") return "going";
-  return "quiet";
 }
 
 /** The steps by what they wait on, top down; a dropped step stays where it was (D-26). */

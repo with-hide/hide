@@ -2,7 +2,7 @@ import { expect, test as base } from "@playwright/test";
 import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
 import { startPhoneRelay } from "./phone-relay-fixture";
-
+import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
   relay: async ({ page }, use, info) => {
     const relay = await startPhoneRelay();
@@ -53,7 +53,7 @@ test("QR clears its secret, pairs over Noise and uses the shared conversation, t
   await expect(page).not.toHaveURL(/#pair=/);
   await expect(page.locator('img[src="x"]')).toHaveCount(0);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page).toHaveURL(/\/p\/1\/\?host=/);
+  await expect(page).toHaveURL(new RegExp(`/p/${PHONE_PROTOCOL}/\\?host=`));
   await expect(page.locator('[data-phone-agent="test-device|pane-one"]')).toBeVisible();
   await expect(page.locator("[data-phone-install-hint]")).toBeVisible();
   await page.locator('[data-phone-agent="test-device|pane-one"]').click();
@@ -115,10 +115,10 @@ for (const surface of ["root", "picker"]) {
         await page.getByRole("button", { name: second.pairing.name, exact: true }).click();
       }
       await expect.poll(() => relay.plaintext.length).toBeGreaterThan(0);
-      await expect(page.getByText("Phone app 1 · Device 9", { exact: true })).toBeVisible();
+      await expect(page.getByText(`Phone app ${PHONE_PROTOCOL} · Device 9`, { exact: true })).toBeVisible();
       expect(relay.wire.binaryFrames).toBe(0);
       expect(relay.received).toEqual([]);
-      await page.getByRole("button", { name: /Phone app 1 · Device 9/ }).click();
+      await page.getByRole("button", { name: new RegExp(`Phone app ${PHONE_PROTOCOL} · Device 9`) }).click();
       await expect(page.getByRole("heading", { name: "Update Hide on this device" })).toBeVisible();
       expect(relay.wire.binaryFrames).toBe(0);
       expect(relay.received).toEqual([]);
@@ -165,7 +165,7 @@ test("a revoked device stays listed as disconnected, never dials again and pairs
   await expect(row.getByRole("button", { name: "Remove device" })).toBeVisible();
   // A link to the device shows the refusal without dialing it.
   relay.plaintext.length = 0;
-  await page.goto(`${relay.origin}/p/1/?host=${relay.pairing.room}`);
+  await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?host=${relay.pairing.room}`);
   await expect(page.locator('[data-phone-guidance="revoked"]')).toBeVisible();
   expect(relay.plaintext).toEqual([]);
   await page.goto(relay.origin + "/");
@@ -300,7 +300,7 @@ test("one browser keeps two devices and switches its live list through the heade
     await page.getByRole("button", { name: second.pairing.name, exact: true }).click();
     await expect(page.getByText("Needs you 1 · Working 2", { exact: true })).toHaveCount(2);
     await page.getByRole("button", { name: /Needs you 1 · Working 2/ }).first().click();
-    await expect(page).toHaveURL(new RegExp(`/p/1/\\?host=${relay.pairing.room}`));
+    await expect(page).toHaveURL(new RegExp(`/p/${PHONE_PROTOCOL}/\\?host=${relay.pairing.room}`));
     await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
   } finally { await page.goto("about:blank"); await second.stop(); }
 });
@@ -325,4 +325,30 @@ test.describe("Korean phone screens", () => {
     await expect(sheet).toHaveCount(0);
     await expect(trigger).toBeFocused();
   });
+});
+
+test("the missions tab lists a mission, and its answer reaches the device as one request that a refusal does not lose", async ({ page, relay }) => {
+  await pair(page, relay);
+  await expect(page.locator('[data-phone-tab="missions"]')).toHaveAttribute("data-phone-tab-count", "1");
+  await page.locator('[data-phone-tab="missions"]').click();
+  await expect(page.locator('[data-phone-mission-group="turn"] [data-phone-mission="mission-one"]')).toContainText("Ship the release");
+  await expect(page.locator("[data-phone-tabs]")).toBeVisible();
+  await page.locator('[data-phone-mission="mission-one"]').click();
+  await expect(page.locator("[data-phone-tabs]")).toHaveCount(0);
+  await expect(page.locator("[data-phone-question]")).toHaveText("Sign the build?");
+
+  // A refusal comes back in words, the written answer stays, and the same press goes again.
+  relay.state.refuseMission = "gone";
+  await page.locator("[data-phone-answer-input]").fill("sign it after lunch");
+  await page.locator("[data-phone-answer-send]").click();
+  await expect(page.locator("[data-phone-answer-error]")).toContainText("no longer open");
+  await expect(page.locator("[data-phone-answer-input]")).toHaveValue("sign it after lunch");
+
+  relay.state.refuseMission = "";
+  await page.locator('[data-phone-option="1"]').click();
+  await expect(page.locator("[data-phone-decision]")).toHaveAttribute("data-phone-decision", "sending");
+  const answers = () => relay.received.filter((frame) => frame.type === "answer_mission");
+  await expect.poll(() => answers().length).toBe(2);
+  expect(answers()).toMatchObject([{ mission: "mission-one", key: 2, text: "sign it after lunch" }, { mission: "mission-one", key: 2, option: 1 }]);
+  expect(answers()[0]!.request_id).not.toBe(answers()[1]!.request_id);
 });
