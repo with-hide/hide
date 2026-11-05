@@ -219,16 +219,19 @@ const DIAGRAMS = [
 
 test("a mermaid fence draws as its diagram, a broken one stays code under its reason, and a caret shows the source", async ({ page }) => {
   const stack = await openStack(page, { "diagram.md": DIAGRAMS });
+  const asked: string[] = [];
+  page.on("request", (request) => asked.push(new URL(request.url()).pathname));
   try {
     await page.locator(`[data-explorer-row="${stack.repo}/diagram.md"]`).click();
     const drawn = page.locator(".cm-md-mermaid[data-state='drawn']");
     await expect(drawn.locator("svg")).toBeVisible({ timeout: 30_000 });
     await expect(drawn).toContainText("로컬 수신 엔진");
-    await expect(drawn.locator("script, img[onerror], [onerror]")).toHaveCount(0);
+    await expect(drawn.locator("script, img, image, a, [onerror]")).toHaveCount(0);
     const failed = page.locator(".cm-md-mermaid[data-state='failed']");
     await expect(failed.locator(".cm-md-alt")).toBeVisible();
     await expect(failed.locator(".cm-md-mermaid-source")).toHaveText("flowchart LR\n  A -->");
     expect(await page.evaluate(() => (window as unknown as { pwned?: unknown }).pwned)).toBeUndefined();
+    expect(asked.filter((pathname) => pathname.endsWith("/x"))).toEqual([]);
     // The diagram never runs wider than the column it sits in.
     const widths = await drawn.evaluate((element) => [element.querySelector("svg")!.getBoundingClientRect().width, element.getBoundingClientRect().width]);
     expect(widths[0]).toBeLessThanOrEqual(widths[1] + 1);

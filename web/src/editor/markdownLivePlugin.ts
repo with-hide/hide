@@ -234,8 +234,8 @@ const diagramWatches = new WeakMap<HTMLElement, () => void>();
 /**
  * A fenced `mermaid` block drawn as its diagram. It takes no room until the
  * picture is in; a source Mermaid cannot read shows as code under one muted
- * line saying why, so the operator sees what to fix, and a click on either
- * shows the source as any drawn block does.
+ * line saying why, so the operator sees what to fix, and a press on either
+ * shows the source.
  */
 class MermaidWidget extends WidgetType {
   constructor(readonly source: string) {
@@ -273,14 +273,23 @@ class MermaidWidget extends WidgetType {
     root.dataset.state = "loading";
     draw();
     diagramWatches.set(root, watchPalette(draw));
+    // A press on a picture has no text position under it, and CodeMirror
+    // would put the caret after the block; the diagram puts it at its own
+    // start, which shows its source.
+    root.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(root) }, userEvent: "select.pointer" });
+      view.focus();
+    });
     return root;
   }
   destroy(dom: HTMLElement): void {
     diagramWatches.get(dom)?.();
     diagramWatches.delete(dom);
   }
-  ignoreEvent(): boolean {
-    return false;
+  ignoreEvent(event: Event): boolean {
+    return event.type === "mousedown";
   }
 }
 

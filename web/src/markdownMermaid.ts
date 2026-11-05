@@ -10,7 +10,8 @@
 //
 // A body can come from anyone (a pull request, an agent's reply), so Mermaid
 // runs at its `strict` security level and its SVG is cleaned again by
-// DOMPurify before it reaches the page.
+// DOMPurify before it reaches the page, without pictures or links, so a
+// diagram neither runs nor loads anything.
 
 import DOMPurify from "dompurify";
 
@@ -76,6 +77,9 @@ function configure(mermaid: Mermaid, colors: Palette, key: string): void {
     securityLevel: "strict",
     maxTextSize: MERMAID_SOURCE_LIMIT,
     suppressErrorRendering: true,
+    // Mermaid puts an HTML label into the page to measure it before anything
+    // can clean it, so a label's `<img>` would load; SVG text holds no markup.
+    htmlLabels: false,
     theme: "base",
     darkMode: colors.dark,
     fontFamily: colors.font,
@@ -98,11 +102,16 @@ function configure(mermaid: Mermaid, colors: Palette, key: string): void {
   configured = key;
 }
 
-/** Mermaid's SVG, with HTML labels inside `foreignObject`, cleaned of anything that could run. */
+/**
+ * Mermaid's SVG, with HTML labels inside `foreignObject`, cleaned of anything
+ * that could run, load or navigate: Mermaid's strict level still lets a label
+ * hold an `<img>` or a link.
+ */
 function clean(svg: string): string {
   return DOMPurify(window).sanitize(svg, {
     USE_PROFILES: { svg: true, svgFilters: true, html: true },
     ADD_TAGS: ["foreignObject"],
+    FORBID_TAGS: ["img", "image", "a", "video", "audio", "picture", "source"],
     HTML_INTEGRATION_POINTS: { foreignobject: true },
   });
 }
