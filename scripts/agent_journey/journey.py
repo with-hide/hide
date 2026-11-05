@@ -154,8 +154,8 @@ def at_brief(value):
 
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
-                 branch, created, sessions, route, composer_judge, model=None, brief_start=True,
-                 failure_logs=None):
+                 branch, created, sessions, route, composer_judge, failure_logs, model=None,
+                 brief_start=True):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
         # The real CLIs start on Hide's brief, which their own record has to
         # confirm; the stand-ins imitate only the agent's prompt argument.
@@ -221,7 +221,7 @@ class Journey:
     def daemon_log(self, name):
         """What hided wrote while the running step ran, kept only for a
         failed cell, at its failure (failure.py)."""
-        if not (self.failure_logs and self.running):
+        if not self.running:
             return None
         step, mark = self.running
         return self.failure_logs.keep(self.run / f"{self.id}-{name}-hided.log", mark, step, name)
@@ -360,7 +360,7 @@ class Journey:
         # The step's times, in the report whatever its cells read.
         times = {"step": name, "started_ms": failure.now_ms()}
         self.record.setdefault("steps", []).append(times)
-        self.running = (times, self.failure_logs.mark() if self.failure_logs else 0)
+        self.running = (times, self.failure_logs.mark())
         try:
             if name in MEASURES:
                 MEASURES[name](self, *args)
