@@ -3783,8 +3783,9 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
 /// hook's last report, a finished turn, is the last run's. While the start
 /// is pending the row says Starting, so neither the operator nor a journey
 /// reads it ready and types into a program that drops the keys (journeys
-/// 41929631031 and 41937427750); work it does shows as work, and the row
-/// reads at rest once the start settles.
+/// 41929631031 and 41937427750); work it does shows as work, a turn the
+/// engine saw end since the start reads as it rests, and the row reads at
+/// rest once the start settles.
 #[test]
 fn an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests() {
     let mut runtime = runtime();
@@ -3816,7 +3817,15 @@ fn an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests() {
         AgentStatusCode::Starting,
         "pending, the last run's turn finished"
     );
-    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "idle", 10, false))));
+    let mut ended = starting_task_agent(Some("codex"), "done", 10, true);
+    ended.agents[0].completion_seq = Some(10);
+    assert!(runtime.ingest_session(Ok(ended)));
+    assert_ne!(
+        status(&runtime),
+        AgentStatusCode::Starting,
+        "pending, a turn the engine saw end since the start"
+    );
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "idle", 11, false))));
     assert_eq!(status(&runtime), AgentStatusCode::Idle, "settled");
 }
 
