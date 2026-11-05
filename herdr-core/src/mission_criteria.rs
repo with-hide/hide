@@ -267,16 +267,24 @@ impl Criterion {
         matches!(self.kind, CriterionKind::Check | CriterionKind::Ci)
     }
 
-    /// The state the line shows when the node's work folder is at `head`: a
-    /// check command passes only for the commit that folder is at now, so
-    /// one that passed on an older commit, or with no folder Hide can read,
-    /// is open again (B7, D-16).
-    pub fn shown(&self, head: Option<&str>) -> CriterionState {
+    /// The state the line shows against `heads`: a check command passes
+    /// only for the commit the node's work folder is at now, so one that
+    /// passed on an older commit, or with no folder Hide can read, is open
+    /// again (B7, D-16); a CI verdict holds only for the head it was read
+    /// on, so once a read names another head the line is open, whatever
+    /// that head's checks are known to be (D-15).
+    pub fn shown(&self, heads: Heads<'_>) -> CriterionState {
+        let on = |head: &str| {
+            self.commit
+                .as_deref()
+                .is_some_and(|commit| same_commit(commit, head))
+        };
         match (self.kind, self.state) {
-            (CriterionKind::Check, CriterionState::Pass)
-                if !head
-                    .zip(self.commit.as_deref())
-                    .is_some_and(|(head, commit)| same_commit(commit, head)) =>
+            (CriterionKind::Check, CriterionState::Pass) if !heads.work.is_some_and(on) => {
+                CriterionState::Open
+            }
+            (CriterionKind::Ci, CriterionState::Pass | CriterionState::Fail)
+                if heads.pull.is_some_and(|head| !on(head)) =>
             {
                 CriterionState::Open
             }
@@ -285,9 +293,9 @@ impl Criterion {
     }
 
     /// Whether the line lets its node be done.
-    pub(crate) fn met(&self, head: Option<&str>) -> bool {
+    pub(crate) fn met(&self, heads: Heads<'_>) -> bool {
         matches!(
-            self.shown(head),
+            self.shown(heads),
             CriterionState::Pass | CriterionState::Skipped
         )
     }
@@ -644,12 +652,22 @@ pub(crate) fn add_defect(
     Ok(key)
 }
 
-/// The keys of the lines that keep a node from being done when its work
-/// folder is at `head`.
-pub(crate) fn unmet<'a>(lines: &'a [Criterion], head: Option<&str>) -> Vec<&'a str> {
+/// The commits a node's lines are judged against now.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Heads<'a> {
+    /// The commit the node's work folder is on, which a check command's
+    /// line is for; `None` when Hide cannot read it.
+    pub work: Option<&'a str>,
+    /// The head of the node's pull request as the last read names it, which
+    /// its CI line is for; `None` when no read names it.
+    pub pull: Option<&'a str>,
+}
+
+/// The keys of the lines that keep a node from being done against `heads`.
+pub(crate) fn unmet<'a>(lines: &'a [Criterion], heads: Heads<'_>) -> Vec<&'a str> {
     lines
         .iter()
-        .filter(|line| !line.met(head))
+        .filter(|line| !line.met(heads))
         .map(|line| line.key.as_str())
         .collect()
 }
@@ -657,6 +675,14 @@ pub(crate) fn unmet<'a>(lines: &'a [Criterion], head: Option<&str>) -> Vec<&'a s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A work folder at `head`, with no pull request read.
+    fn work(head: Option<&str>) -> Heads<'_> {
+        Heads {
+            work: head,
+            pull: None,
+        }
+    }
     use crate::model::PullRequestChecks;
 
     fn by(role: Role) -> Recorded {
@@ -696,11 +722,11 @@ mod tests {
             by(Role::Worker),
         )
         .unwrap();
-        assert!(line.met(Some(A)));
-        assert_eq!(line.shown(Some(B)), CriterionState::Open);
-        assert!(!line.met(Some(B)));
+        assert!(line.met(work(Some(A))));
+        assert_eq!(line.shown(work(Some(B))), CriterionState::Open);
+        assert!(!line.met(work(Some(B))));
         // A work folder Hide cannot read proves nothing (D-16).
-        assert_eq!(line.shown(None), CriterionState::Open);
+        assert_eq!(line.shown(work(None)), CriterionState::Open);
     }
 
     #[test]
@@ -847,7 +873,7 @@ mod tests {
         lines[1]
             .record(true, None, None, Some(A.into()), false, by(Role::Worker))
             .unwrap();
-        assert!(plan_lines(&lines, &["works".into()], &[], true, true)[1].met(Some(A)));
+        assert!(plan_lines(&lines, &["works".into()], &[], true, true)[1].met(work(Some(A))));
         let changed = plan_lines(&lines, &["works".into()], &[], true, false);
         assert_eq!(changed[1].state, CriterionState::Open);
         assert_eq!(changed[1].commit, None);
@@ -864,6 +890,6 @@ mod tests {
             add_defect(&mut lines, "x".into(), "b".into(), by(Role::Conductor)),
             Err("mission_defects_too_many".into())
         );
-        assert_eq!(unmet(&lines, None).len(), DEFECT_LIMIT);
+        assert_eq!(unmet(&lines, Heads::default()).len(), DEFECT_LIMIT);
     }
 }

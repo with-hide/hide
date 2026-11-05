@@ -146,6 +146,7 @@ function fakeGh(root: string): { bin: string; log: string } {
     title,
     statusCheckRollup: passing,
     headRefName: branch,
+    headRefOid: number.toString(16).padStart(40, "0"),
     baseRefName: "main",
     state: "OPEN",
     reviewDecision: "REVIEW_REQUIRED",

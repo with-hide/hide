@@ -3242,6 +3242,44 @@ fn a_check_holds_only_on_its_folders_current_commit_and_its_command() {
     );
 }
 
+/// with-hide/hide#2080 review: a ci verdict holds only for the head it was
+/// read on. A push moves the pull request to a new head whose runs Hide
+/// could not read: the line is open, not the old head's pass, and keeps the
+/// node from done.
+#[test]
+fn a_ci_pass_does_not_hold_after_a_push_whose_checks_are_not_known() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    let read = |runtime: &mut Runtime, head: &str, checks| {
+        let mut pull = pull(7, head, PullRequestBadge::Open, None);
+        pull.checks = checks;
+        let read = github(vec![pull], false);
+        runtime.github = read.clone();
+        runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+    };
+    read(&mut runtime, HEAD, PullRequestChecks::Passing);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Pass);
+    let pushed = "f".repeat(40);
+    read(&mut runtime, &pushed, PullRequestChecks::Unknown);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Open);
+    let mission = runtime.missions.book.missions[0].clone();
+    let mut done = mission
+        .nodes
+        .iter()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .clone();
+    done.status = NodeStatus::Done;
+    assert!(
+        runtime
+            .node_unmet(&mission, &done)
+            .contains(&"ci".to_owned())
+    );
+}
+
 /// Review finding 5, D-15: a pull request's CI gets one rerun per head
 /// however many runs GitHub reports, and the line still follows the run that
 /// finished last on that head; the node stays in progress throughout.

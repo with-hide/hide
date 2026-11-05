@@ -43,6 +43,7 @@ function fakeGh(dir: string, url: string): string {
       title: TITLE,
       statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "verify" }],
       headRefName: BRANCH,
+      headRefOid: "1".repeat(40),
       baseRefName: "main",
       state: "OPEN",
       reviewDecision: "APPROVED",
