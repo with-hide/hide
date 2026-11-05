@@ -858,7 +858,7 @@ mod sys {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "the socket path {} is {length} bytes, and a Unix socket path must be shorter than {capacity}",
+                    "the socket path {} is {length} bytes, and a Unix socket path (sun_path) must be shorter than {capacity}",
                     path.display()
                 ),
             ));
