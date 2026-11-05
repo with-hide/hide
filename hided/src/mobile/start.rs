@@ -241,8 +241,13 @@ pub enum Answer {
 /// the last error, each with the request id it answers.
 pub fn answers_of(rest: &Value, node: &str) -> Vec<(String, Answer)> {
     let mut answers = Vec::new();
+    // An agent start, or a new worktree made with an agent in it (a pull
+    // request handed over where no checkout holds its branch): both answer by
+    // the request id they carry, with the pane the agent runs in.
     if let Some(operation) = rest.get("task_operation").filter(|op| op.is_object())
-        && str_of(operation, "kind") == "agent_start"
+        && (str_of(operation, "kind") == "agent_start"
+            || (str_of(operation, "kind") == "worktree_create"
+                && !str_of(operation, "agent_kind").is_empty()))
     {
         let request_id = str_of(operation, "request_id");
         let answer = match (str_of(operation, "phase"), str_of(operation, "agent_phase")) {
@@ -313,7 +318,7 @@ pub struct Request<'a> {
     pub model: Option<&'a str>,
 }
 
-fn prompt_problem(text: &str) -> Option<&'static str> {
+pub(super) fn prompt_problem(text: &str) -> Option<&'static str> {
     if text.trim().is_empty() {
         return Some("empty");
     }
@@ -329,6 +334,13 @@ fn prompt_problem(text: &str) -> Option<&'static str> {
     None
 }
 
+/// Whether a model name is one a phone may send: short, with no control character.
+pub(super) fn model_valid(model: &str) -> bool {
+    !model.is_empty()
+        && model.chars().count() <= MAX_MODEL_CHARS
+        && !model.chars().any(char::is_control)
+}
+
 /// The core event for one request, or why it is not one.
 fn event(request: &Request<'_>, catalog: &Catalog) -> Result<Value, &'static str> {
     if let Some(problem) = prompt_problem(request.text) {
@@ -342,9 +354,7 @@ fn event(request: &Request<'_>, catalog: &Catalog) -> Result<Value, &'static str
         return Err("unknown_target");
     };
     if let Some(model) = request.model
-        && (model.is_empty()
-            || model.chars().count() > MAX_MODEL_CHARS
-            || model.chars().any(char::is_control))
+        && !model_valid(model)
     {
         return Err("unknown_model");
     }
@@ -448,9 +458,32 @@ impl Desk {
         limit: Duration,
         dispatch: impl FnOnce(Vec<u8>) -> Result<(), String> + Send + 'static,
     ) -> Value {
-        let request_id = request.request_id;
+        let event = event(&request, catalog);
+        self.start_event(
+            phone_id,
+            request.request_id,
+            event,
+            answers,
+            limit,
+            dispatch,
+        )
+        .await
+    }
+
+    /// A start whose core event is already built (a pull request's hand-over
+    /// is `pr_delegate`, not `agent_start_in_checkout`): claimed by its request
+    /// id, dispatched once and followed to the core's answer the same way.
+    pub async fn start_event(
+        &self,
+        phone_id: &str,
+        request_id: &str,
+        event: Result<Value, &'static str>,
+        answers: tokio::sync::watch::Receiver<Answers>,
+        limit: Duration,
+        dispatch: impl FnOnce(Vec<u8>) -> Result<(), String> + Send + 'static,
+    ) -> Value {
         let reply = |ok: bool, reason: Option<&str>| json!({"type": "start_result", "request_id": request_id, "ok": ok, "reason": reason});
-        let event = match event(&request, catalog) {
+        let event = match event {
             Ok(event) => event,
             Err(problem) => return reply(false, Some(problem)),
         };
@@ -790,7 +823,25 @@ mod tests {
             &json!({"task_operation": {"kind": "worktree_create", "phase": "ready", "request_id": "r4"}}),
             "local",
         );
-        assert!(other.is_empty());
+        assert!(other.is_empty(), "a worktree made with no agent is no start");
+        let handed = answers_of(
+            &json!({"task_operation": {
+                "kind": "worktree_create", "agent_kind": "claude", "phase": "ready", "request_id": "r6",
+                "pane_id": "w2:p1", "device_id": null,
+            }}),
+            "local",
+        );
+        assert_eq!(
+            handed,
+            [(
+                "r6".to_owned(),
+                Answer::Started {
+                    device_id: "local".into(),
+                    pane_id: "w2:p1".into()
+                }
+            )],
+            "a worktree made for a hand-over answers as the agent start it is"
+        );
         let refused = answers_of(
             &json!({"status": {"last_error": {"kind": "task_operation.busy", "request_id": "r5"}}}),
             "local",

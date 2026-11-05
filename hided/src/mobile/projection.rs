@@ -5,7 +5,7 @@
 //! nothing else of the snapshot.
 
 pub use herdr_core::agent_state::phone::{
-    AgentKey, PhoneAgent, PhoneMissions, Projection, project,
+    AgentKey, PhoneAgent, PhoneMissions, PhonePrs, Projection, project,
 };
 use serde_json::Value;
 
@@ -18,7 +18,7 @@ pub fn update_inputs(
     have: u64,
 ) -> Result<bool, serde_json::Error> {
     if have == 0 || !kept.is_object() {
-        *kept = serde_json::json!({"navigator": {}, "status": {}, "ui_state": {}, "missions": {}});
+        *kept = serde_json::json!({"navigator": {}, "status": {}, "ui_state": {}, "missions": {}, "pr_work": {}});
     }
     let mut changed = false;
     macro_rules! field {
@@ -42,6 +42,14 @@ pub fn update_inputs(
     field!("status", "last_error", rest.status.last_error);
     if rest.missions.revision > have {
         kept["missions"] = serde_json::to_value(rest.missions.value.as_ref())?;
+        changed = true;
+    }
+    if rest.pr_work.revision > have {
+        // Only what the phone's pull requests read: the cards and the one feedback.
+        kept["pr_work"] = serde_json::json!({
+            "cards": serde_json::to_value(&rest.pr_work.value.cards)?,
+            "feedback": serde_json::to_value(&rest.pr_work.value.feedback)?,
+        });
         changed = true;
     }
     if rest.task_operation.revision > have {

@@ -7,8 +7,10 @@
 //! it, send that pane a reply or one key, open the start sheet and start an
 //! agent from it, wake a sleeping agent in its pane, wake or inspect a listed
 //! sleeping conversation, answer the decision a listed mission waits on
-//! (`answer_mission`), register or report its push subscription, and ask
-//! whether hided still answers (`ping`). Anything else is refused and recorded.
+//! (`answer_mission`), read, merge or hand to an agent a listed pull request
+//! (`read_pr`, `merge_pr`, `read_pr_feedback`, `delegate_pr`), register or
+//! report its push subscription, and ask whether hided still answers
+//! (`ping`). Anything else is refused and recorded.
 //! It never receives a file, a path, a setting or the core's snapshot; the one
 //! exception is the interface language, which rides each `agents` frame so the
 //! phone speaks the language the operator chose.
@@ -27,7 +29,8 @@ use tokio::sync::mpsc;
 
 use super::conversation::{self, Tail, Transcript};
 use super::pane::{self, Input, PaneError};
-use super::projection::{AgentKey, PhoneMissions, Projection};
+use super::projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
+use super::prs;
 use super::store::{Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
 
@@ -232,6 +235,16 @@ fn agents_frame(projection: &Projection) -> Value {
 /// record's trimmed projection, republished when it changes.
 fn missions_frame(missions: &PhoneMissions) -> Value {
     json!({"type": "missions", "items": missions.items, "failed": missions.failed})
+}
+
+/// The pull requests the phone lists (PRD mobile-companion-ui B37-B45): the
+/// projection's trimmed list with the cards the core holds, republished when
+/// it changes.
+fn prs_frame(prs: &PhonePrs) -> Value {
+    json!({
+        "type": "prs", "projects": prs.projects, "items": prs.items,
+        "feedback": prs.feedback, "omitted": prs.omitted,
+    })
 }
 
 fn meta_frame(meta: &PhoneMeta) -> Value {
@@ -626,6 +639,7 @@ async fn run(
 ) {
     let mut projection = mobile.subscribe_projection();
     let mut missions = mobile.subscribe_missions();
+    let mut prs = mobile.subscribe_prs();
     let mut meta = mobile.subscribe_meta();
     let (frames_tx, mut frames) = mpsc::channel::<Value>(8);
     let mut open = Open::default();
@@ -651,6 +665,7 @@ async fn run(
         meta_frame(&meta.borrow_and_update()),
         agents_frame(&projection.borrow_and_update()),
         missions_frame(&missions.borrow_and_update()),
+        prs_frame(&prs.borrow_and_update()),
     ];
     for frame in &first {
         if !send_frame(socket, frame, phone_id).await {
@@ -672,6 +687,11 @@ async fn run(
             changed = missions.changed() => {
                 if changed.is_err() { return; }
                 let frame = missions_frame(&missions.borrow_and_update());
+                if !send_frame(socket, &frame, phone_id).await { return; }
+            }
+            changed = prs.changed() => {
+                if changed.is_err() { return; }
+                let frame = prs_frame(&prs.borrow_and_update());
                 if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = meta.changed() => {
@@ -805,6 +825,18 @@ async fn handle(
         }
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
         "answer_mission" => Some(answer_mission(mobile, phone_id, message).await),
+        "read_pr" | "merge_pr" | "read_pr_feedback" => {
+            Some(pr_request(mobile, phone_id, kind, message).await)
+        }
+        "delegate_pr" => {
+            let busy = json!({"type": "start_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight"});
+            // Answered once the core says how the start went, like a start from the sheet.
+            let (mobile, phone_id, message) =
+                (Arc::clone(mobile), phone_id.to_owned(), message.clone());
+            spawn_beside_loop(&mut open.start, frames, busy, async move {
+                mobile.delegate_pr(&phone_id, &message).await
+            })
+        }
         "input" => {
             let busy = json!({
                 "type": "input_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight",
@@ -1047,6 +1079,78 @@ async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -
             Err(_) => {
                 // Nothing reached the core, so the phone may send this id again.
                 mobile.settle_input(&phone_id, &request, None);
+                Err("unavailable")
+            }
+        }
+    })
+    .await;
+    match dispatched {
+        Ok(Ok(())) => answer(true, None),
+        Ok(Err(reason)) => answer(false, Some(reason)),
+        Err(_) => answer(false, Some("unavailable")),
+    }
+}
+
+/// A phone's read, merge or feedback request for a listed pull request: the
+/// one core event the desktop's card sends, claimed by its request id on one
+/// blocking thread, so a repeat of the same press (on this socket or another)
+/// reaches GitHub once. What GitHub then did comes back on the card, in the
+/// `prs` frame; this answers only whether hided sent the request.
+async fn pr_request(mobile: &Arc<Mobile>, phone_id: &str, kind: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "pr_result", "action": kind, "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "pr_result", "request_id": request_id, "action": kind,
+            "pr": message.get("pr").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let listed = mobile.prs();
+    let built = match kind {
+        "read_pr" => prs::card_read(message, &listed),
+        "merge_pr" => prs::merge(message, &listed),
+        _ => prs::feedback(message, &listed, request_id),
+    };
+    let bytes = match built {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("{kind}:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    // Only a merge is an effect to claim: a read sent twice reads twice.
+    let claims = kind == "merge_pr";
+    let (mobile, phone_id, request) = (
+        Arc::clone(mobile),
+        phone_id.to_owned(),
+        request_id.to_owned(),
+    );
+    let dispatched = tokio::task::spawn_blocking(move || {
+        mobile.still_admitted(&phone_id)?;
+        if claims {
+            match mobile.reserve_input(&phone_id, &request) {
+                Reservation::Write => {}
+                Reservation::Seen(InputState::Written) => return Ok(()),
+                Reservation::Seen(_) => return Err("in_flight"),
+            }
+        }
+        match mobile.config.core.dispatch(bytes) {
+            Ok(()) => {
+                if claims {
+                    mobile.settle_input(&phone_id, &request, Some(InputState::Written));
+                }
+                Ok(())
+            }
+            Err(_) => {
+                // Nothing reached the core, so the phone may send this id again.
+                if claims {
+                    mobile.settle_input(&phone_id, &request, None);
+                }
                 Err("unavailable")
             }
         }
@@ -2021,6 +2125,134 @@ mod tests {
         assert_eq!(
             (answer["ok"].as_bool(), reason(&answer)),
             (Some(false), Some("invalid_request"))
+        );
+    }
+
+    /// A phone with the one pull request list the PR requests are checked against.
+    fn listing(mobile: &Arc<Mobile>, card_head: &str) {
+        use super::super::prs::fixture::{card, prs};
+        mobile
+            .prs
+            .send_replace(Arc::new(prs(card(card_head, false, &["squash"]))));
+    }
+
+    fn pr_message(kind: &str, request_id: &str, body: Value) -> Value {
+        let mut message = json!({"type": kind, "request_id": request_id, "pr": "w1#1"});
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(body.as_object().unwrap().clone());
+        message
+    }
+
+    #[tokio::test]
+    async fn the_same_merge_request_is_answered_from_its_claim_and_reaches_the_core_once() {
+        use super::super::prs::fixture::HEAD;
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        listing(&mobile, HEAD);
+        let phone = paired(&mobile);
+        let ask = pr_message("merge_pr", "merge-1", json!({"head": HEAD, "method": "squash"}));
+
+        let first = pr_request(&mobile, &phone, "merge_pr", &ask).await;
+        assert_eq!(first["type"], "pr_result");
+        assert_eq!((first["request_id"].as_str(), first["pr"].as_str()), (Some("merge-1"), Some("w1#1")));
+        assert_eq!(first["ok"], true, "{first}");
+        assert!(
+            matches!(
+                mobile.reserve_input(&phone, "merge-1"),
+                Reservation::Seen(InputState::Written)
+            ),
+            "the press is recorded as written, so a repeat is not sent to GitHub again"
+        );
+        let again = pr_request(&mobile, &phone, "merge_pr", &ask).await;
+        assert_eq!(again["ok"], true, "{again}");
+
+        // A press still being sent is told so, never sent a second time.
+        assert!(matches!(mobile.reserve_input(&phone, "merge-2"), Reservation::Write));
+        let racing = pr_request(
+            &mobile,
+            &phone,
+            "merge_pr",
+            &pr_message("merge_pr", "merge-2", json!({"head": HEAD, "method": "squash"})),
+        )
+        .await;
+        assert_eq!((racing["ok"].as_bool(), reason(&racing)), (Some(false), Some("in_flight")));
+    }
+
+    #[tokio::test]
+    async fn a_merge_for_a_moved_head_or_an_unlisted_pull_request_claims_nothing() {
+        use super::super::prs::fixture::HEAD;
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        listing(&mobile, HEAD);
+        let phone = paired(&mobile);
+
+        let moved = pr_request(
+            &mobile,
+            &phone,
+            "merge_pr",
+            &pr_message("merge_pr", "m-moved", json!({"head": "f".repeat(40), "method": "squash"})),
+        )
+        .await;
+        assert_eq!((moved["ok"].as_bool(), reason(&moved)), (Some(false), Some("head_moved")));
+        assert!(
+            matches!(mobile.reserve_input(&phone, "m-moved"), Reservation::Write),
+            "a refused merge may be sent again once the card is read"
+        );
+        let mut gone = pr_message("merge_pr", "m-gone", json!({"head": HEAD, "method": "squash"}));
+        gone["pr"] = json!("w9#4");
+        let gone = pr_request(&mobile, &phone, "merge_pr", &gone).await;
+        assert_eq!(reason(&gone), Some("gone"));
+        let mut anonymous = pr_message("merge_pr", "x", json!({"head": HEAD}));
+        anonymous.as_object_mut().unwrap().remove("request_id");
+        let invalid = pr_request(&mobile, &phone, "merge_pr", &anonymous).await;
+        assert_eq!(reason(&invalid), Some("invalid_request"));
+    }
+
+    #[tokio::test]
+    async fn reading_a_card_or_its_feedback_is_not_claimed_and_a_hand_over_is_answered_by_its_start() {
+        use super::super::prs::fixture::HEAD;
+        use super::super::start::Answer;
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        listing(&mobile, HEAD);
+        let phone = paired(&mobile);
+
+        for (kind, id) in [("read_pr", "read-1"), ("read_pr_feedback", "feedback-1")] {
+            let sent = pr_request(&mobile, &phone, kind, &pr_message(kind, id, json!({}))).await;
+            assert_eq!(sent["ok"], true, "{sent}");
+            assert!(
+                matches!(mobile.reserve_input(&phone, id), Reservation::Write),
+                "a read sent twice reads twice, so it claims nothing"
+            );
+        }
+
+        // The core's start answer for the hand-over's request id comes back as the start's own result.
+        mobile.answers.send_replace(Arc::new(vec![(
+            "hand-1".to_owned(),
+            Answer::Started { device_id: "test-node".into(), pane_id: "w1:p9".into() },
+        )]));
+        let started = mobile
+            .delegate_pr(
+                &phone,
+                &pr_message("delegate_pr", "hand-1", json!({"kind": "claude", "prompt": "Fix PR #1"})),
+            )
+            .await;
+        assert_eq!(started["type"], "start_result");
+        assert_eq!((started["ok"].as_bool(), started["pane_id"].as_str()), (Some(true), Some("w1:p9")));
+        let refused = mobile
+            .delegate_pr(
+                &phone,
+                &pr_message("delegate_pr", "hand-2", json!({"kind": "terminal", "prompt": "go"})),
+            )
+            .await;
+        assert_eq!(
+            (refused["ok"].as_bool(), reason(&refused)),
+            (Some(false), Some("unknown_kind"))
         );
     }
 }
