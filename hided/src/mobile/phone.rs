@@ -1695,7 +1695,7 @@ mod tests {
         };
         let projection = super::super::projection::project(
             &json!({"navigator": {"agents": [
-                agent("p", json!({})),
+                agent("p", json!({"lineage_child_pane_ids": ["c"]})),
                 agent("c", json!({"delegated": true, "lineage_parent_pane_id": "p"})),
             ]}}),
             "test-node",

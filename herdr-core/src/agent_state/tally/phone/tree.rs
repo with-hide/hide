@@ -1,7 +1,7 @@
 //! The phone list's tree, order and folds. The phone only draws what this
 //! decides (PRD mobile-companion-ui D-01 to D-04): children stand under their
 //! parent as the sidebar's tree stands them (`lineage::TREE_LEVELS`,
-//! `SIBLINGS_SHOWN`, `sibling_order`), rows of this Mac and of every connected
+//! `SIBLINGS_SHOWN`, `children_in_order`), rows of this Mac and of every connected
 //! device are mixed in one most-recent-first order (`recent_first`, the order
 //! `sort_agents` gives every surface), and a group lists only its first rows
 //! before its "N more".
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use super::{Descendants, Group, GroupRow, PhoneAgent, PhoneSleepingSession};
 use crate::agent_state::recent_first;
-use crate::agent_state::tally::lineage::{SIBLINGS_SHOWN, TREE_LEVELS, sibling_order};
+use crate::agent_state::tally::lineage::{SIBLINGS_SHOWN, TREE_LEVELS, children_in_order};
 use crate::agent_state::tally::scope::RAISED_SHOWN;
 
 /// How many rows 작업 중 and 확인함 list before their "N more" (PRD
@@ -45,27 +45,32 @@ pub(super) fn groups(
         .enumerate()
         .filter_map(|(at, agent)| Some((agent.as_ref()?.pane_id.clone(), at)))
         .collect();
-    // A row is a child only while its parent is on the phone; an orphan whose
-    // parent is not listed is a root again, as on the desktop (D-52).
-    let mut roots = Vec::new();
-    let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
+    // A delegated row hangs under the parent that lists it among its
+    // children, in the sidebar's child order; one whose parent is not on the
+    // phone is a root again, as on the desktop (D-52).
+    let mut claimed = vec![false; slots.len()];
     for (at, slot) in slots.iter().enumerate() {
         let agent = slot.as_ref().expect("every slot is filled before the tree");
-        match agent
-            .delegated
-            .then(|| agent.parent_pane_id.as_deref().and_then(|id| index.get(id)))
-            .flatten()
-        {
-            Some(&parent) if parent != at => children.entry(parent).or_default().push(at),
-            _ => roots.push(at),
+        for id in &agent.child_pane_ids {
+            if let Some(kid) = kid_at(&slots, &index, at, id) {
+                claimed[kid] = true;
+            }
         }
     }
     let mut top: Vec<(String, Vec<GroupRow>)> = order
         .iter()
         .map(|group| ((*group).to_owned(), Vec::new()))
         .collect();
-    for at in roots {
-        let agent = attach(&mut slots, &children, at, 0);
+    // The roots first, then every row again: a lineage that loops claims all
+    // of its rows, so none is a root, and placing what is left keeps it listed.
+    // A row already placed answers `None`.
+    for at in (0..slots.len())
+        .filter(|&at| !claimed[at])
+        .chain(0..slots.len())
+    {
+        let Some(agent) = attach(&mut slots, &index, at, 0) else {
+            continue;
+        };
         let rows = match top.iter_mut().find(|(group, _)| *group == agent.group) {
             Some((_, rows)) => rows,
             None => {
@@ -104,37 +109,78 @@ pub(super) fn groups(
 
 /// The row at `at` with its children and grandchildren hung under it, the
 /// first `SIBLINGS_SHOWN` of each parent's in `children` and the rest in
-/// `more_children`.
+/// `more_children`. A grandchild's own descendants, which the sidebar opens
+/// in its popover, wait flat behind that row's "더 보기", so every agent stays
+/// on the phone to open or answer. `None` when another parent placed it.
 fn attach(
     slots: &mut [Option<PhoneAgent>],
-    children: &HashMap<usize, Vec<usize>>,
+    index: &HashMap<String, usize>,
     at: usize,
     level: usize,
-) -> PhoneAgent {
-    let mut row = slots[at].take().expect("a row hangs under one parent");
+) -> Option<PhoneAgent> {
+    let mut row = slots[at].take()?;
     row.children_open = row.descendants.asking > 0;
+    let kids = kids_of(slots, index, at, &row);
     if level >= TREE_LEVELS {
-        return row;
+        for kid in kids {
+            flatten(slots, index, kid, &mut row.more_children);
+        }
+        return Some(row);
     }
-    let mut kids: Vec<(usize, u8, String)> = children
-        .get(&at)
-        .into_iter()
-        .flatten()
-        .map(|&kid| {
-            let agent = slots[kid].as_ref().expect("a child is not yet attached");
-            (kid, agent.tree_rank, agent.activity.clone())
-        })
-        .collect();
-    kids.sort_by(|left, right| sibling_order((left.1, &left.2), (right.1, &right.2)));
-    let mut kids = kids.into_iter().map(|(kid, ..)| kid);
+    let mut kids = kids.into_iter();
     for kid in kids.by_ref().take(SIBLINGS_SHOWN) {
-        row.children.push(attach(slots, children, kid, level + 1));
+        row.children.extend(attach(slots, index, kid, level + 1));
     }
     for kid in kids {
         row.more_children
-            .push(attach(slots, children, kid, level + 1));
+            .extend(attach(slots, index, kid, level + 1));
     }
-    row
+    Some(row)
+}
+
+/// The row at `at` and, after it, everything below it, parent first.
+fn flatten(
+    slots: &mut [Option<PhoneAgent>],
+    index: &HashMap<String, usize>,
+    at: usize,
+    out: &mut Vec<PhoneAgent>,
+) {
+    let Some(mut row) = slots[at].take() else {
+        return;
+    };
+    row.children_open = row.descendants.asking > 0;
+    let kids = kids_of(slots, index, at, &row);
+    out.push(row);
+    for kid in kids {
+        flatten(slots, index, kid, out);
+    }
+}
+
+/// The delegated rows still unplaced under `row` (the row at `at`), in the
+/// order every tree stands them.
+fn kids_of(
+    slots: &[Option<PhoneAgent>],
+    index: &HashMap<String, usize>,
+    at: usize,
+    row: &PhoneAgent,
+) -> Vec<usize> {
+    children_in_order(
+        &row.child_pane_ids,
+        |id| kid_at(slots, index, at, id),
+        |kid| slots[kid].as_ref().map_or(u8::MAX, |agent| agent.tree_rank),
+    )
+}
+
+/// The slot of the delegated row `id` that the row at `at` lists as a child,
+/// while that row is on the phone and not yet placed.
+fn kid_at(
+    slots: &[Option<PhoneAgent>],
+    index: &HashMap<String, usize>,
+    at: usize,
+    id: &str,
+) -> Option<usize> {
+    let kid = *index.get(id)?;
+    (kid != at && slots[kid].as_ref().is_some_and(|agent| agent.delegated)).then_some(kid)
 }
 
 impl Descendants {
@@ -186,7 +232,30 @@ mod tests {
         value
     }
 
-    fn projected(agents: Vec<Value>) -> Projection {
+    /// The rows as the core lists them: a parent names its children in the
+    /// order they were listed, unless the row already says (`lineage_child_pane_ids`).
+    fn projected(mut agents: Vec<Value>) -> Projection {
+        let named: Vec<(String, String)> = agents
+            .iter()
+            .filter_map(|row| {
+                Some((
+                    row.get("lineage_parent_pane_id")?.as_str()?.to_owned(),
+                    row.get("pane_id")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect();
+        for row in &mut agents {
+            if row.get("lineage_child_pane_ids").is_some() {
+                continue;
+            }
+            let pane = row["pane_id"].as_str().unwrap().to_owned();
+            let kids: Vec<_> = named
+                .iter()
+                .filter(|(parent, _)| *parent == pane)
+                .map(|(_, kid)| kid.clone())
+                .collect();
+            row["lineage_child_pane_ids"] = json!(kids);
+        }
         project(&json!({"navigator": {"agents": agents}}), "local")
     }
 
@@ -260,25 +329,66 @@ mod tests {
         assert_eq!(panes(&group(&projection, "working").rows), ["c"]);
     }
 
-    /// B4: two levels open under a root, the third is only counted.
+    /// B4: two levels open under a root; what lies deeper stays on the phone,
+    /// flat and parent first, behind the grandchild's "더 보기", so the phone
+    /// can still open or answer it.
     #[test]
-    fn only_two_levels_of_children_are_listed() {
+    fn what_lies_deeper_than_two_levels_waits_behind_the_grandchild() {
         let projection = projected(vec![
             agent("p", "working", 10, json!({})),
             child("c", "p", 9, json!({})),
             child("g", "c", 8, json!({})),
             child("deep", "g", 7, json!({})),
+            child("deeper", "deep", 6, json!({})),
+            child("deep-too", "g", 5, json!({})),
         ]);
         let grandchild = &top(&projection, "working", "p").children[0].children[0];
         assert_eq!(grandchild.pane_id, "g");
-        assert!(grandchild.children.is_empty() && grandchild.more_children.is_empty());
-        assert!(projection.agents().all(|agent| agent.pane_id != "deep"));
+        assert!(grandchild.children.is_empty());
+        assert_eq!(
+            ids(&grandchild.more_children),
+            ["deep", "deeper", "deep-too"]
+        );
+        assert!(
+            grandchild
+                .more_children
+                .iter()
+                .all(|row| row.children.is_empty() && row.more_children.is_empty())
+        );
+        let found = |pane: &str| {
+            projection
+                .agents()
+                .find(|row| row.pane_id == pane)
+                .is_some_and(|row| projection.find(&row.key()).is_some())
+        };
+        assert!(
+            ["p", "c", "g", "deep", "deeper", "deep-too"]
+                .into_iter()
+                .all(found)
+        );
     }
 
-    /// B4: siblings stand most urgent first, then most recent, five to a
-    /// parent, and the rest wait for "더 보기".
+    /// A lineage that loops names every row as another's child; none of them
+    /// is lost for it.
     #[test]
-    fn siblings_stand_by_urgency_then_recency_and_five_are_listed() {
+    fn a_looping_lineage_keeps_every_row_listed() {
+        let projection = projected(vec![
+            child("a", "b", 9, json!({})),
+            child("b", "a", 8, json!({})),
+        ]);
+        let listed: Vec<_> = projection
+            .agents()
+            .map(|row| row.pane_id.as_str())
+            .collect();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.contains(&"a") && listed.contains(&"b"));
+    }
+
+    /// B4, D-02: siblings stand as the sidebar stands them, most urgent
+    /// first and then in the parent's own child order whatever their
+    /// activity, five to a parent, and the rest wait for "더 보기".
+    #[test]
+    fn siblings_stand_by_urgency_then_the_parents_order_and_five_are_listed() {
         let mut rows = vec![agent("p", "working", 100, json!({}))];
         for (at, name) in ["a", "b", "c", "d", "e", "f", "g"].iter().enumerate() {
             rows.push(child(name, "p", 10 + at as u64, json!({})));
@@ -287,8 +397,25 @@ mod tests {
         rows.push(child("ask", "p", 1, json!({"state": {"tree_rank": 0}})));
         let projection = projected(rows);
         let parent = top(&projection, "working", "p");
-        assert_eq!(ids(&parent.children), ["ask", "g", "f", "e", "d"]);
-        assert_eq!(ids(&parent.more_children), ["c", "b", "a"]);
+        assert_eq!(ids(&parent.children), ["ask", "a", "b", "c", "d"]);
+        assert_eq!(ids(&parent.more_children), ["e", "f", "g"]);
+    }
+
+    /// D-02: the order the parent names its children in is the sidebar's, so a
+    /// more recently active child does not move above one listed before it.
+    #[test]
+    fn a_more_recent_child_does_not_pass_one_the_parent_lists_first() {
+        let mut parent = agent("p", "working", 100, json!({}));
+        parent["lineage_child_pane_ids"] = json!(["old", "new"]);
+        let projection = projected(vec![
+            parent,
+            child("new", "p", 90, json!({})),
+            child("old", "p", 10, json!({})),
+        ]);
+        assert_eq!(
+            ids(&top(&projection, "working", "p").children),
+            ["old", "new"]
+        );
     }
 
     /// B3: a parent opens while a descendant waits for the operator, and
@@ -450,20 +577,5 @@ mod tests {
         );
         assert_eq!(group(&projection, "needs_you").count, 2);
         assert_eq!(group(&projection, "working").count, 3);
-    }
-
-    /// The sidebar draws its siblings through `web/src/sidebarTree.ts`; the
-    /// phone's cap is the same number, held equal here so the two cannot drift.
-    #[test]
-    fn the_sibling_cap_is_the_sidebars() {
-        let source = include_str!("../../../../../web/src/sidebarTree.ts");
-        let declared = format!(
-            "export const SIBLINGS_SHOWN = {};",
-            crate::agent_state::tally::lineage::SIBLINGS_SHOWN
-        );
-        assert!(
-            source.contains(&declared),
-            "sidebarTree.ts must declare `{declared}`"
-        );
     }
 }

@@ -117,7 +117,7 @@ mod tests {
         json!({
             "navigator": {
                 "agents": [
-                    agent("w1:p1", "working", json!({"activity": "working"})),
+                    agent("w1:p1", "working", json!({"activity": "working", "lineage_child_pane_ids": ["w1:p3"]})),
                     agent("w1:p2", "needs_you", json!({"demand": "approval", "mark": "turn", "state": {"line": line("Bash(cargo test) 실행을 허용할까요?", "request", "warning")}})),
                     agent("w1:p3", "working", json!({"lineage_parent_pane_id": "w1:p1", "delegated": true, "demand": "question"})),
                     agent("w1:p4", "seen", json!({"mark": "quiet", "state": {"line": line("quiet sentence", "quiet", "subtle")}})),
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn phone_rows_take_the_core_mark_and_line() {
         let input = json!({"navigator": {"agents": [
-            agent("root", "working", json!({"wait": "children", "mark": "waiting",
+            agent("root", "working", json!({"wait": "children", "mark": "waiting", "lineage_child_pane_ids": ["child"],
                 "descendant_counts": {"working": 2},
                 "state": {"line": line("", "waiting", "subtle")}})),
             agent("read-question", "seen", json!({"demand": "question", "mark": "turn",

@@ -387,12 +387,13 @@ pub mod phone {
         /// chooses otherwise: a descendant waits for them (B3).
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         pub children_open: bool,
-        /// Whether Hide's own delegation made the row, and the pane that
-        /// spawned it, so the tree hangs it under that pane.
+        /// Whether Hide's own delegation made the row, and the panes that
+        /// hang under it in the sidebar's child order
+        /// (`lineage_child_pane_ids`), so the tree hangs them the same way.
         #[serde(skip)]
         delegated: bool,
         #[serde(skip)]
-        parent_pane_id: Option<String>,
+        child_pane_ids: Vec<String>,
         /// Where the row stands among its siblings (`RowState::tree_rank`).
         #[serde(skip)]
         tree_rank: u8,
@@ -856,11 +857,14 @@ pub mod phone {
                     .get("delegated")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
-                parent_pane_id: agent
-                    .get("lineage_parent_pane_id")
-                    .and_then(Value::as_str)
-                    .filter(|parent| !parent.is_empty())
-                    .map(str::to_owned),
+                child_pane_ids: agent
+                    .get("lineage_child_pane_ids")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
                 tree_rank: agent
                     .pointer("/state/tree_rank")
                     .and_then(Value::as_u64)
