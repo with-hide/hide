@@ -6,7 +6,7 @@ import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
-import { attentionReasonText, turnItems, type TurnItem } from "./missions";
+import { attentionReasonText, turnItems, workerEscalation, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import type { Mission, MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
@@ -25,7 +25,7 @@ export function MissionTurn({ mission, device, actions, onSelect }: { mission: M
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const rows = useMemo(() => agentsByPane(allAgents(local, remote)), [local, remote]);
   // A mission no Conductor holds says so on its Conductor row, with 이어받기 there (PRD mission-tool B13).
-  const items = turnItems(mission, (node) => (node.pane_id ? (rows.get(node.pane_id) ?? null) : null)).filter((item) => item.kind !== "takeover");
+  const items = turnItems(mission, (node) => workerEscalation(node.pane_id ? rows.get(node.pane_id) : null)).filter((item) => item.kind !== "takeover");
   if (items.length === 0) return null;
   return (
     <section aria-label={t("mission.turn", { count: items.length })} className="flex min-w-0 flex-col gap-xs px-md pb-sm" data-mission-turn={items.map((item) => item.kind).join(" ")}>
