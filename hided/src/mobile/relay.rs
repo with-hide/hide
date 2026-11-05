@@ -31,9 +31,10 @@ const INBOUND_QUEUE: usize = 8;
 const OUTBOUND_QUEUE: usize = 32;
 /// The phone application contract, independent of relay wire version. 2 is
 /// the list a parent's children hang under, with devices in one recency
-/// order (PRD mobile-companion-ui D-18); the phone screens that follow ride on
-/// the same number, and `web/src/mobile/phoneVersion.ts` carries it too.
-pub const PHONE_PROTOCOL: u32 = 2;
+/// order (PRD mobile-companion-ui D-18). 3 adds a page View's screenshot, a
+/// `look_head` of mode `page`; the phone screens that follow ride on the same
+/// number, and `web/src/mobile/phoneVersion.ts` carries it too.
+pub const PHONE_PROTOCOL: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {

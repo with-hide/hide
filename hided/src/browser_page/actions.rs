@@ -1083,8 +1083,15 @@ async fn wait_for(page: &mut Page, wait: Wait, timeout: Duration) -> Result<Outp
 }
 
 async fn capture_png(page: &mut Page, clip: Option<Value>) -> Result<Vec<u8>, Failure> {
+    capture_image(page, json!({"format": "png"}), clip).await
+}
+
+async fn capture_image(
+    page: &mut Page,
+    mut params: Value,
+    clip: Option<Value>,
+) -> Result<Vec<u8>, Failure> {
     let top = page.top.clone();
-    let mut params = json!({"format": "png"});
     if let Some(clip) = clip {
         params["clip"] = clip;
     }
@@ -1099,6 +1106,40 @@ async fn capture_png(page: &mut Page, clip: Option<Value>) -> Result<Vec<u8>, Fa
     base64::engine::general_purpose::STANDARD
         .decode(shot["data"].as_str().unwrap_or(""))
         .map_err(|_| Failure::new("screenshot_failed", None))
+}
+
+/// The most CSS pixels of the visible page a phone's still keeps; a larger
+/// viewport is scaled down so the picture stays well under the gateway's
+/// message cap and the phone's image cap.
+const STILL_PIXELS: f64 = 1_500_000.0;
+const STILL_QUALITY: u32 = 70;
+
+/// The visible part of the page as a JPEG, for a phone. It is the same
+/// capture `hide browser screenshot` takes and refuses the same way: a
+/// display behind another tab of its area is `display_hidden`, and nothing
+/// here selects, focuses or raises anything.
+pub async fn still(page: &mut Page) -> Result<Vec<u8>, Failure> {
+    let probe = page.require_visible().await?;
+    let (view, scroll) = (&probe["vv"], &probe["scroll"]);
+    let read = |value: &Value, key: &str| value[key].as_f64().filter(|n| n.is_finite());
+    let (Some(width), Some(height)) = (read(view, "width"), read(view, "height")) else {
+        return Err(Failure::new("screenshot_failed", None));
+    };
+    if width < 1.0 || height < 1.0 {
+        return Err(Failure::new("screenshot_failed", None));
+    }
+    let scale = (STILL_PIXELS / (width * height)).sqrt().min(1.0);
+    let clip = json!({
+        "x": read(scroll, "x").unwrap_or(0.0) + read(view, "left").unwrap_or(0.0),
+        "y": read(scroll, "y").unwrap_or(0.0) + read(view, "top").unwrap_or(0.0),
+        "width": width, "height": height, "scale": scale,
+    });
+    capture_image(
+        page,
+        json!({"format": "jpeg", "quality": STILL_QUALITY}),
+        Some(clip),
+    )
+    .await
 }
 
 pub fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
@@ -1506,6 +1547,55 @@ mod tests {
             ),
             "{detail}"
         );
+    }
+
+    /// What a phone is sent of a page (PRD mobile-companion-ui B20, B21): the
+    /// visible viewport as a bounded JPEG through the CLI's own capture, and
+    /// nothing at all of a display that is not in front.
+    #[tokio::test]
+    async fn a_still_is_a_bounded_jpeg_of_the_visible_page_and_a_hidden_display_gives_none() {
+        let asked: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let log = Arc::clone(&asked);
+        let script = move |request: &Value| match request["method"].as_str().unwrap() {
+            "Page.captureScreenshot" => {
+                log.lock().unwrap().push(request["params"].clone());
+                vec![reply(request, json!({"data": "/9j/4A=="}))]
+            }
+            _ => vec![reply(
+                request,
+                json!({"result": {"value": {
+                    "visibility": "visible",
+                    "vv": {"left": 0, "top": 0, "width": 2400, "height": 1500},
+                    "scroll": {"x": 10, "y": 300},
+                }}}),
+            )],
+        };
+        let mut shown = page(script).await;
+        let bytes = still(&mut shown).await.unwrap();
+        assert_eq!(bytes, [0xff, 0xd8, 0xff, 0xe0]);
+        let params = asked.lock().unwrap().remove(0);
+        assert_eq!(params["format"], "jpeg");
+        assert_eq!(params["quality"], STILL_QUALITY);
+        // A viewport past the pixel bound is scaled down to it, and the clip
+        // starts where the page is scrolled to.
+        let scale = params["clip"]["scale"].as_f64().unwrap();
+        assert!((2400.0 * 1500.0 * scale * scale - STILL_PIXELS).abs() < 1.0, "{scale}");
+        assert_eq!(params["clip"]["x"], 10.0);
+        assert_eq!(params["clip"]["y"], 300.0);
+
+        // Behind another tab of its area it answers `display_hidden` before
+        // any picture is asked for, the way `hide browser screenshot` does.
+        let asked_again = Arc::new(Mutex::new(false));
+        let flag = Arc::clone(&asked_again);
+        let mut hidden = super::super::fake_gateway::page(move |request: &Value| {
+            *flag.lock().unwrap() |= request["method"] == "Page.captureScreenshot";
+            vec![reply(request, json!({"result": {"value": {}}}))]
+        })
+        .await
+        .behind_another_tab();
+        let failure = still(&mut hidden).await.unwrap_err();
+        assert_eq!(failure.reason, "display_hidden");
+        assert!(!*asked_again.lock().unwrap());
     }
 
     #[tokio::test]
