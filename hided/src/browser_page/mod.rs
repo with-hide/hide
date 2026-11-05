@@ -534,6 +534,20 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
+/// A picture of what `display` shows now, taken over a gateway socket the
+/// caller already opened (`mobile/page_shot.rs`). `selected` is whether the
+/// display is its area's front View; a hidden one is `display_hidden`.
+pub(crate) async fn still(
+    socket: crate::workspace_cli::WorkspaceSocket,
+    display: &str,
+    selected: bool,
+) -> Result<Vec<u8>, Failure> {
+    let mut page = page::Page::attach(cdp::Cdp::new(socket), display, selected).await?;
+    let outcome = actions::still(&mut page).await;
+    page.close().await;
+    outcome
+}
+
 pub fn run(env: &Env, command: Command) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

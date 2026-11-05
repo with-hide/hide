@@ -11,8 +11,9 @@
 //! device's helper (`server::send_file_bytes`,
 //! `server::stream_device_file_bytes`), so a path is confined to a checkout
 //! the same way for both. A diff is a list of changed file names and line
-//! counts, never a line of code; a page's screen is another node's work and
-//! shows its address here.
+//! counts, never a line of code; a page's screen is the picture the desktop
+//! app shows of it now (`page_shot.rs`), sent as an image beside its address,
+//! the machine that took it and when.
 //!
 //! Content leaves as JSON text, so bytes travel as base64 chunks small
 //! enough for one relay message (`CHUNK`), at most `WINDOW` of them ahead of
@@ -29,6 +30,7 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use super::Mobile;
+use super::page_shot;
 use super::projection::AgentKey;
 use crate::server;
 
@@ -247,13 +249,27 @@ async fn send(
     let shown = Shown::of(view);
     let answer = match shown {
         Shown::Changes => changes(mobile, request_id, view).await,
-        Shown::Page => {
-            // The screen of a page is the next node's; the address is all
-            // the phone has now (B21).
-            let mut frame = result(request_id, &view.display_id, "page");
-            frame["url"] = json!(cut(view.url.as_deref().unwrap_or(""), URL_CHARS));
-            frame
-        }
+        Shown::Page => match page_shot::take(mobile, view, IMAGE_CAP).await {
+            Ok(shot) => {
+                let read = Read {
+                    total: shot.jpeg.len() as u64,
+                    bytes: shot.jpeg,
+                    page: Some(PageFacts {
+                        url: cut(view.url.as_deref().unwrap_or(""), URL_CHARS),
+                        taken_unix_ms: shot.taken_unix_ms,
+                        device_id: shot.device_id,
+                    }),
+                };
+                return chunks(request_id, view, shown, read, frames, window).await;
+            }
+            // The address is all the phone has when the picture cannot be
+            // taken (B21); why is in the diagnostic log.
+            Err(_) => {
+                let mut frame = result(request_id, &view.display_id, "page");
+                frame["url"] = json!(cut(view.url.as_deref().unwrap_or(""), URL_CHARS));
+                frame
+            }
+        },
         Shown::NameOnly => result(request_id, &view.display_id, "other"),
         Shown::Document | Shown::Image => {
             let cap = if shown == Shown::Image {
@@ -351,6 +367,15 @@ fn changes_frame(request_id: &str, view_id: &str, files: &[LookChange]) -> Value
 struct Read {
     bytes: Vec<u8>,
     total: u64,
+    /// What a page's picture carries beside its bytes; absent for a file.
+    page: Option<PageFacts>,
+}
+
+/// A page's picture is the page as of a moment, on one machine's desktop.
+struct PageFacts {
+    url: String,
+    taken_unix_ms: u64,
+    device_id: String,
 }
 
 /// Reads the View's file up to `cap` bytes through the desktop's readers.
@@ -439,7 +464,11 @@ async fn read(
     };
     reading.abort();
     outcome?;
-    Ok(Read { bytes, total })
+    Ok(Read {
+        bytes,
+        total,
+        page: None,
+    })
 }
 
 /// The `look_result` state for a device whose link could not be had: it is
@@ -482,6 +511,7 @@ async fn chunks(
     }
     let mode = match shown {
         Shown::Image => "image",
+        Shown::Page => "page",
         // The desktop's own rule for what a Markdown file is, so the two draw alike.
         _ if hide_host::document::language_for(std::path::Path::new(&view.path)).as_deref()
             == Some("markdown") =>
@@ -491,12 +521,17 @@ async fn chunks(
         _ => "text",
     };
     let size = read.bytes.len();
-    let head = json!({
+    let mut head = json!({
         "type": "look_head", "request_id": request_id, "view_id": id, "mode": mode,
         "size": size, "total": read.total.max(size as u64),
         "truncated": read.total > size as u64,
         "chunks": size.div_ceil(CHUNK),
     });
+    if let Some(page) = &read.page {
+        head["url"] = json!(page.url);
+        head["taken_at"] = json!(page.taken_unix_ms);
+        head["taken_by"] = json!(page.device_id);
+    }
     if frames.send(head).await.is_err() {
         return;
     }
@@ -669,7 +704,11 @@ mod tests {
         let (frames, mut sent) = mpsc::channel(64);
         let (acked, window) = watch::channel(0_u64);
         let task = tokio::spawn(async move {
-            let read = Read { bytes, total };
+            let read = Read {
+                bytes,
+                total,
+                page: None,
+            };
             chunks("r-1", &looked, Shown::Document, read, &frames, window).await;
         });
         let head = sent_next(&mut sent).await;
@@ -717,10 +756,39 @@ mod tests {
             let read = Read {
                 bytes: b"# title".to_vec(),
                 total: 7,
+                page: None,
             };
             chunks("r-3", &looked, Shown::Document, read, &frames, window).await;
             assert_eq!(sent_next(&mut sent).await["mode"], mode, "{name}");
         }
+    }
+
+    /// B20: the picture of a page leaves as chunks like an image, and its head
+    /// says the address, when it was taken and by which machine's desktop.
+    #[tokio::test]
+    async fn a_pages_picture_is_sent_with_its_address_time_and_machine() {
+        let looked = view("localhost", DisplayKind::Browser);
+        let (frames, mut sent) = mpsc::channel(8);
+        let (_acked, window) = watch::channel(0_u64);
+        let read = Read {
+            bytes: vec![0xff, 0xd8, 0xff, 0xe0, 1, 2, 3],
+            total: 7,
+            page: Some(PageFacts {
+                url: "http://localhost:5173/".to_owned(),
+                taken_unix_ms: 1_700_000_000_000,
+                device_id: "mac-1".to_owned(),
+            }),
+        };
+        chunks("r-5", &looked, Shown::Page, read, &frames, window).await;
+        let head = sent_next(&mut sent).await;
+        assert_eq!(head["type"], "look_head");
+        assert_eq!(head["mode"], "page");
+        assert_eq!(head["url"], "http://localhost:5173/");
+        assert_eq!(head["taken_at"], 1_700_000_000_000_u64);
+        assert_eq!(head["taken_by"], "mac-1");
+        assert_eq!(head["size"], 7);
+        assert_eq!(sent_next(&mut sent).await["type"], "look_chunk");
+        assert_eq!(sent_next(&mut sent).await["type"], "look_end");
     }
 
     fn change(path: &str, status: ChangedFileStatus, counts: Option<(u32, u32)>) -> LookChange {
@@ -791,6 +859,7 @@ mod tests {
         let read = Read {
             bytes: vec![0x50, 0x4b, 0, 3, 4],
             total: 5,
+            page: None,
         };
         chunks("r-2", &looked, Shown::Document, read, &frames, window).await;
         let answer = sent_next(&mut sent).await;

@@ -482,7 +482,7 @@ impl Panes {
             if let Some(install) = request.install.as_deref()
                 && self.install.as_deref() != Some(install)
             {
-                return Err("other_install".to_owned());
+                return Err(hide_agent_hooks::hook_request::install::OTHER_INSTALL.to_owned());
             }
             if request
                 .hook
@@ -964,8 +964,11 @@ fn report_refusal(output: &Mutex<impl Write>, pane_id: Option<String>, reason: &
     );
 }
 
-/// A reference with no wire spelling is not answered at all, so its caller
-/// reads the end of the stream and the issuer withdraws the reference.
+/// Writes the caller's answer, which names this node's installation
+/// (`install`) when it carries a reference or the core's answer to a hook. A
+/// reference with no wire spelling, or an answer past the hook response
+/// limit, is not answered at all, so its caller reads the end of the stream
+/// and the issuer withdraws the reference.
 fn answer_client(
     stream: &mut LocalStream,
     result: Result<BootstrapAnswer, String>,
@@ -982,7 +985,17 @@ fn answer_client(
             }
             answer
         }
-        Ok(BootstrapAnswer::Hook(answer)) => answer,
+        // The core's answer to a hook, which this node gives the pane: it
+        // names this node's installation, as a reference does.
+        Ok(BootstrapAnswer::Hook(mut answer)) => {
+            if let Some(fields) = answer.as_object_mut() {
+                fields.insert("install".to_owned(), json!(install));
+            }
+            if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
+                return Err(io::Error::other("hook response too large"));
+            }
+            answer
+        }
         Err(reason) => {
             json!({"ok":false,"reason":reason,"next_action":hide_node_link::panes::refusal_next_action(&reason)})
         }
@@ -1128,8 +1141,8 @@ mod tests {
     /// A node answers only for its own installation's panes
     /// (with-hide/hide-private#497): a request naming another installation
     /// is refused before anything is proved or sent up, even where the node
-    /// proves a caller by its folder, and the reference it does answer names
-    /// its installation, which the pane's `hide` requires.
+    /// proves a caller by its folder, and the reference or hook answer it
+    /// does give names its installation, which the pane requires.
     #[test]
     fn a_node_answers_only_for_its_own_installation() {
         use std::io::BufRead;
@@ -1171,6 +1184,22 @@ mod tests {
         let answer: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(answer["ok"], true);
         assert_eq!(answer["install"], mine);
+
+        // The core's answer to a hook, which the pane's hook requires to
+        // name its installation too (with-hide/hide-private#575).
+        let (mut writer, reader) = LocalStream::pair().unwrap();
+        let hook =
+            json!({"type": "workspace_result", "request_id": "1-r", "ok": true, "result": {}});
+        answer_client(&mut writer, Ok(BootstrapAnswer::Hook(hook)), Some(mine)).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(reader)
+            .read_line(&mut line)
+            .unwrap();
+        let answer: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            (&answer["request_id"], &answer["install"]),
+            (&json!("1-r"), &json!(mine))
+        );
     }
 
     /// A shell of the node's own account, in no pane, gets exactly the

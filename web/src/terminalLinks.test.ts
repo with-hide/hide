@@ -116,6 +116,34 @@ describe("linkCandidates", () => {
     expect(texts(linkCandidates(margin, 0))).toEqual([["https://example.com/a"]]);
   });
 
+  // hide-private issue 312: the 29-character URL fills its 29-column row.
+  it("keeps a URL that fills its row and ends with a line break apart from the next row's first word", () => {
+    const rows = [row("http://127.0.0.1:41811/a.html", 29), row("osc8 label", 29)];
+    expect(texts(linkCandidates(rows, 0, [false, false]))).toEqual([["http://127.0.0.1:41811/a.html"]]);
+    expect(texts(linkCandidates(rows, 1, [false, false]))).toEqual([]);
+  });
+
+  it("joins a URL across a row the holder says soft-wraps", () => {
+    const rows = [row("http://127.0.0.1:41811/a.html", 29), row("osc8 label", 29)];
+    expect(texts(linkCandidates(rows, 0, [true, false]))[0]![0]).toBe("http://127.0.0.1:41811/a.htmlosc8");
+    expect(texts(linkCandidates(rows, 1, [true, false]))[0]![0]).toBe("http://127.0.0.1:41811/a.htmlosc8");
+  });
+
+  it("ends a URL at a soft-wrapped row whose text stops short of the last column", () => {
+    const rows = [row("see https://a.example/x ", 24), row("and more", 24)];
+    expect(texts(linkCandidates(rows, 0, [true, false]))).toEqual([["https://a.example/x"]]);
+  });
+
+  it("joins a URL at the last column when no wrap is known, as before", () => {
+    const rows = [row("http://127.0.0.1:41811/a.html", 29), row("osc8 label", 29)];
+    expect(texts(linkCandidates(rows, 0, null))[0]![0]).toBe("http://127.0.0.1:41811/a.htmlosc8");
+  });
+
+  it("still offers a path joined across a line break, for its existence to decide", () => {
+    const rows = [row("docs/very/long/folder/name/he", 29), row("re.md", 29)];
+    expect(texts(linkCandidates(rows, 0, [false, false]))[0]).toEqual(["docs/very/long/folder/name/here.md", "docs/very/long/folder/name/he"]);
+  });
+
   it("reads a wide glyph as one character and never splits it", () => {
     const rows = [row("열기 docs/한글.md 끝", 30)];
     const [group] = linkCandidates(rows, 0);

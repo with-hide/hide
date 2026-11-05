@@ -305,6 +305,13 @@ impl Page {
         }
     }
 
+    /// The same page as a display behind another tab of its area.
+    #[cfg(test)]
+    pub fn behind_another_tab(mut self) -> Self {
+        self.selected = false;
+        self
+    }
+
     pub async fn attach(cdp: Cdp, display: &str, selected: bool) -> Result<Self, Failure> {
         Self::attach_within(cdp, display, selected, STEP).await
     }

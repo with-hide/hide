@@ -143,10 +143,21 @@ fn processes_name_the_shell_and_the_program_that_holds_the_terminal() {
     connection
         .send(ClientMessage::Input(line.to_vec()))
         .unwrap();
-    wait_until(
-        "the program to hold the terminal",
-        || matches!(processes().1, Foreground::Known { group, .. } if group != holder.program.pid),
-    );
+    // Until the shell's child runs the program it is a copy of the shell,
+    // which may take the terminal first: the program holds it once a member
+    // has its name.
+    let names_the_program = |members: &[hide_holder_protocol::Member]| {
+        members.iter().any(|member| {
+            member
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(program))
+        })
+    };
+    wait_until("the program to hold the terminal", || {
+        matches!(processes().1, Foreground::Known { group, members }
+            if group != holder.program.pid && names_the_program(&members))
+    });
     let Foreground::Known { members, .. } = processes().1 else {
         unreachable!()
     };

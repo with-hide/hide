@@ -6,8 +6,9 @@
 // prepared build inputs instead of a vendored tree, replaced Herdr's name in
 // comments and test paths, and met this repository's Clippy (`as_chunks`, one
 // reasoned `too_many_arguments`); added `set_default_color`,
-// `effective_background_color` and `encode_paste` for the pane holder. See
-// hide-vt/PATCHES.md.
+// `effective_background_color` and `encode_paste` for the pane holder, and
+// made the render row's wrap read `RowIterator::soft_wrapped`, on every
+// system. See hide-vt/PATCHES.md.
 
 #![allow(dead_code)]
 
@@ -3401,8 +3402,9 @@ impl<'a> RowIter<'a> {
         Ok(dirty)
     }
 
-    #[cfg(windows)]
-    pub fn wrap_state(&self) -> Result<(bool, bool), Error> {
+    /// Whether this row soft-wraps: the program's text ran past its last
+    /// column onto the next row, rather than ending with a line break.
+    pub fn soft_wrapped(&self) -> Result<bool, Error> {
         let mut row = 0;
         // SAFETY: row output matches requested row data type.
         unsafe {
@@ -3423,17 +3425,7 @@ impl<'a> RowIter<'a> {
             )
             .into_result()?;
         }
-        let mut wrap_continuation = false;
-        // SAFETY: wrap continuation output matches requested row data type.
-        unsafe {
-            ffi::ghostty_row_get(
-                row,
-                ffi::GhosttyRowData_GHOSTTY_ROW_DATA_WRAP_CONTINUATION,
-                (&mut wrap_continuation as *mut bool).cast(),
-            )
-            .into_result()?;
-        }
-        Ok((soft_wrapped, wrap_continuation))
+        Ok(soft_wrapped)
     }
 
     pub fn clear_dirty(&mut self) -> Result<(), Error> {

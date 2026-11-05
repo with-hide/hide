@@ -486,6 +486,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let _reaper = browser_routes.spawn_reaper(Arc::clone(&desktop_renderers), shutdown.clone());
     let renderers = Arc::new(AtomicUsize::new(0));
     let start_demand = Arc::new(demand::ObservationDemand::default());
+    // The desktop windows' gateways, shared by `hide browser` and the phone's
+    // screenshot of a page.
+    let browser_control = Arc::new(browser_control::BrowserControl::default());
     let desktop_notices = Arc::new(desktop_notices::DesktopNotices::default());
     seat.starting("core.mobile");
     let mobile = mobile::Mobile::start(mobile::Config {
@@ -506,6 +509,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         desktop: Arc::clone(&desktop_notices),
         boundary: Arc::clone(&boundary),
         roots: Arc::clone(&roots),
+        browser_control: Arc::clone(&browser_control),
     });
     let app = AppState {
         core: Arc::clone(&core),
@@ -518,7 +522,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         token: Arc::new(token.clone()),
         pane_capabilities: Arc::clone(&pane_capabilities),
         browser_routes,
-        browser_control: Arc::new(browser_control::BrowserControl::default()),
+        browser_control,
         browser_comments: Arc::default(),
         allowed_origins: Arc::new(server::allowed_origins(port, env.vite_origin.as_deref())),
         clients: Arc::new(AtomicUsize::new(0)),
