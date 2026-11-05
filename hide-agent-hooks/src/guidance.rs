@@ -47,7 +47,7 @@ use serde_json::{Map, Value, json};
 
 use crate::install::{
     HookDocument, HookStatus, InstallFailure, InstallOutcome, NATIVE, RemoveOutcome, first_quoted,
-    read_document, write_document,
+    helper_exists, read_document, write_document,
 };
 use crate::route::HookTarget;
 use crate::runtime::{HookEvent, PURPOSE_CONTEXT, marker_version_of};
@@ -88,8 +88,8 @@ impl GuidanceAgent {
     /// Antigravity commands encoded across its Windows Go-to-cmd boundary.
     pub const fn version(self) -> u32 {
         match self {
-            Self::Grok => 9,
-            Self::Antigravity => 10,
+            Self::Grok => 10,
+            Self::Antigravity => 11,
             Self::Cursor => 7,
             Self::Gemini
             | Self::Qwen
@@ -501,7 +501,8 @@ fn powershell_command<'a>(
     let helper = helper.into();
     let quoted = Syntax::PowerShell.single_quoted(&helper.display().to_string());
     format!(
-        "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} {} }}",
+        "if ({}) {{ & {quoted} {} }}",
+        helper_exists(&quoted),
         arguments(helper, agent, event)
     )
 }
@@ -586,6 +587,7 @@ const AGY_WINDOWS_COMMAND: &str = "powershell.exe -NoProfile -NonInteractive -En
 fn antigravity_windows_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookEvent) -> String {
     let helper = helper.into();
     let quoted = Syntax::PowerShell.single_quoted(&helper.display().to_string());
+    let exists = helper_exists(&quoted);
     let run = format!(
         "& {quoted} {}",
         arguments(helper, GuidanceAgent::Antigravity, event)
@@ -593,10 +595,10 @@ fn antigravity_windows_command<'a>(helper: impl Into<HookTarget<'a>>, event: Hoo
     let script = if event == HookEvent::PreToolUse {
         let ask = Syntax::PowerShell.single_quoted(crate::antigravity::ASK);
         format!(
-            "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ try {{ {run}; if ($LASTEXITCODE -ne 0) {{ {ask} }} }} catch {{ {ask} }} }} else {{ {ask} }}; exit 0"
+            "if ({exists}) {{ try {{ {run}; if ($LASTEXITCODE -ne 0) {{ {ask} }} }} catch {{ {ask} }} }} else {{ {ask} }}; exit 0"
         )
     } else {
-        format!("if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ {run} }}")
+        format!("if ({exists}) {{ {run} }}")
     };
     let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     format!(

@@ -432,29 +432,17 @@ fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
 ///
 /// The command starts Windows PowerShell. Its first start in a CI job, beside
 /// the other tests starting theirs, took from 2 s to past the 15 s these runs
-/// allow (issue 1497), so it is paid here, before a deadline starts.
-///
-/// The first start includes the first `Test-Path` the command calls: Windows
-/// PowerShell loads that cmdlet's module on first use, and on a fresh runner
-/// it first builds its cache of every installed module ("Preparing modules
-/// for first use", the `#< CLIXML` progress record a timed-out run left on
-/// stderr). A start that only ran `exit 0` left that to the command: four
-/// tests paying it together took 38 to 48 s, and the two that paid it inside
-/// their 15 s failed (issues 198 and 199). These tests check what the command
-/// does once PowerShell is warm; the installed command still pays that first
-/// use on an account with no module cache, which is hide-private issue 318.
+/// allow (issue 1497), so it is paid here, before a deadline starts. The
+/// command itself calls no cmdlet, so it loads no module and builds no
+/// module cache (with-hide/hide-private#318, proved by
+/// `a_windows_guard_with_an_empty_module_cache_answers_inside_its_hook_timeout`).
 fn agy_shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
 
     crate::stand_ins::ready_with_args(
         &Path::new(&std::env::var_os("SystemRoot").unwrap())
             .join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$null = Test-Path -LiteralPath $env:SystemRoot -PathType Leaf; exit 0",
-        ],
+        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
     );
     let mut shell = Command::new("cmd.exe");
     shell
@@ -640,5 +628,132 @@ fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
     assert_eq!(
         received["injectSteps"][0]["systemMessage"]["systemMessage"],
         expected
+    );
+}
+
+/// with-hide/hide-private#318: Windows PowerShell builds its cache of every
+/// installed module before a cmdlet's first use on an account that has none,
+/// which took past a hook's timeout on a fresh runner. Every Windows guard
+/// Hide installs checks for its helper with a .NET call instead, so on an
+/// empty cache (a private `PSModuleAnalysisCachePath`) it answers inside the
+/// hook's own timeout and leaves no cache behind. A `Test-Path` run on another
+/// empty cache shows that PowerShell honors that path, so its absence after a
+/// guard means something.
+#[test]
+fn a_windows_guard_with_an_empty_module_cache_answers_inside_its_hook_timeout() {
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+    use hide_platform::process::OwnedChild;
+    use std::time::{Duration, Instant};
+
+    let powershell = Path::new(&std::env::var_os("SystemRoot").unwrap())
+        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    crate::stand_ins::ready_with_args(
+        &powershell,
+        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+    );
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    // The helper is gone, so the guard's own check is all that runs.
+    let helper = root.path().join("kit [1] $x").join(HELPER_BINARY_NAME);
+    for runtime in AgentRuntime::ALL {
+        std::fs::create_dir_all(runtime.home_directory(&home)).unwrap();
+        hide_agent_hooks::install(runtime, &home, crate::hook_target(&helper)).unwrap();
+    }
+    for agent in [GuidanceAgent::Grok, GuidanceAgent::Antigravity] {
+        std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+        guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
+    }
+    let read = |path: std::path::PathBuf| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    let claude =
+        read(AgentRuntime::ClaudeCode.config_path(&home))["hooks"]["SessionStart"][0]["hooks"][0]
+            .clone();
+    let codex = read(AgentRuntime::Codex.config_path(&home))["hooks"]["SessionStart"][0]["hooks"]
+        [0]
+    .clone();
+    let grok = read(GuidanceAgent::Grok.config_path(&home))["hooks"]["SessionStart"][0]["hooks"][0]
+        .clone();
+    let agy = read(GuidanceAgent::Antigravity.config_path(&home))["hide"]["PreToolUse"][0]["hooks"]
+        [0]
+    .clone();
+
+    let mut runs: Vec<(&str, Command, u64)> = Vec::new();
+    let mut claude_run = Command::new(claude["command"].as_str().unwrap());
+    claude_run.args(
+        claude["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|argument| argument.as_str().unwrap()),
+    );
+    runs.push((
+        "claude-code",
+        claude_run,
+        claude["timeout"].as_u64().unwrap(),
+    ));
+    let mut codex_run = Command::new(&powershell);
+    codex_run.args(["-NoProfile", "-Command", codex["command"].as_str().unwrap()]);
+    runs.push(("codex", codex_run, codex["timeout"].as_u64().unwrap()));
+    let mut grok_run = Command::new(&powershell);
+    grok_run.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        grok["command"].as_str().unwrap(),
+    ]);
+    runs.push(("grok", grok_run, grok["timeout"].as_u64().unwrap()));
+    runs.push((
+        "agy",
+        agy_shell(agy["command"].as_str().unwrap()),
+        agy["timeout"].as_u64().unwrap(),
+    ));
+
+    for (at, (agent, mut command, timeout)) in runs.into_iter().enumerate() {
+        let cache = root.path().join(format!("module-cache-{at}"));
+        command
+            .env("PSModuleAnalysisCachePath", &cache)
+            .env(hide_platform::host::HOME_VARIABLE, &home)
+            .env_remove("HIDE_CAP_REF")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        // The bound is the product's: the timeout the entry gives its hook.
+        let output = child
+            .capture_until(Instant::now() + Duration::from_secs(timeout), 64 * 1024)
+            .unwrap_or_else(|failure| panic!("{agent}: past its {timeout} s timeout: {failure:?}"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{agent}: {stderr}");
+        assert!(
+            !stderr.contains("CLIXML") && !stderr.contains("Preparing modules"),
+            "{agent}: {stderr}"
+        );
+        assert!(!cache.exists(), "{agent}: the guard built a module cache");
+    }
+
+    let cache = root.path().join("module-cache-control");
+    let mut control = Command::new(&powershell);
+    control
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$null = Test-Path -LiteralPath $env:SystemRoot -PathType Leaf; exit 0",
+        ])
+        .env("PSModuleAnalysisCachePath", &cache)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // A hang guard only: this is the cost the guards no longer pay.
+    let status = OwnedChild::spawn(&mut control)
+        .unwrap()
+        .capture_until(Instant::now() + Duration::from_secs(100), 64 * 1024)
+        .unwrap()
+        .status;
+    assert!(status.success());
+    assert!(
+        cache.exists(),
+        "PowerShell honors PSModuleAnalysisCachePath"
     );
 }

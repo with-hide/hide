@@ -498,6 +498,15 @@ pub(crate) fn hook_timeout(runtime: AgentRuntime, event: HookEvent) -> u64 {
     }
 }
 
+/// The PowerShell test that the helper at `quoted` (a quoted path) is a
+/// file. It is a .NET call, not a cmdlet: Windows PowerShell loads a
+/// cmdlet's module on its first use and, on an account whose module cache is
+/// empty, first builds that cache for every installed module, which can
+/// outlast a hook's timeout (with-hide/hide-private#318).
+pub(crate) fn helper_exists(quoted: &str) -> String {
+    format!("[System.IO.File]::Exists({quoted})")
+}
+
 fn windows_guard<'a>(
     helper: impl Into<HookTarget<'a>>,
     runtime: AgentRuntime,
@@ -506,7 +515,8 @@ fn windows_guard<'a>(
     let helper = helper.into();
     let quoted = Syntax::PowerShell.single_quoted(&helper.display().to_string());
     format!(
-        "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} {} }}",
+        "if ({}) {{ & {quoted} {} }}",
+        helper_exists(&quoted),
         helper_arguments(helper, runtime, event)
     )
 }
@@ -944,6 +954,23 @@ pub(crate) fn write_document(path: &Path, document: &HookDocument) -> Result<(),
 }
 
 #[cfg(test)]
+/// The commands of a PowerShell `guard` other than the helper at `helper`,
+/// a `[Type]::Method` call and a test of a variable: what it would start
+/// or load besides the helper.
+pub(crate) fn powershell_commands(guard: &str, helper: &Path) -> Vec<String> {
+    hide_shell::simple_commands(guard, Syntax::PowerShell)
+        .into_iter()
+        .filter_map(|words| words.into_iter().next())
+        .filter(|first| {
+            first.as_str() != helper.to_str().unwrap()
+                && !first.starts_with('[')
+                && !first.starts_with('$')
+                && first != "exit"
+        })
+        .collect()
+}
+
+#[cfg(test)]
 #[path = "install/byte_contract_tests.rs"]
 mod byte_contract_tests;
 
@@ -1132,9 +1159,9 @@ mod tests {
             .unwrap();
         assert!(session_start_command.contains("--runtime codex"));
         assert!(session_start_command.contains("--memory-injection"));
-        assert!(session_start_command.contains("--source hide-subagents@11"));
+        assert!(session_start_command.contains("--source hide-subagents@12"));
         let guard = if cfg!(windows) {
-            "if (Test-Path -LiteralPath '"
+            "if ([System.IO.File]::Exists('"
         } else {
             "if [ -x '"
         };
@@ -1155,12 +1182,12 @@ mod tests {
             (
                 AgentRuntime::ClaudeCode,
                 HookEvent::SessionStart,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@12; fi","timeout":8}"#,
             ),
             (
                 AgentRuntime::Codex,
                 HookEvent::Stop,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@12; fi","timeout":8}"#,
             ),
         ];
         for (runtime, event, bytes) in pinned {
@@ -1180,6 +1207,25 @@ mod tests {
         }
     }
 
+    /// with-hide/hide-private#318: a Windows guard runs no command but the
+    /// helper. Read as PowerShell reads it, each of its commands is the
+    /// helper, a .NET call or a variable's test; a cmdlet (`Test-Path`), whose
+    /// first use loads its module, would be a command of its own.
+    #[test]
+    fn a_windows_guard_calls_no_cmdlet() {
+        let helper = Path::new("C:\\kit path\\it's\\hide-agent-hooks.exe");
+        for runtime in AgentRuntime::ALL {
+            for event in runtime.events() {
+                let guard = windows_guard(helper, runtime, event);
+                assert_eq!(
+                    super::powershell_commands(&guard, helper),
+                    Vec::<String>::new(),
+                    "{runtime:?} {event:?}: {guard}"
+                );
+            }
+        }
+    }
+
     /// Windows: Claude Code's entry runs PowerShell in exec form, Codex's
     /// command is the PowerShell guard its session shell runs. A path with
     /// a space, a quote and a typographic quote PowerShell also takes for
@@ -1191,7 +1237,7 @@ mod tests {
         let quoted = "'C:\\Users\\example\\a b''c\\it\u{2019}\u{2019}s\\hide-agent-hooks.exe'";
         let guard = |runtime: &str| {
             format!(
-                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@11 }}"
+                "if ([System.IO.File]::Exists({quoted})) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@12 }}"
             )
         };
         let codex = windows_hook(helper, AgentRuntime::Codex, HookEvent::Stop);
