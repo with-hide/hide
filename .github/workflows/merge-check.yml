@@ -33,6 +33,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The merge commit and its first parent, which the screen rules
+          # check compares against.
+          fetch-depth: 2
       - uses: pnpm/action-setup@v6
         with:
           version: 10
