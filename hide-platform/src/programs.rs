@@ -32,6 +32,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::host;
 
+mod launcher;
+
 /// How long the login shell has to answer, as long as the desktop host gives
 /// it when it asks the same question.
 const LOGIN_SHELL_DEADLINE: Duration = Duration::from_secs(10);
@@ -525,6 +527,12 @@ impl Program {
         &self.search
     }
 
+    /// How the program starts ([`Start`]), read afresh at each ask: an
+    /// update of the agent can move the script its launcher runs.
+    pub fn start(&self) -> Start {
+        start(&self.path, &self.search)
+    }
+
     /// A command that runs the program with the `PATH` it was found on. A
     /// caller that rebuilds the environment sets [`Self::search`] again
     /// after it.
@@ -535,20 +543,60 @@ impl Program {
     }
 }
 
-/// Whether Windows runs `path` through `cmd.exe`, as it runs a batch file
-/// (`.cmd`, `.bat`: npm's shim of every CLI it installs is one). `cmd.exe`
-/// reads the whole command line again, at most 8,191 characters of it,
-/// expands `%` in it and reads `"` and, outside quotes, `& | < > ^` as its
-/// own, so an argument that holds them does not reach the program as it was
-/// given. No program elsewhere is started that way.
-pub fn runs_through_cmd(path: &Path) -> bool {
-    cfg!(windows)
+/// How a program that was found starts so that each argument it is given
+/// reaches it whole (with-hide/hide-private#573).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Start {
+    /// `program` takes the arguments itself, after `leading`: the program
+    /// that was found, on every system unless it is a Windows batch file, or
+    /// the program npm's Windows launcher runs, with the words the launcher
+    /// puts before the caller's ([`launcher`]).
+    Direct {
+        program: PathBuf,
+        leading: Vec<OsString>,
+    },
+    /// A Windows batch file that is not npm's launcher: Windows runs it
+    /// through `cmd.exe`, which reads the whole command line again, at most
+    /// 8,191 characters of it, expands `%` in it and reads `"` and, outside
+    /// quotes, `& | < > ^` as its own, so an argument that holds them does
+    /// not reach the program as it was given. Why it was not read is logged
+    /// (`platform.launcher_unresolved`).
+    Batch,
+}
+
+/// Whether a start typed into a pane's shell names its program's file
+/// rather than its name. On Windows PowerShell finds a name by its own rule,
+/// a `.ps1` before the `.cmd` beside it, and npm writes both, so the file
+/// [`Program::find`] found and [`Program::start`] read is not the one the
+/// shell would run by name. Elsewhere the shell finds a name on the `PATH`
+/// as [`Program::find`] does.
+pub const START_NAMES_FILE: bool = cfg!(windows);
+
+/// How the program at `path` starts when it runs with `search` as its
+/// `PATH`: a Windows batch file is read as npm's launcher, whose Node is the
+/// one `search` holds, and anything else takes its arguments itself.
+pub fn start(path: &Path, search: &OsStr) -> Start {
+    let batch = cfg!(windows)
         && path
             .extension()
             .and_then(OsStr::to_str)
             .is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-            })
+            });
+    if !batch {
+        return Start::Direct {
+            program: path.to_path_buf(),
+            leading: Vec::new(),
+        };
+    }
+    match launcher::resolve(path, search, &host::path_extensions()) {
+        Ok(start) => start,
+        Err(reason) => {
+            // The reason only: the launcher's path names the account.
+            eprintln!("platform.launcher_unresolved reason={reason:?}");
+            Start::Batch
+        }
+    }
 }
 
 /// The folders installers put a CLI in that a daemon's `PATH` may not reach.
@@ -577,25 +625,6 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-
-    /// Only a batch file on Windows runs through `cmd.exe`: npm's `.cmd`
-    /// shim, a `.bat`, either case; a `.exe`, or any program elsewhere,
-    /// takes its arguments itself.
-    #[test]
-    fn only_a_batch_file_on_windows_runs_through_cmd() {
-        for (path, batch) in [
-            ("C:/npm/codex.cmd", true),
-            ("C:/x/agent.BAT", true),
-            ("C:/x/claude.exe", false),
-            ("/usr/bin/codex", false),
-        ] {
-            assert_eq!(
-                runs_through_cmd(Path::new(path)),
-                batch && cfg!(windows),
-                "{path}"
-            );
-        }
-    }
 
     const LONG: Duration = Duration::from_secs(3600);
 

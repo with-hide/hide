@@ -142,6 +142,10 @@ pub fn program_replaced(error: &io::Error) -> bool {
     }
 }
 
+/// The most UTF-16 units Windows takes as a process's command line, its
+/// terminating null included (`CreateProcessW`); a longer start fails.
+pub const WINDOWS_COMMAND_LINE_LIMIT: usize = 32_767;
+
 /// Hard allocation ceiling for one capture, across stdout and stderr.
 /// A caller's smaller limit remains binding (hooks use 64 KiB).
 pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;

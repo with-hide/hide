@@ -1272,6 +1272,7 @@ dependencies = [
  "junction",
  "libc",
  "notify",
+ "serde_json",
  "tempfile",
  "trash",
  "widestring",
