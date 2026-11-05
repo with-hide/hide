@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
+import { writeAnswers } from "../stand-in-answers.mjs";
 
 const SAMPLES = JSON.parse(readFileSync(new URL("../fixtures/opencode/events-1.18.30.json", import.meta.url), "utf8"));
 const { server: HidePlugin } = (await import(pathToFileURL(process.env.HIDE_OPENCODE_PLUGIN).href)).default;
@@ -44,7 +45,7 @@ policy({});
 
 /** The helper's answers by operation; `delay_ms` holds an operation back. */
 function answer(answers) {
-  writeFileSync(ANSWERS, JSON.stringify(answers));
+  writeAnswers(ANSWERS, answers);
 }
 
 function calls() {
@@ -438,6 +439,10 @@ test("while a project has a protection on, file and shell calls ask the helper w
   policy({ files: true, paths: [".env"] });
   try {
     const hooks = await plugin();
+    // The plugin's own calls as it loads are not awaited by anything: they land first, so the log cleared below
+    // holds only what a guarded call starts.
+    await until("start");
+    await until("subagents");
     const launch = sample("tool.execute.before.bash");
     await assert.rejects(
       hooks["tool.execute.before"]({ ...launch.input, tool: "write" }, { args: { filePath: "/checkouts/fixture/.env", content: "SECRET=1" } }),

@@ -552,9 +552,6 @@ fn publish_session(
     labels: &mut Option<LabelWorker>,
 ) -> bool {
     let mut payload = session.project();
-    // The delivery observation this pass makes, which only its own ingest
-    // below may lay turns for.
-    let mut observed = None;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
@@ -562,61 +559,29 @@ fn publish_session(
         observe_labels(worker, session.published_state());
         worker.overlay()
     });
-    // Observe native state from the payload before the overlay is laid on
-    // it (the remote path below), so no label adds UI timestamps to what
-    // delivery sees; the overlay is only consulted for what each session
-    // read says the agent waits for. This is bounded memory work; no
-    // delivery I/O or notifier is started here.
-    if let Some(runtime) = context.runtime.upgrade()
-        && let Ok(mut guard) = runtime.lock()
-    {
-        if let SessionSyncTarget::Remote { target_id, .. } = &context.target
-            && !guard.remote_coordinator_is_current(target_id, &context.engine)
-        {
-            return false;
-        }
-        observed = Some(match &context.target {
-            SessionSyncTarget::Local { socket_path } => {
-                let node = guard.node().clone();
-                guard.observe_delivery(
-                    node.as_str(),
-                    &payload,
-                    socket_path.to_str(),
-                    overlay.as_ref(),
-                )
-            }
-            SessionSyncTarget::Remote { target_id, .. } => {
-                let pass = guard.observe_delivery(target_id, &payload, None, overlay.as_ref());
-                // Sleeping agents Herdr no longer lists are drawn from their
-                // records before the session is scoped to the device.
-                guard.settle_node_agent_sleep(target_id, &mut payload);
-                pass
-            }
-        });
-    }
+    // A pass observes its panes for delivery in the same step under the lock
+    // that lays their turns (`observe_device_session` here, the ingest for
+    // this machine), so a tool or turn-end ask never meets an observation
+    // whose turn is not laid yet (with-hide/hide-private#560). That step is
+    // bounded memory work; no delivery I/O or notifier is started in it.
     if let SessionSyncTarget::Remote { target_id, .. } = &context.target {
-        if let Some(overlay) = &overlay {
-            overlay.apply(&mut payload);
-        }
-        // The device's hooks report to the core, never to its Herdr, so their
-        // facts are laid here the way the labels are (`agent_hooks::facts`).
-        let hook_tokens = context.hook_facts.as_ref().map(|facts| {
-            facts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .lay(
-                    &mut payload,
-                    |pane| crate::address::scoped_pane_id(target_id, pane),
-                    |pane| crate::address::is_pane_of(pane, target_id),
-                )
-        });
-        // The doorbell reads the turn the core decides from these facts.
-        let turns = crate::runtime::delivery::delivery_turns(&payload);
+        let Some(runtime) = context.runtime.upgrade() else {
+            return false;
+        };
+        let hook_tokens = match runtime.lock() {
+            Ok(mut guard) => {
+                if !guard.remote_coordinator_is_current(target_id, &context.engine) {
+                    return false;
+                }
+                guard.observe_device_session(target_id, &mut payload, overlay.as_ref())
+            }
+            Err(_) => return false,
+        };
+        drop(runtime);
         let projection = session.published_state().project_remote(target_id, payload);
         let (fetched, excluded) = match projection {
             Ok((mut session, excluded)) => {
                 session.pane_hook_tokens = hook_tokens
-                    .unwrap_or_default()
                     .into_iter()
                     .map(|(pane, tokens)| {
                         (crate::address::scoped_pane_id(target_id, &pane), tokens)
@@ -643,9 +608,6 @@ fn publish_session(
             Ok(mut guard) => {
                 if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                     return false;
-                }
-                if let Some(pass) = observed {
-                    guard.lay_delivery_turns(target_id, pass, turns);
                 }
                 guard.ingest_remote_session(target_id, fetched)
             }
@@ -830,11 +792,15 @@ fn publish_session(
     // update itself is not held for that answer: it is ingested now with
     // the differing focus left alone, and the read runs on its own worker
     // outside the lock.
+    let host_scope = match &context.target {
+        SessionSyncTarget::Local { socket_path } => socket_path.to_str(),
+        SessionSyncTarget::Remote { .. } => None,
+    };
     let (changed, readback) = match runtime.lock() {
         Ok(mut guard) => {
-            // The overlay and the payload are the ones this pass observed,
-            // so its ingest lays the turns its observations wait on.
-            guard.ingest_observed_session(Ok(payload), Some(precomputed), observed, overlay)
+            // The ingest observes this payload for delivery and lays the
+            // turns its observations wait on, with this pass's overlay.
+            guard.ingest_observed_session(payload, Some(precomputed), host_scope, overlay)
         }
         Err(_) => return false,
     };

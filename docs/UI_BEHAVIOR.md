@@ -319,11 +319,7 @@ An older build may discard Agent layout state; returning starts with all current
 A Workspace of an SSH device the core dials has the same named-group and draft controls but keeps its existing single-area restriction within each group.
 A machine that dials in to the core, which is what the machine the core moved off becomes, keeps its Agent areas as this machine does: its tree, splits and active area are the same before a move, after it and after the move back, its Herdr shows the tab of the area in use, and the panes of every area's tab are live.
 
-Closing a primary Herdr workspace's last tab or last pane while a linked worktree remains first creates a shell at the checkout root in the same area and position.
-That tab stays in its area, marked closing, until Herdr confirms the close, so the area is never empty while the shell is made.
-The existing close guards run first, and linked workspaces remain untouched.
-If shell creation fails, nothing closes; if closing is refused, the shell remains.
-Retry close reuses that intent's shell, while Dismiss ends the failed intent; detailed Herdr failures are diagnostic-only.
+Closing a primary checkout's last tab or last pane closes it like any other tab, even while a linked worktree remains, and its linked worktrees stay open.
 
 A tab the operator named is a place they keep, like a channel: its name outlives the agents in it.
 A tab is named when the operator gave it its name through Rename, which Hide records for that tab; clearing the name in Rename makes it unnamed again.
@@ -2708,6 +2704,7 @@ An agent installed later appears in these rows off and is never turned on by a p
 ### Mission
 
 Settings › Mission (`미션`; the tab was named Conductor until the skill and the map became hide-mission), in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
+The page's title carries a `?` that opens the one window telling a mission from a task, the same one a mission's page and a task's page open from the kind mark in their head (`미션`, `태스크`); it shows both side by side, a Conductor sending work to three workers at once and one agent finishing its steps in turn, each as a short picture that plays when the window opens and again on `다시 보기`, lights the side the press came from (Mission, here), and with the reduced-motion setting on draws each picture finished and offers no replay; Esc or a press outside closes it ([A mission's map and a plan's map](#tasks-the-보기-slot-and-the-pr-list)).
 `동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
 `머지되면 작업 공간 정리` (Clean up a worktree once merged), right under them and on by default, is a switch with one line under it: `PR이 머지된 갈래의 워크트리와 빌드 캐시를 지워요. 고치던 파일이 남아 있거나 쓰는 중이면 그대로 둬요.`
 On, a done node whose pull request GitHub reports merged has that branch's worktree removed with its build cache when its tree is clean and no agent pane or running program is in it, the branch always kept; a worktree that holds changes or is in use stays, is named in the diagnostic log and stays in the project's disk cleanup (`머지됨 N → 정리`), and nothing is removed while GitHub's answer is missing ([hide-private missions.md: What Hide settles in a mission by itself](delivery.md#missions)).

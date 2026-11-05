@@ -1130,7 +1130,7 @@ impl Runtime {
                 matches!(operation.phase.as_str(), "failed" | "refused")
                     // A replacement shell that may already exist keeps its
                     // own Retry, which reuses it, rather than making another.
-                    && !(operation.request.context.replacement_shell
+                    && !(operation.request.context.replacement_in_tab
                         && (operation.replacement_effect_started
                             || operation.replacement_id.is_some()))
                     && nodes
@@ -1161,7 +1161,7 @@ fn close_running(phase: &str, deadline: Option<u64>) -> bool {
 fn close_settled(operation: &PendingClose) -> bool {
     match operation.phase.as_str() {
         "completed" => true,
-        "failed" | "refused" => !operation.request.context.replacement_shell,
+        "failed" | "refused" => !operation.request.context.replacement_in_tab,
         _ => false,
     }
 }
