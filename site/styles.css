@@ -505,11 +505,14 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
 .site-footer nav a { display: inline-flex; align-items: center; min-height: 44px; color: var(--muted); text-decoration: none; }
 .site-footer nav a:hover { color: var(--ink); }
 
-/* One terminal: a pane's workers tiled, then folded into the pane that started them, drawn by the page.
-   The stage is dark in both color schemes, like the films; one-terminal.js plays it while it is on screen. */
+/* Bird's eye: a pane's workers tiled, then folded into the pane that started them, drawn by the page, and the focus
+   film in the same frame after it. Dark in both color schemes, like the films; one-terminal.js plays them while on screen. */
 .ot-chapters { margin-top: 48px; }
 .no-js .ot-stage { display: none; }
-.ot-stage { position: relative; aspect-ratio: 1280 / 720; background: #0d191b; box-shadow: var(--shot-shadow); }
+.ot-frame { position: relative; aspect-ratio: 16 / 9; background: #0d191b; box-shadow: var(--shot-shadow); }
+.ot-stage { position: absolute; inset: 0; overflow: hidden; }
+.ot-film { position: absolute; inset: 0; opacity: 0; transition: opacity 500ms ease; pointer-events: none; }
+.ot-film.on, .no-js .ot-film { opacity: 1; }
 .ot-stage .scaler { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; transform-origin: 0 0; --t-bg: #0d191b; --t-side: #112023; --t-card: #15272a; --t-sec: #1b3034; --t-pop: #24383c; --t-border: #1a2d31; --t-rail: #4a6266; --t-ink: #f1f6f5; --t-muted: #9cb1b3; --t-faint: #5f7679; --t-term: #c4d3d4; --needs: #f5c451; --done: #5fd38a; --working: #6aa6ff; color: var(--t-ink); font-family: var(--font-sans); line-height: 1.4; }
 .ot-stage.ff *, .ot-stage.ff *::before { transition: none !important; animation: none !important; }
 .ot-stage .bar { height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 14px; border-bottom: 1px solid var(--t-border); background: var(--t-side); position: relative; }

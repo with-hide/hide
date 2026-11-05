@@ -103,38 +103,19 @@
           <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
           <p class="label bare">Bird's eye</p>
           <h2 id="views-title">36 agents running.<br> <span class="accent">Two need you.</span></h2>
-          <p>See every agent from above, then read the same work by project, by task or by pull request. Press My turn and only your decisions stay.</p>
+          <p>The workers an agent starts fold into the terminal that started them, and their questions climb to it instead of opening another pane. From above, every agent of every project; press My turn and only your decisions stay.</p>
         </div>
-        <figure class="chapters reveal" id="views-film">
-          <ol class="ch-tabs" aria-label="Chapters">
-            <li><button type="button" data-at="0" data-to="3.2"><span class="ch-name">From above</span><span class="ch-line">Every agent of every project, alive</span><i class="ch-bar"></i></button></li>
-            <li><button type="button" data-at="3.2" data-to="5.1"><span class="ch-name">Projects</span><span class="ch-line">Every checkout, what runs in it</span><i class="ch-bar"></i></button></li>
-            <li><button type="button" data-at="5.1" data-to="6.45"><span class="ch-name">Tasks</span><span class="ch-line">What waits on you comes first</span><i class="ch-bar"></i></button></li>
-            <li><button type="button" data-at="6.45" data-to="7.4"><span class="ch-name">PRs</span><span class="ch-line">What can merge, what is still cooking</span><i class="ch-bar"></i></button></li>
+        <figure class="ot-chapters reveal" id="views-film">
+          <ol class="ch-tabs" id="ot-tabs" aria-label="Chapters">
+            <li><button type="button"><span class="ch-name">Tiled</span><span class="ch-line">Eleven workers, eleven panes, all ringing</span><i class="ch-bar"></i></button></li>
+            <li><button type="button"><span class="ch-name">Folded</span><span class="ch-line">They fold into the terminal that started them</span><i class="ch-bar"></i></button></li>
+            <li><button type="button"><span class="ch-name">Filed</span><span class="ch-line">Every project, each worker under its parent</span><i class="ch-bar"></i></button></li>
+            <li><button type="button"><span class="ch-name">Asked</span><span class="ch-line">A child's question climbs to its parent</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="0" data-to="7.4"><span class="ch-name">From above</span><span class="ch-line">Every agent of every project, by project, task or PR</span><i class="ch-bar"></i></button></li>
             <li><button type="button" data-at="7.4" data-to="14"><span class="ch-name">My turn</span><span class="ch-line">Two left. Everything else can wait</span><i class="ch-bar"></i></button></li>
           </ol>
-          <div class="shot film-shot film">
-            <img src="./assets/shots/kick-focus.webp" width="1920" height="1080" alt="Thirty-six agents of four projects fold into the sidebar's Projects, Tasks and PRs lists; in the Overview, My turn leaves only the two that wait on you." loading="lazy" decoding="async">
-            <video class="film-video" data-src="./assets/video/kick-focus" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
-          </div>
-        </figure>
-      </section>
-
-      <section class="section wrap" id="one-terminal" aria-labelledby="one-terminal-title">
-        <div class="section-head center reveal">
-          <p class="label bare">One terminal</p>
-    <h2 id="one-terminal-title">Eleven workers, all ringing.<br> <span class="accent">You watch one terminal.</span></h2>
-    <p>However many agents an agent starts, they fold into the pane that started it. Its second row says what they are doing, the sidebar files them under it, and only what needs you climbs up to it.</p>
-        </div>
-        <figure class="ot-chapters reveal">
-          <ol class="ch-tabs" id="ot-tabs" aria-label="Chapters">
-      <li><button type="button" data-ch="0"><span class="ch-name">Tiled</span><span class="ch-line">Eleven workers, eleven panes, all ringing</span><i class="ch-bar"></i></button></li>
-      <li><button type="button" data-ch="1"><span class="ch-name">Folded</span><span class="ch-line">All eleven fold into the terminal that started them</span><i class="ch-bar"></i></button></li>
-      <li><button type="button" data-ch="2"><span class="ch-name">Filed</span><span class="ch-line">Every project, each worker under its parent</span><i class="ch-bar"></i></button></li>
-      <li><button type="button" data-ch="3"><span class="ch-name">Asked</span><span class="ch-line">A child's question climbs to its parent</span><i class="ch-bar"></i></button></li>
-      <li><button type="button" data-ch="4"><span class="ch-name">Done</span><span class="ch-line">Eleven results come home the same way</span><i class="ch-bar"></i></button></li>
-    </ol>
-          <div class="shot ot-stage" id="ot-stage" role="img" aria-label="Eleven workers tile the screen and ring; in hide they fold into the one terminal that started them, its second row and the sidebar carry them, and one child's question climbs to that terminal."><div class="scaler" id="ot-scaler" aria-hidden="true">
+          <div class="shot ot-frame" role="img" aria-label="Eleven workers tile the screen and ring; in hide they fold into the one terminal that started them, its second row and the sidebar carry them, and a child's question climbs to that terminal. Then thirty-six agents of four projects fold into the sidebar's lists, and My turn leaves only the two that wait on you.">
+            <div class="ot-stage" id="ot-stage"><div class="scaler" id="ot-scaler" aria-hidden="true">
       <div class="bar"><i></i><i></i><i></i><span class="ttl" id="ot-ttl"><img src="./assets/hide-mark.png" alt=""><span id="ot-title">Terminal</span></span></div>
       <div class="body" id="ot-body">
         <aside class="side" id="ot-side">
@@ -158,6 +139,11 @@
         <div class="cursor" id="ot-cursor"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 2l15 9-6.5 1.6L9 19z" fill="#b9ff66" stroke="#101112" stroke-width="1.4" stroke-linejoin="round"/></svg></div>
       </div>
     </div></div>
+            <div class="ot-film film" id="ot-film">
+              <img src="./assets/shots/kick-focus.webp" width="1920" height="1080" alt="" loading="lazy" decoding="async">
+              <video class="film-video" id="ot-video" data-src="./assets/video/kick-focus" data-follow="stage" muted playsinline preload="none" aria-hidden="true" hidden></video>
+            </div>
+          </div>
         </figure>
       </section>
 

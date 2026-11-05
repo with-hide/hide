@@ -1,8 +1,8 @@
-// One terminal: a lead pane starts eleven workers, which tile the screen and ring; in hide they fold into
-// the pane that started them, its second row and the sidebar carry them, a child's question climbs to its
-// parent and the results come home. Drawn by the page over invented work; it plays only while on screen
-// and the tab is visible, a chapter press plays from that chapter, and under reduced motion the stage holds
-// a chapter's last frame (Filed until a press). Without script the stage is not shown.
+// Bird's eye: a lead pane starts eleven workers, which tile the screen and ring; in hide they fold into the pane
+// that started them, its second row and the sidebar carry them, and a child's question climbs to its parent. Drawn by
+// the page over invented work, then the focus film plays in the same frame. Both play only while on screen and the tab
+// is visible; a chapter press plays from that chapter; under reduced motion the stage holds a chapter's last frame
+// (Filed until a press) and the film's chapters show its still. Without script the film's still stands.
 (() => {
 const stageEl = document.getElementById("ot-stage");
 if (!stageEl) return;
@@ -48,7 +48,7 @@ const layer = $("layer");
 const BASE = 0.68;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let holdAfter = -1;
-let speed = BASE, gen = 0, ffTo = -1, chapter = -1, chT0 = 0, chDur = [7600, 4600, 4800, 6800, 5600];
+let speed = BASE, gen = 0, ffTo = -1, chapter = -1, chT0 = 0, chDur = [7600, 4600, 4800, 6800];
 let panes, rows, prow, poprows, branches, tick, otick, quiet, timers = [];
 
 class Stale extends Error {}
@@ -57,6 +57,30 @@ const frame = () => { const g = gen; return new Promise((r, j) => requestAnimati
 
 function fit() { const s = stageEl.clientWidth / 1280; $("scaler").style.transform = `scale(${s})`; }
 addEventListener("resize", fit); fit();
+
+/* ---------- the focus film, in the same frame after the stage ---------- */
+// Its chapters come after the stage's: From above (0 to 7.4 s) and My turn (7.4 to 14 s). The still stays under it
+// until it plays, and it never loads under reduced motion.
+const FILM = 4, AT = [0, 7.4], TO = [7.4, 14];
+const film = $("film"), video = $("video");
+function showFilm(on) { film.classList.toggle("on", on); if (!on) video.pause(); }
+async function filmPhase(at) {
+  showFilm(true);
+  const src = video.dataset.src + (video.canPlayType('video/mp4; codecs="avc1.640028"') ? ".mp4" : ".webm");
+  if (video.getAttribute("src") !== src) video.src = src;
+  if (video.readyState < 1) await Promise.race([new Promise((r) => video.addEventListener("loadedmetadata", r, { once: true })), new Promise((r) => setTimeout(r, 4000))]);
+  await sleep(0);
+  const end = Number.isFinite(video.duration) && video.duration > 0 ? Math.min(TO[1], video.duration - 0.1) : TO[1];
+  try { video.currentTime = at; } catch {}
+  video.play().catch(() => {});
+  const t0 = performance.now(), limit = (end - at + 3) * 1000;
+  for (;;) {
+    await frame();
+    const t = video.currentTime, ch = t < AT[1] ? FILM : FILM + 1;
+    if (chapter !== ch) setChapter(ch);
+    if (t >= end || video.ended || performance.now() - t0 > limit) break;
+  }
+}
 
 /* ---------- chapters ---------- */
 const tabs = [...$("tabs").querySelectorAll("button")];
@@ -69,14 +93,24 @@ function setChapter(i) {
   tabs.forEach((b, k) => { b.setAttribute("aria-current", k === i ? "true" : "false"); b.querySelector(".ch-bar").style.transform = `scaleX(${k < i ? 1 : 0})`; });
 }
 (function bar() {
-  if (chapter >= 0 && ffTo < 0) tabs[chapter].querySelector(".ch-bar").style.transform = `scaleX(${Math.min(1, (performance.now() - chT0) / chDur[chapter])})`;
+  if (chapter >= 0 && ffTo < 0) {
+    const p = chapter >= FILM ? (video.currentTime - AT[chapter - FILM]) / (TO[chapter - FILM] - AT[chapter - FILM]) : (performance.now() - chT0) / chDur[chapter];
+    tabs[chapter].querySelector(".ch-bar").style.transform = `scaleX(${Math.max(0, Math.min(1, p))})`;
+  }
   requestAnimationFrame(bar);
 })();
 // A press plays from that chapter; under reduced motion it shows the chapter's last frame and holds it.
 function jump(k) {
-  gen++; ffTo = k; speed = 0.004; $("stage").classList.add("ff");
+  gen++;
+  if (k >= FILM) {
+    ffTo = -1; speed = BASE; $("stage").classList.remove("ff");
+    if (reduceMotion) { hold(k); showFilm(true); return; }
+    setTimeout(() => loop(k), 30);
+    return;
+  }
+  ffTo = k; speed = 0.004; $("stage").classList.add("ff");
   if (reduceMotion) { holdAfter = k; ffTo = 99; }
-  setTimeout(loop, 30);
+  setTimeout(() => loop(0), 30);
 }
 tabs.forEach((b, k) => b.addEventListener("click", () => jump(k)));
 
@@ -181,7 +215,7 @@ async function run() {
   $("side").classList.remove("on"); $("needs").classList.remove("on"); $("pop").classList.remove("on"); cursorTo(700, 420, false);
   const L = panes[0]; $("r2").className = "r2";
   L.style.transition = "none"; rect(L, { x: G, y: G, w: W - 2 * G, h: H - 2 * G }); L.offsetWidth; L.style.transition = "";
-  setMode(false, "Terminal"); startTicks();
+  setMode(false, "Terminal"); startTicks(); showFilm(false);
 
   // ---- 1. Tiled
   setChapter(0);
@@ -285,23 +319,6 @@ async function run() {
   kidState(ASK); rows.list[A].querySelector(".l").textContent = "quarantining";
   r2(waiting(N));
   await sleep(1400);
-
-  // ---- 5. Done
-  setChapter(4);
-  await Promise.all(all(N).map((i, k) => sleep(k * 110).then(() => {
-    kidState(i - 1, "done"); rows.list[i].querySelector(".l").innerHTML = `<i>done</i> · #${2090 + i}`;
-    return runBranch(rows, i, true, true);
-  })));
-  rows.list[0].classList.add("unread"); rows.list[0].querySelector(".l").textContent = `${N} PRs ready`;
-  say("", ""); say("bell", `🦉 ${N} letters from my children`);
-  say("ok", "✓ db migration · 0042 applied on staging · #2091");
-  say("ok", "✓ flaky e2e · spec quarantined · #2092");
-  say("ok", "✓ windows ConPTY · builds on x64 · #2095");
-  say("ok", "✓ tab latency · p50 41 → 18 ms · #2101");
-  say("dim", `  … and ${N - 4} more`);
-  r2(`<span class="arrow">ship 1.2 → </span><span class="g">Done</span><span>${N} PRs ready to review</span>`);
-  await sleep(4200);
-  layer.style.transition = "opacity .5s"; layer.style.opacity = 0; await sleep(500); layer.style.opacity = 1; layer.style.transition = "";
 }
 // The held frame: the stage stops where it is and the pressed chapter's bar stands full.
 function hold(k) {
@@ -309,12 +326,15 @@ function hold(k) {
   $("stage").classList.remove("ff"); chapter = -1;
   tabs.forEach((b, j) => { b.setAttribute("aria-current", j === k ? "true" : "false"); b.querySelector(".ch-bar").style.transform = `scaleX(${j <= k ? 1 : 0})`; });
 }
-async function loop() {
+async function loop(start = 0) {
   const g = gen;
   try {
-    for (;;) {
-      await run();
-      if (holdAfter >= 0) { hold(holdAfter); return; }
+    for (let first = true; ; first = false) {
+      if (!(first && start >= FILM)) {
+        await run();
+        if (holdAfter >= 0) { hold(holdAfter); return; }
+      }
+      await filmPhase(first && start === FILM + 1 ? AT[1] : 0);
       if (g !== gen) return;
     }
   } catch (e) { if (!(e instanceof Stale)) throw e; }
@@ -326,7 +346,7 @@ let seen = false, playing = false;
 const sync = () => {
   const want = seen && !document.hidden;
   if (want && !playing) { playing = true; const at = Math.max(0, chapter); if (at > 0) jump(at); else { gen++; loop(); } }
-  if (!want && playing) { playing = false; gen++; clearInterval(tick); clearInterval(otick); }
+  if (!want && playing) { playing = false; gen++; clearInterval(tick); clearInterval(otick); video.pause(); }
 };
 if ("IntersectionObserver" in window) new IntersectionObserver((e) => { seen = e[0].isIntersecting; sync(); }, { threshold: 0.2 }).observe(stageEl);
 else seen = true;
