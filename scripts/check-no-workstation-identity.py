@@ -49,7 +49,7 @@ WORKSTATION = re.compile(
 DYNAMIC_ACCOUNT = re.compile(
     r"\.?(?:\$[A-Za-z_][A-Za-z_0-9]*|\$\{[A-Za-z_][A-Za-z_0-9]*\})")
 EVIDENCE = re.compile(
-    r"^(?:docs/(?:verification|screenshots)(?:/|$)|spikes/[^/]+/evidence(?:/|$))")
+    r"^docs/(?:verification|screenshots)(?:/|$)")
 PROFILE = re.compile(
     r"(?:^|/)(?:Cookies|History|Login Data|Web Data)(?:-(?:journal|wal|shm))?$"
     r"|(?:^|/)(?:Local State|Preferences|Secure Preferences)$"

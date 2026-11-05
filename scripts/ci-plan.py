@@ -364,7 +364,7 @@ def pull_request_macos(result, entries, root=ROOT):
 # Paths no `pr.yml` lane reads: `policy` alone. Its script suite and the
 # repository invariants are what reads them.
 POLICY_ONLY = (
-    "agents/*", "site/*", "spikes/*",
+    "agents/*", "site/*",
     ".gitignore", "web/.gitignore", "desktop/.gitignore",
     # hide's own license and copyright notice; no build or package reads them.
     "LICENSE", "NOTICE",

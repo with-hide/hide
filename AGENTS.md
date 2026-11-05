@@ -82,7 +82,7 @@ Screenshots, traces, sample output, run logs, browser profiles, and verification
 They once did: an evidence tree reached 123 MB and carried a browser profile with cookies and screenshots showing the workstation's home directory, and it is still reachable from `origin/main`, so treat everything that was in it as public.
 
 - Write run artifacts under `agents/runs/<slug>/`, which is local-only, so nothing there can reach a commit by accident.
-- Never add a path under `docs/verification/`, `docs/screenshots/`, or `spikes/*/evidence/`; `check-no-workstation-identity.sh` refuses them even past a `git add -f`, and refuses a browser profile file by shape.
+- Never add a path under `docs/verification/` or `docs/screenshots/`; `check-no-workstation-identity.sh` refuses them even past a `git add -f`, and refuses a browser profile file by shape.
 - When a document needs to cite evidence, state the finding and how it was measured; do not commit the artifact so a path can be linked.
   A verification claim is proven to the person reading the run, in the receipt and the run directory, not to the repository.
 

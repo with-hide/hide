@@ -120,7 +120,6 @@ A public document may name a private document's path and section; it does not re
 | Command+K/Command+P search keyboard navigation | [UI_BEHAVIOR.md: Search keyboard navigation](UI_BEHAVIOR.md#search-keyboard-navigation) | `web/src/search.ts`, `web/src/SearchPalette.tsx`, `web/src/relations.ts`, `web/src/searchDetail.ts`, `web/src/searchGithub.ts`, `web/src/Palette.tsx`, `herdr-core/src/runtime/issues.rs`, `hided/src/index.rs` |
 | Why a pane's children are visible or not, the uninstrumented projection no screen draws, and why no screen draws a subagent count, where it comes from and what a zero, an unknown and an agent that reports none each mean | [status-model.md: uninstrumented is not an unknown activity](status-model.md#uninstrumented-is-not-an-unknown-activity), [UI_BEHAVIOR.md: Subagent count](UI_BEHAVIOR.md#subagent-count) | `hide-agent-hooks/src/diagnosis.rs`, `herdr-core/src/agent_hooks.rs`, `sidebar.rs::project_pane_children` |
 | Agent hook installation, what is written where, which agents get a skill and a hook and why, and the connection diagnosis the pane chip shows | [agent-hooks.md](agent-hooks.md) | `hide-agent-hooks/` (`codex_trust.rs`), `hide-kit/src/{hooks,codex_trust}.rs`, `StatusSnapshot.agent_hooks`, `kit_reinstall` event |
-| Pet theme format, kept for the pet's return to the desktop app | [theme-contract.md](theme-contract.md), [Electron backlog issue #184](https://github.com/with-hide/hide/issues/184) | `herdr-core/src/pet.rs`, each `theme.json` |
 | App icon, bundled marks and interface faces, and the third-party agent marks with their sources | [dev-runtime.md](dev-runtime.md#bundled-artwork-ownership), [BRAND.md](BRAND.md#third-party-agent-marks) | `desktop/resources/`, `web/src/assets/` (`agents/manifest.json`, `scripts/check-agent-logos.mjs`), `web/public/m/`, `desktop/resources/THIRD_PARTY_NOTICES/` |
 
 Documentation must point to those files rather than inventing another version or protocol authority.
@@ -139,13 +138,12 @@ When code, tests, and a current contract disagree, investigate and update the re
 | `fixtures/` | Small deterministic terminal input files | Inputs for owned fixtures, not test results or an alternate architecture contract |
 
 Features the removed native shell had and the desktop app does not yet (the pet window, the menu bar item, global shortcuts and the Dock badge, file drag and drop into a pane, the remote file viewer) are tracked in [Electron backlog issue #184](https://github.com/with-hide/hide/issues/184), not in this tree.
-The frozen `spikes/web-shell/` record remains outside `docs/` and must not be rewritten to describe later changes.
-Other old spike/run records and PRDs describe their own revision only.
+Old run records and PRDs describe their own revision only.
 Screenshots, traces, profiles, recordings, and per-run verdicts belong in ignored `agents/runs/<slug>/`, not in this documentation tree.
 
 ## Retired documents
 
-The retired Rust/WGPU/CEF ADR and research matrix, porting checklist, copied legacy SSH implementation/config, milestone reports, static-slime prompts, the native shell's pet window guide and its verification fixtures guide live only in Git history.
+The retired Rust/WGPU/CEF ADR and research matrix, porting checklist, copied legacy SSH implementation/config, milestone reports, static-slime prompts, the native shell's pet window guide and its verification fixtures guide, the pet theme contract with its art, and the `spikes/` experiments (the AppKit/WGPU terminal, the CEF browser and the first web shell) live only in Git history.
 They described completed migration work, a shell that was removed, or contradicted the current runtime pin and animated theme contract.
 Use Git history for a historical investigation; do not restore them as active instructions.
 Old PRDs may name those removed inputs because they record the original work rather than current setup steps.

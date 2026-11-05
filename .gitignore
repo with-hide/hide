@@ -17,12 +17,10 @@ out/
 # Repository" in AGENTS.md. They belong under agents/runs/<slug>/.
 docs/verification/
 docs/screenshots/
-spikes/*/evidence/
 
 # Rust build output
 target
 target/
-spikes/*/target
 *.app/
 
 # stray CLI artifact

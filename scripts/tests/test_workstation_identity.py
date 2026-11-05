@@ -282,7 +282,6 @@ class WorkstationIdentityTests(unittest.TestCase):
         paths = {
             "docs/verification/run.txt": "tracked_run_artifact",
             "docs/screenshots/run.png": "tracked_run_artifact",
-            "spikes/example/evidence/run.bin": "tracked_run_artifact",
             "profile/Cookies": "browser_profile_artifact",
             "profile/History": "browser_profile_artifact",
             "profile/Login Data": "browser_profile_artifact",
@@ -294,7 +293,7 @@ class WorkstationIdentityTests(unittest.TestCase):
             "browser-profile/arbitrary.bin": "browser_profile_artifact",
             "profile/Session_1234": "browser_profile_artifact",
         }
-        self.tracked(".gitignore", "docs/\nspikes/\nprofile/\nbrowser-profile/\n")
+        self.tracked(".gitignore", "docs/\nprofile/\nbrowser-profile/\n")
         for path in paths:
             self.tracked(path, "private-content-marker")
         for scope in ("checkout", "index"):
