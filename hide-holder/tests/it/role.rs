@@ -22,7 +22,8 @@ pub const GO: &str = "HIDE_HOLDER_TEST_GO";
 pub const END: &str = "HIDE_HOLDER_TEST_END";
 
 /// Where `line_input_when_told` writes the processes attached to its
-/// console as it stops editing lines (Windows).
+/// console while it waits in its line and as it stops editing lines
+/// (Windows), whole each time.
 pub const CONSOLE_PIDS: &str = "HIDE_HOLDER_TEST_CONSOLE_PIDS";
 
 /// How many milliseconds `line_input_when_told` writes before it waits in
@@ -308,12 +309,16 @@ fn line_input_when_told() {
         std::fs::write(quiet, b"").unwrap();
     }
     while !go.exists() && !end.exists() && Instant::now() < deadline {
+        // Who is attached while it waits, so a test can see the helper that
+        // reads its console before it tells it to read keys.
+        #[cfg(windows)]
+        let _ = write_console_pids();
         #[allow(clippy::disallowed_methods)] // the role's own pace
         thread::sleep(Duration::from_millis(5));
     }
     if !end.exists() {
         #[cfg(windows)]
-        write_console_pids();
+        write_console_pids().unwrap();
         read_keys();
     }
     while !end.exists() && Instant::now() < deadline {
@@ -354,9 +359,10 @@ fn read_keys() {
 }
 
 /// Writes the processes attached to this console, one pid a line, to the
-/// file `CONSOLE_PIDS` names.
+/// file `CONSOLE_PIDS` names, replacing it whole, so a reader never sees a
+/// pid cut short.
 #[cfg(windows)]
-fn write_console_pids() {
+fn write_console_pids() -> std::io::Result<()> {
     use windows_sys::Win32::System::Console::GetConsoleProcessList;
     let mut pids = vec![0u32; 64];
     // SAFETY: the buffer holds as many pids as its length says.
@@ -366,7 +372,10 @@ fn write_console_pids() {
         "{count} console processes"
     );
     let lines: String = pids[..count].iter().map(|pid| format!("{pid}\n")).collect();
-    std::fs::write(std::env::var_os(CONSOLE_PIDS).unwrap(), lines).unwrap();
+    let path = std::path::PathBuf::from(std::env::var_os(CONSOLE_PIDS).unwrap());
+    let next = path.with_extension("next");
+    std::fs::write(&next, lines)?;
+    std::fs::rename(&next, &path)
 }
 
 /// Exits with 3 once the file `GO` names exists: a shell that ends on its own

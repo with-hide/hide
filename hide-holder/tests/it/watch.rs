@@ -15,10 +15,9 @@ use hide_holder_protocol::{
 use hide_platform::ipc::LocalStream;
 
 use crate::role::{CONSOLE_PIDS, END, GO, PRINT_FOR, QUIET};
-#[cfg(unix)]
-use crate::support::wait_until;
 use crate::support::{
     HANG_LIMIT, Home, ROLE, Script, current_version, role_program, shell, source, start_ready,
+    wait_until,
 };
 
 /// A rule set that reads `busy` on the screen as working, as a node sends
@@ -307,6 +306,26 @@ impl LineInputPane {
             pids,
         }
     }
+
+    /// The pids the program last wrote as attached to its console.
+    #[cfg(windows)]
+    fn attached(&self) -> Vec<u32> {
+        std::fs::read_to_string(&self.pids)
+            .unwrap_or_default()
+            .lines()
+            .map(|pid| pid.parse().unwrap())
+            .collect()
+    }
+
+    /// Waits until a process other than the pane's shell and `program` is
+    /// attached to the pane's console: the helper that reads it.
+    #[cfg(windows)]
+    fn wait_for_helper(&self, program: u32) {
+        let known = [self.holder.program.pid, program];
+        wait_until("a helper attached to the program's console", || {
+            self.attached().iter().any(|pid| !known.contains(pid))
+        });
+    }
 }
 
 /// A program reads keys only once it turns the terminal's line editing off,
@@ -340,6 +359,11 @@ fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
         facts.foreground.is_some()
     });
     assert_eq!(editing.line_editing, Some(LineEditing::Edits));
+    // The helper attaches at the first ask, a recheck after the program took
+    // the foreground; told to read keys before then, the program would have
+    // no helper to see on its console.
+    #[cfg(windows)]
+    pane.wait_for_helper(editing.foreground.as_ref().unwrap().pid);
     std::fs::write(&pane.go, b"").unwrap();
     let reading = watch.wait("the program reading keys", |facts| {
         facts.line_editing == Some(LineEditing::ReadsKeys)
@@ -347,11 +371,7 @@ fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
     assert_eq!(reading.foreground, editing.foreground);
     #[cfg(windows)]
     {
-        let attached: Vec<u32> = std::fs::read_to_string(&pane.pids)
-            .unwrap()
-            .lines()
-            .map(|pid| pid.parse().unwrap())
-            .collect();
+        let attached = pane.attached();
         let program = editing.foreground.as_ref().unwrap().pid;
         assert!(
             !attached.contains(&pane.holder.process.pid),
