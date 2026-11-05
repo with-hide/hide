@@ -442,9 +442,13 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   // split pane the full lane so opening Agent Views cannot wrap the URL.
   await zoomPane(page, paneId);
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(`${origin}/a.html`.length);
+  // A Windows holder says no soft wraps (docs/INSTALL.md, What each system
+  // supports), so there a blank row keeps the URL apart from the next word
+  // should it reach the grid's right edge.
   await print(page, paneId, [
     "html src/report.HTML:2",
     `${origin}/a.html`,
+    ...(process.platform === "win32" ? [""] : []),
     `osc8 \u001b]8;;${pathToFileURL(html).href}#L2\u001b\\HTML source label\u001b]8;;\u001b\\`,
     "folder ./src",
     "plain MENU-END",
@@ -515,7 +519,10 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
 // with-hide/hide-private#312: a URL exactly as wide as the pane that ends
 // with a line break stays one link when the next line starts with a word,
 // and a URL the terminal carried onto the next row is still one link. The
-// pane runs a shell, not an agent, so the holder's soft-wrap rows decide.
+// pane runs a shell, not an agent, so the holder's soft-wrap rows decide. A
+// Windows holder cannot know them (ConPTY places a wrapped line's rows
+// itself), so there the full-width URL still joins the next word
+// (docs/INSTALL.md, What each system supports) and only the wrap is checked.
 test("a URL that fills its row is not joined to the next line, and one that wraps is one link", { tag: "@platform" }, async () => {
   ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
@@ -536,15 +543,18 @@ test("a URL that fills its row is not joined to the next line, and one that wrap
   // The rows below are read at the width they were printed at.
   expect(await paneCols(page, paneId)).toBe(cols);
 
-  let point = await pointOf(page, paneId, fills, { offset: 3 });
-  await hoverLink(page, paneId, point);
-  await page.mouse.click(point.x, point.y, { button: "right" });
-  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
-  await expect.poll(copied).toBe(fills);
-  point = await pointOf(page, paneId, "osc8 label", { offset: 1 });
-  await page.mouse.move(point.x, point.y);
-  await quietFor(page, 500, "the word after a full-width URL is no link");
-  await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).not.toHaveClass(/xterm-cursor-pointer/);
+  let point: { x: number; y: number };
+  if (process.platform !== "win32") {
+    point = await pointOf(page, paneId, fills, { offset: 3 });
+    await hoverLink(page, paneId, point);
+    await page.mouse.click(point.x, point.y, { button: "right" });
+    await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+    await expect.poll(copied).toBe(fills);
+    point = await pointOf(page, paneId, "osc8 label", { offset: 1 });
+    await page.mouse.move(point.x, point.y);
+    await quietFor(page, 500, "the word after a full-width URL is no link");
+    await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).not.toHaveClass(/xterm-cursor-pointer/);
+  }
 
   point = await pointOf(page, paneId, "TAILEND", { offset: 2 });
   await hoverLink(page, paneId, point);
