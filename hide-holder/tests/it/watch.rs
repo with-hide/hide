@@ -286,3 +286,113 @@ fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
         .send(ClientMessage::Input(b"\x03".to_vec()))
         .unwrap();
 }
+
+/// PROBE (with-hide/hide-private#545): a Windows pane's console says when its
+/// program turns line input off, read from the console's input mode.
+#[cfg(windows)]
+#[test]
+fn probe_a_windows_watch_says_when_the_program_turns_line_input_off() {
+    use crate::support::{current_version, print_ok, shell, source, start_ready};
+    use hide_holder_protocol::{ClientMessage, LineEditing};
+
+    let home = Home::new();
+    let folder = home.prepare(current_version(), &source());
+    let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
+    let mut connection = holder.open();
+    let accepts = vec![
+        Capability::Facts,
+        Capability::ProgramPackage,
+        Capability::LineEditing,
+    ];
+    let mut watch = Watch::accepting(&holder.socket, accepts);
+    let shell_facts = watch.wait("the shell's facts", |facts| facts.foreground.is_none());
+    eprintln!("probe: shell line_editing {:?}", shell_facts.line_editing);
+    let exe = std::env::current_exe().unwrap();
+    let run = |go: &std::path::Path| {
+        format!(
+            "set \"HIDE_PROBE_GO={}\"&& \"{}\" watch::probe_console_child --exact --nocapture\r",
+            go.display(),
+            exe.display()
+        )
+        .into_bytes()
+    };
+    let go = home.path().join("go");
+    let started = Instant::now();
+    connection.send(ClientMessage::Input(run(&go))).unwrap();
+    let editing = watch.wait("the program in the console's line input", |facts| {
+        facts.foreground.is_some() && facts.line_editing == Some(LineEditing::Edits)
+    });
+    eprintln!(
+        "probe: {:?} edits lines after {:?}",
+        editing.foreground,
+        started.elapsed()
+    );
+    std::fs::write(&go, b"").unwrap();
+    let raw_at = Instant::now();
+    let reading = watch.wait("the program reading keys", |facts| {
+        facts.line_editing == Some(LineEditing::ReadsKeys)
+    });
+    eprintln!("probe: reads keys {:?} after go", raw_at.elapsed());
+    assert_eq!(
+        reading.foreground.map(|program| program.pid),
+        editing.foreground.map(|program| program.pid)
+    );
+    connection
+        .send(ClientMessage::Input(b"\x03".to_vec()))
+        .unwrap();
+    watch.wait("the shell in the foreground again", |facts| {
+        facts.foreground.is_none()
+    });
+
+    // Ctrl+C while the holder still asks the console every 100 ms: the
+    // holder, attached for a read, must live through it.
+    for round in 0..5 {
+        let never = home.path().join(format!("never-{round}"));
+        connection.send(ClientMessage::Input(run(&never))).unwrap();
+        watch.wait("the program in the console's line input", |facts| {
+            facts.foreground.is_some() && facts.line_editing == Some(LineEditing::Edits)
+        });
+        connection
+            .send(ClientMessage::Input(b"\x03".to_vec()))
+            .unwrap();
+        watch.wait("the shell in the foreground again", |facts| {
+            facts.foreground.is_none()
+        });
+    }
+    connection
+        .send(ClientMessage::Input(print_ok().to_vec()))
+        .unwrap();
+    connection.wait_for_text("hide-ok");
+    eprintln!("probe: holder alive after 6 Ctrl+C");
+}
+
+/// PROBE child: waits in the console's line input until `HIDE_PROBE_GO`
+/// exists, then turns line input and echo off and waits.
+#[cfg(windows)]
+#[test]
+fn probe_console_child() {
+    use windows_sys::Win32::System::Console::{
+        ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
+        SetConsoleMode,
+    };
+    let Some(go) = std::env::var_os("HIDE_PROBE_GO") else {
+        return;
+    };
+    println!("probe child waiting");
+    while !std::path::Path::new(&go).exists() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // SAFETY: plain console calls on this process's own input handle.
+    unsafe {
+        let input = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode = 0;
+        assert_ne!(GetConsoleMode(input, &mut mode), 0);
+        println!("probe child mode {mode:#x}");
+        assert_ne!(
+            SetConsoleMode(input, mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)),
+            0
+        );
+    }
+    println!("probe child raw");
+    std::thread::sleep(std::time::Duration::from_secs(60));
+}

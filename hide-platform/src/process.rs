@@ -1553,6 +1553,13 @@ pub fn master_line_input(_master: ()) -> io::Result<Option<LineInput>> {
     Ok(None)
 }
 
+/// PROBE: the input mode of the console `pid` is attached to, read by
+/// attaching this process to that console for the read. Windows only.
+#[cfg(windows)]
+pub fn console_input_mode(pid: u32) -> io::Result<u32> {
+    sys::console_input_mode(pid)
+}
+
 /// How the controlling terminal of `pid` takes input now. `NotFound` when
 /// the process is gone or controls no terminal; `PermissionDenied` when the
 /// terminal is not this account's to read.
@@ -6232,6 +6239,55 @@ mod sys {
             io::ErrorKind::Unsupported,
             "Windows starts no login agent with its output appended to a file",
         ))
+    }
+
+    /// PROBE: attach to `pid`'s console, read its input buffer's mode,
+    /// detach. Serialized: a process has at most one console.
+    pub(super) fn console_input_mode(pid: u32) -> io::Result<u32> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
+        use windows_sys::Win32::System::Console::{
+            AttachConsole, FreeConsole, GetConsoleMode, SetConsoleCtrlHandler,
+        };
+        use windows_sys::core::BOOL;
+        static ATTACH: Mutex<()> = Mutex::new(());
+        static HANDLER: OnceLock<()> = OnceLock::new();
+        unsafe extern "system" fn ignore(_: u32) -> BOOL {
+            1
+        }
+        let _attached = ATTACH.lock().unwrap_or_else(PoisonError::into_inner);
+        HANDLER.get_or_init(|| {
+            // SAFETY: a function handler, which children do not inherit.
+            unsafe { SetConsoleCtrlHandler(Some(ignore), 1) };
+        });
+        // SAFETY: plain calls; the console is let go on every path below.
+        unsafe {
+            if AttachConsole(pid) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let name: Vec<u16> = "CONIN$\0".encode_utf16().collect();
+            let handle = CreateFileW(
+                name.as_ptr(),
+                0x8000_0000 | 0x4000_0000,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            );
+            let read = if handle == INVALID_HANDLE_VALUE {
+                Err(io::Error::last_os_error())
+            } else {
+                let mut mode = 0u32;
+                let ok = GetConsoleMode(handle, &mut mode);
+                let error = io::Error::last_os_error();
+                CloseHandle(handle);
+                if ok == 0 { Err(error) } else { Ok(mode) }
+            };
+            FreeConsole();
+            read
+        }
     }
 
     /// A pane's console keeps typed keys as input events for the program,

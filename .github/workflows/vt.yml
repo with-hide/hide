@@ -14,6 +14,17 @@
 name: vt
 
 on:
+  # PROBE only (with-hide/hide-private#545); never merged.
+  workflow_dispatch:
+    inputs:
+      systems:
+        description: The systems to run.
+        type: string
+        default: '["windows"]'
+      macos-runner:
+        description: unused
+        type: string
+        default: ''
   workflow_call:
     inputs:
       systems:
@@ -120,7 +131,7 @@ jobs:
         env:
           HIDE_HOLDER_CONPTY: ${{ steps.conpty.outputs.folder }}
         run: |
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder -p hide-holder-protocol
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder --no-capture -E "test(probe_a_windows_watch)" && bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder -p hide-holder-protocol
           # --no-deps: the holder's own crates only, not the workspace
           # crates its tests build (hide-kit and what it links), whose lints
           # are their own lanes'.

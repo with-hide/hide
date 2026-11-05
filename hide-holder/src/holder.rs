@@ -1079,7 +1079,9 @@ impl Holder {
                 }),
                 foreground_unread,
                 line_editing: line_editing.then(|| {
-                    Box::new(move || master.line_editing()) as Box<dyn Fn() -> LineEditing + Send>
+                    let shell = self.program;
+                    Box::new(move || master.line_editing(shell))
+                        as Box<dyn Fn() -> LineEditing + Send>
                 }),
                 log: self.log.clone(),
             };
@@ -1576,22 +1578,35 @@ impl PtyMaster {
     /// this holder keeps (`hide_platform::process::master_line_input`):
     /// unknown where the system cannot say (Windows) and when the terminal
     /// could not be asked, its pane having ended.
-    fn line_editing(&self) -> LineEditing {
-        use hide_platform::process::{LineInput, master_line_input};
-        let guard = self.lock();
-        #[cfg(unix)]
-        let read = guard
-            .as_ref()
-            .and_then(|master| master.as_raw_fd())
-            // SAFETY: the master stays open while its lock is held, for the
-            // whole of the call.
-            .map(|fd| master_line_input(unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }));
+    fn line_editing(&self, shell: u32) -> LineEditing {
         #[cfg(windows)]
-        let read = guard.as_ref().map(|_| master_line_input(()));
-        match read {
-            Some(Ok(Some(LineInput::Lines { .. }))) => LineEditing::Edits,
-            Some(Ok(Some(LineInput::Keys))) => LineEditing::ReadsKeys,
-            _ => LineEditing::Unknown,
+        {
+            // PROBE: the pane console's input mode, ENABLE_LINE_INPUT.
+            if self.lock().is_none() {
+                return LineEditing::Unknown;
+            }
+            match hide_platform::process::console_input_mode(shell) {
+                Ok(mode) if mode & 0x0002 != 0 => LineEditing::Edits,
+                Ok(_) => LineEditing::ReadsKeys,
+                Err(_) => LineEditing::Unknown,
+            }
+        }
+        #[cfg(unix)]
+        {
+            use hide_platform::process::{LineInput, master_line_input};
+            let _ = shell;
+            let guard = self.lock();
+            let read = guard
+                .as_ref()
+                .and_then(|master| master.as_raw_fd())
+                // SAFETY: the master stays open while its lock is held, for the
+                // whole of the call.
+                .map(|fd| master_line_input(unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }));
+            match read {
+                Some(Ok(Some(LineInput::Lines { .. }))) => LineEditing::Edits,
+                Some(Ok(Some(LineInput::Keys))) => LineEditing::ReadsKeys,
+                _ => LineEditing::Unknown,
+            }
         }
     }
 
