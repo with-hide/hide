@@ -48,8 +48,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function show(graph: LayeredGraph<Node>) {
-  await act(async () => root!.render(<DependencyGraphView graph={graph} draw={draw} idOf={(node) => node.id} />));
+async function show(graph: LayeredGraph<Node>, flow: "across" | "down" = "across") {
+  await act(async () => root!.render(<DependencyGraphView graph={graph} draw={draw} idOf={(node) => node.id} flow={flow} />));
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
@@ -71,6 +71,22 @@ it("keeps the layered placement when a snapshot rebuilds the same graph, without
   expect(drawn()).toBe("layered");
   expect(container.querySelector('[data-dependency-node="B"]')).toBe(card);
   expect(layout).toHaveBeenCalledOnce();
+});
+
+it("lays a placed graph out again when it turns from down to across, and keeps it once turned", async () => {
+  layout.mockImplementation(async (graph) => ({
+    ...graph,
+    width: 400,
+    height: 100,
+    children: graph.children!.map((child, index) => ({ ...child, x: index * 200, y: 0 })),
+    edges: [],
+  }));
+  await show(graphOf(), "down");
+  expect(container.querySelector("[data-dependency-graph]")!.getAttribute("data-dependency-layout")).toBe("layered");
+  await show(graphOf(), "across");
+  await show(graphOf(), "across");
+  expect(layout.mock.calls.map(([graph]) => graph.layoutOptions?.["elk.direction"])).toEqual(["DOWN", "RIGHT"]);
+  expect(container.querySelector("[data-dependency-graph]")!.getAttribute("data-dependency-layout")).toBe("layered");
 });
 
 it("asks once for a structure the layout refused and says why once, however often the snapshot rebuilds it", async () => {

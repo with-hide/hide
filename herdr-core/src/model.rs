@@ -81,6 +81,8 @@ pub struct Snapshot {
     /// The events of the mission open in the 보기 slot only (PRD
     /// mission-plan-visibility D-22).
     pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
+    /// The brief of the one node whose folded box the operator opened.
+    pub mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot,
     /// Each pane's session's own plan (PRD hide-plan D-10).
     pub plans: crate::runtime::plans::PlansSnapshot,
     pub navigator: NavigatorSnapshot,
@@ -7406,6 +7408,7 @@ impl Snapshot {
             overview_graph: OverviewGraphSnapshot::default(),
             missions: Default::default(),
             mission_events: Default::default(),
+            mission_brief: Default::default(),
             plans: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),

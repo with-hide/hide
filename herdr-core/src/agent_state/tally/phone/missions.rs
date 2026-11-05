@@ -539,8 +539,14 @@ mod tests {
         );
         let nodes = &projected(&rest).items[0].nodes;
         let sent = serde_json::to_value(nodes).unwrap();
-        assert_eq!(sent[0]["landing"], json!({"state": "landed", "proof": {"by": "in_main", "commit": "abc1234"}}));
-        assert_eq!(sent[1]["landing"], json!({"state": "left", "action": "merge"}));
+        assert_eq!(
+            sent[0]["landing"],
+            json!({"state": "landed", "proof": {"by": "in_main", "commit": "abc1234"}})
+        );
+        assert_eq!(
+            sent[1]["landing"],
+            json!({"state": "left", "action": "merge"})
+        );
         assert!(!sent.to_string().contains("private"));
     }
 

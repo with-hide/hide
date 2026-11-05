@@ -90,6 +90,22 @@ fn a_completed_turn_returns_structured_output_with_usage() {
     });
 }
 
+/// A user config with verbose on makes the CLI print every event of the run as
+/// one array instead of the result object. The turn completed all the same, so
+/// its answer and usage are read from the array's result frame, not reported
+/// as `no_result_frame` (with-hide/hide#1942).
+#[test]
+fn a_verbose_accounts_array_of_events_still_returns_the_answer() {
+    with_mode("verbose_array", || {
+        let response = backend()
+            .execute(&request(Duration::from_secs(30)), &CancelToken::new())
+            .unwrap();
+        assert_eq!(response.value["summary"], "fixture");
+        assert_eq!(response.usage.input_tokens, Some(1188));
+        assert_eq!(response.usage.output_tokens, Some(468));
+    });
+}
+
 /// The ledger counts the whole call under the one model the frame names,
 /// with the cache categories and the one-hour split of `usage`.
 #[test]
@@ -520,6 +536,21 @@ mod usage {
             .usage_text(&CancelToken::new())
             .unwrap();
         assert!(text.starts_with("Total cost:"), "{text}");
+    }
+
+    /// An account whose config has verbose on gets every event of the run in
+    /// one array; the weekly figures are the same text in its last frame
+    /// (with-hide/hide#1942).
+    #[test]
+    fn a_verbose_accounts_array_of_events_gives_the_same_text() {
+        let dir = usage_dir("verbose_array");
+        let text = usage_backend(dir.path())
+            .usage_text(&CancelToken::new())
+            .unwrap();
+        assert!(
+            text.contains("Current week (all models): 1% used"),
+            "{text}"
+        );
     }
 
     #[test]

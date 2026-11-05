@@ -68,10 +68,12 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
     {"key": "parser", "title": "#1232 parser (outside)", "kind": "external", "external": {"pr": 1232}},
     {"key": "cause", "title": "#1487 find the cause", "kind": "research",
      "criteria": ["the cause is named with the line that shows it"],
+     "steps": ["Reproduce it on the real screen", "Find the line that loses the filter", "Write the cause down"],
      "worker": {"agent": "claude", "model": "opus", "effort": "xhigh", "effort_auto": true}},
     {"key": "fix-1487", "title": "#1487 fix", "kind": "change", "delivery": "pr", "depends_on": ["cause", "parser"],
      "issues": [1487], "paths": ["web/src/TaskLens.tsx"],
      "criteria": ["the lens keeps its filter after a reload", "a test fails without the fix"],
+     "steps": ["Choose where the filter is kept", "Keep it in the core", "Restore it on the screen after a reload", "A test that fails without the fix, then the PR"],
      "checks": [{"as": "review", "by": [{"agent": "claude", "model": "opus", "effort": "high"}]}],
      "worker": {"agent": "codex", "model": "gpt-6-astra", "effort": "medium"}},
     {"key": "together", "title": "check together", "kind": "verify", "depends_on": ["fix-1487"],
@@ -108,6 +110,10 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   Send no effort to an agent that takes none (`hide agent catalog` lists `efforts`).
   If no candidate can run, say so in the plan.
   Hide refuses a worker that is none of the candidates (`mission_candidate_refused`): another agent, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
+- Every node other than an outside one gets `steps`: three to five short lines of how its work goes, each something it delivers or checks (the core change, the screen, the tests, the pull request), in the operator's language, never the node's title restated and never research (at most 8 steps, each one line of at most 80 characters, otherwise `mission_steps_invalid` names the node).
+  They show on the node's card as one bar cell per step and in its panel as a list before anyone has started, so the operator reads how each node will be worked when they read the plan.
+  The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.
+  Once the worker's plan exists it is the truth and your `steps` stay its starting point; a later plan that leaves `steps` out keeps them, and `"steps": []` clears them.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
 - Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
   The operator's changes in conversation change this mission only; the settings stay as they are.
@@ -159,7 +165,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - the checks the diff touches, by the repository's own commands;
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
 - the limits: start no agents of its own, merge nothing, never touch the operator's app, terminals or panes, never force push or rebase, stop and write a letter when the goal or scope would change;
-- its plan, for a node of three steps or more: before code, put the steps up with `hide task set` as `hide task help` says, three to eight of them, each something it delivers or checks inside this node (the schema, the core change, the screen, the tests, the pull request), never research and never the node itself restated; no `--ask`, since you read the plan, not the operator; each step marked `working` when it starts and `done` when it ends, so the node's panel on the map shows where the work is;
+- its plan: the node's `steps` from your plan, copied into the brief as a numbered list; before code the worker puts exactly those steps up with `hide task set` as `hide task help` says (a node planned without `steps`, of three steps or more, gets three to eight of its own, each something it delivers or checks inside this node, never research and never the node itself restated); it changes a step only when the work turns out different, and then says why with `--reason`; no `--ask`, since you read the plan, not the operator; each step marked `working` when it starts and `done` when it ends, so the node's panel on the map shows where the work is;
 - what to send back and when: a `--kind progress` letter once the plan is up, with its approach in a few lines (`hide task show <agent>` shows you its steps), and a `--kind report` letter with the pull request number and the evidence when done.
 
 ## 3. Starting
@@ -168,6 +174,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Hide refuses a worker before that (`mission_not_started`).
 - Start each worker with `hide agent spawn --parent here --intent <mission-id>:<node-key> --brief-file <path> …`, a `change` node in its own worktree (`--branch` a new branch, `--path` beside the project), a `research` node in the project's checkout.
   The brief is the worker's first prompt: Hide submits it once the agent takes input and keeps it as a delivered letter under the node's intent, so the worker starts on it without anyone typing and a wake later finds it.
+  Hide keeps the brief with the node when you bind the worker, and the node's panel shows it folded under 지시 원문 for as long as the node is on the map, so write it as the one place the worker's instructions live.
   A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names.
   Retrying a node uses the same intent, so it never makes a second agent or submits the brief twice; a new attempt with another worker uses a new intent.
 - When a spawn answers anything but an agent (`request_timeout`, `native_identity_unavailable`, `spawn_busy`), run the same command again until it answers the agent's id, and only then record or bind it.
