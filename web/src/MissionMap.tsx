@@ -1,5 +1,5 @@
 import { CogIcon, GitBranchIcon, TriangleAlertIcon } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
@@ -20,6 +20,7 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { MarkdownText } from "./MarkdownText";
 import { markdownPlainText } from "./markdownPlain";
+import { useMapPick } from "./mapPick";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
@@ -85,8 +86,6 @@ function MapState({ text, tone, state }: { text: string; tone?: string; state: s
 
 function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: Actions; onNode?: (node: MissionNode) => void }) {
   const { t } = useInterfaceTranslation();
-  const [picked, setPicked] = useState<string | null>(null);
-  const panel = useRef<HTMLDivElement>(null);
   const [root, rootRef] = useState<HTMLDivElement | null>(null);
   const [page, pageRef] = useState<HTMLDivElement | null>(null);
   const wide = useWide(root);
@@ -99,19 +98,11 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
   const minute = useMinuteClock();
   const end = mission.closed_at_unix_ms ?? minute;
   // A pick whose node a replan took away is no pick.
-  const selected = picked && mission.nodes.some((node) => node.key === picked) ? picked : null;
+  const { selected, select, panel, onKeyDown, onMapClick } = useMapPick(
+    mission.nodes.map((one) => one.key),
+    "[data-mission-node], [data-node-satellites]",
+  );
   const node = selected ? mission.nodes.find((candidate) => candidate.key === selected)! : null;
-  const select = (key: string | null) => {
-    setPicked(key);
-    // Under a narrow map the panel may be out of view; it comes into it (B34).
-    if (key) requestAnimationFrame(() => panel.current?.scrollIntoView?.({ block: "nearest" }));
-  };
-  // Escape lets go of the pick before the lane answers it (B30).
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape" || event.defaultPrevented || !selected) return;
-    event.preventDefault();
-    setPicked(null);
-  };
   return (
     <div ref={rootRef} className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} onKeyDown={onKeyDown}>
       <div ref={pageRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-mission-scroll="true">
@@ -130,12 +121,7 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
           <div className={cn("flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:flex-1 mission-wide:flex-row", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-values={mission.stale ? "stale" : "live"}>
             <div
               className="flex min-w-0 flex-col mission-wide:min-h-0 mission-wide:flex-1"
-              onClick={(event: MouseEvent<HTMLDivElement>) => {
-                // A press on the map outside every card and its checkers lets go of the pick (B30).
-                // A checker's popover is portalled out of the map, yet its presses bubble here through React.
-                if (!event.currentTarget.contains(event.target as Node)) return;
-                if (!(event.target as Element).closest("[data-mission-node], [data-node-satellites]")) setPicked(null);
-              }}
+              onClick={onMapClick}
               data-mission-map="true"
             >
               <MissionMapCanvas wide={wide} page={page} flow={flow} onFlow={(next) => actions.setConductorSettings({ map_flow: next })}>
@@ -161,7 +147,7 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
               data-mission-panel={node?.key}
             >
               {node ? (
-                <MissionNodePanel mission={mission} node={node} events={log?.events ?? null} end={end} onSelect={select} onClose={() => setPicked(null)} actions={actions} />
+                <MissionNodePanel mission={mission} node={node} events={log?.events ?? null} end={end} onSelect={select} onClose={() => select(null)} actions={actions} />
               ) : (
                 <MissionSummary mission={mission} onSelect={select} />
               )}

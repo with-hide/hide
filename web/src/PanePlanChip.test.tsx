@@ -58,7 +58,7 @@ function agent(): AgentRow {
   return legacyAgentRow({ pane_id: "p1", agent_kind: "claude", session_id: "s-1", device_id: "mac", identity_label: "root", group: "working", activity: "working", status_code: "working" } as Partial<AgentRow>);
 }
 
-async function mount(plans: PlanView[], what: "chip" | "map" = "chip", agents: AgentRow[] = [agent()]) {
+async function mount(plans: PlanView[], what: "chip" | "map" = "chip", agents: AgentRow[] = [agent()], devices: unknown[] = [{ id: "mac", kind: "local" }]) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (value: string) => value });
@@ -66,7 +66,7 @@ async function mount(plans: PlanView[], what: "chip" | "map" = "chip", agents: A
   useShellStore.setState({
     agents,
     focusedPaneId: "p1",
-    rest: { navigator: { devices: [{ id: "mac", kind: "local" }] }, plans: { items: plans } } as unknown as SnapshotRest,
+    rest: { navigator: { devices }, plans: { items: plans } } as unknown as SnapshotRest,
   });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
@@ -311,31 +311,99 @@ it("shows a handed step with its child's current step and name, the short words 
   } finally { await held.unmount(); }
 });
 
-it("draws every map card in two lines, who and what now, and opens a handed card on its child's checklist and a way to its pane (PRD hide-plan-delegate B25, B27)", async () => {
+it("draws every map card with its step number, names an agent only on a handed step, and opens a card in the panel beside the map with the child's checklist and a way to its pane (PRD hide-plan-delegate B25, B27)", async () => {
   const view = await mount([delegatingPlan(), childPlan()], "map", family());
   try {
     const line = (key: string) => view.container.querySelector(`[data-step-line=${key}]`)?.textContent;
-    // The session's own step carries its agent mark, never `Me` (the operator on every other screen); a step still to be handed, a dashed circle.
+    // The session's own step names no agent (the page's owner row does); a handed step the child, a step still to be handed a dashed circle.
     const who = (key: string) => view.container.querySelector<HTMLElement>(`[data-step-line=${key}] [data-step-who]`)?.dataset.stepWho;
-    expect(line("spec")).toBe("·delegate-spec.md");
-    expect(line("core")).toBe("·writing tests");
+    expect(line("spec")).toBe("delegate-spec.md");
+    expect(line("core")).toBe("writing tests");
     expect(line("web")).toBe("web-ui·map 2/4");
     expect(line("review")).toBe("·Waits on core title·web title");
-    expect(line("pr")).toBe("·Planned");
-    expect([who("spec"), who("web"), who("review")]).toEqual(["owner", "child", "pending"]);
+    expect(line("pr")).toBe("Planned");
+    expect([who("spec"), who("web"), who("review")]).toEqual([undefined, "child", "pending"]);
     expect(view.container.querySelector("[data-step-line=review] [data-step-who=pending]")?.getAttribute("aria-label")).toBe("To hand off");
     expect(view.container.querySelector("[data-plan-step=web] [data-step-output]")?.textContent).toBe("PR");
+    // A card leads with its step's number drawn as its state, not a status mark.
+    const numbers = [...view.container.querySelectorAll<HTMLElement>("[data-plan-step] [data-step-number]")].map((mark) => [mark.dataset.stepNumber, mark.dataset.stepShape]);
+    expect(numbers).toEqual([["1", "done"], ["2", "working"], ["3", "working"], ["4", "planned"], ["5", "planned"]]);
+    // Nothing is picked: the plan's summary stands beside the map.
+    expect(view.container.querySelector("[data-plan-side=summary]")).not.toBeNull();
     await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
-    const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
+    const detail = view.container.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
+    expect(view.container.querySelector("[data-plan-panel=web]")?.contains(detail)).toBe(true);
+    expect(view.container.querySelector("[data-plan-step=web]")?.getAttribute("aria-pressed")).toBe("true");
+    expect(view.container.querySelector("[data-plan-side=summary]")).toBeNull();
+    expect(detail.querySelector("[data-panel-meta]")?.textContent).toBe("Step 3 of 5Working");
     const fields = [...detail.querySelectorAll("dt")].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
-    expect(fields).toEqual([["Agent", "web-ui · Codex"], ["State", "Working"], ["Done when", "web-ui's report + its PR number"], ["Waits on", "spec title (Done)"]]);
+    expect(fields.map(([name]) => name)).toEqual(["Now", "Waits on", "Left", "Agent"]);
+    expect(fields[0]).toEqual(["Now", "map 2/4"]);
+    expect(fields[1]).toEqual(["Waits on", "spec title (Done)"]);
+    expect(detail.querySelector("[data-plan-ends]")?.textContent).toBe("Done when: web-ui's report + its PR number");
     const checklist = detail.querySelector<HTMLElement>("[data-plan-child-plan=web-ui]")!;
     expect(checklist.querySelector("p")?.textContent).toBe("web-ui's task steps2/4");
     expect([...checklist.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => [row.dataset.planRow, row.dataset.stepStatus])).toEqual([["parts", "done"], ["store", "done"], ["map", "working"], ["e2e", "planned"]]);
     await act(async () => detail.querySelector<HTMLButtonElement>("[data-plan-child-go=c1]")!.click());
     expect(view.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "c1", origin: "operator" } });
-    expect(document.querySelector("[data-plan-step-detail=web]")).toBeNull();
   } finally { await view.unmount(); }
+});
+
+it("lets go of a picked step on Escape, on the ✕ and on a press on the map's empty ground, lights the cards one edge away, and drops a pick whose step a replan took away, as a mission's map does (PRD mission-map-git-criteria B30)", async () => {
+  const view = await mount([plan()], "map");
+  try {
+    const card = (key: string) => view.container.querySelector<HTMLElement>(`[data-plan-step=${key}]`)!;
+    const detail = () => view.container.querySelector("[data-plan-step-detail]")?.getAttribute("data-plan-step-detail") ?? null;
+    await act(async () => card("core").click());
+    expect(detail()).toBe("core");
+    // The cards one edge away stay lit; the others are dimmed.
+    const dimmed = [...view.container.querySelectorAll<HTMLElement>("[data-plan-step]")].map((one) => [one.dataset.planStep, one.dataset.stepDimmed === "true"]).sort(([a], [b]) => String(a).localeCompare(String(b)));
+    expect(dimmed).toEqual([["core", false], ["docs", true], ["spec", false], ["web", false]]);
+    // A second press on the same card lets go of it.
+    await act(async () => card("core").click());
+    expect(detail()).toBeNull();
+    await act(async () => card("web").click());
+    expect(detail()).toBe("web");
+    await act(async () => { view.container.querySelector<HTMLElement>("[data-plan-step-detail] [data-panel-close]")!.click(); });
+    expect(detail()).toBeNull();
+    await act(async () => card("web").click());
+    // Escape lets go of the pick and is consumed, so the lane never hears it.
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => { card("web").dispatchEvent(escape); });
+    expect(detail()).toBeNull();
+    expect(escape.defaultPrevented).toBe(true);
+    // With nothing picked Escape is left alone.
+    const idle = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => { card("web").dispatchEvent(idle); });
+    expect(idle.defaultPrevented).toBe(false);
+    // A press on the map outside every card lets go of the pick.
+    await act(async () => card("web").click());
+    await act(async () => { view.container.querySelector<HTMLElement>("[data-plan-map]")!.click(); });
+    expect(detail()).toBeNull();
+    // A replan that takes the picked step away is no pick.
+    await act(async () => card("docs").click());
+    expect(detail()).toBe("docs");
+    await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, plans: { items: [plan({ steps: plan().steps.filter((one) => one.key !== "docs") })] } } as unknown as SnapshotRest })));
+    expect(detail()).toBeNull();
+    expect(view.container.querySelector("[data-plan-side=summary]")).not.toBeNull();
+  } finally { await view.unmount(); }
+});
+
+it("names the device of a handed step's agent on its card and in its panel only when it works away from this window", async () => {
+  const away = { ...CHILD_SESSION, device_id: "mini" };
+  const handedAway = delegatingPlan();
+  handedAway.steps = handedAway.steps.map((one) => (one.delegation ? { ...one, delegation: { ...one.delegation, session: away } } : one));
+  const view = await mount([handedAway], "map", family(), [{ id: "mac", kind: "local" }, { id: "mini", kind: "remote", label: "Mac mini" }]);
+  try {
+    expect(view.container.querySelector("[data-step-line=web] [data-device-chip]")?.textContent).toBe("Mac mini");
+    expect(view.container.querySelector("[data-step-line=core] [data-device-chip]")).toBeNull();
+    await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
+    expect(view.container.querySelector("[data-plan-step-detail=web] [data-device-chip]")?.textContent).toBe("Mac mini");
+  } finally { await view.unmount(); }
+  const here = await mount([delegatingPlan()], "map", family());
+  try {
+    expect(here.container.querySelector("[data-step-line=web] [data-device-chip]")).toBeNull();
+  } finally { await here.unmount(); }
 });
 
 it("says a child works without a plan, and draws no count and no way to a pane the child does not have (PRD hide-plan-delegate B27, B32)", async () => {
@@ -344,7 +412,7 @@ it("says a child works without a plan, and draws no count and no way to a pane t
     // No plan of the child: the card says its row's state.
     expect(view.container.querySelector("[data-step-line=web]")?.textContent).toBe("web-ui·In progress");
     await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
-    const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
+    const detail = view.container.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
     expect(detail.querySelector("[data-plan-child-plan]")?.textContent).toBe("Working without steps");
     expect(detail.querySelector("[data-plan-child-go]")).not.toBeNull();
   } finally { await view.unmount(); }
@@ -354,7 +422,7 @@ it("says a child works without a plan, and draws no count and no way to a pane t
   try {
     expect(early.container.querySelector("[data-step-line=web]")?.textContent).toBe("web-ui");
     await act(async () => early.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
-    const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
+    const detail = early.container.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
     expect(detail.querySelector("[data-plan-child-plan]")).toBeNull();
     expect(detail.querySelector("[data-plan-child-go]")).toBeNull();
   } finally { await early.unmount(); }
@@ -366,9 +434,10 @@ it("draws no step and no count for a child whose device does not answer, only it
   handedAway.steps = handedAway.steps.map((one) => (one.delegation ? { ...one, delegation: { ...one.delegation, session: away } } : one));
   const view = await mount([handedAway, { ...childPlan(), session: away }], "map", family());
   try {
-    expect(view.container.querySelector("[data-step-line=web]")?.textContent).toBe("web-ui·In progress");
+    // The device that does not answer is named beside the agent, and the card says its row's state.
+    expect(view.container.querySelector("[data-step-line=web]")?.textContent).toBe("web-uiphone·In progress");
     await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
-    const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
+    const detail = view.container.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
     // Neither its last checklist nor a claim that it works without one.
     expect(detail.querySelector("[data-plan-child-plan]")).toBeNull();
   } finally { await view.unmount(); }
