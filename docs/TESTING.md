@@ -448,6 +448,7 @@ The rule grammar, its limits and the evaluator have their own cases in `hide-scr
 `pr.yml`'s `plan` job reads the paths a pull request changes against the base it merges into and plans the lanes they need; `scripts/ci-plan.py` is the one place the rules live, and `scripts/tests/test_ci_plan.py` checks them against real paths.
 `MACOS_LANE_INPUTS` holds each macOS lane's covered paths together, including the existing crate-only desktop exception; Linux and Windows selection stays with the general classifier.
 `remote-mailbox` (the remote mailbox lane, its own Linux job) is planned for a change to any crate it builds and tests (`MAILBOX_CRATES` in the script: `herdr-core`, `hided`, `hide-agent-hooks`, `hide-host`, and so every crate they depend on, the device link's `hide-node` and `hide-node-link` among them); web code and web specs do not reach it.
+`remote-mailbox-arm` runs the same lane on a Linux ARM64 runner (`ubuntu-24.04-arm`), where the device is an ARM64 Linux machine (with-hide/hide-private#501): it is planned for the device link's own crates (`ARM_DEVICE_CRATES`: `hide-node`, `hide-node-link`), `hided/tests/it/device_own_engine.rs` and `contracts/device-kits.json`, which `hide-node` compiles in; main's push run and the nightly run it with every lane, and it builds cold, since no job saves a dependency cache for that processor.
 `windows-wsl` (the [WSL device lane](#wsl-device-lane)) is planned for a change to a crate the WSL link and a Windows core's ssh cross (`WSL_CRATES`: `hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), to the node command or to its tests, and not for a crate that only consumes them: the core's decisions about a WSL device are unit tests in `herdr-core/src/runtime/tests/wsl_devices.rs`.
 Every lane is a job whose `if:` asks the plan, and `verify` passes only when every planned lane succeeded and every other lane was skipped.
 A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong `if:` shows up as a red check rather than a lane quietly left out.
@@ -709,7 +710,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 50 jobs.
+A run that plans every lane a pull request can plan starts at most 51 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
@@ -725,7 +726,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, and a Windows core dialing the runner's OpenSSH Server and an sshd in that distribution over Windows' own `ssh.exe`, planned only for the crates those links cross (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), the node command and the two tests ([WSL device lane](#wsl-device-lane)) |
-| `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
+| `remote mailbox` (Linux x64, Linux ARM64) | 2 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS; its ARM64 leg is planned only for the device link, its device test and the device kit contract |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |

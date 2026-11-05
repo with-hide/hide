@@ -6,6 +6,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { createGitHubClient, prepareDraft, publishDraft } from "../release-draft.mjs";
+import { DEVICE_BUNDLE_FORMAT, DEVICE_KITS, deviceAsset, deviceKitFiles } from "../../desktop/scripts/device-helpers.mjs";
 
 const tag = "v1.2.3";
 const rc = "v0.4.0-rc.1";
@@ -21,8 +22,8 @@ const updatesOf = (tag) => ({
 });
 const blockmapsOf = (tag) => [`hide-${tag}-macos-arm64.zip.blockmap`, `hide-${tag}-windows-x64-setup.exe.blockmap`];
 const names = namesOf(tag);
-/** Five installers and checksums, three update files, two blockmaps, two Linux kits and their manifest. */
-const ASSET_COUNT = 18;
+/** Five installers and checksums, three update files, two blockmaps, every contract platform's kit and their manifest. */
+const ASSET_COUNT = 15 + Object.keys(DEVICE_KITS).length + 1;
 const digest = (data) => `sha256:${createHash("sha256").update(data).digest("hex")}`;
 
 async function fixture(t, options = {}) {
@@ -45,14 +46,14 @@ async function fixture(t, options = {}) {
     files.set(info, Buffer.from(`${lines.join("\n")}\n`));
   }
   const platforms = {};
-  for (const platform of ["linux-x86_64", "linux-aarch64"]) {
-    const asset = `hide-device-${platform}-${tag.slice(1)}.tar.gz`;
+  for (const platform of Object.keys(DEVICE_KITS)) {
+    const asset = deviceAsset(platform, tag.slice(1));
     const data = gzipSync(Buffer.from(asset));
     files.set(asset, data);
-    const programs = Object.fromEntries(["hided", "hide", "hide-agent-hooks", "hide-holder"].map((name) => [name, { size: 64, sha256: "a".repeat(64) }]));
+    const programs = Object.fromEntries([...deviceKitFiles(platform)].map(([name, program]) => [name, { size: program ? 64 : 1, sha256: "a".repeat(64) }]));
     platforms[platform] = { asset, size: data.length, sha256: digest(data).slice(7), files: programs };
   }
-  files.set("device-bundles.json", Buffer.from(JSON.stringify({ format: 3, version: tag.slice(1), commit: sha, order: "42", platforms })));
+  files.set("device-bundles.json", Buffer.from(JSON.stringify({ format: DEVICE_BUNDLE_FORMAT, version: tag.slice(1), commit: sha, order: "42", platforms })));
   for (const [name, data] of files) await fs.writeFile(path.join(directory, name), data);
   const state = {
     release: options.release ? structuredClone(options.release) : null,
@@ -233,7 +234,7 @@ test("an -rc tag drafts a pre-release with its own assets and publishes it, neve
     "hide-v0.4.0-rc.1-macos-arm64.zip", "hide-v0.4.0-rc.1-macos-arm64.zip.blockmap", "hide-v0.4.0-rc.1-macos-arm64.zip.sha256",
     "hide-v0.4.0-rc.1-windows-x64-setup.exe", "hide-v0.4.0-rc.1-windows-x64-setup.exe.blockmap", "hide-v0.4.0-rc.1-windows-x64-setup.exe.sha256",
     "latest-linux.yml", "latest-mac.yml", "latest.yml",
-    "device-bundles.json", "hide-device-linux-aarch64-0.4.0-rc.1.tar.gz", "hide-device-linux-x86_64-0.4.0-rc.1.tar.gz",
+    "device-bundles.json", ...Object.keys(DEVICE_KITS).map((platform) => deviceAsset(platform, "0.4.0-rc.1")),
   ].sort());
   assert.deepEqual(f.state.publications, [{ draft: false, make_latest: "false" }]);
   assert.equal(f.state.writes.filter((r) => r.method === "PATCH").length, 1);
@@ -258,7 +259,7 @@ test("device manifest from another source blocks draft creation before any netwo
   const manifest = JSON.parse(await fs.readFile(file, "utf8"));
   manifest.commit = "2".repeat(40);
   await fs.writeFile(file, JSON.stringify(manifest));
-  await assert.rejects(f.run(), /this release, source/);
+  await assert.rejects(f.run(), /this release and source/);
   assert.deepEqual(f.state.requests, []);
 });
 
@@ -266,7 +267,7 @@ test("a partial draft containing a matching Linux bundle resumes without replaci
   const f = await fixture(t, { release: draft() });
   const name = "hide-device-linux-aarch64-1.2.3.tar.gz", data = f.files.get(name);
   f.state.assets.push({ name, size: data.length, state: "uploaded", digest: digest(data) });
-  assert.equal((await f.run()).assets, 18);
+  assert.equal((await f.run()).assets, ASSET_COUNT);
   assert.equal(f.state.assets.filter((asset) => asset.name === name).length, 1);
-  assert.equal(f.state.writes.length, 17);
+  assert.equal(f.state.writes.length, ASSET_COUNT - 1);
 });

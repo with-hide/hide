@@ -36,6 +36,20 @@ export function deviceAsset(platform, version) {
   return contract.asset.replace("{platform}", platform).replace("{version}", version);
 }
 
+/**
+ * A kit's files as the core reads them (hide-node/src/ssh/kit/contract.rs):
+ * each program with the platform's suffix, then the runtime files beside
+ * them, mapped to whether the file is a program.
+ */
+export function deviceKitFiles(platform) {
+  const kit = contract.kits[platform];
+  if (!kit) throw new Error(`no device kit contract for ${platform}`);
+  return new Map([
+    ...DEVICE_PROGRAMS.map((name) => [`${name}${kit.suffix}`, true]),
+    ...Object.keys(kit.runtime).map((name) => [name, false]),
+  ]);
+}
+
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /**
@@ -208,14 +222,13 @@ export function stageDeviceKit(manifestFile, archiveFile, folder) {
   if (!entry) throw new Error(`${manifestFile} names no kit ${path.basename(archiveFile)}`);
   const [platform, bundle] = entry;
   const kit = contract.kits[platform];
-  if (!kit) throw new Error(`no device kit contract for ${platform}`);
+  const expected = [...deviceKitFiles(platform).keys()].sort();
   const stat = fs.lstatSync(archiveFile);
   if (!stat.isFile() || stat.size !== bundle.size || stat.size > MAX_KIT) throw new Error(`${archiveFile} is not the ${bundle.size}-byte archive the manifest names`);
   const archive = fs.readFileSync(archiveFile);
   if (digest(archive) !== bundle.sha256) throw new Error(`device archive digest mismatch: ${archiveFile}`);
   const files = readUstar(gunzipSync(archive, { maxOutputLength: MAX_KIT + 64 * 1024 }));
   const programs = new Map(DEVICE_PROGRAMS.map((name) => [`${name}${kit.suffix}`, name]));
-  const expected = [...programs.keys(), ...Object.keys(kit.runtime)].sort();
   if (JSON.stringify([...files.keys()].sort()) !== JSON.stringify(expected)
     || JSON.stringify(Object.keys(bundle.files).sort()) !== JSON.stringify(expected)) {
     throw new Error(`${archiveFile} does not hold exactly the ${platform} kit's files`);

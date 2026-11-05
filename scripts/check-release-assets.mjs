@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { DEVICE_PLATFORMS, DEVICE_PROGRAMS, DEVICE_BUNDLE_MANIFEST, DEVICE_BUNDLE_FORMAT } from "../desktop/scripts/device-helpers.mjs";
+import { DEVICE_KITS, DEVICE_BUNDLE_MANIFEST, DEVICE_BUNDLE_FORMAT, deviceAsset, deviceKitFiles } from "../desktop/scripts/device-helpers.mjs";
 
 /**
  * The tag is the one source of a release's kind: `vX.Y.Z` is a stable
@@ -48,13 +48,18 @@ export function systemAssetNames(version, system) {
   return [...files.installers.flatMap((name) => [name, `${name}.sha256`]), files.updateInfo, ...files.blockmaps].sort();
 }
 
+/** Every platform's device kit archive a release must carry, as contracts/device-kits.json names them. */
+export function deviceKitAssetNames(version) {
+  return Object.keys(DEVICE_KITS).map((platform) => deviceAsset(platform, version)).sort();
+}
+
 export function expectedAssetNames(tag) {
   releaseKind(tag);
   const version = tag.slice(1);
   return [
     ...SYSTEMS.flatMap((system) => systemAssetNames(version, system)),
     DEVICE_BUNDLE_MANIFEST,
-    ...Object.keys(DEVICE_PLATFORMS).map((platform) => `hide-device-${platform}-${version}.tar.gz`),
+    ...deviceKitAssetNames(version),
   ].sort();
 }
 
@@ -133,7 +138,7 @@ export async function verifyUpdateInfo(version, system, directory) {
 /** Match the device download contract to the release assets before any upload. */
 async function verifyDeviceBundles(version, directory, assets, sourceSha) {
   const manifest = JSON.parse(await fs.readFile(path.join(directory, DEVICE_BUNDLE_MANIFEST), "utf8"));
-  const platforms = Object.keys(DEVICE_PLATFORMS).sort();
+  const platforms = Object.keys(DEVICE_KITS).sort();
   const sameNames = (value, names) => value !== null && typeof value === "object" && !Array.isArray(value)
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...names].sort());
   const digest = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -144,21 +149,23 @@ async function verifyDeviceBundles(version, directory, assets, sourceSha) {
     || (sourceSha !== undefined && manifest.commit !== sourceSha)
     || typeof manifest.order !== "string" || !/^[0-9]+$/.test(manifest.order)
     || !sameNames(manifest.platforms, platforms)) {
-    throw new Error("device-bundles.json must identify this release, source and both Linux platforms");
+    throw new Error("device-bundles.json must identify this release and source and name every platform in contracts/device-kits.json");
   }
   for (const platform of platforms) {
     const bundle = manifest.platforms[platform];
-    const asset = assets.find(({ name }) => name === `hide-device-${platform}-${version}.tar.gz`);
+    const asset = assets.find(({ name }) => name === deviceAsset(platform, version));
+    const files = deviceKitFiles(platform);
     if (!sameNames(bundle, ["asset", "sha256", "size", "files"])
       || bundle.asset !== asset.name || !size(bundle.size) || bundle.size !== asset.size
       || !digest(bundle.sha256) || `sha256:${bundle.sha256}` !== asset.digest
-      || !sameNames(bundle.files, DEVICE_PROGRAMS)) {
+      || !sameNames(bundle.files, [...files.keys()])) {
       throw new Error(`${platform} device bundle differs from its manifest`);
     }
     let total = 0;
-    for (const file of Object.values(bundle.files)) {
-      if (!sameNames(file, ["size", "sha256"]) || !size(file.size, 64) || !digest(file.sha256)) {
-        throw new Error(`${platform} device program has invalid size or SHA-256`);
+    for (const [name, file] of Object.entries(bundle.files)) {
+      // A program is at least an executable header; a runtime file may be small.
+      if (!sameNames(file, ["size", "sha256"]) || !size(file.size, files.get(name) ? 64 : 1) || !digest(file.sha256)) {
+        throw new Error(`${platform} device file ${name} has invalid size or SHA-256`);
       }
       total += file.size;
     }
@@ -169,6 +176,15 @@ async function verifyDeviceBundles(version, directory, assets, sourceSha) {
 export async function verifyAssets(tag, directory, { sourceSha } = {}) {
   const expected = expectedAssetNames(tag);
   const actual = (await fs.readdir(directory)).sort();
+  // A core takes a device's kit only from a manifest that names every
+  // platform of the contract (hide-node/src/ssh/kit/manifest.rs), so a
+  // release short of a kit is refused here rather than published with
+  // device connections a core would refuse. The pointer to N3 goes when the
+  // release producers make every kit (with-hide/hide-private#501).
+  const missingKits = deviceKitAssetNames(tag.slice(1)).filter((name) => !actual.includes(name));
+  if (missingKits.length) {
+    throw new Error(`this release lacks device kits a core needs: ${missingKits.join(", ")}; every platform in contracts/device-kits.json needs its kit on the release, and the release producers make them only from with-hide/hide-private#501 N3 (release-kits)`);
+  }
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     const missing = expected.filter((name) => !actual.includes(name));
     const unexpected = actual.filter((name) => !expected.includes(name));
