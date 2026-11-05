@@ -116,9 +116,11 @@ jobs:
         # distribution listens on to this loopback, and Ubuntu's own ssh
         # socket answered 127.0.0.1:22 in place of this server once the
         # distribution ran. One connection with Windows' own ssh.exe proves
-        # the server takes the key before the walks start, and takes this
-        # runner's first start of ssh.exe (7 to 10 s on 2026-11-05), which the
-        # walks would otherwise meet in the core's 10 s `ssh -V` bound.
+        # the server takes the key before the walks start, and runs ssh.exe
+        # once on a quiet runner: on 2026-11-05 the walks' first `ssh -V`,
+        # run while the distribution started beside them, took 7 to 10 s
+        # against the core's 10 s bound; after this connection (under 1 s)
+        # it took 0.1 s.
         timeout-minutes: 15
         shell: pwsh
         run: |
