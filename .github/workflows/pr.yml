@@ -407,7 +407,7 @@ jobs:
       # times and compiling took about 6 of the job's 11 minutes (2026-10-05).
       TEST_TARGETS: >-
         -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p herdr-core -p hide-ai
-        -p hide-agent-adapter -p hide-desk
+        -p hide-agent-adapter -p hide-desk -p hide-shell
         --lib --bin hide-agent-hooks --test it
     steps:
       - name: Keep line endings as committed
@@ -529,11 +529,12 @@ jobs:
       - name: Agent hooks, their Windows entries run through PowerShell
         # The hook file writer, the entries Claude Code, Codex, Grok and
         # Cursor run on Windows, OpenCode's plugin and Pi's and omp's
-        # extension run in Node, and the helper's stdin deadline. It stands
-        # on its own, so it runs whatever the step above answered.
+        # extension run in Node, the helper's stdin deadline, and how a
+        # PowerShell or POSIX call is read (`hide-shell`). It stands on its
+        # own, so it runs whatever the step above answered.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 15
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))) | (package(hide-shell) & kind(lib))'
       - name: Build the pane holder and fetch its pinned ConPTY runtime
         # For the core's own engine below: its panes run in holders started
         # from this build, on the ConPTY runtime contracts/conpty.json pins.
