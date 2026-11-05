@@ -9,11 +9,13 @@
 //! sleeping conversation, answer the decision a listed mission waits on
 //! (`answer_mission`), read, merge or hand to an agent a listed pull request
 //! (`read_pr`, `merge_pr`, `read_pr_feedback`, `delegate_pr`), register or
-//! report its push subscription, and ask whether hided still answers
-//! (`ping`). Anything else is refused and recorded.
-//! It never receives a file, a path, a setting or the core's snapshot; the one
-//! exception is the interface language, which rides each `agents` frame so the
-//! phone speaks the language the operator chose.
+//! report its push subscription, ask whether hided still answers (`ping`),
+//! and look at one View an agent of its open detail opened (`look_open`,
+//! `look_ack`, `look_seen`). Anything else is refused and recorded. It never
+//! receives a path, a setting or the core's snapshot, and a file only as the
+//! content of a View that is open now, asked for by its id (`looks.rs`); the
+//! one setting is the interface language, which rides each `agents` frame so
+//! the phone speaks the language the operator chose.
 //!
 //! Every frame to the phone goes through `encode`, the one place a relay
 //! transport would wrap in end-to-end encryption (PRD D-01).
@@ -28,6 +30,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::conversation::{self, Tail, Transcript};
+use super::looks;
 use super::pane::{self, Input, PaneError};
 use super::projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
 use super::prs;
@@ -297,6 +300,10 @@ struct Open {
     /// reason as a start: the write may already be on its way and its request
     /// id must be settled. The pane call's own limits bound it.
     input: Option<tokio::task::JoinHandle<()>>,
+    /// The content of the one View the phone is looking at, sent a window of
+    /// chunks at a time. It ends with the detail or with the next request:
+    /// it only reads, so nothing is owed to a request id.
+    look: Option<looks::Transfer>,
 }
 
 /// Runs one slow piece of a phone's work beside the socket loop, so the loop
@@ -347,9 +354,12 @@ fn spawn_detail(
         let mut transcript: Option<Transcript> = None;
         // Whether the phone was last told the pane has a conversation.
         let mut told: Option<bool> = None;
+        // The Views the phone was last told the agent has open.
+        let mut told_looks: Option<herdr_core::LookViews> = None;
         loop {
             let ask = *asks.borrow_and_update();
             let mut outgoing = Vec::new();
+            outgoing.extend(looks_step(&mobile, &key, &mut told_looks).await);
             if ask.view == View::Conversation {
                 let (next, frame) = conversation_step(&mobile, &key, transcript.take()).await;
                 transcript = next;
@@ -389,6 +399,43 @@ fn spawn_detail(
             }
         }
     })
+}
+
+/// The Views the agent in `pane_id` has open, asked of the core on a blocking
+/// thread: its owner thread answers, and no worker of the runtime waits for it.
+async fn agent_looks(mobile: &Arc<Mobile>, pane_id: &str) -> Result<herdr_core::LookViews, String> {
+    let (core, pane_id) = (Arc::clone(mobile.core()), pane_id.to_owned());
+    tokio::task::spawn_blocking(move || core.agent_looks(&pane_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// The list of Views the agent has open, when it differs from the last one
+/// sent: a View opened, closed or looked at moves it.
+async fn looks_step(
+    mobile: &Arc<Mobile>,
+    key: &AgentKey,
+    told: &mut Option<herdr_core::LookViews>,
+) -> Option<Value> {
+    let looks = match agent_looks(mobile, &key.pane_id).await {
+        Ok(looks) => looks,
+        Err(message) => {
+            looks_failed(&message);
+            return None;
+        }
+    };
+    if told.as_ref() == Some(&looks) {
+        return None;
+    }
+    let frame = looks::list_frame(key, &looks);
+    *told = Some(looks);
+    Some(frame)
+}
+
+fn looks_failed(message: &str) {
+    herdr_core::diagnostic!(json!({
+        "component": "mobile_phone", "kind": "looks.read_failed", "message": message,
+    }));
 }
 
 fn conversation_failed(message: &str) {
@@ -777,6 +824,7 @@ async fn handle(
             });
             let (older, older_asks) = mpsc::channel(1);
             mobile.set_viewing(connection, Some(key.clone()));
+            open.look = None;
             let task = spawn_detail(Arc::clone(mobile), key, frames.clone(), asks, older_asks);
             open.detail = Some(Detail { ask, older, task });
             None
@@ -820,7 +868,25 @@ async fn handle(
         }
         "close" => {
             open.detail = None;
+            open.look = None;
             mobile.set_viewing(connection, None);
+            None
+        }
+        "look_open" => look_open(mobile, phone_id, message, open, frames, projection).await,
+        "look_ack" => {
+            match (
+                open.look.as_ref(),
+                message.get("request_id").and_then(Value::as_str),
+                message.get("seq").and_then(Value::as_u64),
+            ) {
+                (Some(transfer), Some(request_id), Some(seq)) => transfer.ack(request_id, seq),
+                (_, Some(_), Some(_)) => {}
+                _ => refusal_logged("scope.refused", Some(phone_id), "look_ack"),
+            }
+            None
+        }
+        "look_seen" => {
+            look_seen(mobile, phone_id, message, projection).await;
             None
         }
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
@@ -917,6 +983,115 @@ async fn handle(
                 json!({"type": "refused_request", "request": other.chars().take(64).collect::<String>(), "reason": "not_allowed"}),
             )
         }
+    }
+}
+
+/// The answer to a `look_*` request that cannot go on: its state says why.
+fn look_refused(message: &Value, state: &str) -> Value {
+    json!({
+        "type": "look_result", "request_id": message.get("request_id"),
+        "view_id": message.get("view_id"), "state": state,
+    })
+}
+
+/// Why a `look_*` request was turned away: the `state` its answer carries and
+/// the `reason` `scope.refused` records.
+#[derive(Debug, Eq, PartialEq)]
+struct LookRefusal {
+    state: &'static str,
+    reason: String,
+}
+
+/// The first checks of a `look_open` or `look_seen`, which need nothing from
+/// the core (PRD mobile-companion-ui D-16): the request carries no field
+/// beyond the ids, and the agent is one the phone's list holds.
+fn look_scope<'a>(
+    message: &'a Value,
+    projection: &Projection,
+) -> Result<(AgentKey, looks::Request<'a>), LookRefusal> {
+    let request = looks::request(message).map_err(|error| match error {
+        looks::Malformed::Beyond(field) => LookRefusal {
+            state: "refused",
+            reason: format!("look_field:{field}"),
+        },
+        looks::Malformed::Invalid => LookRefusal {
+            state: "refused",
+            reason: "look_request".to_owned(),
+        },
+    })?;
+    let key = key_of(message)
+        .filter(|key| projection.find(key).is_some())
+        .ok_or_else(|| LookRefusal {
+            state: "gone",
+            reason: "not_an_agent".to_owned(),
+        })?;
+    Ok((key, request))
+}
+
+/// The View a `look_open` or `look_seen` names, checked in the order that
+/// keeps the phone to the Views of an agent it can see: `look_scope`, the
+/// phone still let in, and the View among the Views the core lists that agent
+/// has open now. Every refusal is recorded as `scope.refused`; `Err` is the
+/// answer to send.
+async fn look_target(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    projection: &Projection,
+) -> Result<(String, herdr_core::LookView), Value> {
+    let (key, request) = match look_scope(message, projection) {
+        Ok(scope) => scope,
+        Err(refusal) => {
+            refusal_logged("scope.refused", Some(phone_id), &refusal.reason);
+            return Err(look_refused(message, refusal.state));
+        }
+    };
+    if mobile.still_admitted(phone_id).is_err() {
+        return Err(look_refused(message, "refused"));
+    }
+    let looks = match agent_looks(mobile, &key.pane_id).await {
+        Ok(looks) => looks,
+        Err(failure) => {
+            looks_failed(&failure);
+            return Err(look_refused(message, "unavailable"));
+        }
+    };
+    match looks::find(&looks, request.view_id) {
+        Some(view) => Ok((request.request_id.to_owned(), view)),
+        None => {
+            // Closed since the list was drawn, or never this agent's.
+            refusal_logged("scope.refused", Some(phone_id), "view_not_open");
+            Err(look_refused(message, "closed"))
+        }
+    }
+}
+
+/// `look_open`: starts sending the View's content; the next one replaces it.
+async fn look_open(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    open: &mut Open,
+    frames: &mpsc::Sender<Value>,
+    projection: &Arc<Projection>,
+) -> Option<Value> {
+    let (request_id, view) = match look_target(mobile, phone_id, message, projection).await {
+        Ok(target) => target,
+        Err(answer) => return Some(answer),
+    };
+    if request_id.is_empty() {
+        refusal_logged("scope.refused", Some(phone_id), "look_request");
+        return Some(look_refused(message, "refused"));
+    }
+    open.look = Some(looks::open(mobile, &request_id, view, frames.clone()));
+    None
+}
+
+/// `look_seen`: the phone showed the View, so it is seen, on the phone and on
+/// the desktop (B24). Repeating it changes nothing.
+async fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projection: &Projection) {
+    if let Ok((_, view)) = look_target(mobile, phone_id, message, projection).await {
+        mobile.mark_seen(&view);
     }
 }
 
@@ -1403,6 +1578,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_look_request_names_an_agent_and_a_view_id_and_nothing_a_path_could_ride_in() {
+        let projection = sleeping_projection(None);
+        let ask = |field: Option<&str>, pane: &str| {
+            let mut message = json!({
+                "type": "look_open", "request_id": "r-1", "device_id": "test-node",
+                "pane_id": pane, "view_id": "view-1",
+            });
+            if let Some(field) = field {
+                message[field] = json!("/etc/passwd");
+            }
+            message
+        };
+        let refused = |message: &Value| look_scope(message, &projection).err();
+        assert!(look_scope(&ask(None, "w1:p1"), &projection).is_ok());
+        for field in ["path", "root", "checkout", "file"] {
+            assert_eq!(
+                refused(&ask(Some(field), "w1:p1")),
+                Some(LookRefusal {
+                    state: "refused",
+                    reason: format!("look_field:{field}")
+                })
+            );
+        }
+        // An agent the list does not hold is gone, whatever View it names.
+        assert_eq!(
+            refused(&ask(None, "w9:p9")),
+            Some(LookRefusal {
+                state: "gone",
+                reason: "not_an_agent".to_owned()
+            })
+        );
+        let mut no_view = ask(None, "w1:p1");
+        no_view.as_object_mut().unwrap().remove("view_id");
+        assert_eq!(
+            refused(&no_view).map(|refusal| refusal.reason),
+            Some("look_request".to_owned())
+        );
+    }
+
+    #[test]
     fn a_phone_can_act_only_on_a_current_local_sleep_intent() {
         let mut row = json!({
             "sleep_id": "sleep-a-1", "node_id": "local", "kind": "pi",
@@ -1457,6 +1672,8 @@ mod tests {
         directory: &std::path::Path,
         gate: &Arc<herdr_core::input_gate::PaneInputGate>,
     ) -> Arc<Mobile> {
+        let core = Arc::new(crate::core::CoreHandle::bare(directory));
+        let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
         Mobile::start(super::super::Config {
             state_dir: directory.join("state"),
             home: directory.to_path_buf(),
@@ -1467,13 +1684,20 @@ mod tests {
                 search_path: None,
             },
             host_name: None,
-            core: Arc::new(crate::core::CoreHandle::bare(directory)),
+            core: Arc::clone(&core),
             input_gate: Arc::clone(gate),
             renderers: Arc::default(),
             start_demand: Arc::default(),
             // These tests drive the phone boundary directly, never a network supervisor.
             open: tokio::sync::watch::channel(false).1,
             desktop: Arc::default(),
+            boundary: Arc::clone(&boundary),
+            roots: Arc::new(crate::RootFollower::new(
+                Arc::clone(&core),
+                boundary,
+                Arc::new(crate::watch::WatchService::new(Arc::clone(&core))),
+                Arc::new(crate::index::IndexService::new()),
+            )),
         })
     }
 

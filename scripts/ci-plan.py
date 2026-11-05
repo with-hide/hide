@@ -120,13 +120,18 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # result, and nothing else can. Web code and web specs do not reach it.
 MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
 # The WSL device lane (`wsl-device.yml`) connects a real WSL 2 distribution
-# through `wsl.exe`: the crates the link crosses (the platform layer's WSL
-# listing, the connector and its pipe, the link's protocol, the helper's
-# serve) and the node command the helper runs as. The core's decisions about
-# a WSL device have their own unit tests, so a change to a crate that only
-# consumes these does not plan it.
+# through `wsl.exe`, and the runner's own OpenSSH Server and an sshd in that
+# distribution over Windows' own `ssh.exe`: the crates the links cross (the
+# platform layer's WSL listing, the connector and its pipe, the system ssh,
+# the link's protocol, the helper's serve) and the node command the helper
+# runs as. The core's decisions about a WSL device have their own unit tests,
+# so a change to a crate that only consumes these does not plan it.
 WSL_CRATES = {"hide-host", "hide-node", "hide-node-link", "hide-platform"}
-WSL_CRATE_FILES = ("hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs")
+WSL_CRATE_FILES = (
+    "hided/src/node_cli.rs",
+    "hided/tests/it/wsl_device.rs",
+    "hided/tests/it/windows_ssh_device.rs",
+)
 # The vt lane builds the terminal parser, whose Zig build differs by system,
 # and runs the pane holder's tests, since the holder links the parser and its
 # tests start it on all three systems (docs/TESTING.md, The pane holder); the

@@ -888,3 +888,100 @@ fn an_output_looked_at_in_desks_lane_is_seen_and_its_row_leaves_needs_you() {
     assert_eq!(recipient.group, "working");
     assert!(recipient.look.is_none());
 }
+
+/// PRD mobile-companion-ui D-15: the phone marks a View it showed seen with
+/// the event Desk's lane sends, and Desk being off or not installed (the
+/// fixture runs none) does not refuse it.
+#[test]
+fn a_view_seen_on_the_phone_is_seen_with_desk_off_and_the_row_leaves_needs_you() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    assert!(!guard.desk_installed(), "the fixture runs no Desk");
+    keyboard(&mut guard, Some("sender"));
+    let view = open(&mut guard, "recipient", "notes.md");
+    assert_eq!(row(&guard, "recipient").mark, RowMark::Look);
+    guard.dispatch_json(&explorer_event(
+        "desk_output_seen",
+        json!({"device_id": crate::node::TEST_NODE, "checkout": CHECKOUT, "id": view}),
+    ));
+    assert!(!unseen(&guard, &view));
+    assert_eq!(row(&guard, "recipient").group, "working");
+    // B25: opened again, it is to look at again.
+    keyboard(&mut guard, Some("sender"));
+    open(&mut guard, "recipient", "notes.md");
+    assert!(unseen(&guard, &view));
+}
+
+/// PRD mobile-companion-ui B12, B24, B27: the phone's list is what the
+/// agent opened and has open, seen or not; another agent's, and a closed
+/// View, are not in it.
+#[test]
+fn the_phones_list_is_the_views_the_agent_opened_that_are_open() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let notes = open(&mut guard, "recipient", "docs/notes.md");
+    let login = open(&mut guard, "recipient", "src/login.ts");
+    let other = open(&mut guard, "sender", "src/sender.ts");
+    let listed = guard.phone_looks("recipient");
+    let ids: Vec<&str> = listed.views.iter().map(|v| v.display_id.as_str()).collect();
+    assert_eq!(listed.omitted, 0);
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&notes.as_str()) && ids.contains(&login.as_str()));
+    assert!(
+        !ids.contains(&other.as_str()),
+        "another agent's View is not listed"
+    );
+    assert!(listed.views.iter().all(|view| view.unseen));
+    let notes_row = listed.views.iter().find(|v| v.display_id == notes).unwrap();
+    assert_eq!(
+        (
+            notes_row.device_id.as_str(),
+            notes_row.checkout_path.as_str()
+        ),
+        (crate::node::TEST_NODE, CHECKOUT)
+    );
+    assert_eq!(notes_row.label, "notes.md");
+    // The phone's treatment of a file comes from the one table of outputs.
+    assert_eq!(notes_row.output, Some("document"));
+    let login_row = listed.views.iter().find(|v| v.display_id == login).unwrap();
+    assert_eq!(login_row.output, None);
+    // The same set the desktop's `N views` lists for that pane.
+    let desktop: Vec<(String, bool)> = pane_views(&guard, "recipient")
+        .into_iter()
+        .map(|row| (row.view_id, row.unseen))
+        .collect();
+    let phone: Vec<(String, bool)> = listed
+        .views
+        .iter()
+        .map(|v| (v.display_id.clone(), v.unseen))
+        .collect();
+    for pair in &desktop {
+        assert!(phone.contains(pair), "{pair:?} in {phone:?}");
+    }
+    // Seen it stays listed, now as seen.
+    guard.dispatch_json(&explorer_event(
+        "desk_output_seen",
+        json!({"device_id": crate::node::TEST_NODE, "checkout": CHECKOUT, "id": notes}),
+    ));
+    let listed = guard.phone_looks("recipient");
+    let seen: Vec<(&str, bool)> = listed
+        .views
+        .iter()
+        .map(|v| (v.display_id.as_str(), v.unseen))
+        .collect();
+    assert!(seen.contains(&(notes.as_str(), false)));
+    assert!(seen.contains(&(login.as_str(), true)));
+    // Closed on the desktop, it leaves the list (B12, B27).
+    guard
+        .change_view_layout(&key(), |layout, _| {
+            layout.remove(&login);
+            Ok(((), true))
+        })
+        .unwrap();
+    guard.sync_workspace_view();
+    let listed = guard.phone_looks("recipient");
+    assert!(listed.views.iter().all(|view| view.display_id != login));
+    assert_eq!(listed.views.len(), 1);
+    assert!(guard.phone_looks("no-such-pane").views.is_empty());
+}

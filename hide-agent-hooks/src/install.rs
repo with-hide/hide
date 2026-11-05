@@ -14,6 +14,8 @@ use std::io::{ErrorKind, Read};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
+use hide_shell::Syntax;
+use hide_shell::quote::POWERSHELL_QUOTES;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -451,7 +453,7 @@ fn posix_command<'a>(
     event: HookEvent,
 ) -> String {
     let helper = helper.into();
-    let quoted = Quoting::Posix.quote(&helper.display().to_string());
+    let quoted = Syntax::Posix.single_quoted(&helper.display().to_string());
     format!(
         "if [ -x {quoted} ]; then exec {quoted} {}; fi",
         helper_arguments(helper, runtime, event)
@@ -496,15 +498,25 @@ pub(crate) fn hook_timeout(runtime: AgentRuntime, event: HookEvent) -> u64 {
     }
 }
 
+/// The PowerShell test that the helper at `quoted` (a quoted path) is a
+/// file. It is a .NET call, not a cmdlet: Windows PowerShell loads a
+/// cmdlet's module on its first use and, on an account whose module cache is
+/// empty, first builds that cache for every installed module, which can
+/// outlast a hook's timeout (with-hide/hide-private#318).
+pub(crate) fn helper_exists(quoted: &str) -> String {
+    format!("[System.IO.File]::Exists({quoted})")
+}
+
 fn windows_guard<'a>(
     helper: impl Into<HookTarget<'a>>,
     runtime: AgentRuntime,
     event: HookEvent,
 ) -> String {
     let helper = helper.into();
-    let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
+    let quoted = Syntax::PowerShell.single_quoted(&helper.display().to_string());
     format!(
-        "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} {} }}",
+        "if ({}) {{ & {quoted} {} }}",
+        helper_exists(&quoted),
         helper_arguments(helper, runtime, event)
     )
 }
@@ -525,108 +537,84 @@ pub(crate) fn codex_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookEv
 /// `value` quoted for this system's own shell (PowerShell on Windows, a
 /// POSIX shell elsewhere), for a command the operator is shown to type.
 pub fn quote_for_shell(value: &str) -> String {
-    Quoting::NATIVE.quote(value)
+    NATIVE.single_quoted(value)
 }
 
 /// `words` as one command line for this system's own shell, each word one
 /// argument: a word the shell would read as it is stays bare, any other is
 /// quoted, so `sh -c 'echo a b'` keeps its three arguments.
 pub fn command_line_for_shell(words: &[String]) -> String {
-    Quoting::NATIVE.command_line(words)
+    command_line(NATIVE, words)
 }
 
-/// How a path is quoted in the command this system writes, and read back.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Quoting {
-    /// Single quotes, a quote inside written `'\''`.
-    Posix,
-    /// Single quotes, a quote inside doubled. PowerShell takes the
-    /// typographic single quotes for `'` as well, so they are doubled too.
-    PowerShell,
-    /// Double quotes in agy's legacy Windows commands, retained for reading
-    /// and migrating the entries written before guidance version 7.
-    Cmd,
-}
+/// The shell this system's commands are written for: PowerShell on Windows,
+/// a POSIX shell elsewhere.
+pub(crate) const NATIVE: Syntax = if cfg!(windows) {
+    Syntax::PowerShell
+} else {
+    Syntax::Posix
+};
 
-impl Quoting {
-    pub(crate) const NATIVE: Self = if cfg!(windows) {
-        Self::PowerShell
-    } else {
-        Self::Posix
+/// `words` as one command line for `syntax`, a word only of characters no
+/// supported shell expands left bare. PowerShell reads a quoted first word as
+/// a string rather than a command, so the line then starts with `& `.
+pub(crate) fn command_line(syntax: Syntax, words: &[String]) -> String {
+    let bare = |word: &String| {
+        !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':'))
     };
-
-    pub(crate) const POWERSHELL_QUOTES: [char; 5] = hide_shell::quote::POWERSHELL_QUOTES;
-
-    pub(crate) fn quote(self, value: &str) -> String {
-        match self {
-            Self::Cmd => format!("\"{value}\""),
-            Self::Posix => hide_shell::quote::posix_single_quoted(value),
-            Self::PowerShell => hide_shell::quote::powershell_single_quoted(value),
-        }
-    }
-
-    /// `words` as one command line, a word only of characters no supported
-    /// shell expands left bare. PowerShell reads a quoted first word as a
-    /// string rather than a command, so the line then starts with `& `.
-    pub(crate) fn command_line(self, words: &[String]) -> String {
-        let bare = |word: &String| {
-            !word.is_empty()
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':'))
-        };
-        let line = words
-            .iter()
-            .map(|word| {
-                if bare(word) {
-                    word.clone()
-                } else {
-                    self.quote(word)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        match words.first() {
-            Some(first) if self == Self::PowerShell && !bare(first) => format!("& {line}"),
-            _ => line,
-        }
-    }
-
-    /// The first quoted word of `command`, unquoted: the helper path, in the
-    /// guarded command and in the bare one versions before 6 wrote.
-    pub(crate) fn first_quoted(self, command: &str) -> Option<String> {
-        let opening = if self == Self::Cmd { '"' } else { '\'' };
-        let start = command.find(opening)? + 1;
-        let mut rest = &command[start..];
-        let mut path = String::new();
-        match self {
-            Self::Posix => loop {
-                let end = rest.find('\'')?;
-                path.push_str(&rest[..end]);
-                rest = &rest[end + 1..];
-                match rest.strip_prefix("\\''") {
-                    Some(after) => {
-                        path.push('\'');
-                        rest = after;
-                    }
-                    None => return Some(path),
-                }
-            },
-            Self::PowerShell => {
-                let mut characters = rest.chars().peekable();
-                while let Some(character) = characters.next() {
-                    if !Self::POWERSHELL_QUOTES.contains(&character) {
-                        path.push(character);
-                    } else if characters.peek() == Some(&character) {
-                        path.push(character);
-                        characters.next();
-                    } else {
-                        return Some(path);
-                    }
-                }
-                None
+    let line = words
+        .iter()
+        .map(|word| {
+            if bare(word) {
+                word.clone()
+            } else {
+                syntax.single_quoted(word)
             }
-            Self::Cmd => rest.find('"').map(|end| rest[..end].to_owned()),
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    match words.first() {
+        Some(first) if syntax == Syntax::PowerShell && !bare(first) => format!("& {line}"),
+        _ => line,
+    }
+}
+
+/// The first single-quoted word of `command`, unquoted as `syntax` reads it:
+/// the helper path, in the guarded command and in the bare one versions
+/// before 6 wrote.
+pub(crate) fn first_quoted(syntax: Syntax, command: &str) -> Option<String> {
+    let start = command.find('\'')? + 1;
+    let mut rest = &command[start..];
+    let mut path = String::new();
+    match syntax {
+        Syntax::Posix => loop {
+            let end = rest.find('\'')?;
+            path.push_str(&rest[..end]);
+            rest = &rest[end + 1..];
+            match rest.strip_prefix("\\''") {
+                Some(after) => {
+                    path.push('\'');
+                    rest = after;
+                }
+                None => return Some(path),
+            }
+        },
+        Syntax::PowerShell => {
+            let mut characters = rest.chars().peekable();
+            while let Some(character) = characters.next() {
+                if !POWERSHELL_QUOTES.contains(&character) {
+                    path.push(character);
+                } else if characters.peek() == Some(&character) {
+                    path.push(character);
+                    characters.next();
+                } else {
+                    return Some(path);
+                }
+            }
+            None
         }
     }
 }
@@ -682,7 +670,7 @@ pub(crate) fn hook_is_mine(hook: &Value, install: Option<&str>) -> bool {
         Some(named) if named == install => true,
         Some(_) => hook_texts(hook)
             .filter(|text| text.contains('\''))
-            .find_map(|text| Quoting::NATIVE.first_quoted(text))
+            .find_map(|text| first_quoted(NATIVE, text))
             .is_some_and(|helper| !Path::new(&helper).exists()),
     }
 }
@@ -725,7 +713,7 @@ fn installed_helper(hooks: &Map<String, Value>, install: Option<&str>) -> Option
         .find_map(|hook| {
             hook_texts(hook)
                 .filter(|text| text.contains('\''))
-                .find_map(|text| Quoting::NATIVE.first_quoted(text))
+                .find_map(|text| first_quoted(NATIVE, text))
         })
 }
 
@@ -966,6 +954,23 @@ pub(crate) fn write_document(path: &Path, document: &HookDocument) -> Result<(),
 }
 
 #[cfg(test)]
+/// The commands of a PowerShell `guard` other than the helper at `helper`,
+/// a `[Type]::Method` call and a test of a variable: what it would start
+/// or load besides the helper.
+pub(crate) fn powershell_commands(guard: &str, helper: &Path) -> Vec<String> {
+    hide_shell::simple_commands(guard, Syntax::PowerShell)
+        .into_iter()
+        .filter_map(|words| words.into_iter().next())
+        .filter(|first| {
+            first.as_str() != helper.to_str().unwrap()
+                && !first.starts_with('[')
+                && !first.starts_with('$')
+                && first != "exit"
+        })
+        .collect()
+}
+
+#[cfg(test)]
 #[path = "install/byte_contract_tests.rs"]
 mod byte_contract_tests;
 
@@ -988,31 +993,31 @@ mod tests {
         };
         let call = words(&["sh", "-c", "echo a b", "it's", ""]);
         assert_eq!(
-            Quoting::Posix.command_line(&call),
+            command_line(Syntax::Posix, &call),
             r#"sh -c 'echo a b' 'it'\''s' ''"#
         );
         assert_eq!(
-            Quoting::PowerShell.command_line(&call),
+            command_line(Syntax::PowerShell, &call),
             "sh -c 'echo a b' 'it''s' ''"
         );
         // Words no shell expands stay as typed.
         let plain = words(&["npm", "run", "dev", "./src/a.ts", "--port", "3000"]);
         assert_eq!(
-            Quoting::Posix.command_line(&plain),
+            command_line(Syntax::Posix, &plain),
             "npm run dev ./src/a.ts --port 3000"
         );
         assert_eq!(
-            Quoting::PowerShell.command_line(&plain),
+            command_line(Syntax::PowerShell, &plain),
             "npm run dev ./src/a.ts --port 3000"
         );
         // A program path with a space is still the command in PowerShell.
         let spaced = words(&["/opt/my tools/run", "$HOME"]);
         assert_eq!(
-            Quoting::Posix.command_line(&spaced),
+            command_line(Syntax::Posix, &spaced),
             "'/opt/my tools/run' '$HOME'"
         );
         assert_eq!(
-            Quoting::PowerShell.command_line(&spaced),
+            command_line(Syntax::PowerShell, &spaced),
             "& '/opt/my tools/run' '$HOME'"
         );
     }
@@ -1154,9 +1159,9 @@ mod tests {
             .unwrap();
         assert!(session_start_command.contains("--runtime codex"));
         assert!(session_start_command.contains("--memory-injection"));
-        assert!(session_start_command.contains("--source hide-subagents@11"));
+        assert!(session_start_command.contains("--source hide-subagents@12"));
         let guard = if cfg!(windows) {
-            "if (Test-Path -LiteralPath '"
+            "if ([System.IO.File]::Exists('"
         } else {
             "if [ -x '"
         };
@@ -1177,12 +1182,12 @@ mod tests {
             (
                 AgentRuntime::ClaudeCode,
                 HookEvent::SessionStart,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@12; fi","timeout":8}"#,
             ),
             (
                 AgentRuntime::Codex,
                 HookEvent::Stop,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@12; fi","timeout":8}"#,
             ),
         ];
         for (runtime, event, bytes) in pinned {
@@ -1190,7 +1195,7 @@ mod tests {
             assert_eq!(serde_json::to_string(&written).unwrap(), bytes);
             let command = written["command"].as_str().unwrap();
             assert_eq!(
-                Quoting::Posix.first_quoted(command).as_deref(),
+                first_quoted(Syntax::Posix, command).as_deref(),
                 helper.to_str()
             );
         }
@@ -1199,6 +1204,25 @@ mod tests {
                 hook_group(helper, AgentRuntime::Codex, HookEvent::Stop),
                 serde_json::json!({ "hooks": [posix_hook(helper, AgentRuntime::Codex, HookEvent::Stop)] })
             );
+        }
+    }
+
+    /// with-hide/hide-private#318: a Windows guard runs no command but the
+    /// helper. Read as PowerShell reads it, each of its commands is the
+    /// helper, a .NET call or a variable's test; a cmdlet (`Test-Path`), whose
+    /// first use loads its module, would be a command of its own.
+    #[test]
+    fn a_windows_guard_calls_no_cmdlet() {
+        let helper = Path::new("C:\\kit path\\it's\\hide-agent-hooks.exe");
+        for runtime in AgentRuntime::ALL {
+            for event in runtime.events() {
+                let guard = windows_guard(helper, runtime, event);
+                assert_eq!(
+                    super::powershell_commands(&guard, helper),
+                    Vec::<String>::new(),
+                    "{runtime:?} {event:?}: {guard}"
+                );
+            }
         }
     }
 
@@ -1213,7 +1237,7 @@ mod tests {
         let quoted = "'C:\\Users\\example\\a b''c\\it\u{2019}\u{2019}s\\hide-agent-hooks.exe'";
         let guard = |runtime: &str| {
             format!(
-                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@11 }}"
+                "if ([System.IO.File]::Exists({quoted})) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@12 }}"
             )
         };
         let codex = windows_hook(helper, AgentRuntime::Codex, HookEvent::Stop);
@@ -1241,7 +1265,7 @@ mod tests {
                 .find(|text| text.contains('\''))
                 .unwrap();
             assert_eq!(
-                Quoting::PowerShell.first_quoted(text).as_deref(),
+                first_quoted(Syntax::PowerShell, text).as_deref(),
                 helper.to_str()
             );
         }
@@ -1511,7 +1535,7 @@ mod tests {
     fn an_older_marker_version_reads_as_outdated() {
         let fixture = Fixture::new("outdated");
         let helper_path = helper(&fixture);
-        let quoted = Quoting::NATIVE.quote(&helper_path.display().to_string());
+        let quoted = NATIVE.single_quoted(&helper_path.display().to_string());
         let mut document = serde_json::json!({ "hooks": {} });
         for event in AgentRuntime::Codex.events() {
             document["hooks"][event.name()] = serde_json::json!([{

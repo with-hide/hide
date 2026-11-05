@@ -27,6 +27,7 @@ USERS = {
     ('holder-restart.yml', 'restart'): False,
     ('remote-mailbox.yml', 'mailbox'): False,
     ('wsl-device.yml', 'linux-kit'): False,
+    ('wsl-device.yml', 'windows'): False,
     ('package.yml', 'windows-compile'): False,
     ('package.yml', 'package'): False,
     ('package.yml', 'macos-compile'): False,

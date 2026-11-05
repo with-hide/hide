@@ -21,7 +21,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event Stop --memory-injection --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event Stop --memory-injection --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -38,7 +38,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -55,7 +55,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event UserPromptSubmit --memory-injection --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event UserPromptSubmit --memory-injection --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -72,7 +72,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStart --memory-injection --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStart --memory-injection --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -89,7 +89,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStop --memory-injection --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStop --memory-injection --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -106,7 +106,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PreToolUse --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PreToolUse --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -123,7 +123,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PostToolUse --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PostToolUse --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -140,7 +140,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PostToolUseFailure --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PostToolUseFailure --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -157,7 +157,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PermissionRequest --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PermissionRequest --source hide-subagents@12 }"
             ],
             "timeout": 8
           }
@@ -174,7 +174,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event Notification --source hide-subagents@11 }"
+              "if ([System.IO.File]::Exists('C:\\kit path\\it''s\\hide-agent-hooks.exe')) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event Notification --source hide-subagents@12 }"
             ],
             "timeout": 8
           }

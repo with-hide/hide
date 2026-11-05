@@ -330,7 +330,15 @@ pub mod phone {
         pub pane_id: String,
         /// The pane id of this agent's lineage root on the same device; itself for a root.
         pub root_pane_id: String,
+        /// Where the list puts the row: the desktop's own group, so a row with
+        /// a View to look at stands in Needs You as it does there (PRD
+        /// unseen-agent-views D-05; mobile-companion-ui B24).
         pub group: String,
+        /// The group notices follow: where the row would stand with nothing to
+        /// look at, which a View never sends a notice for (D-13, B12). Equal to
+        /// `group` for every row without one.
+        #[serde(skip)]
+        pub notice_group: String,
         /// In `needs_you` for an ask the operator read and has not answered:
         /// listed there, drawn read, and never announced (needs-you-cleanup
         /// D-10).
@@ -775,6 +783,17 @@ pub mod phone {
             let starred = agent.pointer("/revisit/starred").and_then(Value::as_bool) == Some(true);
             let read_ask = !starred
                 && agent.pointer("/revisit/read_ask").and_then(Value::as_bool) == Some(true);
+            // A quiet row the operator starred stands in 다시 볼 것 (PRD
+            // revisit-group D-10); an ask read and left unanswered stays in
+            // 내 차례, read (needs-you-cleanup B11).
+            let listed = |group: &str| match group {
+                "seen" | "working" if read_ask => "needs_you".to_owned(),
+                "seen" if starred => "revisit".to_owned(),
+                "working" if str_of(agent, "activity") != "working" && starred => {
+                    "revisit".to_owned()
+                }
+                group => group.to_owned(),
+            };
             out.push(PhoneAgent {
                 device_id: device_id.to_owned(),
                 pane_id: pane_id.to_owned(),
@@ -782,23 +801,16 @@ pub mod phone {
                     .get(pane_id)
                     .cloned()
                     .unwrap_or_else(|| pane_id.to_owned()),
-                // A quiet row the operator starred stands in 다시 볼 것 (PRD
-                // revisit-group D-10); an ask read and left unanswered stays
-                // in 내 차례, read (needs-you-cleanup B11). A View to look at
-                // calls no notification (PRD unseen-agent-views D-13, B12):
+                // The list follows the desktop's group; a View to look at
+                // calls no notification (PRD unseen-agent-views D-13, B12), so
                 // notices follow the group the row would have without it.
-                group: match agent
-                    .pointer("/look/group")
-                    .and_then(Value::as_str)
-                    .unwrap_or_else(|| str_of(agent, "group"))
-                {
-                    "seen" | "working" if read_ask => "needs_you".to_owned(),
-                    "seen" if starred => "revisit".to_owned(),
-                    "working" if str_of(agent, "activity") != "working" && starred => {
-                        "revisit".to_owned()
-                    }
-                    group => group.to_owned(),
-                },
+                group: listed(str_of(agent, "group")),
+                notice_group: listed(
+                    agent
+                        .pointer("/look/group")
+                        .and_then(Value::as_str)
+                        .unwrap_or_else(|| str_of(agent, "group")),
+                ),
                 read: read_ask,
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),

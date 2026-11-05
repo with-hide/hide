@@ -504,6 +504,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         start_demand: Arc::clone(&start_demand),
         open: move_gate.subscribe(),
         desktop: Arc::clone(&desktop_notices),
+        boundary: Arc::clone(&boundary),
+        roots: Arc::clone(&roots),
     });
     let app = AppState {
         core: Arc::clone(&core),

@@ -313,12 +313,19 @@ impl Runtime {
     }
 
     pub(super) fn desk_event(&mut self, event: DeskEvent) -> bool {
-        if self.desk.worker.is_none() {
-            return refused("desk_unavailable");
-        }
-        // Switched off, only the switch reaches Desk (D-76).
-        if !self.desk.stored.settings.enabled && !matches!(event, DeskEvent::SettingsSet(_)) {
-            return refused("desk_off");
+        // A View seen is the View's own state, kept with the View and not in
+        // Desk's store, so neither a Desk that is off nor one that is not
+        // installed refuses it: the phone's 볼 것 sends the same event for a
+        // View it showed (PRD mobile-companion-ui D-15).
+        let view_seen = matches!(event, DeskEvent::OutputSeen(_));
+        if !view_seen {
+            if self.desk.worker.is_none() {
+                return refused("desk_unavailable");
+            }
+            // Switched off, only the switch reaches Desk (D-76).
+            if !self.desk.stored.settings.enabled && !matches!(event, DeskEvent::SettingsSet(_)) {
+                return refused("desk_off");
+            }
         }
         // A card's change moves only the cards: the conversation is not sent again.
         let room = !matches!(

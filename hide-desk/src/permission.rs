@@ -1147,7 +1147,7 @@ fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, lin
         line.unreadable();
         return;
     }
-    let parsed = hide_shell::shell_line(text);
+    let parsed = hide_shell::shell_line(text, hide_shell::Syntax::Posix);
     if parsed.commands.is_empty() && parsed.substitutions.is_empty() {
         line.other = true;
         // A quote the text ended inside makes the shell run none of it;
@@ -2564,7 +2564,7 @@ pub fn step(call: &Value) -> Step {
 }
 
 fn hide_step(line: &str) -> Step {
-    let parsed = hide_shell::shell_line(line);
+    let parsed = hide_shell::shell_line(line, hide_shell::Syntax::Posix);
     let mut step = None;
     for words in &parsed.commands {
         let Some((program, rest)) = words.split_first() else {

@@ -321,6 +321,34 @@ mod tests {
         );
     }
 
+    /// mobile-companion-ui B24: an agent with a View to look at stands in
+    /// Needs You on the phone as on the desktop, and the group notices follow
+    /// is the one it has with nothing to look at (unseen-agent-views D-13).
+    #[test]
+    fn a_row_with_a_view_to_look_at_is_listed_in_needs_you_and_notices_follow_the_group_without_it()
+    {
+        let projection = projected(vec![
+            agent(
+                "a",
+                "needs_you",
+                10,
+                json!({"mark": "look", "look": {"group": "seen", "count": 1}}),
+            ),
+            agent("b", "seen", 9, json!({})),
+        ]);
+        let row = top(&projection, "needs_you", "a");
+        assert_eq!(
+            (row.group.as_str(), row.notice_group.as_str()),
+            ("needs_you", "seen")
+        );
+        assert_eq!(row.mark, "look");
+        let plain = top(&projection, "seen", "b");
+        assert_eq!(
+            (plain.group.as_str(), plain.notice_group.as_str()),
+            ("seen", "seen")
+        );
+    }
+
     /// An orphan whose parent is not on the phone is a root again, so it is
     /// never lost (the desktop's rule for a parent that is gone).
     #[test]

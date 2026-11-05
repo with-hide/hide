@@ -16,7 +16,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use hide_agent_adapter::{AgentAdapter, PluginDialect};
+use hide_agent_adapter::{AgentAdapter, HookDialect, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
@@ -398,12 +398,18 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
         return json!({});
     };
     match input.tool.as_deref() {
-        Some("bash" | "shell") => {
+        Some(tool @ ("bash" | "shell")) => {
             let Some(command) = input.command.as_deref() else {
                 return json!({});
             };
+            let dialect = match agent.dialect {
+                PluginDialect::OpenCode => HookDialect::OpenCode,
+                PluginDialect::Pi => HookDialect::Pi,
+                PluginDialect::Omp => HookDialect::Omp,
+            };
+            let syntax = hide_agent_hooks::pre_tool::shell_syntax(dialect, tool);
             let refusal = hide_agent_hooks::opener_guard::pane_refusal(
-                home, runtime, &pane, command, &program, deadline,
+                home, runtime, &pane, command, syntax, &program, deadline,
             );
             refusal.map_or_else(|| json!({}), |reason| json!({ "deny": reason }))
         }

@@ -61,7 +61,6 @@ pub struct CloseSafety {
 pub struct CloseEffectRequest {
     pub safety: Option<CloseSafety>,
     pub failed_terminals: Vec<(String, String)>,
-    pub retain_for_reopen: bool,
     pub allow_replacement_create: bool,
     pub replacement: Option<ClosedContext>,
     pub key: String,

@@ -159,8 +159,43 @@ export type PushMode = "off" | "app_closed" | "always";
 
 export type RowsState = "ok" | "gone" | "device_unreachable" | "unavailable";
 
-/** Which half of a detail the phone shows. */
+/** Which half of a detail hided reads for the phone. */
 export type DetailView = "conversation" | "terminal";
+
+/**
+ * What a detail shows: one of the two halves, or the agent's Views. 볼 것 is the phone's own choice: hided sends the Views with
+ * the detail and is never told which tab is up (PRD mobile-companion-ui D-06).
+ */
+export type DetailTab = DetailView | "looks";
+
+/** What a View is on the phone: hided names it by what the phone can show of it (hided/src/mobile/looks.rs `Shown`). */
+export type LookKind = "changes" | "page" | "doc" | "image" | "other";
+
+/** One row of the 볼 것 list: a View the agent opened that is open now. It carries no path; the phone asks for its content by `id` alone (D-16). */
+export type LookRow = {
+  id: string;
+  kind: LookKind;
+  name: string;
+  unseen: boolean;
+  /** When the agent opened it while unseen, else when it was last looked at (epoch ms). */
+  at: number;
+  /** A page's address. */
+  url?: string;
+};
+
+export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed" | "conflict";
+
+/**
+ * One changed file: its path under the checkout and its line counts. The counts are null for a file git cannot count
+ * (`binary`) and for a file Git does not track yet, which the desktop's list shows no number for either.
+ */
+export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
+
+/** The answer states of `look_result`: everything that is not content. */
+export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable";
+
+/** What a text or an image read sends first (hided/src/mobile/looks.rs `chunks`). */
+export type LookHead = { type: "look_head"; request_id: string; view_id: string; mode: "text" | "markdown" | "image"; size: number; total: number; truncated: boolean; chunks: number };
 
 /** One message of an agent's conversation (hided/src/mobile/conversation.rs). */
 export type ConversationMessage = {
@@ -228,6 +263,13 @@ export type ServerFrame =
       /** The cursor for the page before the oldest message; null at the start. */
       before?: number | null;
     }
+  /** The agent's open Views, newest first; sent again only when they change. `omitted` counts the ones past hided's cap. */
+  | { type: "looks"; device_id: string; pane_id: string; views: LookRow[]; omitted: number }
+  | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string }
+  | { type: "look_changes"; request_id: string; view_id: string; files: LookFile[]; count: number; added: number; removed: number }
+  | LookHead
+  | { type: "look_chunk"; request_id: string; seq: number; data: string }
+  | { type: "look_end"; request_id: string; view_id: string }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
   /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }
@@ -246,6 +288,12 @@ export type PhoneMessage =
   | { type: "older"; before: number }
   | { type: "more" }
   | { type: "close" }
+  /** Content of one View by its id, only while it is open; hided refuses anything else and logs it (D-16). */
+  | { type: "look_open"; request_id: string; device_id: string; pane_id: string; view_id: string }
+  /** The chunks up to `seq` arrived; hided sends a window of four ahead of the last one confirmed. */
+  | { type: "look_ack"; request_id: string; seq: number }
+  /** The View's content was shown: it is seen, here and on the desktop (D-15). */
+  | { type: "look_seen"; device_id: string; pane_id: string; view_id: string }
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
@@ -576,4 +624,23 @@ export function notificationRow({
   // iOS offers push only to a Home Screen app; a Safari tab has no PushManager.
   if (!supported) return "install_first";
   return "enable";
+}
+
+/** The unseen Views first and then the seen ones, each in hided's order (newest first): what the 볼 것 list draws (B12). */
+export function splitLooks(rows: readonly LookRow[]): { unseen: LookRow[]; seen: LookRow[] } {
+  return { unseen: rows.filter((row) => row.unseen), seen: rows.filter((row) => !row.unseen) };
+}
+
+/** The most characters of a View's name a reply carries in front of it. */
+const ABOUT_CHARS = 60;
+
+/**
+ * A reply sent while looking at a View begins with its name in brackets, so the agent knows which result the words are about (B30).
+ * A control character in a name would make the reply refused, so it becomes a space.
+ */
+export function replyAbout(name: string, text: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = name.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/[[\]]/g, "").trim();
+  const shown = [...clean].slice(0, ABOUT_CHARS).join("");
+  return shown ? `[${shown}] ${text}` : text;
 }

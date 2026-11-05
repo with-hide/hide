@@ -21,7 +21,9 @@ import {
   sameKey,
   sleepTarget,
   type AgentKey,
+  type DetailTab,
   type DetailView,
+  type LookRow,
   type PhoneMessage,
   type PhoneMission,
   type QuickKey,
@@ -30,6 +32,7 @@ import {
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prOf } from "./prModel";
 import { CLOSED_SHEET, answerSentFor, applyFrame, openPr, patch, usePhone, type StartSheet } from "./store";
+import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
@@ -275,6 +278,11 @@ function connect(): void {
       reopenPr();
       return;
     }
+    if (frame.type === "look_head" || frame.type === "look_chunk" || frame.type === "look_end") {
+      onLookTransfer(frame, (requestId, seq) => void send({ type: "look_ack", request_id: requestId, seq }));
+      markLookSeen();
+      return;
+    }
     if (frame.type === "input_result") {
       onInputResult(frame.ok, frame.reason);
       return;
@@ -297,6 +305,7 @@ function connect(): void {
       return;
     }
     applyFrame(frame);
+    if (frame.type === "look_result" || frame.type === "look_changes") markLookSeen();
     if (frame.type === "paired" && hostedPhone()) {
       try { patch({ installHint: localStorage.getItem("hide.phone.installed-hint") !== "seen" }); }
       catch { storageFailed(); }
@@ -317,6 +326,7 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   stopWatch();
   const state = usePhone.getState();
   failPendingSleep();
+  failLoadingLook();
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
@@ -359,28 +369,84 @@ function reopenDetail(): void {
   send({ type: "open", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view: detail.view });
 }
 
-export function openDetail(key: AgentKey): void {
+/** Opens an agent's detail; the eye row of the list opens it on 볼 것 (B11), any other row on the conversation. */
+export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void {
   const state = usePhone.getState();
   if (!state.groups) {
     patch({ pendingOpen: key });
     return;
   }
   const view: DetailView = "conversation";
-  patch({ detail: { key, view, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null }, inputError: null, pendingInput: null });
+  dropTransfer();
+  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null }, inputError: null, pendingInput: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
 
-/** Conversation or terminal: hided reads only what the phone shows. */
-export function setView(view: DetailView): void {
+/**
+ * A tab of the detail. Conversation and terminal are what hided reads for the phone, so it is told; 볼 것 is already on its way
+ * with the detail and stays the phone's own choice.
+ */
+export function setTab(tab: DetailTab): void {
   const detail = usePhone.getState().detail;
-  if (!detail || detail.view === view) return;
-  patch({ detail: { ...detail, view } });
-  send({ type: "view", view });
+  if (!detail || (detail.tab === tab && !detail.look)) return;
+  if (tab === "looks") {
+    patch({ detail: { ...detail, tab } });
+    return;
+  }
+  // Leaving 볼 것 ends a View that is open.
+  dropTransfer();
+  patch({ detail: { ...detail, tab, view: tab, look: null } });
+  if (detail.view !== tab) send({ type: "view", view: tab });
 }
 
 export function closeDetail(): void {
+  dropTransfer();
   patch({ detail: null, inputError: null, pendingInput: null });
   send({ type: "close" });
+}
+
+/** Opens one View full screen and asks hided for its content by id alone (B13, D-16). */
+export function openLook(row: LookRow): void {
+  const detail = usePhone.getState().detail;
+  if (!detail) return;
+  const requestId = newRequestId();
+  dropTransfer();
+  const sent = send({ type: "look_open", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: row.id });
+  patch({ detail: { ...detail, look: { row, requestId, content: sent ? { state: "loading" } : { state: "failed" }, shown: false } } });
+}
+
+/** "다시": the same View from the start, under a new request, so nothing of the failed read is reused (B23). */
+export function retryLook(): void {
+  const row = usePhone.getState().detail?.look?.row;
+  if (row) openLook(row);
+}
+
+/** Back to the list; a read still going is dropped. */
+export function closeLook(): void {
+  const detail = usePhone.getState().detail;
+  if (!detail?.look) return;
+  dropTransfer();
+  patch({ detail: { ...detail, look: null } });
+}
+
+/** A read the lost socket cut off is a failed read, with 다시 (B23). */
+function failLoadingLook(): void {
+  const detail = usePhone.getState().detail;
+  if (detail?.look?.content.state !== "loading") return;
+  dropTransfer();
+  patch({ detail: { ...detail, look: { ...detail.look, content: { state: "failed" } } } });
+}
+
+/** What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15). */
+const SEEN_STATES: readonly string[] = ["text", "image", "changes", "page", "other", "too_large"];
+
+/** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */
+function markLookSeen(): void {
+  const detail = usePhone.getState().detail;
+  const look = detail?.look;
+  if (!detail || !look || look.shown || !SEEN_STATES.includes(look.content.state)) return;
+  const sent = send({ type: "look_seen", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id });
+  if (sent) patch({ detail: { ...detail, look: { ...look, shown: true } } });
 }
 
 /** Asks for the next page of older rows once per page (B25). */

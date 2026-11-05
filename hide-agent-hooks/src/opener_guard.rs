@@ -13,18 +13,22 @@
 //! [`registration`](crate::pre_tool::registration)
 //! (`docs/agent-hooks.md`, The opener guard).
 //!
-//! The call is read as a shell reads it (`hide_shell`): each simple
+//! The call is read as the shell that runs it reads it (`hide_shell`, in the
+//! syntax [`read_call`](crate::pre_tool::read_call) names): each simple
 //! command of the line, its environment assignments and wrappers set aside. An
 //! opener hidden one layer deeper (`bash -c`, `$(...)`, a script) is not looked
 //! for, except the one line `cmd /c` and `powershell -Command` take as text,
-//! which is how a Windows agent reaches `start`. Every function here is pure
-//! except [`pane_refusal`] and [`record_refusal`].
+//! which is how a Windows agent reaches `start`: PowerShell's line is read as
+//! PowerShell reads it, and cmd's, which neither syntax describes, in the
+//! syntax of the call it came in. The command the refusal offers is written
+//! for the shell the call came in, so its path is the one the agent wrote.
+//! Every function here is pure except [`pane_refusal`] and [`record_refusal`].
 
 use std::ffi::OsStr;
 use std::path::Path;
 use std::time::Instant;
 
-use hide_shell::{command_words, simple_commands};
+use hide_shell::{Syntax, command_words, simple_commands};
 
 use crate::hook_log::{append_line, log_path, now_ms};
 use crate::pre_tool::Registration;
@@ -174,11 +178,12 @@ pub fn kind_of(word: &str) -> Option<Kind> {
         .map(|(kind, _)| *kind)
 }
 
-/// Every opening in `command`, in the order the line runs them.
-pub fn find_openings(command: &str) -> Vec<Opening> {
+/// Every opening in `command`, read in `syntax`, in the order the line runs
+/// them.
+pub fn find_openings(command: &str, syntax: Syntax) -> Vec<Opening> {
     let mut openings = Vec::new();
-    for words in simple_commands(command) {
-        opening_of(&words, 0, &mut openings);
+    for words in simple_commands(command, syntax) {
+        opening_of(&words, 0, syntax, &mut openings);
     }
     openings
 }
@@ -186,7 +191,7 @@ pub fn find_openings(command: &str) -> Vec<Opening> {
 /// How deep `cmd /c` and `powershell -Command` are read: one line of text in.
 const NESTING: usize = 1;
 
-fn opening_of(words: &[String], depth: usize, openings: &mut Vec<Opening>) {
+fn opening_of(words: &[String], depth: usize, syntax: Syntax, openings: &mut Vec<Opening>) {
     let words = command_words(words, true);
     let Some((first, arguments)) = words.split_first() else {
         return;
@@ -209,13 +214,13 @@ fn opening_of(words: &[String], depth: usize, openings: &mut Vec<Opening>) {
             "explorer" => ("explorer", explorer(arguments)),
             "cmd" if depth < NESTING => {
                 if let Some(line) = after_switch(arguments, &["/c", "/k", "//c", "//k"]) {
-                    nested(line, depth, openings);
+                    nested(line, depth, syntax, openings);
                 }
                 return;
             }
             "powershell" | "pwsh" if depth < NESTING => {
                 if let Some(line) = after_switch(arguments, &["-command", "-c", "/command", "/c"]) {
-                    nested(line, depth, openings);
+                    nested(line, depth, Syntax::PowerShell, openings);
                 }
                 return;
             }
@@ -251,10 +256,10 @@ fn after_switch<'a>(arguments: &'a [String], switches: &[&str]) -> Option<&'a [S
     Some(&arguments[at + 1..])
 }
 
-fn nested(line: &[String], depth: usize, openings: &mut Vec<Opening>) {
+fn nested(line: &[String], depth: usize, syntax: Syntax, openings: &mut Vec<Opening>) {
     let text = line.join(" ");
-    for words in simple_commands(&text) {
-        opening_of(&words, depth + 1, openings);
+    for words in simple_commands(&text, syntax) {
+        opening_of(&words, depth + 1, syntax, openings);
     }
 }
 
@@ -382,7 +387,7 @@ fn python_webbrowser(arguments: &[String]) -> Option<Vec<&String>> {
 /// A word as a POSIX shell reads it back: bare when it holds nothing a shell
 /// treats specially, a home path's `~/` kept outside the quotes, a variable
 /// inside double quotes, otherwise in single quotes.
-fn shell_word(word: &str) -> String {
+fn posix_word(word: &str) -> String {
     let plain = |text: &str| {
         !text.is_empty()
             && text.chars().all(|c| {
@@ -394,7 +399,7 @@ fn shell_word(word: &str) -> String {
         return word.to_owned();
     }
     if let Some(rest) = word.strip_prefix("~/") {
-        return format!("~/{}", shell_word(rest));
+        return format!("~/{}", posix_word(rest));
     }
     if word.contains('$') {
         let escaped: String = word
@@ -408,33 +413,73 @@ fn shell_word(word: &str) -> String {
             .collect();
         return format!("\"{escaped}\"");
     }
-    format!("'{}'", word.replace('\'', "'\\''"))
+    Syntax::Posix.single_quoted(word)
+}
+
+/// A word as PowerShell reads it back: bare when it holds nothing PowerShell
+/// treats specially (a backslash is a plain character there), a variable
+/// inside double quotes, otherwise in single quotes.
+fn powershell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && !word.starts_with('-')
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\' | ':'));
+    if plain {
+        return word.to_owned();
+    }
+    if word.contains('$') {
+        let escaped: String = word
+            .chars()
+            .flat_map(|c| {
+                matches!(c, '"' | '`' | '\u{201C}' | '\u{201D}' | '\u{201E}')
+                    .then_some('`')
+                    .into_iter()
+                    .chain(Some(c))
+            })
+            .collect();
+        return format!("\"{escaped}\"");
+    }
+    Syntax::PowerShell.single_quoted(word)
+}
+
+fn shell_word(word: &str, syntax: Syntax) -> String {
+    match syntax {
+        Syntax::Posix => posix_word(word),
+        Syntax::PowerShell => powershell_word(word),
+    }
 }
 
 /// The command that shows `shown` in Hide's View, through `hide`, the CLI
-/// beside the helper as the session guidance names it.
-pub fn show_command(hide: &str, shown: &Shown) -> String {
+/// beside the helper as the session guidance names it, written for the
+/// shell `syntax` names. PowerShell reads a quoted first word as a string, so
+/// a quoted `hide` is called with `&`.
+pub fn show_command(hide: &str, shown: &Shown, syntax: Syntax) -> String {
     let verb = if shown.kind.is_page() {
         "browser open"
     } else {
         "file open"
     };
-    let program = shell_word(hide);
+    let mut program = shell_word(hide, syntax);
+    if syntax == Syntax::PowerShell && program != hide {
+        program = format!("& {program}");
+    }
     if shown.kind != Kind::Url && shown.target.contains(['*', '?', '[']) {
         // A pattern names many files; each takes its own command.
         return format!(
             "{program} {verb} <path>   (once for each file {} matches)",
-            shell_word(&shown.target)
+            shell_word(&shown.target, syntax)
         );
     }
-    format!("{program} {verb} {}", shell_word(&shown.target))
+    format!("{program} {verb} {}", shell_word(&shown.target, syntax))
 }
 
-/// The reason a refused call reads, for the agent: one command per target.
-pub fn refusal_reason(hide: &str, openings: &[Opening]) -> String {
+/// The reason a refused call reads, for the agent: one command per target,
+/// written for the shell the call ran in.
+pub fn refusal_reason(hide: &str, openings: &[Opening], syntax: Syntax) -> String {
     let mut commands: Vec<String> = Vec::new();
     for shown in openings.iter().flat_map(|opening| &opening.targets) {
-        let command = show_command(hide, shown);
+        let command = show_command(hide, shown, syntax);
         if !commands.contains(&command) {
             commands.push(command);
         }
@@ -480,7 +525,8 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, openings: &[Openin
     let _ = append_line(&log_path(home), &line);
 }
 
-/// The opener guard's decision for one shell call made in the pane `pane`:
+/// The opener guard's decision for one shell call made in the pane `pane`,
+/// read in `syntax`, the syntax of the shell that runs it:
 /// the reason it is refused, or `None` to let it run. A call that hands no
 /// viewable target to the system opener runs without asking anything; one
 /// that does asks the daemon once, through `program`, whether the pane sits
@@ -492,13 +538,14 @@ pub fn pane_refusal(
     runtime: &str,
     pane: &str,
     command: &str,
+    syntax: Syntax,
     program: &OsStr,
     deadline: Instant,
 ) -> Option<String> {
     if !may_hold_opening(command.as_bytes()) {
         return None;
     }
-    let openings = find_openings(command);
+    let openings = find_openings(command, syntax);
     if openings.is_empty() {
         return None;
     }
@@ -511,7 +558,11 @@ pub fn pane_refusal(
         }
     }
     record_refusal(home, runtime, pane, &openings);
-    Some(refusal_reason(&program.to_string_lossy(), &openings))
+    Some(refusal_reason(
+        &program.to_string_lossy(),
+        &openings,
+        syntax,
+    ))
 }
 
 #[cfg(test)]
@@ -519,7 +570,7 @@ mod tests {
     use super::*;
 
     fn targets(command: &str) -> Vec<(&'static str, String, Kind)> {
-        find_openings(command)
+        find_openings(command, Syntax::Posix)
             .into_iter()
             .flat_map(|opening| {
                 opening
@@ -757,38 +808,42 @@ mod tests {
             kind: kind_of(target).unwrap(),
         };
         assert_eq!(
-            show_command(hide, &shown("out/index.html")),
+            show_command(hide, &shown("out/index.html"), Syntax::Posix),
             format!("{hide} browser open out/index.html")
         );
         assert_eq!(
-            show_command(hide, &shown("http://localhost:3000/a?b=1")),
+            show_command(hide, &shown("http://localhost:3000/a?b=1"), Syntax::Posix),
             format!("{hide} browser open 'http://localhost:3000/a?b=1'")
         );
         assert_eq!(
-            show_command("hide", &shown("shot.png")),
+            show_command("hide", &shown("shot.png"), Syntax::Posix),
             "hide file open shot.png"
         );
         assert_eq!(
-            show_command("/a b/hide", &shown("it's.pdf")),
+            show_command("/a b/hide", &shown("it's.pdf"), Syntax::Posix),
             "'/a b/hide' file open 'it'\\''s.pdf'"
         );
         assert_eq!(
-            show_command("hide", &shown("$OUT/a.md")),
+            show_command("hide", &shown("$OUT/a.md"), Syntax::Posix),
             "hide file open \"$OUT/a.md\""
         );
         assert_eq!(
-            show_command("hide", &shown("~/My Shots/a.png")),
+            show_command("hide", &shown("~/My Shots/a.png"), Syntax::Posix),
             "hide file open ~/'My Shots/a.png'"
         );
         assert_eq!(
-            show_command("hide", &shown("out/*.png")),
+            show_command("hide", &shown("out/*.png"), Syntax::Posix),
             "hide file open <path>   (once for each file 'out/*.png' matches)"
         );
     }
 
     #[test]
     fn the_refusal_names_each_command_once_and_what_the_operator_sees() {
-        let reason = refusal_reason("hide", &find_openings("open a.html b.png; open a.html"));
+        let reason = refusal_reason(
+            "hide",
+            &find_openings("open a.html b.png; open a.html", Syntax::Posix),
+            Syntax::Posix,
+        );
         assert!(reason.contains("hide browser open a.html\nhide file open b.png\n"));
         assert_eq!(reason.matches("a.html").count(), 1);
         assert!(reason.contains("Needs You tells them to look at it"));
@@ -800,7 +855,10 @@ mod tests {
     #[test]
     fn a_refusal_is_logged_without_the_command_or_a_path() {
         let home = tempfile::tempdir().unwrap();
-        let openings = find_openings("open /Users/example/SECRET/report.html shot.png");
+        let openings = find_openings(
+            "open /Users/example/SECRET/report.html shot.png",
+            Syntax::Posix,
+        );
         record_refusal(home.path(), "codex", "w1:p2", &openings);
         let text = std::fs::read_to_string(log_path(home.path())).unwrap();
         let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
@@ -809,5 +867,113 @@ mod tests {
         assert_eq!(line["openers"], serde_json::json!(["open"]));
         assert_eq!(line["targets"], serde_json::json!(["html", "image"]));
         assert!(!text.contains("SECRET") && !text.contains("shot"), "{text}");
+    }
+
+    /// with-hide/hide-private#572: a call PowerShell runs is read as
+    /// PowerShell reads it, so the path the refusal offers is the one the
+    /// agent wrote, and the same call run by Git Bash is read as POSIX.
+    #[test]
+    fn a_powershell_call_is_refused_with_the_path_it_was_written_with() {
+        let hide = r"C:\Users\me\AppData\Local\hide\hide.exe";
+        for (command, offered) in [
+            (r"ii .\out.png", format!(r"{hide} file open .\out.png")),
+            (
+                r"Start-Process .\report.html",
+                format!(r"{hide} browser open .\report.html"),
+            ),
+            (
+                r"Invoke-Item 'C:\a b\x.png'",
+                format!(r"{hide} file open 'C:\a b\x.png'"),
+            ),
+            (
+                r#"Invoke-Item "C:\a b\x.png""#,
+                format!(r"{hide} file open 'C:\a b\x.png'"),
+            ),
+            (
+                r"cargo run; if ($?) { ii .\target\shot.png }",
+                format!(r"{hide} file open .\target\shot.png"),
+            ),
+            (
+                r"pwsh -c 'ii .\out.png'",
+                format!(r"{hide} file open .\out.png"),
+            ),
+        ] {
+            let openings = find_openings(command, Syntax::PowerShell);
+            assert_eq!(openings.len(), 1, "{command}");
+            let reason = refusal_reason(hide, &openings, Syntax::PowerShell);
+            assert!(
+                reason.contains(&format!("\n\n{offered}\n\n")),
+                "{command}: {reason}"
+            );
+        }
+        // Git Bash runs the same text as a POSIX shell does.
+        for (command, target, offered) in [
+            (r"ii .\out.png", ".out.png", "hide file open .out.png"),
+            (
+                r"Invoke-Item 'C:\a b\x.png'",
+                r"C:\a b\x.png",
+                r"hide file open 'C:\a b\x.png'",
+            ),
+            (
+                r#"powershell -Command "ii .\out.png""#,
+                r".\out.png",
+                r"hide file open '.\out.png'",
+            ),
+        ] {
+            let openings = find_openings(command, Syntax::Posix);
+            assert_eq!(openings[0].targets[0].target, target, "{command}");
+            assert!(
+                refusal_reason("hide", &openings, Syntax::Posix).contains(offered),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_powershell_call_powershell_cannot_parse_is_left_to_run() {
+        for command in [
+            r"ii '.\out.png",
+            r"ii .\out.png }",
+            r#"Start-Process "x.html"#,
+        ] {
+            assert_eq!(find_openings(command, Syntax::PowerShell), [], "{command}");
+        }
+    }
+
+    #[test]
+    fn the_offered_command_is_written_for_powershell() {
+        let shown = |target: &str| Shown {
+            target: target.into(),
+            kind: kind_of(target).unwrap(),
+        };
+        let ps = Syntax::PowerShell;
+        assert_eq!(
+            show_command(r"C:\Program Files\hide\hide.exe", &shown(r".\a.png"), ps),
+            r"& 'C:\Program Files\hide\hide.exe' file open .\a.png"
+        );
+        assert_eq!(
+            show_command("hide", &shown("it's.pdf"), ps),
+            "hide file open 'it''s.pdf'"
+        );
+        assert_eq!(
+            show_command("hide", &shown(r"$env:OUT\a.md"), ps),
+            r#"hide file open "$env:OUT\a.md""#
+        );
+        assert_eq!(
+            show_command("hide", &shown("$OUT\\\u{201C}a\u{201D}.md"), ps),
+            "hide file open \"$OUT\\`\u{201C}a`\u{201D}.md\""
+        );
+        assert_eq!(
+            show_command("hide", &shown("-odd.png"), ps),
+            "hide file open '-odd.png'"
+        );
+        assert_eq!(
+            show_command("hide", &shown("http://localhost:3000/a?b=1"), ps),
+            "hide browser open 'http://localhost:3000/a?b=1'"
+        );
+        assert_eq!(
+            show_command("hide", &shown(r"out\*.png"), ps),
+            r"hide file open <path>   (once for each file 'out\*.png' matches)"
+        );
     }
 }

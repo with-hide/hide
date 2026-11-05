@@ -2957,7 +2957,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const here = current();
       const paneId = target ?? useShellStore.getState().focusedPaneId;
       const pane = here?.tab?.panes.find((row) => row.id === paneId);
-      if (!here?.tab?.id || !pane) return diagnostic("create_pane: no focused pane");
+      // Named, because a split that sends nothing is otherwise invisible:
+      // the core's keyboard pane outside the tab it shows was the whole
+      // trace of a flaky split (with-hide/hide-private issue 476).
+      if (!here?.tab?.id || !pane) return diagnostic(`create_pane: no focused pane in the visible tab (pane ${paneId ?? "none"}, tab ${here?.tab?.id ?? "none"})`);
       const requestId = remoteRequestId();
       dispatch({
         schema_version: 2,
