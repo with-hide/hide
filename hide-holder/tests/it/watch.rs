@@ -14,9 +14,12 @@ use hide_holder_protocol::{
 };
 use hide_platform::ipc::LocalStream;
 
-use crate::support::{HANG_LIMIT, Home, Script};
+use crate::role::{CONSOLE_PIDS, END, GO};
 #[cfg(unix)]
-use crate::support::{current_version, shell, source, start_ready, wait_until};
+use crate::support::wait_until;
+use crate::support::{
+    HANG_LIMIT, Home, ROLE, Script, current_version, role_program, shell, source, start_ready,
+};
 
 /// A rule set that reads `busy` on the screen as working, as a node sends
 /// one.
@@ -235,54 +238,161 @@ fn a_watch_names_the_program_in_the_foreground_and_none_once_the_shell_holds_it(
     });
 }
 
+/// The line typed into a pane's shell that runs this test binary as the
+/// role the shell's environment names.
+fn role_line() -> Vec<u8> {
+    let words: Vec<String> = role_program("")
+        .iter()
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+    let program = if cfg!(windows) {
+        format!("\"{}\"", words[0])
+    } else {
+        format!("'{}'", words[0])
+    };
+    format!("{program} {}\r", words[1..].join(" ")).into_bytes()
+}
+
+/// A pane whose shell starts `line_input_when_told` (`role.rs`) for each
+/// [`role_line`] typed into it, told by the files `go`, `end` and `pids`.
+struct LineInputPane {
+    /// Kept for the pane's folder, which goes with it.
+    _home: Home,
+    holder: crate::support::Holder,
+    go: std::path::PathBuf,
+    end: std::path::PathBuf,
+    /// Written on Windows only (`role.rs`).
+    #[cfg_attr(unix, allow(dead_code))]
+    pids: std::path::PathBuf,
+}
+
+impl LineInputPane {
+    fn start() -> Self {
+        let home = Home::new();
+        let folder = home.prepare(current_version(), &source());
+        let go = home.path().join("go");
+        let end = home.path().join("end");
+        let pids = home.path().join("console-pids");
+        let role = std::ffi::OsString::from("line_input_when_told");
+        let (go_value, end_value, pids_value) = (
+            go.clone().into_os_string(),
+            end.clone().into_os_string(),
+            pids.clone().into_os_string(),
+        );
+        let holder = start_ready(
+            &folder.program,
+            &home.socket("p"),
+            &shell(),
+            &[
+                (ROLE, &role),
+                (GO, &go_value),
+                (END, &end_value),
+                (CONSOLE_PIDS, &pids_value),
+            ],
+        );
+        Self {
+            _home: home,
+            holder,
+            go,
+            end,
+            pids,
+        }
+    }
+}
+
 /// A program reads keys only once it turns the terminal's line editing off,
 /// which it does without writing anything (Pi 1.0.4 does it as its screen
 /// starts): a watch whose node accepts the fact says so while the program
-/// holds the foreground, and a watch that does not is sent facts without it.
-#[cfg(unix)]
+/// holds the foreground, on every system, and a watch that does not is sent
+/// facts without it. A Windows pane's console keeps the mode in its console
+/// host, and a helper attached to that console reads it, never the holder,
+/// whom the console's close would end (with-hide/hide-private#545).
 #[test]
 fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
     use hide_holder_protocol::{ClientMessage, LineEditing};
 
-    let home = Home::new();
-    let folder = home.prepare(current_version(), &source());
-    let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
-    let mut connection = holder.open();
+    let pane = LineInputPane::start();
+    let mut connection = pane.holder.open();
     let accepts = vec![
         Capability::Facts,
         Capability::ProgramPackage,
         Capability::LineEditing,
     ];
-    let mut watch = Watch::accepting(&holder.socket, accepts.clone());
+    let mut watch = Watch::accepting(&pane.holder.socket, accepts.clone());
     assert_eq!(watch.watching.sends, accepts);
     watch.wait("the shell's facts", |facts| facts.foreground.is_none());
 
-    // It says it started and waits, writing nothing, for the test to have
-    // seen it in the terminal's line; then it turns line editing off.
-    let go = home.path().join("go");
-    connection
-        .send(ClientMessage::Input(
-            format!(
-                "sh -c 'echo started; until [ -e {} ]; do sleep 0.05; done; stty -icanon; sleep 30'\r",
-                go.display()
-            )
-            .into_bytes(),
-        ))
-        .unwrap();
+    connection.send(ClientMessage::Input(role_line())).unwrap();
     let editing = watch.wait("the program in the terminal's line", |facts| {
         facts.foreground.is_some() && facts.line_editing == Some(LineEditing::Edits)
     });
-    std::fs::write(&go, b"").unwrap();
+    std::fs::write(&pane.go, b"").unwrap();
     let reading = watch.wait("the program reading keys", |facts| {
         facts.line_editing == Some(LineEditing::ReadsKeys)
     });
     assert_eq!(reading.foreground, editing.foreground);
+    #[cfg(windows)]
+    {
+        let attached: Vec<u32> = std::fs::read_to_string(&pane.pids)
+            .unwrap()
+            .lines()
+            .map(|pid| pid.parse().unwrap())
+            .collect();
+        let program = editing.foreground.as_ref().unwrap().pid;
+        assert!(
+            !attached.contains(&pane.holder.process.pid),
+            "the holder attached to its pane's console: {attached:?}"
+        );
+        assert!(
+            attached
+                .iter()
+                .any(|pid| ![pane.holder.program.pid, program].contains(pid)),
+            "no helper was attached to the console as the program read keys: {attached:?}"
+        );
+    }
 
-    let mut older = Watch::open(&holder.socket);
+    let mut older = Watch::open(&pane.holder.socket);
     assert_eq!(older.watching.sends, vec![Capability::Facts]);
     let facts = older.wait("the facts", |_| true);
     assert_eq!(facts.line_editing, None);
+    std::fs::write(&pane.end, b"").unwrap();
+    older.wait("the shell again", |facts| facts.foreground.is_none());
+}
+
+/// Programs that end in the console's line input, while the holder's helper
+/// is attached to the console to read it, leave the holder holding its pane:
+/// the console's events reach the helper, never the holder.
+#[cfg(windows)]
+#[test]
+fn programs_that_end_while_their_console_is_read_leave_the_holder_holding_the_pane() {
+    use hide_holder_protocol::{ClientMessage, LineEditing};
+
+    let pane = LineInputPane::start();
+    let mut connection = pane.holder.open();
+    let mut watch = Watch::accepting(
+        &pane.holder.socket,
+        vec![Capability::Facts, Capability::LineEditing],
+    );
+    watch.wait("the shell's facts", |facts| facts.foreground.is_none());
+    let mut seen = Vec::new();
+    for round in 0..5 {
+        let _ = std::fs::remove_file(&pane.end);
+        connection.send(ClientMessage::Input(role_line())).unwrap();
+        let editing = watch.wait("the program in the console's line input", |facts| {
+            facts
+                .foreground
+                .as_ref()
+                .is_some_and(|program| !seen.contains(&program.pid))
+                && facts.line_editing == Some(LineEditing::Edits)
+        });
+        seen.push(editing.foreground.unwrap().pid);
+        std::fs::write(&pane.end, b"").unwrap();
+        watch.wait(&format!("the shell again after round {round}"), |facts| {
+            facts.foreground.is_none()
+        });
+    }
     connection
-        .send(ClientMessage::Input(b"\x03".to_vec()))
+        .send(ClientMessage::Input(crate::support::print_ok().to_vec()))
         .unwrap();
+    connection.wait_for_text("hide-ok");
 }

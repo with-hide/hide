@@ -18,6 +18,13 @@ pub const EXIT_EARLY: &str = "HIDE_HOLDER_TEST_EXIT_EARLY";
 /// The file whose appearance tells `exit_when_told` to exit.
 pub const GO: &str = "HIDE_HOLDER_TEST_GO";
 
+/// The file whose appearance tells `line_input_when_told` to exit.
+pub const END: &str = "HIDE_HOLDER_TEST_END";
+
+/// Where `line_input_when_told` writes the processes attached to its
+/// console as it stops editing lines (Windows).
+pub const CONSOLE_PIDS: &str = "HIDE_HOLDER_TEST_CONSOLE_PIDS";
+
 #[test]
 fn play() {
     let Ok(role) = std::env::var(ROLE) else {
@@ -29,6 +36,7 @@ fn play() {
         "flood" => flood(),
         "script" => script(),
         "exit_when_told" => exit_when_told(),
+        "line_input_when_told" => line_input_when_told(),
         "print_when_told" => print_when_told(),
         "flood_when_told" => flood_when_told(),
         "node" => crate::node::node_role(),
@@ -270,6 +278,76 @@ fn raw_terminal() {
             0
         );
     }
+}
+
+/// A program that starts in the terminal's line input, as every program
+/// does, and turns it off to read keys once the file `GO` names exists,
+/// writing nothing as it does, as Pi 1.0.4 does; it exits once the file
+/// `END` names exists, whether or not it read keys.
+fn line_input_when_told() {
+    let go = std::path::PathBuf::from(std::env::var_os(GO).unwrap());
+    let end = std::path::PathBuf::from(std::env::var_os(END).unwrap());
+    let deadline = Instant::now() + ROLE_LIFE;
+    while !go.exists() && !end.exists() && Instant::now() < deadline {
+        #[allow(clippy::disallowed_methods)] // the role's own pace
+        thread::sleep(Duration::from_millis(5));
+    }
+    if !end.exists() {
+        #[cfg(windows)]
+        write_console_pids();
+        read_keys();
+    }
+    while !end.exists() && Instant::now() < deadline {
+        #[allow(clippy::disallowed_methods)] // the role's own pace
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Turns the terminal's line input and echo off, and nothing else.
+#[cfg(unix)]
+fn read_keys() {
+    // SAFETY: plain calls on this process's own standard input.
+    unsafe {
+        let mut termios = std::mem::zeroed();
+        assert_eq!(libc::tcgetattr(0, &mut termios), 0);
+        termios.c_lflag &= !(libc::ICANON | libc::ECHO);
+        assert_eq!(libc::tcsetattr(0, libc::TCSANOW, &termios), 0);
+    }
+}
+
+/// Turns the console's line input and echo off, and nothing else.
+#[cfg(windows)]
+fn read_keys() {
+    use windows_sys::Win32::System::Console::{
+        ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
+        SetConsoleMode,
+    };
+    // SAFETY: plain calls on this process's own standard input.
+    unsafe {
+        let input = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode = 0;
+        assert_ne!(GetConsoleMode(input, &mut mode), 0);
+        assert_ne!(
+            SetConsoleMode(input, mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)),
+            0
+        );
+    }
+}
+
+/// Writes the processes attached to this console, one pid a line, to the
+/// file `CONSOLE_PIDS` names.
+#[cfg(windows)]
+fn write_console_pids() {
+    use windows_sys::Win32::System::Console::GetConsoleProcessList;
+    let mut pids = vec![0u32; 64];
+    // SAFETY: the buffer holds as many pids as its length says.
+    let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) } as usize;
+    assert!(
+        count > 0 && count <= pids.len(),
+        "{count} console processes"
+    );
+    let lines: String = pids[..count].iter().map(|pid| format!("{pid}\n")).collect();
+    std::fs::write(std::env::var_os(CONSOLE_PIDS).unwrap(), lines).unwrap();
 }
 
 /// Exits with 3 once the file `GO` names exists: a shell that ends on its own

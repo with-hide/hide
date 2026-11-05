@@ -232,6 +232,10 @@ pub fn facts(
     })
 }
 
+/// How a watch reads whether the terminal edits lines, given the pid of the
+/// program in the foreground, if any.
+pub type LineEditingRead = Box<dyn FnMut(Option<u32>) -> LineEditing + Send>;
+
 /// A watch's writer: its messages in order, and the facts whenever they may
 /// have changed and differ from the last it sent.
 pub struct FactsWriter {
@@ -245,9 +249,10 @@ pub struct FactsWriter {
     pub program_package: bool,
     /// The terminal's foreground process group, or why it is not known.
     pub group: Box<dyn Fn() -> Result<u32, Unknown> + Send>,
-    /// Whether the terminal edits lines, where the watch's node accepted
+    /// Whether the terminal edits lines under the foreground program it is
+    /// given (`None` for the shell), where the watch's node accepted
     /// [`hide_holder_protocol::Capability::LineEditing`].
-    pub line_editing: Option<Box<dyn Fn() -> LineEditing + Send>>,
+    pub line_editing: Option<LineEditingRead>,
     /// Whether the watch's node accepted
     /// [`hide_holder_protocol::Capability::ForegroundUnread`].
     pub foreground_unread: bool,
@@ -265,7 +270,12 @@ enum Job {
 }
 
 impl FactsWriter {
-    pub fn serve(self, mut stream: LocalStream, shutdown: &ShutdownHandle, written: &Sender<()>) {
+    pub fn serve(
+        mut self,
+        mut stream: LocalStream,
+        shutdown: &ShutdownHandle,
+        written: &Sender<()>,
+    ) {
         let mut reading = Reading::default();
         let mut foreground = Foreground::default();
         let mut last: Option<Facts> = None;
@@ -290,7 +300,8 @@ impl FactsWriter {
                 }
                 Job::Recheck => {
                     let sent = last.as_ref().and_then(|facts| facts.line_editing);
-                    if self.line_editing.as_ref().map(|read| read()) == sent {
+                    let program = editing.map(|(pid, _)| pid);
+                    if self.line_editing.as_mut().map(|read| read(program)) == sent {
                         continue;
                     }
                     false
@@ -320,9 +331,10 @@ impl FactsWriter {
             {
                 program.package = None;
             }
+            let pid = program.as_ref().map(|program| program.pid);
             let facts = match facts(&self.pane, &self.rules, &mut reading, program) {
                 Ok(facts) => Facts {
-                    line_editing: self.line_editing.as_ref().map(|read| read()),
+                    line_editing: self.line_editing.as_mut().map(|read| read(pid)),
                     foreground_unread: self.foreground_unread.then_some(unread.is_some()),
                     ..facts
                 },
