@@ -329,7 +329,7 @@ function MergeSheet() {
   const connected = usePhone((s) => s.connected);
   const open = confirm !== null && pr !== null;
   const base = pr?.base_branch ?? "";
-  const number = pr?.number ?? 0;
+  const number = String(pr?.number ?? 0);
   const detail = confirm ? [confirm.queue || !confirm.method ? null : t(`work.card.method.${confirm.method}`), confirm.head.slice(0, 7)].filter(Boolean).join(" · ") : "";
   return (
     <Sheet open={open} onOpenChange={(next) => !next && cancelMerge()}>

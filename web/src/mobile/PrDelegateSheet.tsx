@@ -48,8 +48,8 @@ export function PrDelegateSheet() {
   const reading = read === null ? sheet?.feedbackId !== null : read.phase === "reading";
   return (
     <Sheet open={open} onOpenChange={(next) => !next && closeDelegate()}>
-      <SheetContent side="bottom" className="phone-safe-bottom max-h-full gap-md overflow-y-auto rounded-t-xl px-lg pt-lg pb-lg" data-phone-pr-delegate-sheet={pr?.key}>
-        <SheetTitle className="text-headline">{t("prWork.delegateTitle", { number })}</SheetTitle>
+      <SheetContent side="bottom" className="phone-safe-bottom max-h-full gap-md overflow-y-auto rounded-t-xl px-lg pt-lg pb-lg" data-phone-pr-delegate-sheet={pr?.key} onOpenAutoFocus={(event) => event.preventDefault()}>
+        <SheetTitle className="text-headline">{t("prWork.delegateTitle", { number: String(number) })}</SheetTitle>
         <SheetDescription className="line-clamp-2 break-words text-body text-muted-foreground">{title}</SheetDescription>
         {!connected ? (
           <p role="status" className="flex items-center gap-md rounded-lg bg-secondary px-md py-sm text-subhead text-subtle-foreground" data-phone-unreachable="true">

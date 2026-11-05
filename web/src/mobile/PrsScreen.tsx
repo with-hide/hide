@@ -106,7 +106,7 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
   const toneClass = pr.reason.kind === "checking" || pr.reason.kind === "unjudged" ? "text-muted-foreground" : GROUP_TONE[pr.group];
   return (
     <RowButton
-      aria-label={t("work.row.open", { number: pr.number, title: pr.title })}
+      aria-label={t("work.row.open", { number: String(pr.number), title: pr.title })}
       data-phone-pr={pr.key}
       data-phone-pr-reason={pr.reason.kind}
       className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"

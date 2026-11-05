@@ -8,7 +8,7 @@ import { InterfaceLanguageBoundary } from "../i18n/client";
 import { useShellStore } from "../store";
 import { MobilePhoneScene, type PhoneSceneState } from "./MobilePhoneScene";
 
-const PHONE_STATES = ["phone-list", "phone-devices", "phone-missions", "phone-mission"];
+const PHONE_STATES = ["phone-list", "phone-devices", "phone-missions", "phone-mission", "phone-prs", "phone-pr", "phone-pr-agent", "phone-pr-merge", "phone-pr-delegate"];
 
 function fixture(state: string): MobileState {
   const now = Date.now();
@@ -25,7 +25,7 @@ function fixture(state: string): MobileState {
     max_phones:4, push_mode:"off", now_ms:now,
   };
 }
-/** Settings > Mobile on the desktop, and beside it the phone's own screens (`state=phone-list`, `phone-devices`, `phone-missions`, `phone-mission`). */
+/** Settings > Mobile on the desktop, and beside it the phone's own screens (`state=phone-list`, `phone-devices`, `phone-missions`, `phone-mission`, `phone-prs`, `phone-pr`, `phone-pr-agent`, `phone-pr-merge`, `phone-pr-delegate`). */
 export function MobileScene({ params }: { params: URLSearchParams }) {
   const state = params.get("state") ?? "connected";
   if (PHONE_STATES.includes(state)) {
