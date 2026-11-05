@@ -1038,6 +1038,13 @@ fn close_tab(runtime: &mut Runtime, tab_id: &str) {
 /// Herdr's answer to the close's `layout.export`, which captures the tab as
 /// a reopen item, and then to its close.
 fn answer_close(runtime: &mut Runtime, result: Result<(), crate::engine::EngineError>) {
+    let effect = capture_close(runtime);
+    runtime.ingest_close_effect_result(&effect, result);
+}
+
+/// The engine's capture of the close in progress, which sends the close
+/// itself: the request whose answer the close then waits for.
+fn capture_close(runtime: &mut Runtime) -> crate::recent_closed::capture::CloseEffectRequest {
     let request = runtime
         .close_operations
         .values()
@@ -1073,7 +1080,7 @@ fn answer_close(runtime: &mut Runtime, result: Result<(), crate::engine::EngineE
     let [effect] = effects.as_slice() else {
         panic!("one close effect, got {effects:?}");
     };
-    runtime.ingest_close_effect_result(effect, result);
+    effect.clone()
 }
 
 /// The keyboard follows the area, not Herdr's tab order: t2 is next in
@@ -1483,6 +1490,38 @@ fn a_reopen_pressed_while_the_close_settles_starts_once_herdr_confirms_the_close
     assert!(
         runtime.snapshot().recent_closed.restoring,
         "the reopen started"
+    );
+}
+
+/// The core's own engine takes the tab out of its layout before its close
+/// call returns, so the session that shows the tab gone can be ingested
+/// before the close's answer. The close is confirmed by that session, and
+/// the answer that follows confirms nothing new: a reopen pressed then
+/// starts at once rather than waiting out the close's stage deadline for a
+/// session the engine has no reason to send again (with-hide/hide-private#418).
+#[test]
+fn a_close_answer_after_the_session_confirmed_it_leaves_the_tab_ready_to_reopen() {
+    let (mut runtime, _) = two_areas_on_t1();
+    close_tab(&mut runtime, "w-order:t1");
+    let effect = capture_close(&mut runtime);
+    runtime.ingest_session(Ok(tab_order_payload(
+        "/agent-groups",
+        &["w-order:t2", "w-order:t3"],
+        &["w-order:t2", "w-order:t3"],
+        "w-order:t3",
+    )));
+    runtime.ingest_close_effect_result(&effect, Ok(()));
+    assert!(
+        runtime.close_operations.is_empty(),
+        "the session already confirmed the close"
+    );
+    assert_eq!(runtime.snapshot().recent_closed.count, 1);
+    assert!(runtime.snapshot().recent_closed.can_reopen);
+
+    reopen(&mut runtime);
+    assert!(
+        runtime.snapshot().recent_closed.restoring,
+        "the reopen started at once"
     );
 }
 

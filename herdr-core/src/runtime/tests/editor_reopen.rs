@@ -1676,25 +1676,34 @@ fn close_capture_completion_cannot_invert_user_close_order() {
     );
 }
 
+/// Starts the close of `key` the way a user close does, through its
+/// capture, and returns the close request whose answer the close waits for.
+fn captured_close_effect(
+    runtime: &mut Runtime,
+    key: &str,
+) -> crate::recent_closed::capture::CloseEffectRequest {
+    let request = close_capture_request(key);
+    runtime.ensure_pending_close_from_request(&request);
+    let (_, effects) = runtime.ingest_close_capture_result(
+        &request,
+        Ok(crate::recent_closed::capture::CloseCaptureOutcome {
+            item: Some(closed_file(key, &format!("/repo/{key}.rs"))),
+        }),
+    );
+    let [effect] = effects.as_slice() else {
+        panic!("one close effect, got {effects:?}");
+    };
+    effect.clone()
+}
+
 #[test]
 fn rejected_close_removes_only_its_reserved_item() {
     let mut runtime = runtime();
-    runtime.push_recent_closed(closed_file("first", "/repo/first.rs"));
     runtime.push_recent_closed(closed_file("second", "/repo/second.rs"));
+    let effect = captured_close_effect(&mut runtime, "first");
 
     runtime.ingest_close_effect_result(
-        &crate::recent_closed::capture::CloseEffectRequest {
-            safety: None,
-            failed_terminals: Vec::new(),
-            retain_for_reopen: true,
-            allow_replacement_create: true,
-            replacement: None,
-            key: "first".to_owned(),
-            connection_generation: 0,
-            target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
-                tab_id: "tab:first".to_owned(),
-            },
-        },
+        &effect,
         Err(crate::engine::EngineError::Refused {
             code: "refused".to_owned(),
             message: "close refused".to_owned(),
@@ -1706,6 +1715,7 @@ fn rejected_close_removes_only_its_reserved_item() {
         runtime.snapshot().recent_closed.top_label.as_deref(),
         Some("second.rs")
     );
+    assert!(runtime.snapshot().recent_closed.pending.is_empty());
     let notice = &runtime.snapshot().recent_closed.notices[0].message;
     assert!(notice.contains("not closed"));
     assert!(!notice.contains("replacement"));
@@ -1718,22 +1728,8 @@ fn ambiguous_close_result_keeps_the_reserved_item_for_reconciliation() {
         crate::engine::EngineError::Malformed("acknowledgement was invalid".to_owned()),
     ] {
         let mut runtime = runtime();
-        runtime.push_recent_closed(closed_file("first", "/repo/first.rs"));
-        runtime.ingest_close_effect_result(
-            &crate::recent_closed::capture::CloseEffectRequest {
-                safety: None,
-                failed_terminals: Vec::new(),
-                retain_for_reopen: true,
-                allow_replacement_create: true,
-                replacement: None,
-                key: "first".to_owned(),
-                connection_generation: 0,
-                target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
-                    tab_id: "tab:first".to_owned(),
-                },
-            },
-            Err(error),
-        );
+        let effect = captured_close_effect(&mut runtime, "first");
+        runtime.ingest_close_effect_result(&effect, Err(error));
 
         assert_eq!(runtime.snapshot().recent_closed.count, 0);
         assert_eq!(runtime.snapshot().recent_closed.pending.len(), 1);
@@ -1744,6 +1740,39 @@ fn ambiguous_close_result_keeps_the_reserved_item_for_reconciliation() {
                 .message
                 .contains("unknown")
         );
+    }
+}
+
+/// An answer for a close that is no longer in flight changes nothing: the
+/// entry its session already confirmed stays on the reopen list, whatever
+/// the answer says (with-hide/hide-private#418).
+#[test]
+fn an_answer_for_a_close_no_longer_in_flight_leaves_the_reopen_list_alone() {
+    for result in [
+        Ok(()),
+        Err(crate::engine::EngineError::Refused {
+            code: "refused".to_owned(),
+            message: "close refused".to_owned(),
+        }),
+        Err(crate::engine::EngineError::Transport(
+            "acknowledgement timed out".to_owned(),
+        )),
+    ] {
+        let mut runtime = runtime();
+        let effect = captured_close_effect(&mut runtime, "first");
+        assert!(runtime.mark_close_topology_confirmed("first"));
+        assert!(runtime.promote_close_reservations());
+        assert_eq!(runtime.snapshot().recent_closed.count, 1);
+
+        assert!(!runtime.ingest_close_effect_result(&effect, result));
+        assert!(runtime.close_operations.is_empty());
+        assert_eq!(runtime.snapshot().recent_closed.count, 1);
+        assert_eq!(
+            runtime.snapshot().recent_closed.top_label.as_deref(),
+            Some("first.rs")
+        );
+        assert!(runtime.snapshot().recent_closed.can_reopen);
+        assert!(runtime.snapshot().recent_closed.pending.is_empty());
     }
 }
 
