@@ -736,8 +736,6 @@ impl Runtime {
                     path: display.path.clone(),
                     url: display.url.clone(),
                     committed: display.committed,
-                    document_kind: tile.document_kind,
-                    lines: tile.lines,
                     unseen: display.unseen.is_some(),
                     at_unix_ms: at(display),
                 }

@@ -123,9 +123,6 @@ pub fn list_frame(key: &AgentKey, looks: &LookViews) -> Value {
             if let Some(url) = &view.url {
                 row["url"] = json!(cut(url, URL_CHARS));
             }
-            if !view.lines.is_empty() {
-                row["lines"] = json!(view.lines);
-            }
             row
         })
         .collect();
@@ -540,8 +537,6 @@ mod tests {
             path: format!("/repo/{label}"),
             url: None,
             committed: None,
-            document_kind: None,
-            lines: Vec::new(),
             unseen: true,
             at_unix_ms: 1,
         }
@@ -604,8 +599,7 @@ mod tests {
             device_id: "test-node".into(),
             pane_id: "w1:p1".into(),
         };
-        let mut shown = view("notes.md", DisplayKind::File);
-        shown.lines = vec!["# Notes".into()];
+        let shown = view("notes.md", DisplayKind::File);
         let frame = list_frame(
             &key,
             &LookViews {
@@ -628,7 +622,6 @@ mod tests {
         };
         let mut long = view(&"n".repeat(4000), DisplayKind::Browser);
         long.url = Some("u".repeat(4000));
-        long.lines = vec!["l".repeat(120); 6];
         let frame = list_frame(
             &key,
             &LookViews {
@@ -662,5 +655,71 @@ mod tests {
         assert_eq!(sent["payload"]["id"], "d-1");
         assert_eq!(sent["payload"]["checkout"], "/repo");
         assert_eq!(sent["payload"]["device_id"], "test-node");
+    }
+
+    async fn sent_next(frames: &mut mpsc::Receiver<Value>) -> Value {
+        tokio::time::timeout(std::time::Duration::from_secs(5), frames.recv())
+            .await
+            .expect("a frame within five seconds")
+            .expect("the transfer is still sending")
+    }
+
+    #[tokio::test]
+    async fn chunks_go_out_a_window_ahead_of_what_the_phone_confirmed() {
+        let looked = view("notes.md", DisplayKind::File);
+        let bytes = vec![b'a'; CHUNK * 6 + 10];
+        let total = bytes.len() as u64 + 5;
+        let (frames, mut sent) = mpsc::channel(64);
+        let (acked, window) = watch::channel(0_u64);
+        let task = tokio::spawn(async move {
+            let read = Read { bytes, total };
+            chunks("r-1", &looked, Shown::Document, read, &frames, window).await;
+        });
+        let head = sent_next(&mut sent).await;
+        assert_eq!(head["type"], "look_head");
+        assert_eq!(head["mode"], "markdown");
+        assert_eq!(head["chunks"], 7);
+        assert_eq!(head["truncated"], true);
+        for seq in 0..WINDOW {
+            let chunk = sent_next(&mut sent).await;
+            assert_eq!(
+                (chunk["type"].as_str(), chunk["seq"].as_u64()),
+                (Some("look_chunk"), Some(seq))
+            );
+        }
+        // The fifth waits for the phone: a timer never releases it.
+        let waiting =
+            tokio::time::timeout(std::time::Duration::from_millis(100), sent.recv()).await;
+        assert!(waiting.is_err(), "a chunk left beyond the window");
+        // Confirming the first chunk (`seq` 0) lets one more go.
+        acked.send(1).unwrap();
+        assert_eq!(sent_next(&mut sent).await["seq"], WINDOW);
+        acked.send(7).unwrap();
+        assert_eq!(sent_next(&mut sent).await["seq"], WINDOW + 1);
+        assert_eq!(sent_next(&mut sent).await["seq"], WINDOW + 2);
+        let end = sent_next(&mut sent).await;
+        assert_eq!(
+            (end["type"].as_str(), end["view_id"].as_str()),
+            (Some("look_end"), Some("d-1"))
+        );
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_document_that_is_not_text_is_named_and_never_sent() {
+        let looked = view("notes.txt", DisplayKind::File);
+        let (frames, mut sent) = mpsc::channel(8);
+        let (_acked, window) = watch::channel(0_u64);
+        let read = Read {
+            bytes: vec![0x50, 0x4b, 0, 3, 4],
+            total: 5,
+        };
+        chunks("r-2", &looked, Shown::Document, read, &frames, window).await;
+        let answer = sent_next(&mut sent).await;
+        assert_eq!(
+            (answer["type"].as_str(), answer["state"].as_str()),
+            (Some("look_result"), Some("other"))
+        );
+        assert!(sent.try_recv().is_err(), "nothing follows the answer");
     }
 }

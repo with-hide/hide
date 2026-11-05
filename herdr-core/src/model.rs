@@ -674,11 +674,6 @@ pub struct LookView {
     /// Which Changes group a diff shows; absent for anything else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub committed: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub document_kind: Option<DocumentKind>,
-    /// The first lines of the text document its editor tab holds.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub lines: Vec<String>,
     pub unseen: bool,
     /// When the agent opened it while unseen, else when it was last looked at.
     pub at_unix_ms: u64,

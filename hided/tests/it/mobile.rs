@@ -1274,7 +1274,7 @@ async fn a_phone_asking_for_a_path_is_refused_and_logged_and_no_content_is_sent(
     for (request_id, extra) in [
         ("path-1", json!({"path": "/etc/passwd"})),
         ("root-1", json!({"root": "/"})),
-        ("checkout-1", json!({"checkout": "/Users/other/repo"})),
+        ("checkout-1", json!({"checkout": "/mnt/other/repo"})),
         ("file-1", json!({"file": "../../secret"})),
     ] {
         send_phone(&mut socket, ask(request_id, extra)).await;
