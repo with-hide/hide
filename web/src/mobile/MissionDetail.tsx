@@ -25,7 +25,7 @@ import { answerMission, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress } from "./missionModel";
 import { noticeText, type PhoneMission, type PhoneMissionNode } from "./protocol";
-import { closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
+import { answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
 export function MissionDetail() {
   const mission = usePhone((s) => missionOf(s.missions, s.missionOpen));
@@ -122,7 +122,7 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
  */
 function DecisionCard({ mission, connected }: { mission: PhoneMission; connected: boolean }) {
   const { t } = useInterfaceTranslation();
-  const sent = usePhone((s) => (s.missionAnswer?.mission === mission.id ? s.missionAnswer : null));
+  const sent = usePhone((s) => answerSentFor(s.missionAnswer, mission.id));
   const error = usePhone((s) => (s.missionAnswerError?.mission === mission.id ? s.missionAnswerError.notice : null));
   const pressed = sent?.pressed ?? null;
   const view = answerView(mission, mission.device_label, pressed);
@@ -211,8 +211,8 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
 function WrittenAnswer({ mission, connected }: { mission: PhoneMission; connected: boolean }) {
   const { t } = useInterfaceTranslation();
   const draft = usePhone((s) => s.missionDrafts[mission.id] ?? "");
-  const sent = usePhone((s) => s.missionAnswer);
-  const pressed = sent?.mission === mission.id ? sent.pressed : null;
+  const sent = usePhone((s) => answerSentFor(s.missionAnswer, mission.id));
+  const pressed = sent?.pressed ?? null;
   const view = answerView(mission, mission.device_label, pressed);
   const blocked = view.closed || !connected || sent !== null;
   const text = writtenAnswer(draft);

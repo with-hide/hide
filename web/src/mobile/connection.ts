@@ -27,7 +27,7 @@ import {
   type ServerFrame,
 } from "./protocol";
 import { mayHaveStarted, selectionOf, startFailure, startProblem } from "./start";
-import { CLOSED_SHEET, applyFrame, patch, usePhone, type StartSheet } from "./store";
+import { CLOSED_SHEET, answerSentFor, applyFrame, patch, usePhone, type StartSheet } from "./store";
 import { forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
@@ -436,7 +436,8 @@ let lastMissionAnswer: { key: string; requestId: string } | null = null;
  */
 export function answerMission(mission: PhoneMission, choice: MissionAnswerChoice, words: string): boolean {
   const state = usePhone.getState();
-  if (state.missionAnswer) return false;
+  // One press of this mission at a time; an answer left from another mission's page does not count.
+  if (answerSentFor(state.missionAnswer, mission.id)) return false;
   const key = mission.question?.key ?? 0;
   const intent = JSON.stringify([mission.id, key, choice]);
   const requestId = lastMissionAnswer?.key === intent ? lastMissionAnswer.requestId : newRequestId();

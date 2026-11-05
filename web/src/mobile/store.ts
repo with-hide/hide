@@ -26,6 +26,15 @@ export type PhoneTab = "agents" | "missions";
 /** An answer sent from a mission's page that the core has not yet kept or refused; the page draws it as the desktop's banner does. */
 export type MissionAnswerSent = { requestId: string; mission: string; pressed: PressedAnswer };
 
+/**
+ * The answer this mission's page waits on, if any. One rule for "a press of this mission is still out":
+ * the guard in `answerMission` and the page's buttons read it, so an answer left over from another
+ * mission's page never stops this one.
+ */
+export function answerSentFor(sent: MissionAnswerSent | null, mission: string): MissionAnswerSent | null {
+  return sent?.mission === mission ? sent : null;
+}
+
 export type Rows = { state: RowsState; text: string; lines: number; more: boolean };
 
 /**

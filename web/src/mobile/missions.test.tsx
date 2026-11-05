@@ -169,6 +169,27 @@ it("answers a decision with one request, and the same press again reuses that re
   }
 });
 
+it("sends another mission's answer while the first one's accepted answer is still waiting for the core's frame", async () => {
+  const { container, click, serve, answers, unmount } = await connect([deciding(), deciding({ id: "m-other", title: "Mission other" })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-turn"]');
+    await click('[data-phone-option="1"]');
+    expect(answers()).toHaveLength(1);
+    await serve({ type: "mission_result", request_id: answers()[0]!.request_id as string, mission: "m-turn", ok: true, reason: null });
+
+    // Leave the page before the core's frame lands, then answer the other mission.
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-mission="m-other"]');
+    await click('[data-phone-option="2"]');
+    expect(answers()).toHaveLength(2);
+    expect(answers()[1]).toMatchObject({ mission: "m-other", key: 4, option: 2 });
+    expect(container.querySelector('[data-phone-mission-page="m-other"] [data-phone-decision]')!.getAttribute("data-phone-decision")).toBe("sending");
+  } finally {
+    await unmount();
+  }
+});
+
 it("keeps the written answer when it is refused, shows why in words, and sends it again as a new request", async () => {
   const { container, click, serve, answers, unmount } = await connect([deciding()]);
   try {
