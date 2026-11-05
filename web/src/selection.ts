@@ -1,15 +1,16 @@
 // The text a drag selection copies.
 //
-// Herdr's terminal frames redraw every row in place and padded to the full
-// width (`CSI row;1H` then `width` cells), so xterm.js never soft-wraps a row
-// itself: every padding space is a written cell its own `getSelection()`
-// keeps, and no row is ever `isWrapped`. The frame record (`terminal.frame`:
-// seq, encoding, width, height, full, bytes) carries no continuation flag
-// either, so the copy is assembled here the way a native terminal would:
+// A pane holder's frames redraw every row in place and padded to the full
+// width (`CSI row;1H` then `width` cells, autowrap off), so xterm.js never
+// soft-wraps a row itself: every padding space is a written cell its own
+// `getSelection()` keeps, and no row is ever `isWrapped`. The copy is
+// therefore assembled here the way a native terminal would:
 // trailing whitespace trimmed from every row, and a row whose last cell is
 // non-blank read as continuing onto the next row, joined with no break.
-// A hard line that exactly fills the width is joined too; that is the gap a
-// wrap flag in the frame would close. The copy is then dedented: the
+// A hard line that exactly fills the width is joined too. The holder does
+// say which rows soft-wrap (`terminalWrap.ts`), but a copy keeps this rule:
+// an agent's screen breaks its own long lines with line breaks, so the fact
+// would split every full row of its output. The copy is then dedented: the
 // leading whitespace every non-blank line shares is a margin the program
 // drew, not text, while the indentation lines have relative to one another
 // is kept (user: "그 줄 앞에 공백있으면 앞에서 trim까지 해줘"). A single line
