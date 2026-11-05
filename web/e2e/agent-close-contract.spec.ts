@@ -1,5 +1,5 @@
-// Herdr's refusal to close a primary checkout's last tab or pane, observed on a repository and worktree owned
-// by this fixture, and what the operator sees when Hide closes them on either engine.
+// Closing a primary checkout's last tab or pane while a linked worktree remains, on a repository and worktree
+// owned by this fixture: the tab goes away like any other and no shell comes back in its place.
 import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -8,7 +8,7 @@ import { checkoutAt, tabOfPane, withControl, openProject, openWorktree } from ".
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { enterWorkspace, screenshot } from "./wire";
+import { enterWorkspace } from "./wire";
 
 // Each contract has its own private engine and linked worktree; only the UI contracts start hided.
 test.describe.configure({ timeout: 120_000 });
@@ -52,37 +52,29 @@ async function openPrimary(page: Page) {
 }
 
 
-test("closing a primary checkout's last tab in the UI leaves a replacement tab in the same area and keeps the linked workspace", async ({ page }) => {
-  const stack = await startStack(page, "replacement-close-tab");
+test("closing a primary checkout's last tab in the UI closes it for good and keeps the linked workspace", async ({ page }) => {
+  const stack = await startStack(page, "primary-close-tab");
   try {
     await openPrimary(page);
     const originalTab = page.locator(`[data-agent-tab-bar] [data-tab="${stack.primary.tab}"]`);
     await expect(originalTab).toBeVisible();
-    const area = await originalTab.locator("xpath=ancestor::*[@data-agent-area-id]").getAttribute("data-agent-area-id");
     await originalTab.getByRole("button", { name: /^Close tab/ }).click();
     await expect(originalTab).toHaveCount(0);
-    await expect.poll(async () => (await primaryTabs(stack)).length).toBe(1);
-    const replacement = (await primaryTabs(stack))[0]!;
-    expect(replacement).not.toBe(stack.primary.tab);
-    const replacementTab = page.locator(`[data-agent-tab-bar] [data-tab="${replacement}"]`);
-    await expect(replacementTab).toBeVisible();
-    await expect(replacementTab.locator("xpath=ancestor::*[@data-agent-area-id]")).toHaveAttribute("data-agent-area-id", area);
+    await expect.poll(async () => (await primaryTabs(stack)).length).toBe(0);
     const linked = await withControl(stack.daemon, (control) => control.until((rest) => checkoutAt(rest, stack.linkedFolder), "the linked worktree listed", 20_000));
     expect(linked.tabs).toHaveLength(1);
-    await screenshot(page, "agent-primary-replacement-tab");
   } finally { stack.daemon.stop(); stack.server.stop(); }
 });
 
-test("closing a primary checkout's last pane in the UI keeps one tab for it and the linked workspace", async ({ page }) => {
-  const stack = await startStack(page, "replacement-close-pane");
+test("closing a primary checkout's last pane in the UI closes its tab and keeps the linked workspace", async ({ page }) => {
+  const stack = await startStack(page, "primary-close-pane");
   try {
     const pane = stack.primary.pane;
     await openPrimary(page);
     await page.locator(`[data-pane-view="${pane}"]`).getByRole("button", { name: /Close/ }).click();
     await withControl(stack.daemon, (control) => control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `the close of ${pane}`, 20_000));
-    await expect.poll(async () => (await primaryTabs(stack)).length).toBe(1);
+    await expect.poll(async () => (await primaryTabs(stack)).length).toBe(0);
     const linked = await withControl(stack.daemon, (control) => control.until((rest) => checkoutAt(rest, stack.linkedFolder), "the linked worktree listed", 20_000));
     expect(linked.tabs).toHaveLength(1);
-    await screenshot(page, "agent-primary-replacement-pane");
   } finally { stack.daemon.stop(); stack.server.stop(); }
 });

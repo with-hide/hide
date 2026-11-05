@@ -17,8 +17,8 @@ use super::*;
 #[derive(Clone, Debug)]
 pub(super) struct PendingClose {
     pub(super) replacement_effect_started: bool,
-    /// The shell this close made before closing: its tab, or its pane when
-    /// the shell went into the closing tab (`replacement_in_tab`).
+    /// The shell this close made in the closing tab before closing
+    /// (`replacement_in_tab`).
     pub(super) replacement_id: Option<String>,
     pub(super) allow_replacement_create: bool,
     pub(super) request: crate::recent_closed::capture::CloseCaptureRequest,
@@ -60,9 +60,8 @@ impl PendingClose {
 
     /// The tab this close takes out of the Agent areas while it runs: the
     /// whole tab, from approval until a refusal, failure or unknown result
-    /// puts it back. A close that must first open a replacement shell leaves
-    /// its tab in place, because the area would otherwise stand empty until
-    /// that shell exists.
+    /// puts it back. A close that leaves a shell in the tab keeps its tab in
+    /// place, because the shell stays there.
     pub(super) fn leaving_tab(&self) -> Option<&str> {
         let whole_tab = match &self.request.target {
             crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => true,
@@ -70,7 +69,7 @@ impl PendingClose {
                 matches!(self.scope_pane_ids.as_slice(), [only] if only == pane_id)
             }
         };
-        (whole_tab && self.settling() && !self.request.context.replacement_shell)
+        (whole_tab && self.settling() && !self.request.context.replacement_in_tab)
             .then_some(self.scope_id.as_str())
     }
 }
