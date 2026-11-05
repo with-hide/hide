@@ -12,15 +12,21 @@
 //! core's own engine and types into its terminal, reads a file and the Git
 //! changes of a project, and ends with nothing of the node left running.
 //!
+//! Each walk ends what it started on the device whichever way the test
+//! ends ([`Walk`]): a holder outlives a lost link by design, so a walk that
+//! failed partway would otherwise leave the device's node, holders and
+//! shells running on the runner.
+//!
 //! The `windows wsl` lane sets up what only a disposable runner may have and
 //! runs both: the OpenSSH Server it installs, with a key it authorizes for
-//! the runner's account (`HIDE_E2E_WINDOWS_SSH_DIR`: `client` and
-//! `known_hosts`), and the WSL distribution its other walks own
+//! the runner's account (`HIDE_E2E_WINDOWS_SSH_DIR`: `client`, `known_hosts`
+//! and the server's `port`), and the WSL distribution its other walks own
 //! (`HIDE_E2E_WSL_DISTRO`, its Linux kit in `HIDE_E2E_WSL_PACKAGES`). Both
 //! need this build's CLI binaries (`scripts/verify-cargo.sh cli`) and the
 //! pinned ConPTY runtime (`HIDE_HOLDER_CONPTY`).
 #![cfg(windows)]
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -249,17 +255,11 @@ fn files_and_git(link: &dyn NodeLink, project: &str) {
 
 /// Starts the device's interactive shell as `pane` in `cwd` on the core's
 /// own engine, types `line` into its terminal and waits for `answer`, which
-/// `line` does not spell, so its echo is never taken for its output.
-fn terminal(
-    connected: &Established,
-    sink: &Sink,
-    pane: &str,
-    cwd: &str,
-    line: &[u8],
-    answer: &str,
-) -> LinkPanes {
+/// `line` does not spell, so its echo is never taken for its output. The
+/// pane is `walk`'s to end from its start on.
+fn terminal(walk: &mut Walk<'_>, sink: &Sink, pane: &str, cwd: &str, line: &[u8], answer: &str) {
     let panes = LinkPanes::new(
-        Arc::clone(&connected.node.host),
+        Arc::clone(&walk.connected().node.host),
         Arc::new(|record| println!("pane record: {record}")),
     );
     let recovery = panes.recovered(Duration::from_secs(10)).unwrap();
@@ -277,9 +277,11 @@ fn terminal(
     };
     let request = panes.request().unwrap();
     let reserved = panes.reserve(&start, None, request).unwrap();
+    let (panes, _) = walk.pane.insert((panes, pane.to_owned()));
     panes.start_reserved(&start, reserved, request).unwrap();
     panes.retire(request).unwrap();
-    let terminals = connected
+    let terminals = walk
+        .connected()
         .node
         .terminals
         .as_ref()
@@ -303,12 +305,11 @@ fn terminal(
             .contains(answer)
             .then_some(())
     });
-    panes
 }
 
 /// The processes running a program file under `folder`: the device's node,
 /// its holders and the ConPTY host each holder starts.
-fn programs_running(folder: &Path) -> Vec<(PathBuf, Vec<u32>)> {
+fn programs_running(folder: &Path) -> Result<Vec<u32>, String> {
     let mut running = Vec::new();
     let mut folders = vec![folder.to_path_buf()];
     while let Some(folder) = folders.pop() {
@@ -322,14 +323,12 @@ fn programs_running(folder: &Path) -> Vec<(PathBuf, Vec<u32>)> {
             } else if path.extension().is_some_and(|extension| extension == "exe") {
                 let pids = hide_platform::fs::identity::file_id(&path)
                     .and_then(|file| hide_platform::process::running(&file))
-                    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-                if !pids.is_empty() {
-                    running.push((path, pids));
-                }
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                running.extend(pids);
             }
         }
     }
-    running
+    Ok(running)
 }
 
 /// `git` in `project` with no setting of the account's, which must succeed.
@@ -359,16 +358,242 @@ fn key(folder: &Path, name: &str, passphrase: &str) -> PathBuf {
     key
 }
 
-/// Ends `pane` and the link; once `quiet` answers, nothing of the device's
-/// node or holders runs.
-fn end(panes: LinkPanes, pane: &str, connected: Established, quiet: &impl Fn() -> bool) {
-    panes.terminate(pane).unwrap();
-    drop(panes);
-    connected.node.host.close("test ended");
-    drop(connected);
-    wait_for("the device's node and holders to end", || {
-        quiet().then_some(())
-    });
+/// The device a walk reaches, as the test sees what runs there.
+trait Device {
+    /// What of the device's node, its holders and their shells runs, one
+    /// line each; none once a walk has ended.
+    fn running(&self) -> Result<Vec<String>, String>;
+    /// Ends everything [`Device::running`] names.
+    fn kill(&self) -> Result<(), String>;
+}
+
+/// What a walk started on its device, ended whichever way the test ends.
+/// [`Walk::end`] ends the pane and the link and fails the test unless
+/// nothing of the node runs on the device afterwards. A walk dropped
+/// without it, because the test failed first, ends the same, then ends by
+/// force what still runs after [`LEFT_AFTER`] and says what that was.
+struct Walk<'a> {
+    device: &'a dyn Device,
+    connected: Option<Established>,
+    pane: Option<(LinkPanes, String)>,
+    ended: bool,
+}
+
+/// How long a dropped walk waits for the device to end its node, holders
+/// and shells on their own.
+const LEFT_AFTER: Duration = Duration::from_secs(30);
+
+impl<'a> Walk<'a> {
+    fn new(device: &'a dyn Device) -> Self {
+        Self {
+            device,
+            connected: None,
+            pane: None,
+            ended: false,
+        }
+    }
+
+    fn connect(&mut self, connected: Established) {
+        self.connected = Some(connected);
+    }
+
+    fn connected(&self) -> &Established {
+        self.connected.as_ref().expect("the walk is connected")
+    }
+
+    /// Ends the pane, then the link, the link even when the pane did not end.
+    fn close(&mut self) -> Result<(), String> {
+        let ended = match self.pane.take() {
+            Some((panes, pane)) => panes
+                .terminate(&pane)
+                .map_err(|error| format!("{pane} did not end: {error}")),
+            None => Ok(()),
+        };
+        if let Some(connected) = self.connected.take() {
+            connected.node.host.close("test ended");
+        }
+        ended
+    }
+
+    fn end(mut self) {
+        self.close().unwrap();
+        wait_for("the device's node, holders and shells to end", || {
+            self.device.running().unwrap().is_empty().then_some(())
+        });
+        self.ended = true;
+    }
+
+    /// What still runs on the device, after waiting up to `within` for none.
+    #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+    fn left(&self, within: Duration) -> Result<Vec<String>, String> {
+        let deadline = Instant::now() + within;
+        loop {
+            let running = self.device.running()?;
+            if running.is_empty() || Instant::now() >= deadline {
+                return Ok(running);
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+}
+
+impl Drop for Walk<'_> {
+    fn drop(&mut self) {
+        if self.ended {
+            return;
+        }
+        if let Err(error) = self.close() {
+            eprintln!("{error}");
+        }
+        match self.left(LEFT_AFTER) {
+            Ok(left) if left.is_empty() => {}
+            Ok(left) => {
+                eprintln!("still running on the device, ended by force: {left:?}");
+                if let Err(error) = self.device.kill() {
+                    eprintln!("ending them failed: {error}");
+                }
+                match self.left(Duration::from_secs(10)) {
+                    Ok(left) if left.is_empty() => {}
+                    Ok(left) => eprintln!("left running on the device: {left:?}"),
+                    Err(error) => eprintln!("what runs on the device is unknown: {error}"),
+                }
+            }
+            Err(error) => eprintln!("what runs on the device is unknown: {error}"),
+        }
+        if !std::thread::panicking() {
+            panic!("a walk must end with Walk::end");
+        }
+    }
+}
+
+/// The Windows device of the first walk, whose node, holders and ConPTY
+/// hosts run from the fixture's device home. Each look also keeps every
+/// process they started, such as a pane's shell, by its pid and start, so
+/// one that outlives its holder is still seen.
+struct WindowsDevice {
+    home: PathBuf,
+    seen: Mutex<BTreeMap<u32, u64>>,
+}
+
+impl WindowsDevice {
+    fn new(home: &Path) -> Self {
+        Self {
+            home: home.to_path_buf(),
+            seen: Mutex::default(),
+        }
+    }
+
+    /// The pids seen so far that still run the process first seen.
+    fn alive(&self) -> Result<Vec<u32>, String> {
+        let mut seen = self
+            .seen
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for program in programs_running(&self.home)? {
+            let started = hide_platform::process::descendants(program)
+                .map_err(|error| format!("what {program} started: {error}"))?;
+            for pid in std::iter::once(program).chain(started) {
+                if let Ok(start) = hide_platform::process::start_time(pid) {
+                    seen.entry(pid).or_insert(start);
+                }
+            }
+        }
+        Ok(seen
+            .iter()
+            .filter(|&(&pid, &start)| {
+                hide_platform::process::start_time(pid).is_ok_and(|now| now == start)
+            })
+            .map(|(&pid, _)| pid)
+            .collect())
+    }
+}
+
+impl Device for WindowsDevice {
+    fn running(&self) -> Result<Vec<String>, String> {
+        Ok(self
+            .alive()?
+            .into_iter()
+            .map(|pid| {
+                let name = hide_platform::process::name_of(pid)
+                    .unwrap_or_else(|error| format!("({error})"));
+                format!("{pid} {name}")
+            })
+            .collect())
+    }
+
+    fn kill(&self) -> Result<(), String> {
+        let failed: Vec<String> = self
+            .alive()?
+            .into_iter()
+            .filter_map(|pid| {
+                hide_platform::process::kill_tree(pid)
+                    .err()
+                    .map(|error| format!("{pid}: {error}"))
+            })
+            .collect();
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(failed.join(", "))
+        }
+    }
+}
+
+/// `script` as root in `distro`, its output when it succeeds; a failure is
+/// the caller's to report, where [`as_root`] fails the test.
+fn in_distro(distro: &str, script: &str) -> Result<String, String> {
+    let output = Command::new("wsl.exe")
+        .args(["-d", distro, "-u", "root", "-e", "sh", "-c", script])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("wsl.exe: {error}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(format!(
+            "{script}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+/// The Linux device of the second walk: the fixture's account, where the
+/// node, its holders, a pane's shell and the link's ssh session run. The
+/// account's systemd user manager, which logind ends on its own delay, is
+/// not the node's.
+struct LinuxDevice<'a> {
+    distro: &'a str,
+}
+
+impl Device for LinuxDevice<'_> {
+    fn running(&self) -> Result<Vec<String>, String> {
+        let listed = in_distro(
+            self.distro,
+            &format!("pgrep -a -u {SSH_USER} -f 'node serve|hide-holder|bash|sshd' || true"),
+        )?;
+        Ok(listed.lines().map(str::to_owned).collect())
+    }
+
+    fn kill(&self) -> Result<(), String> {
+        in_distro(self.distro, &format!("pkill -KILL -u {SSH_USER}; true")).map(drop)
+    }
+}
+
+/// The fixture's account in the distribution, removed with everything it
+/// runs whichever way the test ends.
+struct Account<'a> {
+    distro: &'a str,
+}
+
+impl Drop for Account<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = in_distro(
+            self.distro,
+            &format!("pkill -KILL -u {SSH_USER}; userdel -r -f {SSH_USER} 2>/dev/null; true"),
+        ) {
+            eprintln!("the fixture's account was not removed: {error}");
+        }
+    }
 }
 
 /// The bytes of every file under `folder`: what a first connection uploads
@@ -405,10 +630,12 @@ fn reconnect(
     local: &Path,
     alias: &str,
     sign_in: Arc<dyn SignIn>,
-    quiet: &impl Fn() -> bool,
+    device: &dyn Device,
 ) {
+    let mut walk = Walk::new(device);
     let started = Instant::now();
-    let connected = establish(connector, local, alias, sign_in);
+    walk.connect(establish(connector, local, alias, sign_in));
+    let connected = walk.connected();
     println!(
         "{alias}: reconnected in {:?}, upload={:?}",
         started.elapsed(),
@@ -416,9 +643,7 @@ fn reconnect(
     );
     assert!(!connected.installed, "a reconnection installs nothing");
     assert_eq!(connected.upload.sent, 0, "{:?}", connected.upload);
-    connected.node.host.close("test ended");
-    drop(connected);
-    wait_for("the device's node to end", || quiet().then_some(()));
+    walk.end();
 }
 
 /// c1: this runner's own OpenSSH Server as a Windows device of a Windows
@@ -439,7 +664,8 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
     std::fs::write(
         local.join(".ssh").join("config"),
         format!(
-            "Host windows-device\n  HostName 127.0.0.1\n  Port 22\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile {}\n",
+            "Host windows-device\n  HostName 127.0.0.1\n  Port {}\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile {}\n",
+            std::fs::read_to_string(ssh.join("port")).unwrap().trim(),
             std::env::var("USERNAME").unwrap(),
             config_path(&ssh.join("client")),
             config_path(&ssh.join("known_hosts")),
@@ -457,17 +683,20 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
         .tempdir_in(&dev)
         .unwrap();
     let run_name = run.path().file_name().unwrap().to_str().unwrap().to_owned();
+    let device = WindowsDevice::new(run.path());
 
     let sink = Arc::new(Sink::default());
     let connector = connector(&packages, sink.clone())
         .with_device_home(Some(format!("~/.hide-dev/{run_name}/home")));
     let row = Arc::new(Row::default());
+    let mut walk = Walk::new(&device);
     let started = Instant::now();
-    let connected = establish(&connector, &local, "windows-device", row.clone());
+    walk.connect(establish(&connector, &local, "windows-device", row.clone()));
+    let connected = walk.connected();
     report_first(
         "windows-device",
         started.elapsed(),
-        &connected,
+        connected,
         folder_bytes(&packages),
     );
     assert!(row.asked().is_empty(), "{:?}", row.asked());
@@ -512,24 +741,24 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
 
     // The holder starts the integrated PowerShell, and Windows' console
     // ends a line with a bare CR.
-    let panes = terminal(
-        &connected,
+    terminal(
+        &mut walk,
         &sink,
         "windows-device-pane",
         &project,
         b"Write-Output ('own-' + 6*7)\r",
         "own-42",
     );
-    // The node and the holder ran from the fixture's device home.
-    assert!(!programs_running(run.path()).is_empty());
-    let quiet = || programs_running(run.path()).is_empty();
-    end(panes, "windows-device-pane", connected, &quiet);
+    // The node and the holder run from the fixture's device home; this
+    // look also keeps the pane's shell.
+    assert!(!device.running().unwrap().is_empty());
+    walk.end();
     reconnect(
         &connector,
         &local,
         "windows-device",
         Arc::new(Row::default()),
-        &quiet,
+        &device,
     );
 }
 
@@ -627,6 +856,7 @@ fn a_windows_core_connects_a_linux_device_over_ssh_with_a_passphrase_asked_once(
     }
     let key = key(fixture.path(), "locked", PASSPHRASE);
     let public = std::fs::read_to_string(key.with_extension("pub")).unwrap();
+    let _account = Account { distro: &distro };
     // A key's public half holds no single quote.
     as_root(
         &distro,
@@ -658,17 +888,20 @@ fn a_windows_core_connects_a_linux_device_over_ssh_with_a_passphrase_asked_once(
         ),
     )
     .unwrap();
-    let sshd = WslSshd::start(&distro);
+    let _sshd = WslSshd::start(&distro);
+    let device = LinuxDevice { distro: &distro };
 
     let sink = Arc::new(Sink::default());
     let connector = connector(&packages, sink.clone());
     let row = Row::answering(vec![Answer::Text(Secret::new(PASSPHRASE.to_owned()))]);
+    let mut walk = Walk::new(&device);
     let started = Instant::now();
-    let connected = establish(&connector, &local, "linux-device", row.clone());
+    walk.connect(establish(&connector, &local, "linux-device", row.clone()));
+    let connected = walk.connected();
     report_first(
         "linux-device",
         started.elapsed(),
-        &connected,
+        connected,
         folder_bytes(&variable("HIDE_E2E_WSL_PACKAGES")),
     );
     let asked = row.asked();
@@ -699,31 +932,17 @@ fn a_windows_core_connects_a_linux_device_over_ssh_with_a_passphrase_asked_once(
     let project = format!("{home}/project");
     files_and_git(&*connected.node.host, &project);
 
-    let panes = terminal(
-        &connected,
+    terminal(
+        &mut walk,
         &sink,
         "linux-device-pane",
         &project,
         b"printf 'ssh_%s\\n' answered\r",
         "ssh_answered",
     );
-    let quiet = || {
-        as_root(
-            &distro,
-            &format!("pgrep -u {SSH_USER} -f '[n]ode serve|[h]ide-holder' >/dev/null && echo running || echo quiet"),
-        )
-        .contains("quiet")
-    };
-    end(panes, "linux-device-pane", connected, &quiet);
+    walk.end();
     // Each connection asks the passphrase once, the reconnection too.
     let again = Row::answering(vec![Answer::Text(Secret::new(PASSPHRASE.to_owned()))]);
-    reconnect(&connector, &local, "linux-device", again.clone(), &quiet);
+    reconnect(&connector, &local, "linux-device", again.clone(), &device);
     assert_eq!(again.asked().len(), 1, "{:?}", again.asked());
-    drop(sshd);
-    as_root(
-        &distro,
-        &format!(
-            "pkill -KILL -u {SSH_USER} 2>/dev/null; userdel -r -f {SSH_USER} 2>/dev/null; true"
-        ),
-    );
 }
