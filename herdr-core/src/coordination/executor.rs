@@ -341,38 +341,30 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
 
 /// How the pane's node starts `kind`'s program now, asked before every
 /// start of the spawn: what the start names and whether the brief can ride
-/// it. A program the node does not find refuses the start, as the engine
-/// would wait for an agent that cannot appear; a node that could not be asked
-/// is the machine's, and the same command continues once it answers. With
-/// no node to ask (a device whose helper is not connected) nothing is known
-/// and the program starts by its name.
+/// it. It only ever lets a start name a file or carry its brief: a program
+/// the node does not find (on Windows a `.ps1` alone, which the pane's
+/// PowerShell still runs), a node that could not be asked, or no node at all
+/// leave the start as it was, by the program's name with its brief typed. A
+/// device's start was refused already when its node did not find the
+/// program (`check_target`).
 fn start_form(
     node: Option<&dyn crate::node_access::NodeLink>,
     kind: &str,
     spawn: &str,
-) -> Result<Option<StartForm>, String> {
-    let Some(node) = node else {
-        return Ok(None);
-    };
-    match crate::start_prompt::start_form(
+) -> Option<StartForm> {
+    let node = node?;
+    crate::start_prompt::start_form(
         node,
         hide_agent_adapter::canonical_kind(kind),
         TARGET_CHECK_TIMEOUT,
-    ) {
-        Ok(Some(form)) => Ok(Some(form)),
-        Ok(None) => Err("agent_not_installed".into()),
-        Err(error) => {
-            crate::diagnostic!(json!({
-                "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
-                "cause": error.to_string(),
-            }));
-            Err(match error {
-                crate::node_access::LinkError::Refused(_) => "agent_not_installed",
-                _ => "machine_unavailable",
-            }
-            .into())
-        }
-    }
+    )
+    .unwrap_or_else(|error| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
+            "agent_kind": kind, "cause": error.to_string(),
+        }));
+        None
+    })
 }
 
 /// The words a fresh start of `kind` adds to carry `brief` as its launch
@@ -1355,7 +1347,7 @@ fn spawn(
                 }));
             }
             close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
-            let form = start_form(node.as_deref(), kind, &reserved.id)?;
+            let form = start_form(node.as_deref(), kind, &reserved.id);
             let mut start_args = with_permission(kind, &permissions, start_args);
             // A fresh start carries the brief as its prompt argument where
             // the agent holds that through its own start screens

@@ -42,6 +42,10 @@ pub fn powershell_single_quoted(value: &str) -> String {
     quoted
 }
 
+/// The most UTF-16 units Windows takes as a process's command line, its
+/// terminating null included (`CreateProcessW`); a longer start fails.
+pub const WINDOWS_COMMAND_LINE_LIMIT: usize = 32_767;
+
 /// `value` as one word of a Windows command line, as the C runtime's
 /// argument parser (`CommandLineToArgvW`'s rules) reads it back: bare when it
 /// holds no space, tab, line break or `"`, else in double quotes with each

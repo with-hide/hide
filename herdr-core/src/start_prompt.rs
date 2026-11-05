@@ -63,7 +63,7 @@ pub(crate) fn launched(
         )),
         Some(StartForm::Direct { program, leading })
             if windows_command_line(program, leading, native, &words)
-                > hide_platform::process::WINDOWS_COMMAND_LINE_LIMIT =>
+                > hide_shell::quote::WINDOWS_COMMAND_LINE_LIMIT =>
         {
             Err(Refusal::Start(
                 "its Windows command line would pass the system's limit".into(),
