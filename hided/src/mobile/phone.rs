@@ -218,6 +218,8 @@ fn agents_frame(projection: &Projection) -> Value {
     json!({
         "type": "agents",
         "groups": projection.groups,
+        // The Mac and the devices it reaches, for the header and the device sheet.
+        "devices": projection.devices,
         // The core's language as stored, or null to follow the phone's own.
         "interface_language": projection.interface_language,
         // The operator's palette; the phone keeps its own light or dark.
@@ -1666,7 +1668,7 @@ mod tests {
         let mut projection = Projection::default();
         assert_eq!(
             agents_frame(&projection),
-            json!({"type": "agents", "groups": [], "interface_language": null, "color_theme": null})
+            json!({"type": "agents", "groups": [], "devices": [], "interface_language": null, "color_theme": null})
         );
         projection.interface_language = Some("ko".to_owned());
         let frame = agents_frame(&projection);
@@ -1674,5 +1676,41 @@ mod tests {
         assert_eq!(frame["type"], "agents");
         projection.color_theme = Some("neutral".to_owned());
         assert_eq!(agents_frame(&projection)["color_theme"], "neutral");
+    }
+
+    /// The list frame is the tree the core decided: a group's rows are tagged
+    /// by kind, a parent carries its children, and the devices ride beside.
+    #[test]
+    fn the_agents_frame_carries_the_tree_and_the_devices() {
+        let agent = |pane: &str, extra: Value| {
+            let mut row = json!({
+                "pane_id": pane, "group": "working", "mark": "going", "identity_label": pane,
+                "agent_kind": "claude", "status_code": "idle", "demand": "none",
+                "last_activity": "1790000000000", "state": {"tree_rank": 2},
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            row
+        };
+        let projection = super::super::projection::project(
+            &json!({"navigator": {"agents": [
+                agent("p", json!({})),
+                agent("c", json!({"delegated": true, "lineage_parent_pane_id": "p"})),
+            ]}}),
+            "test-node",
+        );
+        let frame = agents_frame(&projection);
+        let row = &frame["groups"][0]["rows"][0];
+        assert_eq!(
+            (row["kind"].as_str(), row["pane_id"].as_str()),
+            (Some("agent"), Some("p"))
+        );
+        assert_eq!(row["children"][0]["pane_id"], "c");
+        assert_eq!(frame["groups"][0]["count"], 1);
+        assert_eq!(
+            frame["devices"],
+            json!([{"device_id": "test-node", "label": null, "local": true, "connected": true, "needs_you": 0, "working": 1}])
+        );
     }
 }

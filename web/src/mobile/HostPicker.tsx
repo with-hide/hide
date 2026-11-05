@@ -9,6 +9,8 @@ import { HostList } from "./HostList";
 export function HostPicker({ name }: { name: string }) {
   const { t } = useInterfaceTranslation();
   const active = usePhone();
+  // The Mac's own counts: the groups' counts also hold its devices' rows, which the rows under it say.
+  const local = active.devices.find((device) => device.local);
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   return <Sheet open={open} onOpenChange={setOpen}>
@@ -20,7 +22,7 @@ export function HostPicker({ name }: { name: string }) {
         <SheetTitle className="text-body font-medium text-muted-foreground">{t("mobile.relay.devices")}</SheetTitle>
         <SheetClose asChild><Button variant="ghost" size="icon" className="size-(--size-touch-target)" aria-label={t("common.close")}><XIcon aria-hidden="true" /></Button></SheetClose>
       </SheetHeader>
-      <div className="pb-lg">{open ? <HostList t={t} active={{ online: active.connected, lastSeen: null, needs: active.groups?.find((g) => g.group === "needs_you")?.count, working: active.groups?.find((g) => g.group === "working")?.count }} /> : null}</div>
+      <div className="pb-lg">{open ? <HostList t={t} machines={active.devices} active={{ online: active.connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} /> : null}</div>
     </SheetContent>
   </Sheet>;
 }

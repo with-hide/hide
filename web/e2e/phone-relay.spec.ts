@@ -2,7 +2,7 @@ import { expect, test as base } from "@playwright/test";
 import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
 import { startPhoneRelay } from "./phone-relay-fixture";
-
+import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
   relay: async ({ page }, use, info) => {
     const relay = await startPhoneRelay();
@@ -165,7 +165,7 @@ test("a revoked device stays listed as disconnected, never dials again and pairs
   await expect(row.getByRole("button", { name: "Remove device" })).toBeVisible();
   // A link to the device shows the refusal without dialing it.
   relay.plaintext.length = 0;
-  await page.goto(`${relay.origin}/p/1/?host=${relay.pairing.room}`);
+  await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?host=${relay.pairing.room}`);
   await expect(page.locator('[data-phone-guidance="revoked"]')).toBeVisible();
   expect(relay.plaintext).toEqual([]);
   await page.goto(relay.origin + "/");
@@ -300,7 +300,7 @@ test("one browser keeps two devices and switches its live list through the heade
     await page.getByRole("button", { name: second.pairing.name, exact: true }).click();
     await expect(page.getByText("Needs you 1 · Working 2", { exact: true })).toHaveCount(2);
     await page.getByRole("button", { name: /Needs you 1 · Working 2/ }).first().click();
-    await expect(page).toHaveURL(new RegExp(`/p/1/\\?host=${relay.pairing.room}`));
+    await expect(page).toHaveURL(new RegExp(`/p/${PHONE_PROTOCOL}/\\?host=${relay.pairing.room}`));
     await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
   } finally { await page.goto("about:blank"); await second.stop(); }
 });

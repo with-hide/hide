@@ -65,7 +65,7 @@ describe("the phone's language", () => {
   });
 
   it("keeps the language and color theme the last agents frame carried", () => {
-    const frame = { type: "agents", groups: [], interface_language: "zh-CN", color_theme: "neutral" } satisfies ServerFrame;
+    const frame = { type: "agents", groups: [], devices: [], interface_language: "zh-CN", color_theme: "neutral" } satisfies ServerFrame;
     applyFrame(frame);
     expect(usePhone.getState().interfaceLanguage).toBe("zh-CN");
     expect(usePhone.getState().colorTheme).toBe("neutral");
