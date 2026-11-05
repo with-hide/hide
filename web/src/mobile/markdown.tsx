@@ -13,10 +13,17 @@
 // allow-list and built as a React element, never inserted as markup; a tag
 // that is not on the list, or carries an attribute or an address that is not,
 // stays as the text it was, and an HTML comment is not drawn.
+//
+// A fenced block whose language is `mermaid` is drawn as its diagram, shrunk
+// to the width it is given; until the picture is in, and when Mermaid cannot
+// read it, it is the code block it would otherwise be, the second under one
+// muted line saying why.
 
 import type { SyntaxNode } from "@lezer/common";
 import { GFM, parser } from "@lezer/markdown";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useInterfaceTranslation } from "../i18n/translator";
+import { drawMermaid, isMermaidInfo, showMermaidSvg, watchPalette, type MermaidDrawing } from "../markdownMermaid";
 
 const markdown = parser.configure(GFM);
 
@@ -93,12 +100,12 @@ function block(node: SyntaxNode, source: Source, key: number): ReactNode {
         </blockquote>
       );
     case "FencedCode":
-    case "CodeBlock":
-      return (
-        <pre key={key} className="m-none whitespace-pre-wrap wrap-anywhere rounded-md bg-secondary px-md py-sm font-mono">
-          {codeOf(node, text)}
-        </pre>
-      );
+    case "CodeBlock": {
+      const code = codeOf(node, text);
+      const info = node.getChild("CodeInfo");
+      if (info && isMermaidInfo(text.slice(info.from, info.to)) && code.trim() !== "") return <MermaidBlock key={key} source={code} />;
+      return <CodeBlock key={key} code={code} />;
+    }
     case "HorizontalRule":
       return <hr key={key} className="border-border" />;
     case "Table":
@@ -129,6 +136,46 @@ function tableRow(row: SyntaxNode, source: Source, key: number): ReactNode {
       ))}
     </tr>
   );
+}
+
+function CodeBlock({ code }: { code: string }) {
+  return <pre className="m-none whitespace-pre-wrap wrap-anywhere rounded-md bg-secondary px-md py-sm font-mono">{code}</pre>;
+}
+
+/** A `mermaid` fence drawn as its diagram, drawn again when the colours change. */
+function MermaidBlock({ source }: { source: string }) {
+  const { t } = useInterfaceTranslation();
+  const [drawing, setDrawing] = useState<MermaidDrawing | null>(null);
+  const picture = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let live = true;
+    let attempt = 0;
+    const draw = () => {
+      const mine = ++attempt;
+      void drawMermaid(source).then((next) => {
+        if (live && mine === attempt) setDrawing(next);
+      });
+    };
+    draw();
+    const stop = watchPalette(draw);
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [source]);
+  useEffect(() => {
+    if (drawing?.kind === "svg" && picture.current) showMermaidSvg(picture.current, drawing.svg);
+  }, [drawing]);
+  if (drawing?.kind === "svg") return <div ref={picture} className="overflow-x-auto text-center" data-markdown-diagram="mermaid" />;
+  if (drawing?.kind === "failed") {
+    return (
+      <div className="space-y-xxs">
+        <p className="text-caption text-muted-foreground">{t("documents.mermaidUnavailable", { reason: drawing.reason })}</p>
+        <CodeBlock code={source} />
+      </div>
+    );
+  }
+  return <CodeBlock code={source} />;
 }
 
 /** The code between a fence's marks, or an indented block's lines. */
