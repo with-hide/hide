@@ -17,6 +17,13 @@
 //! program takes the foreground: a program that once read keys is not
 //! waiting to start, and a helper kept for every running agent would be a
 //! process per pane.
+//!
+//! Before its first ask a program is read editing lines, as every program a
+//! console starts does (`ENABLE_LINE_INPUT` is the console's default): read
+//! not known, the core would take an agent that took its foreground past its
+//! start's settle as reading keys and type into its line before the console
+//! was asked. Not known is kept for a program the helper cannot be had for
+//! and one still editing lines past the wait's bound.
 
 use std::process::Command;
 use std::time::Instant;
@@ -49,8 +56,9 @@ struct Program {
     starts: u32,
     /// The console has been asked about this program, or a helper tried.
     asked: bool,
-    /// The last answer, and the one given once the program read keys, the
-    /// wait passed its bound or the helper could not be had.
+    /// The last answer (editing lines until the console is first asked), and
+    /// the one given once the program read keys, the wait passed its bound or
+    /// the helper could not be had.
     last: LineEditing,
     settled: bool,
 }
@@ -68,7 +76,8 @@ impl ConsoleLines {
     /// program (`None` while the shell holds it, which is read as not known,
     /// as before: only a started program's reading keys is waited on). The
     /// console is asked on a [`LineAsk::Recheck`], and on the first read of
-    /// any kind past [`LINE_EDITING_RECHECK`]; a program is not known before.
+    /// any kind past [`LINE_EDITING_RECHECK`]; before that a program is read
+    /// editing lines, the mode a console starts it in.
     pub fn read(&mut self, program: Option<u32>, ask: LineAsk) -> LineEditing {
         let Some(pid) = program else {
             self.program = None;
@@ -83,7 +92,7 @@ impl ConsoleLines {
                 helper: None,
                 starts: 0,
                 asked: false,
-                last: LineEditing::Unknown,
+                last: LineEditing::Edits,
                 settled: false,
             }),
         };
@@ -176,6 +185,22 @@ impl Program {
 mod tests {
     use super::*;
 
+    /// A program the console has not been asked about yet is read editing
+    /// lines, the mode every console program starts in, and so is the next
+    /// program to take the foreground: read not known, a start that took the
+    /// foreground past its settle would be typed into its line before the
+    /// first ask, 100 ms in.
+    #[test]
+    fn a_program_the_console_has_not_been_asked_about_yet_edits_lines() {
+        let log = Log::open(None, "p").unwrap();
+        let mut lines = ConsoleLines::new(std::process::id(), log);
+        assert_eq!(lines.read(Some(7), LineAsk::Facts), LineEditing::Edits);
+        let program = lines.program.as_ref().unwrap();
+        assert!(!program.asked && program.helper.is_none() && program.starts == 0);
+        assert_eq!(lines.read(None, LineAsk::Facts), LineEditing::Unknown);
+        assert_eq!(lines.read(Some(8), LineAsk::Facts), LineEditing::Edits);
+    }
+
     /// A program still editing lines past the start's deadline is read not
     /// known from then on, by the facts as by a recheck, and keeps no
     /// helper: frozen as editing, an agent past a slow start would refuse
@@ -184,13 +209,11 @@ mod tests {
     fn a_program_past_the_start_wait_is_not_known_and_keeps_no_helper() {
         let log = Log::open(None, "p").unwrap();
         let mut lines = ConsoleLines::new(std::process::id(), log);
-        assert_eq!(lines.read(Some(7), LineAsk::Facts), LineEditing::Unknown);
+        assert_eq!(lines.read(Some(7), LineAsk::Facts), LineEditing::Edits);
         let program = lines.program.as_mut().unwrap();
-        assert!(!program.asked, "a program is asked only past the recheck");
         program.since = Instant::now()
             .checked_sub(LINE_EDITING_RECHECK_FOR)
             .unwrap();
-        program.last = LineEditing::Edits;
         assert_eq!(lines.read(Some(7), LineAsk::Facts), LineEditing::Unknown);
         let program = lines.program.as_ref().unwrap();
         assert!(program.settled && program.helper.is_none());

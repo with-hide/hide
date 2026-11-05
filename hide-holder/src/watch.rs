@@ -35,8 +35,7 @@ use crate::pane::{Observed, Pane};
 pub const MIN_FACTS_INTERVAL: Duration = Duration::from_millis(16);
 
 /// How often the writer asks the terminal again whether it edits lines
-/// while a program other than the pane's own holds it and has not been read
-/// reading keys (it edits lines, or that is not known yet): a program turns
+/// while a program other than the pane's own holds it so: a program turns
 /// line editing off to read keys without writing anything, and one that
 /// drew its screen first would otherwise be known to read keys only at its
 /// next output.
@@ -245,7 +244,7 @@ pub enum LineAsk {
     /// since asking its console costs a helper's round trip.
     Facts,
     /// On the writer's timer ([`LINE_EDITING_RECHECK`]), while a program
-    /// holds the terminal and the answer is not that it reads keys.
+    /// holds the terminal and edits lines.
     Recheck,
 }
 
@@ -293,9 +292,8 @@ impl FactsWriter {
         let mut foreground = Foreground::default();
         let mut last: Option<Facts> = None;
         let mut next = Instant::now();
-        // The program that holds the terminal while it is not read reading
-        // keys and since when, so its line editing is asked again for a
-        // bounded time.
+        // The program that holds the terminal while it edits lines and since
+        // when, so its line editing is asked again for a bounded time.
         let mut editing: Option<(u32, Instant)> = None;
         // Whether the last read could not say what holds the terminal, so
         // the log has it once per spell.
@@ -367,16 +365,11 @@ impl FactsWriter {
                     continue;
                 }
             };
-            // Asked again while the program has not been read reading keys:
-            // a Windows holder answers not known until its first recheck
-            // has asked the console.
             editing = match (&facts.foreground, facts.line_editing) {
-                (Some(program), Some(LineEditing::Edits | LineEditing::Unknown)) => {
-                    Some(match editing {
-                        Some((pid, since)) if pid == program.pid => (pid, since),
-                        _ => (program.pid, Instant::now()),
-                    })
-                }
+                (Some(program), Some(LineEditing::Edits)) => Some(match editing {
+                    Some((pid, since)) if pid == program.pid => (pid, since),
+                    _ => (program.pid, Instant::now()),
+                }),
                 _ => None,
             };
             if !owed && last.as_ref() == Some(&facts) {

@@ -332,9 +332,14 @@ fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
     watch.wait("the shell's facts", |facts| facts.foreground.is_none());
 
     connection.send(ClientMessage::Input(role_line())).unwrap();
+    // The first facts that name the program say it edits lines, the mode a
+    // terminal or console starts every program in: read not known, a start
+    // that took the foreground past its settle would be typed into its line
+    // (on Windows, until the console is first asked 100 ms in).
     let editing = watch.wait("the program in the terminal's line", |facts| {
-        facts.foreground.is_some() && facts.line_editing == Some(LineEditing::Edits)
+        facts.foreground.is_some()
     });
+    assert_eq!(editing.line_editing, Some(LineEditing::Edits));
     std::fs::write(&pane.go, b"").unwrap();
     let reading = watch.wait("the program reading keys", |facts| {
         facts.line_editing == Some(LineEditing::ReadsKeys)
