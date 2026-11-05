@@ -235,7 +235,7 @@ The same cause is raised once.
 CI, review and merge waits call no one, and a worker waiting on them is not warned for being quiet.
 
 Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge is not quiet).
-Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing review or a new push takes it off, and a warning that stands is never sent again.
+Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review or a new push takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
 The two thresholds are the operator's, in Settings › Mission (`warn_review_fails`, `warn_quiet_minutes` in `hide mission settings`).
 

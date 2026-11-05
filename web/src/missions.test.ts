@@ -568,8 +568,8 @@ describe("a node's warnings", () => {
     status: "working",
     review_fails: 3,
     warnings: [
-      { kind: "review_fails", from_unix_ms: 1, since_unix_ms: 1 },
-      { kind: "no_push", from_unix_ms: 0, since_unix_ms: 95 * 60_000 },
+      { kind: "review_fails", from_unix_ms: 1, since_unix_ms: 1, told_unix_ms: 1 },
+      { kind: "no_push", from_unix_ms: 0, since_unix_ms: 95 * 60_000, told_unix_ms: 95 * 60_000 },
     ],
   });
 
@@ -579,6 +579,11 @@ describe("a node's warnings", () => {
       full: ["Warned the Conductor: review failed 3 times in a row", "Warned the Conductor: no push for 95 minutes"],
     });
     expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
+  });
+
+  it("says a warning told only once its letter was queued", () => {
+    const untold = { ...warned, warnings: [{ ...warned.warnings![1]!, told_unix_ms: null }] };
+    expect(warningWords(mission("m"), untold, t)?.full).toEqual(["no push for 95 minutes"]);
   });
 
   it("is none without a warning, on a dropped node or in a cancelled mission", () => {

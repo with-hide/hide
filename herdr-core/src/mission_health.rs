@@ -1048,6 +1048,7 @@ mod tests {
             kind,
             from_unix_ms: from,
             since_unix_ms: from,
+            told_unix_ms: Some(from),
         }
     }
 

@@ -420,11 +420,13 @@ fn draw_node(result: &Value, now: u64) -> String {
             ),
             _ => "확인 필요".to_owned(),
         };
-        let _ = writeln!(
-            out,
-            "경고 {WARN} {what} · 지휘자에게 알림 {}",
-            age(now, &warning["since_unix_ms"])
-        );
+        // A full letter queue leaves it untold until the next evaluation.
+        let told = if warning["told_unix_ms"].is_u64() {
+            format!("지휘자에게 알림 {}", age(now, &warning["told_unix_ms"]))
+        } else {
+            "지휘자에게 알릴 차례".to_owned()
+        };
+        let _ = writeln!(out, "경고 {WARN} {what} · {told}");
     }
     if node["attention"].is_object() {
         let attention = &node["attention"];
@@ -505,7 +507,8 @@ mod tests {
                 {"key": "review", "kind": "review", "state": "fail", "fails_in_a_row": 2},
                 {"key": "ci", "kind": "ci", "state": "fail"}],
              "warnings": [
-                {"kind": "review_fails", "from_unix_ms": NOW - 20 * MINUTE, "since_unix_ms": NOW - 20 * MINUTE},
+                {"kind": "review_fails", "from_unix_ms": NOW - 20 * MINUTE, "since_unix_ms": NOW - 20 * MINUTE,
+                 "told_unix_ms": NOW - 20 * MINUTE},
                 {"kind": "no_push", "from_unix_ms": NOW - 95 * MINUTE, "since_unix_ms": NOW - 5 * MINUTE}]},
             {"key": "ci", "kind": "change", "delivery": "pr", "status": "working",
              "pr": 8, "prs": [{"number": 8, "state": "pending"}], "pr_state": "pending",
@@ -608,7 +611,7 @@ mod tests {
              브랜치 feat/show\n\
              ⚠push 95분 전\n\
              경고 ⚠ 리뷰 FAIL 2연속 · 지휘자에게 알림 20분 전\n\
-             경고 ⚠ push 없이 95분 · 지휘자에게 알림 5분 전\n\
+             경고 ⚠ push 없이 95분 · 지휘자에게 알릴 차례\n\
              완료 줄 1/3\n\
              \x20 c1 통과 · show reads as text · 근거 unit test · w 30분 전\n\
              \x20 review 실패 · FAIL 2연속\n\

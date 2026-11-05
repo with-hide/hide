@@ -1517,8 +1517,8 @@ export type MissionNode = {
 
 /** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
 export type MissionWarningKind = "review_fails" | "no_push";
-/** A warning a node carries (`NodeWarning`): raised to its Conductor at `since_unix_ms`, standing on the fact at `from_unix_ms`. */
-export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number };
+/** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
+export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null };
 
 /** One mission as the map draws it (`MissionView`). */
 export type Mission = {

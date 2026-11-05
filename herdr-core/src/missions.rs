@@ -326,6 +326,10 @@ pub struct NodeWarning {
     pub from_unix_ms: u64,
     /// When Hide raised it.
     pub since_unix_ms: u64,
+    /// When its letter joined the Conductor's queue; none while the queue
+    /// was full, so each evaluation after asks again until it is told.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told_unix_ms: Option<u64>,
 }
 
 /// What Hide itself did to a node last (D-07, D-15): the card's small Hide
