@@ -78,11 +78,19 @@ export function phoneGroups(): AgentGroup[] {
   ];
 }
 
-export const PHONE_DEVICES: PhoneDevice[] = [
-  { device_id: "local", label: null, local: true, connected: true, needs_you: 3, working: 9 },
-  { device_id: "mini", label: "Mac mini", connected: true, needs_you: 1, working: 3 },
-  { device_id: "old", label: "Linux 서버", connected: false, needs_you: 0, working: 0 },
-];
+/** Each device's counts of top rows, counted from the list as the core counts them (B9), so the sheet cannot disagree with the rows. */
+export function phoneDevices(groups: readonly AgentGroup[]): PhoneDevice[] {
+  const tally = (group: string, device: string) =>
+    groups
+      .filter((candidate) => candidate.group === group)
+      .flatMap((candidate) => [...candidate.rows, ...(candidate.more ?? [])])
+      .filter((top) => top.kind === "agent" && top.device_id === device).length;
+  return [
+    { device_id: "local", label: null, local: true, connected: true, needs_you: tally("needs_you", "local"), working: tally("working", "local") },
+    { device_id: "mini", label: "Mac mini", connected: true, needs_you: tally("needs_you", "mini"), working: tally("working", "mini") },
+    { device_id: "old", label: "Linux 서버", connected: false, needs_you: 0, working: 0 },
+  ];
+}
 
 /** The one paired Mac the hosted phone's picker lists, written before the sheet reads it. */
 export function seedPairedMac(): void {

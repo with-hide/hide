@@ -7,7 +7,7 @@ import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { ListScreen } from "../mobile/App";
 import { patch, usePhone } from "../mobile/store";
 import "../mobile/mobile.css";
-import { PHONE_DEVICES, PHONE_MAC, PHONE_ROOM, phoneGroups, seedPairedMac } from "./mobilePhoneSceneData";
+import { PHONE_MAC, PHONE_ROOM, phoneDevices, phoneGroups, seedPairedMac } from "./mobilePhoneSceneData";
 
 export function MobilePhoneScene({ state, language, theme, scale }: { state: "phone-list" | "phone-devices"; language: string; theme: string; scale: number }) {
   const [ready] = useState(() => { seedPairedMac(); return true; });
@@ -15,7 +15,8 @@ export function MobilePhoneScene({ state, language, theme, scale }: { state: "ph
   useFollowInterfaceLanguage(language);
   useLayoutEffect(() => {
     const before = usePhone.getState();
-    patch({ screen: "app", connected: true, unreachable: false, macName: PHONE_MAC, otherPhones: 0, groups: phoneGroups(), devices: PHONE_DEVICES, childrenOpen: {}, foldsOpen: {} });
+    const groups = phoneGroups();
+    patch({ screen: "app", connected: true, unreachable: false, macName: PHONE_MAC, otherPhones: 0, groups, devices: phoneDevices(groups), childrenOpen: {}, foldsOpen: {} });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
