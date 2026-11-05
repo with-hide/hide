@@ -39,6 +39,10 @@ export function openCount(entries: readonly MissionEntry<PhoneMission>[]): numbe
  * the Conductor and what works; `끝남` what finished. The step the decision
  * stopped, and a worker the core raised, stand in `hold` beside the nodes
  * the map marks `!`, so no step that waits on someone reads as working.
+ *
+ * This is not `turnItems`: that decides what waits on the operator (the
+ * badge and `내 차례`), while `hold` is every step that waits on anyone, the
+ * Conductor included, so the page never shows a stopped step as working.
  */
 export function missionSteps(mission: PhoneMission): { hold: PhoneMissionNode[]; working: PhoneMissionNode[]; done: PhoneMissionNode[] } {
   const groups = summaryGroups(mission);

@@ -5,7 +5,7 @@
 // a refused answer shows in the desktop's words.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { PhoneMission, PhoneMissionNode, ServerFrame } from "./protocol";
 
 vi.hoisted(() => {
@@ -83,6 +83,14 @@ async function connect(items: PhoneMission[]) {
   const answers = () => socket.sent.filter((message) => message.type === "answer_mission");
   return { container, socket, serve, click, answers, connection, store, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
 }
+
+// The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
+// hook's own budget, so the first test's budget is for what it asserts.
+beforeAll(async () => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  await import("./App");
+  vi.unstubAllGlobals();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -164,6 +172,27 @@ it("answers a decision with one request, and the same press again reuses that re
     await click('[data-phone-option="1"]');
     expect(answers()).toHaveLength(2);
     expect(answers()[1]!.request_id).toBe(answers()[0]!.request_id);
+  } finally {
+    await unmount();
+  }
+});
+
+it("sends another mission's answer while the first one's accepted answer is still waiting for the core's frame", async () => {
+  const { container, click, serve, answers, unmount } = await connect([deciding(), deciding({ id: "m-other", title: "Mission other" })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-turn"]');
+    await click('[data-phone-option="1"]');
+    expect(answers()).toHaveLength(1);
+    await serve({ type: "mission_result", request_id: answers()[0]!.request_id as string, mission: "m-turn", ok: true, reason: null });
+
+    // Leave the page before the core's frame lands, then answer the other mission.
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-mission="m-other"]');
+    await click('[data-phone-option="2"]');
+    expect(answers()).toHaveLength(2);
+    expect(answers()[1]).toMatchObject({ mission: "m-other", key: 4, option: 2 });
+    expect(container.querySelector('[data-phone-mission-page="m-other"] [data-phone-decision]')!.getAttribute("data-phone-decision")).toBe("sending");
   } finally {
     await unmount();
   }

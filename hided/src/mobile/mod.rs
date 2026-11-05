@@ -1911,7 +1911,9 @@ impl Mobile {
                         if **current == missions {
                             return false;
                         }
-                        if missions.omitted > 0 {
+                        // Recorded when the record first goes over the cap, not on every
+                        // change while it stays over (the count is in the frame).
+                        if missions.omitted > 0 && current.omitted == 0 {
                             herdr_core::diagnostic!(json!({
                                 "component": "mobile_phone", "kind": "missions.capped",
                                 "omitted": missions.omitted,

@@ -93,6 +93,32 @@ pub struct PhoneAttention {
     pub item: bool,
 }
 
+/// Where a node's work is on its way to main (`NodeLanding`), copied variant
+/// by variant: a state or a field the core adds is not on the wire until it is
+/// named here, and the contract test over the published record fails first.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum PhoneLanding {
+    Landed { proof: PhoneLandingProof },
+    Left { action: PhoneLandingAction },
+    Unread { action: PhoneLandingAction },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum PhoneLandingProof {
+    Merged,
+    InMain { commit: String },
+    Outside,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhoneLandingAction {
+    Merge,
+    Join,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PhoneNode {
     pub key: String,
@@ -107,8 +133,8 @@ pub struct PhoneNode {
     pub base_pr: Option<u32>,
     pub stage: Option<u8>,
     pub attention: Option<PhoneAttention>,
-    /// Where the work is on its way to main (`NodeLanding`), as the core sent it.
-    pub landing: Option<Value>,
+    /// Where the work is on its way to main.
+    pub landing: Option<PhoneLanding>,
     pub agent_runtime: Option<String>,
     /// The agent kind of the node's worker.
     pub worker_agent: Option<String>,
@@ -187,7 +213,7 @@ struct NodeIn {
     #[serde(default)]
     attention: Option<PhoneAttention>,
     #[serde(default)]
-    landing: Option<Value>,
+    landing: Option<PhoneLanding>,
     #[serde(default)]
     agent_runtime: Option<String>,
     #[serde(default)]
@@ -493,6 +519,29 @@ mod tests {
             missions.items[0].nodes[0].worker_agent.as_deref(),
             Some("codex")
         );
+    }
+
+    #[test]
+    fn a_steps_landing_reaches_the_phone_by_its_named_fields_only() {
+        let landed = json!({"state": "landed", "proof": {"by": "in_main", "commit": "abc1234", "path": "/private/never-send"}, "note": "private"});
+        let left = json!({"state": "left", "action": "merge", "branch": "private-branch"});
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    node("a", json!({"landing": landed})),
+                    node("b", json!({"landing": left})),
+                ],
+            )],
+            json!({}),
+        );
+        let nodes = &projected(&rest).items[0].nodes;
+        let sent = serde_json::to_value(nodes).unwrap();
+        assert_eq!(sent[0]["landing"], json!({"state": "landed", "proof": {"by": "in_main", "commit": "abc1234"}}));
+        assert_eq!(sent[1]["landing"], json!({"state": "left", "action": "merge"}));
+        assert!(!sent.to_string().contains("private"));
     }
 
     #[test]
