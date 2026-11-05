@@ -221,6 +221,10 @@ fn end_reason(record: &PaneRecord) -> EndReason {
 
 /// The processes running a version folder's holder under `home`, a test's
 /// own.
+/// The holders running under `home`: the processes running a holder's
+/// program, less those a found holder started. A holder's child runs the
+/// holder's program between its fork and its exec, so it is no second holder
+/// (with-hide/hide-private#498).
 fn holders_in(home: &Path) -> Vec<u32> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(layout::holders_root(home))
@@ -233,7 +237,14 @@ fn holders_in(home: &Path) -> Vec<u32> {
         };
         found.extend(hide_platform::process::running(&file).unwrap());
     }
+    let started_by_one = |pid: &u32| {
+        hide_platform::process::parent_of(*pid).is_ok_and(|parent| found.contains(&parent))
+    };
     found
+        .iter()
+        .copied()
+        .filter(|pid| !started_by_one(pid))
+        .collect()
 }
 
 #[test]
@@ -410,7 +421,7 @@ fn a_program_that_ends_with_no_node_there_leaves_why_in_its_record() {
     let end = ended.end.as_ref().unwrap();
     assert_eq!(end.reason, EndReason::ProgramExited, "{ended:?}");
     assert_eq!(end.exit_code, Some(3), "{ended:?}");
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
 }
 
 /// The holder waits a bounded time for the records' lock and exits without
@@ -428,7 +439,7 @@ fn an_end_the_holder_could_not_record_is_settled_as_a_lost_holder() {
     .unwrap()
     .expect("the records' lock");
     std::fs::write(folder.go(), b"").unwrap();
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
     drop(lock);
     assert_eq!(folder.record("p1").phase, Phase::Running);
 
@@ -526,7 +537,7 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
     }
     #[cfg(windows)]
     hide_platform::process::terminate(holder.pid).unwrap();
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
     #[cfg(unix)]
     assert!(
         tree.iter().all(Running::is_running),
@@ -548,7 +559,11 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
         );
     }
     let socket = layout::holder_socket(&folder.state, "p1");
-    assert!(!socket.exists());
+    assert!(
+        !socket.exists(),
+        "{:?}",
+        EVENTS.lock().unwrap_or_else(PoisonError::into_inner)
+    );
     let mut lock = socket.into_os_string();
     lock.push(".lock");
     assert!(!Path::new(&lock).exists());
@@ -702,7 +717,7 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
         hide_platform::process::terminate(holder.pid).unwrap();
     }
     for holder in &holders {
-        wait_until("the holder's end", || !holder.runs());
+        Running::named(*holder).wait_gone();
     }
 
     let none = folder.panes.reconcile(folder.owner(), Duration::ZERO);
@@ -832,7 +847,11 @@ fn an_earlier_start_that_left_processes_holds_its_id_until_they_end() {
         Err(StartRefusal::EarlierRuns(left)) => assert!(left.contains(&program.pid), "{left:?}"),
         other => panic!("the pane's id was taken while its program ran: {other:?}"),
     }
+    let left = named.program;
     drop(named);
+    // The holder's end ends its program, on Windows by its job a moment
+    // after: the id is free once the program it names has ended.
+    left.wait_gone();
     let started = folder.start(&request);
     assert_eq!(started.phase, Phase::Running, "{started:?}");
     assert_ne!(started.program, Some(program), "{started:?}");
