@@ -80,61 +80,7 @@ An unresolved disagreement needs an operator answer.
 
 ## The suggestion investigation
 
-Hide AI 제안 (PRD hide-ai-suggestions) finds recurring problems with feature id `suggestions_investigation`, the one feature that asks over several turns (`herdr-core/src/suggestions/investigation/`).
-It is the core's analysis that edits a Project's notebook: its input is the record index and the notebook, its output the edits it writes, and nothing else in the suggestion area depends on how it works inside.
-The turns are `hide_ai::run_turns` (`hide-ai/src/turns.rs`): each turn is one `AiRouter::execute`, so provider selection and fallback, the usage limit, duplicate suppression, cancellation, process ownership and usage counting are the router's, and every turn is a call.
-No provider keeps a conversation between turns: each turn's request carries everything the model needs, so Claude, Codex, Grok, Pi, omp and Antigravity take part the same way through the one-shot surfaces below, and Codex's thread stays ephemeral per turn.
-OpenCode answers `Unsupported` as it does for any request, so no investigation runs on it.
-
-A Project's daily run is the investigation while Hide AI can take it: Hide AI on, an agent chosen, and that agent not OpenCode (B19, D-39).
-Otherwise it is the deterministic grouping by signal and tag, which asks no one.
-The choice is made when the run starts (`runtime/suggestions.rs`, `analysis_factory`), from what the runtime lock holds; an investigation whose usage limit is near does not start, and the day waits for a later wake (D-36).
-The router is Memory's (`crate::ai::memory_router`), with the usage limit.
-
-A turn sends, within the 64 KiB request input (every number is in `herdr-core/src/suggestions/policy.rs`):
-
-- the turn's number, the turns left and its phase;
-- the notebook: each line's number, stage, discomfort, cause, fix or a document fix's title, path and draft, and outcome, who struck it and why, how many records it has and its newest record numbers, open lines first, at most 20 KiB;
-- the fresh records grouped by signal and tag: their numbers, how many sessions, the pull request numbers and how many days ago, never the words around them, at most 12 KiB;
-- the model's own notes from the turn before (at most 1,000 characters), the outcome of each edit it made, and the results of the reads it asked for, at most 24 KiB together and 8 KiB each.
-
-The model answers one JSON object (`PlainJson`, schema `suggestions_investigation.v3`): at most eight notebook edits, applied in order and each saved before the next is taken, at most four reads for the next turn, its notes, and whether it is done.
-It runs nothing itself.
-A line the grouping by tag made, before anyone looked, is a key and not yet a problem: the prompt asks the model to check it, to split a CI check's records by the cause its log shows, and to pass or strike what is only a check's name or a shell command's head from exploring (`cat`, `rg`, `sed` and the like).
-A struck line still takes the sightings of its problem: Hide, not the model, decides whether a line the operator skipped comes back (D-43), so the prompt tells the model an operator's skip is not a finding.
-A fix has to be one the person can act on without opening the records again: for a pull request `write_cause` carries the result as a title (at most 80 characters), the repository-relative path of the one file it changes and the draft of the words it writes there (at most 600 characters), and a pull request line is offered only once it has all three; for an issue its fix says what was seen (the check, the error line, how often) and what to look at first.
-A read is a request Hide fulfils with its own fixed tools on the node that holds the Project, on the investigation's worker, off the runtime lock and off the session-sync thread.
-The Project's folder is found the first time a read needs it: of the catalog Projects on this machine and on linked devices, the one whose node names this Project, the folder that is its root asked first (`ProjectReads`).
-A Project no linked node names answers every read `project_unreachable`, and the run goes on with the records alone.
-
-| Read | What Hide runs | Bound |
-| --- | --- | --- |
-| `session` | the session a record happened in, through the session readers (`Call::SessionConversation`), around the record or from an event number; the window is `herdr-core/src/session_excerpt.rs`, which `hide session read` shares ([ARCHITECTURE.md: The link record](ARCHITECTURE.md#the-link-record)) | 16 events, at most 40, 2,000 characters an event |
-| `ci_log` | the failed check's page from the pull request's checks (`gh pr view`), then `gh run view --job <id> --log-failed`, which the node cuts to its last 256 KiB | the last 200 lines; a check not on GitHub Actions is refused |
-| `file` | the file's first 256 KiB (`Call::Bytes`), as numbered lines | 120 lines, at most 200 |
-| `search` | `git grep` of tracked text files for a fixed text, case ignored (`GitCommand::Grep`) | 5 lines a file, 40 shown, 64 KiB from the node |
-| `git_log` | `git log` of the repository or of one path (`GitCommand::Log`) | 10 commits, at most 20 |
-
-Every result passes the Memory redactor (`hide_memory::redact`, through `session_excerpt::mask`) before it is put in a request, and is cut to its bound; a session window past the reader's byte bound answers `session_read_bound`, not the events it did reach.
-A path with a credential file anywhere in it (the rule Memory's checks use: `.env*`, keys and certificates, names containing `secret` or `credential`) or Git's own folder, whose configuration can hold a token, is refused before anything is read, and a search hit in such a file is not shown.
-Each line a result keeps is at most 400 characters.
-
-A run has 30 turns and 20 minutes (`RUN_TURNS`, `RUN_SPAN_MS`), and one turn is given at most two minutes.
-The four turns before the last ask the model to wrap up.
-The last turn, at the turn limit or once less than a turn's time is left, offers no read and asks for the final edits; a turn that got no usable answer (an answer the schema refused twice, a timeout, a lost completion) is followed by that last turn.
-Every turn is admitted against Memory's machine-wide daily call cap, in Memory's store, before it is asked, and the usage ledger counts the turns with Memory's calls (`memory`), since both are the Hide AI tool.
-The run's stop (the Project turned off, or the core stopping) is the provider call's cancel token, so it ends a turn in flight, and it is checked again before each edit and each read.
-
-The run's end is what the core's analysis boundary reads:
-
-- `done`: the model said so.
-- `turn_limit` or `time_limit`: the last turn was answered; records it did not reach stay fresh for the next run.
-- `usage_paused`: the usage limit or the daily call cap; nothing more is asked, and the run resumes later.
-- `failed`: no agent could answer (not signed in, unavailable, a cap of the router), or no turn got a usable answer; a run with no usable answer wrote nothing; the core then groups what it left unread by tag and raises nothing that day, and the tab says `조사 못 함` (`not_investigated`, `docs/ARCHITECTURE.md`).
-- `stopped`: the notebook could not be saved, the Project was turned off or the core is stopping.
-
-None of it reaches the screen (design principle 13).
-The diagnostic log's `suggestions` `investigation.finished` carries the Project, the run, the end and its cause class, the turns asked and answered, the reads by tool and those refused, the edits by kind and those refused, the fresh records and the duration; never a prompt, a record's words, a file, a path or an answer.
+Moved to a private document: `docs/suggestion-investigation.md` in with-hide/hide-private.
 
 ## Providers
 

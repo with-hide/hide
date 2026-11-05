@@ -520,7 +520,7 @@ Use a qualified verdict when coverage is bounded: "no whole-body blanking observ
 
 ## Web shell measurement
 
-Published figures and their measurement boundaries live in the dated [performance observations](PERFORMANCE_RESULTS.md).
+Published figures and their measurement boundaries live in the dated performance observations, `docs/performance-results.md` in with-hide/hide-private.
 That report is an observed candidate result, not a new threshold or a replacement for the measurement contract here.
 
 `scripts/web-shell-measure/run.sh` exercises the product `hided` with separate screen-key and driven-output workloads.

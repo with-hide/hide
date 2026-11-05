@@ -27,7 +27,7 @@ Before writing or changing a test, read `docs/TESTING.md` for which layer to tes
 - `hide-relay-protocol/` - the shared mobile relay routing, device admission, Noise NK sessions and QR v2 contract, linked by native Rust and compiled to WASM for the phone; see `docs/RELAY_PROTOCOL.md`.
 - `hide-session/` - shared local Claude, Codex and OpenCode session location, incremental and backwards page reading, and conversation parsing used by the core's label worker, the core usage fallback and the phone's conversation, and every supported agent's session read as ACP session updates (`thread`); `tests/it/adapters.rs` is each agent reader's contract and `tests/it/thread.rs` each thread converter's.
 Agent registration, spawning and lineage are owned by the core, in `herdr-core/src/coordination/`; see `docs/delivery.md` and `docs/status-model.md`.
-Agent labels are made by the core, in `herdr-core/src/labels/`; see `docs/status-model.md`, Task identity.
+Agent labels are made by the core, in `herdr-core/src/labels/`; see `docs/task-identity.md` in with-hide/hide-private.
 
 ## Every Agent And Feature On Every System
 
@@ -39,6 +39,11 @@ A gap is allowed only as a cell in `docs/INSTALL.md`, What each system supports,
 
 When you tell the operator about a problem and its fix, in a reply, a letter or a pull request's `Summary`, say in plain words what is wrong and what changes, core first and short.
 Leave out the technical detail and the comparison of alternatives unless the operator asks for them; a pull request keeps the files to watch and the proof in `Review` and `Evidence`.
+
+## Private Design Documents
+
+The core design of missions and of the main services is owned by documents in with-hide/hide-private's `docs/` folder: missions (`missions.md`), session plans (`plans.md`), task identity and delegated escalation (`task-identity.md`), Project Memory (`project-sessions-and-memory.md`), Desk (`desk.md`), the Hide AI tool (`hide-ai-tool.md`), the 태스크 list, 보기 slot and PR list (`tasks-and-pr-list.md`), the suggestion investigation (`suggestion-investigation.md`), the measured performance figures (`performance-results.md`) and how a Conductor runs a mission (`mission-operations.md`); [docs/README.md](docs/README.md) maps each to the public section that points at it.
+A public pull request that changes behavior one of them owns comes with a paired with-hide/hide-private pull request that updates it, and the two name each other; a public file may name a private path and section, never restate its content.
 
 ## Working Beside Open Pull Requests
 
@@ -122,7 +127,7 @@ Read `docs/ARCHITECTURE.md` in full before changing anything under `herdr-core/`
   Launch creates the core once, after the runtime resolution has finished, and never replaces it.
 - A user action is one event, not a sequence: dispatch is fire-and-forget, so four events would arrive as four frames and a refusal partway would leave the screen half moved.
 - A path outside every registered checkout never reaches the core; the shell hands it to macOS and reveals rather than opens anything executable.
-- A delegated child pane is moved to its own tab, never split into the operator's pane, unless its spawn asked to open it beside its caller (`hide agent spawn --beside`, `docs/delivery.md`), and an ordinary delegated row can only be Working or Seen, with the seven core-owned escalation causes in `docs/status-model.md` as the explicit exception; a descendant's demand or completion turns its ancestors unread and nothing else on the parent moves; `docs/status-model.md` owns the ownership axis, the descendant badge and that rule.
+- A delegated child pane is moved to its own tab, never split into the operator's pane, unless its spawn asked to open it beside its caller (`hide agent spawn --beside`, `docs/delivery.md`), and an ordinary delegated row can only be Working or Seen, with the seven core-owned escalation causes in `docs/task-identity.md` in with-hide/hide-private as the explicit exception; a descendant's demand or completion turns its ancestors unread and nothing else on the parent moves; `docs/status-model.md` owns the ownership axis, the descendant badge and that rule.
 - An attach lives only while its tab is among the last five shown (`ATTACHED_TAB_LIMIT`); a released pane keeps its projection entry as `released`, because a missing entry reads as a failure.
 - Design principle #13 governs what reaches the screen: a failure the operator cannot act on goes to the diagnostic log, and an alert, a banner, or a sheet is a PRD decision, not a default.
 
