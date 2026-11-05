@@ -196,7 +196,7 @@ it("keeps the written answer when it is refused, shows why in words, and sends i
 });
 
 it("shows the desktop's reason and presses nothing when the Conductor is gone or the Mac is out of reach", async () => {
-  const { container, click, store, answers, unmount } = await connect([deciding({ conductor: { present: false, takes_answers: true, name: "Conductor", agent_kind: "claude", agent: null } })]);
+  const { container, click, answers, unmount } = await connect([deciding({ conductor: { present: false, takes_answers: true, name: "Conductor", agent_kind: "claude", agent: null } })]);
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-turn"]');
