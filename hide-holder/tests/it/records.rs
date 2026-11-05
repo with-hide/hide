@@ -221,6 +221,10 @@ fn end_reason(record: &PaneRecord) -> EndReason {
 
 /// The processes running a version folder's holder under `home`, a test's
 /// own.
+/// The holders running under `home`: the processes running a holder's
+/// program, less those a found holder started. A holder's child runs the
+/// holder's program between its fork and its exec, so it is no second holder
+/// (with-hide/hide-private#498).
 fn holders_in(home: &Path) -> Vec<u32> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(layout::holders_root(home))
@@ -233,35 +237,14 @@ fn holders_in(home: &Path) -> Vec<u32> {
         };
         found.extend(hide_platform::process::running(&file).unwrap());
     }
+    let started_by_one = |pid: &u32| {
+        hide_platform::process::parent_of(*pid).is_ok_and(|parent| found.contains(&parent))
+    };
     found
-}
-
-/// Asserts that `holder` is the one process running a holder under `home`;
-/// otherwise names each process found by its parent, start and name, and
-/// says whether a second look still finds it, which
-/// with-hide/hide-private#498 needs to tell another holder from a passing
-/// copy of this one.
-fn assert_one_holder(home: &Path, holder: u32) {
-    let found = holders_in(home);
-    if found == [holder] {
-        return;
-    }
-    let described: Vec<String> = found
         .iter()
-        .map(|pid| {
-            format!(
-                "{pid}: parent {:?}, start {:?}, name {:?}",
-                hide_platform::process::parent_of(*pid).ok(),
-                hide_platform::process::start_time(*pid).ok(),
-                hide_platform::process::name_of(*pid).ok(),
-            )
-        })
-        .collect();
-    panic!(
-        "one holder {holder} was expected, found {found:?} (a second look finds {:?}):\n{}",
-        holders_in(home),
-        described.join("\n")
-    );
+        .copied()
+        .filter(|pid| !started_by_one(pid))
+        .collect()
 }
 
 #[test]
@@ -300,7 +283,7 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
         .record("p1")
         .holder
         .expect("the holder wrote itself in");
-    assert_one_holder(folder.home.path(), holder.pid);
+    assert_eq!(holders_in(folder.home.path()), vec![holder.pid]);
     // The same pane id with another command is another intent, refused.
     let other = folder.request("p1", role_program("flood"), Vec::new());
     assert!(
@@ -338,7 +321,7 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     assert!(again.incarnation > ended.incarnation, "{again:?}");
     let second = again.holder.expect("the holder wrote itself in");
     assert_ne!(second, holder);
-    assert_one_holder(folder.home.path(), second.pid);
+    assert_eq!(holders_in(folder.home.path()), vec![second.pid]);
     folder.panes.close(folder.owner(), "p1").unwrap();
     assert!(folder.panes.forget(folder.owner(), "p1").is_err());
     drop(replacement);
