@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import cells
 from agent_journey.failure import FailureLogs, drop_on_pass
 from agent_journey.journey import Journey
+from agent_journey.report import markdown
 from agent_live_check.runtime import ResidentOutput
 
 # Account homes as hided's output and a pane's screen write them, each built
@@ -112,48 +113,54 @@ class FailedCell(unittest.TestCase):
         return path.read_bytes()
 
     def test_a_log_past_the_cells_cap_keeps_its_last_whole_lines_within_the_cap_and_says_it_was_cut(self):
-        journey = self.journey(cell_bytes=400)
-        lines = [b'{"n":%02d,"pad":"xxxxxxx"}\n' % n for n in range(40)]
+        journey = self.journey(cell_bytes=1500, floor_bytes=1024)
+        lines = [b'{"n":%03d,"pad":"xxxxxxx"}\n' % n for n in range(200)]
         journey.step("resume", b"".join(lines), (cells.FAIL, "no answer"))
         kept = self.kept()
         # The cap holds the whole file, its first line included.
-        self.assertLessEqual(len(kept), 400)
+        self.assertLessEqual(len(kept), 1500)
         first, body = kept.split(b"\n", 1)
         self.assertIn(b"cut", first)
         # The longest run of last whole lines that fits: one line more would not.
         self.assertTrue(body and b"".join(lines).endswith(body))
         held = body.count(b"\n")
-        self.assertGreater(len(kept) + len(lines[-held - 1]), 400)
+        self.assertGreater(len(kept) + len(lines[-held - 1]), 1500)
+        # The report says it too, where a person reads it.
+        self.assertEqual([cut["cell"] for cut in self.record["hided_logs_cut"]], ["resume"])
+        text = markdown({"mode": "ci", "holders": {}, "table": {}, "systems": {}, "agents": [self.record]})
+        self.assertIn("claude-resume-hided.log", text)
+        self.assertIn("1500-byte", text)
 
     def test_every_cap_keeps_the_longest_run_of_last_whole_lines_that_fits(self):
         # Swept over every cap, the cut lands on a line start as often as inside a line.
         self.journey()
-        lines = [b"old\n"] + [b"keep%02d\n" % n for n in range(12)]
+        lines = [b"old\n"] + [b"keep%03d\n" % n for n in range(160)]
         self.hided.write(b"".join(lines))
         step = {"step": "resume", "started_ms": 0}
-        for cap in range(220, 320):
+        for cap in range(1024, 1124):
             path = self.run_dir / f"cap-{cap}.log"
-            FailureLogs(self.hided.output, cell_bytes=cap).keep(path, 0, step, "resume")
-            if not path.exists():
-                continue
+            FailureLogs(self.hided.output, cell_bytes=cap, floor_bytes=1024).keep(path, 0, step, "resume")
             kept = path.read_bytes()
             held = kept.split(b"\n", 1)[1].count(b"\n")
             self.assertLessEqual(len(kept), cap)
-            if held < len(lines):
-                self.assertGreater(len(kept) + len(lines[-held - 1]), cap, cap)
+            self.assertGreater(len(kept) + len(lines[-held - 1]), cap, cap)
 
-    def test_the_runs_failed_cells_keep_no_more_than_the_runs_budget_and_a_spent_one_is_named(self):
-        journey = self.journey(cell_bytes=400, run_bytes=1000)
+    def test_every_failed_cell_keeps_its_tail_once_the_runs_budget_is_spent(self):
+        floor, run_bytes = 1024, 1500
+        journey = self.journey(cell_bytes=4096, run_bytes=run_bytes, floor_bytes=floor)
         line = b'{"pad":"' + b"x" * 50 + b'"}\n'
-        for step in ("resume", "letter", "resume", "letter"):
+        failed = ("resume", "letter", "resume", "letter")
+        for step in failed:
             for name in cells.CELLS:
                 self.table["claude"][name] = cells.cell(cells.PENDING, "")
-            journey.step(step, line * 20, (cells.FAIL, "no answer"))
-        logs = list(self.run_dir.glob("*-hided.log"))
-        self.assertLessEqual(sum(path.stat().st_size for path in logs), 1000)
-        self.assertTrue(all(path.stat().st_size <= 400 for path in logs))
-        # A cell the budget had no room for says so in the report rather than a file past it.
-        self.assertTrue(self.record.get("hided_logs_not_kept"))
+            journey.step(step, line * 60, (cells.FAIL, "no answer"))
+            # Each failed cell has its file, whatever the run spent before it.
+            self.assertTrue((self.run_dir / f"claude-{step}-hided.log").exists(), step)
+            self.assertTrue(self.kept(step).endswith(line), step)
+        logs = [path.stat().st_size for path in self.run_dir.glob("*-hided.log")]
+        # The run's budget plus each failed cell's tail bounds what the run keeps.
+        self.assertLessEqual(sum(logs), run_bytes + floor * len(failed))
+        self.assertIn("budget", self.record["hided_logs_cut"][-1]["limit"])
 
     def test_a_step_that_began_inside_a_line_keeps_that_whole_line(self):
         journey = self.journey()
@@ -172,21 +179,39 @@ class FailedCell(unittest.TestCase):
         self.assertIn('"whole"', text)
         self.assertNotIn('"cwd"', text)
 
-    def test_no_account_home_reaches_the_kept_log_or_screen(self):
-        spaced = "/" + "Users/Review Person"
-        lower = "C:" + "\\" + "users" + "\\" + "review-person"
-        with mock.patch.dict(os.environ, {"HOME": spaced, "USERPROFILE": spaced}):
+    def homes_in(self, home, line, screen):
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
             journey = self.journey()
-            self.screen = f"{spaced}/project $ {lower}\\project\n"
-            line = (f'{{"cwd":"{MACOS}/project","home":"{LINUX}/work",'
-                    f'"win":"{WINDOWS_JSON}\\\\AppData","short":"{WINDOWS_SHORT}\\Temp",'
-                    f'"spaced":"{spaced}/project","lower":"{lower}\\project"}}\n')
+            self.screen = screen
             journey.step("resume", line.encode(), (cells.FAIL, "no answer"))
-        for name in ("claude-resume-hided.log", "claude-resume-pane.txt"):
-            text = (self.run_dir / name).read_text()
-            for home in (MACOS, LINUX, "Users\\", "Person", "review-person"):
-                self.assertNotIn(home, text, name)
-        self.assertIn("~/project", (self.run_dir / "claude-resume-pane.txt").read_text())
+        return [(self.run_dir / name).read_text() for name in ("claude-resume-hided.log", "claude-resume-pane.txt")]
+
+    def test_no_account_home_reaches_the_kept_log_or_screen(self):
+        # Another account's, with a space in its name, in either case, on every system.
+        other = "/" + "Users/OtherAccount"
+        spaced = "/" + "Users/Review Person"
+        windows = "C:" + "\\" + "Users" + "\\" + "Review Person"
+        lower = "c:" + "\\" + "users" + "\\" + "review-person"
+        linux = "/" + "home/Review Person"
+        line = (f'{{"cwd":"{MACOS}/project","home":"{LINUX}/work",'
+                f'"win":"{WINDOWS_JSON}\\\\AppData","short":"{WINDOWS_SHORT}\\Temp",'
+                f'"spaced":"{spaced}/project","windows":"{windows}\\project","linux":"{linux}/work",'
+                f'"lower":"{lower}\\project","json":"{windows.replace(chr(92), chr(92) * 2)}\\\\project",'
+                f'"bare":"{spaced}"}}\n')
+        screen = f"{spaced}/project $ cd {windows}\\project\n{linux} $\n"
+        for name, text in zip(("log", "pane"), self.homes_in(other, line, screen)):
+            for leak in (MACOS, LINUX, "Users\\", "Person", "review-person", "someone", "runneradmin", "RUNNER"):
+                self.assertNotIn(leak, text, name)
+        self.assertIn("~/project", text)
+
+    def test_the_running_accounts_home_is_hidden_only_where_it_ends(self):
+        home = "/opt/review-account"
+        log, pane = self.homes_in(home, f'{{"in":"{home}/work","out":"{home}+extra/work","whole":"{home}"}}\n',
+                                  f"{home}/work $\n")
+        self.assertIn('"in":"~/work"', log)
+        self.assertIn('"whole":"~"', log)
+        self.assertIn(f'"out":"{home}+extra/work"', log)
+        self.assertIn("~/work $", pane)
 
 
 class PassedRun(unittest.TestCase):

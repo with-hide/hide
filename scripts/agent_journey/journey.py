@@ -224,10 +224,9 @@ class Journey:
         if not self.running:
             return None
         step, mark = self.running
-        kept = self.failure_logs.keep(self.run / f"{self.id}-{name}-hided.log", mark, step, name)
-        if not kept:
-            self.record.setdefault("hided_logs_not_kept", []).append(
-                {"cell": name, "reason": f"the run's {self.failure_logs.run_bytes}-byte budget for failed cells' logs is spent"})
+        kept, limit = self.failure_logs.keep(self.run / f"{self.id}-{name}-hided.log", mark, step, name)
+        if limit:
+            self.record.setdefault("hided_logs_cut", []).append({"cell": name, "file": kept, "limit": limit})
         return kept
 
     def settle(self, name, verdict, evidence=None, pane=None):
