@@ -1,0 +1,16 @@
+name: CI letters probe
+on:
+  push:
+    branches: [qa/ci-letters-2089-probe]
+permissions:
+  contents: read
+jobs:
+  probe-result:
+    name: Probe result
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Hold observation window
+        run: sleep 90
+      - name: Controlled result
+        run: exit 0
