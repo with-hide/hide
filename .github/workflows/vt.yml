@@ -125,33 +125,6 @@ jobs:
           # crates its tests build (hide-kit and what it links), whose lints
           # are their own lanes'.
           bash scripts/verify-cargo.sh clippy -p hide-holder -p hide-holder-protocol --all-targets --no-deps -- -D warnings
-      # TEMPORARY (removed before merge): with-hide/hide-private#405's
-      # measurement on Windows, and 20 runs of the holder's flaky tests
-      # under parallel load on every system.
-      - name: Measure (temporary, private#405 and flaky repeats)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 25
-        env:
-          HIDE_HOLDER_CONPTY: ${{ steps.conpty.outputs.folder }}
-        run: |
-          set +e +o pipefail
-          mkdir -p agents/runs/measure
-          filter='test(=queues::a_node_that_does_not_accept_notices_is_sent_none) | test(=queues::answers_past_their_bound_are_refused_and_told_to_a_node_that_accepts_notices) | test(=records::an_earlier_start_that_left_processes_holds_its_id_until_they_end) | test(=records::a_killed_holders_pane_is_settled_by_the_next_reconcile) | test(=records::starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed) | test(=lifecycle::a_holder_runs_its_shell_and_carries_input_and_output_across_connections) | test(=asks::processes_name_the_shell_and_the_program_that_holds_the_terminal) | test(=connections::a_connection_past_the_opening_bound_is_told_so_and_the_pane_runs_on)'
-          for run in $(seq 1 20); do
-            bash scripts/verify-cargo.sh nextest -p hide-holder --test it -E "$filter" --no-fail-fast > "agents/runs/measure/run-$run.txt" 2>&1
-            grep -E "Summary" "agents/runs/measure/run-$run.txt" | sed "s/^/run $run: /"
-          done
-          echo "failed tests:"; grep -h "  FAIL \[" agents/runs/measure/run-*.txt | sort | uniq -c
-          grep -h -A6 "panicked" agents/runs/measure/run-*.txt | head -60
-          exit 0
-      - uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        with:
-          name: measure-405-${{ matrix.system }}-${{ github.run_attempt }}
-          path: agents/runs/measure
-          if-no-files-found: ignore
       - name: Build with the network denied
         # The build runs Zig with package fetching off, so a reachable network
         # proves nothing: each wrapper first shows that it denies the network,
