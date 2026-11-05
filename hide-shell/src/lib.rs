@@ -1152,8 +1152,14 @@ mod tests {
             ("$a, $b = git push", &[&["git", "push"]]),
             ("$a,$b=git push", &[&["git", "push"]]),
             ("[int]$a , $b = git push", &[&["git", "push"]]),
+            ("[int] $r = git push", &[&["git", "push"]]),
+            ("$r.x = git push", &[&["git", "push"]]),
+            ("$h['k'] = git push", &[&["git", "push"]]),
+            ("$h['a=b'] += git push", &[&["git", "push"]]),
             // A comparison, a static call and a variable alone run as written.
             ("$r == 1", &[&["$r", "==", "1"]]),
+            ("$r -eq 1", &[&["$r", "-eq", "1"]]),
+            ("$a, $b", &[&["$a,", "$b"]]),
             ("[IO.File]::Exists('x')", &[&["[IO.File]::Exists"], &["x"]]),
             ("$r", &[&["$r"]]),
             // PowerShell reads the typographic double quotes as `\"`.

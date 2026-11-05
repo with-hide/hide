@@ -52,113 +52,60 @@ pub(crate) fn read(text: &str) -> ShellLine {
 /// PowerShell would refuse to run the line.
 struct Refused;
 
-/// The assignment operators (`about_Assignment_Operators`).
-const ASSIGNMENTS: [&str; 7] = ["=", "+=", "-=", "*=", "/=", "%=", "??="];
+/// The assignment operators (`about_Assignment_Operators`), the longer
+/// ones first so `+=` is not read as `=`.
+const ASSIGNMENTS: [&str; 7] = ["??=", "+=", "-=", "*=", "/=", "%=", "="];
 
 /// Takes the assignment in front of a command out of its words: what runs
-/// is the command after it, whose output the variables take (`$r = git
-/// push`, `$r=git push`, `$r =git push`, `$a = $b += git push`, with a cast
-/// `[string]$r = git push` and several targets `$a, $b = git push`). A
-/// variable whose name is given in braces or with a scope (`${a}`,
-/// `$env:x`) counts.
+/// is the command after it, whose output the target takes. A command whose
+/// first word starts with `$` or `[` is an expression, and when an
+/// assignment operator stands outside its brackets, everything up to the
+/// first one is the target (`$r`, `[int] $r`, `$r.x`, `$h['k']`, `$a, $b`)
+/// and the rest is the command (`about_Assignment_Operators`); chained
+/// assignments are taken one by one. Without an operator the words stay as
+/// they are (`$r == 1`, `$r -eq 1`, `[IO.File]::Exists`).
 fn strip_assignments(words: &mut Vec<String>) {
-    'assignment: loop {
-        // The targets and the operator may be spread over several words
-        // (`$a, $b =`) or share one with the value (`$r=git`).
-        let mut joined = String::new();
-        for taken in 1..=words.len() {
-            joined.push_str(&words[taken - 1]);
-            match assignment(&joined) {
-                Assignment::Not => return,
-                Assignment::Incomplete => {}
-                Assignment::Value(value) => {
-                    words.drain(..taken);
-                    if !value.is_empty() {
-                        words.insert(0, value);
-                    }
-                    continue 'assignment;
-                }
-            }
-        }
-        return;
-    }
-}
-
-enum Assignment {
-    /// The text does not start with an assignment.
-    Not,
-    /// The text so far is targets, so the next word may finish it.
-    Incomplete,
-    /// The text after the assignment's operator.
-    Value(String),
-}
-
-/// Whether `text` starts with assignment targets and an operator.
-fn assignment(text: &str) -> Assignment {
-    let mut rest = text;
-    loop {
-        // A cast before a target: `[string]`, `[int[]]`.
-        while rest.starts_with('[') {
-            let Some(end) = cast_end(rest) else {
-                return Assignment::Not;
-            };
-            rest = &rest[end..];
-        }
-        let Some(end) = variable_end(rest) else {
-            return Assignment::Not;
-        };
-        rest = &rest[end..];
-        match rest.strip_prefix(',') {
-            Some("") => return Assignment::Incomplete,
-            Some(next) => rest = next,
-            None => break,
-        }
-    }
-    if rest.is_empty() {
-        return Assignment::Incomplete;
-    }
-    if rest.starts_with("==") {
-        return Assignment::Not;
-    }
-    match ASSIGNMENTS
-        .iter()
-        .find(|operator| rest.starts_with(**operator))
+    while words
+        .first()
+        .is_some_and(|first| first.starts_with(['$', '[']))
     {
-        Some(operator) => Assignment::Value(rest[operator.len()..].to_owned()),
-        None => Assignment::Not,
+        let Some((word, at, operator)) = first_assignment(words) else {
+            return;
+        };
+        let value = words[word][at + operator.len()..].to_owned();
+        words.drain(..=word);
+        if !value.is_empty() {
+            words.insert(0, value);
+        }
     }
 }
 
-/// Where a cast's brackets close, nested brackets counted.
-fn cast_end(text: &str) -> Option<usize> {
+/// The word, the byte offset in it and the operator of the first
+/// assignment operator outside brackets in `words`.
+fn first_assignment(words: &[String]) -> Option<(usize, usize, &'static str)> {
     let mut depth = 0usize;
-    for (at, c) in text.char_indices() {
-        match c {
-            '[' => depth += 1,
-            ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(at + 1);
+    for (index, word) in words.iter().enumerate() {
+        for (at, c) in word.char_indices() {
+            match c {
+                '[' | '{' => depth += 1,
+                ']' | '}' => depth = depth.saturating_sub(1),
+                _ if depth == 0 => {
+                    let rest = &word[at..];
+                    if rest.starts_with("==") {
+                        return None;
+                    }
+                    if let Some(operator) = ASSIGNMENTS
+                        .iter()
+                        .find(|operator| rest.starts_with(**operator))
+                    {
+                        return Some((index, at, operator));
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
     None
-}
-
-/// Where the variable a word starts with ends: `$name`, `$scope:name` or
-/// `${any}`, read to its last name character.
-fn variable_end(word: &str) -> Option<usize> {
-    let rest = word.strip_prefix('$')?;
-    if let Some(braced) = rest.strip_prefix('{') {
-        return braced.find('}').map(|end| end + 3);
-    }
-    let name = rest
-        .char_indices()
-        .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | ':' | '?')))
-        .map_or(rest.len(), |(at, _)| at);
-    (name > 0).then_some(name + 1)
 }
 
 struct Reader {

@@ -672,6 +672,9 @@ fn a_powershell_call_is_judged_as_powershell_reads_it() {
         "$r =git push --force origin feature",
         "[string]$r = git push --force origin feature",
         "$a, $b = git push --force origin feature",
+        "[int] $r = git push --force origin feature",
+        "$r.x = git push --force origin feature",
+        "$h['k'] = git push --force origin feature",
     ] {
         assert_eq!(
             powershell(worktree, command),
