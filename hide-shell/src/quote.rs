@@ -85,6 +85,7 @@ pub fn windows_argument(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::windows_argument;
     use crate::Syntax;
 
     #[test]
