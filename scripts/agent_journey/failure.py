@@ -28,16 +28,14 @@ RUN_BYTES = 4 * 1024 * 1024
 FLOOR_BYTES = 16 * 1024
 # A cell's first line is a few hundred bytes; a tail has room for it.
 FIRST_LINE_ROOM = 1024
-# A home is a path's segment, whatever its name holds (spaces included):
-# the one after `Users` or `home` that follows a separator or a drive, up to
-# the next separator, quote or line end, in either case and as a JSON string
-# doubles a backslash (scripts/check-no-workstation-identity.py). The running
-# account's own home, wherever it lies, is the whole value its variables give,
-# where a separator, quote or line end follows it. Each prefix is split so
-# this file names no home itself.
+# Hidden as `~`: the home of the account running the journey, as its
+# variables give it, in either case and as a path or a JSON string writes its
+# separators, where no path name character follows it (a separator, a quote,
+# white space, CR and LF included, or the end). The log and the pane come from
+# this run's machine, whose account home is that one; another account's path
+# is left as written, since a pattern for it took the failure's reason with it.
 SEPARATOR = r"(?:\\+|/)"
-SEGMENT_END = r"(?=[\\/\"']|$)"
-OTHER_HOME = r"(?:\b[A-Za-z]:)?" + SEPARATOR + r"(?:Users|home)" + SEPARATOR + r"[^\\/\"'\r\n]+"
+HOME_END = r"(?![^\\/\"'\s])"
 
 
 def now_ms():
@@ -60,12 +58,12 @@ def homes_pattern(homes):
     def written(home):
         # Every separator as a path or a JSON string may write it.
         parts = [re.escape(part) for part in re.split(r"[\\/]+", home) if part]
-        return (SEPARATOR if home[:1] in "/\\" else "") + SEPARATOR.join(parts) + SEGMENT_END
-    return re.compile("|".join([*map(written, homes), OTHER_HOME]), re.IGNORECASE | re.MULTILINE)
+        return (SEPARATOR if home[:1] in "/\\" else "") + SEPARATOR.join(parts) + HOME_END
+    return re.compile("|".join(map(written, homes)), re.IGNORECASE)
 
 
 def scrub(text):
-    """`text` with every account home written as `~`."""
+    """`text` with the running account's home written as `~` (scripts/check-no-workstation-identity.py)."""
     return homes_pattern(account_homes()).sub("~", text)
 
 

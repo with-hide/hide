@@ -24,11 +24,9 @@ from agent_journey.journey import Journey
 from agent_journey.report import markdown
 from agent_live_check.runtime import ResidentOutput
 
-# Account homes as hided's output and a pane's screen write them, each built
-# from its parts so this file names no home (check-no-workstation-identity).
-MACOS, LINUX = "/" + "Users/someone", "/" + "home/runner"
-WINDOWS_JSON = "C:" + "\\\\" + "Users" + "\\\\" + "runneradmin"
-WINDOWS_SHORT = "C:" + "\\" + "Users" + "\\" + "RUNNER~1"
+# The running account's home, built from its parts so this file names no
+# home (check-no-workstation-identity).
+MACOS = "/" + "Users/someone"
 
 
 class Hided:
@@ -71,7 +69,12 @@ class Measured(Journey):
 
 
 class FailedCell(unittest.TestCase):
-    def journey(self, **caps):
+    def journey(self, home=MACOS, **caps):
+        # The account running the journey, whose home is the one hided's
+        # output and the pane can name on this machine.
+        account = mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home})
+        account.start()
+        self.addCleanup(account.stop)
         self.run_dir = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.run_dir)
         self.hided = Hided(self, self.run_dir)
@@ -163,11 +166,12 @@ class FailedCell(unittest.TestCase):
         self.assertIn("budget", self.record["hided_logs_cut"][-1]["limit"])
 
     def test_a_step_that_began_inside_a_line_keeps_that_whole_line(self):
-        journey = self.journey()
-        # The step begins after a home's prefix and inside a character's bytes.
-        self.hided.write(b'{"cwd":"' + MACOS[:7].encode() + "\ud55c".encode()[:1])
-        journey.step("resume", "\ud55c".encode()[1:] + MACOS[7:].encode() + b'/project"} error\n',
-                     (cells.FAIL, "no answer"))
+        home = MACOS + "\ud55c"
+        journey = self.journey(home)
+        # The step begins inside the home and inside its last character's bytes.
+        written = home.encode()
+        self.hided.write(b'{"cwd":"' + written[:-2])
+        journey.step("resume", written[-2:] + b'/project"} error\n', (cells.FAIL, "no answer"))
         text = self.kept().decode()
         self.assertNotIn("someone", text)
         self.assertNotIn("\ufffd", text)
@@ -180,29 +184,36 @@ class FailedCell(unittest.TestCase):
         self.assertNotIn('"cwd"', text)
 
     def homes_in(self, home, line, screen):
-        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
-            journey = self.journey()
-            self.screen = screen
-            journey.step("resume", line.encode(), (cells.FAIL, "no answer"))
-        return [(self.run_dir / name).read_text() for name in ("claude-resume-hided.log", "claude-resume-pane.txt")]
+        journey = self.journey(home)
+        self.screen = screen
+        journey.step("resume", line.encode(), (cells.FAIL, "no answer"))
+        return [(self.run_dir / name).read_bytes().decode() for name in ("claude-resume-hided.log", "claude-resume-pane.txt")]
 
-    def test_no_account_home_reaches_the_kept_log_or_screen(self):
-        # Another account's, with a space in its name, in either case, on every system.
-        other = "/" + "Users/OtherAccount"
-        spaced = "/" + "Users/Review Person"
-        windows = "C:" + "\\" + "Users" + "\\" + "Review Person"
-        lower = "c:" + "\\" + "users" + "\\" + "review-person"
-        linux = "/" + "home/Review Person"
-        line = (f'{{"cwd":"{MACOS}/project","home":"{LINUX}/work",'
-                f'"win":"{WINDOWS_JSON}\\\\AppData","short":"{WINDOWS_SHORT}\\Temp",'
-                f'"spaced":"{spaced}/project","windows":"{windows}\\project","linux":"{linux}/work",'
-                f'"lower":"{lower}\\project","json":"{windows.replace(chr(92), chr(92) * 2)}\\\\project",'
-                f'"bare":"{spaced}"}}\n')
-        screen = f"{spaced}/project $ cd {windows}\\project\n{linux} $\n"
-        for name, text in zip(("log", "pane"), self.homes_in(other, line, screen)):
-            for leak in (MACOS, LINUX, "Users\\", "Person", "review-person", "someone", "runneradmin", "RUNNER"):
-                self.assertNotIn(leak, text, name)
-        self.assertIn("~/project", text)
+    def test_the_running_accounts_home_is_hidden_as_every_form_writes_it(self):
+        # A name with a space, in either case, with either separator and a
+        # JSON string's doubled backslashes, before a separator, a quote, a
+        # space, a CRLF or the end of the text.
+        home = "D:" + "\\" + "Profiles" + "\\" + "Review Person"
+        doubled = home.replace("\\", "\\\\")
+        line = (f'{{"cwd":"{doubled}\\\\project","lower":"{doubled.lower()}","slash":"{home.replace(chr(92), "/")}/x"}}\n'
+                f"cd {home} && ls\r\n{home}\r\n")
+        log, pane = self.homes_in(home, line, f"{home}\\project $\r\n{home}\r\n")
+        for name, text in (("log", log), ("pane", pane)):
+            self.assertNotIn("review", text.lower(), name)
+        self.assertIn("cd ~ && ls\r\n~\r\n", log)
+        self.assertIn("~\\project $\r\n~\r\n", pane)
+
+    def test_what_follows_a_path_stays_to_be_read(self):
+        # Only the running account's home is hidden: the log and the pane come
+        # from this run's machine, whose only account home is its own.
+        lines = ("cd: /" + "home/Review Person: Permission denied",
+                 "GET https://service.example/" + "home/settings status=503 retry=0",
+                 '{"cwd":"' + MACOS + '/project","error":"open failed"}')
+        log, pane = self.homes_in(MACOS, "\n".join(lines) + "\n", "\n".join(lines) + "\n")
+        for name, text in (("log", log), ("pane", pane)):
+            self.assertIn(lines[0], text, name)
+            self.assertIn(lines[1], text, name)
+            self.assertIn('{"cwd":"~/project","error":"open failed"}', text, name)
 
     def test_the_running_accounts_home_is_hidden_only_where_it_ends(self):
         home = "/opt/review-account"
