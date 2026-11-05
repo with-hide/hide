@@ -224,7 +224,7 @@ enum Place {
 }
 
 fn shell(text: &str, mut place: Place, depth: usize, found: &mut Found) {
-    let line = hide_shell::shell_line(text);
+    let line = hide_shell::shell_line(text, hide_shell::Syntax::Posix);
     found.fallback |= line.fallback;
     for words in &line.commands {
         command(words, &mut place, found);

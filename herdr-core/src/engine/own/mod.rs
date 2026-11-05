@@ -2210,7 +2210,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs a program; an agent starts only in an idle shell"),
             ));
         }
-        let shell = shell_line::Shell::of(processes.shell_name(), self.shared.windows).ok_or_else(|| {
+        let shell = shell_line::shell_of(processes.shell_name(), self.shared.windows).ok_or_else(|| {
             refused(
                 "agent_start_refused",
                 format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),

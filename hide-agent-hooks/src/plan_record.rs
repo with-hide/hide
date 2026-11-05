@@ -380,7 +380,7 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
 }
 
 fn shell(command: &str, proposed: bool, merge_barred: bool) -> Option<Refused> {
-    let line = shell_line(command);
+    let line = shell_line(command, hide_shell::Syntax::Posix);
     for words in &line.commands {
         let words = command_words(words, true);
         let Some((first, args)) = words.split_first() else {

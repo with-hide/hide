@@ -41,11 +41,12 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use hide_agent_adapter::AgentId;
+use hide_shell::Syntax;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::install::{
-    HookDocument, HookStatus, InstallFailure, InstallOutcome, Quoting, RemoveOutcome,
+    HookDocument, HookStatus, InstallFailure, InstallOutcome, NATIVE, RemoveOutcome, first_quoted,
     read_document, write_document,
 };
 use crate::route::HookTarget;
@@ -332,13 +333,16 @@ impl GuidanceAgent {
         }
     }
 
-    /// How the helper's path is quoted in this agent's command on this
-    /// system, and read back from it.
-    fn quoting(self) -> Quoting {
+    /// The helper's path in a command of this agent's on this system: agy's
+    /// Windows commands before guidance version 7 named it in cmd's double
+    /// quotes, kept for reading and migrating them.
+    fn helper_in(self, command: &str) -> Option<String> {
         if cfg!(windows) && self == Self::Antigravity {
-            Quoting::Cmd
+            let start = command.find('"')? + 1;
+            let rest = &command[start..];
+            rest.find('"').map(|end| rest[..end].to_owned())
         } else {
-            Quoting::NATIVE
+            first_quoted(NATIVE, command)
         }
     }
 }
@@ -475,12 +479,12 @@ fn posix_command<'a>(
     otherwise: Option<&str>,
 ) -> String {
     let helper = helper.into();
-    let quoted = Quoting::Posix.quote(&helper.display().to_string());
+    let quoted = Syntax::Posix.single_quoted(&helper.display().to_string());
     let arguments = arguments(helper, agent, event);
     match otherwise {
         Some(text) => format!(
             "if [ -x {quoted} ]; then exec {quoted} {arguments}; else printf '%s\\n' {}; fi",
-            Quoting::Posix.quote(text)
+            Syntax::Posix.single_quoted(text)
         ),
         None => format!("if [ -x {quoted} ]; then exec {quoted} {arguments}; fi"),
     }
@@ -495,7 +499,7 @@ fn powershell_command<'a>(
     event: HookEvent,
 ) -> String {
     let helper = helper.into();
-    let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
+    let quoted = Syntax::PowerShell.single_quoted(&helper.display().to_string());
     format!(
         "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} {} }}",
         arguments(helper, agent, event)
@@ -543,7 +547,7 @@ fn plain_command<'a>(
 /// POSIX guard does.
 fn cursor_powershell_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookEvent) -> String {
     let helper = helper.into();
-    let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
+    let quoted = Syntax::PowerShell.single_quoted(&helper.display().to_string());
     let run = format!(
         "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ $payload = $input | Out-String -Stream; $payload | & {quoted} {} }}",
         arguments(helper, GuidanceAgent::Cursor, event)
@@ -551,7 +555,7 @@ fn cursor_powershell_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookE
     if crate::basic::cursor_permission_event(event) {
         format!(
             "& {{ {run} else {{ {} }} }}",
-            Quoting::PowerShell.quote(crate::basic::CURSOR_ALLOW)
+            Syntax::PowerShell.single_quoted(crate::basic::CURSOR_ALLOW)
         )
     } else {
         format!("& {{ {run} }}")
@@ -565,9 +569,9 @@ fn cursor_powershell_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookE
 /// every path it reaches, so a failed run has printed nothing.
 fn antigravity_tool_command<'a>(helper: impl Into<HookTarget<'a>>) -> String {
     let helper = helper.into();
-    let quoted = Quoting::Posix.quote(&helper.display().to_string());
+    let quoted = Syntax::Posix.single_quoted(&helper.display().to_string());
     let arguments = arguments(helper, GuidanceAgent::Antigravity, HookEvent::PreToolUse);
-    let ask = Quoting::Posix.quote(crate::antigravity::ASK);
+    let ask = Syntax::Posix.single_quoted(crate::antigravity::ASK);
     format!(
         "if [ -x {quoted} ]; then {quoted} {arguments} || printf '%s\\n' {ask}; else printf '%s\\n' {ask}; fi"
     )
@@ -581,13 +585,13 @@ const AGY_WINDOWS_COMMAND: &str = "powershell.exe -NoProfile -NonInteractive -En
 
 fn antigravity_windows_command<'a>(helper: impl Into<HookTarget<'a>>, event: HookEvent) -> String {
     let helper = helper.into();
-    let quoted = Quoting::PowerShell.quote(&helper.display().to_string());
+    let quoted = Syntax::PowerShell.single_quoted(&helper.display().to_string());
     let run = format!(
         "& {quoted} {}",
         arguments(helper, GuidanceAgent::Antigravity, event)
     );
     let script = if event == HookEvent::PreToolUse {
-        let ask = Quoting::PowerShell.quote(crate::antigravity::ASK);
+        let ask = Syntax::PowerShell.single_quoted(crate::antigravity::ASK);
         format!(
             "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ try {{ {run}; if ($LASTEXITCODE -ne 0) {{ {ask} }} }} catch {{ {ask} }} }} else {{ {ask} }}; exit 0"
         )
@@ -837,13 +841,13 @@ fn entry_helper(agent: GuidanceAgent, entry: &Value) -> Option<String> {
         if let Some(decoded) = decoded_windows_command(text) {
             return decoded
                 .contains(GUIDANCE_SOURCE_NAME)
-                .then(|| Quoting::PowerShell.first_quoted(&decoded))
+                .then(|| first_quoted(Syntax::PowerShell, &decoded))
                 .flatten();
         }
         if !text.contains(GUIDANCE_SOURCE_NAME) {
             return None;
         }
-        agent.quoting().first_quoted(text).or_else(|| {
+        agent.helper_in(text).or_else(|| {
             // Cursor's plain form: the helper's path, then its arguments.
             text.split_whitespace()
                 .next()

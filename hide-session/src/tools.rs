@@ -266,7 +266,7 @@ pub fn head(tool: &str, command: Option<&str>) -> String {
 /// What runs first in `line` that is not only a change of place or of
 /// environment (`cd`, `export`, an assignment).
 fn command_head(line: &str) -> Option<String> {
-    hide_shell::simple_commands(line)
+    hide_shell::simple_commands(line, hide_shell::Syntax::Posix)
         .into_iter()
         .find_map(|words| {
             let mut words = words.into_iter().skip_while(|word| {
@@ -333,7 +333,7 @@ fn uses(tool: &str, input: Option<&Value>) -> Vec<ToolUse> {
 /// `rg`, `grep`, `find` and the like.
 fn shell_uses(line: &str) -> Vec<ToolUse> {
     let mut uses = Vec::new();
-    for words in hide_shell::simple_commands(line) {
+    for words in hide_shell::simple_commands(line, hide_shell::Syntax::Posix) {
         let mut words = words.into_iter().skip_while(|word| {
             hide_shell::is_assignment(word) || hide_shell::is_prefix(word, false)
         });
