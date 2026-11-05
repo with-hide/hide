@@ -541,6 +541,9 @@ fn publish_session(
     // The delivery observation this pass makes, which only its own ingest
     // below may lay turns for.
     let mut observed = None;
+    // The pass runs until this function returns, on every path: a pull that
+    // found a pane's turn not yet laid by it waits until then.
+    let mut _running = None;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
@@ -579,6 +582,7 @@ fn publish_session(
                 pass
             }
         });
+        _running = observed.map(|pass| guard.begin_delivery_pass(pass));
     }
     if let SessionSyncTarget::Remote { target_id, .. } = &context.target {
         if let Some(overlay) = &overlay {
