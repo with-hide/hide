@@ -8,12 +8,12 @@
 // desktop's own rules; this draws them.
 
 import { ChevronRightIcon, Loader2Icon } from "lucide-react";
-import { useElapsed } from "../components/elapsed";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { PR_LOOK } from "../prMark";
-import { GROUP_TONE, reasonText, splitReason } from "../prReasonText";
+import { ReasonLine } from "../prReason";
+import { ApprovalCount } from "../PrReviewers";
 import { approvalCount, prReview } from "../prReview";
 import { OfflineText } from "./OfflineText";
 import { DeviceTag } from "./parts";
@@ -99,11 +99,7 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
   const { t } = useInterfaceTranslation();
   const { pr, project } = entry;
   const { icon: Icon, tone } = PR_LOOK[pr.state];
-  const elapsed = useElapsed(pr.reason.since_unix_ms);
-  const [lead, tail] = splitReason(reasonText(t, pr.reason, elapsed));
   const review = prReview(pr);
-  const approvals = review ? approvalCount(review) : null;
-  const toneClass = pr.reason.kind === "checking" || pr.reason.kind === "unjudged" ? "text-muted-foreground" : GROUP_TONE[pr.group];
   return (
     <RowButton
       aria-label={t("work.row.open", { number: String(pr.number), title: pr.title })}
@@ -119,11 +115,13 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
       </span>
       <span className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs pl-[calc(var(--size-pr-icon)+var(--spacing-sm))] text-body">
-        <span className="min-w-0 break-keep wrap-anywhere" data-phone-pr-line="true">
-          {lead ? <span className="font-medium text-foreground">{lead}</span> : null}
-          <span className={toneClass}>{tail}</span>
-          {approvals ? <span className={approvals.approved ? "text-pr-mergeable" : "text-pr-pending"}> · {t("work.review.count", approvals)}</span> : null}
-        </span>
+        <ReasonLine
+          reason={pr.reason}
+          group={pr.group}
+          approvals={review && approvalCount(review) ? <ApprovalCount review={review} /> : null}
+          className="whitespace-normal break-keep text-body wrap-anywhere"
+          data-phone-pr-line="true"
+        />
         {showProject ? <span className="min-w-0 truncate text-muted-foreground">{project.label}</span> : null}
         {project.device_label ? <DeviceTag label={project.device_label} /> : null}
       </span>

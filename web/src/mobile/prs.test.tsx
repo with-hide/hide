@@ -113,6 +113,10 @@ it("lists the open pull requests in four groups with the desktop's line, no badg
     expect(failed.getAttribute("data-phone-pr-reason")).toBe("failed");
     expect(failed.textContent).toContain("web-e2e");
     expect(container.querySelector(`[data-phone-pr="${keyOf(2090)}"] [data-phone-pr-line]`)!.textContent).toContain("Merge");
+    // The desktop list's own line: the approvals follow the leading word of a review wait and close every other reason.
+    const approvals = (number: number) => container.querySelector(`[data-phone-pr="${keyOf(number)}"] [data-phone-pr-line] [data-pr-approvals]`)!;
+    expect(approvals(2079).nextElementSibling).not.toBeNull();
+    expect(approvals(2090).nextElementSibling).toBeNull();
   } finally {
     await unmount();
   }
