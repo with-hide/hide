@@ -301,6 +301,7 @@ fn start_dormant(
         args,
         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
         wakes: true,
+        program: crate::start_prompt::start_program(node, &work.record.kind),
     }) {
         Ok(start) => start,
         Err(_) => return DormantStartOutcome::NotStarted,

@@ -319,17 +319,33 @@ use crate::error::HostError;
 /// link stream, the Hello's Herdr socket and the label lock's Herdr socket
 /// (the lock now names the engine folder, `scope`); a helper on 75 still
 /// takes them, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 76;
+/// 77: a Windows node answers `Call::AgentInstalled` with the file a start
+/// runs and the words before its arguments (`StartForm::Direct`), npm's
+/// launcher read as the program it runs, so a first input rides the start
+/// there too; a helper on 76 would answer `program` or `batch` for it, so
+/// it upgrades.
+pub const PROTOCOL_VERSION: u32 = 77;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
-/// runs it ([`Call::AgentInstalled`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
+/// reads it there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartForm {
-    /// The program itself takes them, each whole.
+    /// The program itself takes them, each whole, started by its name, which
+    /// the pane's shell finds as the node did (macOS, Linux).
     Program,
-    /// Windows runs the program through `cmd.exe`, a batch file such as
-    /// npm's shim (`hide_platform::programs::runs_through_cmd`).
+    /// The start names `program`, a file on the node, and puts `leading`
+    /// before its arguments, which it takes each whole: on Windows, where
+    /// the shell would find another file by the name, and npm's launcher is
+    /// read as the program it runs (`hide_platform::programs::START_NAMES_FILE`).
+    Direct {
+        program: String,
+        leading: Vec<String>,
+    },
+    /// Windows runs the program through `cmd.exe`: a batch file that is not
+    /// npm's launcher (`hide_platform::programs::Start::Batch`), so nothing
+    /// that `cmd.exe` would read again rides its start.
     Batch,
 }
 

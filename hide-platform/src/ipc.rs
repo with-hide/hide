@@ -398,6 +398,9 @@ impl LocalListener {
     /// connect (a listener of a build that took no lock); what a dead
     /// listener left at the path is replaced.
     pub fn bind(path: &Path) -> io::Result<Self> {
+        // Before any folder or lock is made, so a path the system cannot
+        // address fails whole and names itself.
+        sys::check_path(path)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -747,6 +750,7 @@ mod sys {
     /// connect waits for the socket to be writable, which an unconnected one
     /// is at once, so it hands back a stream that never connected.
     pub(super) fn connect(path: &Path, wait: Option<Duration>) -> io::Result<RawStream> {
+        check_path(path)?;
         let Some(wait) = wait else {
             return RawStream::connect(endpoint_name(path)?);
         };
@@ -761,10 +765,10 @@ mod sys {
         let bytes = path.as_os_str().as_bytes();
         // SAFETY: an all-zero `sockaddr_un` is a valid, empty address.
         let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
-        if bytes.is_empty() || bytes.contains(&0) || bytes.len() >= address.sun_path.len() {
+        if bytes.is_empty() || bytes.contains(&0) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "a socket path must be shorter than a socket address holds",
+                "a socket path must be a non-empty name with no NUL byte",
             ));
         }
         address.sun_family = libc::AF_UNIX as libc::sa_family_t;
@@ -836,6 +840,30 @@ mod sys {
         } else {
             Err(io::Error::last_os_error())
         }
+    }
+
+    /// Refuses a path a socket address cannot hold, with the path, its length
+    /// and the limit in the reason. The address holds `sun_path` bytes and a
+    /// terminating NUL (104 on macOS, 108 on Linux), and the system's own
+    /// refusal names none of it. A path never moves to another place here: a
+    /// caller that owns the folder shortens it.
+    pub(super) fn check_path(path: &Path) -> io::Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+
+        // SAFETY: an all-zero `sockaddr_un` is a valid, empty address.
+        let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        let capacity = address.sun_path.len();
+        let length = path.as_os_str().as_bytes().len();
+        if length >= capacity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "the socket path {} is {length} bytes, and a Unix socket path (sun_path) must be shorter than {capacity}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// A listener leaves a socket; a regular file or directory is not its.
@@ -1419,6 +1447,11 @@ mod sys {
             self.written.store(true, Ordering::Relaxed);
             Ok(written)
         }
+    }
+
+    /// A named pipe has no address limit like a Unix socket's.
+    pub(super) fn check_path(_path: &Path) -> io::Result<()> {
+        Ok(())
     }
 
     /// The marker file is the only thing a listener leaves on Windows.

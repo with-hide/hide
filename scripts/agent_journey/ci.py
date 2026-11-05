@@ -95,21 +95,56 @@ def route_names(kind, fixture_bin, fake_env=None):
     return names
 
 
-def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None, sandbox=None):
-    """The program a pane runs as `kind`: the agent in the disposable HOME,
-    with the runner's PATH behind the candidate's `hide`, and the stand-in's
-    configuration or the fake model's environment (fake_lane.py). Its PATH and
-    temporary folder are set here, since a Windows pane takes both from the
-    account's registry rather than from Herdr."""
-    private_directory(runtime.bin)
+def agent_environment(runtime, kind, path, journey_config=None, fake_env=None):
+    """What `kind` runs with: the disposable HOME, the runner's PATH behind
+    the candidate's `hide`, and the stand-in's configuration or the fake
+    model's environment (fake_lane.py)."""
     environment = {**home_env(runtime.home), "HIDE_STATE_DIR": str(runtime.state),
                    "PATH": os.pathsep.join((str(runtime.bin), path)), **temp_env(runtime.run / "agent-tmp"), **QUIET,
                    **{name: str(runtime.home / relative) for name, relative in AGENT_ENV[kind].items()}}
     if journey_config:
         environment["HIDE_E2E_JOURNEY"] = str(journey_config)
     environment.update(fake_env or {})
+    return environment
+
+
+def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None, sandbox=None, folder=None):
+    """The program that runs `kind` in its environment (agent_environment),
+    in `folder`, else in the candidate's bin folder, where a pane finds it as
+    `kind`. Its PATH and temporary folder are set here as well as on the
+    daemon, since a Windows pane takes what the daemon lacks from the
+    account's registry."""
+    folder = folder or runtime.bin
+    private_directory(folder)
+    environment = agent_environment(runtime, kind, path, journey_config, fake_env)
     command = sandbox.command([str(program)]) if sandbox else [program]
-    return launcher(runtime.bin / kind, command, environment=environment, unset=["CLAUDE_CONFIG_DIR"])
+    return launcher(folder / kind, command, environment=environment, unset=["CLAUDE_CONFIG_DIR"])
+
+
+def runs_as_installed(row, fixture_bin):
+    """Whether a Windows pane runs the agent's CLI as the runner installed it
+    (npm's launcher, or its executable) rather than as the journey's
+    wrapper: an agent whose first input rides its start. Hide reads npm's
+    launcher as the program it runs (hide-platform `programs::Start`), and
+    the wrapper, a batch file Hide cannot read, would make the start typed.
+    Its environment goes to the daemon instead (share_with_daemon), whose
+    panes inherit it; the agents typed by declaration keep the wrapper,
+    whose variables (OpenCode's XDG folders) differ from the daemon's."""
+    return WINDOWS and not fixture_bin and (row.get("input") or [None])[0] == "launch_prompt"
+
+
+def share_with_daemon(runtime, environment):
+    """Puts an agent's environment on the daemon, whose panes inherit it.
+    The daemon's own controlled PATH gives way to the agents' one PATH; any
+    other name the daemon or an earlier agent holds with another value is
+    refused rather than overwritten."""
+    for name, value in environment.items():
+        current = runtime.daemon_env.get(name)
+        replaceable = name == "PATH" and current == runtime.env.get("PATH")
+        if current is not None and current != value and not replaceable:
+            raise ProtectionError(f"agent_environment_conflict_{name}")
+        runtime.daemon_env[name] = value
+    runtime.daemon_env.pop("CLAUDE_CONFIG_DIR", None)
 
 
 def agy_set_up(home):

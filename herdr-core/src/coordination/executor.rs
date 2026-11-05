@@ -339,13 +339,47 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
+/// How the pane's node starts `kind`'s program now, asked before every
+/// start of the spawn: what the start names and whether the brief can ride
+/// it. It only ever lets a start name a file or carry its brief: a program
+/// the node does not find (on Windows a `.ps1` alone, which the pane's
+/// PowerShell still runs), a node that could not be asked, or no node at all
+/// leave the start as it was, by the program's name with its brief typed. A
+/// device's start was refused already when its node did not find the
+/// program (`check_target`).
+fn start_form(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    kind: &str,
+    spawn: &str,
+) -> Option<StartForm> {
+    let node = node?;
+    crate::start_prompt::start_form(
+        node,
+        hide_agent_adapter::canonical_kind(kind),
+        TARGET_CHECK_TIMEOUT,
+    )
+    .unwrap_or_else(|error| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
+            "agent_kind": kind, "cause": error.to_string(),
+        }));
+        None
+    })
+}
+
 /// The words a fresh start of `kind` adds to carry `brief` as its launch
 /// prompt (`start_prompt::launched`, the one decision), or `None` where the
 /// brief is typed once the agent runs; a reason to type it is logged.
 /// Decided once, for the spawn's first start, and saved with
 /// `BriefLaunched`.
-fn launch_prompt(kind: &str, args: &[String], brief: &str, here: bool) -> Option<Vec<String>> {
-    crate::start_prompt::launched(kind, args, brief, here)
+fn launch_prompt(
+    kind: &str,
+    args: &[String],
+    brief: &str,
+    here: bool,
+    form: Option<&StartForm>,
+) -> Option<Vec<String>> {
+    crate::start_prompt::launched(kind, args, brief, here, form)
         .map_err(|refusal| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
@@ -369,6 +403,7 @@ fn brief_words(
     reserved: &SpawnRecord,
     start_args: &[String],
     here: bool,
+    form: Option<&StartForm>,
 ) -> Result<Option<Vec<String>>, String> {
     let Some(brief) = reserved.brief.as_deref() else {
         return Ok(None);
@@ -388,7 +423,7 @@ fn brief_words(
     if reserved.briefed {
         return Ok(None);
     }
-    Ok(launch_prompt(&reserved.kind, start_args, brief, here))
+    Ok(launch_prompt(&reserved.kind, start_args, brief, here, form))
 }
 
 /// Sends `brief` down its prepared route, the one submission path the
@@ -1312,6 +1347,7 @@ fn spawn(
                 }));
             }
             close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
+            let form = start_form(node.as_deref(), kind, &reserved.id);
             let mut start_args = with_permission(kind, &permissions, start_args);
             // A fresh start carries the brief as its prompt argument where
             // the agent holds that through its own start screens
@@ -1322,7 +1358,7 @@ fn spawn(
                 .brief_input
                 .as_ref()
                 .is_some_and(|input| input.route == SendRoute::Launch);
-            let words = brief_words(&reserved, &start_args, !on_device)?;
+            let words = brief_words(&reserved, &start_args, !on_device, form.as_ref())?;
             let carried = words.clone();
             if let Some(words) = words {
                 if !launched_before {
@@ -1353,6 +1389,9 @@ fn spawn(
                 kind,
                 start_args,
                 codex_daemon,
+                form.as_ref().and_then(|form| {
+                    crate::engine::StartProgram::of(hide_agent_adapter::canonical_kind(kind), form)
+                }),
             )?;
             reserved = serde_json::from_value(mutate(
                 client,
@@ -2053,47 +2092,65 @@ mod tests {
             }))
             .unwrap()
         };
+        use hide_node_link::protocol::StartForm;
+        let by_name = Some(&StartForm::Program);
         // Saved words win over what the adapter would give now: OpenCode's
         // brief is typed today, and its earlier launch is not undone.
         assert_eq!(
             super::brief_words(
                 &record("opencode", Some("launch"), &["--prompt=-go"]),
                 &[],
-                true
+                true,
+                by_name,
             ),
             Ok(Some(vec!["--prompt=-go".to_owned()]))
         );
         // An earlier build's launched record has no words: its start gave
         // the brief as carried, and nothing is asked.
         assert_eq!(
-            super::brief_words(&record("codex", Some("launch"), &[]), &[], true),
+            super::brief_words(&record("codex", Some("launch"), &[]), &[], true, by_name),
             Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
         );
         assert_eq!(
             super::brief_words(
                 &record("codex", Some("launch"), &[]),
                 &["--".into(), "mine".into()],
-                true
+                true,
+                by_name,
             ),
             Err("brief_launch_unrecorded".to_owned())
         );
         // A brief that was typed is never launched by a later start.
         assert_eq!(
-            super::brief_words(&record("codex", Some("typed"), &[]), &[], true),
+            super::brief_words(&record("codex", Some("typed"), &[]), &[], true, by_name),
             Ok(None)
         );
-        // Only a fresh start decides: here it launches where the journey
-        // proves it, and a device's start is typed.
+        // Only a fresh start decides: here it launches as its node starts
+        // the program, by its name or its file, and a device's start, and a
+        // program Windows runs through cmd.exe, is typed.
         assert_eq!(
-            super::brief_words(&record("codex", None, &[]), &[], false),
+            super::brief_words(&record("codex", None, &[]), &[], false, by_name),
             Ok(None)
         );
-        if !cfg!(windows) {
+        let direct = StartForm::Direct {
+            program: "C:/node/node.exe".into(),
+            leading: vec!["C:/npm/node_modules/@openai/codex/bin/codex.js".into()],
+        };
+        for form in [by_name, Some(&direct)] {
             assert_eq!(
-                super::brief_words(&record("codex", None, &[]), &[], true),
+                super::brief_words(&record("codex", None, &[]), &[], true, form),
                 Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
             );
         }
+        assert_eq!(
+            super::brief_words(
+                &record("codex", None, &[]),
+                &[],
+                true,
+                Some(&StartForm::Batch)
+            ),
+            Ok(None)
+        );
     }
 
     #[test]

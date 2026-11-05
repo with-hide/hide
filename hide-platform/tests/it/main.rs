@@ -6,6 +6,7 @@
 mod fs;
 mod host;
 mod ipc;
+mod launchers;
 mod listeners;
 mod memory;
 mod path;
