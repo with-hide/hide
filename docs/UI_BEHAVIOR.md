@@ -2829,6 +2829,7 @@ It hangs under its parent as an indented row behind a vertical rail, two levels 
 A parent shows its children's counts by state (asking, working, done) and `자식 N ⌄` or `자식 N ›`, which opens or folds the children; the rest of the parent row opens the parent's detail.
 A parent opens expanded when a descendant asks the operator for something (an error, an approval or a question) and folded otherwise, and a change made on the phone stays on that phone: the desktop sidebar's folds never move.
 A parent keeps at most five children in view and folds the rest under `더 보기 N`, which opens them in place.
+What lies deeper than the second level waits behind that row's `더 보기 N`, so every agent can still be opened and answered from the phone.
 A child whose parent is not in the list is a row of its group again.
 Local sleeping conversations appear as separate rows in the core-selected group, with Wake or Check status and no conversation detail or reply bar.
 Those controls are disabled while disconnected or while one sleep request is waiting; a refused request keeps the row and asks the operator to check connection and session status before trying again.

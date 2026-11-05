@@ -26,7 +26,7 @@ import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useMissionAsks } from "./components/sidebar-mission-row";
 import { TreeRails } from "./components/agent-tree";
-import { sidebarTreeLines } from "./sidebarTree";
+import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
 import { groupFoldKey, useGroupFolds, useGroupName } from "./groupTabs";
 import { tabSurface } from "./recent";
@@ -1574,7 +1574,8 @@ function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSi
 function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { checkoutId: string; deviceId: string; agentRows: BoardRow[]; inset: string; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
-  const lines = useMemo(() => sidebarTreeLines(agentRows, shownAll), [agentRows, shownAll]);
+  const siblings = useShellStore((s) => siblingsShown(s.rest));
+  const lines = useMemo(() => sidebarTreeLines(agentRows, shownAll, siblings), [agentRows, shownAll, siblings]);
   // Which devices are reachable now, as one value, so a reconnect redraws the rows that name one.
   const reachable = useShellStore((s) => [localDeviceId(s.rest), ...(s.rest?.status?.remote ?? []).filter((row) => row.state === "connected").map((row) => row.target_id)].join("\n"));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);

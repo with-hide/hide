@@ -61,7 +61,7 @@ it("starts both device checkouts open and offers the same persisted fold (sessio
   const remote = project("mini");
   const local = project("local");
   const device: SnapshotRest = {
-    navigator: { devices: [LOCAL, MINI], workspaces: [], agents: [], focused_device_id: "mini" },
+    navigator: { siblings_shown: 5, devices: [LOCAL, MINI], workspaces: [], agents: [], focused_device_id: "mini" },
     status: {
       remote: [{
         target_id: "mini", state: "connected", message: null,
@@ -74,7 +74,7 @@ it("starts both device checkouts open and offers the same persisted fold (sessio
     },
   } as unknown as SnapshotRest;
   const thisMac = {
-    navigator: { devices: [LOCAL, MINI], workspaces: [local.workspace], agents: [local.agent], focused_device_id: "local" },
+    navigator: { siblings_shown: 5, devices: [LOCAL, MINI], workspaces: [local.workspace], agents: [local.agent], focused_device_id: "local" },
   } as unknown as SnapshotRest;
   useShellStore.setState({ rest: legacyRest(device, []), agents: [], connection: "live" });
   const actions = createActions(() => true);

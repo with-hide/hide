@@ -53,7 +53,7 @@ function setup(listed: HideAiCheckout[], focused: string | null) {
   } as unknown as Workspace;
   // An operator's agent works in the first Hide AI checkout; the core leaves a Hide AI agent's own row out of every tree.
   const rows = [agent("main", "사이드바 가독성 개선"), agent("checkout:m43", "m43 문서 직접 수정")];
-  const rest = { navigator: { devices: [LOCAL], workspaces: [workspace], agents: rows, hide_ai_checkouts: listed, focused_device_id: "local", focused_checkout_id: focused } } as unknown as SnapshotRest;
+  const rest = { navigator: { siblings_shown: 5, devices: [LOCAL], workspaces: [workspace], agents: rows, hide_ai_checkouts: listed, focused_device_id: "local", focused_checkout_id: focused } } as unknown as SnapshotRest;
   return { rest, rows };
 }
 

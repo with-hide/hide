@@ -332,6 +332,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   return {
     revision: 1,
     navigator: {
+      siblings_shown: 5,
       agent_scope: EMPTY_GALLERY_SCOPE,
       workspaces: projects,
       inactive_projects: [],

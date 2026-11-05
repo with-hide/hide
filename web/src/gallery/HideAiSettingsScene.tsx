@@ -64,7 +64,7 @@ export function HideAiSettingsScene({ params }: { params: URLSearchParams }) {
       connection: "live",
       rest: {
         status: { background_ai: ai },
-        navigator: { devices: [{ id: "local", kind: "local", label: null, machine_name: "Windows PC" }, { id: DEVICE, kind: "remote", label: "WSL Ubuntu", state: away ? "unavailable" : "ready" }] },
+        navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local", label: null, machine_name: "Windows PC" }, { id: DEVICE, kind: "remote", label: "WSL Ubuntu", state: away ? "unavailable" : "ready" }] },
         ui_state: { interface_language: lang, issue_settings: { ai_worktree_name: true, closes_instruction: true } },
       },
     } as never);
