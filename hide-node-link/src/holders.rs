@@ -196,8 +196,9 @@ pub struct PaneFacts {
     /// Whether the terminal edits input a line at a time before its program
     /// reads it (canonical mode), as the holder read it: a program reads
     /// keys only once it turns that off, and until then an Enter typed for
-    /// it arrives as a line break. `None` where the system cannot say
-    /// (Windows) or the holder or node was built before it.
+    /// it arrives as a line break. `None` where the holder cannot say (a
+    /// Windows console its helper could not read) or the holder or node was
+    /// built before it.
     #[serde(default)]
     pub line_editing: Option<bool>,
     /// The program in the terminal's foreground other than the pane's own

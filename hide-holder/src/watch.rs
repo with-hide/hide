@@ -232,6 +232,22 @@ pub fn facts(
     })
 }
 
+/// How a watch reads whether the terminal edits lines, given the pid of the
+/// program in the foreground, if any, and why it asks.
+pub type LineEditingRead = Box<dyn FnMut(Option<u32>, LineAsk) -> LineEditing + Send>;
+
+/// Why a watch's writer asks whether the terminal edits lines.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LineAsk {
+    /// For the facts it is about to send, as often as they change. A Unix
+    /// holder reads its master; a Windows holder answers what it last read,
+    /// since asking its console costs a helper's round trip.
+    Facts,
+    /// On the writer's timer ([`LINE_EDITING_RECHECK`]), while a program
+    /// holds the terminal and edits lines.
+    Recheck,
+}
+
 /// A watch's writer: its messages in order, and the facts whenever they may
 /// have changed and differ from the last it sent.
 pub struct FactsWriter {
@@ -245,9 +261,10 @@ pub struct FactsWriter {
     pub program_package: bool,
     /// The terminal's foreground process group, or why it is not known.
     pub group: Box<dyn Fn() -> Result<u32, Unknown> + Send>,
-    /// Whether the terminal edits lines, where the watch's node accepted
+    /// Whether the terminal edits lines under the foreground program it is
+    /// given (`None` for the shell), where the watch's node accepted
     /// [`hide_holder_protocol::Capability::LineEditing`].
-    pub line_editing: Option<Box<dyn Fn() -> LineEditing + Send>>,
+    pub line_editing: Option<LineEditingRead>,
     /// Whether the watch's node accepted
     /// [`hide_holder_protocol::Capability::ForegroundUnread`].
     pub foreground_unread: bool,
@@ -265,7 +282,12 @@ enum Job {
 }
 
 impl FactsWriter {
-    pub fn serve(self, mut stream: LocalStream, shutdown: &ShutdownHandle, written: &Sender<()>) {
+    pub fn serve(
+        mut self,
+        mut stream: LocalStream,
+        shutdown: &ShutdownHandle,
+        written: &Sender<()>,
+    ) {
         let mut reading = Reading::default();
         let mut foreground = Foreground::default();
         let mut last: Option<Facts> = None;
@@ -290,7 +312,9 @@ impl FactsWriter {
                 }
                 Job::Recheck => {
                     let sent = last.as_ref().and_then(|facts| facts.line_editing);
-                    if self.line_editing.as_ref().map(|read| read()) == sent {
+                    let program = editing.map(|(pid, _)| pid);
+                    let read = self.line_editing.as_mut();
+                    if read.map(|read| read(program, LineAsk::Recheck)) == sent {
                         continue;
                     }
                     false
@@ -320,9 +344,13 @@ impl FactsWriter {
             {
                 program.package = None;
             }
+            let pid = program.as_ref().map(|program| program.pid);
             let facts = match facts(&self.pane, &self.rules, &mut reading, program) {
                 Ok(facts) => Facts {
-                    line_editing: self.line_editing.as_ref().map(|read| read()),
+                    line_editing: self
+                        .line_editing
+                        .as_mut()
+                        .map(|read| read(pid, LineAsk::Facts)),
                     foreground_unread: self.foreground_unread.then_some(unread.is_some()),
                     ..facts
                 },

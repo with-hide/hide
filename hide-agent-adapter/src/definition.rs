@@ -83,6 +83,10 @@ pub struct Definition {
     pub home: Option<Vec<String>>,
     pub hooks: Hooks,
     pub start_args: Vec<String>,
+    /// The id of the idle screen rule that shows the program ready for a
+    /// start's first input (`[start] ready`): a start waits for its screen
+    /// to match it. It always names a rule of [`Self::screen`].
+    pub start_ready: Option<String>,
     pub resume_session: Option<Vec<String>>,
     pub resume_last: Option<Vec<String>>,
     pub screen: Option<Screen>,
@@ -195,6 +199,13 @@ impl Catalog {
                     definition.source == Source::Builtin && definition.id == id
                 }) {
                     let screen = screen_override(&name, read)?;
+                    // The agent's start waits for its ready rule, so rules
+                    // without it would hold every start to its deadline.
+                    check_ready(
+                        &name,
+                        definitions[index].start_ready.as_deref(),
+                        Some(&screen),
+                    )?;
                     // Only a file that replaced the rules is remembered, so
                     // a later refusal names that file and not one left out.
                     if let Some(earlier) = overridden.get(&id) {
@@ -259,6 +270,11 @@ fn new_definition(
             "{name}: hooks must be \"none\"; a file takes another agent's hooks with based_on"
         ));
     }
+    let screen = screen.map(|rules| Screen {
+        rules: Arc::new(rules),
+        source: source.clone(),
+    });
+    check_ready(name, file.start_ready.as_deref(), screen.as_ref())?;
     Ok(Definition {
         id: file.id,
         name: display,
@@ -268,12 +284,10 @@ fn new_definition(
         home: file.home,
         hooks,
         start_args: file.start_args.unwrap_or_default(),
+        start_ready: file.start_ready,
         resume_session: file.resume_session,
         resume_last: file.resume_last,
-        screen: screen.map(|rules| Screen {
-            rules: Arc::new(rules),
-            source: source.clone(),
-        }),
+        screen,
         source,
         based_on: None,
     })
@@ -297,6 +311,15 @@ fn based_on(
     }
     let display = required(name, "name", file.name)?;
     let source = Source::User(name.to_owned());
+    let screen = match screen {
+        Some(rules) => Some(Screen {
+            rules: Arc::new(rules),
+            source: source.clone(),
+        }),
+        None => builtin.screen.clone(),
+    };
+    let start_ready = file.start_ready.or_else(|| builtin.start_ready.clone());
+    check_ready(name, start_ready.as_deref(), screen.as_ref())?;
     Ok(Definition {
         id: file.id,
         name: display,
@@ -312,20 +335,34 @@ fn based_on(
         start_args: file
             .start_args
             .unwrap_or_else(|| builtin.start_args.clone()),
+        start_ready,
         resume_session: file
             .resume_session
             .or_else(|| builtin.resume_session.clone()),
         resume_last: file.resume_last.or_else(|| builtin.resume_last.clone()),
-        screen: match screen {
-            Some(rules) => Some(Screen {
-                rules: Arc::new(rules),
-                source: source.clone(),
-            }),
-            None => builtin.screen.clone(),
-        },
+        screen,
         source,
         based_on: Some(base.to_owned()),
     })
+}
+
+/// A start's ready rule (`[start] ready`) is an idle rule of the screen
+/// rules the definition ends up with.
+fn check_ready(name: &str, ready: Option<&str>, screen: Option<&Screen>) -> Result<(), String> {
+    let Some(ready) = ready else {
+        return Ok(());
+    };
+    let rule = screen
+        .and_then(|screen| screen.rules.rules().iter().find(|rule| rule.id == ready))
+        .ok_or_else(|| {
+            format!("{name}: start.ready names screen rule {ready:?}, which [screen] does not have")
+        })?;
+    if rule.state != Some(hide_screen_rules::State::Idle) {
+        return Err(format!(
+            "{name}: start.ready names screen rule {ready:?}, which is not an idle rule"
+        ));
+    }
+    Ok(())
 }
 
 /// A file with a built-in agent's id may only replace its screen rules.
@@ -338,7 +375,10 @@ fn screen_override(name: &str, (file, screen): (Fields, Option<Rules>)) -> Resul
         ("aliases", file.aliases.is_some()),
         ("home", file.home.is_some()),
         ("hooks", file.hooks.is_some()),
-        ("start", file.start_args.is_some()),
+        (
+            "start",
+            file.start_args.is_some() || file.start_ready.is_some(),
+        ),
         (
             "resume",
             file.resume_session.is_some() || file.resume_last.is_some(),

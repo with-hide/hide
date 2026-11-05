@@ -48,6 +48,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+pub mod console_input;
 mod resident;
 mod session;
 
@@ -1541,7 +1543,8 @@ pub enum LineInput {
 /// own descriptor, so a pane's holder asks its terminal without finding it
 /// again by pid. `None` on Windows: a pseudoconsole keeps its program's
 /// console input mode (`ENABLE_LINE_INPUT`) inside the console host, which
-/// the holder of its master has no handle to ask.
+/// the holder of its master has no handle to ask; a process attached to that
+/// console can, which [`console_input`] runs as a helper.
 #[cfg(unix)]
 pub fn master_line_input(master: std::os::fd::BorrowedFd<'_>) -> io::Result<Option<LineInput>> {
     sys::input_of_descriptor(std::os::fd::AsRawFd::as_raw_fd(&master)).map(Some)

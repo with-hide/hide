@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT, Hello,
-    HolderMessage, LineEditing, Notice, NoticeReason, Opening as FirstMessage, Size, SubmitPart,
-    Unknown, Watching, Welcome, agree, read_client, read_opening, write_holder,
+    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, SubmitPart, Unknown,
+    Watching, Welcome, agree, read_client, read_opening, write_holder,
 };
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
 use hide_platform::process::{Session, SessionEnd};
@@ -53,7 +53,7 @@ use crate::encode::Encoder;
 use crate::log::Log;
 use crate::pane::{Pane, Wheel};
 use crate::record::Claim;
-use crate::watch::{FactsWriter, SharedRules, Wake, WatchConnection, WatchReader};
+use crate::watch::{FactsWriter, LineEditingRead, SharedRules, Wake, WatchConnection, WatchReader};
 
 /// How long ending the pane's session may take before it is reported as
 /// unconfirmed.
@@ -1042,6 +1042,24 @@ impl Holder {
     /// told it was taken over, and its reader's late rules change nothing.
     /// Its first facts are sent whatever they are, and its node's first rule
     /// set is read as soon as it arrives.
+    /// How a watch reads whether the terminal edits lines under the
+    /// foreground program it names: from the master on Unix; on Windows from
+    /// a helper attached to the pane's console, which the holder never
+    /// attaches to itself (`console_input.rs`).
+    fn line_editing(&self, master: PtyMaster) -> LineEditingRead {
+        #[cfg(unix)]
+        {
+            Box::new(move |_program, _ask| master.line_editing())
+        }
+        #[cfg(windows)]
+        {
+            let _ = master;
+            let mut console =
+                crate::console_input::ConsoleLines::new(self.program, self.log.clone());
+            Box::new(move |program, ask| console.read(program, ask))
+        }
+    }
+
     fn watch(&mut self, stream: LocalStream, version: u16, sends: Vec<Capability>) {
         self.watch_generation += 1;
         let generation = self.watch_generation;
@@ -1102,9 +1120,7 @@ impl Holder {
                     move || master.group(shell)
                 }),
                 foreground_unread,
-                line_editing: line_editing.then(|| {
-                    Box::new(move || master.line_editing()) as Box<dyn Fn() -> LineEditing + Send>
-                }),
+                line_editing: line_editing.then(|| self.line_editing(master.clone())),
                 log: self.log.clone(),
             };
             let shutdown = stream.shutdown_handle();
@@ -1601,20 +1617,18 @@ impl PtyMaster {
 
     /// Whether the terminal edits lines, as the platform reads the master
     /// this holder keeps (`hide_platform::process::master_line_input`):
-    /// unknown where the system cannot say (Windows) and when the terminal
-    /// could not be asked, its pane having ended.
-    fn line_editing(&self) -> LineEditing {
+    /// unknown when the terminal could not be asked, its pane having ended.
+    #[cfg(unix)]
+    fn line_editing(&self) -> hide_holder_protocol::LineEditing {
+        use hide_holder_protocol::LineEditing;
         use hide_platform::process::{LineInput, master_line_input};
         let guard = self.lock();
-        #[cfg(unix)]
         let read = guard
             .as_ref()
             .and_then(|master| master.as_raw_fd())
             // SAFETY: the master stays open while its lock is held, for the
             // whole of the call.
             .map(|fd| master_line_input(unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }));
-        #[cfg(windows)]
-        let read = guard.as_ref().map(|_| master_line_input(()));
         match read {
             Some(Ok(Some(LineInput::Lines { .. }))) => LineEditing::Edits,
             Some(Ok(Some(LineInput::Keys))) => LineEditing::ReadsKeys,

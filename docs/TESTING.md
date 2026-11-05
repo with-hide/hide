@@ -446,7 +446,8 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
 
 A built-in agent's `[screen]` (`hide-agent-adapter/agents/<id>.toml`) reaches the operator only in a release, so a change to it is gated twice.
 `scripts/check-agent-screen-rules.py`, in the policy lane on every pull request and merge queue group, refuses a changed `[screen]` whose `version` is not higher than the base's, and one whose agent has no captured screen under `hide-agent-adapter/tests/fixtures/screens/<id>/`; a new definition file adds an agent and is reviewed as that.
-`hide-agent-adapter/tests/it/screens.rs` evaluates every agent's rules against each of its captures, which are the real agent's screen as Herdr drew it, colours included, named `<idle|working|blocked>-<what>.ansi` for the state the operator saw; no rule matching reads as idle, as the engine reads it.
+`hide-agent-adapter/tests/it/screens.rs` evaluates every agent's rules against each of its captures, which are the real agent's screen as Herdr drew it, colours included, named `<idle|working|blocked>-<what>.ansi` for the state the operator saw (`.txt` for a screen taken as text alone from a terminal emulator); no rule matching reads as idle, as the engine reads it.
+For an agent whose start waits for a ready screen (`[start] ready`), every idle capture shows that rule except the ones named `idle-loading-<what>`, taken before the agent takes a line (`a_start_waits_for_the_ready_screen_only_until_the_agent_takes_a_line`).
 The first captures are the composer captures of `composer.rs` (an empty and a typed composer of six agents, all idle); a capture is never written from the rule it tests.
 The rule grammar, its limits and the evaluator have their own cases in `hide-screen-rules/tests/it/rules.rs`, taken from Herdr's manifest tests.
 
