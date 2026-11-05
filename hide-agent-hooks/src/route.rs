@@ -191,6 +191,16 @@ fn parse_install(arguments: impl Iterator<Item = String>) -> Result<Option<Strin
     Ok(install)
 }
 
+/// The installation the pane this process runs in names
+/// ([`INSTALL_VARIABLE`]), which a request to its daemon carries and its
+/// answer must name back ([`crate::hook_request::install`]); `None` for a
+/// pane that names none.
+pub fn pane_install() -> Option<String> {
+    std::env::var(INSTALL_VARIABLE)
+        .ok()
+        .filter(|install| !install.is_empty())
+}
+
 /// The folder the hooks keep their records by pane in (subagent counts, plan
 /// records): Hide's own for a pane the desktop app started or one that names
 /// no installation, and one of its own for a pane another installation
