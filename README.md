@@ -93,17 +93,6 @@ The sidebar shows the same work three ways: **Projects** as a tree of checkouts 
 The Project tool beside your agents counts the project's sessions, pull requests, worktrees and the last seven days' cost, and lists what is yours to do.
 The Overview draws the whole night as one map: which agent started which, the letters between them, and who is waiting on you.
 
-<table>
-  <tr>
-    <td width="50%"><picture><source media="(prefers-color-scheme: light)" srcset="site/assets/shots/tasks-light.webp"><img src="site/assets/shots/tasks-dark.webp" alt="The sidebar on its Tasks list: tasks grouped as Needs You, Unread, Working, Waiting and Resting, each with its agent, its project and the pull requests it opened."></picture></td>
-    <td width="50%"><picture><source media="(prefers-color-scheme: light)" srcset="site/assets/shots/map-light.webp"><img src="site/assets/shots/map-dark.webp" alt="The Overview's work graph: agents of three projects around You, lines for who started whom and the letters between them, and the two waiting on you listed on the right."></picture></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Tasks, grouped by who acts next</sub></td>
-    <td align="center"><sub>The Overview map of who started whom</sub></td>
-  </tr>
-</table>
-
 ### Agents start, watch and write to each other
 
 A lead starts workers, a worker starts a helper, on this machine or another, and they write to each other in letters.
@@ -119,13 +108,6 @@ Hide AI reads what each agent did and writes what a person needs: a title, why i
 Agents sort themselves into **Needs You, Unread, Working and Seen**, and the ones waiting on you sit on top of every screen.
 **Project Memory** turns what you decide in a session into a card, checks it against the repository and hands it to the next agent, whichever vendor runs it; a rule worth keeping comes back as one pull request to your docs.
 Hide AI runs on the agent CLI you already signed in to, and every status still works with it switched off.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/attention-light.webp">
-    <img width="380" src="site/assets/shots/attention-dark.webp" alt="hide's sidebar. Two agents wait under Needs You, each with a title and a one-line reason Hide AI wrote. A finished fix sits under Unread, and the project tree below shows who is still working.">
-  </picture>
-</p>
 
 ### Your agent drives the browser
 
@@ -144,13 +126,6 @@ hide file open src/export/csv.ts                       # the file it changed, in
 Put hide's core on a machine that never sleeps.
 Projects, letters and titles live there; your laptop becomes a screen, so closing it stops nothing.
 Add any machine by its SSH alias and its agents join the same lists, and pair your phone by QR to answer the one that needs you, over your own Tailscale.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/core-light.webp">
-    <img src="site/assets/shots/core-dark.webp" alt="Settings in hide beside the sidebar. Devices lists the core machine, a MacBook that dials in and a Linux server, all connected. Mobile shows Tailscale ready and one paired phone.">
-  </picture>
-</p>
 
 ### Still an IDE
 
