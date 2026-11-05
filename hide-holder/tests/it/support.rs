@@ -563,9 +563,8 @@ impl Script {
         }
     }
 
-    /// The holder is started with `theme`, as a node passes its own. Unix
-    /// only, like the answers it is checked by (`meaning.rs`).
-    #[cfg(unix)]
+    /// The holder is started with `theme`, as a node passes its own: a
+    /// holder answers no color question before a screen gave the colors.
     pub fn with_theme(mut self, theme: hide_holder_protocol::Theme) -> Self {
         self.theme = Some(theme);
         self
