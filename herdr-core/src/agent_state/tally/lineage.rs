@@ -2,9 +2,30 @@
 //! alphabetical placement remains presentation; core resolves status priority
 //! first and publishes only the tied candidates in each priority tier.
 use super::scope::{RowRef, descendants, row_references};
+use crate::agent_state::recent_first;
 use crate::model::{DescendantCountsSnapshot, SidebarAgentSnapshot, WorkspaceSnapshot};
 use serde::Serialize;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+
+/// How many levels of children a tree opens under a root: children and
+/// grandchildren (agent-hierarchy-screens D-12, D-38). The sidebar and the
+/// phone's list open the same two levels.
+pub const TREE_LEVELS: usize = 2;
+
+/// How many siblings a tree draws under one parent before its "N more"
+/// (agent-hierarchy-screens B12). The sidebar's drawing reads the same number
+/// in `web/src/sidebarTree.ts` (`SIBLINGS_SHOWN`), which a test holds equal.
+pub const SIBLINGS_SHOWN: usize = 5;
+
+/// How siblings stand in a tree (PRD agent-hierarchy-screens B11): the most
+/// urgent `tree_rank` first, then the most recently active, then the order
+/// the rows were listed in (a stable sort keeps that third key).
+pub fn sibling_order(left: (u8, &str), right: (u8, &str)) -> Ordering {
+    left.0
+        .cmp(&right.0)
+        .then_with(|| recent_first(left.1, right.1))
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct Folded {
@@ -80,7 +101,7 @@ pub(super) fn sidebar_tree(
         references: &HashMap<*const SidebarAgentSnapshot, RowRef>,
         out: &mut Vec<TreeRow>,
     ) {
-        if parent.lineage_collapsed || depth > 2 {
+        if parent.lineage_collapsed || depth > TREE_LEVELS {
             return;
         }
         let mut children: Vec<_> = parent
@@ -88,14 +109,19 @@ pub(super) fn sidebar_tree(
             .iter()
             .filter_map(|id| by_pane.get(id.as_str()).copied())
             .collect();
-        children.sort_by_key(|child| child.state.tree_rank);
+        children.sort_by(|left, right| {
+            sibling_order(
+                (left.state.tree_rank, &left.last_activity),
+                (right.state.tree_rank, &right.last_activity),
+            )
+        });
         for child in children {
             out.push(TreeRow {
                 pane_id: child.pane_id.clone(),
                 occurrence: references[&(child as *const _)].occurrence,
                 depth,
             });
-            if depth < 2 {
+            if depth < TREE_LEVELS {
                 open(child, depth + 1, by_pane, references, out);
             }
         }

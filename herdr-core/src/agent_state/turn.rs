@@ -762,8 +762,18 @@ pub(crate) fn sort_agents(agents: &mut [SidebarAgentSnapshot]) {
         group_of(left)
             .rank()
             .cmp(&group_of(right).rank())
-            .then_with(|| right.last_activity.cmp(&left.last_activity))
+            .then_with(|| recent_first(&left.last_activity, &right.last_activity))
     });
+}
+
+/// Most recent activity first, by the rows' ordering keys
+/// (`SidebarAgentSnapshot::last_activity`): thirteen digits of epoch
+/// milliseconds sort above Herdr's zero-padded sequence, so a row with a
+/// time always stands above one with only a sequence. Every surface that
+/// orders rows by recency, a phone's mixed devices included, compares with
+/// this.
+pub(crate) fn recent_first(left: &str, right: &str) -> std::cmp::Ordering {
+    right.cmp(left)
 }
 
 pub fn group_of(agent: &SidebarAgentSnapshot) -> AgentGroup {
