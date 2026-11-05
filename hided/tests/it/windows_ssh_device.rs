@@ -576,8 +576,8 @@ fn a_windows_core_connects_a_linux_device_over_ssh_with_a_passphrase_asked_once(
         &format!(
             "pkill -KILL -u {SSH_USER} 2>/dev/null; userdel -r -f {SSH_USER} 2>/dev/null; useradd -m -s /bin/bash {SSH_USER} \
              && mkdir -p /run/sshd && ssh-keygen -A \
-             && mkdir -m 700 /home/{SSH_USER}/.ssh && printf '%s\\n' '{}' > /home/{SSH_USER}/.ssh/authorized_keys \
-             && chmod 600 /home/{SSH_USER}/.ssh/authorized_keys && chown -R {SSH_USER}: /home/{SSH_USER}/.ssh \
+             && mkdir -m 700 ~{SSH_USER}/.ssh && printf '%s\\n' '{}' > ~{SSH_USER}/.ssh/authorized_keys \
+             && chmod 600 ~{SSH_USER}/.ssh/authorized_keys && chown -R {SSH_USER}: ~{SSH_USER}/.ssh \
              && su - {SSH_USER} -c 'mkdir -p project && cd project && git init -q && printf \"hello\\n\" > a.txt && git add a.txt && git -c user.name=t -c user.email=t@example.invalid commit -qm init && printf \"more\\n\" >> a.txt'",
             public.trim()
         ),
@@ -636,7 +636,9 @@ fn a_windows_core_connects_a_linux_device_over_ssh_with_a_passphrase_asked_once(
         .home
         .clone()
         .expect("the node names its home");
-    assert_eq!(home, format!("/home/{SSH_USER}"));
+    // The account's home as the distribution names it.
+    let account_home = as_root(&distro, &format!("getent passwd {SSH_USER} | cut -d: -f6"));
+    assert_eq!(home, account_home.trim());
     let project = format!("{home}/project");
     files_and_git(&*connected.node.host, &project);
 
