@@ -1180,7 +1180,11 @@ A pane that names no installation, a Herdr pane or a plain terminal, lets every 
 
 A `hide` that another installation put first on the pane's `PATH` hands the call to `HIDE_INSTALL_CLI` (`hided::pane_install`), so the call speaks its own daemon's protocol.
 In a pane of an installation other than the app, `hide` asks the device bridges first and this account's daemon after (`workspace_cli::bootstrap`), since the daemon would bind the pane by its folder alone.
-The call names the pane's installation, and a daemon of another one refuses it with `other_install` before it looks at the folder (`pane_auth`), so a pane whose own Hide does not answer never runs its calls against another.
+The call names the pane's installation, and a daemon or device node of another one refuses it with `other_install` before it looks at the folder (`pane_auth`, `hide_host::panes`).
+The refusal alone cannot hold against an earlier build, which ignores the name it does not know and binds the pane by its folder, so the answer names its installation too and the call takes a reference only from an answer naming the pane's own (`workspace_cli::read_bootstrap_answer`); an answer naming none or another is `install_unconfirmed`, its reference is never used, and a node that answers so neither succeeds for the pane nor makes it ambiguous.
+A pane whose own Hide does not answer therefore never runs its calls against another, whatever build the other runs.
+The same holds against an earlier build of the pane's own installation: in the app's case that is the time between the bundle being replaced and the next app launch, whose `hide connect` replaces the daemon, and the refusal says to quit and reopen Hide.
+The added answer field moves no schema or protocol number: an earlier `hide` reads only `ok`, `reason` and `reference`.
 The `hide` link in the command folder stays with the installation that holds it while that installation's command is there: the other's part reads Not on this machine, "another Hide on this account holds it", and takes the name back once that command is gone.
 
 The kit record keeps the app's parts, command and hook route where earlier builds read them, and every other installation's under `installs`.

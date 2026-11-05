@@ -736,18 +736,13 @@ pub struct BootstrapRequest {
     pub install: Option<String>,
 }
 
-/// The installation this daemon is (`hide_host::kit::pane_install`), the
+/// The installation this daemon is (`hide_host::kit::running_install`), the
 /// one its own panes name; `None` for a build run from anywhere else, whose
 /// panes name none.
 fn own_install() -> Option<&'static str> {
     static OWN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    OWN.get_or_init(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| hide_host::kit::pane_install(&exe))
-            .map(|install| install.id)
-    })
-    .as_deref()
+    OWN.get_or_init(|| hide_host::kit::running_install().map(|install| install.id))
+        .as_deref()
 }
 
 #[derive(Clone, Debug)]
@@ -1278,12 +1273,16 @@ fn answer_bootstrap(
         });
     // The reference crosses in the wire spelling, as the device bridge's
     // does; one without it is refused and withdrawn like an undelivered one.
+    // The answer names this daemon's installation, which a caller that named
+    // one requires (`workspace_cli::read_bootstrap_answer`).
     let wire = match &result {
         Ok((path, _)) => hide_platform::path::to_wire(path).ok(),
         Err(_) => None,
     };
     let answer = match (&result, &wire) {
-        (Ok(_), Some(reference)) => json!({"ok": true, "reference": reference}),
+        (Ok(_), Some(reference)) => {
+            json!({"ok": true, "reference": reference, "install": own_install()})
+        }
         (Ok(_), None) => json!({"ok": false, "reason": "reference_unavailable"}),
         (Err(reason), _) => json!({"ok": false, "reason": reason}),
     };
