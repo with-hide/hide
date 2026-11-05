@@ -28,6 +28,9 @@ pub(crate) struct HeadRuns {
     /// The runs failed only because every run of a workflow was cancelled
     /// and none replaced it, which a mission's CI letter calls cancelled.
     pub cancelled: bool,
+    /// A workflow still has a run queued or running, whatever the others
+    /// add up to.
+    pub running: bool,
 }
 
 impl HeadRuns {
@@ -35,6 +38,7 @@ impl HeadRuns {
         checks: PullRequestChecks::Unknown,
         counted: None,
         cancelled: false,
+        running: false,
     };
 }
 
@@ -147,6 +151,7 @@ fn verdict(suites: &[Suite]) -> Result<HeadRuns, String> {
         checks: PullRequestChecks::None,
         counted: Some(HashSet::new()),
         cancelled: false,
+        running: false,
     };
     // Whether every workflow that failed failed by its runs' cancelling.
     let mut only_cancelled = true;
@@ -155,6 +160,7 @@ fn verdict(suites: &[Suite]) -> Result<HeadRuns, String> {
         if checks == PullRequestChecks::Failed {
             only_cancelled &= cancelled;
         }
+        judged.running |= checks == PullRequestChecks::Pending;
         judged.checks = worse(judged.checks, checks);
         judged.counted.get_or_insert_default().extend(counted);
     }

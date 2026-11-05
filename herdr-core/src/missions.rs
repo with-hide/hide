@@ -374,11 +374,11 @@ pub struct PrSeen {
     /// Closed without its merge: nothing is left to wait on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
-    /// What its CI last ended as on `head`; a rerun still running or a read
-    /// that cannot say leaves it, so the same result read again is no news.
-    /// None until a run ends on `head`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ci: Option<CiResult>,
+    /// The CI results the Conductor was told on `head`, each once for good
+    /// (at most one of each); a new head empties it, so its results are
+    /// news again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ci_told: Vec<CiResult>,
 }
 
 /// What a pull request's CI ended as on one head commit: its checks as the

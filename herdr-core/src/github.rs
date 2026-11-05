@@ -1086,6 +1086,8 @@ fn judge_head_runs(
                 // the failure theirs, not a cancellation.
                 pull_request.work.checks_cancelled =
                     runs.cancelled && pull_request.checks != PullRequestChecks::Failed;
+                pull_request.work.checks_running =
+                    runs.running || pull_request.work.running_checks > 0;
                 pull_request.checks = runs::worse(pull_request.checks, runs.checks);
             }
             (None, _) => pull_request.checks = PullRequestChecks::Unknown,
@@ -4494,6 +4496,71 @@ mod tests {
             (pull.checks, pull.work.checks_cancelled),
             (PullRequestChecks::Failed, true)
         );
+    }
+
+    /// A failure ranks first, so a workflow still running beside a failed
+    /// one shows only on `checks_running`, which a mission's CI letter
+    /// waits on; once it ends, both failures are named.
+    #[test]
+    fn a_failure_beside_a_workflow_still_running_is_not_the_end() {
+        let design = run_job(
+            "Design contract",
+            1,
+            "static-design",
+            "COMPLETED",
+            r#""FAILURE""#,
+        );
+        let design_run = run_suite(
+            DESIGN,
+            1,
+            "pull_request",
+            "COMPLETED",
+            r#""FAILURE""#,
+            "2026-11-05T08:31:00Z",
+        );
+        let running = open_pull(
+            &[
+                design.clone(),
+                run_job("verify", 2, "rust workspace", "IN_PROGRESS", "null"),
+            ],
+            &[
+                design_run.clone(),
+                run_suite(
+                    VERIFY,
+                    2,
+                    "pull_request",
+                    "IN_PROGRESS",
+                    "null",
+                    "2026-11-05T08:32:00Z",
+                ),
+            ],
+        );
+        assert_eq!(
+            (running.checks, running.work.checks_running),
+            (PullRequestChecks::Failed, true)
+        );
+        let ended = open_pull(
+            &[
+                design,
+                run_job("verify", 2, "rust workspace", "COMPLETED", r#""FAILURE""#),
+            ],
+            &[
+                design_run,
+                run_suite(
+                    VERIFY,
+                    2,
+                    "pull_request",
+                    "COMPLETED",
+                    r#""FAILURE""#,
+                    "2026-11-05T09:10:00Z",
+                ),
+            ],
+        );
+        assert_eq!(
+            (ended.checks, ended.work.checks_running),
+            (PullRequestChecks::Failed, false)
+        );
+        assert_eq!(failed_names(&ended), ["static-design", "rust workspace"]);
     }
 
     /// with-hide/hide#2080 review: without the runs nothing says a run is

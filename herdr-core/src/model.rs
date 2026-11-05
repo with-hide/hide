@@ -6039,6 +6039,11 @@ pub struct PullRequestWork {
     /// letter calls cancelled rather than failed. Core only.
     #[serde(skip)]
     pub checks_cancelled: bool,
+    /// A workflow run or a check on its head has not finished, which
+    /// `Failed` checks do not show (a failure ranks first): a mission's CI
+    /// letter waits until nothing runs. Core only.
+    #[serde(skip)]
+    pub checks_running: bool,
     /// Its place in the base branch's merge queue.
     pub queue: MergeQueuePlace,
     /// When the latest review request on it was made, which `리뷰 · N시간째`

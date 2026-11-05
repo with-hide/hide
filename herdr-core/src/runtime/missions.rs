@@ -377,14 +377,19 @@ pub(super) fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
         merged: pull.badge == PullRequestBadge::Merged,
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
         closed: pull.badge == PullRequestBadge::Closed,
-        ci: ci_of(pull),
+        ci_told: Vec::new(),
     }
 }
 
-/// What `pull`'s CI ended as on its head, by the checks the list judged
-/// (`github::runs`); none while it runs, has none or cannot be read.
+/// What an open `pull`'s CI ended as on its head, by the checks the list
+/// judged (`github::runs`); none while anything on the head still runs
+/// (a failure ranks first, so `Failed` alone is not the end), while it has
+/// no checks, or while they cannot be read.
 fn ci_of(pull: &crate::model::PullRequestSnapshot) -> Option<CiResult> {
     pull.head_oid.as_ref()?;
+    if pull.badge.is_settled() || pull.work.checks_running {
+        return None;
+    }
     match pull.checks {
         PullRequestChecks::Passing => Some(CiResult::Passed),
         PullRequestChecks::Failed if pull.work.checks_cancelled => Some(CiResult::Cancelled),
@@ -393,11 +398,16 @@ fn ci_of(pull: &crate::model::PullRequestSnapshot) -> Option<CiResult> {
     }
 }
 
-/// Keeps the CI result `before` holds while `seen`, of the same head, says
-/// none ended: a rerun still running or a read that cannot say is no news.
-fn keep_ci(seen: &mut PrSeen, before: &PrSeen) {
-    if seen.ci.is_none() && seen.head == before.head {
-        seen.ci = before.ci;
+/// Keeps the CI results `before` told beside those `seen` holds while
+/// `seen` is of the same head.
+fn keep_told(seen: &mut PrSeen, before: &PrSeen) {
+    if seen.head != before.head {
+        return;
+    }
+    for result in &before.ci_told {
+        if !seen.ci_told.contains(result) {
+            seen.ci_told.push(*result);
+        }
     }
 }
 
@@ -624,7 +634,7 @@ pub(super) fn note_seen(node: &mut MissionNode, mut seen: PrSeen) -> bool {
         .find(|held| held.number == seen.number)
     {
         Some(held) => {
-            keep_ci(&mut seen, held);
+            keep_told(&mut seen, held);
             if *held == seen {
                 return false;
             }
@@ -2022,10 +2032,10 @@ impl Runtime {
     /// Compares a new GitHub answer with the facts each mission's pull
     /// request was last seen with, and records a wake for every change that
     /// is its Conductor's to act on (D-39, B36): a merge, a review asking
-    /// for changes, an open one's CI ending on its head, once per head and
-    /// result. A done mission reopens with a review or the first CI result
-    /// on a commit, unless its Conductor conducts another open mission then,
-    /// and
+    /// for changes, an open one's CI ending on its head, each result once
+    /// per head, the first answer's included. A done mission reopens with a
+    /// review or a CI result, unless its Conductor conducts another open
+    /// mission then, and
     /// its merge wakes no one; a cancelled one is not woken (D-51). A stale
     /// read wakes nothing.
     /// Returns the intents of the wakes it records; each is sent as soon as
@@ -2092,9 +2102,6 @@ impl Runtime {
             }
             let mission = &self.missions.book.missions[index];
             let mut events = Vec::new();
-            // Whether a change would reopen a done mission: a review asking
-            // for changes, or the first CI result on a commit.
-            let mut reopens = false;
             let mut merged = Vec::new();
             let mut seen_updates = Vec::new();
             for (node_index, node) in mission.nodes.iter().enumerate() {
@@ -2108,7 +2115,7 @@ impl Runtime {
                     };
                     let mut now_seen = seen_of(pull);
                     if let Some(before) = node.seen(number) {
-                        keep_ci(&mut now_seen, before);
+                        keep_told(&mut now_seen, before);
                     }
                     match node.seen(number) {
                         // The first answer about a pull request is where its
@@ -2130,52 +2137,48 @@ impl Runtime {
                                     None,
                                     None,
                                 ));
-                            } else if !now_seen.merged {
-                                if now_seen.changes_requested && !before.changes_requested {
-                                    // Changes asked for again on one head are
-                                    // news again: GitHub's time of the pull
-                                    // request tells the asks apart.
-                                    let key = format!(
-                                        "changes_requested:{}:{number}:{}:{}",
-                                        node.key,
-                                        now_seen
-                                            .head
-                                            .as_deref()
-                                            .map_or("-", |head| head.get(..12).unwrap_or(head)),
-                                        pull.updated_at_unix_ms.unwrap_or_default()
-                                    );
-                                    events.push(wake_about(
-                                        node.key.clone(),
-                                        Some(number),
-                                        WakeEvent::ChangesRequested,
-                                        now_seen.head.clone(),
-                                        Some(key),
-                                    ));
-                                    reopens = true;
-                                }
-                                // A new head is told by its CI's result,
-                                // which names its commit.
-                                if let Some(result) = now_seen.ci
-                                    && !now_seen.closed
-                                    && (&now_seen.head, now_seen.ci) != (&before.head, before.ci)
-                                {
-                                    let mut wake = wake_about(
-                                        node.key.clone(),
-                                        Some(number),
-                                        WakeEvent::Ci,
-                                        now_seen.head.clone(),
-                                        None,
-                                    );
-                                    wake.ci = Some(ci_news(pull, result));
-                                    events.push(wake);
-                                    // The first result on a commit reopens a
-                                    // done mission, as its new commit did; a
-                                    // run ending again on it tells and leaves
-                                    // the mission done.
-                                    reopens |= before.ci.is_none() || now_seen.head != before.head;
-                                }
+                            } else if !now_seen.merged
+                                && now_seen.changes_requested
+                                && !before.changes_requested
+                            {
+                                // Changes asked for again on one head are
+                                // news again: GitHub's time of the pull
+                                // request tells the asks apart.
+                                let key = format!(
+                                    "changes_requested:{}:{number}:{}:{}",
+                                    node.key,
+                                    now_seen
+                                        .head
+                                        .as_deref()
+                                        .map_or("-", |head| head.get(..12).unwrap_or(head)),
+                                    pull.updated_at_unix_ms.unwrap_or_default()
+                                );
+                                events.push(wake_about(
+                                    node.key.clone(),
+                                    Some(number),
+                                    WakeEvent::ChangesRequested,
+                                    now_seen.head.clone(),
+                                    Some(key),
+                                ));
                             }
                         }
+                    }
+                    // An open pull request's CI result not yet told on its
+                    // head is told, the first answer's too; a new head is
+                    // told by its result, which names its commit.
+                    if let Some(result) = ci_of(pull)
+                        && !now_seen.ci_told.contains(&result)
+                    {
+                        now_seen.ci_told.push(result);
+                        let mut wake = wake_about(
+                            node.key.clone(),
+                            Some(number),
+                            WakeEvent::Ci,
+                            now_seen.head.clone(),
+                            None,
+                        );
+                        wake.ci = Some(ci_news(pull, result));
+                        events.push(wake);
                     }
                     if node.seen(number) != Some(&now_seen) {
                         seen_updates.push((node_index, now_seen));
@@ -2206,7 +2209,7 @@ impl Runtime {
             // to a done one while it conducts another wakes it with the
             // news and leaves the mission done.
             let reopen = done
-                && reopens
+                && !events.is_empty()
                 && self
                     .missions
                     .book
