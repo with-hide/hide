@@ -2000,3 +2000,337 @@ fn a_pre_check_session_reads_as_reviewed_and_keeps_it_across_a_reopen_and_an_upg
         vec![("s-check", SessionRole::Reviewed, Some("7번 미리 점검해 줘"))]
     );
 }
+
+/// Captures the last summaries a pass published.
+#[derive(Default)]
+struct Published(std::cell::RefCell<BTreeMap<String, crate::links::ProjectLinkSummary>>);
+
+impl crate::links::worker::Sink for Published {
+    fn summaries(&self, summaries: BTreeMap<String, crate::links::ProjectLinkSummary>) {
+        *self.0.borrow_mut() = summaries;
+    }
+    fn panel(&self, _: u64, _: Result<crate::links::worker::PanelAnswer, String>) {}
+    fn filling(&self, _: bool) {}
+    fn devices(&self) -> Vec<(String, std::sync::Arc<dyn crate::node_access::NodeLink>)> {
+        Vec::new()
+    }
+}
+
+/// Three projects for the scoped summary pass: an app with a second
+/// worktree and two pull requests, a library with one, and a folder with no
+/// repository.
+fn scoped_projects(merged: Option<u64>) -> Vec<ProjectFacts> {
+    let mut app = project(vec![
+        pr(1, "feat", T0 + 10 * MIN, merged),
+        pr(2, "fix", T0 + 30 * MIN, None),
+    ]);
+    app.worktrees.push(WorktreeFact {
+        path: "/work/app-feat".into(),
+        branch: Some("feat".into()),
+        created_at_unix_ms: Some(T0),
+    });
+    let lib = ProjectFacts {
+        key: "project:lib".into(),
+        workspace_id: "ws-lib".into(),
+        root: "/work/lib".into(),
+        repository: Some("acme/lib".into()),
+        repository_id: Some("R_2".into()),
+        worktrees: vec![WorktreeFact {
+            path: "/work/lib".into(),
+            branch: Some("main".into()),
+            created_at_unix_ms: None,
+        }],
+        prs: vec![PrFact {
+            repository: "acme/lib".into(),
+            url: "https://github.com/acme/lib/pull/5".into(),
+            ..pr(5, "lib-x", T0 + 20 * MIN, None)
+        }],
+        ..project(Vec::new())
+    };
+    let docs = ProjectFacts {
+        key: "project:docs".into(),
+        workspace_id: "ws-docs".into(),
+        root: "/work/docs".into(),
+        repository: None,
+        repository_id: None,
+        worktrees: Vec::new(),
+        ..project(Vec::new())
+    };
+    vec![app, lib, docs]
+}
+
+/// One chunk of a session's file, as a read answers it.
+fn chunk(id: &str, cwd: &str, at: u64) -> links::LinkFacts {
+    links::LinkFacts {
+        session_id: Some(id.into()),
+        cwd: Some(cwd.into()),
+        interactive: Some(true),
+        first_at_unix_ms: Some(at),
+        last_at_unix_ms: Some(at + MIN),
+        last_request: Some((at, format!("{id} 요청"))),
+        ..Default::default()
+    }
+}
+
+fn span(branch: &str, at: u64) -> links::BranchSpan {
+    links::BranchSpan {
+        branch: Some(branch.into()),
+        inherited: false,
+        first_at_unix_ms: at,
+        last_at_unix_ms: at + MIN,
+        last_request: None,
+    }
+}
+
+fn mark(repository: &str, number: u64, at: u64, made: bool) -> links::PrMark {
+    links::PrMark {
+        repository: repository.into(),
+        number,
+        at_unix_ms: at,
+        request: None,
+        made,
+    }
+}
+
+fn session(id: &str) -> SessionIdentity {
+    SessionIdentity {
+        device_id: DEVICE.into(),
+        agent: "claude".into(),
+        session_id: id.into(),
+    }
+}
+
+/// A summary pass over the projects a change can move publishes exactly what
+/// a pass over every project publishes on the same store, after each write
+/// of a mix that reaches projects through a folder, a learned place, a
+/// repository, a number named from another folder, a continuation chain, a
+/// parent's missed work and a renamed parent edge
+/// (with-hide/hide-private#571).
+#[test]
+fn a_pass_over_the_changed_projects_publishes_what_a_full_pass_publishes() {
+    use crate::links::worker::{State, publish_summaries};
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = open(directory.path());
+    let mut scoped = State::new();
+    let sink = Published::default();
+    let mut step = 0;
+    // Runs both passes and answers how many projects the scoped one read.
+    let mut check = |store: &LinkStore, scoped: &mut State, what: &str| -> usize {
+        step += 1;
+        let read = publish_summaries(store, scoped, &sink);
+        let mut full = State::new();
+        full.projects = std::sync::Arc::clone(&scoped.projects);
+        let everything = Published::default();
+        publish_summaries(store, &mut full, &everything);
+        assert_eq!(
+            *sink.0.borrow(),
+            *everything.0.borrow(),
+            "step {step}: {what}"
+        );
+        read
+    };
+    let read = |store: &mut LinkStore, scoped: &mut State, path: &str, facts: links::LinkFacts| {
+        let answer = links::ReadAnswer {
+            agent: Agent::Claude,
+            path: path.into(),
+            checkpoint: None,
+            has_more: false,
+            rescanned: false,
+            facts,
+            error: None,
+        };
+        store.apply_answer(DEVICE, &answer, "stamp").unwrap();
+        scoped.read_written(store, DEVICE, path);
+    };
+    let projects = |merged| std::sync::Arc::new(scoped_projects(merged));
+
+    scoped.projects = projects(None);
+    for facts in scoped.projects.iter() {
+        store.apply_project(facts, T0).unwrap();
+    }
+    store.refresh_ledger_outputs().unwrap();
+    scoped.changed_all();
+    assert_eq!(check(&store, &mut scoped, "projects"), 3);
+
+    // A session in the app's second worktree makes PR 1 on its branch.
+    let mut facts = chunk("s1", "/work/app-feat", T0 + 9 * MIN);
+    facts.spans = vec![span("feat", T0 + 9 * MIN)];
+    facts.prs = vec![mark("acme/app", 1, T0 + 10 * MIN, true)];
+    facts.last_uuid = Some("s1-last".into());
+    facts.issues = vec![mark("acme/app", 9, T0 + 11 * MIN, false)];
+    read(&mut store, &mut scoped, "/f/s1.jsonl", facts);
+    assert_eq!(check(&store, &mut scoped, "a folder and a repository"), 1);
+
+    // A session in the library works its pull request's branch.
+    let mut facts = chunk("s2", "/work/lib", T0 + 21 * MIN);
+    facts.spans = vec![span("lib-x", T0 + 21 * MIN)];
+    read(&mut store, &mut scoped, "/f/s2.jsonl", facts);
+    assert_eq!(check(&store, &mut scoped, "a branch in a folder"), 1);
+
+    // The docs folder names the app's PR 2 by its repository.
+    let mut facts = chunk("s3", "/work/docs", T0 + 31 * MIN);
+    facts.named = vec![links::NamedMark {
+        pr: hide_session::NamedPr {
+            repository: Some("acme/app".into()),
+            number: 2,
+            folder: None,
+        },
+        at_unix_ms: T0 + 31 * MIN,
+        request: None,
+    }];
+    read(&mut store, &mut scoped, "/f/s3.jsonl", facts);
+    assert_eq!(check(&store, &mut scoped, "a named pull request"), 2);
+
+    // A session outside every project names PR 5 by number from the library.
+    let mut facts = chunk("s4", "/tmp/scratch", T0 + 22 * MIN);
+    facts.named = vec![links::NamedMark {
+        pr: hide_session::NamedPr {
+            repository: None,
+            number: 5,
+            folder: Some("/work/lib".into()),
+        },
+        at_unix_ms: T0 + 22 * MIN,
+        request: None,
+    }];
+    read(&mut store, &mut scoped, "/f/s4.jsonl", facts);
+    assert_eq!(check(&store, &mut scoped, "a number named elsewhere"), 1);
+
+    // A session on PR 2's branch in a folder no project holds yet, then the
+    // session that made PR 2 from there, which teaches the app the folder.
+    let mut facts = chunk("s12", "/work/app-wt2", T0 + 35 * MIN);
+    facts.spans = vec![span("fix", T0 + 35 * MIN)];
+    read(&mut store, &mut scoped, "/f/s12.jsonl", facts);
+    assert_eq!(check(&store, &mut scoped, "a folder no project holds"), 0);
+    let mut facts = chunk("s11", "/work/app-wt2", T0 + 29 * MIN);
+    facts.prs = vec![mark("acme/app", 2, T0 + 30 * MIN, true)];
+    read(&mut store, &mut scoped, "/f/s11.jsonl", facts);
+    assert_eq!(check(&store, &mut scoped, "a learned place"), 1);
+
+    // A session whose first record answers a session not read yet, then
+    // that session, outside every project, continuing s1: the three are one
+    // line.
+    let mut facts = chunk("s9", "/work/app-feat", T0 + 50 * MIN);
+    facts.spans = vec![span("feat", T0 + 50 * MIN)];
+    facts.first_parent_uuid = Some("s7-last".into());
+    read(&mut store, &mut scoped, "/f/s9.jsonl", facts);
+    check(&store, &mut scoped, "a continuation of an unread session");
+    let mut facts = chunk("s7", "/tmp/elsewhere", T0 + 40 * MIN);
+    facts.first_parent_uuid = Some("s1-last".into());
+    facts.last_uuid = Some("s7-last".into());
+    read(&mut store, &mut scoped, "/f/s7.jsonl", facts);
+    assert_eq!(check(&store, &mut scoped, "the middle of a chain"), 1);
+
+    // The library's session is the app session's child, and its missed
+    // work rolls up to its parent.
+    store
+        .apply_parents(&[crate::links::ParentFact {
+            device_id: DEVICE.into(),
+            agent: "claude".into(),
+            session_id: "s2".into(),
+            parent_device_id: DEVICE.into(),
+            parent_agent: "claude".into(),
+            parent_session_id: "s1".into(),
+            parent_name: "app".into(),
+        }])
+        .unwrap();
+    scoped.changed_all();
+    check(&store, &mut scoped, "lineage");
+    store
+        .connection
+        .execute(
+            "INSERT INTO ledger_missed(device,agent,id,missed,kind,text,status,at,turn_offset) \
+             VALUES(?1,'claude','s2','m1','\"follow_up\"','테스트 남김','\"open\"',?2,0)",
+            params![DEVICE, (T0 + 22 * MIN) as i64],
+        )
+        .unwrap();
+    scoped.changed(session("s2"));
+    assert_eq!(check(&store, &mut scoped, "a child's missed work"), 2);
+
+    // A parent known first by its file: the read that names the file moves
+    // the docs session's edge to the reader's name. The app is read again
+    // too, since its PR 2 names the docs session.
+    store
+        .apply_parents(&[crate::links::ParentFact {
+            device_id: DEVICE.into(),
+            agent: "claude".into(),
+            session_id: "s3".into(),
+            parent_device_id: DEVICE.into(),
+            parent_agent: "claude".into(),
+            parent_session_id: "/f/p1.jsonl".into(),
+            parent_name: "lib".into(),
+        }])
+        .unwrap();
+    scoped.changed_all();
+    check(&store, &mut scoped, "a parent named by its file");
+    read(
+        &mut store,
+        &mut scoped,
+        "/f/p1.jsonl",
+        chunk("p1", "/work/lib", T0 + 60 * MIN),
+    );
+    assert_eq!(check(&store, &mut scoped, "a renamed parent edge"), 3);
+
+    // A pane moves the library session to another branch.
+    store
+        .apply_panes(
+            &[crate::links::PaneFact {
+                device_id: DEVICE.into(),
+                agent: "claude".into(),
+                session_id: "s2".into(),
+                cwd: "/work/lib".into(),
+                branch: Some("lib-y".into()),
+            }],
+            T0 + 70 * MIN,
+        )
+        .unwrap();
+    scoped.changed(session("s2"));
+    check(&store, &mut scoped, "a pane");
+
+    // A session the docs folder holds touches nothing else.
+    read(
+        &mut store,
+        &mut scoped,
+        "/f/s5.jsonl",
+        chunk("s5", "/work/docs", T0 + 80 * MIN),
+    );
+    assert_eq!(check(&store, &mut scoped, "one folder"), 1);
+
+    // PR 1 merges: a project fact moves every project.
+    scoped.projects = projects(Some(T0 + 90 * MIN));
+    for facts in scoped.projects.iter() {
+        store.apply_project(facts, T0 + 90 * MIN).unwrap();
+    }
+    store.refresh_ledger_outputs().unwrap();
+    scoped.changed_all();
+    assert_eq!(check(&store, &mut scoped, "a merge"), 3);
+    assert_eq!(check(&store, &mut scoped, "nothing changed"), 0);
+
+    // The app is connected to another repository and keeps its pull
+    // requests: a session naming one of them still reaches it.
+    let mut moved = scoped_projects(Some(T0 + 90 * MIN));
+    moved[0].repository = Some("acme/app2".into());
+    moved[0].repository_id = Some("R_3".into());
+    moved[0].prs = Vec::new();
+    moved[0].connection_epoch = 1;
+    scoped.projects = std::sync::Arc::new(moved);
+    for facts in scoped.projects.iter() {
+        store.apply_project(facts, T0 + 95 * MIN).unwrap();
+    }
+    scoped.changed_all();
+    check(&store, &mut scoped, "another repository");
+    let mut facts = chunk("s13", "/tmp/review", T0 + 96 * MIN);
+    facts.named = vec![links::NamedMark {
+        pr: hide_session::NamedPr {
+            repository: Some("acme/app".into()),
+            number: 1,
+            folder: None,
+        },
+        at_unix_ms: T0 + 96 * MIN,
+        request: None,
+    }];
+    read(&mut store, &mut scoped, "/f/s13.jsonl", facts);
+    assert_eq!(
+        check(&store, &mut scoped, "a pull request kept from before"),
+        1
+    );
+}

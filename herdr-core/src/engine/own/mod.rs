@@ -4442,11 +4442,7 @@ mod tests {
         let session = engine.session(WAIT).unwrap();
         let shown = session.panes.iter().find(|p| p.pane_id == pane).unwrap();
         assert_eq!(shown.cwd.as_deref(), Some("/w/sub"));
-        assert_eq!(shown.terminal_title.as_deref(), Some("✳ Fix the tests"));
-        assert_eq!(
-            shown.terminal_title_stripped.as_deref(),
-            Some("Fix the tests")
-        );
+        assert_eq!(shown.terminal_title.as_deref(), Some("Fix the tests"));
         assert_eq!(shown.agent_status, "working");
         assert_eq!(shown.foreground_process.as_deref(), Some("gemini"));
         assert_eq!(session.agents[0].agent.as_deref(), Some("gemini"));

@@ -12,7 +12,7 @@ import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
 import { MissionSummary } from "./components/mission-summary";
-import { HEAD_FILL, ProgressCells, STATE_PILL_TONE, WorkPill } from "./components/mission-tone";
+import { HEAD_FILL, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -38,6 +38,7 @@ import {
   missionOpen,
   neighbours,
   nodeLook,
+  nodeSteps,
   nodeResult,
   reportLine,
   shortCommit,
@@ -47,7 +48,7 @@ import {
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionNode, MissionStatus } from "./snapshot";
+import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionStatus } from "./snapshot";
 import { useShellStore } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { TFunction } from "i18next";
@@ -92,6 +93,8 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
   const wide = useWide(root);
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const log = useShellStore((s) => missionEventsOf(s.rest, mission.id));
+  // Settings › Mission keeps which way every mission's map runs.
+  const flow = useShellStore((s) => s.rest?.ui_state?.conductor_settings?.map_flow) ?? "down";
   const open = missionOpen(mission);
   // The page's clock ticks by the minute; a closed mission's times end where it closed.
   const minute = useMinuteClock();
@@ -136,9 +139,10 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
               }}
               data-mission-map="true"
             >
-              <MissionMapCanvas wide={wide} page={page}>
+              <MissionMapCanvas wide={wide} page={page} flow={flow} onFlow={(next) => actions.setConductorSettings({ map_flow: next })}>
                 <Graph
                   actions={actions}
+                  flow={flow}
                   mission={mission}
                   events={log?.events ?? null}
                   end={end}
@@ -279,7 +283,7 @@ function ReportLine({ mission }: { mission: Mission }) {
 
 type GraphCard = { key: string; node: MissionNode | null };
 
-function Graph({ mission, events, end, selected, onSelect, actions }: { mission: Mission; events: MissionEvent[] | null; end: number; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
+function Graph({ mission, flow, events, end, selected, onSelect, actions }: { mission: Mission; flow: MissionMapFlow; events: MissionEvent[] | null; end: number; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
   const nodes = mission.nodes;
   const graph = useMemo(() => {
     const shown = new Set(nodes.map((node) => node.key));
@@ -314,7 +318,7 @@ function Graph({ mission, events, end, selected, onSelect, actions }: { mission:
     <DependencyGraphView
       graph={graph}
       idOf={(card) => card.key}
-      flow="down"
+      flow={flow}
       gaps={{ layers: "--size-mission-layer-gap", nodes: "--size-mission-node-gap" }}
       edgeLook={edgeLook}
       overlay={overlay}
@@ -346,9 +350,11 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
  * and border, its title on one line that ends in an ellipsis (the whole
  * title on hover and in its accessible name) with Hide's mark when Hide
- * changed it last; a line holding its worker's agent mark, model and effort
- * as the panel's head draws them, how long it has taken and its worker's
- * plan as `n/m`; and a line
+ * changed it last; a bar of one cell per step of how its work goes (done,
+ * being worked, or only planned) with the step being worked under it, or
+ * `계획 n단계 · 시작 전` before a worker starts; a line holding its worker's
+ * agent mark, model and effort as the panel's head draws them and how long
+ * it has taken; and a line
  * holding its pull requests' marks or a direct change's result, and after
  * them `! 나` or `! Conductor` when it waits on someone to look, its reason on
  * hover. A line with nothing to hold is not drawn. The Conductor's line shows
@@ -369,8 +375,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
   const took = useNodeTimes(mission, node, events, end)?.took ?? null;
-  // The worker's plan is one number at the end of that line, never a line of its own.
-  const plan = run || took ? node.plan : null;
+  // How the node's work goes is one bar of cells under its title, from the worker's plan once it exists, else the Conductor's steps; its count is in the card's name, never a second number on the card.
+  const work = nodeSteps(node);
   const titleText = (
     <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.line ? undefined : node.title}>
       {node.title}
@@ -386,7 +392,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
         ...(run ? [run.text] : []),
         ...(device ? [device] : []),
-        ...(plan ? [t("plan.chip", { progress: planCount(plan) })] : []),
+        ...(work ? [node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : t("mission.steps.planned", { count: work.steps.length })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(warning ? warning.full : []),
@@ -400,7 +406,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       data-node-blocked={node.blocked ?? undefined}
       data-node-dimmed={dimmed || undefined}
       className={cn(
-        "flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
+        "relative flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
         attention ? ATTENTION_CARD : LOOK_CARD[look],
         // Outside is the node's kind: the dotted border stays in whatever state it ends (B19).
         node.kind === "external" && "border-dotted",
@@ -408,12 +414,25 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         dimmed && "opacity-(--opacity-dimmed)",
       )}
     >
+      {/* A node that runs on another device wears that device's colour on its edge, the one the workspace's header band wears; a node here stays quiet. */}
+      {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
       <span className="flex min-w-0 items-center gap-xs">
         <MissionNodeMark look={look} label={word} />
         {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
         {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
         {hide ? <HideMark words={hide} /> : null}
       </span>
+      {work ? (
+        <span className="flex min-w-0 flex-col gap-xxs" data-node-steps={work.source}>
+          <ProgressCells tones={work.steps.map((step) => step.tone)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) flex-none" />
+          {work.now && node.status === "working" ? (
+            <span className="min-w-0 truncate text-caption text-subtle-foreground" data-node-steps-now="true">{t("mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span>
+          ) : null}
+          {work.source === "plan" && node.status === "planned" ? (
+            <span className="min-w-0 truncate text-caption text-muted-foreground" data-node-steps-waiting="true">{t("mission.steps.planned", { count: work.steps.length })} · {t("mission.steps.notStarted")}</span>
+          ) : null}
+        </span>
+      ) : null}
       {/* The worker and its device stay together; at a large text size a crowded row wraps time and progress below them. Results keep their own row. */}
       {run || took || device ? (
         <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", device && "flex-wrap")} data-node-run={run?.from ?? "none"}>
@@ -424,12 +443,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
               {device ? <>{run ? <span aria-hidden="true">·</span> : null}<MissionDevice name={device} className="max-w-[calc(var(--size-mission-node)/3)] shrink-0" /></> : null}
             </span>
           ) : null}
-          {took || plan ? (
-            <span className="flex shrink-0 items-center gap-xxs">
-              {took ? <span data-node-took="true">{run || device ? "· " : ""}{took}</span> : null}
-              {plan ? <span className="font-mono tabular-nums" data-node-plan-count="true">{run || took || device ? "· " : ""}{planCount(plan)}</span> : null}
-            </span>
-          ) : null}
+          {took ? <span className="flex shrink-0 items-center gap-xxs"><span data-node-took="true">{run || device ? "· " : ""}{took}</span></span> : null}
         </span>
       ) : null}
       {result || attention || warning ? (
