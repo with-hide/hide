@@ -1337,7 +1337,7 @@ fn grok_hooks(fixture: &Fixture) -> PathBuf {
 fn grok_gets_its_own_hook_file_beside_the_others_and_only_inside_its_own_folder() {
     let fixture = Fixture::new();
     install(&fixture, "grok", ".grok");
-    // Herdr's and Orca's files are already there and stay byte for byte.
+    // Another tool's file is already there and stays byte for byte.
     let herdr = br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/herdr.sh"}]}]}}"#;
     set_up(&fixture, ".grok/hooks");
     std::fs::write(fixture.home().join(".grok/hooks/herdr.json"), herdr).unwrap();

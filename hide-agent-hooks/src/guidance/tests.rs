@@ -739,15 +739,15 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
 #[cfg(unix)]
 #[test]
 fn every_byte_another_tool_wrote_in_cursors_shared_file_survives_install_and_remove() {
-    // What Orca, Herdr and the operator keep in `~/.cursor/hooks.json`, in
+    // What other tools and the operator keep in `~/.cursor/hooks.json`, in
     // their own spacing and order (PRD grok-cursor-hooks Risks).
-    let theirs = "{\n  \"version\": 1,\n  \"hooks\": {\n    \"stop\": [ { \"command\": \"/orca/status.sh stop\" } ],\n    \"preToolUse\": [\n      {\"command\": \"/herdr/state.sh\", \"matcher\": \"Shell\"}\n    ]\n  },\n  \"zzz\": \"\\u00e9\"\n}\n";
+    let theirs = "{\n  \"version\": 1,\n  \"hooks\": {\n    \"stop\": [ { \"command\": \"/other-tool/status.sh stop\" } ],\n    \"preToolUse\": [\n      {\"command\": \"/herdr/state.sh\", \"matcher\": \"Shell\"}\n    ]\n  },\n  \"zzz\": \"\\u00e9\"\n}\n";
     let fixture = Fixture::new(GuidanceAgent::Cursor);
     fixture.write(GuidanceAgent::Cursor, theirs);
     install(GuidanceAgent::Cursor, fixture.home(), &fixture.helper).unwrap();
     let installed = fs::read_to_string(GuidanceAgent::Cursor.config_path(fixture.home())).unwrap();
     for kept in [
-        "\"stop\": [ { \"command\": \"/orca/status.sh stop\" }",
+        "\"stop\": [ { \"command\": \"/other-tool/status.sh stop\" }",
         "{\"command\": \"/herdr/state.sh\", \"matcher\": \"Shell\"}",
         "\"zzz\": \"\\u00e9\"",
     ] {
@@ -850,7 +850,7 @@ fn cursor_version_two(fixture: &Fixture) -> String {
         )
     };
     format!(
-        r#"{{"version":1,"hooks":{{{},{},{},{},"stop":[{{"command":"/orca/status.sh stop"}},{{"command":"{} hook --runtime cursor --event Stop --source hide-guidance@2","timeout":8}}]}}}}"#,
+        r#"{{"version":1,"hooks":{{{},{},{},{},"stop":[{{"command":"/other-tool/status.sh stop"}},{{"command":"{} hook --runtime cursor --event Stop --source hide-guidance@2","timeout":8}}]}}}}"#,
         hide("sessionStart", "SessionStart"),
         hide("preToolUse", "PreToolUse"),
         hide("subagentStart", "SubagentStart"),
@@ -880,7 +880,7 @@ fn installing_over_version_two_takes_out_the_subagent_and_turn_entries_and_only_
     assert_eq!(keys, ["sessionStart", "preToolUse", "stop"]);
     assert_eq!(
         document["hooks"]["stop"],
-        json!([{ "command": "/orca/status.sh stop" }])
+        json!([{ "command": "/other-tool/status.sh stop" }])
     );
     assert!(matches!(
         status(GuidanceAgent::Cursor, fixture.home(), None),
@@ -903,7 +903,7 @@ fn removing_version_twos_cursor_hook_takes_the_retired_entries_too() {
     let document = fixture.read(GuidanceAgent::Cursor);
     assert_eq!(
         document["hooks"]["stop"],
-        json!([{ "command": "/orca/status.sh stop" }])
+        json!([{ "command": "/other-tool/status.sh stop" }])
     );
     assert_eq!(document["hooks"].as_object().unwrap().len(), 1);
 }

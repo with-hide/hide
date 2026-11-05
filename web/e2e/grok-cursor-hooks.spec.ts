@@ -26,10 +26,10 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
 const json = <T = Record<string, unknown>>(file: string): T => JSON.parse(read(file)) as T;
 const sample = (name: string) => JSON.parse(fs.readFileSync(path.resolve("..", "hide-agent-hooks", "tests", "fixtures", name), "utf8")) as Record<string, unknown>;
 
-/** What another tool left beside Hide's: Herdr's and Orca's Grok files, odd spacing kept, and the operator's Cursor hook with Orca's. */
+/** What another tool left beside Hide's: two other tools' Grok files, odd spacing kept, and the operator's Cursor hook with another tool's. */
 const HERDR_FILE = '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/opt/herdr/hook stop"}]}]}}';
-const ORCA_FILE = '{\n\t"hooks": {\n\t\t"SessionStart": [ {"hooks": [{"type": "command", "command": "/opt/orca/hook", "timeout": 3}]} ]\n\t}\n}';
-const CURSOR_FILE = { version: 1, hooks: { stop: [{ command: "/opt/mine.sh", timeout: 5 }], sessionStart: [{ command: "/opt/orca/cursor-hook", timeout: 3 }] } };
+const OTHER_FILE = '{\n\t"hooks": {\n\t\t"SessionStart": [ {"hooks": [{"type": "command", "command": "/opt/other-tool/hook", "timeout": 3}]} ]\n\t}\n}';
+const CURSOR_FILE = { version: 1, hooks: { stop: [{ command: "/opt/mine.sh", timeout: 5 }], sessionStart: [{ command: "/opt/other-tool/cursor-hook", timeout: 3 }] } };
 const CURSOR_BYTES = `${JSON.stringify(CURSOR_FILE, null, "\t")}\n`;
 
 type Stack = { herdr: AgentFixture; daemon: Daemon; home: string };
@@ -52,7 +52,7 @@ async function start(label: string, options: { on?: boolean; claude?: boolean } 
   fs.writeFileSync(path.join(home, ".zshrc"), "PS1='fixture %# '\n");
   for (const folder of [".grok/hooks", ".cursor", ...(options.claude ? [".claude"] : [])]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.writeFileSync(path.join(home, ".grok", "hooks", "herdr.json"), HERDR_FILE);
-  fs.writeFileSync(path.join(home, ".grok", "hooks", "orca.json"), ORCA_FILE);
+  fs.writeFileSync(path.join(home, ".grok", "hooks", "other-tool.json"), OTHER_FILE);
   fs.writeFileSync(path.join(home, ".cursor", "hooks.json"), CURSOR_BYTES);
   fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
   fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [], ...(options.on ? { agents: { grok: true, cursor: true } } : {}) }));
@@ -163,7 +163,7 @@ test("Grok's switch installs only its owned file while retired Cursor has no swi
     expect(json<Grouped>(grokFile(home)).hooks.PreToolUse![0]!.matcher).toBeUndefined();
     // Third-party Grok files and the complete retired Cursor file retain their exact original bytes.
     expect(read(path.join(home, ".grok", "hooks", "herdr.json"))).toBe(HERDR_FILE);
-    expect(read(path.join(home, ".grok", "hooks", "orca.json"))).toBe(ORCA_FILE);
+    expect(read(path.join(home, ".grok", "hooks", "other-tool.json"))).toBe(OTHER_FILE);
     expect(read(cursorFile(home))).toBe(CURSOR_BYTES);
     // Only the active hook piece is installed; the popover names its current features.
     await expect.poll(() => wire.hook("grok")?.state, { timeout: 60_000 }).toBe("installed");
@@ -180,9 +180,9 @@ test("Grok's switch installs only its owned file while retired Cursor has no swi
     await switchOf("grok", "on").click();
     await expect(switchOf("grok", "off")).toBeVisible();
     await expect.poll(() => fs.existsSync(grokFile(home)), { timeout: 60_000 }).toBe(false);
-    expect(fs.readdirSync(path.join(home, ".grok", "hooks")).sort()).toEqual(["herdr.json", "orca.json"]);
+    expect(fs.readdirSync(path.join(home, ".grok", "hooks")).sort()).toEqual(["herdr.json", "other-tool.json"]);
     expect(read(path.join(home, ".grok", "hooks", "herdr.json"))).toBe(HERDR_FILE);
-    expect(read(path.join(home, ".grok", "hooks", "orca.json"))).toBe(ORCA_FILE);
+    expect(read(path.join(home, ".grok", "hooks", "other-tool.json"))).toBe(OTHER_FILE);
     expect(read(cursorFile(home))).toBe(CURSOR_BYTES);
   } finally {
     stop(stack);
@@ -224,7 +224,7 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
     await expect.poll(() => wire.hook("grok")?.state, { timeout: 60_000 }).toBe("installed");
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
     expect(read(path.join(home, ".grok", "hooks", "herdr.json"))).toBe(HERDR_FILE);
-    expect(read(path.join(home, ".grok", "hooks", "orca.json"))).toBe(ORCA_FILE);
+    expect(read(path.join(home, ".grok", "hooks", "other-tool.json"))).toBe(OTHER_FILE);
 
     // B8: an agent that is on but has not made its folder gets nothing made, and its row says why in a quiet
     // line without Reinstall (the kit piece's cause, worded with its folder).

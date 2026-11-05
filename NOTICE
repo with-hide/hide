@@ -77,6 +77,15 @@ Licensed under the MIT License (vendor/portable-pty/LICENSE.md).
 Hide changed it: each file says what changed, and
 vendor/portable-pty/PATCHES.md lists every change.
 
+desktop/native/notification-status/main.swift, and the way
+desktop/scripts/package.mjs compiles it with the app's identifier embedded as
+its Info.plist, are derived from Orca's native/notification-status-macos/main.swift
+and config/scripts/build-notification-status-macos.mjs
+(https://github.com/stablyai/orca).
+Copyright (c) 2026 Lovecast Inc.
+Licensed under the MIT License.
+Hide changed them: main.swift says what it took and what changed.
+
 The Windows pane holder runs Microsoft's ConPTY runtime
 (Microsoft.Windows.Console.ConPTY 1.24.260710001 from nuget.org:
 conpty.dll and OpenConsole.exe), unchanged and checked against its sha256
