@@ -2023,8 +2023,9 @@ impl Runtime {
     /// request was last seen with, and records a wake for every change that
     /// is its Conductor's to act on (D-39, B36): a merge, a review asking
     /// for changes, an open one's CI ending on its head, once per head and
-    /// result. A done mission reopens with a CI result or a review, unless
-    /// its Conductor conducts another open mission then, and
+    /// result. A done mission reopens with a review or the first CI result
+    /// on a commit, unless its Conductor conducts another open mission then,
+    /// and
     /// its merge wakes no one; a cancelled one is not woken (D-51). A stale
     /// read wakes nothing.
     /// Returns the intents of the wakes it records; each is sent as soon as
@@ -2091,6 +2092,9 @@ impl Runtime {
             }
             let mission = &self.missions.book.missions[index];
             let mut events = Vec::new();
+            // Whether a change would reopen a done mission: a review asking
+            // for changes, or the first CI result on a commit.
+            let mut reopens = false;
             let mut merged = Vec::new();
             let mut seen_updates = Vec::new();
             for (node_index, node) in mission.nodes.iter().enumerate() {
@@ -2147,6 +2151,7 @@ impl Runtime {
                                         now_seen.head.clone(),
                                         Some(key),
                                     ));
+                                    reopens = true;
                                 }
                                 // A new head is told by its CI's result,
                                 // which names its commit.
@@ -2163,6 +2168,11 @@ impl Runtime {
                                     );
                                     wake.ci = Some(ci_news(pull, result));
                                     events.push(wake);
+                                    // The first result on a commit reopens a
+                                    // done mission, as its new commit did; a
+                                    // run ending again on it tells and leaves
+                                    // the mission done.
+                                    reopens |= before.ci.is_none() || now_seen.head != before.head;
                                 }
                             }
                         }
@@ -2196,7 +2206,7 @@ impl Runtime {
             // to a done one while it conducts another wakes it with the
             // news and leaves the mission done.
             let reopen = done
-                && !events.is_empty()
+                && reopens
                 && self
                     .missions
                     .book

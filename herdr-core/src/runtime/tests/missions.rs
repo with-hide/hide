@@ -710,6 +710,31 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     assert_eq!(runtime.note_mission_pulls(node, &pushed_again).len(), 1);
     assert_eq!(status(&runtime, "mission-1"), MissionStatus::Running);
 
+    // A run ending again on that commit tells and leaves it done; the
+    // first result on the next commit opens it again.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.note_mission_pulls(node, &checked(7, "c3", PullRequestChecks::Failed, &[])),
+        vec!["mission:mission-1:ci:fix:7:c3:failed:sender"]
+    );
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
+    assert!(
+        runtime
+            .note_mission_pulls(node, &checked(7, "d4", PullRequestChecks::Pending, &[]))
+            .is_empty()
+    );
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
+    assert_eq!(
+        runtime.note_mission_pulls(node, &checked(7, "d4", PullRequestChecks::Passing, &[])),
+        vec!["mission:mission-1:ci:fix:7:d4:passed:sender"]
+    );
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Running);
+
     // Its merge is the end it was waiting for: no wake, and it stays done.
     command(
         &mut runtime,
@@ -717,7 +742,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
         json!({"op": "close", "end": "done"}),
     )
     .unwrap();
-    let merged = github(vec![pull(7, "c3", PullRequestBadge::Merged, None)], false);
+    let merged = github(vec![pull(7, "d4", PullRequestBadge::Merged, None)], false);
     assert!(runtime.note_mission_pulls(node, &merged).is_empty());
     assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
 }
