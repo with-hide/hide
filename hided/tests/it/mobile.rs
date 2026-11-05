@@ -1206,3 +1206,113 @@ async fn only_a_desktop_window_turns_agent_notifications_on() {
     }
     running.stop();
 }
+
+async fn look_result(socket: &mut Socket, request_id: &str) -> Value {
+    loop {
+        let frame = next_frame(socket).await.expect("a look result");
+        assert!(
+            !matches!(
+                frame["type"].as_str(),
+                Some("look_head" | "look_chunk" | "look_end" | "look_changes")
+            ),
+            "content reached the phone: {frame}"
+        );
+        if frame["type"] == "look_result" && frame["request_id"] == request_id {
+            return frame;
+        }
+    }
+}
+
+/// The `scope.refused` records of `phone_id` the daemon has written, once it
+/// has written `count` of them.
+async fn refusals(state: &Path, phone_id: &str, count: usize) -> Vec<String> {
+    let log = state.join("Logs/core.jsonl");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let reasons: Vec<String> = text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|row| row["kind"] == "scope.refused" && row["phone_id"] == phone_id)
+            .filter_map(|row| row["reason"].as_str().map(str::to_owned))
+            .collect();
+        if reasons.len() >= count || tokio::time::Instant::now() > deadline {
+            return reasons;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// PRD mobile-companion-ui B27, D-16: a phone names a View by its id and
+/// nothing else. A request that carries a path, a root or a checkout, or
+/// names an agent Hide does not list, is answered with a refusal, sends no
+/// content, and is recorded.
+#[tokio::test]
+async fn a_phone_asking_for_a_path_is_refused_and_logged_and_no_content_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    // The daemon runs in this process, so its records go to stderr until a
+    // sink writes them where the real daemon's go.
+    herdr_core::diagnostics::install(&dir.path().join("state/core-state.json")).unwrap();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let mut shell = renderer(&running).await;
+    let (mut socket, phone_id, _credential) = paired_phone(&running, &mut shell).await;
+    let ask = |request_id: &str, extra: Value| {
+        let mut message = json!({
+            "type": "look_open", "request_id": request_id,
+            "device_id": "local", "pane_id": "w9:p9", "view_id": "view-1",
+        });
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        message
+    };
+    for (request_id, extra) in [
+        ("path-1", json!({"path": "/etc/passwd"})),
+        ("root-1", json!({"root": "/"})),
+        ("checkout-1", json!({"checkout": "/Users/other/repo"})),
+        ("file-1", json!({"file": "../../secret"})),
+    ] {
+        send_phone(&mut socket, ask(request_id, extra)).await;
+        let answer = look_result(&mut socket, request_id).await;
+        assert_eq!(answer["state"], "refused", "{answer}");
+    }
+    // An agent that is not listed is gone, with or without a View id Hide knows.
+    send_phone(&mut socket, ask("agent-1", json!({}))).await;
+    assert_eq!(look_result(&mut socket, "agent-1").await["state"], "gone");
+    // A confirmation or a seen mark for what is not open is refused too, and nothing is read.
+    send_phone(
+        &mut socket,
+        json!({"type": "look_seen", "device_id": "local", "pane_id": "w9:p9", "view_id": "view-1"}),
+    )
+    .await;
+    send_phone(
+        &mut socket,
+        json!({"type": "look_ack", "request_id": "never-1"}),
+    )
+    .await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 7})).await;
+    assert_eq!(
+        next_pong(&mut socket).await,
+        json!({"type": "pong", "id": 7})
+    );
+    let reasons = refusals(&dir.path().join("state"), &phone_id, 7).await;
+    for wanted in [
+        "look_field:path",
+        "look_field:root",
+        "look_field:checkout",
+        "look_field:file",
+        "not_an_agent",
+        "look_ack",
+    ] {
+        assert!(
+            reasons.iter().any(|reason| reason == wanted),
+            "{wanted} missing from {reasons:?}"
+        );
+    }
+    running.stop();
+}
