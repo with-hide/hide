@@ -186,6 +186,7 @@ When that push changes nothing a lane reads beyond what the last green run check
 A pull request that finishes an issue gets the `Closes #N` line before it goes in: Hide and GitHub relate a pull request to an issue only through that line, and one that finishes none goes in as it is.
 
 The queue is the ruleset `main merge queue` (merge commits, all groups green, up to five built and five merged at once, a 30-minute check timeout).
+The repository allows auto-merge because `gh pr merge` adds a pull request to a queue through GitHub's auto-merge request; with it off, the command fails with "Auto merge is not allowed for this repository" and adds nothing.
 It was first turned on 2026-10-05 with every lane on each group and turned off the next day: with the organization's 20 concurrent jobs then, a pull request waited a median 47.6 minutes from ready to merged, of which 12.6 were its own runs.
 In its place a script ran the same checks as a group runs now on the lead's Mac, one at a time under a shared lock, about five minutes each.
 The organization's plan now runs 60 jobs at once; from 2026-11-02 to 2026-11-05 a Linux or Windows job waited a median of no time and 0.8 minutes at the 90th percentile, and a green pull request waited a median 11 and a 90th-percentile 70 minutes for the lead to merge it.
