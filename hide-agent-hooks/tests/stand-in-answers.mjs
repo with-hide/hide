@@ -12,7 +12,8 @@ import { renameSync, writeFileSync } from "node:fs";
 export function writeAnswers(file, answers) {
   const lines = Object.entries(answers).map(([operation, { delay_ms: delay, exit, raw, ...answer }]) => {
     const fields = [operation, delay ? String(delay / 1000) : "-", exit === undefined ? "-" : String(exit), raw ?? JSON.stringify(answer)];
-    if (fields.some((field) => field === "" || /[\t\n]/.test(field))) {
+    // The output may be empty (the helper printed nothing); the fields before it may not.
+    if (fields.some((field, index) => (field === "" && index < 3) || /[\t\n]/.test(field))) {
       throw new Error(`not one line of the stand-in's answers: ${JSON.stringify(fields)}`);
     }
     return `${fields.join("\t")}\n`;
