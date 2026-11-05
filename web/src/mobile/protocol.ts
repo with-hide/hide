@@ -8,8 +8,9 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
+import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, GithubStatus, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -122,6 +123,36 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   stale: boolean;
 };
 
+/** One project the PR tab lists pull requests of, with how its GitHub reads stand (`hided/src/mobile/prs.rs`, `PhoneProject`). */
+export type PhonePrProject = {
+  id: string;
+  label: string;
+  device_id: string;
+  /** The device's name for a project away from the paired Mac; null on the Mac. */
+  device_label: string | null;
+  github: GithubStatus[];
+};
+
+/** What a card read beyond the list, as the phone gets it: no body and no threads. */
+export type PhonePrCard = Pick<PrCard, "reading" | "head" | "files" | "files_total" | "merge" | "failed" | "write">;
+
+/**
+ * One listed pull request: the desktop list's value (`PullRequest`) with the board's group and reason, the agents it names on rows
+ * the phone lists, whether a checkout of its branch exists, and the card the core read. `key` is `<project id>#<number>`.
+ */
+export type PhonePr = PullRequest & {
+  key: string;
+  project: string;
+  group: PrGroupId;
+  reason: PrReason;
+  agents: AgentKey[];
+  checkout: boolean;
+  card: PhonePrCard | null;
+};
+
+/** The one feedback read the core holds, which a hand-over's prompt is built from. */
+export type PhonePrFeedback = Pick<PrFeedback, "request_id" | "pr_number" | "phase" | "failed_checks" | "change_requests" | "failure">;
+
 export type Notifications = "on" | "off" | "unasked";
 
 export type PushMode = "off" | "app_closed" | "always";
@@ -181,6 +212,10 @@ export type ServerFrame =
   | { type: "missions"; items: PhoneMission[]; failed: boolean }
   /** hided's answer to `answer_mission`; what the core does with it comes back on the mission itself. */
   | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
+  /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
+  | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
+  /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */
+  | { type: "pr_result"; request_id?: string; action: "read_pr" | "merge_pr" | "read_pr_feedback"; pr?: string | null; ok: boolean; reason: string | null }
   | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean }
   | {
       type: "conversation";
@@ -216,6 +251,12 @@ export type PhoneMessage =
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
   /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
+  /** The PR tab's own requests: `pr` is the list's key (`PhonePr.key`), `head` the card's head commit the merge was confirmed for. */
+  | { type: "read_pr"; request_id: string; pr: string; look_again?: boolean }
+  | { type: "merge_pr"; request_id: string; pr: string; head: string; method?: PrMergeMethod }
+  | { type: "read_pr_feedback"; request_id: string; pr: string }
+  /** Answered by a `start_result`, like `start_agent`; the agent starts where the desktop would start it and the desktop's screen stays. */
+  | { type: "delegate_pr"; request_id: string; pr: string; prompt: string; kind: StartKind; model?: string }
   | { type: "start_sheet"; open: boolean }
   | { type: "start_agent"; request_id: string; text: string; target: string; kind: StartKind; model?: string }
   | { type: "push_subscription"; subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }
@@ -238,7 +279,7 @@ export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
 type LimitKey = "mobile.input.tooLong" | "mobile.start.tooLong" | "mobile.refusal.phoneLimit";
 
 /** The other input, refusal, row and start sentences carry no value. */
-type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}`>, LimitKey>;
+type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.prs.refusal.${string}`>, LimitKey>;
 
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
@@ -316,6 +357,25 @@ export function missionAnswerFailure(reason: string | null): Notice {
       return { key: "mobile.mission.answer.offline" };
     default:
       return { key: "mobile.mission.answer.failed" };
+  }
+}
+
+/** The line under a pull request's buttons for a read or merge hided refused or the connection lost (B42, B43). */
+export function prFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "head_moved":
+      return { key: "mobile.prs.refusal.headMoved" };
+    case "gone":
+    case "settled":
+      return { key: "mobile.prs.refusal.gone" };
+    case "unread":
+      return { key: "mobile.prs.refusal.unread" };
+    case "in_flight":
+      return { key: "mobile.prs.refusal.inFlight" };
+    case "offline":
+      return { key: "mobile.prs.refusal.offline" };
+    default:
+      return { key: "mobile.prs.refusal.failed" };
   }
 }
 

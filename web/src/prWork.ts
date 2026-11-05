@@ -87,7 +87,11 @@ export function readingWarning(reading: PrReading, t: TFunction<"translation">):
  * keeps its last values with their age.
  */
 export function prReading(projects: readonly Workspace[], now: number): PrReading {
-  const statuses = projects.flatMap(projectStatuses);
+  return readingOfStatuses(projects.flatMap(projectStatuses), now);
+}
+
+/** The same reading over GitHub statuses a caller already holds, as the phone gets them per project. */
+export function readingOfStatuses(statuses: readonly GithubStatus[], now: number): PrReading {
   const answered = statuses.filter((status) => status.last_success_at_unix_ms != null);
   const refusal = statuses.find((status) => status.failure_category === "not_installed" || status.failure_category === "not_logged_in");
   if (refusal && answered.length === 0) return { state: "blocked", category: refusal.failure_category as "not_installed" | "not_logged_in" };

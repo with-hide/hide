@@ -15,6 +15,7 @@ import {
   macNameOf,
   missionAnswerFailure,
   parseFragment,
+  prFailure,
   refusalOf,
   replyProblem,
   sameKey,
@@ -26,8 +27,9 @@ import {
   type QuickKey,
   type ServerFrame,
 } from "./protocol";
-import { mayHaveStarted, selectionOf, startFailure, startProblem } from "./start";
-import { CLOSED_SHEET, answerSentFor, applyFrame, patch, usePhone, type StartSheet } from "./store";
+import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
+import { confirmOf, holds, prOf } from "./prModel";
+import { CLOSED_SHEET, answerSentFor, applyFrame, openPr, patch, usePhone, type StartSheet } from "./store";
 import { forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
@@ -270,6 +272,7 @@ function connect(): void {
       applyFrame(frame);
       reopenDetail();
       reopenStartSheet();
+      reopenPr();
       return;
     }
     if (frame.type === "input_result") {
@@ -282,6 +285,10 @@ function connect(): void {
     }
     if (frame.type === "mission_result") {
       onMissionResult(frame);
+      return;
+    }
+    if (frame.type === "pr_result") {
+      onPrResult(frame);
       return;
     }
     if (frame.type === "sleep_result") {
@@ -313,6 +320,8 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
+  if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
+  if (state.prDelegate?.pending) patch({ prDelegate: { ...state.prDelegate, pending: null, error: startFailure("offline") } });
   patch({ connected: false, unreachable: !refused || state.refusal === "mobile_off" });
   if (!refused || state.refusal === "mobile_off") scheduleRetry();
 }
@@ -526,7 +535,8 @@ function openStarted(): void {
 }
 
 function reopenStartSheet(): void {
-  if (usePhone.getState().startSheet.open) send({ type: "start_sheet", open: true });
+  const state = usePhone.getState();
+  if (state.startSheet.open || state.prDelegate) send({ type: "start_sheet", open: true });
 }
 
 /** Opens the sheet; hided reads the model catalog while it is open and sends what it lists. */
@@ -578,6 +588,7 @@ export function submitStart(): boolean {
 }
 
 function onStartResult(frame: Extract<ServerFrame, { type: "start_result" }>): void {
+  if (onDelegateResult(frame)) return;
   const sheet = usePhone.getState().startSheet;
   // Only the answer to the start this sheet is waiting on.
   if (!sheet.pending || frame.request_id !== sheet.pending) return;
@@ -596,6 +607,177 @@ function onStartResult(frame: Extract<ServerFrame, { type: "start_result" }>): v
     patch({ startedAgent: null });
     openDetail(key);
   }, STARTED_WAIT_MS);
+}
+
+/** Reads the card of the page that is open, so the page and its Merge show what the core read for the head now (B39). */
+function readOpenPr(lookAgain = false): void {
+  const key = usePhone.getState().prOpen;
+  if (!key) return;
+  send({ type: "read_pr", request_id: newRequestId(), pr: key, ...(lookAgain ? { look_again: true } : {}) });
+}
+
+/** After a lost connection the page's card and the hand-over sheet's catalog and feedback are read again. */
+function reopenPr(): void {
+  readOpenPr();
+  const sheet = usePhone.getState().prDelegate;
+  if (sheet) readFeedback(sheet.key);
+}
+
+/** Opens a pull request's page and asks the core for its card, as the desktop's card does when it opens (B39). */
+export function openPrPage(key: string): void {
+  openPr(key);
+  readOpenPr();
+}
+
+/** The desktop's `Look again` after a write GitHub refused. */
+export function lookAgainPr(): void {
+  readOpenPr(true);
+}
+
+/** Opens the merge confirmation for what the page shows now; nothing in it is preselected (B41). */
+export function askMerge(): void {
+  const { prs, prOpen } = usePhone.getState();
+  const pr = prOf(prs?.items ?? null, prOpen);
+  const confirm = pr ? confirmOf(pr) : null;
+  if (confirm) patch({ prConfirm: confirm, prNotice: null });
+}
+
+export function cancelMerge(): void {
+  patch({ prConfirm: null });
+}
+
+/** A merge whose outcome is unknown keeps its request id, so a resend of the same press reaches GitHub once (B43). */
+let lastMerge: { key: string; requestId: string } | null = null;
+
+/** Sends the confirmed merge, for the head and method the confirmation named, when the page still shows them (B41-B43). */
+export function confirmMerge(): boolean {
+  const state = usePhone.getState();
+  const confirm = state.prConfirm;
+  if (!confirm || state.prPending) return false;
+  const pr = prOf(state.prs?.items ?? null, confirm.key);
+  patch({ prConfirm: null });
+  if (!pr || !holds(confirm, pr)) return false;
+  const intent = JSON.stringify([confirm.key, confirm.head, confirm.queue ? null : confirm.method]);
+  const requestId = lastMerge?.key === intent ? lastMerge.requestId : newRequestId();
+  lastMerge = { key: intent, requestId };
+  const sent = send({
+    type: "merge_pr",
+    request_id: requestId,
+    pr: confirm.key,
+    head: confirm.head,
+    ...(confirm.queue || !confirm.method ? {} : { method: confirm.method }),
+  });
+  patch(sent ? { prPending: { requestId, key: confirm.key }, prNotice: null } : { prNotice: { key: confirm.key, notice: prFailure("offline") } });
+  return sent;
+}
+
+function onPrResult(frame: Extract<ServerFrame, { type: "pr_result" }>): void {
+  const state = usePhone.getState();
+  if (frame.action === "merge_pr") {
+    const pending = state.prPending;
+    // Only the answer to the merge this page is waiting on.
+    if (!pending || frame.request_id !== pending.requestId) return;
+    // The core's own state, on the card, says what GitHub then did; a refusal that sent nothing may go again under a new id.
+    if (frame.ok || (frame.reason !== "in_flight" && frame.reason !== "offline")) lastMerge = null;
+    patch({ prPending: null, prNotice: frame.ok ? null : { key: pending.key, notice: prFailure(frame.reason) } });
+    return;
+  }
+  if (frame.ok) return;
+  if (frame.action === "read_pr" && frame.pr && frame.pr === state.prOpen) {
+    patch({ prNotice: { key: frame.pr, notice: prFailure(frame.reason) } });
+    return;
+  }
+  const sheet = state.prDelegate;
+  if (frame.action === "read_pr_feedback" && sheet && sheet.feedbackId === frame.request_id) {
+    patch({ prDelegate: { ...sheet, feedbackId: null, error: prFailure(frame.reason) } });
+  }
+}
+
+/** Asks the core to read the failed checks and change requests a hand-over's prompt is made from. */
+function readFeedback(key: string): void {
+  const requestId = newRequestId();
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet || sheet.key !== key) return;
+  patch({ prDelegate: { ...sheet, feedbackId: requestId, error: null } });
+  send({ type: "read_pr_feedback", request_id: requestId, pr: key });
+}
+
+/** Opens the hand-over sheet; hided sends the agent kinds and what the desktop remembers while it is open (B44). */
+export function openDelegate(key: string): void {
+  if (usePhone.getState().prDelegate?.key === key) return;
+  patch({ prDelegate: { key, prompt: "", edited: false, choice: NO_CHOICE, feedbackId: null, pending: null, error: null }, prDelegated: null });
+  send({ type: "start_sheet", open: true });
+  readFeedback(key);
+}
+
+/** Closes the sheet and, unless the start sheet still needs it, the catalog with it. */
+export function closeDelegate(): void {
+  patch({ prDelegate: null });
+  if (!usePhone.getState().startSheet.open) send({ type: "start_sheet", open: false });
+}
+
+export function editDelegate(next: Partial<Pick<PrDelegateDraft, "prompt" | "choice">>): void {
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet) return;
+  patch({ prDelegate: { ...sheet, ...next, edited: sheet.edited || next.prompt !== undefined, error: null } });
+}
+
+/** The prompt a finished feedback read made, put in the field while the operator has not typed. */
+export function fillDelegatePrompt(prompt: string): void {
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet || sheet.edited || sheet.prompt === prompt) return;
+  patch({ prDelegate: { ...sheet, prompt } });
+}
+
+export function readFeedbackAgain(): void {
+  const sheet = usePhone.getState().prDelegate;
+  if (sheet) readFeedback(sheet.key);
+}
+
+type PrDelegateDraft = { prompt: string; choice: StartChoice };
+
+/** A hand-over whose outcome is unknown keeps its request id, so a resend of the same one starts one agent (B43 for start). */
+let lastDelegate: { key: string; requestId: string } | null = null;
+
+/** Sends the hand-over with the sheet's prompt and the agent kind and model the sheet shows (D-13). */
+export function submitDelegate(): boolean {
+  const state = usePhone.getState();
+  const sheet = state.prDelegate;
+  if (!sheet || sheet.pending || !state.startCatalog) return false;
+  const problem = startProblem(sheet.prompt);
+  if (problem) {
+    patch({ prDelegate: { ...sheet, error: startFailure(problem) } });
+    return false;
+  }
+  const selection = selectionOf(state.startCatalog, sheet.choice);
+  const key = JSON.stringify([sheet.key, sheet.prompt, selection.kind, selection.model]);
+  const requestId = lastDelegate?.key === key ? lastDelegate.requestId : newRequestId();
+  lastDelegate = { key, requestId };
+  const sent = send({
+    type: "delegate_pr",
+    request_id: requestId,
+    pr: sheet.key,
+    prompt: sheet.prompt,
+    kind: selection.kind,
+    ...(selection.model ? { model: selection.model } : {}),
+  });
+  patch({ prDelegate: { ...sheet, pending: sent ? requestId : null, error: sent ? null : startFailure("offline") } });
+  return sent;
+}
+
+/** hided's answer to a hand-over: the sheet closes on a start and keeps its prompt on a refusal. */
+function onDelegateResult(frame: Extract<ServerFrame, { type: "start_result" }>): boolean {
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet?.pending || frame.request_id !== sheet.pending) return false;
+  if (!frame.ok) {
+    if (!mayHaveStarted(frame.reason)) lastDelegate = null;
+    patch({ prDelegate: { ...sheet, pending: null, error: startFailure(frame.reason) } });
+    return true;
+  }
+  lastDelegate = null;
+  patch({ prDelegate: null, prDelegated: sheet.key });
+  if (!usePhone.getState().startSheet.open) send({ type: "start_sheet", open: false });
+  return true;
 }
 
 /** The user tapped Connect on the pairing screen (B11). */

@@ -5,26 +5,15 @@ import { OfflineText } from "./OfflineText";
 // start succeeds, so a refusal or a lost connection never costs it.
 
 import { Loader2Icon } from "lucide-react";
-import type { ReactNode } from "react";
 import { Button } from "../components/ui/button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../components/ui/sheet";
 import { closeStartSheet, editStartSheet, submitStart } from "./connection";
-import { noticeText, type StartKind } from "./protocol";
-import { START_KINDS, modelsOf, selectionOf, startFailure, startProblem, targetText } from "./start";
+import { AgentChoice } from "./AgentChoice";
+import { Field, SELECT_CLASS } from "./parts";
+import { noticeText } from "./protocol";
+import { selectionOf, startFailure, startProblem, targetText } from "./start";
 import { usePhone } from "./store";
-
-const SELECT_CLASS =
-  "h-(--size-touch-target) w-full min-w-0 truncate rounded-lg border border-border bg-input px-md text-title text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50";
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="flex min-w-0 flex-col gap-xs text-body text-muted-foreground">
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
 
 export function StartSheet() {
   const { t } = useInterfaceTranslation();
@@ -32,7 +21,6 @@ export function StartSheet() {
   const catalog = usePhone((s) => s.startCatalog);
   const connected = usePhone((s) => s.connected);
   const selection = selectionOf(catalog, sheet.choice);
-  const models = modelsOf(selection);
   const problem = startProblem(sheet.text);
   const tooLong = problem === "too_long";
   const shown = tooLong ? startFailure("too_long") : sheet.error;
@@ -79,39 +67,7 @@ export function StartSheet() {
             )}
           </select>
         </Field>
-        <div className="grid grid-cols-2 gap-sm">
-          <Field label={t("mobile.start.kind")}>
-            <select
-              value={selection.kind}
-              onChange={(event) => editStartSheet({ choice: { ...sheet.choice, kind: event.target.value as StartKind, model: undefined } })}
-              data-phone-start-kind="true"
-              className={SELECT_CLASS}
-            >
-              {START_KINDS.map((kind) => (
-                <option key={kind.id} value={kind.id}>
-                  {kind.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t("mobile.start.model")}>
-            <select
-              value={selection.model}
-              disabled={models.length === 0}
-              onChange={(event) => editStartSheet({ choice: { ...sheet.choice, model: event.target.value } })}
-              data-phone-start-model="true"
-              className={SELECT_CLASS}
-            >
-              <option value="">{t("mobile.start.defaultModel")}</option>
-              {selection.model && !models.includes(selection.model) ? <option value={selection.model}>{selection.model}</option> : null}
-              {models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
+        <AgentChoice selection={selection} choice={sheet.choice} onChange={(choice) => editStartSheet({ choice })} name="start" />
         {shown ? (
           <p role="alert" className="text-body text-destructive" data-phone-start-error="true">
             {noticeText(t, shown)}

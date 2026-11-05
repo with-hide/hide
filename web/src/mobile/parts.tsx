@@ -3,6 +3,7 @@
 // task name, and the project · branch with the SSH device's chip.
 
 import { ServerIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { StatusMark } from "../components/status-mark";
 import type { PhoneAgent } from "./protocol";
@@ -47,5 +48,19 @@ export function Place({ agent, inset }: { agent: PhoneAgent; inset: string }) {
       {agent.place ? <span className="min-w-0 truncate">{agent.place}</span> : null}
       {agent.device_label ? <DeviceTag label={agent.device_label} /> : null}
     </span>
+  );
+}
+
+/** A phone sheet's select: one touch target tall, the same in every sheet. */
+export const SELECT_CLASS =
+  "h-(--size-touch-target) w-full min-w-0 truncate rounded-lg border border-border bg-input px-md text-title text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50";
+
+/** A phone sheet's labelled field. */
+export function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex min-w-0 flex-col gap-xs text-body text-muted-foreground">
+      <span>{label}</span>
+      {children}
+    </label>
   );
 }
