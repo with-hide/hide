@@ -84,7 +84,14 @@ def measure(journey):
         journey.settle(CELL, (cells.FAIL, f"Fork agent opened {len(opened)} panes, not one"),
                        journey.evidence(CELL, record))
         return
-    turn, read, value = journey.turn_in(opened[0], record.setdefault("prompt", {}))
+    try:
+        turn, read, value = journey.turn_in(opened[0], record.setdefault("prompt", {}))
+    except ProcessError as error:
+        if journey.runtime.owner.cancelled.is_set():
+            raise
+        # The fork's own screen, not its source's, says why it took no turn.
+        journey.settle(CELL, (cells.FAIL, str(error)), journey.evidence(CELL, record), pane=opened[0])
+        return
 
     def forked(rest):
         row = forked_row(rest, journey.pane)
