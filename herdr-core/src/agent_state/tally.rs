@@ -489,7 +489,7 @@ pub mod phone {
     #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
     pub enum GroupRow {
-        Agent(PhoneAgent),
+        Agent(Box<PhoneAgent>),
         Sleeping(PhoneSleepingSession),
     }
 

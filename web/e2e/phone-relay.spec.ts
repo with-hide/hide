@@ -53,7 +53,7 @@ test("QR clears its secret, pairs over Noise and uses the shared conversation, t
   await expect(page).not.toHaveURL(/#pair=/);
   await expect(page.locator('img[src="x"]')).toHaveCount(0);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page).toHaveURL(/\/p\/1\/\?host=/);
+  await expect(page).toHaveURL(new RegExp(`/p/${PHONE_PROTOCOL}/\\?host=`));
   await expect(page.locator('[data-phone-agent="test-device|pane-one"]')).toBeVisible();
   await expect(page.locator("[data-phone-install-hint]")).toBeVisible();
   await page.locator('[data-phone-agent="test-device|pane-one"]').click();
@@ -115,10 +115,10 @@ for (const surface of ["root", "picker"]) {
         await page.getByRole("button", { name: second.pairing.name, exact: true }).click();
       }
       await expect.poll(() => relay.plaintext.length).toBeGreaterThan(0);
-      await expect(page.getByText("Phone app 1 · Device 9", { exact: true })).toBeVisible();
+      await expect(page.getByText(`Phone app ${PHONE_PROTOCOL} · Device 9`, { exact: true })).toBeVisible();
       expect(relay.wire.binaryFrames).toBe(0);
       expect(relay.received).toEqual([]);
-      await page.getByRole("button", { name: /Phone app 1 · Device 9/ }).click();
+      await page.getByRole("button", { name: new RegExp(`Phone app ${PHONE_PROTOCOL} · Device 9`) }).click();
       await expect(page.getByRole("heading", { name: "Update Hide on this device" })).toBeVisible();
       expect(relay.wire.binaryFrames).toBe(0);
       expect(relay.received).toEqual([]);

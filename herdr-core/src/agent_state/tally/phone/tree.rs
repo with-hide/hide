@@ -73,7 +73,7 @@ pub(super) fn groups(
                 &mut top.last_mut().expect("a group was just added").1
             }
         };
-        rows.push(GroupRow::Agent(agent));
+        rows.push(GroupRow::Agent(Box::new(agent)));
     }
     for session in sleeping {
         match top.iter_mut().find(|(group, _)| *group == session.group) {
@@ -348,12 +348,7 @@ mod tests {
     #[test]
     fn a_group_lists_its_first_rows_and_counts_the_folded_ones() {
         let mut rows = Vec::new();
-        for (group, listed, total) in [
-            ("needs_you", 5, 7),
-            ("done", 3, 4),
-            ("working", 5, 6),
-            ("seen", 3, 9),
-        ] {
+        for (group, total) in [("needs_you", 7), ("done", 4), ("working", 6), ("seen", 9)] {
             for at in 0..total {
                 rows.push(agent(
                     &format!("{group}-{at}"),
