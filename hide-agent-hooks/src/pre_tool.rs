@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use hide_agent_adapter::HookDialect;
 use hide_platform::process::{CaptureFailureKind, OwnedChild};
+use hide_shell::Syntax;
 use serde::Deserialize;
 
 /// The shell tool's call, as a runtime's `PreToolUse` payload carries it.
@@ -18,6 +19,41 @@ use serde::Deserialize;
 pub struct Call {
     pub command: String,
     pub cwd: Option<PathBuf>,
+    /// The syntax of the shell that runs `command`, which every guard reads
+    /// it in ([`shell_syntax`]).
+    pub syntax: Syntax,
+}
+
+/// The syntax of the shell a runtime's shell tool `tool` runs its command
+/// in on this system. The tool decides it, not the shell of the pane the
+/// agent runs in: an agent starts a shell of its own for each call. This is
+/// the one place it is decided; a guard reads the call in the syntax it is
+/// handed and never guesses (docs/agent-hooks.md, Which shell reads a call).
+pub fn shell_syntax(dialect: HookDialect, tool: &str) -> Syntax {
+    syntax_on(dialect, tool, cfg!(windows))
+}
+
+fn syntax_on(dialect: HookDialect, tool: &str, windows: bool) -> Syntax {
+    match dialect {
+        // Claude Code names the shell in the tool: `Bash` runs in Git Bash
+        // on Windows (and is not registered where Git Bash is missing), and
+        // `PowerShell` in PowerShell on every system (tools reference,
+        // "PowerShell tool").
+        HookDialect::ClaudeCode if tool == "PowerShell" => Syntax::PowerShell,
+        HookDialect::ClaudeCode => Syntax::Posix,
+        // Codex runs every command in the session's shell, PowerShell on
+        // Windows (codex-rs shell_detect `default_user_shell`); Grok in pwsh or
+        // Windows PowerShell; Cursor and agy are read the same way on
+        // Windows, unconfirmed by a capture (docs/INSTALL.md).
+        HookDialect::Codex | HookDialect::Grok | HookDialect::Cursor | HookDialect::Antigravity
+            if windows =>
+        {
+            Syntax::PowerShell
+        }
+        // OpenCode's, Pi's and omp's bash tool runs a POSIX shell, Git Bash on
+        // Windows.
+        _ => Syntax::Posix,
+    }
 }
 
 /// Claude Code's, Codex's and Cursor's payload: snake_case keys.
@@ -66,8 +102,9 @@ struct ToolInput {
     working_directory: Option<String>,
 }
 
-/// The shell call in a `PreToolUse` payload, in `dialect`'s shape: the shell
-/// tool is `Bash` in Claude Code and Codex, `run_terminal_command` in Grok
+/// The shell call in a `PreToolUse` payload, in `dialect`'s shape, with the
+/// syntax of the shell that runs it: the shell tool is `Bash` or `PowerShell`
+/// in Claude Code, `Bash` in Codex, `run_terminal_command` in Grok
 /// (which a hook may also see as its alias `Bash`), `Shell` in Cursor,
 /// whose call carries its own `working_directory`, and `run_command` in agy,
 /// whose call carries `CommandLine` and `Cwd`. A truncated or unreadable
@@ -95,6 +132,7 @@ pub fn read_call(payload: &[u8], truncated: bool, dialect: HookDialect) -> Optio
             return Some(Call {
                 command,
                 cwd: args.cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
+                syntax: shell_syntax(dialect, "run_command"),
             });
         }
         HookDialect::Grok => {
@@ -107,18 +145,15 @@ pub fn read_call(payload: &[u8], truncated: bool, dialect: HookDialect) -> Optio
         }
     };
     let shell = match dialect {
-        HookDialect::ClaudeCode
-        | HookDialect::Codex
-        | HookDialect::OpenCode
-        | HookDialect::Pi
-        | HookDialect::Omp => &["Bash"][..],
+        HookDialect::ClaudeCode => &["Bash", "PowerShell"][..],
+        HookDialect::Codex | HookDialect::OpenCode | HookDialect::Pi | HookDialect::Omp => {
+            &["Bash"][..]
+        }
         HookDialect::Grok => &["run_terminal_command", "Bash"][..],
         HookDialect::Cursor => &["Shell"][..],
         HookDialect::Antigravity => &["run_command"][..],
     };
-    if !tool.is_some_and(|tool| shell.contains(&tool.as_str())) {
-        return None;
-    }
+    let tool = tool.filter(|tool| shell.contains(&tool.as_str()))?;
     let input = input?;
     let serde_json::Value::String(command) = input.command? else {
         return None;
@@ -133,6 +168,7 @@ pub fn read_call(payload: &[u8], truncated: bool, dialect: HookDialect) -> Optio
     Some(Call {
         command,
         cwd: cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
+        syntax: shell_syntax(dialect, &tool),
     })
 }
 
@@ -243,7 +279,8 @@ mod tests {
             call(r#"{"tool_name":"Bash","cwd":"/r","tool_input":{"command":"ls"}}"#),
             Some(Call {
                 command: "ls".into(),
-                cwd: Some(PathBuf::from("/r"))
+                cwd: Some(PathBuf::from("/r")),
+                syntax: Syntax::Posix,
             })
         );
         assert_eq!(
@@ -276,7 +313,8 @@ mod tests {
             read_call(grok, false, HookDialect::Grok),
             Some(Call {
                 command: "npm test".into(),
-                cwd: Some(PathBuf::from("/work/project"))
+                cwd: Some(PathBuf::from("/work/project")),
+                syntax: shell_syntax(HookDialect::Grok, "run_terminal_command"),
             })
         );
         assert_eq!(
@@ -307,7 +345,8 @@ mod tests {
             read_call(cursor, false, HookDialect::Cursor),
             Some(Call {
                 command: "npm install".into(),
-                cwd: Some(PathBuf::from("/project/web"))
+                cwd: Some(PathBuf::from("/project/web")),
+                syntax: shell_syntax(HookDialect::Cursor, "Shell"),
             })
         );
         assert_eq!(
@@ -326,6 +365,93 @@ mod tests {
                 HookDialect::Cursor
             ),
             None
+        );
+    }
+
+    #[test]
+    fn claude_codes_powershell_tool_is_a_shell_call_read_as_powershell() {
+        let call = read_call(
+            br#"{"tool_name":"PowerShell","cwd":"C:/r","tool_input":{"command":"ii .\\out.png"}}"#,
+            false,
+            HookDialect::ClaudeCode,
+        )
+        .unwrap();
+        assert_eq!(call.command, r"ii .\out.png");
+        assert_eq!(call.syntax, Syntax::PowerShell);
+        // Codex has no tool of that name.
+        assert_eq!(
+            read_call(
+                br#"{"tool_name":"PowerShell","tool_input":{"command":"ls"}}"#,
+                false,
+                HookDialect::Codex
+            ),
+            None
+        );
+    }
+
+    /// Which shell each runtime's shell tool runs a command in, per system:
+    /// Claude Code's tools reference (Bash in Git Bash, PowerShell tool),
+    /// Codex's shell detection (PowerShell on Windows), Grok's hooks guide
+    /// (pwsh or Windows PowerShell), and Cursor's and agy's read the same way.
+    #[test]
+    fn the_shell_syntax_is_the_one_the_tool_runs_on_its_system() {
+        use HookDialect::*;
+        let table = [
+            (ClaudeCode, "Bash", Syntax::Posix, Syntax::Posix),
+            (
+                ClaudeCode,
+                "PowerShell",
+                Syntax::PowerShell,
+                Syntax::PowerShell,
+            ),
+            (Codex, "Bash", Syntax::Posix, Syntax::PowerShell),
+            (
+                Grok,
+                "run_terminal_command",
+                Syntax::Posix,
+                Syntax::PowerShell,
+            ),
+            (Grok, "Bash", Syntax::Posix, Syntax::PowerShell),
+            (Cursor, "Shell", Syntax::Posix, Syntax::PowerShell),
+            (
+                Antigravity,
+                "run_command",
+                Syntax::Posix,
+                Syntax::PowerShell,
+            ),
+            (OpenCode, "bash", Syntax::Posix, Syntax::Posix),
+            (Pi, "bash", Syntax::Posix, Syntax::Posix),
+            (Omp, "bash", Syntax::Posix, Syntax::Posix),
+        ];
+        for (dialect, tool, elsewhere, windows) in table {
+            assert_eq!(
+                syntax_on(dialect, tool, false),
+                elsewhere,
+                "{dialect:?} {tool}"
+            );
+            assert_eq!(
+                syntax_on(dialect, tool, true),
+                windows,
+                "{dialect:?} {tool} on Windows"
+            );
+            assert_eq!(
+                shell_syntax(dialect, tool),
+                if cfg!(windows) { windows } else { elsewhere }
+            );
+        }
+        let codex = read_call(
+            br#"{"tool_name":"Bash","tool_input":{"command":"ii .\\out.png"}}"#,
+            false,
+            HookDialect::Codex,
+        )
+        .unwrap();
+        assert_eq!(
+            codex.syntax,
+            if cfg!(windows) {
+                Syntax::PowerShell
+            } else {
+                Syntax::Posix
+            }
         );
     }
 }

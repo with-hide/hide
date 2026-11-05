@@ -231,7 +231,7 @@ fn copilot_writes_its_own_file_with_both_shell_keys_and_seconds() {
         entry["powershell"]
             .as_str()
             .unwrap()
-            .starts_with("if (Test-Path -LiteralPath '")
+            .starts_with("if ([System.IO.File]::Exists('")
     );
 }
 
@@ -706,7 +706,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
         assert_eq!(hook["timeout"], 8, "{event}");
         let command = hook["command"].as_str().unwrap();
         assert!(command.starts_with("if [ -x '"), "{command}");
-        assert!(command.contains("hide-guidance@9"), "{command}");
+        assert!(command.contains("hide-guidance@10"), "{command}");
         assert!(
             command.contains(&format!("--runtime grok --event {event} ")),
             "{command}"
@@ -728,7 +728,7 @@ fn grok_writes_its_own_file_of_the_events_its_documentation_names() {
     );
     let old = fs::read_to_string(&path)
         .unwrap()
-        .replace("hide-guidance@9", "hide-guidance@6");
+        .replace("hide-guidance@10", "hide-guidance@6");
     fs::write(&path, old).unwrap();
     assert!(matches!(
         status(GuidanceAgent::Grok, fixture.home(), None),
@@ -1117,5 +1117,28 @@ fn each_installation_keeps_its_own_entry_in_every_agents_file() {
             status(agent, fixture.home(), Some(device)),
             HookStatus::NotInstalled
         ));
+    }
+}
+
+/// with-hide/hide-private#318: Grok's and agy's Windows commands run no
+/// command but the helper, as Claude Code's and Codex's do
+/// (`install::tests::a_windows_guard_calls_no_cmdlet`).
+#[test]
+fn the_windows_guidance_commands_call_no_cmdlet() {
+    let helper = Path::new("C:\\kit path\\it's\\hide-agent-hooks.exe");
+    for event in [
+        HookEvent::SessionStart,
+        HookEvent::PreToolUse,
+        HookEvent::Stop,
+    ] {
+        let grok = powershell_command(helper, GuidanceAgent::Grok, event);
+        let agy = decoded_windows_command(&antigravity_windows_command(helper, event)).unwrap();
+        for command in [grok, agy] {
+            let others: Vec<String> = crate::install::powershell_commands(&command, helper)
+                .into_iter()
+                .filter(|first| first != crate::antigravity::ASK)
+                .collect();
+            assert_eq!(others, Vec::<String>::new(), "{event:?}: {command}");
+        }
     }
 }

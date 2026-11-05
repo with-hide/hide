@@ -41,7 +41,7 @@ pub enum ViewKind {
 /// it ran several; `None` when it ran none a thread draws as a part (a read
 /// such as `hide task show` or `hide inbox` stays a shell call).
 pub fn hide_call(command: &str) -> Option<HideCall> {
-    simple_commands(command)
+    simple_commands(command, hide_shell::Syntax::Posix)
         .iter()
         .find_map(|words| read(program_words(words)?))
 }

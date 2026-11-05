@@ -500,7 +500,7 @@ fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
     if cfg!(windows) {
         let write = format!(
             "Write-Host {}",
-            hide_shell::quote::powershell_single_quoted(&line)
+            hide_shell::Syntax::PowerShell.single_quoted(&line)
         );
         let mut program = shell.to_vec();
         // A shell started with a command of its own (the integration's)

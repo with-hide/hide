@@ -49,7 +49,7 @@ impl AgentPermission {
         if text.chars().any(char::is_control) {
             return Err("options hold a control character".into());
         }
-        let mut line = hide_shell::shell_line(text);
+        let mut line = hide_shell::shell_line(text, hide_shell::Syntax::Posix);
         if !text.is_empty() && line.commands.is_empty() {
             return Err("options end inside a quote".into());
         }

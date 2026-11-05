@@ -915,6 +915,7 @@ fn guard_refusal(
         runtime_id,
         &pane,
         &call.command,
+        call.syntax,
         &program,
         Instant::now() + GUARD_BUDGET,
     )
