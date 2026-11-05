@@ -5,7 +5,7 @@
 // a refused answer shows in the desktop's words.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { PhoneMission, PhoneMissionNode, ServerFrame } from "./protocol";
 
 vi.hoisted(() => {
@@ -83,6 +83,14 @@ async function connect(items: PhoneMission[]) {
   const answers = () => socket.sent.filter((message) => message.type === "answer_mission");
   return { container, socket, serve, click, answers, connection, store, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
 }
+
+// The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
+// hook's own budget, so the first test's budget is for what it asserts.
+beforeAll(async () => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  await import("./App");
+  vi.unstubAllGlobals();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
