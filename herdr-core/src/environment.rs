@@ -126,7 +126,10 @@ fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentR
                     "invalid",
                     "Herdr socket override is invalid; moving from Herdr cannot read it",
                 ),
-                Some(_) => ("available", "Herdr socket override is available for moving from Herdr"),
+                Some(_) => (
+                    "available",
+                    "Herdr socket override is available for moving from Herdr",
+                ),
             },
             CODEX_HOME_KEY => {
                 let resolved = AgentId::Codex.adapter().home(

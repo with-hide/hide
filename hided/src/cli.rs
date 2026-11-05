@@ -3333,7 +3333,10 @@ mod tests {
             parse(&["hide", "import", "herdr", "--yes"]).unwrap(),
             CommandKind::ImportHerdr { yes: true }
         );
-        for wrong in [&["hide", "import"][..], &["hide", "import", "other-tool"][..]] {
+        for wrong in [
+            &["hide", "import"][..],
+            &["hide", "import", "other-tool"][..],
+        ] {
             assert_eq!(parse(wrong).unwrap_err(), IMPORT_USAGE, "{wrong:?}");
         }
         let offered = |kind: &str, running: bool| {

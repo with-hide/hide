@@ -156,10 +156,10 @@ use crate::model::{
     ExplorerOperationSnapshot, LastErrorSnapshot, LinkOrigin, OperatorFocusAck,
     PANE_TEXT_SCALE_STEP, PaneFindOpened, PaneFindRoute, PaneFindSnapshot,
     PaneFocusRequestSnapshot, PaneForkSnapshot, PaneLayoutNodeSnapshot, PaneLayoutSnapshot,
-    PaneSnapshot, RemoteFileEntrySnapshot,
-    RemoteFileListSnapshot, RemoteSessionSnapshot, RightPanelSection, SCHEMA_VERSION,
-    SessionRowSnapshot, SidebarAgentSnapshot, Snapshot, StripTabKind, StripTabSnapshot, Surface,
-    TabSnapshot, TerminalPaneSnapshot, UiStateSnapshot, WorkspaceSnapshot, clamp_pane_text_scale,
+    PaneSnapshot, RemoteFileEntrySnapshot, RemoteFileListSnapshot, RemoteSessionSnapshot,
+    RightPanelSection, SCHEMA_VERSION, SessionRowSnapshot, SidebarAgentSnapshot, Snapshot,
+    StripTabKind, StripTabSnapshot, Surface, TabSnapshot, TerminalPaneSnapshot, UiStateSnapshot,
+    WorkspaceSnapshot, clamp_pane_text_scale,
 };
 use crate::recent_closed::{
     ClosedAgent, ClosedContext, ClosedItem, ClosedPane, ClosedTabName, push_bounded,
