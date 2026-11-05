@@ -438,7 +438,7 @@ fn a_program_that_ends_with_no_node_there_leaves_why_in_its_record() {
     let end = ended.end.as_ref().unwrap();
     assert_eq!(end.reason, EndReason::ProgramExited, "{ended:?}");
     assert_eq!(end.exit_code, Some(3), "{ended:?}");
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
 }
 
 /// The holder waits a bounded time for the records' lock and exits without
@@ -456,7 +456,7 @@ fn an_end_the_holder_could_not_record_is_settled_as_a_lost_holder() {
     .unwrap()
     .expect("the records' lock");
     std::fs::write(folder.go(), b"").unwrap();
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
     drop(lock);
     assert_eq!(folder.record("p1").phase, Phase::Running);
 
@@ -554,7 +554,7 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
     }
     #[cfg(windows)]
     hide_platform::process::terminate(holder.pid).unwrap();
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
     #[cfg(unix)]
     assert!(
         tree.iter().all(Running::is_running),
@@ -734,7 +734,7 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
         hide_platform::process::terminate(holder.pid).unwrap();
     }
     for holder in &holders {
-        wait_until("the holder's end", || !holder.runs());
+        Running::named(*holder).wait_gone();
     }
 
     let none = folder.panes.reconcile(folder.owner(), Duration::ZERO);

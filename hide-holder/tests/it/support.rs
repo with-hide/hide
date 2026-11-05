@@ -150,13 +150,27 @@ impl Running {
         is_alive(pid).then_some(Self { pid, started })
     }
 
+    /// `identity`'s process, named as the records name it.
+    pub fn named(identity: hide_holder_protocol::record::Identity) -> Self {
+        Self {
+            pid: identity.pid,
+            started: identity.started,
+        }
+    }
+
     pub fn is_running(&self) -> bool {
         is_alive(self.pid) && start_time(self.pid).ok() == Some(self.started)
     }
 
+    /// Waits until the system counts the process ended, as a start's and a
+    /// reconcile's checks (`is_alive`) count it, not only until its start
+    /// time stops answering: on Windows the exit code is set first, and the
+    /// process still holds its handles (its listening socket, its job's
+    /// members) until its object is signalled a moment later
+    /// (with-hide/hide-private#399, #403).
     pub fn wait_gone(&self) {
         wait_until(&format!("the end of process {}", self.pid), || {
-            !self.is_running()
+            !is_alive(self.pid) || start_time(self.pid).is_ok_and(|started| started != self.started)
         });
     }
 }
