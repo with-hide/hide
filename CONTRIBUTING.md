@@ -329,7 +329,6 @@ A script that stops earning its place here is deleted rather than left unreferen
 | `python3 scripts/premerge-check.py <number>` | A pull request may merge into main as main is now: its latest `verify` passed, it does not conflict, and the fast checks pass on the merge result ([Merging into main](#merging-into-main)) | `gh` logged in for this repository, and the web and Rust toolchains the checks build with |
 | `python3 scripts/merge-order.py [<number> \| --branch <name>]` | Which green pull request merges first and what each breaks ([Which green pull request merges first](#which-green-pull-request-merges-first)), or where a pull request or branch stands beside the open ones ([Starting work beside open pull requests](#starting-work-beside-open-pull-requests)); it only reads and fetches | `gh` logged in for this repository |
 | `python3 scripts/check-no-attribution.py` | No AI tooling attribution in the branch name, the commits, or a prepared PR body | A fetched `origin/main`; `--range` and `--pr-body` override the defaults |
-| `python3 scripts/check-worktree-performance-evidence.py [dir]` | A worktree performance run recorded what the guide requires | A completed native run directory |
 
 ## Performance-sensitive changes
 

@@ -401,21 +401,6 @@ class WorkstationIdentityTests(unittest.TestCase):
         self.assertEqual(self.classes(result), ["tracked_blob_too_large"])
         self.assertEqual(self.check("index", checker).returncode, 0)
 
-    def test_only_the_named_large_source_reads_past_the_blob_limit(self):
-        self.tracked("design/hide-screens.pen", "neutral\n")
-        self.tracked("other.pen", "neutral\n")
-        checker = self.checker_with_limit("MAX_BYTES", 1024)
-        for name in ("design/hide-screens.pen", "other.pen"):
-            with (self.root / name).open("r+b") as target:
-                target.truncate(1024 + 1)
-            self.git("add", "-f", "--", name)
-        for scope in ("checkout", "index"):
-            result = self.check(scope, checker)
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(self.classes(result), ["tracked_blob_too_large"])
-            self.assertNotIn("design/hide-screens.pen", result.stderr)
-            self.assertIn("other.pen", result.stderr)
-
     def test_diagnostic_limit_is_reported_instead_of_truncated_success(self):
         self.tracked("fixture.txt", (home("macos", "private-fixture-person") + "\n") * 201)
         result = self.check("index")

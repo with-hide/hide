@@ -135,7 +135,6 @@ When code, tests, and a current contract disagree, investigate and update the re
 | [Agent workflow UI contract](../design/agent-workflow-review.md) | Maps retained Agents, pane focus and Explorer Git components and behavior to their code owners | Current implementation contract; `UI_BEHAVIOR.md`, `status-model.md`, and `ARCHITECTURE.md` retain their domain authority |
 | [Orca visual references](design-reference/README.md) and its three images | Layout and interaction inspiration | Read on demand; `UI_BEHAVIOR.md` wins on current UI requirements |
 | `assets/hide-icon-candidates/` | Earlier artwork candidates | Historical visual references; the approved source is `design/brand/hide-mark.png` |
-| `fixtures/` | Small deterministic terminal input files | Inputs for owned fixtures, not test results or an alternate architecture contract |
 
 Features the removed native shell had and the desktop app does not yet (the pet window, the menu bar item, global shortcuts and the Dock badge, file drag and drop into a pane, the remote file viewer) are tracked in [Electron backlog issue #184](https://github.com/with-hide/hide/issues/184), not in this tree.
 Old run records and PRDs describe their own revision only.
