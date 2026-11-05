@@ -224,7 +224,7 @@ The core owns the state behind one snapshot boundary, and the shell only renders
 
 On an M4 Pro Mac, the 2026-10-04 candidate measured **16.3 ms p95** from a renderer keydown to a complete nine-character echo in the terminal buffer, and its whole process tree held **549 MiB** idle and **622 MiB** with three busy terminals (RSS p95).
 These are one machine's numbers on macOS, taken without quiescing it: they leave out key-to-photon latency and Windows and Linux, and no other app ran the same workload, so they claim nothing about relative speed.
-[PERFORMANCE_RESULTS.md](docs/PERFORMANCE_RESULTS.md) has the method, the distributions and every limit.
+The method, the distributions and every limit are kept in `docs/performance-results.md` in with-hide/hide-private.
 
 </details>
 

@@ -370,7 +370,7 @@ it("keeps a read question in 내 차례 dimmed with a hollow ! and no 읽음 wor
 
 it("draws a middle child's whole pull request list on its child row, its grandchild's included, as its pane and record do", async () => {
   // A -> B -> C: B made #41 and C made #42. The core lays one list on each
-  // session (docs/status-model.md, One list per session); B's is both.
+  // session (with-hide/hide-private docs/task-identity.md, One list per session); B's is both.
   const pull = (number: number, state: SessionPull["state"], holder: string, own: boolean): SessionPull => ({
     url: `https://github.com/acme/app/pull/${number}`, number, title: `PR ${number}`, state, own, holders: [holder], stale: false, last_read_at_unix_ms: null,
   });

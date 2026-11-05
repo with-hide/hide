@@ -93,7 +93,7 @@ pub struct Waiting {
 
 /// The causes an agent waits by: its own demand (docs/status-model.md, Where
 /// each axis comes from), a question the core laid on its row, or one of the
-/// escalation causes (Delegated escalation).
+/// escalation causes (with-hide/hide-private docs/task-identity.md, Delegated escalation).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitCause {

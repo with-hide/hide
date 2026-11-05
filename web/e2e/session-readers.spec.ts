@@ -103,7 +103,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page);
     const row = await showNativeRow(page, sourcePane);
-    // status-model.md, Task identity: an automatic/source-less name follows the goal.
+    // with-hide/hide-private docs/task-identity.md: an automatic/source-less name follows the goal.
     const selected = kind === "pi" ? "Generated Pi goal" : kind === "grok" ? "Generated Grok goal" : initialTitle;
     await expect(row).toContainText(selected, { timeout: 30_000 });
     if (kind === "pi" || kind === "grok") await disableAgentSummaries(page);

@@ -1,4 +1,4 @@
-// How a mission's map zooms (docs/UI_BEHAVIOR.md, A mission's map): it
+// How a mission's map zooms (with-hide/hide-private docs/tasks-and-pr-list.md, A mission's map): it
 // opens at 맞춤, the whole map inside its box and never larger
 // than its own size, and a pinch, a wheel with ⌘ or Ctrl held, or the
 // box's − and + move it between 40% and 200%, the buttons in Chrome's steps.

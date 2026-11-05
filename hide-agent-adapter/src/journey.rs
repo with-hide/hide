@@ -137,8 +137,8 @@ pub enum JourneyWake {
     SleepingSession,
 }
 
-/// The native title source a `title` cell measures (docs/status-model.md,
-/// Task identity: the automatic or source-less slot of each format).
+/// The native title source a `title` cell measures (with-hide/hide-private
+/// docs/task-identity.md: the automatic or source-less slot of each format).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JourneyTitle {

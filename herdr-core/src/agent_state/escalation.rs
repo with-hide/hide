@@ -187,8 +187,8 @@ impl Cause {
     }
 }
 
-/// One raised descendant as its lineage root shows it (docs/status-model.md,
-/// Delegated escalation): the verb, what to do, who asks, where Open goes and
+/// One raised descendant as its lineage root shows it (with-hide/hide-private
+/// docs/task-identity.md, Delegated escalation): the verb, what to do, who asks, where Open goes and
 /// since when. `what` is absent when no label line or letter says it; the
 /// shell then words the verb's own fallback.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -682,7 +682,7 @@ mod tests {
         }
     }
 
-    // status-model.md, Delegated escalation: a child that took up a new turn
+    // with-hide/hide-private docs/task-identity.md, Delegated escalation: a child that took up a new turn
     // after its letter moved on without the answer, so stopping again does
     // not bring the letter's raise back. The 2026-10-09 case: a block letter
     // went undelivered, the child carried on and merged its PR, and stayed
