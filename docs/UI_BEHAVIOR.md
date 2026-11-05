@@ -2860,10 +2860,14 @@ When nothing is left to show it reads `지금은 바뀐 파일이 없어요`.
 A Markdown document is drawn with its headings, lists, tables and code blocks by the renderer the conversation uses; any other text is fixed-width and wrapped to the phone's width, never scrolling sideways, and text over 1 MiB shows its first 1 MiB and `나머지는 Mac에서 보세요`.
 An image is fitted to the width, zoomed and moved with two fingers (a double tap toggles the zoom), with its size and its pixels below it; one over 10 MiB is not opened and says `이미지가 커서 Mac에서 보세요`.
 A PDF, a video, any other binary and a file that is not text show their name, their kind and `Mac에서 열어 보세요`.
-A web page shows its address and `지금은 화면을 가져올 수 없어요` until its screen can be fetched.
+A web page shows its address and the screen the desktop app shows of it now, as a picture the width of the phone that scrolls down, with `<기기>에서 찍은 화면 · <몇 초> 전` under it: the device is the Mac whose desktop app took it, and the time keeps counting on the phone (PRD mobile-companion-ui B20, D-11).
+A refresh button beside the address takes it again under a new request; the picture on view stays, and the button waits with a spinner, until the new one comes or says it cannot.
+When the screen cannot be taken (the desktop app is closed, the page is not the front tab of its View area, another agent or the operator's Comment mode holds the page, or the page is on another machine's window) the picture is replaced by the address and `지금은 화면을 가져올 수 없어요` alone, refresh stays pressable to try again, and why goes only to the diagnostic log as `look.page_unavailable` (B21, design principle 13).
+Taking the picture never selects a tab, moves the keyboard or raises a window, so a page that is behind another tab is answered "cannot be taken now" and is not brought forward (B22).
+Without a connection the last picture stays dimmed under the unreachable line and refresh does not press (B45).
 While a View loads its place shows a spinner; a read that fails says `불러오지 못했어요` with `다시`, which starts the read again from the beginning under a new request; a View that is no longer open says `이 결과물은 이제 열려 있지 않아요`; one in a checkout on a device that is not connected says `기기가 연결되어 있지 않아요`.
 A View the phone drew an answer about is seen, on the phone and on the desktop alike, through the Desk's own seen-by-id path: the dot and the eye leave both, and an agent with no View left unseen returns to its own group.
-That is its content (a change list, a document, an image) and also what it shows when it has no content to show: the name of a PDF or a video, an image over 10 MiB, a web page's address.
+That is its content (a change list, a document, an image) and also what it shows when it has no content to show: the name of a PDF or a video, an image over 10 MiB, a web page's picture or, when none can be taken, its address.
 A loading screen and a View that is closed, failed or on a device that is not connected are not seen.
 An agent with a View not seen stands in 내 차례 on the phone as on the desktop and returns to its own group when every View is seen; a notice still follows the group it would be in without it, so a View sends none.
 The reply bar is on the tab and on a View, and the quick keys are not.

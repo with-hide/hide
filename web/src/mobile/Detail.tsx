@@ -152,7 +152,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
       ) : tab === "looks" && detail ? (
         // The last list and the last content stay under the unreachable line, dimmed (B45).
         <div className={`flex min-h-0 flex-1 flex-col ${offline ? "opacity-(--opacity-dimmed)" : ""}`} aria-busy={offline}>
-          {viewing ? <LookViewer row={viewing.row} content={viewing.content} /> : <LooksList looks={detail.looks} />}
+          {viewing ? <LookViewer row={viewing.row} content={viewing.content} refreshing={viewing.refreshing} /> : <LooksList looks={detail.looks} />}
         </div>
       ) : !showsConversation ? (
         <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} />

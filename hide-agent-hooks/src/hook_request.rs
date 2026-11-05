@@ -21,6 +21,8 @@ use serde_json::{Value, json};
 
 use crate::report::HookStatusReport;
 
+pub mod install;
+
 /// Where a runtime hook can hand letters to its model.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -299,11 +301,24 @@ fn random_hex<const N: usize>() -> Result<String, &'static str> {
 }
 
 /// Who asks: the daemon's state folder, the pane the caller says it runs
-/// in, and the reference it names (`HIDE_CAP_REF`), if any.
+/// in, the installation that pane names (`HIDE_INSTALL`), and the reference
+/// it names (`HIDE_CAP_REF`), if any.
 pub struct Caller<'a> {
     pub state_dir: &'a Path,
     pub pane_id: Option<&'a str>,
+    pub install: Option<&'a str>,
     pub named: Option<&'a Path>,
+}
+
+/// One way to a daemon or node that may answer for the pane, in the order
+/// [`send`] tries them.
+enum Way<'a> {
+    /// The node socket the pane's reference names.
+    Node(PathBuf),
+    /// The bootstrap socket the daemon of this state folder recorded.
+    Daemon(&'a Path),
+    /// This device's node pane service, when exactly one is live.
+    Bridges,
 }
 
 /// Why a request got no answer: the step's reason, the system's error when
@@ -354,8 +369,18 @@ pub struct Sent {
 }
 
 /// Sends `command` as request `request_id` and returns the daemon's answer,
-/// `ok` or not, with how long each step took. Choosing a route happens
-/// before sending; neither a refusal nor a lost answer retries the command.
+/// `ok` or not, with how long each step took.
+///
+/// The request goes to the route the pane's reference names, else to this
+/// account's daemon and this device's node in the order the pane's
+/// installation calls for ([`install::asks_bridges_first`]). It moves on to
+/// the next only when nothing ran: nothing took the connection, or a daemon
+/// or node of another installation refused it ([`install::OTHER_INSTALL`]).
+/// Any other answer is the request's, and neither a refusal nor a lost answer
+/// retries the command. An `ok` answer counts only when it names the pane's
+/// installation ([`install::confirm`]): one from an earlier build, which ran
+/// the command without knowing whose pane it was, is
+/// [`install::INSTALL_UNCONFIRMED`] and is not sent again elsewhere.
 ///
 /// Each step that can fail has a reason of its own, which a hook records
 /// (`docs/agent-hooks.md`, What a hook records when it fails): no daemon
@@ -364,7 +389,9 @@ pub struct Sent {
 /// there (`hide_unreachable`), the request was not written whole, so nothing
 /// ran (`request_unsent`), no answer came before the deadline and the command
 /// may have run (`request_timeout`), and the answer was not one bounded JSON
-/// line for this request (`invalid_response`).
+/// line for this request (`invalid_response`). When no route reached the
+/// pane's own installation, the first route's failure stands, and
+/// `other_install` only when every route that answered was another's.
 pub fn send(
     caller: &Caller<'_>,
     request_id: &str,
@@ -388,41 +415,34 @@ pub fn send(
             },
             None => None,
         };
-        let connect = |socket: &Path| {
-            LocalStream::connect_until(socket, deadline)
-                .map_err(|error| ("hide_unreachable", Some(error)))
-        };
-        let selected = match &named {
+        let ways = match &named {
             Some((
                 _,
                 Reference {
                     route: Route::Node { socket },
                     ..
                 },
-            )) => connect(&node_socket(socket).ok_or("invalid_reference")?),
-            _ => {
-                let state = named
-                    .as_ref()
-                    .and_then(|(path, _)| path.parent().and_then(Path::parent))
-                    .unwrap_or(caller.state_dir);
-                recorded_socket_path(&bootstrap_socket_record(state))
-                    .map_err(|refusal| (refusal.code(), None))
-                    .and_then(|socket| connect(&socket))
+            )) => [
+                Way::Node(node_socket(socket).ok_or("invalid_reference")?),
+                Way::Bridges,
+            ],
+            // The daemon that issued the reference, whose state folder holds
+            // it two levels down.
+            Some(_) => [
+                Way::Daemon(
+                    caller
+                        .named
+                        .and_then(Path::parent)
+                        .and_then(Path::parent)
+                        .unwrap_or(caller.state_dir),
+                ),
+                Way::Bridges,
+            ],
+            None if install::asks_bridges_first(caller.install) => {
+                [Way::Bridges, Way::Daemon(caller.state_dir)]
             }
+            None => [Way::Daemon(caller.state_dir), Way::Bridges],
         };
-        let mut stream = match selected {
-            Ok(stream) => stream,
-            // A device's node answers for a pane whose daemon is on another
-            // machine; without one, the route's own failure stands.
-            Err((reason, error)) => {
-                let mut bridges = live_bridges(&workspace_bridges(caller.state_dir), deadline)?;
-                if bridges.len() > 1 {
-                    return Err("ambiguous_pane".into());
-                }
-                bridges.pop().ok_or_else(|| step(reason, error))?
-            }
-        };
-        timing.connected = Some(started.elapsed());
         let nonce = random_hex::<16>()?;
         let one_shot = command.one_shot();
         let token = named.map(|(_, reference)| reference.token);
@@ -437,6 +457,7 @@ pub fn send(
                 "nonce": nonce,
                 "one_shot": one_shot,
                 "hook": hook,
+                "install": caller.install,
             });
             let line = request.to_string();
             if line.len() < HOOK_REQUEST_LIMIT {
@@ -452,21 +473,68 @@ pub fn send(
             }
             *prompt = hide_memory::hook::prefix(prompt, prompt.len() / 2).to_owned();
         };
-        stream
-            .write_all(format!("{line}\n").as_bytes())
-            .map_err(|error| step("request_unsent", Some(error)))?;
-        let line = read_line(
-            |bytes| stream.read(bytes),
-            || deadline.checked_duration_since(Instant::now()),
-        )
-        .map_err(|(reason, error)| step(reason, error))?;
-        timing.answered = Some(started.elapsed());
-        let answer: Value =
-            serde_json::from_str(&line).map_err(|_| step("invalid_response", None))?;
-        if answer["ok"] == true && answer["request_id"] != request_id {
-            return Err(step("invalid_response", None));
+        let connect = |socket: &Path| {
+            LocalStream::connect_until(socket, deadline)
+                .map_err(|error| ("hide_unreachable", Some(error)))
+        };
+        let mut unreached = None;
+        let mut other_install = false;
+        for way in ways {
+            let selected = match way {
+                Way::Node(socket) => connect(&socket),
+                Way::Daemon(state) => recorded_socket_path(&bootstrap_socket_record(state))
+                    .map_err(|refusal| (refusal.code(), None))
+                    .and_then(|socket| connect(&socket)),
+                Way::Bridges => {
+                    let mut bridges = live_bridges(&workspace_bridges(caller.state_dir), deadline)?;
+                    if bridges.len() > 1 {
+                        return Err("ambiguous_pane".into());
+                    }
+                    match bridges.pop() {
+                        Some(stream) => Ok(stream),
+                        None => continue,
+                    }
+                }
+            };
+            let mut stream = match selected {
+                Ok(stream) => stream,
+                Err((reason, error)) => {
+                    unreached.get_or_insert_with(|| step(reason, error));
+                    continue;
+                }
+            };
+            timing.connected = Some(started.elapsed());
+            stream
+                .write_all(format!("{line}\n").as_bytes())
+                .map_err(|error| step("request_unsent", Some(error)))?;
+            let reply = read_line(
+                |bytes| stream.read(bytes),
+                || deadline.checked_duration_since(Instant::now()),
+            )
+            .map_err(|(reason, error)| step(reason, error))?;
+            timing.answered = Some(started.elapsed());
+            let answer: Value =
+                serde_json::from_str(&reply).map_err(|_| step("invalid_response", None))?;
+            if answer["ok"] != true {
+                if answer["reason"] == install::OTHER_INSTALL {
+                    other_install = true;
+                    continue;
+                }
+                return Ok(answer);
+            }
+            if answer["request_id"] != request_id {
+                return Err(step("invalid_response", None));
+            }
+            install::confirm(&answer, caller.install)?;
+            return Ok(answer);
         }
-        Ok(answer)
+        Err(unreached.unwrap_or_else(|| {
+            if other_install {
+                install::OTHER_INSTALL.into()
+            } else {
+                step("hide_unavailable", None)
+            }
+        }))
     })();
     Sent {
         answer,
@@ -532,6 +600,7 @@ mod tests {
         let caller = Caller {
             state_dir: state.path(),
             pane_id: None,
+            install: None,
             named: None,
         };
         let sent = send(

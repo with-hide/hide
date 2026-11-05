@@ -38,6 +38,7 @@ const ROWS: LookRow[] = [
   { id: "v1", kind: "doc", name: "NOTES.md", unseen: true, at: Date.now() - 60_000 },
   { id: "v2", kind: "changes", name: "경로 구분자 수정", unseen: true, at: Date.now() - 120_000 },
   { id: "v3", kind: "image", name: "chart.png", unseen: false, at: Date.now() - 3_600_000 },
+  { id: "v4", kind: "page", name: "랜딩 미리보기", unseen: false, at: Date.now() - 30_000, url: "http://localhost:5173/" },
 ];
 
 /** A phone connected to a fake hided, with one agent whose row shows the eye, its detail opened from that row, and its Views listed. */
@@ -254,6 +255,72 @@ it("names what the phone cannot show: a page's address, a binary, an image past 
     expect(container.querySelector('[data-phone-look-state="device_unreachable"]')!.textContent).toContain("isn't connected");
     // Nothing of it was drawn, so it stays unseen.
     expect(seen()).toEqual(["v1", "v3"]);
+  } finally {
+    await unmount();
+  }
+});
+
+// A JPEG's first bytes, which is all the phone reads to know what an image is.
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]).toString("base64");
+
+it("draws a page's screenshot with its address, the device and its age, and a refresh takes it again while the old one stays (B20)", async () => {
+  const { container, serve, last, press, socket, unmount } = await openLooks();
+  try {
+    await press('[data-phone-look="v4"]');
+    const first = last("look_open");
+    // The page is asked for by its View id alone (D-16), like any other View.
+    expect(Object.keys(first).sort()).toEqual(["device_id", "pane_id", "request_id", "type", "view_id"]);
+    const taken = Date.now() - 20_000;
+    await serve({ type: "look_head", request_id: first.request_id as string, view_id: "v4", mode: "page", size: 8, total: 8, truncated: false, chunks: 1, url: "http://localhost:5173/", taken_at: taken, taken_by: "local" });
+    await serve({ type: "look_chunk", request_id: first.request_id as string, seq: 0, data: JPEG });
+    await serve({ type: "look_end", request_id: first.request_id as string, view_id: "v4" });
+
+    const body = container.querySelector('[data-phone-look-state="shot"]')!;
+    expect(body.querySelector('[data-phone-look-address]')!.textContent).toBe("http://localhost:5173/");
+    expect(body.querySelector<HTMLImageElement>("[data-phone-look-shot]")!.src).toMatch(/^data:image\/jpeg;base64,/);
+    // `local` is the paired Mac, called by the name it announced.
+    expect(body.querySelector("[data-phone-look-taken]")!.textContent).toMatch(/^Taken on Mac · \d+s ago$/);
+    expect(last("look_seen")).toMatchObject({ view_id: "v4" });
+
+    // Refresh asks again under a new request; the screen on view stays until the answer comes.
+    await press("[data-phone-look-refresh]");
+    const again = last("look_open");
+    expect(again.view_id).toBe("v4");
+    expect(again.request_id).not.toBe(first.request_id);
+    expect(container.querySelector("[data-phone-look-shot]")).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>("[data-phone-look-refresh]")!.disabled).toBe(true);
+    // A late frame of the first request changes nothing.
+    await serve({ type: "look_result", request_id: first.request_id as string, view_id: "v4", state: "failed" });
+    expect(container.querySelector("[data-phone-look-shot]")).not.toBeNull();
+
+    await serve({ type: "look_result", request_id: again.request_id as string, view_id: "v4", state: "page", url: "http://localhost:5173/" });
+    expect(container.querySelector("[data-phone-look-shot]")).toBeNull();
+    expect(socket.sent.filter((message) => message.type === "look_open")).toHaveLength(2);
+  } finally {
+    await unmount();
+  }
+});
+
+it("says a page's screen cannot be taken with its address alone, keeps refresh pressable, and holds it back without a connection (B21, B45)", async () => {
+  const { container, serve, last, press, unmount } = await openLooks();
+  try {
+    await press('[data-phone-look="v4"]');
+    await serve({ type: "look_result", request_id: last("look_open").request_id as string, view_id: "v4", state: "page", url: "http://localhost:5173/" });
+    const body = container.querySelector('[data-phone-look-state="page"]')!;
+    expect(body.querySelector("[data-phone-look-address]")!.textContent).toBe("http://localhost:5173/");
+    expect(body.textContent).toContain("The screen can't be fetched right now");
+    expect(container.querySelector("[data-phone-look-shot]")).toBeNull();
+    const refresh = () => container.querySelector<HTMLButtonElement>("[data-phone-look-refresh]")!;
+    expect(refresh().disabled).toBe(false);
+
+    const { patch } = await import("./store");
+    await act(async () => patch({ connected: false }));
+    expect(refresh().disabled).toBe(true);
+    await act(async () => patch({ connected: true }));
+
+    // It can be taken the next time: the same button asks again.
+    await press("[data-phone-look-refresh]");
+    expect(last("look_open").view_id).toBe("v4");
   } finally {
     await unmount();
   }

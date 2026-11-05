@@ -199,6 +199,11 @@ impl Served {
         if answer["ok"] == true && answer.get("request_id").is_none() {
             answer["request_id"] = hook["request_id"].clone();
         }
+        // It stands in for the daemon of the installation the pane names, if
+        // any, which its answer names back (`hook_request::install`).
+        if answer["ok"] == true && answer.get("install").is_none() {
+            answer["install"] = request["install"].clone();
+        }
         let _ = writeln!(stream, "{answer}");
     }
 }

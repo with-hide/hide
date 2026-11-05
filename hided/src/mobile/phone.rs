@@ -1698,6 +1698,7 @@ mod tests {
                 Arc::new(crate::watch::WatchService::new(Arc::clone(&core))),
                 Arc::new(crate::index::IndexService::new()),
             )),
+            browser_control: Arc::default(),
         })
     }
 
@@ -1843,6 +1844,37 @@ mod tests {
         second.abort();
         let _ = second.await;
         mobile.shutdown().await;
+    }
+
+    /// B21: a page whose screen cannot be taken (no desktop window here, no
+    /// such checkout) is a refusal with its reason, which `take` logs, and
+    /// never a picture or a hang; the phone is answered with the address.
+    #[tokio::test]
+    async fn a_page_with_no_desktop_window_cannot_be_shot() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let view = herdr_core::LookView {
+            device_id: "test-node".to_owned(),
+            checkout_path: "/repo".to_owned(),
+            display_id: "browser-1".to_owned(),
+            kind: herdr_core::DisplayKind::Browser,
+            label: "landing".to_owned(),
+            path: String::new(),
+            url: Some("http://localhost:5173/".to_owned()),
+            committed: None,
+            output: None,
+            unseen: true,
+            at_unix_ms: 1,
+        };
+        let reason = super::super::page_shot::take(&mobile, &view, super::super::looks::IMAGE_CAP)
+            .await
+            .err()
+            .expect("no window, no picture");
+        assert!(
+            !reason.is_empty(),
+            "the refusal names its reason for the log"
+        );
     }
 
     #[tokio::test]

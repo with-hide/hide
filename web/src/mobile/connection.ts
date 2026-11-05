@@ -412,7 +412,27 @@ export function openLook(row: LookRow): void {
   const requestId = newRequestId();
   dropTransfer();
   const sent = send({ type: "look_open", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: row.id });
-  patch({ detail: { ...detail, look: { row, requestId, content: sent ? { state: "loading" } : { state: "failed" }, shown: false } } });
+  patch({ detail: { ...detail, look: { row, requestId, content: sent ? { state: "loading" } : { state: "failed" }, shown: false, refreshing: false } } });
+}
+
+/**
+ * A page's screen again (B20, B21): the same View under a new request while the screen on view stays, so a refresh that cannot be
+ * taken replaces it with the address and the message and one that is taken replaces it with the new one. Without a connection
+ * nothing is sent and nothing changes (B45); another kind of View starts over as a new read.
+ */
+export function refreshLook(): void {
+  const detail = usePhone.getState().detail;
+  const look = detail?.look;
+  if (!detail || !look) return;
+  if (look.content.state !== "shot" && look.content.state !== "page") {
+    openLook(look.row);
+    return;
+  }
+  if (look.refreshing) return;
+  const requestId = newRequestId();
+  if (!send({ type: "look_open", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id })) return;
+  dropTransfer();
+  patch({ detail: { ...detail, look: { ...look, requestId, refreshing: true } } });
 }
 
 /** "다시": the same View from the start, under a new request, so nothing of the failed read is reused (B23). */
@@ -432,13 +452,19 @@ export function closeLook(): void {
 /** A read the lost socket cut off is a failed read, with 다시 (B23). */
 function failLoadingLook(): void {
   const detail = usePhone.getState().detail;
+  if (detail?.look?.refreshing) {
+    // The screen on view stays; the refresh that was cut off is simply not coming.
+    dropTransfer();
+    patch({ detail: { ...detail, look: { ...detail.look, refreshing: false } } });
+    return;
+  }
   if (detail?.look?.content.state !== "loading") return;
   dropTransfer();
   patch({ detail: { ...detail, look: { ...detail.look, content: { state: "failed" } } } });
 }
 
 /** What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15). */
-const SEEN_STATES: readonly string[] = ["text", "image", "changes", "page", "other", "too_large"];
+const SEEN_STATES: readonly string[] = ["text", "image", "shot", "changes", "page", "other", "too_large"];
 
 /** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */
 function markLookSeen(): void {

@@ -14,6 +14,7 @@
 
 pub mod conversation;
 pub mod looks;
+pub mod page_shot;
 pub mod pane;
 pub mod phone;
 pub mod phones;
@@ -188,6 +189,9 @@ pub struct Config {
     /// ones the desktop's `file_bytes` uses (`looks.rs`).
     pub boundary: Arc<crate::boundary::Boundary>,
     pub roots: Arc<crate::RootFollower>,
+    /// The desktop windows' gateways, which a page View's screenshot goes
+    /// through (`page_shot.rs`).
+    pub browser_control: Arc<crate::browser_control::BrowserControl>,
 }
 
 pub struct Mobile {
@@ -1843,6 +1847,10 @@ impl Mobile {
 
     pub fn roots(&self) -> Arc<crate::RootFollower> {
         Arc::clone(&self.config.roots)
+    }
+
+    pub fn browser_control(&self) -> &Arc<crate::browser_control::BrowserControl> {
+        &self.config.browser_control
     }
 
     /// Marks a View the phone showed seen, with the event Desk sends when

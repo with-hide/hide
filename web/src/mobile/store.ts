@@ -65,7 +65,7 @@ export type Looks = { rows: LookRow[]; omitted: number };
  * One View opened full screen (B13). `requestId` names the read in flight, so a late frame of an earlier read, or of one the
  * phone retried, is ignored; `shown` is set once the phone told hided it saw the content (D-15).
  */
-export type Viewing = { row: LookRow; requestId: string; content: LookContent; shown: boolean };
+export type Viewing = { row: LookRow; requestId: string; content: LookContent; shown: boolean; refreshing: boolean };
 
 /**
  * `moreAskedAt` is the line count when older rows were last asked for, and
@@ -334,7 +334,7 @@ export function applyFrame(frame: ServerFrame): void {
 export function showLook(requestId: string, content: LookContent): void {
   const detail = usePhone.getState().detail;
   if (!detail?.look || detail.look.requestId !== requestId) return;
-  patch({ detail: { ...detail, look: { ...detail.look, content } } });
+  patch({ detail: { ...detail, look: { ...detail.look, content, refreshing: false } } });
 }
 
 /** The choices this phone made that still name a row or group of the new list, so a long session keeps no stale ones. */

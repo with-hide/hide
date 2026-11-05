@@ -331,6 +331,8 @@ A hook's request to its daemon (the letter pull, Memory) answers a reason for th
 | The request was not written whole, because its time ran out or the stream broke; nothing ran | `request_unsent` | `unsent` |
 | No answer came before the deadline; the command may have run | `request_timeout` | `timeout` |
 | The answer ended, broke off, or was not one bounded JSON line for this request | `invalid_response` | `answer` |
+| An answer came, but it does not name the pane's installation (an earlier build's, or another installation's); it is dropped ([More than one Hide on an account](#more-than-one-hide-on-an-account)) | `install_unconfirmed` | `unconfirmed` |
+| Only a daemon or node of another installation answered, refusing the pane before anything ran | `other_install` | `other_install` |
 
 The daemon's own refusals keep the causes a hook acts on (`ledger`, `capacity`, `identity`), and any other reason is `refused`; an answer with no reason is `format`, and `cli` means the helper could not run the `hide` beside it.
 The `hide` whose request failed also writes `hook.request_failed` on its standard error, with the request id, the reason and the system's error kind.
@@ -1202,11 +1204,20 @@ A pane that names no installation, a Herdr pane or a plain terminal, lets every 
 A `hide` that another installation put first on the pane's `PATH` hands the call to `HIDE_INSTALL_CLI` (`hided::pane_install`), so the call speaks its own daemon's protocol.
 In a pane of an installation other than the app, `hide` asks the device bridges first and this account's daemon after (`workspace_cli::bootstrap`), since the daemon would bind the pane by its folder alone.
 The call names the pane's installation, and a daemon or device node of another one refuses it with `other_install` before it looks at the folder (`pane_auth`, `hide_host::panes`).
-The refusal alone cannot hold against an earlier build, which ignores the name it does not know and binds the pane by its folder, so the answer names its installation too and the call takes a reference only from an answer naming the pane's own (`workspace_cli::read_bootstrap_answer`); an answer naming none or another is `install_unconfirmed`, its reference is never used, and a node that answers so neither succeeds for the pane nor makes it ambiguous.
+The refusal alone cannot hold against an earlier build, which ignores the name it does not know and binds the pane by its folder, so the answer names its installation too and the call takes a reference only from an answer naming the pane's own (`hook_request::install::confirm`, which `workspace_cli::read_bootstrap_answer` applies); an answer naming none or another is `install_unconfirmed`, its reference is never used, and a node that answers so neither succeeds for the pane nor makes it ambiguous.
 A refusal of another installation's node (`other_install`) is no answer either, in any bridge order, so it never replaces the reason of the daemon or a node that may be the pane's own.
 A pane whose own Hide does not answer therefore never runs its calls against another, whatever build the other runs.
 The same holds against an earlier build of the pane's own installation: in the app's case that is the time between the bundle being replaced and the next app launch, whose `hide connect` replaces the daemon, and the refusal says to quit and reopen Hide.
 The added answer field moves no schema or protocol number: an earlier `hide` reads only `ok`, `reason` and `reference`.
+
+An agent hook's request to its daemon (the letter pull, Memory, the status report and the SessionStart probe, `hook_request::send`) follows the same rule, kept once in `hook_request::install`.
+It names the pane's installation (`HIDE_INSTALL`, which the hook inherits from the agent), and a daemon or device node of another one refuses it with `other_install` before it proves the caller or runs the command; the daemon's and the node's answers to a hook name their installation as a reference does.
+Without a reference naming its route, a hook in a pane of an installation other than the app asks this device's node first and this account's daemon after, as `hide` does, and an app pane asks the daemon first.
+The request moves to the next route only when nothing ran there: nothing took the connection, or another installation refused it.
+An answer that does not name the pane's installation is `install_unconfirmed`: an earlier build ran the command without knowing whose pane it was, so its answer is dropped and the command is not sent again to another route.
+The hook then goes on without it, as with any failure, and records the cause ([What a hook records when it fails](#what-a-hook-records-when-it-fails)): no letters are handed to the agent and none is confirmed, so they stay waiting for the next prompt or tool event; the prompt has no Memory; SessionStart gives no `HIDE_CAP_REF`, so the agent is never told another installation's reference; and the status report's failure is kept like any other.
+Against an earlier build of the pane's own installation that lasts until the same launch that replaced the kit replaces the daemon (`hide connect`), and a device's node and kit are installed together when its link starts.
+The request and the answer each gain one field, `install`, outside the hook request itself; an earlier daemon or node ignores it, and no schema, link or hook version number moves.
 The `hide` link in the command folder stays with the installation that holds it while that installation's command is there: the other's part reads Not on this machine, "another Hide on this account holds it", and takes the name back once that command is gone.
 
 The kit record keeps the app's parts, command and hook route where earlier builds read them, and every other installation's under `installs`.
