@@ -251,7 +251,9 @@ fn serve_in(
     // it was asked to stop; the reader enters one before handing it over, so
     // a cancel that arrives first still reaches it.
     let running: Mutex<HashMap<u64, bool>> = Mutex::new(HashMap::new());
-    let panes = crate::panes::Panes::new().with_checkout_callers(services.checkout_callers);
+    let panes = crate::panes::Panes::new()
+        .with_checkout_callers(services.checkout_callers)
+        .with_install(crate::kit::running_install().map(|install| install.id));
     // Where a pane's `hide` on this machine finds the node's bootstrap
     // socket; read once, so every start of the service agrees.
     let bridges = hide_platform::host::home_dir().map(|home| {

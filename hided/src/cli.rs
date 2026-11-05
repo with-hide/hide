@@ -1363,6 +1363,9 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
     match reason {
         "checkout_not_registered" => crate::pane_auth::CHECKOUT_NEXT_ACTION,
         "caller_unavailable" => "Retry from a live shell inside a registered project checkout",
+        crate::workspace_cli::INSTALL_UNCONFIRMED => {
+            "An earlier build of Hide answered and cannot confirm this pane is its own: quit and reopen the Hide that started this pane so it runs its current build, then retry the same command"
+        }
         _ => "Open Hide, reconnect this pane, and retry the same command",
     }
 }
@@ -1371,7 +1374,12 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
 /// named was gone and the bare bootstrap that replaces it was refused;
 /// nothing was sent, and the bootstrap's next step still applies.
 pub(crate) fn bootstrap_refused(reason: &str) -> bool {
-    matches!(reason, "checkout_not_registered" | "caller_unavailable")
+    matches!(
+        reason,
+        "checkout_not_registered"
+            | "caller_unavailable"
+            | crate::workspace_cli::INSTALL_UNCONFIRMED
+    )
 }
 
 /// One refused command's line, `{"ok":false,"error":{"code","message"}}`,

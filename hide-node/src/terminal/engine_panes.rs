@@ -102,9 +102,7 @@ impl LocalPanes {
                 user: hide_host::shell_integration::UserShell::of_process(),
             },
         );
-        panes.install = std::env::current_exe()
-            .ok()
-            .and_then(|program| hide_host::kit::pane_install(&program));
+        panes.install = hide_host::kit::running_install();
         panes
     }
 
