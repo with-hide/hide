@@ -905,6 +905,8 @@ test("the phone's PR tab lists a GitHub project's pull requests, refuses a merge
 
     // Read again, the page shows the new head and one more confirmation merges on it: two writes in all, one per confirmed intent.
     await phone.locator("[data-phone-pr-look-again]").tap();
+    // Look again reads the list and the card; the core takes a merge only once the list shows the head the card did.
+    await expect(phone.locator("[data-phone-pr-page]")).toContainText("(moved)", { timeout: 30_000 });
     await expect(phone.locator("[data-phone-pr-page]")).toHaveAttribute("data-phone-pr-head", moved, { timeout: 30_000 });
     await expect(phone.locator("[data-phone-pr-merge]")).toBeEnabled();
     await phone.locator("[data-phone-pr-merge]").tap();
