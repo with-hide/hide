@@ -1068,8 +1068,8 @@ impl Topology {
 
     /// The whole session as of `now`, as a snapshot of Herdr's would
     /// project it, its agents named by `catalog`'s definitions. `now` decides
-    /// each start's `launch_pending`, and [`Self::next_start_change`] read at
-    /// the same `now` says when the first of those can change.
+    /// each start's `launch_pending` and, from the same `now`, when the first
+    /// of those can change (`settles_at`, [`Self::next_start_change`]).
     pub(super) fn state_at(
         &self,
         catalog: &Catalog,
@@ -1085,6 +1085,7 @@ impl Topology {
             panes: Vec::new(),
             layouts: Vec::new(),
             agents: Vec::new(),
+            settles_at: self.next_start_change(now),
         };
         for workspace in &self.workspaces {
             state.workspaces.push(ProjectedWorkspace {

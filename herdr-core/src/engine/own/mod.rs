@@ -52,7 +52,6 @@ pub(crate) mod layout;
 mod restore;
 mod rules;
 mod shell_line;
-mod start_clock;
 mod starts;
 mod store;
 mod topology;
@@ -120,11 +119,7 @@ struct Shared {
     holders: Arc<dyn PaneHolders>,
     starts: Arc<starts::Starts>,
     pending: Mutex<BTreeMap<String, creation::Ticket>>,
-    wake: Arc<Mutex<Option<Wake>>>,
-    /// Wakes the watcher when a pending agent start can end with nothing
-    /// else changing (its settle or its deadline), armed by each read of the
-    /// session.
-    start_clock: start_clock::StartClock,
+    wake: Mutex<Option<Wake>>,
     stopped: AtomicBool,
     place: Option<Place>,
     /// Wakes the thread that saves the session, for a daemon's engine,
@@ -336,17 +331,15 @@ impl OwnEngine<'static> {
             |place| Arc::clone(&place.definitions),
         );
         let windows = place.as_ref().map_or(cfg!(windows), |place| place.windows);
-        let wake: Arc<Mutex<Option<Wake>>> = Arc::default();
         let engine = Self {
             shared: Arc::new(Shared {
-                start_clock: start_clock::StartClock::start(Arc::clone(&wake))?,
                 windows,
                 topology: Arc::new(Mutex::new(topology)),
                 rules: rules::RulesWorker::start(Arc::clone(&holders), restored)?,
                 holders,
                 starts: Arc::default(),
                 pending: Mutex::default(),
-                wake,
+                wake: Mutex::default(),
                 stopped: AtomicBool::new(false),
                 place,
                 saving: OnceLock::new(),
@@ -1456,15 +1449,7 @@ impl<'g> Engine for OwnEngine<'g> {
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
         self.check()?;
         let catalog = self.shared.definitions.get();
-        let topology = self.topology();
-        // One moment decides both whether each start is pending in this read
-        // and when the clock has the core read again: read apart, a start
-        // pending in the read could already be past its settle for the
-        // clock, which would then never wake for it.
-        let now = Instant::now();
-        let state = topology.state_at(&catalog, now)?;
-        self.shared.start_clock.arm(topology.next_start_change(now));
-        Ok(state)
+        self.topology().state_at(&catalog, Instant::now())
     }
 
     fn session_payload(&self, wait: Wait) -> Answer<SessionSnapshotPayload> {
@@ -4548,11 +4533,12 @@ mod tests {
 
     /// A woken agent's pane still shows the last run's screen, which reads
     /// at rest at once, so nothing the holder reports changes when its
-    /// start's settle passes. The engine still tells its watcher then, and
-    /// the read that follows no longer has the start pending: until then the
-    /// core shows the agent starting, and what is typed waits for it
-    /// (journey 41929631031, a resumed Codex that dropped the prompt typed
-    /// half a second after its wake).
+    /// start's settle passes. The read that has the start pending names that
+    /// moment (`settles_at`), for the coordinator that publishes it to read
+    /// again then; a read that publishes nothing in between (an agent
+    /// lookup) changes nothing, and the read at the settle has the start
+    /// settled and names nothing more (journey 41929631031, a resumed Codex
+    /// that dropped the prompt typed half a second after its wake).
     #[test]
     fn a_start_whose_screen_already_rests_is_read_settled_once_its_settle_passes() {
         use hide_node_link::holders::ScreenState;
@@ -4567,46 +4553,62 @@ mod tests {
             .unwrap();
         engine.start_agent(WAIT, &start).unwrap();
         holders.say(&pane, &running("codex", ScreenState::Idle));
-        let pending = |engine: &OwnEngine| {
+        let read = |engine: &OwnEngine| {
             let session = engine.session(WAIT).unwrap();
             let agent = session
                 .agents
                 .iter()
                 .find(|agent| agent.pane_id == pane)
                 .unwrap();
-            (agent.agent_status.clone(), agent.launch_pending)
+            (
+                agent.agent_status.clone(),
+                agent.launch_pending,
+                session.settles_at,
+            )
         };
+        let started = engine
+            .topology()
+            .pane(&pane)
+            .unwrap()
+            .agent
+            .as_ref()
+            .unwrap()
+            .live
+            .started
+            .unwrap();
+        let published = read(&engine);
         assert_eq!(
-            pending(&engine),
-            (Some("idle".to_owned()), true),
+            published,
+            (
+                Some("idle".to_owned()),
+                true,
+                Some(started + agents::START_SETTLE)
+            ),
             "a screen at rest within the settle"
         );
-        let (woke, woken) = std::sync::mpsc::channel();
-        let woke = Mutex::new(woke);
-        engine.changes(Arc::new(move || {
-            let _ = woke.lock().unwrap().send(());
-        }));
-        age_start(
-            &engine,
-            &pane,
-            agents::START_SETTLE - std::time::Duration::from_millis(300),
+        settle_start(&engine, &pane);
+        // A lookup after the settle passed reads without acting on it.
+        assert!(
+            engine
+                .agents(WAIT)
+                .unwrap()
+                .iter()
+                .any(|agent| agent.pane_id == pane)
         );
-        // The read arms the clock for the settle, 300 ms from now.
-        assert!(pending(&engine).1);
-        woken
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the watcher is told when the settle passes");
-        assert_eq!(pending(&engine), (Some("idle".to_owned()), false));
-        assert_eq!(engine.shared.start_clock.armed(), None, "nothing pending");
+        assert_eq!(
+            read(&engine),
+            (Some("idle".to_owned()), false, None),
+            "the coordinator's read at the moment the published read named"
+        );
     }
 
     /// Whatever moment a read lands at around a start's settle and deadline,
-    /// a start the read has pending names a later moment for the clock, and
+    /// a start the read has pending names a later moment to read again, and
     /// one it has settled names none: a read whose start is pending but
-    /// whose clock is disarmed leaves the row starting until something else
+    /// that names no moment leaves the row starting until something else
     /// changes.
     #[test]
-    fn a_read_that_has_a_start_pending_always_arms_a_later_moment() {
+    fn a_read_that_has_a_start_pending_always_names_a_later_moment() {
         use hide_node_link::holders::ScreenState;
         let holders = Arc::new(Holders::default());
         let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
@@ -4627,7 +4629,7 @@ mod tests {
                 .iter()
                 .find(|agent| agent.pane_id == pane)
                 .is_some_and(|agent| agent.launch_pending);
-            (pending, topology.next_start_change(now))
+            (pending, state.settles_at)
         };
         let tick = std::time::Duration::from_millis(1);
         for (screen, settles) in [(ScreenState::Idle, true), (ScreenState::Working, false)] {
@@ -4659,7 +4661,7 @@ mod tests {
                     now - started
                 );
                 if let Some(next) = next {
-                    assert!(next > now, "{screen:?}: the clock is armed later");
+                    assert!(next > now, "{screen:?}: the moment is later");
                 }
             }
             assert_eq!(read(settle - tick), (true, Some(settle)), "{screen:?}");

@@ -415,13 +415,25 @@ fn run_coordinator(
             }
         }
 
+        // A start the published read has pending can end with nothing the
+        // engine reports, so the read itself says when to read again.
+        let settles_at = pulled
+            .as_ref()
+            .and_then(|session| session.published_state().settles_at);
         let timeout = coordinator_wait(
             pulled.is_some(),
             reconnect_at,
             next_operation_tick,
+            settles_at,
             Instant::now(),
         );
-        match receiver.recv_timeout(timeout) {
+        let message = match receiver.recv_timeout(timeout) {
+            Err(RecvTimeoutError::Timeout) if settle_due(settles_at, Instant::now()) => {
+                Ok(CoordinatorMessage::Republish)
+            }
+            message => message,
+        };
+        match message {
             Ok(CoordinatorMessage::RefreshTopology) => {
                 // Discard the old stream generation. The next bootstrap is a
                 // read only; it can safely supersede a move's final drawing
@@ -1578,17 +1590,26 @@ fn coordinator_wait(
     connected: bool,
     reconnect_at: Instant,
     next_operation_tick: Instant,
+    settles_at: Option<Instant>,
     now: Instant,
 ) -> Duration {
     let deadline = if connected {
         // The engine wakes this mailbox on changes and nothing reconnects
         // while connected, so the reconnect clock can stay in the past
-        // without making the coordinator spin.
-        next_operation_tick
+        // without making the coordinator spin; a start the published read
+        // has pending is read again when it can settle.
+        settles_at.map_or(next_operation_tick, |at| at.min(next_operation_tick))
     } else {
         reconnect_at.min(next_operation_tick)
     };
     deadline.saturating_duration_since(now)
+}
+
+/// Whether the moment the published read named for a pending start to settle
+/// (`ProjectionState::settles_at`) has come, so the session is read and
+/// published again.
+fn settle_due(settles_at: Option<Instant>, now: Instant) -> bool {
+    settles_at.is_some_and(|at| now >= at)
 }
 
 fn next_reconnect_delay(current: Duration) -> Duration {
@@ -1604,10 +1625,35 @@ mod coordinator_wait_tests {
         let now = Instant::now();
         let expired = now - Duration::from_secs(1);
         assert_eq!(
-            coordinator_wait(true, expired, now + Duration::from_millis(250), now),
+            coordinator_wait(true, expired, now + Duration::from_millis(250), None, now),
             Duration::from_millis(250),
         );
-        assert_eq!(coordinator_wait(true, expired, now, now), Duration::ZERO);
+        assert_eq!(
+            coordinator_wait(true, expired, now, None, now),
+            Duration::ZERO
+        );
+    }
+
+    /// A start the published read has pending is read again when it can
+    /// settle, sooner than the tick, and then counts as due; a later moment
+    /// leaves the tick in charge.
+    #[test]
+    fn a_connected_coordinator_reads_again_when_the_published_read_can_settle() {
+        let now = Instant::now();
+        let expired = now - Duration::from_secs(1);
+        let tick = now + Duration::from_millis(250);
+        let soon = now + Duration::from_millis(40);
+        assert_eq!(
+            coordinator_wait(true, expired, tick, Some(soon), now),
+            Duration::from_millis(40)
+        );
+        assert_eq!(
+            coordinator_wait(true, expired, tick, Some(now + Duration::from_secs(9)), now),
+            Duration::from_millis(250)
+        );
+        assert!(!settle_due(Some(soon), now));
+        assert!(settle_due(Some(soon), soon));
+        assert!(!settle_due(None, soon));
     }
 
     #[test]
@@ -1619,6 +1665,7 @@ mod coordinator_wait_tests {
                     false,
                     now + Duration::from_millis(reconnect_ms),
                     now + Duration::from_millis(250),
+                    None,
                     now,
                 ),
                 Duration::from_millis(expected_ms),

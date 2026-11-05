@@ -106,6 +106,13 @@ pub(crate) struct ProjectionState {
     pub(crate) panes: Vec<ProjectedPane>,
     pub(crate) layouts: Vec<SessionLayoutPayload>,
     pub(crate) agents: Vec<ProjectedAgent>,
+    /// The next moment an agent start this read has pending (`launch_pending`)
+    /// can end with nothing the engine reports changing: its settle passing
+    /// while its screen already rests, or its deadline. The coordinator that
+    /// publishes this read reads the session again then; no other read acts
+    /// on it.
+    #[cfg_attr(test, serde(skip))]
+    pub(crate) settles_at: Option<std::time::Instant>,
 }
 
 impl ProjectionState {
