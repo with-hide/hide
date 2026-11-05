@@ -7,6 +7,7 @@ import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useElapsed } from "../components/elapsed";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
+import { RowButton } from "../components/ui/row-button";
 import { agentProductName } from "../agentAdapters";
 import { lineText, markWords, rowDimmed } from "../agentRow";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -137,11 +138,10 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
   const words = agent.status_code === "sleeping" && agent.mark === "asleep" ? t("panes.sleep.sleeping") : markWords(t, agent);
   const label = [words, agent.title, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
   return (
-    <button
-      type="button"
+    <RowButton
       aria-label={label}
       data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
-      className="flex min-h-(--size-touch-target) w-full flex-col gap-xs py-md text-left outline-none focus-visible:bg-accent active:bg-accent"
+      className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"
       onClick={() => openDetail({ device_id: agent.device_id, pane_id: agent.pane_id })}
     >
       <span className="flex w-full items-center gap-sm">
@@ -157,7 +157,7 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
           {lineText(t, { wait: agent.wait, status_code: agent.status_code, descendant_counts: { working: agent.descendants_working }, background_left: agent.background_left }, agent.line)}
         </span>
       ) : null}
-    </button>
+    </RowButton>
   );
 }
 

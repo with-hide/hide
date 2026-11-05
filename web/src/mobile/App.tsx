@@ -85,7 +85,11 @@ function standalone(): boolean {
   return iosStandalone || window.matchMedia("(display-mode: standalone)").matches;
 }
 
-function ListScreen() {
+/**
+ * `hosted` and `picker` are the gallery's: the list as a hosted phone draws it,
+ * with the device sheet already open on the Mac it names. A phone passes neither.
+ */
+export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolean; picker?: { room: string; open: boolean } }) {
   const { t } = useInterfaceTranslation();
   const macName = usePhone((s) => s.macName);
   const otherPhones = usePhone((s) => s.otherPhones);
@@ -116,7 +120,7 @@ function ListScreen() {
             </button>
           </div>
         </div>
-        {hostedPhone() ? <HostPicker name={machinesName(macName, devices)} /> : macName ? (
+        {hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? (
           <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones, devices)}>
             <LaptopIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones, devices)}</span>

@@ -6,6 +6,7 @@ import type { MobileState } from "../mobileSettings";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { useShellStore } from "../store";
+import { MobilePhoneScene } from "./MobilePhoneScene";
 
 function fixture(state: string): MobileState {
   const now = Date.now();
@@ -22,8 +23,16 @@ function fixture(state: string): MobileState {
     max_phones:4, push_mode:"off", now_ms:now,
   };
 }
+/** Settings > Mobile on the desktop, and beside it the phone's own screens (`state=phone-list`, `state=phone-devices`). */
 export function MobileScene({ params }: { params: URLSearchParams }) {
   const state = params.get("state") ?? "connected";
+  if (state === "phone-list" || state === "phone-devices") {
+    return <MobilePhoneScene state={state} language={params.get("lang") ?? "ko"} theme={params.get("theme") ?? "dark"} scale={params.get("scale") === "large" ? 17 / 13 : 1} />;
+  }
+  return <MobileSettingsScene params={params} state={state} />;
+}
+
+function MobileSettingsScene({ params, state }: { params: URLSearchParams; state: string }) {
   const language = params.get("lang") ?? "ko";
   const theme = params.get("theme") ?? "dark";
   const scale = params.get("scale") === "large" ? 17 / 13 : 1;

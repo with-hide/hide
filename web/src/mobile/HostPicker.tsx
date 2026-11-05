@@ -6,12 +6,12 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { usePhone } from "./store";
 import { HostList } from "./HostList";
 
-export function HostPicker({ name }: { name: string }) {
+export function HostPicker({ name, activeRoom, defaultOpen = false }: { name: string; /** The room of the Mac being viewed, when the page address does not name it (the gallery). */ activeRoom?: string; defaultOpen?: boolean }) {
   const { t } = useInterfaceTranslation();
   const active = usePhone();
   // The Mac's own counts: the groups' counts also hold its devices' rows, which the rows under it say.
   const local = active.devices.find((device) => device.local);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const trigger = useRef<HTMLButtonElement>(null);
   return <Sheet open={open} onOpenChange={setOpen}>
     <SheetTrigger asChild><Button ref={trigger} variant="ghost" className="mt-xs h-auto min-h-(--size-touch-target) max-w-full justify-start gap-sm px-none py-sm text-subhead">
@@ -22,7 +22,7 @@ export function HostPicker({ name }: { name: string }) {
         <SheetTitle className="text-body font-medium text-muted-foreground">{t("mobile.relay.devices")}</SheetTitle>
         <SheetClose asChild><Button variant="ghost" size="icon" className="size-(--size-touch-target)" aria-label={t("common.close")}><XIcon aria-hidden="true" /></Button></SheetClose>
       </SheetHeader>
-      <div className="pb-lg">{open ? <HostList t={t} machines={active.devices} active={{ online: active.connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} /> : null}</div>
+      <div className="pb-lg">{open ? <HostList t={t} machines={active.devices} activeRoom={activeRoom} active={{ online: active.connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} /> : null}</div>
     </SheetContent>
   </Sheet>;
 }

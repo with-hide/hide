@@ -123,14 +123,13 @@ describe("a group's fold", () => {
 describe("the device sheet", () => {
   function Sheet({ machines }: { machines: PhoneDevice[] }) {
     const { t } = useInterfaceTranslation();
-    return <HostList t={t} machines={machines} active={{ online: true, lastSeen: null, needs: 3, working: 9 }} />;
+    return <HostList t={t} machines={machines} activeRoom={"a".repeat(43)} active={{ online: true, lastSeen: null, needs: 3, working: 9 }} />;
   }
 
   it("draws the devices the Mac reaches under its row, the unconnected one dimmed, and says no pairing is needed", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const room = "a".repeat(43);
     localStorage.setItem(HOSTS_KEY, JSON.stringify([{ room, name: "MacBook Pro", noiseKey: "b".repeat(43), credential: "credential", protocol: 2, lastSeen: null }]));
-    history.replaceState(null, "", `/p/2/?host=${room}`);
     const machines: PhoneDevice[] = [
       { device_id: "local", label: null, local: true, connected: true, needs_you: 3, working: 9 },
       { device_id: "mini", label: "Mac mini", connected: true, needs_you: 1, working: 3 },

@@ -9,13 +9,13 @@ import { PHONE_PROTOCOL } from "./phoneVersion";
 import type { PhoneDevice } from "./protocol";
 
 /** Observe lists only while the picker is open. Never opens a detail or sends an action. */
-export function HostList({ t, active, machines = [], choose = (host: PairedHost) => window.location.assign(hostLink(host)) }: { t: TFunction; active?: Presence; /** The devices the Mac being viewed reaches, drawn under its row (PRD mobile-companion-ui B9). */ machines?: readonly PhoneDevice[]; choose?: (host: PairedHost) => void }) {
+export function HostList({ t, active, machines = [], activeRoom: named, choose = (host: PairedHost) => window.location.assign(hostLink(host)) }: { t: TFunction; active?: Presence; /** The Mac being viewed when the page address does not name it (the gallery). */ activeRoom?: string; /** The devices the Mac being viewed reaches, drawn under its row (PRD mobile-companion-ui B9). */ machines?: readonly PhoneDevice[]; choose?: (host: PairedHost) => void }) {
   const [hosts, setHosts] = useState(() => {
     try { return readHosts(localStorage); } catch { return null; }
   });
   const [error, setError] = useState(false);
   const [removing, setRemoving] = useState<PairedHost | null>(null);
-  const activeRoom = location.pathname.startsWith("/p/") ? new URLSearchParams(location.search).get("host") : null;
+  const activeRoom = named ?? (location.pathname.startsWith("/p/") ? new URLSearchParams(location.search).get("host") : null);
   const [presence, setPresence] = useState<Record<string, Presence>>({});
   useEffect(() => {
     let stops: (() => void)[] = [];
