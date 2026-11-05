@@ -1,5 +1,6 @@
 """The journey table as report.md and report.json, and as the terminal shows it."""
 
+from datetime import datetime, timezone
 import json
 
 from agent_live_check.protection import write_private
@@ -9,6 +10,10 @@ from .cells import CELLS
 
 def text(value):
     return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
+def clock(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%H:%M:%S.%f")[:-3]
 
 
 def table_lines(report):
@@ -66,6 +71,13 @@ def markdown(report):
                 lines.append(f"- {key} argv: `{text(json.dumps(agent[key]['argv']))}`")
         if agent.get("spawn"):
             lines.append(f"- route: `{text(json.dumps(agent['spawn']['route']))}`")
+        if agent.get("steps"):
+            # When each step ran, to read a failed cell's hided log against.
+            lines.append("- steps (UTC): " + ", ".join(
+                f"{step['step']} {clock(step['started_ms'])}-{clock(step['ended_ms']) if 'ended_ms' in step else '?'}"
+                for step in agent["steps"]))
+        for cut in agent.get("hided_logs_cut", []):
+            lines.append(f"- {text(cut['file'])} cut to its last whole lines at {text(cut['limit'])}")
         lines.append("")
     if report.get("hide_ai_requests"):
         lines.extend(["## Hide AI", "", "The candidate's own model requests, outside every agent's budget: "
