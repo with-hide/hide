@@ -296,9 +296,12 @@ pub(super) struct Live {
     /// a line break. Pi 1.0.4 started on a CI runner took more than
     /// [`START_SETTLE`] after its start line to do so, and a brief typed at
     /// that mark sat in its editor, never submitted (nightly 41789009557).
-    /// `None` where the holder cannot say (Windows, or a holder or node
-    /// built before it), which leaves a start to the settle alone, as
-    /// before; never read as reading keys.
+    /// A Windows holder reads it from the pane's console through a helper
+    /// (`hide-holder/src/console_input.rs`). `None` where the holder cannot
+    /// say (a holder or node built before it could, or a console its helper
+    /// could not read), which leaves a start to the settle alone and is
+    /// recorded when it settles ([`Applied::settled_unread`]); never read as
+    /// reading keys.
     pub(super) line_editing: Option<bool>,
     /// The holder could not say what holds the terminal, so who the agent
     /// is stays as it was and it takes no input until it can: read as the
@@ -310,6 +313,13 @@ pub(super) struct Live {
     /// settle. Waiting for a rest that never comes held every omp start
     /// pending to its 120 s deadline (journey 871294628).
     pub(super) rest_unread: bool,
+    /// Whether this start's program has shown the screen its definition
+    /// names ready for a first input (`Definition::start_ready`). OpenCode
+    /// 2.0.29 reads keys and draws its composer before its model loads, and
+    /// refuses the Enter that submits a line until then, which its model
+    /// line under the composer shows: a brief typed at the settle on Windows
+    /// was refused (journey-win).
+    pub(super) ready: StartReady,
     pub(super) status: Status,
     /// One more each time its status changed, from the engine's own count.
     pub(super) seq: u64,
@@ -399,14 +409,27 @@ impl PaneAgent {
     }
 
     /// Whether a start made at `started` has settled by `now`: its program
-    /// takes input ([`Self::interactive`]) and its screen rests, or cannot be
-    /// read at rest ([`Live::rest_unread`]), at least [`START_SETTLE`] after
-    /// the start.
+    /// takes input ([`Self::interactive`]), has shown the screen its
+    /// definition names ready, if it names one ([`Live::ready`]), and its
+    /// screen rests, or cannot be read at rest ([`Live::rest_unread`]), at
+    /// least [`START_SETTLE`] after the start.
     fn settled(&self, started: Instant, now: Instant) -> bool {
         self.interactive()
+            && self.live.ready != StartReady::Waiting
             && (matches!(self.live.status, Status::Idle | Status::Done) || self.live.rest_unread)
             && now.duration_since(started) >= START_SETTLE
     }
+}
+
+/// Whether a start's program has shown its ready screen ([`Live::ready`]).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum StartReady {
+    /// Its definition names no ready screen.
+    #[default]
+    Unnamed,
+    Waiting,
+    /// Shown since this start; it stays shown however the screen reads next.
+    Shown,
 }
 
 /// An agent's state as Herdr's `agent_status` names it.
@@ -463,6 +486,11 @@ pub(super) struct Applied {
     pub(super) changed: bool,
     /// The pane's holder is due another agent's rules (or none).
     pub(super) rules_for: Option<Option<String>>,
+    /// A start of this agent kind settled while the holder could not say
+    /// whether its program reads keys, so on the settle's time alone: a
+    /// holder or node built before it could, or a Windows console its
+    /// helper could not read (`hide-holder/src/console_input.rs`).
+    pub(super) settled_unread: Option<String>,
 }
 
 /// Lays `facts` on a pane whose folder is `cwd` and whose agent is `agent`:
@@ -535,8 +563,22 @@ pub(super) fn apply(
     }
     applied.rules_for = live.rules_due(agent.as_ref());
     if let Some(current) = agent.as_mut().filter(|current| current.live.shown) {
-        current.live.rest_unread =
-            definition(catalog, &current.kind).is_none_or(|definition| definition.screen.is_none());
+        let known = definition(catalog, &current.kind);
+        current.live.rest_unread = known.is_none_or(|definition| definition.screen.is_none());
+        let ready = match known.and_then(|definition| definition.start_ready.as_deref()) {
+            None => StartReady::Unnamed,
+            Some(_) if current.live.ready == StartReady::Shown => StartReady::Shown,
+            Some(ready) => match &facts.screen {
+                ScreenRead::Read {
+                    rule: Some(rule), ..
+                } if rule == ready => StartReady::Shown,
+                _ => StartReady::Waiting,
+            },
+        };
+        if ready != current.live.ready {
+            current.live.ready = ready;
+            applied.changed |= current.live.started.is_some();
+        }
         // A start that settled on what the screen read last stays settled
         // whatever this screen reads, as Herdr's active agent does.
         if current
@@ -545,6 +587,9 @@ pub(super) fn apply(
             .is_some_and(|started| current.settled(started, now))
         {
             current.live.started = None;
+            if current.live.line_editing.is_none() {
+                applied.settled_unread = Some(current.kind.clone());
+            }
         }
         if facts.line_editing != current.live.line_editing {
             // The program taking the terminal's keys restarts a pending
@@ -977,6 +1022,71 @@ mod tests {
         assert!(
             !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
             "a holder that cannot say leaves the start to the settle"
+        );
+        let applied = pane.facts(at(None));
+        assert_eq!(
+            applied.settled_unread.as_deref(),
+            Some("pi"),
+            "a start settled on the time alone is recorded"
+        );
+        assert_eq!(pane.facts(at(None)).settled_unread, None, "once");
+    }
+
+    /// OpenCode 2.0.29 reads keys and draws its composer before its model
+    /// loads, and refuses the Enter of a line typed before its model line
+    /// shows under the composer: its start waits for the screen rule its
+    /// definition names ready as well, once shown whatever the screen reads
+    /// next.
+    #[test]
+    fn a_start_whose_definition_names_a_ready_screen_waits_for_it() {
+        let ready = catalog()
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "opencode")
+            .and_then(|definition| definition.start_ready.clone())
+            .expect("OpenCode names its ready screen");
+        let at = |rule: Option<&str>| PaneFacts {
+            foreground: program("opencode"),
+            screen: ScreenRead::Read {
+                state: if rule.is_some() {
+                    ScreenState::Idle
+                } else {
+                    ScreenState::Unknown
+                },
+                rule: rule.map(str::to_owned),
+            },
+            line_editing: Some(false),
+            ..PaneFacts::default()
+        };
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
+        pane.facts(at(None));
+        pane.agent.as_mut().unwrap().live.started = Some(Instant::now() - START_SETTLE);
+        assert_eq!(pane.status(), Some("idle"));
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(agent.interactive());
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "it reads keys and rests past the settle, but its model has not loaded"
+        );
+        let applied = pane.facts(at(Some(&ready)));
+        assert!(applied.changed, "the start's readiness moved");
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(!agent.launch_pending(Instant::now()));
+        assert_eq!(agent.live.started, None);
+
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
+        pane.facts(at(Some(&ready)));
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "within its settle"
+        );
+        pane.facts(at(None));
+        pane.agent.as_mut().unwrap().live.started = Some(Instant::now() - START_SETTLE);
+        assert!(
+            !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a ready screen once shown stays shown"
         );
     }
 

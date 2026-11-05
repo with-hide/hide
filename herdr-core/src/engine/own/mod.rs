@@ -482,6 +482,7 @@ impl OwnEngine<'_> {
         let applied = self.topology().apply_facts(pane, facts, &catalog);
         match applied {
             Ok(applied) => {
+                settled_unread(pane, &applied);
                 if applied.rules_for.is_some() {
                     self.give_rules(pane);
                 }
@@ -532,10 +533,11 @@ impl OwnEngine<'_> {
         let catalog = self.shared.definitions.get();
         for (pane, facts) in entered {
             let applied = self.topology().apply_facts(&pane, &facts, &catalog);
-            if let Ok(applied) = applied
-                && applied.rules_for.is_some()
-            {
-                self.give_rules(&pane);
+            if let Ok(applied) = applied {
+                settled_unread(&pane, &applied);
+                if applied.rules_for.is_some() {
+                    self.give_rules(&pane);
+                }
             }
         }
     }
@@ -1106,6 +1108,19 @@ impl OwnEngine<'_> {
             foreground_pids,
             foreground_names,
         })
+    }
+}
+
+/// Records a start that settled on the settle's time alone
+/// ([`agents::Applied::settled_unread`]), once for the start.
+fn settled_unread(pane: &str, applied: &agents::Applied) {
+    if let Some(agent) = &applied.settled_unread {
+        crate::diagnostic!(serde_json::json!({
+            "component": "own_engine",
+            "kind": "agent.start_settled_unread",
+            "pane_id": pane,
+            "agent": agent,
+        }));
     }
 }
 

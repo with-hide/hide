@@ -74,7 +74,14 @@ pub struct Start {
     /// Words after the program's name on every start; a spawn's native
     /// arguments follow them.
     #[serde(default)]
-    pub args: Vec<String>,
+    pub args: Option<Vec<String>>,
+    /// The id of the `[screen]` rule, an idle one, that shows the program
+    /// ready for its first input: a start is typed into only once the screen
+    /// has matched it (`docs/ARCHITECTURE.md`, Agents on the core's own
+    /// engine). For an agent that reads keys and draws its input before it
+    /// takes a line, as OpenCode 2 does before its model loads.
+    #[serde(default)]
+    pub ready: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -112,6 +119,7 @@ pub struct Fields {
     pub home: Option<Vec<String>>,
     pub hooks: Option<Hooks>,
     pub start_args: Option<Vec<String>>,
+    pub start_ready: Option<String>,
     pub resume_session: Option<Vec<String>>,
     pub resume_last: Option<Vec<String>>,
     pub screen: Option<toml::Table>,
@@ -173,8 +181,8 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         .as_deref()
         .map(|home| home_parts(name, home))
         .transpose()?;
-    let start_args = file.start.map(|start| start.args);
-    if let Some(args) = &start_args {
+    let start = file.start.unwrap_or_default();
+    if let Some(args) = &start.args {
         check_words(name, "start.args", args, 0)?;
     }
     let resume = file.resume.unwrap_or_default();
@@ -193,7 +201,8 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         aliases: file.aliases,
         home,
         hooks: file.hooks,
-        start_args,
+        start_args: start.args,
+        start_ready: start.ready,
         resume_session: resume.session,
         resume_last: resume.last,
         screen: file.screen,

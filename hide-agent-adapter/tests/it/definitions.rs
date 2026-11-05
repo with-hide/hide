@@ -235,6 +235,67 @@ fn a_file_with_a_built_in_id_replaces_only_its_screen_rules() {
 }
 
 #[test]
+fn a_starts_ready_rule_is_an_idle_rule_of_the_screen_rules_the_agent_ends_up_with() {
+    let opencode = builtin("opencode").unwrap();
+    assert_eq!(opencode.start_ready.as_deref(), Some("model_line_idle"));
+    let model_line = "\n[[screen.rules]]\nid = \"model_line_idle\"\nstate = \"idle\"\ncontains = [\"build ·\"]\n";
+    let busy = "\n[[screen.rules]]\nid = \"busy\"\nstate = \"working\"\ncontains = [\"busy\"]\n";
+    let new_agent =
+        "schema = 1\nid = \"mine\"\nname = \"Mine\"\nexecutables = [\"mine\"]\nhooks = \"none\"\n";
+    let catalog = Catalog::read(vec![
+        // Rules without the ready rule would hold every start to its deadline.
+        text(
+            "opencode-a.toml",
+            &format!("schema = 1\nid = \"opencode\"\n{RULES}"),
+        ),
+        text(
+            "opencode-b.toml",
+            &format!("schema = 1\nid = \"opencode\"\n{RULES}{model_line}"),
+        ),
+        text(
+            "copy.toml",
+            "schema = 1\nid = \"copy\"\nname = \"Copy\"\nbased_on = \"opencode\"\nexecutables = [\"copy\"]\n",
+        ),
+        text(
+            "mine.toml",
+            &format!("{new_agent}[start]\nready = \"ready\"\n{RULES}"),
+        ),
+        text(
+            "busy.toml",
+            &format!(
+                "{}[start]\nready = \"busy\"\n{RULES}{busy}",
+                new_agent.replace("mine", "busy")
+            ),
+        ),
+    ]);
+    let reasons: Vec<&str> = catalog
+        .rejected
+        .iter()
+        .map(|rejected| rejected.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "opencode-a.toml: start.ready names screen rule \"model_line_idle\", which [screen] does not have",
+            "busy.toml: start.ready names screen rule \"busy\", which is not an idle rule",
+        ]
+    );
+    let find = |id: &str| {
+        catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == id)
+            .unwrap()
+    };
+    assert_eq!(
+        find("opencode").screen.as_ref().unwrap().source,
+        Source::User("opencode-b.toml".into())
+    );
+    assert_eq!(find("copy").start_ready.as_deref(), Some("model_line_idle"));
+    assert_eq!(find("mine").start_ready.as_deref(), Some("ready"));
+}
+
+#[test]
 fn every_later_file_for_the_same_built_in_names_the_one_whose_rules_were_taken() {
     let pi = format!("schema = 1\nid = \"pi\"\n{RULES}");
     let catalog = Catalog::read(
