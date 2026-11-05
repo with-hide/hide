@@ -37,12 +37,10 @@ pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT
 /// taking input: Herdr's `AGENT_START_SETTLE_DELAY`. A program in the
 /// foreground has not drawn its screen yet, and a screen no rule matches
 /// reads at rest, so a start read sooner would be typed into a program that
-/// has not asked for input. It is only a lower bound, never the signal: a
-/// start whose program still leaves the terminal editing lines is pending
-/// however long it took ([`Live::line_editing`]), one whose integration
-/// reports its session as it loads waits for that report
-/// ([`Live::awaits_report`]), and what is typed into it is confirmed on its
-/// screen by the pane's holder (`prompt_agent`).
+/// has not asked for input. It is a lower bound: a start whose program
+/// still leaves the terminal editing lines is pending however long it took
+/// ([`Live::line_editing`]), and one whose integration reports its session
+/// as it loads waits for that report ([`Live::awaits_report`]).
 pub(super) const START_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The agent definitions the engine starts and recognizes agents by: the
@@ -305,6 +303,9 @@ pub(super) struct Live {
     /// Its integration reported its session since the engine typed this
     /// start; a report from the run before does not count.
     pub(super) reported: bool,
+    /// The start's deadline passed with the report it waited for still
+    /// missing, and the diagnostic said so ([`PaneAgent::report_missed`]).
+    pub(super) report_missed: bool,
     /// The start whose not-yet-delivered metadata can still be withdrawn.
     /// Foreground or session evidence invalidates it, even at the same value.
     pub(super) start_claim: Option<Arc<()>>,
@@ -371,6 +372,19 @@ impl PaneAgent {
         moved
     }
 
+    /// Whether the start waited for its integration's report and its
+    /// deadline passed without one: a failed start, never one that settled.
+    /// Its agent takes no input ([`Self::interactive`]), so a delivery waits
+    /// or is refused, until a late report comes.
+    pub(super) fn report_missed(&self, now: Instant) -> bool {
+        self.live.awaits_report
+            && !self.live.reported
+            && self
+                .live
+                .started
+                .is_some_and(|started| now.duration_since(started) >= START_DEADLINE)
+    }
+
     /// Marks the agent's program shown; whether that changed anything.
     fn show(&mut self) -> bool {
         let changed = !self.live.shown;
@@ -429,24 +443,27 @@ impl PaneAgent {
     }
 
     /// Whether the agent's program takes what is typed to it: it shows, the
-    /// holder can say what holds the terminal, and the program does not
-    /// leave it editing lines. This is not whether its
-    /// start is pending: a start ends at its deadline, while a program that
-    /// never turns line editing off takes no input however long ago it
+    /// holder can say what holds the terminal, the program does not leave
+    /// it editing lines, and a start that waits for its integration's report
+    /// had it. This is not whether its start is pending: a start ends at its
+    /// deadline, while a program that never turns line editing off, or whose
+    /// awaited report never came, takes no input however long ago it
     /// started, and a retried letter must not be typed into its line.
     pub(super) fn interactive(&self) -> bool {
-        self.live.shown && !self.live.foreground_unread && self.live.line_editing != Some(true)
+        self.live.shown
+            && !self.live.foreground_unread
+            && self.live.line_editing != Some(true)
+            && (self.live.reported || !self.live.awaits_report)
     }
 
     /// Whether a start made at `started` has settled by `now`: its program
-    /// takes input ([`Self::interactive`]), its screen rests, or cannot be
-    /// read at rest ([`Live::rest_unread`]), its integration reported its
-    /// session when the start waits for that ([`Live::awaits_report`]), and
-    /// at least [`START_SETTLE`] passed since the start.
+    /// takes input ([`Self::interactive`], which a start waiting for its
+    /// integration's report has only once it came), its screen rests, or
+    /// cannot be read at rest ([`Live::rest_unread`]), and at least
+    /// [`START_SETTLE`] passed since the start.
     fn settled(&self, started: Instant, now: Instant) -> bool {
         self.interactive()
             && (matches!(self.live.status, Status::Idle | Status::Done) || self.live.rest_unread)
-            && (self.live.reported || !self.live.awaits_report)
             && now.duration_since(started) >= START_SETTLE
     }
 }
@@ -673,6 +690,7 @@ fn status_of(screen: &ScreenRead, before: Status) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::answers::Readiness;
 
     fn catalog() -> Catalog {
         Catalog::read(Vec::new())
@@ -1067,13 +1085,12 @@ mod tests {
         let started = Instant::now() - START_SETTLE;
         pane.agent.as_mut().unwrap().live.started = Some(started);
         let agent = pane.agent.as_mut().unwrap();
-        assert!(agent.interactive());
         assert!(
-            agent.launch_pending(Instant::now()),
+            agent.launch_pending(Instant::now()) && !agent.interactive(),
             "its screen rests and reads keys past the settle, but it has not reported"
         );
         assert!(agent.report(), "the report is what the start waited for");
-        assert!(!agent.launch_pending(Instant::now()));
+        assert!(!agent.launch_pending(Instant::now()) && agent.interactive());
         assert!(!agent.report(), "a second report moves nothing");
 
         let mut pane = Pane::new();
@@ -1128,6 +1145,49 @@ mod tests {
             ..PaneFacts::default()
         });
         assert!(pane.agent.is_none(), "the shell holds the terminal again");
+    }
+
+    /// A start that waited for its integration's report and reached its
+    /// deadline without one failed: it is no longer pending, yet its agent
+    /// takes no input, so a delivery is refused rather than typed into a
+    /// program that never said it loaded; a late report recovers it.
+    #[test]
+    fn a_start_whose_awaited_report_never_comes_fails_at_its_deadline_and_takes_no_input() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started(
+            "claude-code",
+            Some("worker"),
+            None,
+            true,
+        ));
+        pane.facts(PaneFacts {
+            foreground: program("claude"),
+            screen: read(ScreenState::Idle),
+            line_editing: Some(false),
+            ..PaneFacts::default()
+        });
+        let agent = pane.agent.as_mut().unwrap();
+        let started = agent.live.started.unwrap();
+        let deadline = started + START_DEADLINE;
+        assert!(!agent.report_missed(deadline - START_SETTLE));
+        assert!(!agent.launch_pending(deadline), "the start is over");
+        assert!(agent.report_missed(deadline), "and it failed");
+        let readiness = Readiness::of(
+            Some(agent.interactive()),
+            Some(agent.launch_pending(deadline)),
+        );
+        assert_eq!(readiness, Readiness::NotReady);
+        assert!(!readiness.accepts_input(), "a delivery is refused");
+
+        assert!(agent.report(), "a late report");
+        assert!(!agent.report_missed(deadline));
+        assert_eq!(
+            Readiness::of(
+                Some(agent.interactive()),
+                Some(agent.launch_pending(deadline))
+            ),
+            Readiness::Ready
+        );
     }
 
     #[test]

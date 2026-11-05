@@ -2227,7 +2227,6 @@ fn keys_typed_during_a_letter_follow_its_submit_in_order() {
                     vec![Typed::Bytes(b"letter".to_vec())],
                     Typed::Bytes(b"\r".to_vec()),
                     Duration::from_millis(300),
-                    Default::default(),
                 )
                 .unwrap();
         });
@@ -2257,7 +2256,6 @@ fn keys_held_for_a_letter_are_kept_when_another_letter_begins_and_follow_the_las
                 vec![Typed::Bytes(body.to_vec())],
                 Typed::Bytes(b"\r".to_vec()),
                 Duration::from_millis(gap),
-                Default::default(),
             )
             .unwrap();
     };

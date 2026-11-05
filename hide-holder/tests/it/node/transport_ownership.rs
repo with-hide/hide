@@ -460,7 +460,6 @@ fn a_letter_whose_text_was_written_submits_when_its_pane_begins_closing_in_the_g
             vec![PaneInput::Bytes(b"body".to_vec())],
             PaneInput::Bytes(b"submit".to_vec()),
             Duration::from_secs(1),
-            Default::default(),
         )
         .unwrap();
     heard(&script, b"body");

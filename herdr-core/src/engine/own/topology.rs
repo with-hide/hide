@@ -538,6 +538,33 @@ impl Topology {
             .min()
     }
 
+    /// Says once, for each start whose deadline passed without the report
+    /// it waited for ([`agents::PaneAgent::report_missed`]), that it failed:
+    /// its agent takes no input, so each delivery to it waits or is refused
+    /// on its own, and this line names the cause.
+    pub(super) fn note_missed_reports(&mut self, now: Instant) {
+        for workspace in &mut self.workspaces {
+            for tab in &mut workspace.tabs {
+                for (pane_id, pane) in tab.panes.iter_mut() {
+                    let Some(agent) = pane.agent.as_mut() else {
+                        continue;
+                    };
+                    if agent.live.report_missed || !agent.report_missed(now) {
+                        continue;
+                    }
+                    agent.live.report_missed = true;
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "own_engine",
+                        "kind": "agent.start_report_missed",
+                        "pane_id": pane_id,
+                        "agent": agent.kind,
+                        "name": agent.name,
+                    }));
+                }
+            }
+        }
+    }
+
     /// Every pane, by id.
     pub(super) fn panes(&self) -> impl Iterator<Item = (&str, &Pane)> {
         self.workspaces.iter().flat_map(|workspace| {

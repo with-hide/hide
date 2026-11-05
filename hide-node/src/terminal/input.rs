@@ -766,8 +766,6 @@ pub(super) fn submissions(chunks: Vec<HeldChunk>) -> Vec<HeldChunk> {
                     text: vec![SubmitPart::Input(typed)],
                     gap: REPLAYED_SUBMIT_GAP,
                     enter: SubmitPart::Input(enter),
-                    // The operator's own submit: what they typed shows them.
-                    guard: Default::default(),
                 })),
                 ..chunk
             });

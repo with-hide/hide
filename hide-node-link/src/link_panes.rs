@@ -407,7 +407,6 @@ impl PaneHolders for LinkPanes {
         text: Vec<PaneInput>,
         submit: PaneInput,
         gap: Duration,
-        guard: crate::holders::LetterGuard,
     ) -> Result<(), HolderError> {
         self.done(
             PaneCall::Letter {
@@ -415,7 +414,6 @@ impl PaneHolders for LinkPanes {
                 text,
                 submit,
                 gap_ms: u64::try_from(gap.as_millis()).unwrap_or(u64::MAX),
-                guard,
             },
             gap.saturating_add(LETTER_WAIT),
         )

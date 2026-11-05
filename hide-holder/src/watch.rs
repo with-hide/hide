@@ -232,32 +232,6 @@ pub fn facts(
     })
 }
 
-/// Whether the pane's screen rules read its program working or asking now,
-/// on the screen as it is at this moment: what a submission guarded at rest
-/// (`hide_holder_protocol::Guard::at_rest`) is refused on. A pane with no
-/// rules, or a screen they read nothing certain of, is not busy, since
-/// nothing says a turn began.
-pub fn busy(pane: &Mutex<Pane>, rules: &SharedRules) -> Result<bool, hide_vt::Error> {
-    let (generation, set) = {
-        let slot = slot(rules);
-        (slot.generation, slot.rules.clone())
-    };
-    if !matches!(set, Some(Ok(_))) {
-        return Ok(false);
-    }
-    let observed = pane
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .observe(true)?;
-    Ok(matches!(
-        Reading::default().read(generation, set.as_ref(), &observed),
-        ScreenRead::Read {
-            state: ScreenState::Working | ScreenState::Blocked,
-            ..
-        }
-    ))
-}
-
 /// A watch's writer: its messages in order, and the facts whenever they may
 /// have changed and differ from the last it sent.
 pub struct FactsWriter {

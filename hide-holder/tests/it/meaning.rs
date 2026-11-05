@@ -285,7 +285,6 @@ fn a_submission_writes_its_submit_a_gap_after_its_text_and_holds_the_input_behin
             ],
             gap,
             enter: SubmitPart::Keys(vec![Key::Enter]),
-            guard: Default::default(),
         }))
         .unwrap();
     connection

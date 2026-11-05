@@ -459,14 +459,12 @@ impl PaneHolders for LocalPanes {
         text: Vec<PaneInput>,
         submit: PaneInput,
         gap: std::time::Duration,
-        guard: hide_node_link::holders::LetterGuard,
     ) -> Result<(), HolderError> {
         self.service.type_letter(
             pane,
             text.into_iter().map(typed).collect(),
             typed(submit),
             gap,
-            guard,
         )
     }
 

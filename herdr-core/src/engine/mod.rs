@@ -415,14 +415,6 @@ pub(crate) trait Engine: Send + Sync {
     fn send_keys(&self, wait: Wait, pane: &str, keys: &[&str]) -> Answer<()>;
     /// Types `text` into a pane and submits it.
     fn submit_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
-    /// [`Self::submit_text`] only into a pane whose agent is at rest when the
-    /// text is written: the core's own engine has the pane's holder check
-    /// its screen rules right before it writes, so a turn that began after
-    /// the caller's own check refuses the text (with-hide/hide-private#545).
-    /// Herdr has no such step and submits as [`Self::submit_text`] does.
-    fn submit_text_at_rest(&self, wait: Wait, pane: &str, text: &str) -> Answer<()> {
-        self.submit_text(wait, pane, text)
-    }
     /// Presses one key in a pane.
     fn press_key(&self, wait: Wait, pane: &str, key: &str) -> Answer<()>;
     /// Presses Hide's `keys` in a pane, in order, in one call.

@@ -33,7 +33,6 @@ mod answers;
 mod ask;
 mod encode;
 mod foreground;
-mod guard;
 mod holder;
 mod log;
 mod osc;

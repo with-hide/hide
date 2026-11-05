@@ -487,10 +487,7 @@ fn fork_antigravity(
     clear_antigravity_composer(engine, pane_id, Instant::now() + ANTIGRAVITY_CLEAR_WAIT)?;
     // The mark's read may have waited on agy writing its index, and the
     // composer's clearing on agy redrawing: `/fork` is typed only into a pane
-    // still at rest, never into a turn that began since. The engine's own
-    // check is a moment old by the time `/fork` is written, so the pane's
-    // holder checks again as it writes (`submit_text_at_rest`); a turn that
-    // began in between leaves no fork, which the wait below reports.
+    // still at rest, never into a turn that began since.
     if !at_rest(
         &engine
             .pane_agent_status(CONTROL_WAIT, pane_id)
@@ -499,7 +496,7 @@ fn fork_antigravity(
         return Err("agy started working before /fork could be typed".into());
     }
     engine
-        .submit_text_at_rest(CONTROL_WAIT, pane_id, "/fork")
+        .submit_text(CONTROL_WAIT, pane_id, "/fork")
         .map_err(failed("pane.send_input"))?;
     let deadline = Instant::now() + ANTIGRAVITY_FORK_WAIT;
     let forked = loop {

@@ -16,13 +16,6 @@ hooks = "claude"
 [resume]
 session = ["--resume", "{session}"]
 
-[input]
-# Text typed into the agent is confirmed on its screen before Enter: its own
-# end, or the chip it draws for a paste it folds (with-hide/hide-private#545).
-# Claude Code 2.1.306 folds a paste of four lines or more into `[Pasted text #1 +11 lines]`.
-# Measured in the composer captures of hide-agent-adapter/tests/fixtures/composer.
-paste_chips = ["[Pasted text #"]
-
 [screen]
 version = "2026.10.11.1"
 min_engine_version = 2

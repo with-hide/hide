@@ -46,8 +46,6 @@ struct File {
     pub start: Option<Start>,
     #[serde(default)]
     pub resume: Option<Resume>,
-    #[serde(default)]
-    pub input: Option<Input>,
     /// The screen rules, read by `hide_screen_rules`; kept as a table here
     /// so the build script needs no rule grammar.
     #[serde(default)]
@@ -91,25 +89,6 @@ pub struct Resume {
     pub last: Option<Vec<String>>,
 }
 
-/// How the agent shows text typed into it, so the pane's holder can tell
-/// that typed text landed before it presses Enter
-/// (with-hide/hide-private#545): the text's own end, or one of these chips.
-/// A definition without it gets no such check.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Input {
-    /// What the agent draws in its composer in place of a paste it folds,
-    /// each the start of that chip as drawn, such as Claude Code's
-    /// `[Pasted text #`: at most [`MAX_PASTE_CHIPS`], each 1 to
-    /// [`MAX_CHIP_BYTES`] bytes with no control character.
-    #[serde(default)]
-    pub paste_chips: Vec<String>,
-}
-
-/// The most paste chips a definition names, and the most bytes of one.
-pub const MAX_PASTE_CHIPS: usize = 4;
-pub const MAX_CHIP_BYTES: usize = 32;
-
 /// Which files a definition comes from: what each may say differs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Origin {
@@ -135,7 +114,6 @@ pub struct Fields {
     pub start_args: Option<Vec<String>>,
     pub resume_session: Option<Vec<String>>,
     pub resume_last: Option<Vec<String>>,
-    pub paste_chips: Option<Vec<String>>,
     pub screen: Option<toml::Table>,
 }
 
@@ -206,23 +184,6 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
     if let Some(words) = &resume.last {
         check_words(name, "resume.last", words, 0)?;
     }
-    let paste_chips = file.input.map(|input| input.paste_chips);
-    if let Some(chips) = &paste_chips {
-        if chips.len() > MAX_PASTE_CHIPS {
-            return Err(format!(
-                "{name}: input.paste_chips holds more than {MAX_PASTE_CHIPS} chips"
-            ));
-        }
-        if let Some(chip) = chips.iter().find(|chip| {
-            chip.trim().is_empty()
-                || chip.len() > MAX_CHIP_BYTES
-                || chip.chars().any(char::is_control)
-        }) {
-            return Err(format!(
-                "{name}: input.paste_chips {chip:?} is not 1 to {MAX_CHIP_BYTES} bytes of printable text"
-            ));
-        }
-    }
     Ok(Fields {
         id: file.id,
         name: file.name,
@@ -235,7 +196,6 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         start_args,
         resume_session: resume.session,
         resume_last: resume.last,
-        paste_chips,
         screen: file.screen,
     })
 }

@@ -237,7 +237,6 @@ fn open_watched(
             Capability::Notices,
             Capability::Keys,
             Capability::Submit,
-            Capability::SubmitGuard,
         ],
         Instant::now() + OPEN_LIMIT,
     )
@@ -253,10 +252,8 @@ fn open_watched(
         cols: welcome.size.cols,
     };
     let mut writer = HolderWriter {
-        pane: pane.to_owned(),
         stream: stream.duplicate(),
         size: found,
-        guards: welcome.sends.contains(&Capability::SubmitGuard),
     };
     if let Some(size) = size {
         writer.resize(size).map_err(|error| {
@@ -428,31 +425,14 @@ impl HolderEvents {
 
 /// A holder connection's input side.
 struct HolderWriter {
-    pane: String,
     stream: LocalStream,
-    /// The holder reads a submission's guard
-    /// ([`hide_holder_protocol::Guard`]).
-    guards: bool,
     /// The size the holder has: a resize to it is not sent, since the holder
     /// resizes its PTY, and signals its program, on every one it is sent.
     size: GridSize,
 }
 
 impl SessionWriter for HolderWriter {
-    /// A holder built before guards is sent the submission without its
-    /// guard, as it was before guards existed: its pane keeps the old
-    /// typing until it is replaced, and the log says so.
     fn submit(&mut self, submit: &hide_holder_protocol::Submit) -> std::io::Result<()> {
-        if !self.guards && submit.guard != hide_holder_protocol::Guard::default() {
-            crate::diagnostic!(json!({
-                "component": "pane_holder",
-                "kind": "pane_holder.submit_unguarded",
-                "pane_id": self.pane,
-            }));
-            let mut unguarded = submit.clone();
-            unguarded.guard = hide_holder_protocol::Guard::default();
-            return write_client(&mut self.stream, &ClientMessage::Submit(unguarded));
-        }
         write_client(&mut self.stream, &ClientMessage::Submit(submit.clone()))
     }
 
