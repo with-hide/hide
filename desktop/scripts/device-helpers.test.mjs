@@ -179,7 +179,10 @@ describe("a kit staged into the developer folder", () => {
       else fs.writeFileSync(target, bytes);
     }
     const asset = deviceAsset(platform, identity.version);
-    execFileSync("tar", ["--format", "ustar", "-czf", path.join(root, asset), "-C", source, ...Object.keys(files)], {
+    // Relative paths only: the GNU tar on a Windows runner reads `D:\...` as a
+    // remote host's name.
+    execFileSync("tar", ["--format", "ustar", "-czf", asset, "-C", "source", ...Object.keys(files)], {
+      cwd: root,
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
     const archive = fs.readFileSync(path.join(root, asset));
