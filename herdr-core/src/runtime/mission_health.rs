@@ -173,6 +173,7 @@ pub(super) fn raise_for(
                 reason: Some(reason),
                 why: None,
                 action: None,
+                ci: None,
                 key: Some(raise_key.clone()),
             },
         );
@@ -241,6 +242,7 @@ pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
                 reason: Some(reason),
                 why: None,
                 action: None,
+                ci: None,
                 key: Some(key),
             },
         );
@@ -857,6 +859,7 @@ impl Runtime {
                 reason: None,
                 why: Some(why),
                 action: None,
+                ci: None,
                 key: Some(act.clone()),
             },
         );
@@ -932,6 +935,7 @@ impl Runtime {
                             reason: None,
                             why: None,
                             action: None,
+                            ci: None,
                             key: Some(wake_key),
                         },
                     );
@@ -1209,6 +1213,7 @@ impl Runtime {
                     reason: attention.as_ref().map(|attention| attention.reason),
                     why: None,
                     action: Some(payload.action),
+                    ci: None,
                     key: None,
                 },
             );

@@ -1082,6 +1082,10 @@ fn judge_head_runs(
                         .collect();
                     OpenChecks::of(Some(counted)).apply(pull_request);
                 }
+                // The checks GitHub Actions does not run failing too makes
+                // the failure theirs, not a cancellation.
+                pull_request.work.checks_cancelled =
+                    runs.cancelled && pull_request.checks != PullRequestChecks::Failed;
                 pull_request.checks = runs::worse(pull_request.checks, runs.checks);
             }
             (None, _) => pull_request.checks = PullRequestChecks::Unknown,
@@ -4454,9 +4458,11 @@ mod tests {
         );
     }
 
+    /// The failure is the cancelled run's alone, which a mission's CI
+    /// letter tells apart.
     #[test]
     fn a_cancelled_run_with_no_replacement_fails_the_checks() {
-        let checks = open_checks(
+        let pull = open_pull(
             &[
                 job(
                     "Design contract",
@@ -4484,7 +4490,10 @@ mod tests {
                 ),
             ],
         );
-        assert_eq!(checks, PullRequestChecks::Failed);
+        assert_eq!(
+            (pull.checks, pull.work.checks_cancelled),
+            (PullRequestChecks::Failed, true)
+        );
     }
 
     /// with-hide/hide#2080 review: without the runs nothing says a run is

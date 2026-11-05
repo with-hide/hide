@@ -6034,6 +6034,11 @@ pub struct PullRequestWork {
     /// holds an agent's row in progress (status-marks D-07). Core only.
     #[serde(skip)]
     pub running_checks: u32,
+    /// Its `Failed` checks are only workflow runs that were all cancelled
+    /// with none replacing them (`github::runs`), which a mission's CI
+    /// letter calls cancelled rather than failed. Core only.
+    #[serde(skip)]
+    pub checks_cancelled: bool,
     /// Its place in the base branch's merge queue.
     pub queue: MergeQueuePlace,
     /// When the latest review request on it was made, which `리뷰 · N시간째`
