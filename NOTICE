@@ -83,7 +83,8 @@ its Info.plist, are derived from Orca's native/notification-status-macos/main.sw
 and config/scripts/build-notification-status-macos.mjs
 (https://github.com/stablyai/orca).
 Copyright (c) 2026 Lovecast Inc.
-Licensed under the MIT License.
+Licensed under the MIT License, whose full text the app ships in
+desktop/resources/THIRD_PARTY_NOTICES/orca-notification-status-MIT.txt.
 Hide changed them: main.swift says what it took and what changed.
 
 The Windows pane holder runs Microsoft's ConPTY runtime
