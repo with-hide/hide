@@ -142,7 +142,8 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
       aria-label={label}
       data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
       className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"
-      onClick={() => openDetail({ device_id: agent.device_id, pane_id: agent.pane_id })}
+      // The eye row opens on 볼 것; a question, an approval or any other row on the conversation as before (B11).
+      onClick={() => openDetail({ device_id: agent.device_id, pane_id: agent.pane_id }, agent.mark === "look" ? "looks" : "conversation")}
     >
       <span className="flex w-full items-center gap-sm">
         <span className="min-w-0 flex-1">

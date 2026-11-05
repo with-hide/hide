@@ -3,7 +3,9 @@
 // Names, places and counts are fixtures, never operator data.
 
 import { HOSTS_KEY } from "../mobile/hosts";
-import type { AgentGroup, GroupRow, PhoneAgent, PhoneDevice, PhoneSleepingSession } from "../mobile/protocol";
+import type { LookContent } from "../mobile/lookContent";
+import type { AgentGroup, AgentKey, GroupRow, LookFile, LookRow, PhoneAgent, PhoneDevice, PhoneSleepingSession } from "../mobile/protocol";
+import type { Detail } from "../mobile/store";
 
 export const PHONE_ROOM = "a".repeat(43);
 export const PHONE_MAC = "호연의 MacBook Pro";
@@ -99,4 +101,95 @@ export function seedPairedMac(): void {
   } catch {
     // The picker then says storage is unavailable, which is the state it draws.
   }
+}
+
+/** The scenes of the 볼 것 tab and its viewers (PRD mobile-companion-ui B10-B19, B23, B26, B27), in the order the board draws them. */
+export type PhoneLookScene = "phone-looks" | "phone-look-changes" | "phone-look-doc" | "phone-look-image" | "phone-look-page" | "phone-look-other" | "phone-look-large" | "phone-look-failed" | "phone-look-closed" | "phone-look-device" | "phone-look-loading";
+
+export const PHONE_LOOK_SCENES: readonly PhoneLookScene[] = ["phone-looks", "phone-look-changes", "phone-look-doc", "phone-look-image", "phone-look-page", "phone-look-other", "phone-look-large", "phone-look-failed", "phone-look-closed", "phone-look-device", "phone-look-loading"];
+
+const LOOK_AGENT = "l1";
+
+/** The one agent the scenes open: its row carries the eye mark (B11). */
+export function phoneLookGroups(): AgentGroup[] {
+  const parent = agent(LOOK_AGENT, "PR 2090 리뷰 반영", 3, {
+    group: "needs_you", mark: "look", status_code: "idle", emphasized: true, place: "hide · fix/review-2090",
+    line: { text: "경로 구분자 수정", mode: "request", tone: "warning" },
+  });
+  return [{ group: "needs_you", count: 1, rows: [row(parent)] }];
+}
+
+const KEY: AgentKey = { device_id: "local", pane_id: LOOK_AGENT };
+
+const INSTALL_GUIDE = `# Linux에 설치하기
+
+Hide는 Ubuntu 24.04 이상과 Fedora 40 이상에서 돌아가요.
+
+## 1. 받기
+
+\`\`\`sh
+curl -fsSL https://withhide.dev/install.sh | sh
+\`\`\`
+
+## 2. 폰 연결
+
+설정 › 모바일에서 **폰에서 Hide 열기**를 켜고 QR을 폰 카메라로 찍으세요. 로그인이나 계정은 필요 없어요.
+
+## 3. 지우기
+
+1. \`hide uninstall\`을 실행해요.
+2. 남은 상태 폴더 \`~/.hide\`를 지워요.
+
+| 시스템 | 지원 |
+| --- | --- |
+| Ubuntu 24.04 | 예 |
+| Fedora 40 | 예 |
+`;
+
+/** A chart drawn as an image, so the viewer has pixels to show without a file. */
+const CHART = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1400" viewBox="0 0 240 140"><rect width="240" height="140" fill="white"/><text x="10" y="14" font-size="8" font-family="sans-serif" fill="black">홀더 메모리 (MB) · 탭 50개 열고 닫기 10회</text><g stroke="lightgray" stroke-width=".5"><path d="M10 40H230M10 70H230M10 100H230"/></g><path d="M10 100C60 70 120 66 230 36" fill="none" stroke="orangered" stroke-width="1.5"/><path d="M10 104C80 90 150 92 230 90" fill="none" stroke="royalblue" stroke-width="1.5"/></svg>',
+)}`;
+
+export function phoneLooks(): LookRow[] {
+  return [
+    { id: "v1", kind: "changes", name: "경로 구분자 수정", unseen: true, at: Date.now() - 3 * MINUTE },
+    { id: "v2", kind: "image", name: "memory-holder.png", unseen: true, at: Date.now() - 5 * MINUTE },
+    { id: "v3", kind: "page", name: "랜딩 미리보기", unseen: true, at: Date.now() - 8 * MINUTE, url: "https://withhide.dev/preview" },
+    { id: "v4", kind: "doc", name: "INSTALL.md", unseen: false, at: Date.now() - 60 * MINUTE },
+  ];
+}
+
+const FILES: LookFile[] = [
+  { path: "hide-platform/src/path.rs", status: "modified", added: 6, removed: 2, binary: false },
+  { path: "hided/src/mobile/wire.rs", status: "modified", added: 71, removed: 8, binary: false },
+  { path: "hide-platform/tests/it/path.rs", status: "untracked", added: null, removed: null, binary: false },
+  { path: "docs/diagram.pdf", status: "untracked", added: null, removed: null, binary: true },
+];
+
+const VIEWED: Record<Exclude<PhoneLookScene, "phone-looks">, { id: string; content: LookContent }> = {
+  "phone-look-changes": { id: "v1", content: { state: "changes", files: FILES, count: 4, added: 77, removed: 10 } },
+  "phone-look-doc": { id: "v4", content: { state: "text", markdown: true, text: INSTALL_GUIDE, truncated: false } },
+  "phone-look-image": { id: "v2", content: { state: "image", url: CHART, size: 319_488 } },
+  "phone-look-page": { id: "v3", content: { state: "page", url: "https://withhide.dev/preview" } },
+  "phone-look-other": { id: "v5", content: { state: "other" } },
+  "phone-look-large": { id: "v6", content: { state: "too_large" } },
+  "phone-look-failed": { id: "v1", content: { state: "failed" } },
+  "phone-look-closed": { id: "v1", content: { state: "closed" } },
+  "phone-look-device": { id: "v1", content: { state: "device_unreachable" } },
+  "phone-look-loading": { id: "v2", content: { state: "loading" } },
+};
+
+/** The detail the scene seeds: the 볼 것 list, or one of its Views opened with the content the state names. */
+export function phoneLookDetail(scene: PhoneLookScene): Detail {
+  const rows = phoneLooks();
+  const extra: LookRow[] = [
+    { id: "v5", kind: "other", name: "architecture.pdf", unseen: true, at: Date.now() - 12 * MINUTE },
+    { id: "v6", kind: "image", name: "screen-recording-poster.png", unseen: true, at: Date.now() - 14 * MINUTE },
+  ];
+  const base: Detail = { key: KEY, view: "conversation", tab: "looks", rows: null, moreAskedAt: null, conversation: { messages: [], before: null }, olderAskedAt: null, looks: { rows, omitted: 0 }, look: null };
+  if (scene === "phone-looks") return base;
+  const viewed = VIEWED[scene];
+  const row = [...rows, ...extra].find((candidate) => candidate.id === viewed.id)!;
+  return { ...base, looks: { rows: [...rows, ...extra], omitted: 0 }, look: { row, requestId: `gallery-${scene}`, content: viewed.content, shown: true } };
 }

@@ -13,6 +13,7 @@
 //! change; what it asks is one of the `mobile_*` events.
 
 pub mod conversation;
+pub mod looks;
 pub mod pane;
 pub mod phone;
 pub mod phones;
@@ -182,6 +183,10 @@ pub struct Config {
     /// The desktop windows' notifications, judged on the projection this
     /// follower reads (`desktop_notices.rs`).
     pub desktop: Arc<crate::desktop_notices::DesktopNotices>,
+    /// The boundary and the roots a phone's file read is confined by: the
+    /// ones the desktop's `file_bytes` uses (`looks.rs`).
+    pub boundary: Arc<crate::boundary::Boundary>,
+    pub roots: Arc<crate::RootFollower>,
 }
 
 pub struct Mobile {
@@ -1773,6 +1778,30 @@ impl Mobile {
         if let Err(message) = self.config.core.dispatch(event.to_string().into_bytes()) {
             herdr_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent_unrecorded", "message": message,
+            }));
+        }
+    }
+
+    pub fn core(&self) -> &Arc<CoreHandle> {
+        &self.config.core
+    }
+
+    pub fn boundary(&self) -> Arc<crate::boundary::Boundary> {
+        Arc::clone(&self.config.boundary)
+    }
+
+    pub fn roots(&self) -> Arc<crate::RootFollower> {
+        Arc::clone(&self.config.roots)
+    }
+
+    /// Marks a View the phone showed seen, with the event Desk sends when
+    /// its lane shows an output (PRD mobile-companion-ui D-15, B24). Seen is
+    /// the View's own state, so the desktop's eye and count follow at once.
+    pub fn mark_seen(&self, view: &herdr_core::LookView) {
+        if let Err(message) = self.config.core.dispatch(looks::seen_event(view)) {
+            herdr_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "look.seen_unrecorded",
+                "view_id": view.display_id, "message": message,
             }));
         }
     }

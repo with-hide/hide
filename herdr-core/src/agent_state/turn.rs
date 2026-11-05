@@ -1093,8 +1093,10 @@ pub mod push {
         pub place: String,
     }
 
-    /// Root rows use their core group, which a raised descendant already moved
-    /// to Needs You; a delegated row never notifies on its own (PRD B9).
+    /// Root rows use the group notices follow (`notice_group`: their core
+    /// group, which a raised descendant already moved to Needs You, and not
+    /// the Needs You a View to look at puts a row in); a delegated row never
+    /// notifies on its own (PRD B9).
     /// Existing human delivery notices own undelivered-letter and
     /// unconfirmed-watch notifications.
     fn effective(projection: &Projection) -> BTreeMap<AgentKey, (Effective, &PhoneAgent)> {
@@ -1110,15 +1112,15 @@ pub mod push {
                 // A read ask listed in Needs You is read: it clears a notice
                 // and never announces again (needs-you-cleanup D-10, B12).
                 Effective::Seen
-            } else if agent.notification_finalized && agent.group == "needs_you" {
+            } else if agent.notification_finalized && agent.notice_group == "needs_you" {
                 // A later judgment updates the row, not a finalized notice.
                 Effective::Done
-            } else if agent.notification_pending && agent.group == "done" {
+            } else if agent.notification_pending && agent.notice_group == "done" {
                 // The lifecycle stopped before its asynchronous judgment.
                 // Explicit asks still announce immediately.
                 Effective::Working
             } else {
-                Effective::from_group(&agent.group)
+                Effective::from_group(&agent.notice_group)
             };
             roots.insert(agent.key(), (state, agent));
         }

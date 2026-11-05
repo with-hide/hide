@@ -6,9 +6,7 @@ import type { MobileState } from "../mobileSettings";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { useShellStore } from "../store";
-import { MobilePhoneScene, type PhoneSceneState } from "./MobilePhoneScene";
-
-const PHONE_STATES = ["phone-list", "phone-devices", "phone-missions", "phone-mission"];
+import { MobilePhoneScene, PHONE_SCENES, type PhoneSceneState } from "./MobilePhoneScene";
 
 function fixture(state: string): MobileState {
   const now = Date.now();
@@ -25,11 +23,11 @@ function fixture(state: string): MobileState {
     max_phones:4, push_mode:"off", now_ms:now,
   };
 }
-/** Settings > Mobile on the desktop, and beside it the phone's own screens (`state=phone-list`, `phone-devices`, `phone-missions`, `phone-mission`). */
+/** Settings > Mobile on the desktop, and beside it the phone's own screens (`state=phone-list`, `phone-devices`, `phone-missions`, `phone-mission`, `phone-looks` and the `phone-look-*` viewers; `offline=1` dims the 볼 것 ones). */
 export function MobileScene({ params }: { params: URLSearchParams }) {
   const state = params.get("state") ?? "connected";
-  if (PHONE_STATES.includes(state)) {
-    return <MobilePhoneScene state={state as PhoneSceneState} language={params.get("lang") ?? "ko"} theme={params.get("theme") ?? "dark"} scale={params.get("scale") === "large" ? 17 / 13 : 1} />;
+  if (PHONE_SCENES.includes(state)) {
+    return <MobilePhoneScene state={state as PhoneSceneState} language={params.get("lang") ?? "ko"} theme={params.get("theme") ?? "dark"} scale={params.get("scale") === "large" ? 17 / 13 : 1} offline={params.get("offline") === "1"} />;
   }
   return <MobileSettingsScene params={params} state={state} />;
 }
