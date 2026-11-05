@@ -264,8 +264,8 @@ fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Option<Vec<u16>> {
 /// with-hide/hide-private#312: a line that fills the width and ends with a
 /// line break is not a wrap, while a longer one the terminal carried onto
 /// the next row is. On Windows ConPTY draws the screen again for the holder
-/// and places a wrapped line's rows itself, so its parser sees no wrap and
-/// the holder says nothing of wraps, leaving the screen its last-column rule.
+/// and places a wrapped line's rows itself, without reliably leaving a soft
+/// wrap, so the holder says nothing of wraps, leaving the screen its last-column rule.
 #[test]
 fn a_full_screen_says_which_rows_the_programs_text_ran_past() {
     let home = Home::new();

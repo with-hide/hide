@@ -516,13 +516,14 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   expect(sent.get("browser_open")).toBe(1);
 });
 
-// with-hide/hide-private#312: a URL exactly as wide as the pane that ends
+// hide-private issue 312: a URL exactly as wide as the pane that ends
 // with a line break stays one link when the next line starts with a word,
 // and a URL the terminal carried onto the next row is still one link. The
 // pane runs a shell, not an agent, so the holder's soft-wrap rows decide. A
-// Windows holder cannot know them (ConPTY places a wrapped line's rows
-// itself), so there the full-width URL still joins the next word
-// (docs/INSTALL.md, What each system supports) and only the wrap is checked.
+// Windows holder says none (ConPTY places a wrapped line's rows itself and
+// does not reliably leave a soft wrap), so there the full-width URL still
+// joins the next word (docs/INSTALL.md, What each system supports) and only
+// the wrap is checked.
 test("a URL that fills its row is not joined to the next line, and one that wraps is one link", { tag: "@platform" }, async () => {
   ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
