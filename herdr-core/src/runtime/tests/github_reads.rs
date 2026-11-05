@@ -1617,6 +1617,33 @@ fn the_poll_watches_only_projects_whose_last_read_worked_and_holds_an_open_pull_
     );
 }
 
+/// A failure ranks first among a head's checks, so a head whose checks read
+/// failed while a workflow still runs is unfinished: the poll watches it as
+/// it watches a pending one, so its last run ending is read and a mission's
+/// CI letter, which waits on the same fact, goes.
+#[test]
+fn the_poll_watches_a_failed_head_while_a_run_on_it_still_goes() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+    let mut running = open_pull_request(1, PullRequestChecks::Failed);
+    running.work.checks_running = true;
+    first_read(
+        &mut runtime,
+        vec![read_ok(
+            "/tmp/a",
+            vec![running, open_pull_request(2, PullRequestChecks::Failed)],
+            10,
+        )],
+        Instant::now(),
+    );
+    let request = runtime.github_poll_request();
+    assert_eq!(
+        request.projects[0].heads,
+        vec![format!("{:040x}", 1)],
+        "the failed head still running is watched; the one that ended is not"
+    );
+}
+
 #[test]
 fn the_poll_reads_at_most_eight_projects_the_one_in_front_first() {
     let mut runtime = runtime();

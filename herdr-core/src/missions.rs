@@ -374,6 +374,49 @@ pub struct PrSeen {
     /// Closed without its merge: nothing is left to wait on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    /// The CI results the Conductor was told on `head`, each once for good
+    /// (at most one of each); a new head empties it, so its results are
+    /// news again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ci_told: Vec<CiResult>,
+}
+
+/// What a pull request's CI ended as on one head commit: its checks as the
+/// pull request list judges them (`github::runs`), the node's `ci` line's
+/// value.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiResult {
+    Passed,
+    /// Every run of a workflow was cancelled and none replaced it.
+    Cancelled,
+    Failed,
+}
+
+impl CiResult {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// The checks a CI letter names at most; past it, it counts the rest.
+pub const CI_FAILED_NAMED: usize = 8;
+
+/// A CI result as its letter tells it (`WakeEvent::Ci`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CiNews {
+    pub result: CiResult,
+    /// The checks that failed, by the name GitHub shows, at most
+    /// `CI_FAILED_NAMED`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
+    /// How many more failed than `failed` names.
+    #[serde(default)]
+    pub more: usize,
 }
 
 /// One change of a node's pull request the Conductor is still to be told
@@ -401,6 +444,9 @@ pub struct PendingWake {
     pub why: Option<FixReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<OperatorAction>,
+    /// The CI result a `ci` wake tells, on `head`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci: Option<CiNews>,
     /// The facts the wake stands on (`MissionEvent::id`'s kind of key), its
     /// letter's intent with the mission and the recipient: the same facts
     /// evaluated again, after a restart or a lost save, are the same letter
@@ -415,7 +461,12 @@ pub struct PendingWake {
 pub enum WakeEvent {
     Merged,
     ChangesRequested,
+    /// A new head commit, which a build before CI letters told; a book from
+    /// then may still hold one waiting, sent as it was. None is recorded now:
+    /// the head's CI result (`Ci`) names the commit.
     NewHead,
+    /// An open pull request's CI ended on its head; `ci` says how.
+    Ci,
     /// An outside node's pull request merged or its branch reached main, so
     /// the nodes waiting on it can start (B19).
     OutsideDone,
@@ -448,6 +499,7 @@ impl WakeEvent {
             Self::Merged => "merged",
             Self::ChangesRequested => "changes_requested",
             Self::NewHead => "new_head",
+            Self::Ci => "ci",
             Self::OutsideDone => "outside_done",
             Self::OutsideFailed => "outside_failed",
             Self::Resumed => "resumed",
