@@ -72,6 +72,11 @@ export function corePaneFocus(rest: Rest): string | null {
   return ((rest.focused ?? null) as { pane_id?: string } | null)?.pane_id ?? null;
 }
 
+/** The terminal pane the core's next split acts on, as the snapshot names it. */
+export function coreTerminalPane(rest: Rest): string | null {
+  return ((rest.terminal ?? null) as { pane_id?: string } | null)?.pane_id ?? null;
+}
+
 /** The tab the core shows, as the snapshot names it. */
 export function shownTab(rest: Rest): string | null {
   return ((rest.tab ?? null) as { id?: string } | null)?.id ?? null;
@@ -191,7 +196,14 @@ export async function newTab(control: HidedControl, at: { workspace: string; che
  * running `command` or the shell, as Split does; returns the new pane.
  */
 export async function splitPane(control: HidedControl, tab: string, cwd: string, { direction = "right", command = null }: { direction?: "right" | "down"; command?: string | null } = {}): Promise<string> {
-  const before = await control.until((rest) => tabLayout(rest, tab) ? tabPanes(rest, tab) : undefined, `the layout of ${tab}`);
+  // `create_pane` splits the core's current terminal pane and reads no tab,
+  // so the split waits until that pane is in `tab`; sent before, it was
+  // refused as `pane.no_current_pane` (with-hide/hide-private#456).
+  const before = await control.until((rest) => {
+    const panes = tabPanes(rest, tab);
+    const current = coreTerminalPane(rest);
+    return current && panes.includes(current) ? panes : undefined;
+  }, `the core's current pane in ${tab}`);
   control.send("create_pane", { tab_id: tab, cwd, command, direction, request_id: `e2e-${crypto.randomUUID()}` });
   return control.until((rest) => tabPanes(rest, tab).find((pane) => !before.includes(pane)), `a new pane in ${tab}`, 30_000);
 }
