@@ -78,10 +78,9 @@ export function phoneMissions(): PhoneMission[] {
       status: "merge_wait",
       created_at_unix_ms: Date.now() - 5 * HOUR,
       started_at_unix_ms: Date.now() - 5 * HOUR,
-      landing_order: ["a", "b"],
       nodes: [
-        step("a", "랜딩 문구 다듬기", "done", { pr: 2088, pr_state: "mergeable", agent_runtime: "ended" }),
-        step("b", "가격 표 고치기", "done", { pr: 2089, pr_state: "mergeable", worker_agent: "codex", agent_runtime: "ended", base_pr: 2088 }),
+        step("a", "랜딩 문구 다듬기", "done", { pr: 2088, pr_state: "pending", agent_runtime: "ended" }),
+        step("b", "가격 표 고치기", "done", { pr: 2089, pr_state: "pending", worker_agent: "codex", agent_runtime: "ended", base_pr: 2088 }),
       ],
     }),
     ...[

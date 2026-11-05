@@ -296,5 +296,5 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
     return t("mobile.mission.waitsDecision");
   }
   if (kind === "done") return node.pr_state ? t(`agentSessions.pr.${node.pr_state}`) : t(kindWord(node.kind));
-  return node.base_pr != null ? t("mobile.mission.after", { pr: node.base_pr }) : t(stageWord(node));
+  return node.base_pr != null ? t("mobile.mission.after", { pr: String(node.base_pr) }) : t(stageWord(node));
 }
