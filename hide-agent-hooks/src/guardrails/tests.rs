@@ -9,7 +9,6 @@ use hide_shell::Syntax;
 
 use super::payload::{self, ToolCall};
 use super::*;
-use crate::pre_tool;
 
 fn git(root: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -114,6 +113,16 @@ impl Fixture {
 
     fn read(&self, cwd: &Path, path: &str) -> Option<Rule> {
         refused(self.decide_in(cwd, Action::Read(vec![path.to_owned()]), Some(false)))
+    }
+}
+
+/// The shell Codex's and Cursor's shell tool runs: PowerShell on Windows,
+/// a POSIX shell elsewhere.
+fn windows_powershell() -> Syntax {
+    if cfg!(windows) {
+        Syntax::PowerShell
+    } else {
+        Syntax::Posix
     }
 }
 
@@ -624,14 +633,21 @@ fn a_powershell_call_is_judged_as_powershell_reads_it() {
         r"echo x > .\.env.local",
         r"$x = Get-Content .\.env",
         r"if (Test-Path .\.env) { echo yes }",
+        // A parameter's value after `-Name:`, and an array's items.
+        r"Get-Content -LiteralPath:.\.env",
+        r"Get-Content -Path:'.\.env'",
+        r"Get-Content a.txt,.env",
+        r"Set-Location -LiteralPath:src; Get-Content ..\.env",
     ] {
         assert_eq!(powershell(repo, command), Some(Rule::Files), "{command}");
     }
     for command in [r"Get-Content .\.env.example", r"Get-Content .\a.txt", "ls"] {
         assert_eq!(powershell(repo, command), None, "{command}");
     }
-    // Git Bash reads `.\.env` as `..env`, a file that is not there.
+    // Git Bash reads `.\.env` as `..env`, and `a.txt,.env` as one name,
+    // files that are not there.
     assert_eq!(fixture.shell(repo, r"cat .\.env"), None);
+    assert_eq!(fixture.shell(repo, "cat a.txt,.env"), None);
     for command in [
         r"git -C ..\repo switch topic",
         r"GIT -C ..\repo switch topic",
@@ -645,10 +661,18 @@ fn a_powershell_call_is_judged_as_powershell_reads_it() {
         );
     }
     assert_eq!(powershell(worktree, "git switch topic"), None);
-    assert_eq!(
-        powershell(worktree, "Git push --force origin feature"),
-        Some(Rule::GitCommands)
-    );
+    for command in [
+        "Git push --force origin feature",
+        // An assignment runs the command after it.
+        "$r = git push --force origin feature",
+        "$r=git push --no-verify",
+    ] {
+        assert_eq!(
+            powershell(worktree, command),
+            Some(Rule::GitCommands),
+            "{command}"
+        );
+    }
     // A line PowerShell refuses to parse runs, as it does today.
     assert_eq!(powershell(repo, r"Get-Content '.\.env"), None);
 }
@@ -964,10 +988,7 @@ fn each_runtimes_payload_reads_as_its_action() {
             HookDialect::Codex
         )
         .map(|call| call.action),
-        Some(shell(
-            "git status",
-            pre_tool::shell_syntax(HookDialect::Codex, "Bash")
-        ))
+        Some(shell("git status", windows_powershell()))
     );
     // Cursor 2026.10.14: an edit arrives as `Write`; a shell call's empty cwd
     // falls back to the workspace.
@@ -987,10 +1008,7 @@ fn each_runtimes_payload_reads_as_its_action() {
             HookDialect::Cursor
         ),
         Some(ToolCall {
-            action: shell(
-                "git status",
-                pre_tool::shell_syntax(HookDialect::Cursor, "Shell")
-            ),
+            action: shell("git status", windows_powershell()),
             cwd: Some("/r".into())
         })
     );

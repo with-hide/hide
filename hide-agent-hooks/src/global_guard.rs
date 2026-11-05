@@ -58,7 +58,12 @@ pub fn refusal(home: &Path, call: &ToolCall) -> Option<String> {
     let writes = match &call.action {
         Action::Write(paths) => paths.iter().any(|path| names(path)),
         Action::Shell { command, syntax } => {
-            let words = |word: &str| names(&syntax.path_word(word));
+            let words = |word: &str| {
+                syntax
+                    .path_values(word)
+                    .into_iter()
+                    .any(|value| names(&syntax.path_word(value)))
+            };
             shell_names(command, *syntax, &words) || beside_state(command, &cwd, &files)
         }
         Action::Read(_) | Action::UnreadWrite => false,

@@ -36,9 +36,9 @@ impl Syntax {
     /// `/bin/zsh`, `-bash` as a login shell's), in any case. cmd.exe reads
     /// neither syntax, so it has none.
     pub fn of_program(name: &str) -> Option<Self> {
-        let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
-        let name = name.trim_start_matches('-').to_ascii_lowercase();
-        match name.strip_suffix(".exe").unwrap_or(&name) {
+        // A shell's name is matched without case, as PowerShell finds a
+        // program.
+        match Self::PowerShell.program(name).trim_start_matches('-') {
             "pwsh" | "powershell" => Some(Self::PowerShell),
             "cmd" => None,
             _ => Some(Self::Posix),
@@ -57,10 +57,39 @@ impl Syntax {
         }
     }
 
+    /// The parts of one command word that may name a path, the word itself
+    /// first: the value of a `--name=value` or `NAME=value` word in both
+    /// shells, and in PowerShell also the value of a `-Name:value`
+    /// parameter (`-LiteralPath:.\.env`) and each item of a comma-separated
+    /// array (`README.md,.env`, `about_Parameters`, `about_Arrays`). A
+    /// variable in a value is left in it: neither shell's value is known
+    /// before it runs.
+    pub fn path_values(self, word: &str) -> Vec<&str> {
+        let mut values = vec![word];
+        if let Some((_, value)) = word.split_once('=') {
+            values.push(value);
+        }
+        if self == Self::PowerShell {
+            if word.starts_with('-')
+                && let Some((_, value)) = word.split_once(':')
+            {
+                values.push(value);
+            }
+            let items: Vec<&str> = values
+                .iter()
+                .filter(|value| value.contains(','))
+                .flat_map(|value| value.split(','))
+                .collect();
+            values.extend(items);
+        }
+        values
+    }
+
     /// The name a command word calls, as this shell finds it: the word's
     /// file name without `.exe`, and in PowerShell in lower case, since
     /// PowerShell finds a cmdlet, an alias and on Windows a program without
-    /// case (`Set-Location`, `CD`, `Git.exe`).
+    /// case (`Set-Location`, `CD`, `Git.exe`). The one place a command's
+    /// name is read from its word.
     pub fn program(self, word: &str) -> String {
         let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
         let name = match self {
@@ -76,18 +105,28 @@ impl Syntax {
     }
 
     /// Whether `program`, a name [`Syntax::program`] gave, moves the
-    /// shell's working folder for the commands after it: `cd` and `pushd`,
-    /// and in PowerShell also `Set-Location` with its aliases `sl` and
-    /// `chdir`, and `Push-Location` (`about_Aliases`).
-    pub fn changes_folder(self, program: &str) -> bool {
-        match self {
-            Self::Posix => matches!(program, "cd" | "pushd"),
-            Self::PowerShell => matches!(
-                program,
-                "cd" | "pushd" | "chdir" | "sl" | "set-location" | "push-location"
-            ),
+    /// shell's working folder for the commands after it, and where it goes
+    /// when it names no folder: `cd` and `pushd`, and in PowerShell also
+    /// `Set-Location` with its aliases `sl` and `chdir`, and `Push-Location`
+    /// (`about_Aliases`). A bare `cd` or `Set-Location` goes home, as a
+    /// POSIX shell and PowerShell 7 do; Windows PowerShell 5.1 stays.
+    pub fn changes_folder(self, program: &str) -> Option<BareFolder> {
+        match (self, program) {
+            (_, "cd") => Some(BareFolder::Home),
+            (_, "pushd") => Some(BareFolder::Stays),
+            (Self::PowerShell, "chdir" | "sl" | "set-location") => Some(BareFolder::Home),
+            (Self::PowerShell, "push-location") => Some(BareFolder::Stays),
+            _ => None,
         }
     }
+}
+
+/// Where a command that moves the working folder goes when it names no
+/// folder ([`Syntax::changes_folder`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BareFolder {
+    Home,
+    Stays,
 }
 
 /// The simple commands of a shell line, each as its words with quoting
@@ -1100,6 +1139,15 @@ mod tests {
                 "Set-Content a.txt @\"\r\nii x.png; rm y\r\n\"@",
                 &[&["Set-Content", "a.txt", "ii x.png; rm y"]],
             ),
+            // An assignment runs the command after it.
+            ("$r = git push --force", &[&["git", "push", "--force"]]),
+            ("$r=git push", &[&["git", "push"]]),
+            ("$a = $b += git commit", &[&["git", "commit"]]),
+            ("${my r} = git push", &[&["git", "push"]]),
+            ("$env:X = 1", &[&["1"]]),
+            ("$r = (git push)", &[&["git", "push"]]),
+            ("[int]$r = 1", &[&["[int]$r", "=", "1"]]),
+            ("$r", &[&["$r"]]),
             // PowerShell reads the typographic double quotes as `\"`.
             (
                 "ii \u{201C}C:\\a b\\x.png\u{201D}",
@@ -1153,15 +1201,43 @@ mod tests {
             assert_eq!(Syntax::Posix.program(word), posix, "{word}");
             assert_eq!(ps.program(word), powershell, "{word}");
         }
-        for program in ["cd", "pushd"] {
-            assert!(Syntax::Posix.changes_folder(program));
-            assert!(ps.changes_folder(program));
+        for (program, bare) in [("cd", BareFolder::Home), ("pushd", BareFolder::Stays)] {
+            assert_eq!(Syntax::Posix.changes_folder(program), Some(bare));
+            assert_eq!(ps.changes_folder(program), Some(bare));
         }
-        for program in ["set-location", "sl", "chdir", "push-location"] {
-            assert!(ps.changes_folder(program), "{program}");
-            assert!(!Syntax::Posix.changes_folder(program), "{program}");
+        for (program, bare) in [
+            ("set-location", BareFolder::Home),
+            ("sl", BareFolder::Home),
+            ("chdir", BareFolder::Home),
+            ("push-location", BareFolder::Stays),
+        ] {
+            assert_eq!(ps.changes_folder(program), Some(bare), "{program}");
+            assert_eq!(Syntax::Posix.changes_folder(program), None, "{program}");
         }
-        assert!(!ps.changes_folder("get-content"));
+        assert_eq!(ps.changes_folder("get-content"), None);
+        // The values a word passes: `=` in both shells, `-Name:` and arrays
+        // in PowerShell.
+        for (word, posix, powershell) in [
+            (
+                "--env-file=.env",
+                &["--env-file=.env", ".env"][..],
+                &["--env-file=.env", ".env"][..],
+            ),
+            (
+                r"-LiteralPath:.\.env",
+                &[r"-LiteralPath:.\.env"][..],
+                &[r"-LiteralPath:.\.env", r".\.env"][..],
+            ),
+            (
+                "a.txt,.env",
+                &["a.txt,.env"][..],
+                &["a.txt,.env", "a.txt", ".env"][..],
+            ),
+            ("C:\\x", &["C:\\x"][..], &["C:\\x"][..]),
+        ] {
+            assert_eq!(Syntax::Posix.path_values(word), posix, "{word}");
+            assert_eq!(ps.path_values(word), powershell, "{word}");
+        }
     }
 
     #[test]

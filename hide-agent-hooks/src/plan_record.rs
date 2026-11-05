@@ -556,6 +556,10 @@ mod tests {
             judged(&PlanContext::default(), "GIT.EXE push --force origin x"),
             Some(Refused::HistoryRewrite)
         );
+        assert_eq!(
+            judged(&proposed, "$r = git commit -m x"),
+            Some(Refused::ProposedPlan)
+        );
         assert_eq!(judged(&proposed, "Get-Content README.md"), None);
         // A line PowerShell refuses to parse runs, as it does today.
         assert_eq!(judged(&proposed, "git commit -m 'x"), None);

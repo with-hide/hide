@@ -52,6 +52,56 @@ pub(crate) fn read(text: &str) -> ShellLine {
 /// PowerShell would refuse to run the line.
 struct Refused;
 
+/// The assignment operators (`about_Assignment_Operators`).
+const ASSIGNMENTS: [&str; 7] = ["=", "+=", "-=", "*=", "/=", "%=", "??="];
+
+/// Takes the `$name =` in front of a command out of its words: what runs is
+/// the command after it, whose output the variable takes (`$r = git push`,
+/// `$r=git push`, `$a = $b = git push`). A variable whose name is given in
+/// braces or with a scope (`${a}`, `$env:x`) counts; a cast or several
+/// targets (`[int]$x =`, `$a, $b =`) are left as they are.
+fn strip_assignments(words: &mut Vec<String>) {
+    loop {
+        let Some(first) = words.first() else {
+            return;
+        };
+        let Some(rest) = variable_end(first).map(|end| &first[end..]) else {
+            return;
+        };
+        if rest.is_empty() {
+            match words.get(1) {
+                Some(operator) if ASSIGNMENTS.contains(&operator.as_str()) => {
+                    words.drain(..2);
+                }
+                _ => return,
+            }
+        } else if let Some(operator) = ASSIGNMENTS.iter().find(|op| rest.starts_with(**op)) {
+            let value = rest[operator.len()..].to_owned();
+            if value.is_empty() {
+                words.remove(0);
+            } else {
+                words[0] = value;
+            }
+        } else {
+            return;
+        }
+    }
+}
+
+/// Where the variable a word starts with ends: `$name`, `$scope:name` or
+/// `${any}`, read to its last name character.
+fn variable_end(word: &str) -> Option<usize> {
+    let rest = word.strip_prefix('$')?;
+    if let Some(braced) = rest.strip_prefix('{') {
+        return braced.find('}').map(|end| end + 3);
+    }
+    let name = rest
+        .char_indices()
+        .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | ':' | '?')))
+        .map_or(rest.len(), |(at, _)| at);
+    (name > 0).then_some(name + 1)
+}
+
 struct Reader {
     chars: Vec<char>,
     at: usize,
@@ -214,7 +264,8 @@ impl Reader {
         self.end_word();
         self.target_next = false;
         let conditional = self.and_or || !self.blocks.is_empty();
-        let words = std::mem::take(&mut self.words);
+        let mut words = std::mem::take(&mut self.words);
+        strip_assignments(&mut words);
         let keyword =
             words.len() == 1 && KEYWORDS.contains(&words[0].to_ascii_lowercase().as_str());
         if !words.is_empty() && !keyword {

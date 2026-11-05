@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::facts::{Checkout, Located, Place};
 use super::{Dirty, Facts, Refusal, Rule, absolute, protected};
-use hide_shell::{Syntax, command_words, shell_line};
+use hide_shell::{BareFolder, Syntax, command_words, shell_line};
 
 /// The most words of one call checked against the protected paths; past it
 /// the words are left unchecked and the log says so, while every later
@@ -37,17 +37,24 @@ pub(super) fn shell(
             continue;
         };
         let program = syntax.program(first);
-        if syntax.changes_folder(&program) {
-            // A bare `cd` goes home; `cd -` goes where this line cannot see.
-            match args.iter().find(|arg| !arg.starts_with('-') || *arg == "-") {
+        if let Some(bare) = syntax.changes_folder(&program) {
+            // `cd -` goes where this line cannot see; a value given as
+            // `-LiteralPath:..` is the folder.
+            let target = args.iter().find_map(|arg| {
+                (arg == "-").then_some("-").or_else(|| {
+                    syntax
+                        .path_values(arg)
+                        .into_iter()
+                        .find(|value| !value.is_empty() && !value.starts_with('-'))
+                })
+            });
+            match target {
                 Some(target) if target != "-" => {
                     let target = syntax.path_word(target);
                     dir = absolute(&facts.home, &dir, Path::new(target.as_ref()));
                 }
                 Some(_) => {}
-                None if !matches!(program.as_str(), "pushd" | "push-location") => {
-                    dir = facts.home.clone();
-                }
+                None if bare == BareFolder::Home => dir = facts.home.clone(),
                 None => {}
             }
             continue;
@@ -71,7 +78,7 @@ pub(super) fn shell(
             .map(|(at, word)| (Some(at), word, false))
             .chain(targets.map(|target| (None, target, true)))
         {
-            for candidate in path_words(word) {
+            for candidate in path_words(syntax, word) {
                 if checked >= WORD_LIMIT {
                     facts.word_limit.set(true);
                     break;
@@ -214,18 +221,21 @@ fn text_word(program: &str, words: &[String], at: usize, value: bool) -> bool {
     }
 }
 
-/// The parts of a word that may name a path: the word, and the value of a
-/// `--name=value` or `NAME=value` word. A word still holding an expansion
-/// (`$HOME`, `$(...)`, a backtick) is not read, since its path is unknown.
-fn path_words(word: &str) -> Vec<&str> {
+/// The parts of a word that may name a path, as the shell passes them
+/// ([`Syntax::path_values`]: a `--name=value` value, and in PowerShell a
+/// `-Name:value` value and each array item). A part still holding an
+/// expansion (`$HOME`, `$env:USERPROFILE`, `$(...)`, a backtick) is not read,
+/// since its path is unknown.
+fn path_words(syntax: Syntax, word: &str) -> Vec<&str> {
     let readable = |candidate: &&str| {
         !candidate.is_empty()
             && !candidate.contains('$')
             && !candidate.contains('`')
             && !candidate.starts_with('-')
     };
-    std::iter::once(word)
-        .chain(word.split_once('=').map(|(_, value)| value))
+    syntax
+        .path_values(word)
+        .into_iter()
         .filter(readable)
         .collect()
 }

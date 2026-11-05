@@ -196,10 +196,11 @@ fn opening_of(words: &[String], depth: usize, syntax: Syntax, openings: &mut Vec
     let Some((first, arguments)) = words.split_first() else {
         return;
     };
-    let name = first.rsplit(['/', '\\']).next().unwrap_or(first);
-    let lower = name.to_ascii_lowercase();
-    let windows_name = lower.strip_suffix(".exe").unwrap_or(&lower);
-    let (opener, operands): (&'static str, Option<Vec<&String>>) = match name {
+    let name = syntax.program(first);
+    // Windows finds its openers without case, in any shell.
+    let windows_name = Syntax::PowerShell.program(first);
+    let windows_name = windows_name.as_str();
+    let (opener, operands): (&'static str, Option<Vec<&String>>) = match name.as_str() {
         "open" => ("open", macos_open(arguments)),
         "xdg-open" | "sensible-browser" | "x-www-browser" | "www-browser" | "wslview"
         | "gnome-open" | "kde-open" | "kde-open5" | "exo-open" | "gvfs-open" => {

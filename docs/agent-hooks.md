@@ -413,7 +413,7 @@ The tool decides, not the shell of the pane: an agent starts a shell of its own 
 
 No payload names its shell beyond the tool: Claude Code's `Bash` and `PowerShell` calls carry the same fields, and no hook variable says which shell a call runs in.
 Claude Code's Windows hook entry has no matcher, so a `PowerShell` tool call reaches the helper as a `Bash` call does, and every guard judges it: the opener guard through `pre_tool::Call`, and the guardrails, the global instruction's guard and the plan record through the same syntax carried in the call they read (`guardrails::Action::Shell`, set by `guardrails::payload::action` from `shell_syntax`).
-What a PowerShell line means beyond its words is read in `hide-shell` too, so no guard spells it on its own: a word's `\` separates names on every system, as PowerShell reads a path (`Syntax::path_word`: `.\.env` is `./.env`, `C:\repo` is `C:/repo`), a command name is found without case (`Syntax::program`: `Set-Location`, `GIT.EXE`), and `Set-Location` with its aliases `sl` and `chdir`, and `Push-Location`, move the folder as `cd` and `pushd` do (`Syntax::changes_folder`).
+What a PowerShell line means beyond its words is read in `hide-shell` too, so no guard spells it on its own: a word's `\` separates names on every system, as PowerShell reads a path (`Syntax::path_word`: `.\.env` is `./.env`, `C:\repo` is `C:/repo`), a word passes a path as a `-Name:value` parameter value and as each item of a comma-separated array as well as itself (`Syntax::path_values`: `-LiteralPath:.\.env`, `a.txt,.env`, beside both shells' `--name=value`), a command name is found without case (`Syntax::program`, the one place a command's name is read: `Set-Location`, `GIT.EXE`), `Set-Location` with its aliases `sl` and `chdir`, and `Push-Location`, move the folder as `cd` and `pushd` do (`Syntax::changes_folder`, which also says where a bare one goes), and a `$name =` in front of a command (`+=` and the other assignment operators too) is not part of it, since what runs is the command after it (`$r = git push --force`).
 
 ## Folder trust for the worktrees Hide makes
 
@@ -504,7 +504,8 @@ A plain folder project takes only Guard files.
 A repository nested in a checkout, a submodule or a clone, is a folder of the checkout around it, so its files take that checkout's protections and no protection locks an agent out of it; a `git` or `gh` command run there works on the nested repository, which no protection guards; only a project whose own repository cannot be read refuses, and then only a write or a `git` command a protection that is on needs the repository for.
 Paths are compared after links are followed, and with or without case as the folder compares names, judged from the entries the folder already holds so the hook writes nothing there, and taken as ignoring case when no entry tells (B24).
 A `cd` or `pushd` earlier in a shell line (in PowerShell also `Set-Location`, `sl`, `chdir` and `Push-Location`) moves where the commands after it run (a bare `cd` goes home), and `git -C <dir>` moves one command; the line is read in the [syntax of the shell that runs it](#which-shell-reads-a-call), one simple command at a time with quotes, heredoc bodies and comments set aside, and a line that shell would refuse to parse holds no command and runs.
-In PowerShell a backslash path is the path as written, on every system: `Get-Content .\.env` reads the protected `.env`, and `git -C C:\repo` and `Set-Location ..\repo` aim at that checkout; a command name is matched without case (`Git push --force`).
+In PowerShell a backslash path is the path as written, on every system: `Get-Content .\.env`, `Get-Content -LiteralPath:.\.env` and `Get-Content a.txt,.env` read the protected `.env`, and `git -C C:\repo` and `Set-Location ..\repo` aim at that checkout; a command name is matched without case (`Git push --force`), and an assigned command is judged as itself (`$r = git push --force`).
+A word holding a variable (`$PWD\.env`, `$env:USERPROFILE\.ssh`) is not read in either shell, since its path is known only when it runs.
 In Git Bash, the shell Claude Code runs on Windows, a backslash path is read as that shell runs it: quoted (`git -C 'C:\repo'`) it is the path, unquoted its backslashes are escapes, there and in the hook alike; a drive mount (`/c/work/...`, `/cygdrive/c/...`) is the drive's path (`hide_platform::path::shell_drive_path`).
 
 The refusal reaches the agent in English, in its runtime's deny shape, and names the protection, what the call did and what to do instead: `Not run: the "Guard files" protection is on for this project in Hide. This call reads or changes a path on the project's protected list. Ask the operator ...`.
@@ -523,7 +524,7 @@ The payload each runtime sends, observed on the versions Hide installs into (`hi
 
 | Runtime | Reads | Writes | Shell |
 |---|---|---|---|
-| Claude Code 2.1.300 | `Read` | `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (`file_path`, `notebook_path`) | `Bash` |
+| Claude Code 2.1.300 | `Read` | `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (`file_path`, `notebook_path`) | `Bash`, `PowerShell` |
 | Codex 0.162.1 | no read tool; the shell words only | `apply_patch` (the patch's file lines) | `Bash` |
 | Grok 1.0.52 | `read_file`, `Read` | `search_replace`, `write`, `Edit`, `Write` | `Bash` |
 | OpenCode 1.18.30 | `read` | `edit`, `write`, `apply_patch`, `multiedit` (`filePath`, `patchText`) | `bash` |
