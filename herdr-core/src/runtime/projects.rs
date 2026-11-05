@@ -307,13 +307,28 @@ impl Runtime {
                 return (None, true);
             }
         };
+        let request = self.own_changes_request(root, &workspace_id, &checkout_id, root_path);
+        (Some(request), false)
+    }
+
+    /// The read of one checkout's own changes and committed group: no row
+    /// selected and no diff, the committed group measured against the
+    /// checkout row's base. `남은 것` reads it for its worktree, and so does
+    /// the phone's change list for the checkout a View points at.
+    fn own_changes_request(
+        &mut self,
+        root: crate::files::DocumentRoot,
+        workspace_id: &str,
+        checkout_id: &str,
+        root_path: String,
+    ) -> crate::changes::ChangesRequest {
         let channel = self
             .changes_channel(&root.device_id)
             .map(crate::changes::ChannelRef);
         let base_branch = self
-            .catalog_checkout(&workspace_id, &checkout_id)
+            .catalog_checkout(workspace_id, checkout_id)
             .and_then(|(_, checkout)| checkout.base_branch.clone());
-        let request = crate::changes::ChangesRequest {
+        crate::changes::ChangesRequest {
             root,
             channel,
             root_path,
@@ -321,8 +336,26 @@ impl Runtime {
             selected_committed: false,
             base_branch,
             diffs: Vec::new(),
-        };
-        (Some(request), false)
+        }
+    }
+
+    /// The change-list read for the checkout `key` names, for the phone's
+    /// 변경 내용 viewer (PRD mobile-companion-ui B14). Refuses with a code
+    /// when the catalog no longer carries the checkout, which the caller words.
+    pub fn phone_changes_request(
+        &mut self,
+        key: &(String, String),
+    ) -> Result<crate::changes::ChangesRequest, &'static str> {
+        let (workspace_id, checkout_id) = self
+            .agent_workspace_ids(key)
+            .ok_or("checkout_unavailable")?;
+        let root_path = self
+            .changes_root_path(&workspace_id, &checkout_id)
+            .ok_or("checkout_unavailable")?;
+        let root = self
+            .document_root(&workspace_id, &checkout_id)
+            .map_err(|_| "checkout_unavailable")?;
+        Ok(self.own_changes_request(root, &workspace_id, &checkout_id, root_path))
     }
 
     /// Takes a `남은 것` read when it still describes the worktree shown; an

@@ -655,6 +655,55 @@ pub struct RecordViewSnapshot {
     pub session: crate::links::ledger::SessionIdentity,
 }
 
+/// A View the agent in a pane opened that is still open, as the phone's
+/// 볼 것 tab lists it (PRD mobile-companion-ui D-07): the same tile a session
+/// record's gallery draws, with whether the operator has looked at it. It
+/// names the View by the checkout that holds it; the phone asks for its
+/// content by `display_id` alone and hided finds the path here (D-16).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookView {
+    pub device_id: String,
+    /// The checkout whose View list holds it.
+    pub checkout_path: String,
+    pub display_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Which Changes group a diff shows; absent for anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_kind: Option<DocumentKind>,
+    /// The first lines of the text document its editor tab holds.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
+    pub unseen: bool,
+    /// When the agent opened it while unseen, else when it was last looked at.
+    pub at_unix_ms: u64,
+}
+
+/// The Views a pane's agent has open, newest first, and how many more than
+/// the list's bound there were.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LookViews {
+    pub views: Vec<LookView>,
+    pub omitted: usize,
+}
+
+/// One file of a checkout's change list, as the phone shows it: a name and
+/// line counts, never a line of code (PRD mobile-companion-ui D-08).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookChange {
+    /// Relative to the checkout root.
+    pub path: String,
+    pub status: ChangedFileStatus,
+    /// Absent for a file git cannot count: an untracked file or a binary.
+    pub added: Option<u32>,
+    pub removed: Option<u32>,
+}
+
 /// Where a Send stands (B21, B27, B28, B20).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ViewFeedbackSendSnapshot {

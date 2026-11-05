@@ -634,48 +634,124 @@ impl Runtime {
             .into_iter()
             .take(RECORD_VIEWS)
             .map(|(key, display, session)| {
-                let document = display
-                    .tab_id
-                    .as_deref()
-                    .and_then(|tab| self.editor_documents.get(tab));
-                let text = display.kind == crate::view_layout::DisplayKind::File;
+                let tile = self.view_tile(display);
                 crate::model::RecordViewSnapshot {
                     device_id: key.0.clone(),
                     checkout_path: key.1.clone(),
                     display_id: display.id.clone(),
                     kind: display.kind,
-                    label: match display.kind {
-                        crate::view_layout::DisplayKind::Browser => {
-                            super::view_areas::browser_label(display)
-                        }
-                        crate::view_layout::DisplayKind::External => display
-                            .external
-                            .as_ref()
-                            .map_or_else(String::new, |file| file.name.clone()),
-                        crate::view_layout::DisplayKind::File => {
-                            super::workspace_view::file_label(&display.path)
-                        }
-                        crate::view_layout::DisplayKind::Diff => super::editor::diff_label(
-                            &display.path,
-                            display.committed.unwrap_or(false),
-                        ),
-                    },
+                    label: tile.label,
                     path: display.path.clone(),
                     url: display.url.clone(),
-                    document_kind: document
-                        .filter(|_| text)
-                        .map(|document| document.document_kind),
-                    lines: document
-                        .filter(|document| text && document.document_kind.is_editable())
-                        .and_then(|document| document.contents_utf8.as_deref())
-                        .map(first_lines)
-                        .unwrap_or_default(),
+                    document_kind: tile.document_kind,
+                    lines: tile.lines,
                     session: session.clone(),
                 }
             })
             .collect();
         (views, omitted)
     }
+
+    /// What a View's tile shows of it from what Hide already holds: its tab's
+    /// name, the kind of the file its editor tab holds and an open text
+    /// document's first lines, never a read or a capture made for the tile.
+    /// The session record's gallery and the phone's 볼 것 list draw the same
+    /// tile.
+    fn view_tile(&self, display: &Display) -> ViewTile {
+        use crate::view_layout::DisplayKind;
+        let document = display
+            .tab_id
+            .as_deref()
+            .and_then(|tab| self.editor_documents.get(tab));
+        let text = display.kind == DisplayKind::File;
+        ViewTile {
+            label: super::view_areas::display_label(display),
+            document_kind: document
+                .filter(|_| text)
+                .map(|document| document.document_kind),
+            lines: document
+                .filter(|document| text && document.document_kind.is_editable())
+                .and_then(|document| document.contents_utf8.as_deref())
+                .map(first_lines)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The Views the agent in `pane_id` opened that are open now, in every
+    /// checkout's list, the one opened or looked at last first, each once,
+    /// with whether the operator has looked at it: the phone's 볼 것 tab
+    /// (PRD mobile-companion-ui D-07). Past `LOOK_VIEWS` only counted. This
+    /// is the same set the pane's `N views` lists on the desktop (a session's
+    /// Views by `Display::openers`), found for any pane, not only the front
+    /// Workspace's.
+    pub fn phone_looks(&self, pane_id: &str) -> crate::model::LookViews {
+        let Some(scope) = self.session_scope_of_pane(pane_id) else {
+            return crate::model::LookViews::default();
+        };
+        let mut found: Vec<(WorkspaceKey, &Display)> = Vec::new();
+        for (key, layout) in self.every_view_layout() {
+            for display in layout.displays() {
+                if !display
+                    .openers
+                    .iter()
+                    .any(|opener| opener.of_session(&scope))
+                {
+                    continue;
+                }
+                // Two tabs showing the same thing in one checkout are one
+                // row, which is unseen while either is and then names the
+                // unseen one: only that View being seen clears the eye.
+                match found
+                    .iter_mut()
+                    .find(|(other, seen)| *other == key && seen.shown() == display.shown())
+                {
+                    Some(row) => {
+                        if display.unseen.is_some() && row.1.unseen.is_none() {
+                            row.1 = display;
+                        }
+                    }
+                    None => found.push((key.clone(), display)),
+                }
+            }
+        }
+        let at = |display: &Display| {
+            display
+                .unseen
+                .as_ref()
+                .map_or(display.last_focused_unix_ms, |unseen| unseen.opened_unix_ms)
+        };
+        found.sort_by_key(|(_, display)| std::cmp::Reverse(at(display)));
+        let omitted = found.len().saturating_sub(LOOK_VIEWS);
+        let views = found
+            .into_iter()
+            .take(LOOK_VIEWS)
+            .map(|(key, display)| {
+                let tile = self.view_tile(display);
+                crate::model::LookView {
+                    device_id: key.0,
+                    checkout_path: key.1,
+                    display_id: display.id.clone(),
+                    kind: display.kind,
+                    label: tile.label,
+                    path: display.path.clone(),
+                    url: display.url.clone(),
+                    committed: display.committed,
+                    document_kind: tile.document_kind,
+                    lines: tile.lines,
+                    unseen: display.unseen.is_some(),
+                    at_unix_ms: at(display),
+                }
+            })
+            .collect();
+        crate::model::LookViews { views, omitted }
+    }
+}
+
+/// A View's tile.
+struct ViewTile {
+    label: String,
+    document_kind: Option<crate::model::DocumentKind>,
+    lines: Vec<String>,
 }
 
 /// Whether a View is a 결과물, something made for a person to look at, by
@@ -720,6 +796,8 @@ const OUTPUT_EXTENSIONS: &[(&str, &[&str])] = &[
 
 /// Views one record lists; the rest are counted, not sent.
 const RECORD_VIEWS: usize = 64;
+/// Views the phone's 볼 것 list holds for one agent; the rest are counted.
+const LOOK_VIEWS: usize = 64;
 /// Lines of an open document a record's tile shows, and the characters
 /// kept of each.
 const PREVIEW_LINES: usize = 6;
