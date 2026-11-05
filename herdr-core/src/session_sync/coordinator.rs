@@ -13,8 +13,8 @@ pub(crate) fn spawn(
 ) -> Result<SessionSyncHandle, String> {
     let (sender, receiver) = channel();
     let worker_sender = sender.clone();
-    let republish_pending = Arc::new(AtomicBool::new(false));
-    let worker_republish = Arc::clone(&republish_pending);
+    let republish = Arc::new(RepublishFlags::default());
+    let worker_republish = Arc::clone(&republish);
     let worker = thread::Builder::new()
         .name("herdr-core-session-sync".to_owned())
         .spawn(move || {
@@ -29,7 +29,7 @@ pub(crate) fn spawn(
         .map_err(|error| format!("session sync worker could not be started: {error}"))?;
     Ok(SessionSyncHandle {
         sender,
-        republish_pending,
+        republish,
         worker: Some(worker),
     })
 }
@@ -39,7 +39,7 @@ fn run_coordinator(
     usage_paths: Option<crate::usage::UsagePaths>,
     receiver: Receiver<CoordinatorMessage>,
     sender: Sender<CoordinatorMessage>,
-    republish_pending: Arc<AtomicBool>,
+    republish: Arc<RepublishFlags>,
 ) {
     let home_path = usage_paths.as_ref().and_then(|paths| paths.home.clone());
     let mut lineage_writer = match context.ledger_machine().and_then(|machine| {
@@ -65,10 +65,10 @@ fn run_coordinator(
     let mut defer_background_reads = true;
     let mut next_operation_tick = Instant::now() + ASYNC_OPERATION_TICK_INTERVAL;
     let mut catalog_cache = CatalogState {
-        wake: Some(RepublishWaker {
-            sender: sender.clone(),
-            pending: Arc::clone(&republish_pending),
-        }),
+        wake: Some(RepublishWaker::asking(
+            sender.clone(),
+            Arc::clone(&republish),
+        )),
         ..Default::default()
     };
     // The runtime's settled worktree removals the catalog was last rebuilt for.
@@ -155,10 +155,7 @@ fn run_coordinator(
     // The engine wakes this thread once its session changed, and the session
     // is read whole on each wake and published as it is (`pulled.rs`).
     {
-        let waker = RepublishWaker {
-            sender: sender.clone(),
-            pending: Arc::clone(&republish_pending),
-        };
+        let waker = RepublishWaker::engine(sender.clone(), Arc::clone(&republish));
         context.engine.changes(Arc::new(move || waker.wake()));
     }
     let mut pulled: Option<super::pulled::PulledSession> = None;
@@ -427,11 +424,12 @@ fn run_coordinator(
             settles_at,
             Instant::now(),
         );
-        let message = match receiver.recv_timeout(timeout) {
+        // A settle that comes due is published whatever the read shows.
+        let (message, settle) = match receiver.recv_timeout(timeout) {
             Err(RecvTimeoutError::Timeout) if settle_due(settles_at, Instant::now()) => {
-                Ok(CoordinatorMessage::Republish)
+                (Ok(CoordinatorMessage::Republish), true)
             }
-            message => message,
+            message => (message, false),
         };
         match message {
             Ok(CoordinatorMessage::RefreshTopology) => {
@@ -446,17 +444,26 @@ fn run_coordinator(
                 return;
             }
             Ok(CoordinatorMessage::Republish) => {
-                // Cleared before the read, so a wake that lands during the
-                // publish asks for the next one rather than being lost.
-                republish_pending.store(false, Ordering::Release);
-                // The engine woke this thread because its session changed:
-                // the session is read again, whole, and published.
+                let asked = republish.take() || settle;
+                // The engine woke this thread because its session changed, or
+                // the core asked: the session is read again, whole, and
+                // published.
                 if pulled.is_none() {
                     // Not connected yet; the connect reads it.
                     continue;
                 }
                 let started_at = Instant::now();
                 match super::pulled::PulledSession::read(&context) {
+                    // A burst of the engine's changes that the session does
+                    // not show, or that a publish already read, publishes
+                    // nothing more: a publish rebuilds every pane and agent
+                    // under the runtime lock.
+                    Ok(session)
+                        if !publishes(
+                            asked,
+                            pulled.as_ref().map(|previous| previous.published_state()),
+                            session.published_state(),
+                        ) => {}
                     Ok(session) => {
                         let moved = pulled.as_ref().is_none_or(|previous| {
                             previous.published_state().agents != session.published_state().agents
@@ -518,6 +525,13 @@ fn run_coordinator(
             }
         }
     }
+}
+
+/// Whether a session read is published: one a wake of the core's asked for
+/// always is, one the engine's wake brought only when it differs from the
+/// last one published.
+fn publishes(asked: bool, previous: Option<&ProjectionState>, read: &ProjectionState) -> bool {
+    asked || previous != Some(read)
 }
 
 fn log_sync_failure(context: &SessionSyncContext, kind: &str, error: &SessionFetchError) {
@@ -1614,6 +1628,44 @@ fn settle_due(settles_at: Option<Instant>, now: Instant) -> bool {
 
 fn next_reconnect_delay(current: Duration) -> Duration {
     current.saturating_mul(2).min(RECONNECT_MAX_DELAY)
+}
+
+#[cfg(test)]
+mod republish_tests {
+    use super::*;
+    use crate::engine::fake::session;
+
+    /// Wakes before the coordinator takes the first are one message, and only
+    /// a wake of the core's asks for a publish the session may not show.
+    #[test]
+    fn engine_wakes_ask_for_no_publish_and_a_core_wake_does_once() {
+        let (sender, receiver) = channel();
+        let flags = Arc::new(RepublishFlags::default());
+        let engine = RepublishWaker::engine(sender.clone(), Arc::clone(&flags));
+        let core = RepublishWaker::asking(sender, Arc::clone(&flags));
+        engine.wake();
+        engine.wake();
+        assert_eq!(receiver.try_iter().count(), 1);
+        assert!(!flags.take());
+        engine.wake();
+        core.wake();
+        assert_eq!(receiver.try_iter().count(), 1);
+        assert!(flags.take());
+        assert!(!flags.take());
+    }
+
+    /// An engine wake whose read equals the last publish (a title whose
+    /// spinner alone turned) publishes nothing; a changed read, the first
+    /// read and a wake the core asked for do.
+    #[test]
+    fn only_a_read_that_moved_or_one_the_core_asked_for_is_published() {
+        let one = session(json!({"panes": [{"pane_id": "w1:p1", "terminal_title": "Fix"}]}));
+        let two = session(json!({"panes": [{"pane_id": "w1:p1", "terminal_title": "Fix it"}]}));
+        assert!(!publishes(false, Some(&one), &one));
+        assert!(publishes(false, Some(&one), &two));
+        assert!(publishes(false, None, &one));
+        assert!(publishes(true, Some(&one), &one));
+    }
 }
 
 #[cfg(test)]

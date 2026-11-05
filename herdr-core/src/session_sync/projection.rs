@@ -48,8 +48,9 @@ pub(crate) struct ProjectedPane {
     pub(crate) cwd: Option<String>,
     pub(crate) tokens: BTreeMap<String, Value>,
     pub(crate) label: Option<String>,
+    /// The terminal's title without the activity glyph an agent turns in
+    /// front of it, as Herdr's stripped title reads it.
     pub(crate) terminal_title: Option<String>,
-    pub(crate) terminal_title_stripped: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -194,11 +195,7 @@ impl ProjectionState {
                 tokens: pane.tokens.clone(),
                 cwd: pane.cwd.clone(),
                 label: crate::start_claim::public_label(pane.label.as_deref()),
-                terminal_title: crate::start_claim::public_label(
-                    pane.terminal_title_stripped
-                        .as_deref()
-                        .or(pane.terminal_title.as_deref()),
-                ),
+                terminal_title: crate::start_claim::public_label(pane.terminal_title.as_deref()),
             })
             .collect();
         // Herdr order, not map order: the active tab id rides with the
@@ -383,9 +380,7 @@ impl ProjectionState {
                                         pane.label.as_deref(),
                                     ),
                                     terminal_title: crate::start_claim::public_label(
-                                        pane.terminal_title_stripped
-                                            .as_deref()
-                                            .or(pane.terminal_title.as_deref()),
+                                        pane.terminal_title.as_deref(),
                                     ),
                                     cwd: pane.cwd.clone().unwrap_or_else(|| path.clone()),
                                     status_code: agent

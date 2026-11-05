@@ -264,16 +264,13 @@ impl CatalogState {
 
 pub(crate) struct SessionSyncHandle {
     sender: Sender<CoordinatorMessage>,
-    republish_pending: Arc<AtomicBool>,
+    republish: Arc<RepublishFlags>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl SessionSyncHandle {
     pub(crate) fn republish_waker(&self) -> RepublishWaker {
-        RepublishWaker {
-            sender: self.sender.clone(),
-            pending: Arc::clone(&self.republish_pending),
-        }
+        RepublishWaker::asking(self.sender.clone(), Arc::clone(&self.republish))
     }
 }
 
@@ -302,26 +299,73 @@ pub(crate) enum CoordinatorMessage {
     RefreshTopology,
 }
 
-/// Wakes the local coordinator to publish its session again at once: the
-/// core has drawn a created tab or a predicted pane geometry ahead of Herdr,
-/// or taken one back, and the overlay rides the next ingest (PRD
-/// instant-pane-topology D-05, D-07). Wakes that arrive before the
-/// coordinator takes the first are one publish, so a burst cannot queue
-/// publishes.
+/// What the coordinator owes the wakes it has not taken yet.
+#[derive(Default)]
+pub(crate) struct RepublishFlags {
+    /// A `Republish` is in the mailbox, so a later wake sends none.
+    pending: AtomicBool,
+    /// A wake whose reason the engine's session does not carry asked for the
+    /// next publish (`RepublishWaker::asking`); without one, a read equal to
+    /// the last one published is not published again.
+    asked: AtomicBool,
+}
+
+impl RepublishFlags {
+    /// Takes the wakes so far, before the session is read, so a wake that
+    /// lands during the publish asks for the next one rather than being
+    /// lost; answers whether one of them asked for a publish.
+    fn take(&self) -> bool {
+        self.pending.store(false, Ordering::Release);
+        self.asked.swap(false, Ordering::AcqRel)
+    }
+}
+
+/// Wakes the local coordinator to publish its session again at once. The
+/// engine wakes it when its session changed; the core when it has drawn a
+/// created tab or a predicted pane geometry ahead of Herdr, or taken one
+/// back, and the overlay rides the next ingest (PRD instant-pane-topology
+/// D-05, D-07), or when anything else it lays on a publish moved. Wakes that
+/// arrive before the coordinator takes the first are one publish, so a burst
+/// cannot queue publishes.
 #[derive(Clone)]
 pub(crate) struct RepublishWaker {
     sender: Sender<CoordinatorMessage>,
-    pending: Arc<AtomicBool>,
+    flags: Arc<RepublishFlags>,
+    /// This wake's reason is not in the engine's session, so the publish it
+    /// asks for runs even when the session read equals the last one.
+    asks: bool,
 }
 
 impl RepublishWaker {
+    /// A waker for the core's own reasons: it is always published.
+    fn asking(sender: Sender<CoordinatorMessage>, flags: Arc<RepublishFlags>) -> Self {
+        Self {
+            sender,
+            flags,
+            asks: true,
+        }
+    }
+
+    /// The engine's waker: its session changed, and a read equal to the last
+    /// one published (a change the session does not show) publishes nothing.
+    fn engine(sender: Sender<CoordinatorMessage>, flags: Arc<RepublishFlags>) -> Self {
+        Self {
+            sender,
+            flags,
+            asks: false,
+        }
+    }
+
     pub(crate) fn refresh_topology(&self) -> bool {
         self.sender
             .send(CoordinatorMessage::RefreshTopology)
             .is_ok()
     }
     pub(crate) fn wake(&self) {
-        if !self.pending.swap(true, Ordering::AcqRel) {
+        if self.asks {
+            self.flags.asked.store(true, Ordering::Release);
+        }
+        if !self.flags.pending.swap(true, Ordering::AcqRel) {
             let _ = self.sender.send(CoordinatorMessage::Republish);
         }
     }
