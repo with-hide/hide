@@ -178,7 +178,7 @@ Requiring that sends every other green pull request back through a full `verify`
 
 Adding a pull request to the queue is the merge: `gh pr merge <number> --match-head-commit <head>`, with no merge method, since the queue merges with a merge commit.
 GitHub refuses it when the branch moved after you read its head, or when its `verify` has not passed.
-The queue builds a group commit of main, every pull request queued ahead and this one, and runs `verify` on it, which for a group plans only the checks where two changes that each passed fail together without a conflict: `policy`, and `merge check rust` and `merge check web`, the web and desktop typecheck, the e2e test size budgets, `cargo fmt` and Clippy (`scripts/ci-plan.py`, MERGE_GROUP_LANES).
+The queue builds a group commit of main, every pull request queued ahead and this one, and runs `verify` on it, which for a group plans only the checks where two changes that each passed fail together without a conflict: the structural checks of `policy`, and `merge check rust` and `merge check web`, the web and desktop typecheck, the e2e test size budgets, `cargo fmt` and Clippy (`scripts/ci-plan.py`, MERGE_GROUP_LANES).
 On 2026-10-05 one pull request removed an export another one imported, both had passed, and main's typecheck failed until a third pull request fixed it.
 It builds up to five groups at once, each on the one ahead, and merges a group when it and every group ahead passed; one that fails leaves the queue, and the groups behind it are built again without it.
 A failure there says what to do: merge main into the branch, fix it, let `verify` run again on the push, and add it again.

@@ -192,7 +192,11 @@ jobs:
       - name: Install zsh
         # The invariant scripts are zsh; the image has bash.
         run: sudo apt-get install -y --no-install-recommends zsh
+      # A merge group runs the structural checks below and not the script
+      # suite, which takes about two minutes and checks the scripts each pull
+      # request already ran it on; main's push run runs it on the merge.
       - name: Test the repository scripts, the lane plan included
+        if: github.event_name != 'merge_group'
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - name: Structural checks
         run: |
@@ -350,6 +354,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, which the web scripts build with.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         id: install
         run: bash scripts/verify-web.sh install
@@ -583,6 +591,10 @@ jobs:
         id: web-deps
         if: ${{ !cancelled() }}
         run: bash scripts/verify-web.sh install --ignore-scripts
+      # The relay WebAssembly's binding tool, which the web scripts build with.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Web shell unit suite
         if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
         timeout-minutes: 10
@@ -909,6 +921,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, which the web scripts build with.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         run: bash scripts/verify-web.sh install
       - name: Web shell and desktop app typecheck
