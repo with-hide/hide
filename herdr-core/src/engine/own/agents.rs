@@ -514,6 +514,9 @@ pub(super) fn apply(
     let now = Instant::now();
     let mut applied = Applied::default();
     let before = live.facts.clone();
+    // Whether the agent's program showed before these facts: only then
+    // were the last ones read of it.
+    let shown_before = agent.as_ref().is_some_and(|current| current.live.shown);
     live.heard = true;
     live.facts = facts.clone();
     if let Some(reported) = facts.cwd.as_ref().filter(|reported| *reported != cwd) {
@@ -591,11 +594,16 @@ pub(super) fn apply(
             applied.changed |= current.live.started.is_some();
         }
         // A start that settled on what the screen read last stays settled
-        // whatever this screen reads, as Herdr's active agent does.
-        if current
-            .live
-            .started
-            .is_some_and(|started| current.settled(started, now))
+        // whatever this screen reads, as Herdr's active agent does. Facts
+        // that first show the program are its first read: judged on the
+        // read before them, an agent with no screen rules (omp) that showed
+        // past its settle settled at once, its terminal still editing lines
+        // read as not known (journey 42061570326).
+        if shown_before
+            && current
+                .live
+                .started
+                .is_some_and(|started| current.settled(started, now))
         {
             current.live.started = None;
             if current.live.line_editing.is_none() {
@@ -1041,6 +1049,28 @@ mod tests {
             "a start settled on the time alone is recorded"
         );
         assert_eq!(pane.facts(at(None)).settled_unread, None, "once");
+    }
+
+    /// A program that shows past its start's settle is judged on what its
+    /// own first facts say: an agent with no screen rules (omp) settled at
+    /// once on the facts before them, which said nothing of its terminal,
+    /// and a start was typed into a line it still edited.
+    #[test]
+    fn a_program_that_shows_past_its_settle_is_judged_on_its_own_first_facts() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
+        pane.agent.as_mut().unwrap().live.started = Some(Instant::now() - START_SETTLE);
+        let applied = pane.facts(PaneFacts {
+            foreground: program("omp"),
+            line_editing: Some(true),
+            ..PaneFacts::default()
+        });
+        assert_eq!(applied.settled_unread, None);
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "its terminal still edits lines"
+        );
     }
 
     /// OpenCode 2.0.29 reads keys and draws its composer before its model
