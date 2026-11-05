@@ -9324,6 +9324,15 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_fix_reason", &fixes);
             checked.insert("mission_fix_reason");
+            use crate::missions::WarningKind;
+            let warnings = [WarningKind::ReviewFails, WarningKind::NoPush];
+            for variant in warnings {
+                match variant {
+                    WarningKind::ReviewFails | WarningKind::NoPush => {}
+                }
+            }
+            assert_wire(&contract, "mission_warning_kind", &warnings);
+            checked.insert("mission_warning_kind");
             let chosen = [
                 OperatorAction::Done,
                 OperatorAction::Drop,

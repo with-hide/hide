@@ -10,7 +10,7 @@ import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -742,6 +742,28 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
   const attention = node.attention;
   if (!attention) return null;
   return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t) };
+}
+
+/**
+ * A node's warnings as its card says them (hide-private issue 552): the
+ * short word the card shows, the first warning's with `+n` for the rest,
+ * and each warning in full for its hover and accessible name. Null with no
+ * warning, and for a dropped node or a cancelled mission, which warn of
+ * nothing.
+ */
+export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): { short: string; full: string[] } | null {
+  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []);
+  const first = warnings[0];
+  if (!first) return null;
+  const words = (warning: MissionNodeWarning, form: "short" | "full") =>
+    warning.kind === "review_fails"
+      ? t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 })
+      : t(`mission.warning.no_push.${form}`, { minutes: String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000)) });
+  const more = warnings.length - 1;
+  return {
+    short: more > 0 ? `${words(first, "short")} +${more}` : words(first, "short"),
+    full: warnings.map((warning) => t("mission.warning", { what: words(warning, "full") })),
+  };
 }
 
 /**

@@ -191,6 +191,17 @@ function rejectedReview(one: MissionNode): MissionNode {
   };
 }
 
+/**
+ * The warned state (hide-private issue 552): the rejected search fix
+ * failed its review twice in a row, and the reopen fix went ninety-five
+ * minutes with no push; Hide told the Conductor about each.
+ */
+function warned(one: MissionNode, now: number): MissionNode {
+  if (one.key === "fix-1490") return { ...one, review_fails: 2, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE }] };
+  if (one.key === "fix-1487") return { ...one, pushed_at_unix_ms: now - 95 * MINUTE, warnings: [{ kind: "no_push", from_unix_ms: now - 95 * MINUTE, since_unix_ms: now - 5 * MINUTE }] };
+  return one;
+}
+
 /** How many minutes before now each state's mission started; the rest started 44 minutes ago. */
 const STARTED_AGO: Record<string, number> = { stack: 72, done: 300, cancelled: 300, "no-pr": 180 };
 
@@ -234,9 +245,9 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   // An answer sent from the banner draws the decision with that answer on it.
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
   const remote = shown === "remote" || shown === "remote-long";
-  const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || remote ? "running" : shown;
+  const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
-  const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : plan(state, now);
+  const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
   if (remote) {
     for (const one of nodes) {
       one.machine = one.key === "screen" || (shown === "remote-long" && one.key === "fix-1487") ? "mini" : one.pane_id ? "local" : null;

@@ -10,6 +10,7 @@
   "mission_attention_to": ["conductor", "operator"],
   "mission_hide_action": ["done", "attached", "woke"],
   "mission_fix_reason": ["ci_failed", "conflict", "changes_requested"],
+  "mission_warning_kind": ["review_fails", "no_push"],
   "mission_operator_action": ["done", "drop", "attach", "leave", "resume"],
   "mission_verdict": ["pass", "fail"],
   "mission_landing_state": ["landed", "left", "unread"],
