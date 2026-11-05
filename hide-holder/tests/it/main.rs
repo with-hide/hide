@@ -12,6 +12,8 @@ mod lifecycle;
 mod meaning;
 mod memory;
 mod node;
+#[cfg(windows)]
+mod probe405;
 mod queues;
 mod records;
 mod role;

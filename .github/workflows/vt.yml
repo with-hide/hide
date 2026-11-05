@@ -125,6 +125,40 @@ jobs:
           # crates its tests build (hide-kit and what it links), whose lints
           # are their own lanes'.
           bash scripts/verify-cargo.sh clippy -p hide-holder -p hide-holder-protocol --all-targets --no-deps -- -D warnings
+      # TEMPORARY (removed before merge): with-hide/hide-private#405's
+      # measurement on Windows, and 20 runs of the holder's flaky tests
+      # under parallel load on every system.
+      - name: Measure (temporary, private#405 and flaky repeats)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          HIDE_HOLDER_CONPTY: ${{ steps.conpty.outputs.folder }}
+          HIDE_PROBE_405_OUT: ${{ runner.temp }}/probe405.json
+        run: |
+          mkdir -p agents/runs/measure
+          if [ "$RUNNER_OS" = Windows ]; then
+            for round in 1 2; do
+              # Load beside the probe: four busy processes.
+              pids=()
+              for n in 1 2 3 4; do python -c "while True: pass" & pids+=($!); done
+              bash scripts/verify-cargo.sh nextest -p hide-holder --test it -E 'test(=probe405::probe_405_color_answer_records)' --run-ignored only --no-capture 2>&1 | grep -E "probe405|PASS|FAIL" | tee -a agents/runs/measure/probe405.txt
+              kill "${pids[@]}" || true
+              cp "$HIDE_PROBE_405_OUT" "agents/runs/measure/probe405-$round.json" || true
+            done
+          fi
+          filter='test(=queues::a_node_that_does_not_accept_notices_is_sent_none) | test(=queues::answers_past_their_bound_are_refused_and_told_to_a_node_that_accepts_notices) | test(=records::an_earlier_start_that_left_processes_holds_its_id_until_they_end) | test(=records::a_killed_holders_pane_is_settled_by_the_next_reconcile) | test(=records::starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed) | test(=lifecycle::a_holder_runs_its_shell_and_carries_input_and_output_across_connections) | test(=asks::processes_name_the_shell_and_the_program_that_holds_the_terminal) | test(=connections::a_connection_past_the_opening_bound_is_told_so_and_the_pane_runs_on)'
+          for run in $(seq 1 20); do
+            bash scripts/verify-cargo.sh nextest -p hide-holder --test it -E "$filter" --no-fail-fast 2>&1 | grep -E "^\s+(PASS|FAIL|SIGSEGV|TIMEOUT)|panicked|Summary" | sed "s/^/run $run: /" | tee -a agents/runs/measure/repeats.txt
+          done
+          echo "failures:"; grep -c " FAIL " agents/runs/measure/repeats.txt || true
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          name: measure-405-${{ matrix.system }}-${{ github.run_attempt }}
+          path: agents/runs/measure
+          if-no-files-found: ignore
       - name: Build with the network denied
         # The build runs Zig with package fetching off, so a reachable network
         # proves nothing: each wrapper first shows that it denies the network,
