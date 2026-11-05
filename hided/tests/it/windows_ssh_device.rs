@@ -361,7 +361,7 @@ fn key(folder: &Path, name: &str, passphrase: &str) -> PathBuf {
 
 /// Ends `pane` and the link; once `quiet` answers, nothing of the device's
 /// node or holders runs.
-fn end(panes: LinkPanes, pane: &str, connected: Established, quiet: impl Fn() -> bool) {
+fn end(panes: LinkPanes, pane: &str, connected: Established, quiet: &impl Fn() -> bool) {
     panes.terminate(pane).unwrap();
     drop(panes);
     connected.node.host.close("test ended");
@@ -369,6 +369,56 @@ fn end(panes: LinkPanes, pane: &str, connected: Established, quiet: impl Fn() ->
     wait_for("the device's node and holders to end", || {
         quiet().then_some(())
     });
+}
+
+/// The bytes of every file under `folder`: what a first connection uploads
+/// when the folder holds the build for the device.
+fn folder_bytes(folder: &Path) -> u64 {
+    std::fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                folder_bytes(&entry.path())
+            } else {
+                entry.metadata().unwrap().len()
+            }
+        })
+        .sum()
+}
+
+/// Prints what a first connection took to upload `bytes`.
+fn report_first(label: &str, took: Duration, connected: &Established, bytes: u64) {
+    let mib = bytes as f64 / 1_048_576.0;
+    println!(
+        "{label}: connected in {took:?}, upload={:?}, {mib:.1} MiB at {:.1} MiB/s overall",
+        connected.upload,
+        mib / took.as_secs_f64()
+    );
+}
+
+/// Connects again once the first link ended. The device already holds this
+/// build, so nothing is sent again, and what this connection takes is what
+/// every later connection of the same build takes; it ends like the first.
+fn reconnect(
+    connector: &hide_node::ssh::Connector,
+    local: &Path,
+    alias: &str,
+    sign_in: Arc<dyn SignIn>,
+    quiet: &impl Fn() -> bool,
+) {
+    let started = Instant::now();
+    let connected = establish(connector, local, alias, sign_in);
+    println!(
+        "{alias}: reconnected in {:?}, upload={:?}",
+        started.elapsed(),
+        connected.upload
+    );
+    assert!(!connected.installed, "a reconnection installs nothing");
+    assert_eq!(connected.upload.sent, 0, "{:?}", connected.upload);
+    connected.node.host.close("test ended");
+    drop(connected);
+    wait_for("the device's node to end", || quiet().then_some(()));
 }
 
 /// c1: this runner's own OpenSSH Server as a Windows device of a Windows
@@ -414,10 +464,11 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
     let row = Arc::new(Row::default());
     let started = Instant::now();
     let connected = establish(&connector, &local, "windows-device", row.clone());
-    println!(
-        "windows device: connected in {:?}, upload={:?}",
+    report_first(
+        "windows-device",
         started.elapsed(),
-        connected.upload
+        &connected,
+        folder_bytes(&packages),
     );
     assert!(row.asked().is_empty(), "{:?}", row.asked());
     assert!(
@@ -471,9 +522,15 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
     );
     // The node and the holder ran from the fixture's device home.
     assert!(!programs_running(run.path()).is_empty());
-    end(panes, "windows-device-pane", connected, || {
-        programs_running(run.path()).is_empty()
-    });
+    let quiet = || programs_running(run.path()).is_empty();
+    end(panes, "windows-device-pane", connected, &quiet);
+    reconnect(
+        &connector,
+        &local,
+        "windows-device",
+        Arc::new(Row::default()),
+        &quiet,
+    );
 }
 
 /// `sshd` inside the distribution, started by this test and ended with it.
@@ -608,11 +665,11 @@ fn a_windows_core_connects_a_linux_device_over_ssh_with_a_passphrase_asked_once(
     let row = Row::answering(vec![Answer::Text(Secret::new(PASSPHRASE.to_owned()))]);
     let started = Instant::now();
     let connected = establish(&connector, &local, "linux-device", row.clone());
-    println!(
-        "linux device: connected in {:?}, upload={:?}, asked={:?}",
+    report_first(
+        "linux-device",
         started.elapsed(),
-        connected.upload,
-        row.asked()
+        &connected,
+        folder_bytes(&variable("HIDE_E2E_WSL_PACKAGES")),
     );
     let asked = row.asked();
     // ssh names the key as the config spells it, `/` between names.
@@ -650,13 +707,18 @@ fn a_windows_core_connects_a_linux_device_over_ssh_with_a_passphrase_asked_once(
         b"printf 'ssh_%s\\n' answered\r",
         "ssh_answered",
     );
-    end(panes, "linux-device-pane", connected, || {
+    let quiet = || {
         as_root(
             &distro,
             &format!("pgrep -u {SSH_USER} -f '[n]ode serve|[h]ide-holder' >/dev/null && echo running || echo quiet"),
         )
         .contains("quiet")
-    });
+    };
+    end(panes, "linux-device-pane", connected, &quiet);
+    // Each connection asks the passphrase once, the reconnection too.
+    let again = Row::answering(vec![Answer::Text(Secret::new(PASSPHRASE.to_owned()))]);
+    reconnect(&connector, &local, "linux-device", again.clone(), &quiet);
+    assert_eq!(again.asked().len(), 1, "{:?}", again.asked());
     drop(sshd);
     as_root(
         &distro,
