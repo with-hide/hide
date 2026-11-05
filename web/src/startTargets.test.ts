@@ -46,10 +46,9 @@ function rest(over: { front?: string; connected?: boolean; miniSession?: boolean
           target_id: "mini",
           state: over.connected === false ? "not_connected" : "connected",
           message: null,
-          herdr_version: null,
           session: over.miniSession === false ? null : { workspaces: miniWorkspaces, focused_checkout_id: "m-main" },
         },
-        { target_id: "box", state: "not_connected", message: null, herdr_version: null, session: null },
+        { target_id: "box", state: "not_connected", message: null, session: null },
       ],
     },
   } as unknown as SnapshotRest;

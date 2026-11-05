@@ -96,7 +96,7 @@ pub enum HookSupport {
     /// Claude Code and Codex: the six-event hook that is also one kit part.
     Part(ComponentId),
     /// Hide's hook for an agent of the basic tier with documented command
-    /// hooks: the spawn guard, the subagent count and the session
+    /// hooks: the opener guard, the subagent count and the session
     /// guidance (`hide_agent_hooks::guidance`).
     Guidance(GuidanceAgent),
     /// A script file of Hide's own in the agent's plugin or extension folder
@@ -361,14 +361,6 @@ pub(crate) fn adapter_of_part(part: ComponentId) -> Option<&'static AgentAdapter
 }
 
 impl AgentAdapter {
-    /// Whether the hook entries Herdr's integration writes for this agent are
-    /// covered by Hide's trust for it: only Codex asks the operator to review
-    /// a hook before it runs, and Hide records that trust for it
-    /// (`hide_agent_hooks::codex_trust`, PRD codex-herdr-hook-trust).
-    pub(crate) fn trusts_herdr_hook(&self) -> bool {
-        self.hook == HookSupport::Part(ComponentId::CodexHook)
-    }
-
     /// Capabilities come from the shared declaration, independently.
     pub fn supports(&self, feature: Feature) -> bool {
         self.declaration.supports(feature)
@@ -383,13 +375,6 @@ impl AgentAdapter {
     /// with its update command.
     pub(crate) fn updates(&self) -> &'static [hide_agent_adapter::UpdateRoute] {
         self.declaration.updates
-    }
-
-    /// The agent's own folder under `home` where Hide and Herdr install,
-    /// from the one resolver of agent folders
-    /// (`hide_agent_adapter::HomeScope::Install`).
-    pub(crate) fn install_home(&self, home: &std::path::Path) -> std::path::PathBuf {
-        self.declaration.install_home(home)
     }
 }
 
@@ -820,11 +805,6 @@ pub struct AgentReport {
     pub skill: PieceReport,
     /// `None` for an agent with no hook (skill only).
     pub hook: Option<PieceReport>,
-    /// Herdr's integration for the agent. This build fills it for every
-    /// agent; `None` only in a report from a device helper whose build
-    /// predates the field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub herdr: Option<PieceReport>,
     /// The found copy is older than the agent's minimum and Hide puts in, or
     /// would put in were the agent on, none of its hook, plugin or
     /// extension until it is updated: present for an agent that is off, and
@@ -849,7 +829,7 @@ impl AgentReport {
     /// copy is too old is not one ([`repairable`]).
     pub fn reinstall_repairs(&self) -> bool {
         self.enabled
-            && [Some(&self.skill), self.hook.as_ref(), self.herdr.as_ref()]
+            && [Some(&self.skill), self.hook.as_ref()]
                 .into_iter()
                 .flatten()
                 .any(|piece| repairable(piece.state, piece.why.as_ref()))
@@ -863,10 +843,6 @@ impl AgentReport {
                 || self
                     .hook
                     .as_ref()
-                    .is_some_and(|hook| hook.state.needs_attention())
-                || self
-                    .herdr
-                    .as_ref()
-                    .is_some_and(|herdr| herdr.state.needs_attention()))
+                    .is_some_and(|hook| hook.state.needs_attention()))
     }
 }

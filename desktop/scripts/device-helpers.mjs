@@ -12,13 +12,12 @@ import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-// The pane holder is a device's only program on the core's own engine
-// (PRD engine-bundle-3-core-owns D-22); a device on Herdr is sent the others.
-export const HELPER_PROGRAMS = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
-export const DEVICE_PROGRAMS = [...HELPER_PROGRAMS, "herdr"];
+// What a device runs: the helper, the CLI, the agent hooks and the pane holder
+// that keeps its panes (PRD engine-bundle-3-core-owns D-22).
+export const DEVICE_PROGRAMS = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
 export const DEVICE_BUNDLE_MANIFEST = "device-bundles.json";
-// 2: each bundle carries the pane holder too.
-export const DEVICE_BUNDLE_FORMAT = 2;
+// 3: no bundle carries Herdr (PRD engine-bundle-4-herdr-removal D-2); 2 carried it beside the holder.
+export const DEVICE_BUNDLE_FORMAT = 3;
 export const DEVICE_PLATFORMS = {
   "linux-x86_64": { target: "x86_64-unknown-linux-gnu", os: "linux", arch: "x64" },
   "linux-aarch64": { target: "aarch64-unknown-linux-gnu", os: "linux", arch: "arm64" },
@@ -60,8 +59,8 @@ export function deviceHelperResources(directory, identity) {
     if (manifest.platform !== platform || manifest.commit !== identity.commit || manifest.version !== identity.version || manifest.order !== identity.order) {
       throw new Error(`device helper identity mismatch for ${platform}: rebuild all helpers for this source, version and order`);
     }
-    if (Object.keys(manifest.files).sort().join(",") !== [...HELPER_PROGRAMS].sort().join(",")) throw new Error(`incomplete device helper manifest for ${platform}`);
-    return HELPER_PROGRAMS.map((name) => {
+    if (Object.keys(manifest.files).sort().join(",") !== [...DEVICE_PROGRAMS].sort().join(",")) throw new Error(`incomplete device helper manifest for ${platform}`);
+    return DEVICE_PROGRAMS.map((name) => {
       const source = path.join(folder, name);
       const bytes = readProgram(source, platform);
       if (digest(bytes) !== manifest.files[name]) throw new Error(`device helper digest mismatch: ${platform}/${name}`);
@@ -74,11 +73,11 @@ export function deviceHelperResources(directory, identity) {
 export function deviceHelperDigests(directory, identity) {
   const resources = new Map(deviceHelperResources(directory, identity));
   return Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((platform) => [platform,
-    Object.fromEntries(HELPER_PROGRAMS.map((name) => [name, digest(fs.readFileSync(resources.get(`${name}-${platform}`)))]))]));
+    Object.fromEntries(DEVICE_PROGRAMS.map((name) => [name, digest(fs.readFileSync(resources.get(`${name}-${platform}`)))]))]));
 }
 
 /** Prepare release assets outside the app; only the resulting manifest ships inside it. */
-export function prepareDeviceBundles(directory, identity, output, herdrPaths) {
+export function prepareDeviceBundles(directory, identity, output) {
   const helpers = new Map(deviceHelperResources(directory, identity));
   fs.rmSync(output, { recursive: true, force: true });
   fs.mkdirSync(output, { recursive: true });
@@ -88,7 +87,7 @@ export function prepareDeviceBundles(directory, identity, output, herdrPaths) {
     fs.mkdirSync(stage);
     const files = {};
     for (const name of DEVICE_PROGRAMS) {
-      const source = name === "herdr" ? herdrPaths[platform] : helpers.get(`${name}-${platform}`);
+      const source = helpers.get(`${name}-${platform}`);
       readProgram(source, platform);
       const target = path.join(stage, name);
       fs.copyFileSync(source, target);
@@ -98,7 +97,7 @@ export function prepareDeviceBundles(directory, identity, output, herdrPaths) {
     }
     const asset = `hide-device-${platform}-${identity.version}.tar.gz`;
     const archive = path.join(output, asset);
-    // A deliberately small USTAR vocabulary: five regular files, no paths,
+    // A deliberately small USTAR vocabulary: four regular files, no paths,
     // extended attributes, links or platform-specific metadata records.
     execFileSync("tar", ["--format", "ustar", "-czf", asset, "-C", platform, ...DEVICE_PROGRAMS], {
       cwd: output,
@@ -139,12 +138,6 @@ export function readDeviceBundles(output, identity) {
   return file;
 }
 
-/** The pinned Herdr for each Linux platform, fetched and verified by the repository's fetch script. */
-export function fetchDeviceHerdr() {
-  return Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name,
-    execFileSync("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name], { cwd: repo, encoding: "utf8" }).trim()]));
-}
-
 /** Builds with the repository's release recipe, natively on each Linux processor. */
 function build(platform, identity) {
   assertIdentity(identity);
@@ -161,7 +154,7 @@ function build(platform, identity) {
   });
   fs.mkdirSync(folder, { recursive: true });
   const files = {};
-  for (const name of HELPER_PROGRAMS) {
+  for (const name of DEVICE_PROGRAMS) {
     const source = path.join(repo, "target", system.target, "release", name);
     files[name] = digest(readProgram(source, platform));
     fs.copyFileSync(source, path.join(folder, name));
@@ -179,7 +172,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // Once per run, from both platforms' helpers in desktop/out/device-helpers.
     const [version, commit, order] = rest;
     const out = path.join(repo, "desktop/out");
-    const manifest = prepareDeviceBundles(path.join(out, "device-helpers"), { version: version.replace(/^v/, ""), commit, order }, path.join(out, "device-bundles"), fetchDeviceHerdr());
+    const manifest = prepareDeviceBundles(path.join(out, "device-helpers"), { version: version.replace(/^v/, ""), commit, order }, path.join(out, "device-bundles"));
     console.log(`device_manifest=${manifest}`);
   } else {
     throw new Error("usage: device-helpers.mjs build <platform> <version> <source-sha> <build-order> | bundle <version> <source-sha> <build-order>");

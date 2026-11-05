@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::guardrails::Action;
-use crate::spawn_guard::{command_words, shell_line};
+use hide_shell::{command_words, shell_line};
 
 /// The record's version; one of another version is not read.
 const RECORD_VERSION: u32 = 1;
@@ -331,10 +331,10 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, refused: Refused) 
         "rule": refused.code(),
         "runtime": runtime,
         "pane": pane,
-        "at_unix_ms": crate::spawn_guard::now_ms(),
+        "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+    let _ = crate::hook_log::append_line(&crate::hook_log::log_path(home), &line);
 }
 
 /// The refusal `action` meets under `context`, if any. Reading, searching
@@ -382,7 +382,7 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
 fn shell(command: &str, proposed: bool, merge_barred: bool) -> Option<Refused> {
     let line = shell_line(command);
     for words in &line.commands {
-        let (words, _) = command_words(words, &|_| None, true);
+        let words = command_words(words, true);
         let Some((first, args)) = words.split_first() else {
             continue;
         };

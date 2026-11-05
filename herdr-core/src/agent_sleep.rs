@@ -1114,7 +1114,7 @@ mod tests {
                 .map(|row| (row.pane_id.as_deref(), row.spawned_from_pane_id.as_deref()))
                 .collect::<Vec<_>>(),
             [(Some("w1:p1"), Some("w1:p9"))],
-            "the row names the pane as the node's Herdr does"
+            "the row names the pane as the node's engine does"
         );
 
         let mut gone = payload(serde_json::json!([]), &["w1:p2"]);

@@ -174,8 +174,10 @@ pub enum CheckId {
     /// The copy can reach the device's state folder: nothing on the way is
     /// a file or a link that leads nowhere, and the account owns it.
     TargetFolder,
-    /// Both machines have a Herdr server.
-    Herdr,
+    /// The core's engine can move between the two machines. The core's own
+    /// engine cannot yet, so every move fails this check
+    /// (`preflight::engine_moves`).
+    Engine,
     /// The device answers as the machine this core knows.
     Identity,
     /// For a move back: this machine's state folder holds no brain state
@@ -207,7 +209,7 @@ pub enum CheckId {
 pub const FORWARD_CHECKS: [CheckId; 13] = [
     CheckId::Connection,
     CheckId::OtherNode,
-    CheckId::Herdr,
+    CheckId::Engine,
     CheckId::AiSetup,
     CheckId::Ai,
     CheckId::Identity,
@@ -223,7 +225,7 @@ pub const FORWARD_CHECKS: [CheckId; 13] = [
 /// The checks of a move back to this machine, each once.
 pub const BACK_CHECKS: [CheckId; 8] = [
     CheckId::Link,
-    CheckId::Herdr,
+    CheckId::Engine,
     CheckId::OwnState,
     CheckId::Connection,
     CheckId::Identity,

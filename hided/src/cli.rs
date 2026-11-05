@@ -104,11 +104,6 @@ pub enum CommandKind {
     },
     WorkspaceInfo,
     WorkspaceHookInfo,
-    /// Private post-tool transport. Its bounded metadata is read from stdin:
-    /// one observation per recipient, or per started agent with `--start`.
-    ObservationHook {
-        start: bool,
-    },
     /// Private hook transport: one agent hook's report on its pane's agent
     /// (`HookStatusReport` as JSON on stdin), proven like every hook request.
     StatusHook,
@@ -210,7 +205,7 @@ fn topic_usage(topic: &str) -> Option<String> {
 
 /// `hide --help`: the commands a person types, then the ones an agent in a
 /// Hide pane uses. The host's and the hooks' own commands (`connect`,
-/// `serve`, `dev`, `runtime prepare`, `observation`, `workspace bootstrap`,
+/// `serve`, `dev`, `runtime prepare`, `workspace bootstrap`,
 /// `workspace memory`) are not listed.
 fn help_text() -> String {
     let indent =
@@ -438,13 +433,6 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map_err(|reason| wrong(reason, crate::delivery_cli::USAGE))
         }
         Some("browser") => parse_browser(iter),
-        Some("observation") => match (iter.next().map(String::as_str), iter.next()) {
-            (Some("--hook"), None) => Ok(CommandKind::ObservationHook { start: false }),
-            (Some("--hook"), Some(flag)) if flag == "--start" && iter.next().is_none() => {
-                Ok(CommandKind::ObservationHook { start: true })
-            }
-            _ => Err("usage: hide observation --hook [--start]".into()),
-        },
         Some("workspace") => match iter.next().map(String::as_str) {
             Some("memory") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
@@ -854,7 +842,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::WorkspaceRemove(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
-                    | CommandKind::ObservationHook { .. }
                     | CommandKind::StatusHook
                     | CommandKind::ViewList { .. }
                     | CommandKind::ViewStatus { .. }
@@ -973,55 +960,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     .as_str()
                     .unwrap_or("status_unavailable")
                     .to_owned())
-            }
-        }
-        CommandKind::ObservationHook { start } => {
-            use hide_node_link::panes::{
-                HookCommand, OBSERVATION_ITEM_LIMIT, OBSERVATION_RECIPIENT_LIMIT,
-            };
-            use std::io::Read;
-            // One item per recipient, each already bounded; the array adds
-            // its brackets and commas.
-            let limit = (OBSERVATION_ITEM_LIMIT + 1) * OBSERVATION_RECIPIENT_LIMIT + 2;
-            let mut bytes = Vec::new();
-            std::io::stdin()
-                .lock()
-                .take((limit + 1) as u64)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "observation_input_unavailable")?;
-            if bytes.len() > limit {
-                return Err("observation_input_too_large".into());
-            }
-            let observations: Vec<hide_node_link::panes::DirectObservation> =
-                serde_json::from_slice(&bytes).map_err(|_| "observation_input_invalid")?;
-            if observations.is_empty() || observations.len() > OBSERVATION_RECIPIENT_LIMIT {
-                return Err("observation_input_invalid".into());
-            }
-            // Each recipient is proven and recorded on its own; one refusal
-            // does not withhold the others.
-            let mut refusal = None;
-            for observation in observations {
-                let command = if start {
-                    HookCommand::StartObservation { observation }
-                } else {
-                    HookCommand::Observation { observation }
-                };
-                let answer = crate::workspace_cli::request_hook(&env, command)?;
-                if answer["ok"] != true && refusal.is_none() {
-                    refusal = Some(answer);
-                }
-            }
-            let answer = refusal.unwrap_or_else(|| {
-                serde_json::json!({"type":"workspace_result","ok":true,"result":{"queued":true}})
-            });
-            println!("{answer}");
-            if answer["ok"] == true {
-                Ok(())
-            } else {
-                Err(answer["reason"]
-                    .as_str()
-                    .unwrap_or("observation_unavailable")
-                    .into())
             }
         }
         CommandKind::WorkspaceMemory {
@@ -1872,12 +1810,7 @@ impl ConnectError {
 /// installed app's daemon is the operator's. A daemon that will not stop
 /// is a start failure. Only the daemon of this state folder is looked at,
 /// so a dev or e2e daemon elsewhere is never replaced, and stopping it
-/// leaves Herdr, its panes and their agents running.
-///
-/// The app's own `hide` first moves a Herdr server another Hide app
-/// started onto this app's Herdr, its panes kept
-/// ([`crate::herdr_handoff`]), so the daemon follows a server of the same
-/// app.
+/// leaves the pane holders, their panes and their agents running.
 ///
 /// The whole look-and-replace holds this state folder's connect lock, so
 /// two connects never both stop a daemon and start their own.
@@ -2008,14 +1941,6 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
         .ok()
         .as_deref()
         .and_then(hide_kit::bundled_kit_dir);
-    // Before the daemon, so a daemon this connect starts or keeps finds the
-    // server it will follow already running this app's Herdr.
-    if let Some(herdr) = package.as_deref().and_then(|kit| given_herdr(env, kit))
-        && let Some(socket) = &env.herdr_socket_path
-        && let Some(record) = crate::herdr_handoff::hand_off(&herdr, Path::new(socket)).record()
-    {
-        eprintln!("{record}");
-    }
     if let Some((state, health)) = healthy_daemon(env) {
         let running = health.get("build").and_then(serde_json::Value::as_str);
         if running == Some(build.as_str()) {
@@ -2060,12 +1985,6 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
     // The daemon outlives this command; nothing waits for it.
     std::mem::forget(daemon);
     started
-}
-
-/// The Herdr the app in `kit` ships, when it is the one this connect was
-/// given (`HERDR_BIN_PATH`).
-fn given_herdr(env: &Env, kit: &Path) -> Option<std::path::PathBuf> {
-    crate::herdr_handoff::shipped_herdr(kit, env.herdr_bin_path.as_deref())
 }
 
 /// How long an updated core has to answer `/health` once its update said
@@ -2558,9 +2477,6 @@ fn import_herdr(env: &Env, yes: bool) -> Result<(), String> {
 
 /// The lines `hide import herdr` prints for the daemon's `result`.
 fn import_herdr_lines(result: &serde_json::Value, yes: bool) -> Vec<String> {
-    if result["own_engine"] == false {
-        return vec!["Hide runs on Herdr here, so there is no Herdr session to move: this command moves one into Hide's own engine (HIDE_DEV_PANE_HOLDER=1).".to_owned()];
-    }
     let offered = &result["offered"];
     let count = |field: &str| offered[field].as_u64().unwrap_or(0);
     let mut lines = Vec::new();
@@ -2830,22 +2746,10 @@ fn daemon_binary() -> Result<std::path::PathBuf, String> {
 }
 
 fn spawn_daemon(env: &Env, keep_alive: bool) -> Result<std::process::Child, String> {
-    // The daemon would refuse the same value after it is spawned; checking
-    // here answers `start_failed` with the path instead of a ten-second
-    // `no_response` that names nothing.
-    if let Some(error) = env::herdr_bin_error(env) {
-        return Err(error);
-    }
     let mut command = Command::new(daemon_binary()?);
     command.env("HIDE_STATE_DIR", &env.state_dir);
     if keep_alive {
         command.env("HIDE_KEEP_ALIVE", "1");
-    }
-    if let Some(socket) = &env.herdr_socket_path {
-        command.env("HERDR_SOCKET_PATH", socket);
-    }
-    if let Some(bin) = &env.herdr_bin_path {
-        command.env("HERDR_BIN_PATH", bin);
     }
     if let Some(origin) = &env.vite_origin {
         command.env("HIDE_VITE_ORIGIN", origin);
@@ -3140,7 +3044,6 @@ mod tests {
             pid: 1,
             port,
             token: "t".to_owned(),
-            socket: None,
             started_at: String::new(),
             pid_started: None,
         };
@@ -3182,7 +3085,6 @@ mod tests {
             pid,
             port: 7001,
             token: "abc".into(),
-            socket: None,
             started_at: "now".into(),
             pid_started,
         }
@@ -3480,12 +3382,6 @@ mod tests {
             import_herdr_lines(&serde_json::json!({"offered": null, "asked": false}), false),
             ["This machine has no Herdr session left to move into Hide."]
         );
-        assert_eq!(
-            import_herdr_lines(&serde_json::json!({"own_engine": false}), false),
-            [
-                "Hide runs on Herdr here, so there is no Herdr session to move: this command moves one into Hide's own engine (HIDE_DEV_PANE_HOLDER=1)."
-            ]
-        );
     }
 
     #[test]
@@ -3756,7 +3652,6 @@ mod tests {
             pid: 42,
             port: 7001,
             token: "abc".into(),
-            socket: None,
             started_at: "now".into(),
             pid_started: None,
         };
@@ -4301,7 +4196,12 @@ mod tests {
             serde_json::json!({"type":"workspace_result","ok":true,"result":{"label":"app"}});
         std::thread::scope(|scope| {
             panes
-                .start(scope, &output, &bridges, "/tmp/hide-test-herdr.sock")
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let panes = &panes;
             let answered = answer.clone();

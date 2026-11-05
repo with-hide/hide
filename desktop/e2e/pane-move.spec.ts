@@ -24,7 +24,7 @@ test("pane moves render and cancel in a narrow candidate with long titles and la
     for (const id of [source, target]) await expect(paneView(page, id)).toHaveAttribute("data-transport", "controlling");
     await expect(paneView(page, source).locator("[data-pane-move-title]")).toContainText("로그인", { timeout: 30_000 });
     await expect(paneView(page, target).locator("[data-pane-move-title]")).toContainText("Review");
-    const facts = { build: "worktree debug candidate", daemonPid: run.daemonPid(), socket: fixture.socket, state: run.env.HIDE_STATE_DIR, input: "Playwright renderer", provider: "controlled fixture CLI", window: "sole candidate, shown inactive" };
+    const facts = { build: "worktree debug candidate", daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR, input: "Playwright renderer", provider: "controlled fixture CLI", window: "sole candidate, shown inactive" };
     for (const [theme, language] of [["dark", "ko"], ["light", "en"]] as const) {
       await page.locator("[data-open-settings]").click();
       await page.locator('[data-settings-tab="general"]').click();

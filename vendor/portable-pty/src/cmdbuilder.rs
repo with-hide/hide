@@ -2,7 +2,9 @@
 // MIT License (vendor/portable-pty/LICENSE.md). Taken from Herdr v0.9.5's
 // vendor/portable-pty (commit 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01).
 // Herdr's patches in this file: 0002, 0003, 0004.
-// Hide's changes in this file: none.
+// Hide's changes in this file: the Windows registry environment only adds
+// what the starting environment lacks (`merge_registry_environment`,
+// PATCHES.md).
 // vendor/portable-pty/PATCHES.md lists both.
 #[cfg(unix)]
 use anyhow::Context;
@@ -171,70 +173,117 @@ fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
         }
     }
 
+    // Changed by Hide: the pane keeps the variables its starter gave it, as
+    // on Unix, and the account's registry environment only adds to them
+    // ([`merge_registry_environment`]).
     #[cfg(windows)]
     {
         use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         use winreg::RegKey;
 
-        if let Ok(sys_env) = RegKey::predef(HKEY_LOCAL_MACHINE)
-            .open_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
-        {
-            for res in sys_env.enum_values() {
-                if let Ok((name, value)) = res {
-                    if name.to_ascii_lowercase() == "username" {
-                        continue;
-                    }
-                    if let Ok(value) = reg_value_to_string(&value) {
-                        log::trace!("adding SYS env: {:?} {:?}", name, value);
-                        env.insert(
-                            EnvEntry::map_key(name.clone().into()),
-                            EnvEntry {
-                                is_from_base_env: true,
-                                preferred_key: name.into(),
-                                value,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-
-        if let Ok(sys_env) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment") {
-            for res in sys_env.enum_values() {
-                if let Ok((name, value)) = res {
-                    if let Ok(value) = reg_value_to_string(&value) {
-                        // Merge the system and user paths together
-                        let value = if name.to_ascii_lowercase() == "path" {
-                            match env.get(&EnvEntry::map_key(name.clone().into())) {
-                                Some(entry) => {
-                                    let mut result = OsString::new();
-                                    result.push(&entry.value);
-                                    result.push(";");
-                                    result.push(&value);
-                                    result
-                                }
-                                None => value,
-                            }
-                        } else {
-                            value
-                        };
-
-                        log::trace!("adding USER env: {:?} {:?}", name, value);
-                        env.insert(
-                            EnvEntry::map_key(name.clone().into()),
-                            EnvEntry {
-                                is_from_base_env: true,
-                                preferred_key: name.into(),
-                                value,
-                            },
-                        );
-                    }
-                }
-            }
-        }
+        let read = |root, path: &str| -> Vec<(OsString, OsString)> {
+            let Ok(registry) = RegKey::predef(root).open_subkey(path) else {
+                return Vec::new();
+            };
+            registry
+                .enum_values()
+                .flatten()
+                .filter_map(|(name, value)| {
+                    reg_value_to_string(&value).ok().map(|value| (name.into(), value))
+                })
+                .collect()
+        };
+        let system = read(
+            HKEY_LOCAL_MACHINE,
+            "System\\CurrentControlSet\\Control\\Session Manager\\Environment",
+        );
+        let user = read(HKEY_CURRENT_USER, "Environment");
+        let inherited: Vec<(OsString, OsString)> = env
+            .values()
+            .map(|entry| (entry.preferred_key.clone(), entry.value.clone()))
+            .collect();
+        env = merge_registry_environment(&inherited, &system, &user)
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    EnvEntry::map_key(key.clone()),
+                    EnvEntry {
+                        is_from_base_env: true,
+                        preferred_key: key,
+                        value,
+                    },
+                )
+            })
+            .collect();
     }
 
     env
+}
+
+/// The environment a Windows pane starts with (Hide's change; upstream and
+/// Herdr let the registry replace the starting values). The registry's
+/// environment is made first, as Windows makes a sign-in's: the system's
+/// variables, then the user's, a user variable replacing the system's of
+/// the same name except `PATH`, which is the system's then the user's
+/// (<https://devblogs.microsoft.com/oldnewthing/20231212-00/?p=109137>);
+/// `USERNAME` is left out. It then only adds to `inherited`: a variable
+/// `inherited` names keeps its value, except that its `PATH` gains each
+/// registry folder it lacks after its own folders, so a program installed
+/// since the starter began is still found. Names compare as Windows
+/// compares them, without case, whatever system this runs on.
+pub fn merge_registry_environment(
+    inherited: &[(OsString, OsString)],
+    system: &[(OsString, OsString)],
+    user: &[(OsString, OsString)],
+) -> Vec<(OsString, OsString)> {
+    fn fold(key: &OsStr) -> String {
+        key.to_string_lossy().to_lowercase()
+    }
+    let mut registry: Vec<(OsString, OsString)> = Vec::new();
+    for (scope, variables) in [("system", system), ("user", user)] {
+        for (name, value) in variables {
+            let key = fold(name);
+            if key == "username" {
+                continue;
+            }
+            match registry.iter_mut().find(|(known, _)| fold(known) == key) {
+                None => registry.push((name.clone(), value.clone())),
+                Some((_, known)) if key == "path" && scope == "user" => {
+                    let mut joined = known.clone();
+                    joined.push(";");
+                    joined.push(value);
+                    *known = joined;
+                }
+                Some(entry) => *entry = (name.clone(), value.clone()),
+            }
+        }
+    }
+    let mut merged: Vec<(OsString, OsString)> = inherited.to_vec();
+    for (name, value) in registry {
+        let key = fold(&name);
+        match merged.iter_mut().find(|(known, _)| fold(known) == key) {
+            None => merged.push((name, value)),
+            Some((_, current)) if key == "path" => {
+                // A value that is not Unicode is left as the starter gave it.
+                let (Some(own), Some(more)) = (current.to_str(), value.to_str()) else {
+                    continue;
+                };
+                let mut path = own.to_owned();
+                let named: Vec<String> = path.split(';').map(str::to_lowercase).collect();
+                for folder in more.split(';') {
+                    if !folder.is_empty() && !named.contains(&folder.to_lowercase()) {
+                        if !path.is_empty() && !path.ends_with(';') {
+                            path.push(';');
+                        }
+                        path.push_str(folder);
+                    }
+                }
+                *current = path.into();
+            }
+            Some(_) => {}
+        }
+    }
+    merged
 }
 
 /// `CommandBuilder` is used to prepare a command to be spawned into a pty.

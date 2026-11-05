@@ -24,7 +24,6 @@ fn duplicate_inflight_remote_tab_creation_is_observable_and_ignored() {
         target_id: "mini".to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![remote_workspace],
             agents: Vec::new(),
@@ -37,13 +36,12 @@ fn duplicate_inflight_remote_tab_creation_is_observable_and_ignored() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     runtime.install_remote_control(RemoteControlContext::new(
         "mini",
         connector,
@@ -96,20 +94,17 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         sign_in: None,
         ssh_alias: Some("mini".to_owned()),
         wsl_distro: None,
-        herdr_socket_path: None,
         agent_count: 0,
         test: None,
         host: Default::default(),
         kit: Default::default(),
         machine_name: None,
         dials_in: false,
-        herdr_behind: None,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: "mini".to_owned(),
         state: "not_connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -168,7 +163,6 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     };
 
     assert!(runtime.ingest_remote_session("mini", Ok(session.clone())));
@@ -273,7 +267,6 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         })
     ));
     assert!(terminals.take().contains(&TerminalControl::Forget {
@@ -331,7 +324,6 @@ fn remote_file_results_are_scoped_and_generation_guarded() {
         target_id: "mini".to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![remote_workspace],
             agents: Vec::new(),
@@ -344,7 +336,6 @@ fn remote_file_results_are_scoped_and_generation_guarded() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -560,7 +551,6 @@ fn switch_on(runtime: &mut Runtime, ids: &[&str]) {
                 chosen: false,
                 skill: piece.clone(),
                 hook: None,
-                herdr: None,
                 partial: false,
                 features: Vec::new(),
                 sessions: None,
@@ -1109,7 +1099,6 @@ fn remote_pane_focus_uses_its_existing_request_outcome() {
         target_id: target_id.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![remote_workspace],
             agents: Vec::new(),
@@ -1122,13 +1111,12 @@ fn remote_pane_focus_uses_its_existing_request_outcome() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-remote-focus-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     runtime.install_remote_control(RemoteControlContext::new(
         target_id,
         connector,
@@ -1704,7 +1692,6 @@ fn a_device_pane_read_before_its_server_restarts_stays_read() {
         target_id: "mini".to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1748,7 +1735,6 @@ fn a_device_pane_read_before_its_server_restarts_stays_read() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }
     };
     let unread = |runtime: &Runtime| {
@@ -1893,7 +1879,6 @@ fn read_record_is_scoped_by_pane_id_namespace_across_servers() {
             target_id: target_id.to_owned(),
             state: "not_connected".to_owned(),
             message: None,
-            herdr_version: None,
             session: None,
             files: RemoteFileListSnapshot::idle(),
             catalog: Default::default(),
@@ -1967,7 +1952,6 @@ fn read_record_is_scoped_by_pane_id_namespace_across_servers() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }
     };
     let stored_agents = |runtime: &Runtime, target_id: &str| {
@@ -2225,7 +2209,7 @@ fn read_record_reaches_the_pane_tree_and_not_only_the_agent_rows() {
     let _ = std::fs::remove_file(&state_path);
 }
 
-fn remote_purpose_runtime(version: &str) -> Runtime {
+fn remote_purpose_runtime() -> Runtime {
     let mut runtime = runtime();
     let workspace_id = "remote:mini:workspace:w1";
     let checkout_id = "remote:mini:checkout:w1";
@@ -2242,7 +2226,6 @@ fn remote_purpose_runtime(version: &str) -> Runtime {
         target_id: "mini".to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some(version.to_owned()),
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![remote_workspace],
             agents: Vec::new(),
@@ -2255,7 +2238,6 @@ fn remote_purpose_runtime(version: &str) -> Runtime {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -2287,7 +2269,7 @@ fn begin_remote_purpose_operation(runtime: &mut Runtime) -> u64 {
 /// caller-visible task-operation contract as a local save.
 #[test]
 fn remote_purpose_results_update_clear_and_preserve_the_exact_checkout() {
-    let mut runtime = remote_purpose_runtime("0.9.1");
+    let mut runtime = remote_purpose_runtime();
 
     let id = begin_remote_purpose_operation(&mut runtime);
     assert!(runtime.ingest_purpose_operation_result(
@@ -2358,35 +2340,6 @@ fn remote_purpose_results_update_clear_and_preserve_the_exact_checkout() {
     assert_eq!(
         operation.failure.as_deref(),
         Some("checkout_purpose.token_failed")
-    );
-}
-
-/// B20. The remote row resolver reaches the projected checkout, then refuses
-/// an unsupported server through the sheet's task operation instead of a
-/// detached global error.
-#[test]
-fn remote_purpose_resolver_reports_an_unsupported_server_in_the_sheet() {
-    let mut runtime = remote_purpose_runtime("0.9.0");
-
-    assert!(runtime.set_checkout_purpose(SetCheckoutPurposePayload {
-        checkout_id: "remote:mini:checkout:w1".to_owned(),
-        text: "Remote purpose".to_owned(),
-    }));
-
-    let operation = runtime.snapshot.task_operation.as_ref().expect("operation");
-    assert_eq!(operation.kind, "checkout_purpose");
-    assert_eq!(operation.phase, "failed");
-    assert_eq!(
-        operation.failure.as_deref(),
-        Some("checkout_purpose.remote_unsupported")
-    );
-    assert!(
-        runtime
-            .snapshot
-            .status
-            .diagnostics
-            .iter()
-            .any(|diagnostic| { diagnostic.kind == "checkout_purpose.remote_unsupported" })
     );
 }
 

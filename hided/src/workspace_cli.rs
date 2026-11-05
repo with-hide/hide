@@ -894,12 +894,6 @@ pub fn request_hook(
 ) -> Result<Value, String> {
     let within = if matches!(command, hide_node_link::panes::HookCommand::Memory { .. }) {
         MEMORY_WITHIN
-    } else if matches!(
-        command,
-        hide_node_link::panes::HookCommand::Observation { .. }
-            | hide_node_link::panes::HookCommand::StartObservation { .. }
-    ) {
-        hide_node_link::panes::OBSERVATION_SEND_BUDGET
     } else {
         TIMEOUT
     };
@@ -1765,30 +1759,34 @@ mod tests {
     fn a_device_node_answers_this_device_until_it_stops() {
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, _lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
         let request = json!({"pane_id": "w1:p1", "nonce": "0".repeat(32)});
-        std::thread::scope(|scope| {
+        // The node is stopped before anything is asserted, so a failed
+        // assertion cannot leave the scope waiting on its thread.
+        let (socket, answer) = std::thread::scope(|scope| {
             let started = panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
-            // Both ends read and write the wire spelling, which on Windows is
-            // the only one `from_wire` reads.
-            assert!(
-                node_socket(&started.socket).unwrap().starts_with(&bridges),
-                "{}",
-                started.socket
-            );
-            // No Herdr answers at the socket the node was given, so it cannot
-            // read the pane; it got that far only by seeing who called.
-            assert_eq!(
-                bootstrap_bridges(&bridges, &request),
-                Err("pane_unavailable".to_owned())
-            );
+            let answer = bootstrap_bridges(&bridges, &request);
             panes.stop();
+            (started.socket, answer)
         });
+        // Both ends read and write the wire spelling, which on Windows is the
+        // only one `from_wire` reads.
+        assert!(
+            node_socket(&socket).unwrap().starts_with(&bridges),
+            "{socket}"
+        );
+        // The node was given no pane holders, so it cannot read the pane; it
+        // got that far only by seeing who called.
+        assert_eq!(answer, Err("bridge_unavailable".to_owned()));
         panes.remove_folder();
         assert_eq!(bootstrap_bridges(&bridges, &request), Ok(None));
     }
@@ -1826,7 +1824,6 @@ mod tests {
         use hide_node_link::panes::ProofAnswer;
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
@@ -1834,7 +1831,12 @@ mod tests {
         let answer = json!({"type":"workspace_result","ok":true,"result":{"label":"app","path":"/home/me/app","added":true,"window":true}});
         std::thread::scope(|scope| {
             panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let panes = &panes;
             let answered = answer.clone();
@@ -1856,7 +1858,12 @@ mod tests {
             );
             core.join().unwrap();
             other
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             assert_eq!(
                 project_open_on_bridge(&bridges, "/home/me/app"),
@@ -1889,7 +1896,6 @@ mod tests {
         let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
@@ -1899,7 +1905,12 @@ mod tests {
             .unwrap();
         std::thread::scope(|scope| {
             let started = panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let socket = node_socket(&started.socket).unwrap();
             runtime.block_on(async {
@@ -1935,11 +1946,6 @@ mod tests {
     fn env_at(directory: &Path) -> Env {
         Env {
             home: directory.to_path_buf(),
-            herdr_socket_path: None,
-            herdr_move_socket: None,
-            herdr_bin_path: None,
-            own_engine: false,
-            login_shell: None,
             state_dir: directory.to_path_buf(),
             legacy_state_dir: None,
             account_state_folder: false,
@@ -1973,11 +1979,14 @@ mod tests {
         true
     }
 
-    /// A one-shot command against a running daemon sends no claim and
-    /// writes no claimed marker, and the daemon revokes its token once the
-    /// connection ends; a named reference's command still claims. This
-    /// process stands in for the pane's shell, so every credential stays
-    /// alive until the daemon or the command ends it.
+    /// A one-shot command against a running daemon writes no claimed
+    /// marker, and the daemon revokes its token once the connection ends; a
+    /// command for a pane the engine cannot prove is refused and its
+    /// credential revoked before any claim. This process stands in for the
+    /// pane's shell, so every credential stays alive until the daemon or the
+    /// command ends it. A named reference's claim needs a pane the engine
+    /// runs, and the device contract proves it
+    /// (`workspace_guidance_gets_one_reusable_reference_and_rejects_writes`).
     #[test]
     fn a_one_shot_command_is_not_claimed_and_its_token_ends_with_its_connection() {
         let directory = tempfile::tempdir().unwrap();
@@ -2021,8 +2030,8 @@ mod tests {
             named: false,
             _one_shot: Some(OneShotReference(path.to_path_buf())),
         };
-        // This daemon has no Herdr to read the pane from, so each command is
-        // answered with that refusal; what follows an answer is the same.
+        // The daemon's engine runs no pane `w1:p1`, so each command is
+        // refused with that and its credential revoked.
         let answered = |credential: &mut Credential| {
             let answer = request(credential, "info").unwrap();
             assert_eq!(answer["reason"], "pane_unavailable", "{answer}");
@@ -2040,21 +2049,14 @@ mod tests {
         drop(credential);
         assert!(!path.exists());
 
-        // The same command on a token the daemon would keep: it sends no
-        // claim, so neither side records one.
+        // The same command on a token the daemon would keep: the refusal
+        // revokes the credential, so neither side records a claim.
         let (path, token) = issue('2', None);
         let mut credential = one_shot(&path);
         answered(&mut credential);
         assert!(!path.with_extension("claimed").exists());
-        assert_eq!(registry.claimed(&token), Some(false));
+        assert_eq!(registry.claimed(&token), None);
         drop(credential);
-
-        // A named reference is persistent, and its command claims it.
-        let (path, token) = issue('3', None);
-        let mut credential = Credential::named(&env, path.clone());
-        answered(&mut credential);
-        assert!(path.with_extension("claimed").is_file());
-        assert_eq!(registry.claimed(&token), Some(true));
 
         running.stop();
         drop(running);

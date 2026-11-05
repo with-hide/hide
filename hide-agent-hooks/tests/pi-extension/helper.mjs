@@ -19,7 +19,7 @@ const { delay_ms: delay, exit, raw, ...answer } =
   JSON.parse(readFileSync(process.env.HIDE_EXTENSION_HELPER_ANSWERS, "utf8"))[operation] ?? {};
 appendFileSync(
   process.env.HIDE_EXTENSION_HELPER_LOG,
-  `${JSON.stringify({ agent, operation, input: JSON.parse(stdin), env: { HERDR_PANE_ID: process.env.HERDR_PANE_ID } })}\n`,
+  `${JSON.stringify({ agent, operation, input: JSON.parse(stdin), env: { HIDE_PANE_ID: process.env.HIDE_PANE_ID } })}\n`,
 );
 if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 if (exit !== undefined) process.exit(exit);

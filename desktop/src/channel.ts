@@ -105,19 +105,5 @@ export const UPDATE_CHECK_CHANNEL = "hide:update-check";
 export const UPDATE_RESTART_CHANNEL = "hide:update-restart";
 export const UPDATE_PRERELEASE_CHANNEL = "hide:update-prerelease";
 
-/**
- * Restarting the operator's Herdr server on this app's Herdr where Herdr
- * cannot hand it over live (PRD herdr-takeover B12): the shell asks once the
- * operator confirmed what ends (invoke), and the host answers how it went.
- */
-export const HERDR_RESTART_CHANNEL = "hide:herdr-restart";
-
-/**
- * Quitting the app from the screen that holds Hide while this machine's Herdr
- * speaks another protocol (PRD herdr-takeover): the window's own Quit, as
- * the app menu's would; hided keeps running, as it does after any quit.
- */
-export const QUIT_CHANNEL = "hide:quit";
-
 /** Help > Practice Hide and the empty Home: open the practice window, or bring it forward (renderer -> main). */
 export const PRACTICE_OPEN_CHANNEL = "hide:practice-open";

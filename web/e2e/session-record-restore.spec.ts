@@ -1,6 +1,6 @@
 // The record restores the exact retained native conversation after its pane closes.
 import { expect, test } from "@playwright/test";
-import { CLAUDE_FULL_ACCESS_LINE } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS_LINE } from "./pane-fixture";
 import { agentIn, closePane, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { labelAgentPane } from "./fixture-agents";
@@ -46,14 +46,10 @@ test("a closed pane's record restores the same native session in a fresh pane", 
     // hook identity. This is a locator test, not a real-agent observation.
     const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${pane}"]`);
     await expect(row.locator("[data-agent-title]")).toHaveText("Restore this conversation", { timeout: 30_000 });
-    if (fixture.engine === "herdr") {
-      // Herdr is told no session by the stand-in, so the record stays unconfirmed. The own engine takes the session
-      // from the start's --resume, so its row is confirmed: it names the record's session and carries no pending mark.
-      await expect(row.locator('[data-record-connection="unconfirmed"]')).toBeVisible();
-    } else {
-      await expect(row.locator("[data-record-connection]")).toHaveCount(0);
-      await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}`, 20_000));
-    }
+    // The engine takes the session from the start's --resume, so the row is confirmed: it names the
+    // record's session and carries no pending mark.
+    await expect(row.locator("[data-record-connection]")).toHaveCount(0);
+    await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}`, 20_000));
     await expect(row.locator('[data-agent-status-mark="turn"]')).toHaveCount(0);
   } finally {
     await page.goto("about:blank");

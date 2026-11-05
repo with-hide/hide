@@ -67,34 +67,22 @@ fn session(right: Option<f32>, zoomed: bool) -> SessionSnapshotPayload {
     payload
 }
 
-fn fake_herdr(name: &str) -> FakeHerdr {
-    FakeHerdr::start_with_errors(name, |method, _| match method {
-        "pane.split" => Ok(serde_json::json!({"type": "pane_info", "pane": {
-            "pane_id": CREATED, "terminal_id": "fixture-terminal", "workspace_id": "w-order",
-            "tab_id": TAB, "focused": true, "agent_status": "idle", "revision": 1
-        }})),
+fn fake_herdr() -> Fake {
+    FakeEngine::start(|method, _| match method {
+        "split_pane" | "split_pane_at" => reply(CREATED.to_owned()),
         // The answers reach the runtime only when a test hands them over, so
-        // the body here only has to be well formed.
-        "pane.zoom" | "pane.resize" => Ok(serde_json::json!({"type": "ok"})),
-        other => Err(("unsupported".to_owned(), format!("fixture has no {other}"))),
+        // the answer here only has to be the call's own.
+        "toggle_zoom" | "resize_pane" => reply(true),
+        other => refused("unsupported", &format!("fixture has no {other}")),
     })
 }
 
 /// A runtime on `payload` with a control session open on every pane, and
 /// the terminal controls it sends from then on.
-fn runtime_on(
-    herdr: &FakeHerdr,
-    payload: SessionSnapshotPayload,
-) -> (Runtime, Arc<RecordedTerminals>) {
+fn runtime_on(herdr: &Fake, payload: SessionSnapshotPayload) -> (Runtime, Arc<RecordedTerminals>) {
     let (mut runtime, _) = tab_order_runtime(CHECKOUT);
     let terminals = record_terminals(&mut runtime);
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    runtime.live = Some(herdr.live());
     let panes = payload
         .layouts
         .iter()
@@ -155,11 +143,11 @@ fn resizes(terminals: &RecordedTerminals, pane: &str) -> Vec<(u16, u16)> {
         .collect()
 }
 
-fn sent(herdr: &FakeHerdr, method: &str) -> usize {
+fn sent(herdr: &Fake, method: &str) -> usize {
     herdr
         .methods()
         .iter()
-        .filter(|sent| *sent == method)
+        .filter(|sent| **sent == method)
         .count()
 }
 
@@ -189,7 +177,7 @@ fn zoom_action(pane: &str) -> PaneControlAction {
 /// nothing and end nothing.
 #[test]
 fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it() {
-    let herdr = fake_herdr("geometry-frame-watch");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr, session(Some(0.5), false));
     let watches = |terminals: &RecordedTerminals| {
         terminals
@@ -207,7 +195,7 @@ fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it()
         }]);
     };
     zoom(&mut runtime, LEFT);
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     answer(&mut runtime, zoom_action(LEFT), accepted());
     for _ in 0..3 {
         shown(&mut runtime);
@@ -261,7 +249,7 @@ fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it()
 /// which goes out once.
 #[test]
 fn a_zoom_sends_its_pty_size_at_the_drawing_and_nothing_more_when_herdr_confirms_the_same_layout() {
-    let herdr = fake_herdr("geometry-zoom");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr, session(Some(0.5), false));
     zoom(&mut runtime, LEFT);
     assert!(
@@ -282,7 +270,7 @@ fn a_zoom_sends_its_pty_size_at_the_drawing_and_nothing_more_when_herdr_confirms
         "the PTY follows the drawing before Herdr answers"
     );
 
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     answer(&mut runtime, zoom_action(LEFT), accepted());
     runtime.ingest_session(Ok(session(Some(0.5), true)));
     assert!(
@@ -311,7 +299,7 @@ fn a_zoom_sends_its_pty_size_at_the_drawing_and_nothing_more_when_herdr_confirms
 /// once.
 #[test]
 fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
-    let herdr = fake_herdr("geometry-same-size");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr, session(None, false));
     let report = |runtime: &mut Runtime, rows: u16| {
         dispatch(
@@ -333,7 +321,7 @@ fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
 /// and the grid the split pane's view reports for its half goes out at once.
 #[test]
 fn a_split_is_drawn_with_the_pane_herdr_named_before_its_layout_arrives() {
-    let herdr = fake_herdr("geometry-split");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr, session(None, false));
     let split = PaneControlAction::Split {
         pane_id: LEFT.to_owned(),
@@ -428,8 +416,8 @@ fn split_by_engine(ratio: f32) -> SessionSnapshotPayload {
 /// so the publish that confirms the split can be the first one after the
 /// answer: `ratio` is the layout that publish reads, and the answer to the
 /// split is handed over before it, as the engine's worker returns first.
-fn split_confirmed_by_the_first_publish(name: &str, ratio: f32) -> Vec<serde_json::Value> {
-    let herdr = fake_herdr(name);
+fn split_confirmed_by_the_first_publish(ratio: f32) -> Vec<serde_json::Value> {
+    let herdr = fake_herdr();
     let (mut runtime, _) = runtime_on(&herdr, session(None, false));
     dispatch(
         &mut runtime,
@@ -467,7 +455,7 @@ fn split_confirmed_by_the_first_publish(name: &str, ratio: f32) -> Vec<serde_jso
 /// split reported every split on the core's own engine.
 #[test]
 fn a_split_confirmed_by_the_first_publish_after_its_answer_matches_its_prediction() {
-    let mismatches = split_confirmed_by_the_first_publish("geometry-split-first-publish", 0.5);
+    let mismatches = split_confirmed_by_the_first_publish(0.5);
     assert!(mismatches.is_empty(), "{mismatches:?}");
 }
 
@@ -475,7 +463,7 @@ fn a_split_confirmed_by_the_first_publish_after_its_answer_matches_its_predictio
 /// prediction draws, with both shapes.
 #[test]
 fn a_split_the_engine_lays_out_otherwise_than_predicted_is_reported_in_the_same_order() {
-    let mismatches = split_confirmed_by_the_first_publish("geometry-split-other-ratio", 0.25);
+    let mismatches = split_confirmed_by_the_first_publish(0.25);
     assert_eq!(mismatches.len(), 1, "{mismatches:?}");
     // The drawn shape is the prediction's, with the new pane in it, and only
     // the ratio differs from the engine's.
@@ -497,14 +485,14 @@ fn a_split_the_engine_lays_out_otherwise_than_predicted_is_reported_in_the_same_
 /// waiting is refused and logged.
 #[test]
 fn operations_in_one_tab_wait_their_turn_and_the_ninth_waiting_is_refused() {
-    let herdr = fake_herdr("geometry-line");
+    let herdr = fake_herdr();
     let (mut runtime, _) = runtime_on(&herdr, session(Some(0.5), false));
     for _ in 0..10 {
         zoom(&mut runtime, LEFT);
     }
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     assert_eq!(
-        sent(&herdr, "pane.zoom"),
+        sent(&herdr, "toggle_zoom"),
         1,
         "the rest wait for the first answer"
     );
@@ -521,9 +509,9 @@ fn operations_in_one_tab_wait_their_turn_and_the_ninth_waiting_is_refused() {
 
     answer(&mut runtime, zoom_action(LEFT), accepted());
     runtime.ingest_session(Ok(session(Some(0.5), true)));
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(
-        sent(&herdr, "pane.zoom"),
+        sent(&herdr, "toggle_zoom"),
         2,
         "the next leaves once Herdr confirms"
     );
@@ -533,15 +521,15 @@ fn operations_in_one_tab_wait_their_turn_and_the_ninth_waiting_is_refused() {
 /// layout; the layout that confirmed the one ahead of it is not its answer.
 #[test]
 fn the_next_operation_in_a_line_waits_for_its_own_layout() {
-    let herdr = fake_herdr("geometry-line-baseline");
+    let herdr = fake_herdr();
     let (mut runtime, _) = runtime_on(&herdr, session(Some(0.5), false));
     zoom(&mut runtime, LEFT);
     zoom(&mut runtime, LEFT);
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
 
     answer(&mut runtime, zoom_action(LEFT), accepted());
     runtime.ingest_session(Ok(session(Some(0.5), true)));
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     answer(&mut runtime, zoom_action(LEFT), accepted());
     // The coordinator's republish carries the layout Herdr last sent.
     runtime.ingest_session(Ok(session(Some(0.5), true)));
@@ -556,14 +544,14 @@ fn the_next_operation_in_a_line_waits_for_its_own_layout() {
     zoom(&mut runtime, LEFT);
     runtime.ingest_session(Ok(session(Some(0.5), true)));
     assert_eq!(
-        sent(&herdr, "pane.zoom"),
+        sent(&herdr, "toggle_zoom"),
         2,
         "the third waits for the second's layout"
     );
 
     runtime.ingest_session(Ok(session(Some(0.5), false)));
-    herdr.wait_for_requests(3, Duration::from_secs(5));
-    assert_eq!(sent(&herdr, "pane.zoom"), 3);
+    herdr.wait_for_calls(3, Duration::from_secs(5));
+    assert_eq!(sent(&herdr, "toggle_zoom"), 3);
 }
 
 /// B16, B19, grid-ahead-of-herdr B6: a refusal drops what waited behind it
@@ -571,7 +559,7 @@ fn the_next_operation_in_a_line_waits_for_its_own_layout() {
 /// drawing goes back with the drawing, as one more resize.
 #[test]
 fn a_refused_operation_drops_the_line_behind_it_and_draws_what_herdr_confirmed() {
-    let herdr = fake_herdr("geometry-refused");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr, session(Some(0.5), false));
     zoom(&mut runtime, LEFT);
     dispatch(
@@ -587,7 +575,7 @@ fn a_refused_operation_drops_the_line_behind_it_and_draws_what_herdr_confirmed()
         serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 80}),
     );
     assert_eq!(resizes(&terminals, LEFT), [(30, 80)]);
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     runtime.take_republish_request();
 
     answer(
@@ -615,7 +603,7 @@ fn a_refused_operation_drops_the_line_behind_it_and_draws_what_herdr_confirmed()
         "the grid returns with the drawing"
     );
     assert_eq!(
-        sent(&herdr, "pane.resize"),
+        sent(&herdr, "resize_pane"),
         0,
         "the waiting resize was dropped"
     );
@@ -629,30 +617,30 @@ fn a_refused_operation_drops_the_line_behind_it_and_draws_what_herdr_confirmed()
 /// the tab's next operation leaves at once.
 #[test]
 fn a_zoom_herdr_says_changed_nothing_ends_and_the_next_operation_leaves() {
-    let herdr = fake_herdr("geometry-unchanged");
+    let herdr = fake_herdr();
     // Two panes: the core sends no zoom for a tab's only pane.
     let (mut runtime, _) = runtime_on(&herdr, session(Some(0.5), false));
     zoom(&mut runtime, LEFT);
     zoom(&mut runtime, LEFT);
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     answer(
         &mut runtime,
         zoom_action(LEFT),
         Ok(PaneControlOutcome::Unchanged),
     );
-    herdr.wait_for_requests(2, Duration::from_secs(5));
-    assert_eq!(sent(&herdr, "pane.zoom"), 2);
+    herdr.wait_for_calls(2, Duration::from_secs(5));
+    assert_eq!(sent(&herdr, "toggle_zoom"), 2);
 }
 
 /// B17: an operation past its deadline draws what Herdr confirmed, drops the
 /// line behind it, and does not hold the tab's next operation.
 #[test]
 fn an_operation_past_its_deadline_draws_what_herdr_confirmed_and_frees_the_tab() {
-    let herdr = fake_herdr("geometry-deadline");
+    let herdr = fake_herdr();
     let (mut runtime, _) = runtime_on(&herdr, session(Some(0.5), false));
     zoom(&mut runtime, LEFT);
     zoom(&mut runtime, RIGHT);
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     let late = unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1;
     runtime.tick_async_operations(late);
     assert_eq!(
@@ -668,9 +656,9 @@ fn an_operation_past_its_deadline_draws_what_herdr_confirmed_and_frees_the_tab()
     assert!(!drawn(&runtime).zoomed);
 
     zoom(&mut runtime, RIGHT);
-    herdr.wait_for_requests(2, Duration::from_secs(5));
+    herdr.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(
-        sent(&herdr, "pane.zoom"),
+        sent(&herdr, "toggle_zoom"),
         2,
         "an unknown result does not hold the line"
     );
@@ -680,14 +668,14 @@ fn an_operation_past_its_deadline_draws_what_herdr_confirmed_and_frees_the_tab()
 /// turn, is drawn gone at once, and starts when the resize is confirmed.
 #[test]
 fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
-    let herdr = fake_herdr("geometry-close");
+    let herdr = fake_herdr();
     let (mut runtime, _) = runtime_on(&herdr, session(Some(0.5), false));
     dispatch(
         &mut runtime,
         "resize_pane",
         serde_json::json!({"pane_id": LEFT, "direction": "right", "amount": 0.1}),
     );
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     runtime.snapshot.terminal.pane_id = Some(RIGHT.to_owned());
     runtime.snapshot.navigator.focused_checkout_id = runtime
         .snapshot
@@ -745,14 +733,14 @@ fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
 /// rather than meeting the close in progress, and stays drawn until it runs.
 #[test]
 fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
-    let herdr = fake_herdr("geometry-close-last");
+    let herdr = fake_herdr();
     let (mut runtime, _) = runtime_on(&herdr, session(Some(0.5), false));
     dispatch(
         &mut runtime,
         "resize_pane",
         serde_json::json!({"pane_id": LEFT, "direction": "right", "amount": 0.1}),
     );
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     dispatch(
         &mut runtime,
         "close_pane",
@@ -858,7 +846,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
 /// is taken back at the stage bound.
 #[test]
 fn a_created_tab_is_drawn_at_its_answer_until_herdr_lays_it_out() {
-    let herdr = fake_herdr("geometry-created-tab");
+    let herdr = fake_herdr();
     let (mut runtime, _) = runtime_on(&herdr, session(None, false));
     for checkout in runtime
         .snapshot

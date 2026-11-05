@@ -1,11 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, declareParent, printLinesCommand } from "./herdr-fixture";
+import { printLinesCommand } from "./pane-fixture";
 import { startLayoutStack, startFixture } from "./engine-fixture";
 import { closePane, focusTab, newTab, sendKeys, tabPanes, tabsOf, withControl } from "./daemon-actions";
 import { spawnChild } from "./fixture-agents";
-import { herdrGate } from "./herdr-gate";
 import { waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, showTool } from "./wire";
@@ -363,54 +362,6 @@ test("New tab and Reopen use the requested area and Rename works in either bar",
   } finally { group.stop(); }
 });
 
-// The chip's focus is held at the Herdr socket, so the click on the normal tab
-// lands while the chip's focus is still unanswered: the order is the test's,
-// not the runner's speed.
-// Herdr only: it holds Herdr's pane.focus answer at the socket and reads the tab.focus Hide then sends it.
-test("Delegated canvas returns to its normal tab while the chip's focus is still waiting for Herdr @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr();
-  let daemon: Daemon | null = null;
-  let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
-  try {
-    const [parent, child] = herdr.panes;
-    gate = await herdrGate(herdr);
-    daemon = await startHided({ ...herdr, socket: gate.socket }, "agent-delegated-return");
-    const sent = countSent(page);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    declareParent(herdr, child, parent);
-    const treeButton = page.locator(`[data-pane-view="${parent}"] [data-pane-tree="${parent}"]`);
-    await expect(treeButton).toBeVisible({ timeout: 20_000 });
-    // The tree button shows once the lineage is known; the delegated canvas exists
-    // once the core has moved the child out of its parent's tab. The list is
-    // opened after that move, so the move's redraw cannot close it.
-    await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveCount(0);
-    await treeButton.click();
-    const chip = page.locator(`[data-agent-child="${child}"]`);
-    await expect(chip).toBeVisible();
-    const held = gate.arm("pane.focus");
-    await chip.click();
-    await held;
-    expect(gate.params("pane.focus").map((params) => params.pane_id)).toEqual([child]);
-    // The core already shows the child while Herdr has not answered, so the normal tab is not the selected one.
-    const quick = { intervals: [25] };
-    await expect(tab(page, herdr.tab)).toHaveAttribute("aria-selected", "false", quick);
-    const before = sent.get("agent_layout.focus") ?? 0;
-    await tab(page, herdr.tab).click();
-    await expect(tab(page, herdr.tab)).toHaveAttribute("aria-selected", "true", quick);
-    expect(sent.get("agent_layout.focus")).toBe(before + 1);
-    await gate.release();
-    // The tab focus waits behind the pane focus and leaves once it is answered: seeing it
-    // reach Herdr proves the late answer has been handled before the final state is read.
-    await expect.poll(() => gate.params("tab.focus").map((params) => params.tab_id)).toContain(herdr.tab);
-    expect(gate.maximum("pane.focus")).toBe(1);
-    await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
-    await expect(tab(page, herdr.tab)).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveCount(0);
-  } finally { daemon?.stop(); await gate?.stop(); herdr.stop(); }
-});
-
 test("A delegated canvas's normal tab keeps the Agent commands in its menu", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const fixture = await startFixture({ family: true });
@@ -445,39 +396,4 @@ test("A delegated canvas's normal tab keeps the Agent commands in its menu", asy
     await expect(page.locator('[role="menu"]')).toHaveCount(0);
     await screenshot(page, "agent-groups-delegated-return");
   } finally { daemon?.stop(); fixture.stop(); }
-});
-
-// Herdr only: Hide following a tab Herdr created and focused outside Hide.
-test("An external focused creation joins a bar without replacing either shown canvas @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
-  let daemon: Daemon | null = null;
-  try {
-    const second = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "second", "--no-focus"]) as { result: { tab: { tab_id: string } } };
-    daemon = await startHided(herdr, "agent-external-focus");
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    await expect(tab(page, second.result.tab.tab_id)).toBeVisible();
-    const body = await box(page.locator("[data-agent-body]"));
-    await drag(page, tab(page, second.result.tab.tab_id), { x: body.x + body.width - 5, y: body.y + body.height / 2 });
-    await expect(areas(page)).toHaveCount(2);
-    const before = (await shape(page)).map(({ id, active, shown }) => ({ id, active, shown }));
-    const external = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "외부 생성", "--focus"]) as { result: { tab: { tab_id: string } } };
-    await expect(tab(page, external.result.tab.tab_id)).toBeVisible();
-    // Wait through the actual separate creation/layout/focus stream, including
-    // the next read-only projection, rather than asserting its first frame.
-    await expect.poll(async () => (await shape(page)).map(({ id, active, shown }) => ({ id, active, shown }))).toEqual(before);
-    await quietFor(page, 1500, "an externally created tab does not move the layout");
-    expect((await shape(page)).map(({ id, active, shown }) => ({ id, active, shown }))).toEqual(before);
-    // A genuinely later external focus still selects a known tab.
-    // Pinned Herdr emits no event for a no-op focus on its current tab.
-    // Exercise an observable external focus transition after creation instead.
-    herdr.run(["tab", "focus", second.result.tab.tab_id]);
-    // `herdr tab focus` returns once Herdr has applied it, and its events reach the core in order,
-    // so the first focus (already the shown tab of its bar, nothing to observe) precedes the second.
-    herdr.run(["tab", "focus", external.result.tab.tab_id]);
-    await expect(tab(page, external.result.tab.tab_id)).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator(`[data-canvas="${external.result.tab.tab_id}"]`)).toBeVisible();
-    await screenshot(page, "agent-groups-external-focus");
-  } finally { daemon?.stop(); herdr.stop(); }
 });

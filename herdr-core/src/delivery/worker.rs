@@ -1460,16 +1460,18 @@ mod tests {
 
     #[test]
     fn notify_herdr_reports_herdr_reason_or_a_failed_call() {
-        let herdr = crate::fake_herdr::FakeHerdr::start("notice-reason", |method, _| {
-            assert_eq!(method, "notification.show");
-            json!({"type": "notification_show", "shown": false, "reason": "disabled"})
+        use crate::engine::fake::{FakeEngine, reply};
+        let fake = FakeEngine::start(|method, _| {
+            assert_eq!(method, "notify");
+            reply::<crate::engine::Notified>(Err("disabled"))
         });
         let notice = undelivered_notice();
-        let engine = crate::engine::EngineHandle::new(herdr.engine());
+        let engine = crate::engine::EngineHandle::new(fake.engine());
         assert_eq!(notice.notify_herdr(&engine), Err("disabled"));
-        let gone = crate::engine::EngineHandle::new(crate::engine::herdr::local(
-            herdr.socket_path().with_file_name("absent.sock"),
-        ));
+        let gone = FakeEngine::start(|_, _| {
+            Err(crate::engine::EngineError::NotRunning("gone".to_owned()))
+        });
+        let gone = crate::engine::EngineHandle::new(gone.engine());
         assert_eq!(notice.notify_herdr(&gone), Err("call_failed"));
     }
 

@@ -52,7 +52,7 @@ fn invoke(
         .env(hide_platform::host::HOME_VARIABLE, home)
         .env("XDG_STATE_HOME", home.join("shell-state"))
         .env("EXPECTED_STATE_DIR", state)
-        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HIDE_PANE_ID", "w1:p1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

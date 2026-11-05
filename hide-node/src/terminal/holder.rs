@@ -1,31 +1,24 @@
 //! A node's panes held by pane holders (PRD engine-bundle-2-pane-holder
 //! D-10, D-11, D-15, D-17): starting and ending them, attaching their screens
-//! through the terminal service beside the node's Herdr sessions, and, when
-//! the node starts, finding again the holders that ran on while it was gone.
+//! through the terminal service, and, when the node starts, finding again
+//! the holders that ran on while it was gone.
 //!
-//! Nothing here runs unless the development switch [`SWITCH`] is on: with it
-//! off a node opens Herdr sessions only, as it always has, and starts,
-//! adopts and reads no holder (B1). With it on, [`Holders`] owns the state
-//! folder's pane records (`hide_kit::panes`) and [`PaneAttacher`] opens a
-//! pane it knows by them over its holder's socket and every other pane over
-//! Herdr. A holder pane's screen reaches the [`super::OutputSink`] as the
-//! fragments the holder draws, each delivered as the frame a Herdr session
-//! delivers, and its input goes out as the bytes, resizes and wheels a Herdr
-//! session takes; a holder encodes those for its program's own settings.
+//! [`Holders`] owns the state folder's pane records (`hide_kit::panes`) and
+//! [`PaneAttacher`] opens a pane it knows by them over its holder's socket. A holder pane's screen reaches the [`super::OutputSink`] as the
+//! fragments the holder draws, each delivered as a frame, and its input goes
+//! out as bytes, resizes and wheels; a holder encodes those for its
+//! program's own settings.
 //!
 //! The holder's connection is the one that holds its screen and input; a
 //! second node that says hello takes it over, and this node's session ends
 //! `taken_over`, which is never tried again on its own (B9). A holder that
 //! speaks a version older than [`OLDEST_HOLDER_VERSION`] is reported
 //! `unsupported_holder_version` and left running (B10). A device's node
-//! runs holders only when the core that dialed it asks
-//! (`Call::HoldersStart`, PRD engine-bundle-3-core-owns D-22), never by its
-//! own environment's switch ([`device_switch`]); a Windows device's node
-//! runs inside the job its SSH session made, which a holder leaves through
-//! `start_resident`.
+//! runs holders when its core asks (`Call::HoldersStart`, PRD
+//! engine-bundle-3-core-owns D-22); a Windows device's node runs inside the
+//! job its SSH session made, which a holder leaves through `start_resident`.
 
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -53,73 +46,13 @@ use hide_platform::ipc::LocalStream;
 use serde_json::json;
 
 use super::Service;
-use super::protocol::{Mode, SessionEvent};
-use super::session::{
-    Attacher, Cleanup, OpenFailure, SessionEvents, SessionParts, SessionWriter, Transport,
-};
+use super::protocol::SessionEvent;
+use super::session::{Attacher, Cleanup, OpenFailure, SessionEvents, SessionWriter, Transport};
 
 mod watch;
 
 use watch::Watches;
 pub(super) use watch::too_old;
-
-/// The development switch that lets a node run pane holders.
-///
-/// - Requirement: optional; it is read once, when a node's terminal service
-///   starts.
-/// - Shape: unset, `0` (off) or `1` (on). Any other value fails the node's
-///   start with the values it takes, rather than being read as off.
-/// - Fallback: off.
-/// - When it is missing: the node opens every pane through its Herdr's
-///   terminal sessions and starts, adopts and reads no pane holder; the app
-///   and the daemon behave as they always have. Nobody but a developer of
-///   the next engine sets it: the app shows no holder pane in this bundle.
-/// - Removal: deleted in bundle 4, the switch release, once the new engine
-///   is the default (docs/ARCHITECTURE.md, The pane holder).
-pub const SWITCH: &str = "HIDE_DEV_PANE_HOLDER";
-
-/// Whether [`SWITCH`] is on.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Switch {
-    Off,
-    On,
-}
-
-impl Switch {
-    /// The switch as this process's environment sets it.
-    pub fn from_env() -> Result<Self, String> {
-        Self::parse(std::env::var_os(SWITCH).as_deref())
-    }
-
-    /// The switch a value of [`SWITCH`] sets.
-    pub fn parse(value: Option<&OsStr>) -> Result<Self, String> {
-        match value.map(|value| value.to_str()) {
-            None => Ok(Self::Off),
-            Some(Some("0")) => Ok(Self::Off),
-            Some(Some("1")) => Ok(Self::On),
-            Some(value) => Err(format!(
-                "{SWITCH} is {}; it takes 1 (run pane holders) or 0 (do not), or is left unset",
-                value.map_or_else(|| "not text".to_owned(), |value| format!("{value:?}"))
-            )),
-        }
-    }
-}
-
-/// A device's node whose core runs its panes on Herdr opens them through
-/// Herdr whatever its own environment's switch says: the core that dialed
-/// it chooses its engine (`Call::HoldersStart`), so with the switch on here
-/// it says so in the diagnostic log. A value the switch does not take fails
-/// the device's terminal start, as it fails the local daemon's.
-pub fn device_switch() -> Result<(), String> {
-    if Switch::from_env()? == Switch::On {
-        crate::diagnostic!(json!({
-            "component": "pane_holder",
-            "kind": "pane_holder.device_node_unsupported",
-            "message": "a device's node runs pane holders only when its core asks; its panes open through Herdr",
-        }));
-    }
-    Ok(())
-}
 
 /// How long opening a holder's connection may take: its connect and its
 /// hello's answer, a screen's or a watch's (`watch.rs`).
@@ -161,11 +94,10 @@ impl Known {
     /// The socket of `pane`'s holder, waiting until `deadline` for a start
     /// under way: a pane is drawn, and its view attaches, while its holder
     /// starts (the core's own engine answers a new tab or split first), and
-    /// that attach is the holder's to answer, not Herdr's. `None` for a
-    /// pane no holder runs or starts on a node that also runs Herdr.
-    /// A node of the core's own engine waits for even an unseen pane: the
-    /// layout may be drawn before its start is registered. A deadline is
-    /// a holder failure, never a reason to open that pane through Herdr.
+    /// that attach is the holder's to answer. `None` for a pane no holder
+    /// runs or starts before the core's own engine owns every pane; once it
+    /// does, the node waits for even an unseen pane, since the layout may be
+    /// drawn before its start is registered. A deadline is a holder failure.
     fn socket_once_started(
         &self,
         pane: &str,
@@ -249,28 +181,16 @@ impl Ends {
 }
 
 /// Opens a pane its node knows by its holder's record over the holder's
-/// socket, and every other pane through `herdr`.
+/// socket; a pane no holder runs has no session to open.
 pub struct PaneAttacher {
-    herdr: Box<dyn Attacher>,
     known: Arc<Known>,
     ends: Arc<Ends>,
 }
 
 impl Attacher for PaneAttacher {
-    fn open(
-        &self,
-        pane_id: &str,
-        mode: Mode,
-        rows: u16,
-        cols: u16,
-    ) -> Result<SessionParts, String> {
-        self.herdr.open(pane_id, mode, rows, cols)
-    }
-
     fn open_transport(
         &self,
         pane_id: &str,
-        mode: Mode,
         size: Option<GridSize>,
     ) -> Result<Transport, OpenFailure> {
         let deadline = Instant::now() + hide_kit::panes::START_LIMIT;
@@ -280,12 +200,14 @@ impl Attacher for PaneAttacher {
             .map_err(OpenFailure::retried)?
         {
             Some(socket) => open_watched(pane_id, &socket, size, Some(Arc::clone(&self.ends))),
-            None => self.herdr.open_transport(pane_id, mode, size),
+            None => Err(OpenFailure::retried(format!(
+                "Pane {pane_id} has no holder on this node"
+            ))),
         }
     }
 
     fn keeps_own_size(&self, pane_id: &str) -> bool {
-        self.known.contains(pane_id) || self.herdr.keeps_own_size(pane_id)
+        self.known.contains(pane_id)
     }
 }
 
@@ -346,10 +268,9 @@ fn open_watched(
             screen: None,
             ends,
         }),
-        writer: Some(Box::new(writer)),
+        writer: Box::new(writer),
         reads_keys,
         submissions,
-        kept: None,
         // After the release has been written (or a second passed), a
         // reader still waiting on a holder that never answered it is let go.
         cleanup: Cleanup::Other(Box::new(move || shutdown.shutdown())),
@@ -608,7 +529,7 @@ pub struct Recovered {
     pub complete: bool,
 }
 
-/// A state folder's holder panes, as a node with [`SWITCH`] on runs them.
+/// A state folder's holder panes, as a node runs them.
 pub struct Holders {
     panes: Panes,
     source: Source,
@@ -624,16 +545,15 @@ pub struct Holders {
     recovery: (Mutex<Option<HolderRecovery>>, Condvar),
 }
 
-/// What [`Holders::start_local`] starts: the node's terminal service, and its
-/// holder panes when the switch is on.
+/// What [`Holders::start_local`] starts: the node's terminal service and its
+/// holder panes.
 pub struct LocalTerminals {
     pub service: Arc<Service>,
-    pub holders: Option<Arc<Holders>>,
+    pub holders: Arc<Holders>,
 }
 
 /// Where a node's holder panes live: the home whose version folders the
 /// holders are copied into, and the state folder that keeps their records.
-/// Only a node with the switch on has them.
 #[derive(Clone, Copy, Debug)]
 pub struct HolderFolders<'a> {
     pub home: &'a Path,
@@ -677,8 +597,7 @@ impl Holders {
     /// The local node's holder program: the one beside this program, and on
     /// Windows the pinned ConPTY runtime in the folder beside it the app
     /// package puts it in ([`hide_kit::holders::CONPTY_SOURCE`],
-    /// `scripts/fetch-conpty.py`). No Herdr is asked for either, so a node
-    /// runs its holders where no Herdr is.
+    /// `scripts/fetch-conpty.py`).
     pub fn local_source() -> Result<Source, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("this program could not be found: {error}"))?;
@@ -691,59 +610,46 @@ impl Holders {
         })
     }
 
-    /// The local node's terminal service as a daemon starts it: given
-    /// `holders` (the switch on), their state folder's holder panes beside
-    /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
-    /// the holders that ran on while no node was there found again, and the
-    /// version folders nothing runs from removed when its connection has
-    /// acquired pane ownership; given none (the switch off),
-    /// `herdr`'s sessions alone and nothing of holders opened, read or
-    /// removed. hided and the tools that measure a node
-    /// (`hide-node/examples/holder_node.rs`) start it here, so what they
-    /// measure is how the daemon is built.
+    /// The local node's terminal service as a daemon starts it: the state
+    /// folder's holder panes, the holder from
+    /// [`Holders::local_source`], and the holders that ran on while no node
+    /// was there found again, and the version folders nothing runs from
+    /// removed when its connection has acquired pane ownership. hided and
+    /// the tools that measure a node (`hide-node/examples/holder_node.rs`)
+    /// start it here, so what they measure is how the daemon is built.
     pub fn start_local(
-        holders: Option<HolderFolders<'_>>,
-        herdr: Box<dyn Attacher>,
+        folders: HolderFolders<'_>,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
-        let holders = match holders {
-            None => None,
-            Some(folders) => Some((folders, Self::local_source()?)),
-        };
-        Self::start_from(holders, herdr, outputs, reports)
+        Self::start_from(folders, Self::local_source()?, outputs, reports)
     }
 
     /// [`Holders::start_local`] with the holder program `source` names, for
     /// a test that starts a node as the daemon does with the holder it built.
     pub fn start_from(
-        holders: Option<(HolderFolders<'_>, Source)>,
-        herdr: Box<dyn Attacher>,
+        folders: HolderFolders<'_>,
+        source: Source,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
-        let holders = match holders {
-            None => None,
-            Some((folders, source)) => {
-                Some(Arc::new(Self::open(folders, source, Arc::clone(&reports))?))
-            }
-        };
-        let attacher = match &holders {
-            Some(holders) => holders.attacher(herdr),
-            None => herdr,
-        };
+        let holders = Arc::new(Self::open(folders, source, Arc::clone(&reports))?);
         let service = Arc::new(
-            Service::start(attacher, outputs, reports, super::RetryPolicy::Automatic)
-                .map_err(|error| format!("terminal service failed to start: {error}"))?,
+            Service::start(
+                holders.attacher(),
+                outputs,
+                reports,
+                super::RetryPolicy::Automatic,
+            )
+            .map_err(|error| format!("terminal service failed to start: {error}"))?,
         );
         Ok(LocalTerminals { service, holders })
     }
 
-    /// The attacher the node's terminal service opens panes with: holder
-    /// panes over their sockets, the rest through `herdr`.
-    pub fn attacher(&self, herdr: Box<dyn Attacher>) -> Box<dyn Attacher> {
+    /// The attacher the node's terminal service opens panes with: each
+    /// pane over its holder's socket.
+    pub fn attacher(&self) -> Box<dyn Attacher> {
         Box::new(PaneAttacher {
-            herdr,
             known: Arc::clone(&self.known),
             ends: Arc::clone(&self.ends),
         })
@@ -1292,7 +1198,6 @@ impl Holders {
             pane: pane.to_owned(),
             state: PaneTerminalState {
                 state: state.to_owned(),
-                mode: None,
                 generation: 0,
                 attempt: 0,
                 message: Some(message),
@@ -1320,46 +1225,18 @@ fn finished(reason: Option<EndReason>) -> bool {
 mod tests {
     use super::*;
 
-    /// A Herdr attacher that counts its opens and refuses them all, as a
-    /// daemon with no Herdr server does.
-    #[derive(Default)]
-    struct NoHerdr(std::sync::atomic::AtomicUsize);
-
-    impl Attacher for NoHerdr {
-        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            Err("This daemon runs without a Herdr server".to_owned())
-        }
-    }
-
     /// The core's own engine draws a new tab or split before its holder
     /// starts, and the view attaches at once: that attach waits for the
-    /// start and opens the holder, never Herdr, whose refusal used to reach
-    /// the pane's screen and the core's error. A pane whose start fails, or
-    /// that no holder runs, goes to Herdr as before.
+    /// start and opens the holder. A pane whose start fails, or that no
+    /// holder runs, is refused at once.
     #[test]
-    fn an_attach_to_a_pane_whose_holder_is_starting_waits_for_it_and_never_asks_herdr() {
-        let herdr = Arc::new(NoHerdr::default());
-        struct Shared(Arc<NoHerdr>);
-        impl Attacher for Shared {
-            fn open(
-                &self,
-                pane: &str,
-                mode: Mode,
-                rows: u16,
-                cols: u16,
-            ) -> Result<SessionParts, String> {
-                self.0.open(pane, mode, rows, cols)
-            }
-        }
+    fn an_attach_to_a_pane_whose_holder_is_starting_waits_for_it() {
         let known = Arc::new(Known::default());
         let attacher = PaneAttacher {
-            herdr: Box::new(Shared(Arc::clone(&herdr))),
             known: Arc::clone(&known),
             ends: Arc::default(),
         };
         let size = Some(GridSize { rows: 24, cols: 80 });
-        let asked = || herdr.0.load(std::sync::atomic::Ordering::Acquire);
         let missing = tempfile::tempdir().unwrap();
 
         known.starting("w1:p2");
@@ -1367,8 +1244,7 @@ mod tests {
             attacher.keeps_own_size("w1:p2"),
             "a starting pane is a holder pane"
         );
-        // While the start runs the open waits, out to its deadline, rather
-        // than answer the pane through Herdr.
+        // While the start runs the open waits, out to its deadline.
         let began = Instant::now();
         let wait = Duration::from_millis(30);
         assert!(known.socket_once_started("w1:p2", began + wait).is_err());
@@ -1386,32 +1262,25 @@ mod tests {
             assert_eq!(waiting.join().unwrap().unwrap(), Some(socket.clone()));
         });
         // No holder listens there, so the open itself fails, at the holder.
-        assert!(
-            attacher
-                .open_transport("w1:p2", Mode::Control, size)
-                .is_err()
-        );
-        assert_eq!(asked(), 0, "the starting pane's attach never reached Herdr");
+        assert!(attacher.open_transport("w1:p2", size).is_err());
 
         known.starting("w1:p3");
         thread::scope(|scope| {
-            let open = scope.spawn(|| attacher.open_transport("w1:p3", Mode::Control, size));
+            let open = scope.spawn(|| attacher.open_transport("w1:p3", size));
             known.not_started("w1:p3");
             assert!(open.join().unwrap().is_err());
         });
         assert!(!attacher.keeps_own_size("w1:p3"));
-        assert_eq!(asked(), 1, "a start that left nothing goes to Herdr");
 
-        assert!(
-            attacher
-                .open_transport("w1:p9", Mode::Control, size)
-                .is_err()
-        );
-        assert_eq!(asked(), 2, "a pane no holder starts goes to Herdr at once");
+        let refused = attacher
+            .open_transport("w1:p9", size)
+            .err()
+            .expect("a pane no holder runs is refused");
+        assert!(refused.retried, "{}", refused.message);
     }
 
     #[test]
-    fn an_unregistered_pane_of_the_only_engine_has_no_herdr_fallback_at_its_deadline() {
+    fn an_unregistered_pane_of_the_only_engine_fails_at_its_deadline() {
         let known = Known::default();
         assert_eq!(
             known.socket_once_started("w1:p1", Instant::now()).unwrap(),
@@ -1441,20 +1310,6 @@ mod tests {
             (None, false),
         ] {
             assert_eq!(finished(reason), closes, "{reason:?}");
-        }
-    }
-
-    #[test]
-    fn the_switch_is_off_unless_set_to_one_and_refuses_other_values_naming_what_it_takes() {
-        assert_eq!(Switch::parse(None), Ok(Switch::Off));
-        assert_eq!(Switch::parse(Some(OsStr::new("0"))), Ok(Switch::Off));
-        assert_eq!(Switch::parse(Some(OsStr::new("1"))), Ok(Switch::On));
-        for value in ["", "true", "yes", " 1", "2"] {
-            let refused = Switch::parse(Some(OsStr::new(value))).unwrap_err();
-            assert!(
-                refused.contains(SWITCH) && refused.contains("1 (run pane holders) or 0"),
-                "{refused}"
-            );
         }
     }
 

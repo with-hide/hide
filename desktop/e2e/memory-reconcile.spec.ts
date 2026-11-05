@@ -47,7 +47,7 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     await expect(tab.locator("[data-memory-pr-group]")).toHaveCount(0);
     await expect(tab).toContainText("Personal");
     await expect(tab).toContainText("Outdated");
-    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, fixture: "invented cards and scripted GitHub facts; no network", daemonPid: run.daemonPid(), capture: "candidate-window renderer via its own CDP; no OS capture" };
+    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, fixture: "invented cards and scripted GitHub facts; no network", daemonPid: run.daemonPid(), capture: "candidate-window renderer via its own CDP; no OS capture" };
     const candidate = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, windows: BrowserWindow.getAllWindows().length, visible: BrowserWindow.getAllWindows()[0]?.isVisible() }));
     expect(candidate.windows).toBe(1);
     if (process.env.HIDE_E2E_SCREENSHOT_DIR) fs.writeFileSync(path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "candidate.json"), JSON.stringify({ candidate, ...facts }, null, 2));

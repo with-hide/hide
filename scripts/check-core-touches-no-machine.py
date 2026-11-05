@@ -169,7 +169,6 @@ LATER_LAYERS = {}
 
 # Fixtures that are built for tests and never shipped.
 FIXTURES = {
-    "herdr-core/src/bin/hide-fixture.rs": "the e2e fixture binary; the package ships none of herdr-core's binaries",
 }
 
 

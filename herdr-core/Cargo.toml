@@ -15,7 +15,6 @@ hide-kit = { path = "../hide-kit" }
 hide-shell = { path = "../hide-shell" }
 hide-ai = { path = "../hide-ai" }
 hide-desk = { path = "../hide-desk" }
-hide-herdr-client = { path = "../hide-herdr-client" }
 hide-host = { path = "../hide-host" }
 hide-node-link = { path = "../hide-node-link" }
 hide-memory = { path = "../hide-memory" }
@@ -39,10 +38,6 @@ tokio = { version = "=1.53.2", features = ["io-util", "net", "rt-multi-thread", 
 tempfile = "=3.27.0"
 unicode-normalization = "=0.1.25"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
-
-[build-dependencies]
-serde_json = "=1.0.151"
-typify = "=0.8.0"
 
 [dev-dependencies]
 hide-node = { path = "../hide-node" }

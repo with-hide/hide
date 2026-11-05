@@ -2082,7 +2082,7 @@ impl LabelWorker {
             "target": self.target,
             "pane_id": pane_id,
             "state_change_seq": owed,
-            "message": "The session read for a turn that just ended failed; the row is shown as Herdr reports it",
+            "message": "The session read for a turn that just ended failed; the row is shown as the engine reports it",
         }));
         true
     }

@@ -342,6 +342,97 @@ pub fn hook_entries(home: &Path) -> Result<BTreeSet<HookEntry>, String> {
     Ok(found)
 }
 
+/// What taking the entries Herdr's integration wrote out of
+/// `~/.codex/hooks.json` did.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HerdrEntriesRemoved {
+    /// Entries equal to a recorded one, taken out.
+    pub removed: usize,
+    /// Recorded entries the file no longer holds as recorded: gone, or edited
+    /// by the operator, whose edit stays.
+    pub kept_or_gone: usize,
+}
+
+/// Takes out of `home`'s `~/.codex/hooks.json` every command entry equal to
+/// one the kit recorded Herdr's integration writing (`recorded`), byte for
+/// byte in its event, matcher, handler type and command, and the groups and
+/// events that leaves empty; every other entry stays as it is (PRD
+/// engine-bundle-4-herdr-removal D-12). The file is written only when an
+/// entry came out.
+pub fn remove_herdr_entries(
+    home: &Path,
+    recorded: &[HookEntry],
+) -> Result<HerdrEntriesRemoved, crate::InstallFailure> {
+    let path = AgentRuntime::Codex.config_path(home);
+    let Some(mut document) = crate::install::read_document(&path)? else {
+        return Ok(HerdrEntriesRemoved {
+            removed: 0,
+            kept_or_gone: recorded.len(),
+        });
+    };
+    let hooks = crate::install::hooks_object_mut(&mut document, &path)?;
+    let mut found = BTreeSet::new();
+    let mut emptied = Vec::new();
+    for (event, groups) in hooks.iter_mut() {
+        let Some(groups) = groups.as_array_mut() else {
+            continue;
+        };
+        let before = groups.len();
+        for group in groups.iter_mut() {
+            let matcher = group
+                .get("matcher")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let Some(entries) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            entries.retain(|hook| {
+                let entry = match (
+                    hook.get("type").and_then(Value::as_str),
+                    hook.get("command").and_then(Value::as_str),
+                ) {
+                    (Some(COMMAND_HANDLER), Some(command)) => HookEntry {
+                        event: event.clone(),
+                        matcher: matcher.clone(),
+                        handler_type: COMMAND_HANDLER.to_owned(),
+                        command: command.to_owned(),
+                    },
+                    _ => return true,
+                };
+                if recorded.contains(&entry) {
+                    found.insert(entry);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        groups.retain(|group| {
+            group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_none_or(|entries| !entries.is_empty())
+        });
+        if before != 0 && groups.is_empty() {
+            emptied.push(event.clone());
+        }
+    }
+    if found.is_empty() {
+        return Ok(HerdrEntriesRemoved {
+            removed: 0,
+            kept_or_gone: recorded.len(),
+        });
+    }
+    for event in emptied {
+        hooks.shift_remove(&event);
+    }
+    crate::install::write_document(&path, &document)?;
+    Ok(HerdrEntriesRemoved {
+        removed: found.len(),
+        kept_or_gone: recorded.len().saturating_sub(found.len()),
+    })
+}
+
 /// Why an install teaches the kit nothing about what Herdr wrote. The record
 /// is left as it was in either case.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

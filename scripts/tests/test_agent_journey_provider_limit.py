@@ -131,7 +131,7 @@ class RefusedCell(unittest.TestCase):
 
     def test_a_start_whose_emitter_failed_beside_an_unanswered_turn_stays_the_emitters_failure(self):
         unanswered = cells.turn_verdict([], [{"role": "user", "text": "go"}], "JOURNEY-1")
-        emitter = cells.emitter_verdict(None, "herdr:codex")
+        emitter = cells.emitter_verdict(None)
         verdict = cells.start_verdict((cells.PASS, "spawned"), unanswered, emitter)
         self.assertEqual(cells.kind(unanswered), cells.NO_ANSWER)
         table, record = self.settled(verdict)

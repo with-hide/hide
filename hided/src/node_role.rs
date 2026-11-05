@@ -66,11 +66,6 @@ pub struct NodeIdentity {
     pub build: String,
     /// This build's version and order, which the core's are compared with.
     pub release: crate::build_order::Release,
-    /// This machine's own Herdr, which the core reaches only through the
-    /// link.
-    pub herdr_socket: PathBuf,
-    /// The Herdr binary this machine's panes attach with.
-    pub herdr_bin: PathBuf,
     /// Where this node keeps what it measured of each repository's
     /// worktrees across links and restarts; none keeps them for one link.
     pub worktree_facts: Option<PathBuf>,
@@ -1320,7 +1315,6 @@ fn serve_link(
             node: identity.node.clone(),
             label: identity.label.clone(),
             build: identity.build.clone(),
-            herdr_socket: identity.herdr_socket.display().to_string(),
             release: identity.release.clone(),
             move_intent: placement.move_intent.clone(),
         }),
@@ -1371,10 +1365,7 @@ fn carry_link(
     let forward = core
         .forward(accepted.port)
         .map_err(|error| LinkFailure::Transport(format!("relay_forward: {error}")))?;
-    let terminals = Arc::new(NodeTerminals::for_screen(
-        Arc::clone(&shared.screen),
-        identity.herdr_bin.clone(),
-    ));
+    let terminals = Arc::new(NodeTerminals::for_screen(Arc::clone(&shared.screen)));
     let roots = match &shared.roots_changed {
         Some(changed) => {
             changed(&[]);
@@ -1435,7 +1426,6 @@ fn serve(
         writer,
         hide_host::serve::Services {
             terminals: Some(terminals),
-            herdr_socket: Some(identity.herdr_socket.clone()),
             heartbeat: true,
             checkout_callers: true,
             opened_roots: Some(roots),

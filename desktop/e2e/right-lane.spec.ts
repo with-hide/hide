@@ -146,7 +146,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
     const identity = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, window: BrowserWindow.getAllWindows()[0]!.getMediaSourceId(), screen: BrowserWindow.getAllWindows()[0]!.getBounds() }));
     const dir = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (dir) fs.writeFileSync(path.join(dir, "lane-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), socket: fixture.socket, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, home: run.env.HOME }, null, 2));
+    if (dir) fs.writeFileSync(path.join(dir, "lane-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, home: run.env.HOME }, null, 2));
     await bodyWidth(app, page, 1600);
     await nativeCapture(app, page, "lane-closed");
     const resizeCount = () => sent.get("terminal_resize") ?? 0;
@@ -487,12 +487,12 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     const dir = process.env.HIDE_E2E_SCREENSHOT_DIR;
     if (dir) {
       const candidate = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, window: BrowserWindow.getAllWindows()[0]!.getMediaSourceId(), executable: process.execPath }));
-      fs.writeFileSync(path.join(dir, "remote-lane-identity.json"), JSON.stringify({ ...candidate, daemonPid: run.daemonPid(), engine: local.engine, localSocket: local.socket, remoteSocket: remote.socket, home: run.env.HOME, deviceHome: remoteHome, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, transport: "real loopback SSH to a separate private device" }, null, 2));
+      fs.writeFileSync(path.join(dir, "remote-lane-identity.json"), JSON.stringify({ ...candidate, daemonPid: run.daemonPid(), home: run.env.HOME, deviceHome: remoteHome, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, transport: "real loopback SSH to a separate private device" }, null, 2));
     }
     await enterWorkspace(page, "fixture");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };
     await sendEvent(page, { origin: new URL(page.url()).origin, token: state.token }, "register_device", {
-      id: "lane-ssh", label: "SSH lane", ssh_alias: "isolated-lane", herdr_socket_path: remote.socket, host_consent: true,
+      id: "lane-ssh", label: "SSH lane", ssh_alias: "isolated-lane", host_consent: true,
     });
     const rail = (device: string) => page.locator(`[data-rail-tile="${device}"]`);
     await expect(rail("lane-ssh")).toHaveAttribute("data-rail-connected", "true", { timeout: 120_000 });

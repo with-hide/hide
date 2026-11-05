@@ -9,8 +9,8 @@ import { cn } from "./lib/utils";
 import { clampMapZoom, mapFit, mapLayout, MAX_MAP_ZOOM, MIN_MAP_ZOOM, stepMapZoom } from "./missionMapZoom";
 import { anchoredScroll, wheelZoomFactor, type Point, type Size } from "./viewers/viewerZoom";
 
-// The box a mission's map is drawn in (docs/UI_BEHAVIOR.md, A mission's
-// map): it opens at 맞춤 and keeps fitting while the operator has not
+// The box a mission's map is drawn in (with-hide/hide-private
+// docs/tasks-and-pr-list.md, A mission's map): it opens at 맞춤 and keeps fitting while the operator has not
 // zoomed, so a panel opening beside it or a resized slot fits it again; a
 // pinch or a wheel with ⌘ (Ctrl off macOS) zooms around the pointer, a
 // drag from an empty spot moves the map, and − · % · + · 맞춤 sit at its

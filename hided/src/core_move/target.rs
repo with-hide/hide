@@ -174,17 +174,11 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
         refused,
         handover,
     } = Folder::look_at(state_dir).map_err(plain)?;
-    // The Herdr this machine's core would own, as its daemon resolves it.
     let env = crate::env::load()
         .map_err(|errors| plain(format!("{} environment errors", errors.len())))?;
-    let herdr_bin = env.herdr_program();
     let failed = super::preflight::failing(
         &env.home,
         state_dir,
-        &super::preflight::Herdr {
-            bin: herdr_bin.as_deref(),
-            socket: env.herdr_socket_path.as_deref(),
-        },
         ai,
         &super::preflight::Programs::for_this_machine().map_err(plain)?,
     );
@@ -194,7 +188,7 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
             .map_err(|error| plain(error.to_string()))?,
         brain: copy::brain_present(state_dir),
         handover,
-        herdr_socket: env.herdr_socket_path,
+        herdr_socket: super::preflight::movable_scope(),
         ai: herdr_core::stored_hide_ai_settings(&env.home),
         failed,
         path_refused: refused,

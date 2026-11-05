@@ -1,4 +1,4 @@
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, channel};
 
 use hide_host::serve::Terminals;
 use hide_node_link::terminal::GridSize;
@@ -68,7 +68,6 @@ fn a_device_past_its_unsent_reports_keeps_each_panes_last_state() {
     }
     let state = PaneTerminalState {
         state: "controlling".into(),
-        mode: Some("control".into()),
         generation: 3,
         attempt: 1,
         message: None,
@@ -188,29 +187,16 @@ fn a_devices_diagnostic_keeps_its_plain_fields_cut_to_size() {
     );
 }
 
-fn node(socket_seen: Sender<String>) -> (NodeTerminals, Receiver<Opened>) {
+/// A device node whose service runs over the fake attacher, as
+/// [`NodeTerminals::start_holders`] starts it over the node's holders.
+fn node() -> (NodeTerminals, Receiver<Opened>) {
     let (opened_tx, opened) = channel();
-    let attacher = Arc::new(FakeAttacher {
+    let attacher = FakeAttacher {
         opened: Mutex::new(opened_tx),
         refuse: Mutex::new(None),
-    });
-    let socket_seen = Mutex::new(socket_seen);
-    let node = NodeTerminals::with_attacher(Box::new(move |socket: &str| {
-        socket_seen.lock().unwrap().send(socket.to_owned()).unwrap();
-        struct Shared(Arc<FakeAttacher>);
-        impl super::super::Attacher for Shared {
-            fn open(
-                &self,
-                pane: &str,
-                mode: super::super::Mode,
-                rows: u16,
-                cols: u16,
-            ) -> Result<super::super::SessionParts, String> {
-                self.0.open(pane, mode, rows, cols)
-            }
-        }
-        Box::new(Shared(Arc::clone(&attacher)))
-    }));
+    };
+    let node = NodeTerminals::new();
+    node.start_service(Box::new(attacher)).unwrap();
     (node, opened)
 }
 
@@ -230,10 +216,7 @@ fn attach(node: &NodeTerminals, opened: &Receiver<Opened>, pane: &str) -> Opened
 /// keys nor its frames.
 #[test]
 fn a_flooding_pane_holds_back_neither_another_panes_keys_nor_its_frames() {
-    let (socket_tx, socket) = channel();
-    let (node, opened) = node(socket_tx);
-    node.start("/tmp/herdr.sock").unwrap();
-    assert_eq!(socket.recv().unwrap(), "/tmp/herdr.sock");
+    let (node, opened) = node();
     let flooding = attach(&node, &opened, "w1:p1");
     let quiet = attach(&node, &opened, "w1:p2");
     flooding.frame(SIZE, true, b"start");
@@ -420,7 +403,6 @@ fn wait_for(mut done: impl FnMut() -> bool) {
 fn controlling() -> PaneTerminalState {
     PaneTerminalState {
         state: "controlling".into(),
-        mode: Some("control".into()),
         generation: 4,
         attempt: 1,
         message: None,
@@ -958,7 +940,6 @@ fn a_devices_notes_count_against_the_record_cap_and_its_states_do_not() {
                 pane: "w1:p1".into(),
                 state: PaneTerminalState {
                     state: "live".into(),
-                    mode: None,
                     generation: 1,
                     attempt: 1,
                     message: None,

@@ -4,9 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::Runtime;
-use crate::product_analytics::{
-    DeviceFailedStep, DeviceHerdr, DeviceOutcome, DevicePlatform, Event,
-};
+use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
 use crate::remote::EstablishError;
 
 const MAX_ATTEMPTS: usize = 128;
@@ -88,39 +86,9 @@ impl Runtime {
         {
             return;
         }
-        use hide_kit::device_herdr::HerdrUpdate;
         let outcome = match report {
-            Err(_) => DeviceOutcome::Failed(DeviceFailedStep::Install),
-            Ok(report) if report.refused.is_some() => {
-                DeviceOutcome::Failed(DeviceFailedStep::Install)
-            }
-            Ok(report) => match report.herdr.as_deref() {
-                Some(HerdrUpdate::Started { .. }) => DeviceOutcome::Ready(DeviceHerdr::Started),
-                Some(HerdrUpdate::HandedOff { .. }) => DeviceOutcome::Ready(DeviceHerdr::HandedOff),
-                Some(HerdrUpdate::Current { .. }) => DeviceOutcome::Ready(DeviceHerdr::Current),
-                Some(HerdrUpdate::Kept { .. }) => DeviceOutcome::Ready(DeviceHerdr::Kept),
-                Some(HerdrUpdate::Behind { .. }) => {
-                    DeviceOutcome::Failed(DeviceFailedStep::HerdrHandoff)
-                }
-                Some(HerdrUpdate::Failed { stage, .. }) => {
-                    DeviceOutcome::Failed(match stage.as_str() {
-                        "upload" => DeviceFailedStep::Install,
-                        "record" | "handoff" | "confirm" => DeviceFailedStep::HerdrHandoff,
-                        _ => DeviceFailedStep::HerdrStart,
-                    })
-                }
-                None if self
-                    .device_registration(device)
-                    .is_some_and(|registration| registration.herdr_session.is_some()) =>
-                {
-                    DeviceOutcome::Ready(DeviceHerdr::Preserved)
-                }
-                // An old helper's NoServer or a missing pin/updater did not
-                // establish a Herdr outcome. Never invent a ready value.
-                Some(HerdrUpdate::NoServer { .. }) | None => {
-                    DeviceOutcome::Failed(DeviceFailedStep::HerdrStart)
-                }
-            },
+            Ok(report) if report.refused.is_none() => DeviceOutcome::Ready,
+            Ok(_) | Err(_) => DeviceOutcome::Failed(DeviceFailedStep::Install),
         };
         self.finish_device_connect(device, outcome);
     }

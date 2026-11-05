@@ -18,14 +18,13 @@
 //! ([`store`]) and, as it opens, lays the saved session out again around the
 //! holders that ran on, starts the rest again and resumes their agents
 //! ([`restore`]), so a pane keeps its id across a restart and a reboot.
-//! Only a daemon with the development
-//! switch `HIDE_DEV_PANE_HOLDER` on builds this engine (D-5).
+//! Every daemon builds this engine (PRD engine-bundle-4-herdr-removal D-2).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
@@ -35,10 +34,10 @@ use hide_node_link::holders::{
 
 use super::keys::PaneKey;
 use super::{
-    AgentLaunch, AgentState, Answer, Changes, CreatedWorktree, DeliveryAgent, Engine, EngineError,
-    Env, EventStream, Gate, Notified, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup,
-    PaneProof, PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong,
-    StartedAgent, Wait, Wake, Zoom,
+    AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
+    Gate, Notified, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof,
+    PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong, StartedAgent,
+    Wait, Wake, Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -1281,10 +1280,6 @@ fn prompt_text(kind: &str, windows: bool, body: PaneInput) -> Vec<PaneInput> {
 /// Ghostty encoder writes it.
 const FOCUS_GAINED: &[u8] = b"\x1b[I";
 
-/// The source a session this engine knows is reported under: what the
-/// engine itself saw at a start or a report, never an agent's integration.
-const NATIVE_SESSION_SOURCE: &str = "hide";
-
 /// The agent kind a pane runs, in the name Herdr would give it.
 fn shown_kind(catalog: &hide_agent_adapter::definition::Catalog, kind: &str) -> String {
     agents::definition(catalog, kind).map_or_else(|| kind.to_owned(), agents::kind_name)
@@ -1297,7 +1292,6 @@ fn delivery_of(
     agent: &agents::PaneAgent,
 ) -> DeliveryAgent {
     DeliveryAgent {
-        terminal_id: pane.clone(),
         name: agent.name.clone().unwrap_or_else(|| pane.clone()),
         pane_id: pane,
         kind: Some(shown_kind(catalog, &agent.kind)),
@@ -1404,13 +1398,12 @@ impl<'g> Engine for OwnEngine<'g> {
         })
     }
 
-    fn changes(&self, wake: Wake) -> Changes {
+    fn changes(&self, wake: Wake) {
         *self
             .shared
             .wake
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(wake);
-        Changes::Pulled
     }
 
     fn set_agent_definitions(&self, catalog: Arc<hide_agent_adapter::definition::Catalog>) {
@@ -1456,7 +1449,7 @@ impl<'g> Engine for OwnEngine<'g> {
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
         self.check()?;
         let catalog = self.shared.definitions.get();
-        self.topology().state(&catalog)
+        self.topology().state_at(&catalog, Instant::now())
     }
 
     fn session_payload(&self, wait: Wait) -> Answer<SessionSnapshotPayload> {
@@ -1530,15 +1523,6 @@ impl<'g> Engine for OwnEngine<'g> {
         })
     }
 
-    fn subscribe(&self, _timeout: Duration) -> Answer<EventStream> {
-        self.check()?;
-        Err(EngineError::Refused {
-            code: "no_event_stream".to_owned(),
-            message: "the core's own engine wakes its watcher instead of streaming events"
-                .to_owned(),
-        })
-    }
-
     fn create_workspace(
         &self,
         _wait: Wait,
@@ -1565,11 +1549,6 @@ impl<'g> Engine for OwnEngine<'g> {
     fn workspace_active_tab(&self, _wait: Wait, workspace: &str) -> Answer<String> {
         self.check()?;
         self.topology().active_tab(workspace)
-    }
-
-    fn focused_workspace(&self, _wait: Wait) -> Answer<Option<String>> {
-        self.check()?;
-        Ok(self.topology().focused_workspace())
     }
 
     fn workspace_tokens(&self, _wait: Wait, token: &str) -> Answer<Vec<(String, Option<String>)>> {
@@ -2107,14 +2086,6 @@ impl<'g> Engine for OwnEngine<'g> {
         self.processes(pane)
     }
 
-    fn foreground_program(&self, _wait: Wait, pane: &str) -> Answer<Option<String>> {
-        self.check()?;
-        Ok(self
-            .processes(pane)?
-            .foreground_program()
-            .map(str::to_owned))
-    }
-
     fn resumed_session(
         &self,
         _wait: Wait,
@@ -2181,12 +2152,8 @@ impl<'g> Engine for OwnEngine<'g> {
         })
     }
 
-    fn inspect_pane(
-        &self,
-        wait: Wait,
-        pane: &str,
-    ) -> Option<Answer<hide_node_link::panes::PaneIdentity>> {
-        Some(self.pane_identity(wait, pane).and_then(|proof| {
+    fn inspect_pane(&self, wait: Wait, pane: &str) -> Answer<hide_node_link::panes::PaneIdentity> {
+        self.pane_identity(wait, pane).and_then(|proof| {
             Ok(hide_node_link::panes::PaneIdentity {
                 terminal_id: proof.terminal_id,
                 shell_pid: proof.shell_pid,
@@ -2194,7 +2161,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     refused("pane_not_running", format!("pane {pane} has no start"))
                 })?,
             })
-        }))
+        })
     }
 
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String> {
@@ -2288,33 +2255,6 @@ impl<'g> Engine for OwnEngine<'g> {
         let topology = self.topology();
         let (pane, _, agent) = topology.agent(target)?;
         Ok(delivery_of(&catalog, pane, agent))
-    }
-
-    fn observed_agent(
-        &self,
-        _wait: Wait,
-        target: &str,
-    ) -> Answer<(
-        DeliveryAgent,
-        Option<hide_agent_hooks::observation::ObservationNativeSession>,
-    )> {
-        self.check()?;
-        let catalog = self.shared.definitions.get();
-        let topology = self.topology();
-        let (pane, _, agent) = topology.agent(target)?;
-        let native = agent.session.as_ref().map(|session| {
-            hide_agent_hooks::observation::ObservationNativeSession {
-                source: NATIVE_SESSION_SOURCE.to_owned(),
-                agent: shown_kind(&catalog, &agent.kind),
-                kind: match agents::session_kind(session) {
-                    PaneSessionKind::Id => "id",
-                    PaneSessionKind::Path => "path",
-                }
-                .to_owned(),
-                value: session.clone(),
-            }
-        });
-        Ok((delivery_of(&catalog, pane, agent), native))
     }
 
     #[allow(clippy::disallowed_methods)] // Herdr's submit delay, a production wait
@@ -2427,6 +2367,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Condvar, Mutex};
+    use std::time::Duration;
 
     use hide_node_link::holders::{HolderProcesses, HolderRecovery};
 
@@ -2926,7 +2867,7 @@ mod tests {
             let (sent, read) = std::sync::mpsc::channel();
             let engine = Arc::clone(&self.engine);
             std::thread::spawn(move || {
-                let _ = sent.send(engine.focused_workspace(WAIT).is_ok());
+                let _ = sent.send(engine.session(WAIT).is_ok());
             });
             let topology_free = read.recv_timeout(Duration::from_secs(2)).unwrap_or(false);
             self.seen
@@ -3339,10 +3280,6 @@ mod tests {
         );
         assert_eq!(engine.read_screen(WAIT, &failed).unwrap_err(), expected);
         assert_eq!(engine.pane_identity(WAIT, &failed).unwrap_err(), expected);
-        assert_eq!(
-            engine.foreground_program(WAIT, &failed).unwrap_err(),
-            expected
-        );
     }
 
     #[test]
@@ -3353,7 +3290,7 @@ mod tests {
         holders.refuse.store(true, Ordering::Release);
         refused_for_the_holder(engine.create_workspace(WAIT, "/w", "w", true, Env::new()));
         assert!(listed(&engine).is_empty());
-        assert_eq!(engine.focused_workspace(WAIT).unwrap(), None);
+        assert_eq!(engine.topology().focused_workspace, None);
 
         holders.refuse.store(false, Ordering::Release);
         let (workspace, tab, pane) = engine
@@ -3878,7 +3815,7 @@ mod tests {
         assert!(again.already_open);
         assert_eq!(again.workspace_id, opened.workspace_id);
         assert_eq!(
-            engine.focused_workspace(WAIT).unwrap().as_deref(),
+            engine.topology().focused_workspace.as_deref(),
             Some(opened.workspace_id.as_str())
         );
 
@@ -4592,6 +4529,151 @@ mod tests {
             refused(engine.prompt_agent(WAIT, "worker", "hi")),
             "agent_blocked"
         );
+    }
+
+    /// A woken agent's pane still shows the last run's screen, which reads
+    /// at rest at once, so nothing the holder reports changes when its
+    /// start's settle passes. The read that has the start pending names that
+    /// moment (`settles_at`), for the coordinator that publishes it to read
+    /// again then; a read that publishes nothing in between (an agent
+    /// lookup) changes nothing, and the read at the settle has the start
+    /// settled and names nothing more (journey 41929631031, a resumed Codex
+    /// that dropped the prompt typed half a second after its wake).
+    #[test]
+    fn a_start_whose_screen_already_rests_is_read_settled_once_its_settle_passes() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "codex", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        holders.say(&pane, &running("codex", ScreenState::Idle));
+        let read = |engine: &OwnEngine| {
+            let session = engine.session(WAIT).unwrap();
+            let agent = session
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane)
+                .unwrap();
+            (
+                agent.agent_status.clone(),
+                agent.launch_pending,
+                session.settles_at,
+            )
+        };
+        let started = engine
+            .topology()
+            .pane(&pane)
+            .unwrap()
+            .agent
+            .as_ref()
+            .unwrap()
+            .live
+            .started
+            .unwrap();
+        let published = read(&engine);
+        assert_eq!(
+            published,
+            (
+                Some("idle".to_owned()),
+                true,
+                Some(started + agents::START_SETTLE)
+            ),
+            "a screen at rest within the settle"
+        );
+        settle_start(&engine, &pane);
+        // A lookup after the settle passed reads without acting on it.
+        assert!(
+            engine
+                .agents(WAIT)
+                .unwrap()
+                .iter()
+                .any(|agent| agent.pane_id == pane)
+        );
+        assert_eq!(
+            read(&engine),
+            (Some("idle".to_owned()), false, None),
+            "the coordinator's read at the moment the published read named"
+        );
+    }
+
+    /// Whatever moment a read lands at around a start's settle and deadline,
+    /// a start the read has pending names a later moment to read again, and
+    /// one it has settled names none: a read whose start is pending but
+    /// that names no moment leaves the row starting until something else
+    /// changes.
+    #[test]
+    fn a_read_that_has_a_start_pending_always_names_a_later_moment() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "codex", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        let catalog = engine.shared.definitions.get();
+        let read = |now: Instant| {
+            let topology = engine.topology();
+            let state = topology.state_at(&catalog, now).unwrap();
+            let pending = state
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane)
+                .is_some_and(|agent| agent.launch_pending);
+            (pending, state.settles_at)
+        };
+        let tick = std::time::Duration::from_millis(1);
+        for (screen, settles) in [(ScreenState::Idle, true), (ScreenState::Working, false)] {
+            holders.say(&pane, &running("codex", screen));
+            let started = engine
+                .topology()
+                .pane(&pane)
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .live
+                .started
+                .unwrap();
+            let settle = started + agents::START_SETTLE;
+            let deadline = started + agents::START_DEADLINE;
+            for now in [
+                settle - tick,
+                settle,
+                settle + tick,
+                deadline - tick,
+                deadline,
+            ] {
+                let (pending, next) = read(now);
+                assert_eq!(
+                    pending,
+                    next.is_some(),
+                    "{screen:?} at {:?} after the start",
+                    now - started
+                );
+                if let Some(next) = next {
+                    assert!(next > now, "{screen:?}: the moment is later");
+                }
+            }
+            assert_eq!(read(settle - tick), (true, Some(settle)), "{screen:?}");
+            assert_eq!(
+                read(settle).0,
+                !settles,
+                "{screen:?}: a resting screen settles at the settle"
+            );
+            if !settles {
+                assert_eq!(read(settle).1, Some(deadline), "{screen:?}");
+            }
+        }
     }
 
     /// A brief typed while the agent's program still leaves the terminal

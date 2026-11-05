@@ -1,20 +1,18 @@
 // What the native spawn specs (`agent-spawn.spec.ts`, `agent-handoff.spec.ts`)
-// share on either engine: a Git repository with one linked worktree, the
-// answer of a `hide agent` command run by a real agent process in its pane
-// (`agentPane` in `web/e2e/agent-pane.ts`, whose stand-in reports its native
-// session the way the pane's engine learns one), and, on Herdr only, the
-// native agent rows Herdr keeps beside the daemon's.
+// share: a Git repository with one linked worktree, and the answer of a
+// `hide agent` command run by a real agent process in its pane (`agentPane`
+// in `web/e2e/agent-pane.ts`, whose stand-in reports its native session the
+// way the engine learns one).
 
 import { expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentFixture, HideRunner } from "../../web/e2e/engine-fixture";
+import type { HideRunner } from "../../web/e2e/engine-fixture";
 import { corePaneFocus, withControl } from "../../web/e2e/daemon-actions";
 import type { Daemon } from "../../web/e2e/hided-fixture";
 
 export type SpawnedAgent = { id: string; pane: string; machine: string; parent: string | null; origin: string | null; watch: string | null; session: string };
-type NativeAgent = { pane_id: string; terminal_id: string; agent_session?: { value: string }; tokens?: Record<string, unknown> };
 
 /**
  * A repository `<root>/repo` on `main` with one commit and a linked
@@ -58,12 +56,4 @@ export async function coreFocus(daemon: Pick<Daemon, "origin" | "token">): Promi
 /** Waits until the core holds `pane` focused. */
 export async function expectCoreFocus(daemon: Pick<Daemon, "origin" | "token">, pane: string): Promise<void> {
   await expect.poll(() => coreFocus(daemon), { message: `the core's keyboard focus on ${pane}` }).toBe(pane);
-}
-
-/** Herdr's own agent rows: what its integration reports for each pane, which only Herdr keeps. */
-export function herdrAgents(fixture: AgentFixture): NativeAgent[] {
-  if (fixture.engine !== "herdr") throw new Error("only Herdr keeps native agent rows");
-  const herdr = fixture as AgentFixture & { env: NodeJS.ProcessEnv; bin: string };
-  const answer = JSON.parse(execFileSync(herdr.bin, ["api", "snapshot"], { env: herdr.env, encoding: "utf8", timeout: 20_000 })) as { result: { snapshot: { agents: NativeAgent[] } } };
-  return answer.result.snapshot.agents;
 }

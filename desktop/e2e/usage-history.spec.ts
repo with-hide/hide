@@ -44,7 +44,7 @@ test("native usage history preserves totals, hover geometry and the Overview fil
       const candidate = await app!.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, windows: BrowserWindow.getAllWindows().length, switches: process.argv, bounds: BrowserWindow.getAllWindows()[0]!.getBounds() }));
       expect(candidate.windows).toBe(1);
       const directory = process.env.HIDE_E2E_SCREENSHOT_DIR;
-      if (directory) fs.writeFileSync(path.join(directory, `${name}.json`), JSON.stringify({ candidate, home: run.env.HOME, socket: fixture.socket, fixture: "six native calls; new tokens 360, cache read 5400; unknown model", collector: "isolated Electron renderer screenshot" }, null, 2));
+      if (directory) fs.writeFileSync(path.join(directory, `${name}.json`), JSON.stringify({ candidate, home: run.env.HOME, fixture: "six native calls; new tokens 360, cache read 5400; unknown model", collector: "isolated Electron renderer screenshot" }, null, 2));
       await screenshot(page, name);
     };
     for (const language of ["en", "ko"] as const) {

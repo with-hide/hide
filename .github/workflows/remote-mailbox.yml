@@ -1,21 +1,13 @@
 # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
-# docs/TESTING.md), with the terminal attach children's real-process test
-# beside it on the same pinned Herdr, as one reusable job: the candidate CLI binaries, two private
-# pinned Herdr servers and a loopback SSH server. A device is reached with
-# the system `ssh` (PRD system-ssh-device-link), so the node contract, the
-# device bootstrap, the mailbox and the sign-in journeys
-# (hided/tests/it/system_ssh.rs) run against the system's own `sshd` on
-# loopback. `pr.yml` runs it on Linux for
-# a change to the crates it builds, and `nightly.yml` on macOS, the system of
-# the usual remote device: the fixture signs its staged binaries there. It
-# also runs the one other hided
-# test that needs the pinned Herdr beside a real daemon and no SSH
-# (hided/tests/it/held_letter_notice.rs), because this is the lane that already
-# fetches the pinned binary for a change to `hided` or `herdr-core`, and the
-# remote core journeys (hided/tests/it/remote_core.rs), which need the same
-# binaries, pinned Herdr and loopback SSH, and a device of the core's own
-# engine (hided/tests/it/device_own_engine.rs), which needs the loopback SSH
-# and the built pane holder and no Herdr.
+# docs/TESTING.md) as one reusable job: the candidate CLI binaries and the
+# pane holder, a daemon and a device whose panes run on the core's own
+# engine, and a loopback SSH server. A device is reached with the system
+# `ssh` (PRD system-ssh-device-link), so the node contract, the mailbox, the
+# sign-in journeys (hided/tests/it/system_ssh.rs) and a device's holder panes
+# (hided/tests/it/device_own_engine.rs) run against the system's own `sshd`
+# on loopback. `pr.yml` runs it on Linux for a change to the crates it
+# builds, and `nightly.yml` on macOS, the system of the usual remote device:
+# the fixture signs its staged binaries there.
 name: remote mailbox lane
 
 on:
@@ -23,10 +15,6 @@ on:
     inputs:
       runner:
         description: The GitHub-hosted runner label.
-        type: string
-        required: true
-      herdr-platform:
-        description: The pinned Herdr asset to run, as `fetch-herdr-runtime.sh --platform` names it.
         type: string
         required: true
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
@@ -55,17 +43,16 @@ jobs:
           set: workspace
           save: false
       # hide-vt's Zig inputs and caches, which the vt lane saves: the pane
-      # holder a device of the core's own engine runs links hide-vt.
+      # holder every pane runs in links hide-vt.
       - uses: ./.github/actions/vt-cache
         timeout-minutes: 5
         with:
           save: false
       - name: Install zsh and the SSH server
-        # The fixture starts every pane's shell from SHELL=/bin/zsh, and the
-        # Herdr fetch script is zsh; the Linux image has neither. A device's
-        # tests, the remote core's and the core move's run against the
-        # system's sshd. The mirror can stall (web-e2e.yml), so apt retries
-        # and gives up on a silent connection. macOS has both.
+        # The fixture starts every pane's shell from SHELL=/bin/zsh, which the
+        # Linux image lacks, and a device's tests run against the system's
+        # sshd. The mirror can stall (web-e2e.yml), so apt retries and gives
+        # up on a silent connection. macOS has both.
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: |
@@ -108,67 +95,18 @@ jobs:
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
       - name: Build the CLI binaries
-        # hided, hide, the agent hooks and the host helper: the lane stages and
-        # starts all four.
+        # hided, hide, the agent hooks and the pane holder: the lane stages and
+        # starts them all.
         timeout-minutes: 20
         run: bash scripts/verify-cargo.sh cli
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        timeout-minutes: 5
-        env:
-          HERDR_PLATFORM: ${{ inputs.herdr-platform }}
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
+      - name: Remote mailbox, node contract and a device's holder panes over the system ssh
+        # device_own_engine (PRD engine-bundle-3-core-owns D-22, B35): a pane
+        # keeps its process when the device's node ends with its link and a
+        # new link's node finds it. The node contract's device links start
+        # their holders from the built one too.
+        timeout-minutes: 20
         run: |
-          bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Fetch an older Herdr release for the device handoff
-        # hided/tests/it/herdr_handoff.rs hands a device server the operator
-        # started from an older Herdr to the pinned one (PRD
-        # device-herdr-update B2). 0.9.1 is the release devices ran when they
-        # started following the pin; a pin it cannot hand over to fails that
-        # test, which is then the device update's real limit to decide on.
-        id: older-herdr
-        timeout-minutes: 5
-        env:
-          HERDR_PLATFORM: ${{ inputs.herdr-platform }}
-        run: |
-          case "$HERDR_PLATFORM" in
-            linux-x86_64) digest=2a02fed16beb651ef006e1d43f048f652ca4dc58ad053cd2d44450563d5c54b7 ;;
-            macos-aarch64) digest=5fc7a7e7adfaca56fa80aa89dcb025693357268dab8285b9ce2d08a2313c89de ;;
-            *) echo "no older Herdr is recorded for $HERDR_PLATFORM" >&2; exit 1 ;;
-          esac
-          bin="$RUNNER_TEMP/herdr-0.9.1/herdr"
-          mkdir -p "$(dirname "$bin")"
-          curl -fsSL --retry 3 -o "$bin" "https://github.com/herdrdev/herdr/releases/download/v0.9.1/herdr-$HERDR_PLATFORM"
-          echo "$digest  $bin" | shasum -a 256 -c -
-          chmod 755 "$bin"
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Fetch a Herdr release on an older protocol for this Mac's move
-        # hided/tests/it/herdr_handoff.rs moves a server the operator started
-        # from their own Herdr 0.8.2 (protocol 20), which this build cannot
-        # read, onto the pinned one when asked (PRD herdr-takeover B1, B7).
-        id: older-protocol-herdr
-        timeout-minutes: 5
-        env:
-          HERDR_PLATFORM: ${{ inputs.herdr-platform }}
-        run: |
-          case "$HERDR_PLATFORM" in
-            linux-x86_64) digest=976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4 ;;
-            macos-aarch64) digest=a5d4f4d504d8b309c91f811050559300faba31258425f53c50852fc96f6ae574 ;;
-            *) echo "no older-protocol Herdr is recorded for $HERDR_PLATFORM" >&2; exit 1 ;;
-          esac
-          bin="$RUNNER_TEMP/herdr-0.8.2/herdr"
-          mkdir -p "$(dirname "$bin")"
-          curl -fsSL --retry 3 -o "$bin" "https://github.com/herdrdev/herdr/releases/download/v0.8.2/herdr-$HERDR_PLATFORM"
-          echo "$digest  $bin" | shasum -a 256 -c -
-          chmod 755 "$bin"
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Remote mailbox, device bootstrap and node contract over the system ssh
-        timeout-minutes: 15
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice|device_bootstrap|node_contract|system_ssh)::/) & !test(protocol24)' --run-ignored only
+          HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only
       - name: Another account's hide <path> on a device's bridge
         # hide-host/src/panes.rs: a plain shell's `hide <path>` is proved only
         # as a process of the node's own account, by the kernel's answer about
@@ -176,56 +114,6 @@ jobs:
         # process of another account (`nobody`) this needs.
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=panes::tests::another_account_s_open_is_refused_by_the_kernel_s_peer_check)' --run-ignored only
-      - name: A device of the core's own engine over the system ssh
-        # hided/tests/it/device_own_engine.rs (PRD engine-bundle-3-core-owns
-        # D-22, B35): the device gets the pane holder and no Herdr, and a pane
-        # keeps its process when the device's node ends with its link and a
-        # new link's node finds it.
-        timeout-minutes: 15
-        run: |
-          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
-          HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^device_own_engine::/)' --run-ignored only
-      - name: A screen machine whose core runs on another machine
-        # hided/tests/it/remote_core.rs (PRD core-host-node-remote-core): a
-        # node-role hided attached over this lane's loopback SSH to a core
-        # hided, each with its own pinned Herdr.
-        timeout-minutes: 10
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^remote_core::/)' --run-ignored only
-      - name: The core moves to another machine and back
-        # hided/tests/it/core_move.rs (PRD core-host-node-move): a core
-        # moved over this lane's loopback SSH to a second "machine" and back,
-        # each with its own pinned Herdr and state folder, and every failure
-        # row of the move rolled back without two cores.
-        timeout-minutes: 15
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^core_move::/)' --run-ignored only
-      - name: Terminal attach children end with what started them
-        # hided/tests/it/terminal_children.rs (PRD core-host-node-terminal B20):
-        # a SIGKILLed hided and a dropped device link each leave no
-        # `herdr terminal session` running, on the pinned Herdr this lane
-        # already fetched.
-        timeout-minutes: 5
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^terminal_children::/)' --run-ignored only
-      - name: A Herdr server an older app started moves onto this app's Herdr
-        # hided/tests/it/herdr_handoff.rs: a pinned Herdr server started from
-        # one app folder is handed to another app's Herdr with its pane's
-        # process kept, and a Herdr no Hide app holds is left alone; a
-        # device's server started from an older Herdr moves to the pinned copy
-        # with its pane, one on another socket stays, and a refused handoff is
-        # not repeated; this Mac's server the operator started from Herdr
-        # 0.9.1 or 0.8.2 moves when asked, and a refused move is remembered
-        # and tried again on a press (PRD herdr-takeover).
-        timeout-minutes: 8
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-          HIDE_E2E_HERDR_OLDER_BIN: ${{ steps.older-herdr.outputs.bin }}
-          HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN: ${{ steps.older-protocol-herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^herdr_handoff::/)' --run-ignored only
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
@@ -249,14 +137,11 @@ jobs:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
       - name: Keep the lane's run directory
-        # The daemon's and both Herdr servers' logs behind a failed run, without
-        # the staged binaries, the copies of them the install places in each
-        # account's helper and bin folders, and the fixture's SSH keys. A
-        # flaky run is kept too: its first attempt's logs are the evidence its
-        # issue needs (docs/TESTING.md, Flaky tests). Of the remote core
-        # journeys' runs (rc-*) only the logs are kept: each daemon's and
-        # Herdr server's output and the Logs folders' records, which name the
-        # runner's fixture paths and nothing of its state, keys or binaries.
+        # The daemon's output and both machines' Logs records behind a failed
+        # run, without the staged binaries, the copies of them the install
+        # places in each account's helper and bin folders, and the fixture's
+        # SSH keys. A flaky run is kept too: its first attempt's logs are the
+        # evidence its issue needs (docs/TESTING.md, Flaky tests).
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
@@ -268,20 +153,6 @@ jobs:
             !agents/runs/rd-*/*/*/.ssh/**
             !agents/runs/rd-*/*/*/helper/**
             !agents/runs/rd-*/*/*/bin/**
-            agents/runs/rc-*/**/*.log
-            agents/runs/rc-*/**/Logs/*.jsonl
-          if-no-files-found: ignore
-      - name: Keep core move failure logs
-        # Core-move fixtures use short /tmp paths for Unix sockets, outside
-        # rd-*. Keep only logs, never their SSH keys, state or staged binaries.
-        if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: hide-core-move-logs-${{ inputs.runner }}-attempt-${{ github.run_attempt }}
-          include-hidden-files: true
-          path: |
-            /tmp/hcm-*/**/*.log
-            /tmp/hcm-*/**/Logs/*.jsonl
           if-no-files-found: ignore
       - name: Summarize the stalled device connection
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
@@ -292,7 +163,7 @@ jobs:
           from pathlib import Path
           # Only the final bounded diagnostic records, never fixture keys,
           # state, environment, or conversation contents.
-          for path in sorted(Path('/tmp').glob('hcm-*/m/s/Logs/core.jsonl'))[:100]:
+          for path in sorted(Path('agents/runs').glob('rd-*/logs-local/core.jsonl'))[:100]:
               with path.open('rb') as stream:
                   stream.seek(0, 2)
                   stream.seek(max(0, stream.tell() - 32768))

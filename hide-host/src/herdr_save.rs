@@ -183,12 +183,7 @@ fn stop_within(
     within: Duration,
 ) -> Result<(), String> {
     let same = || hide_platform::process::start_time(pid).is_ok_and(|now| now == started);
-    let asked = hide_herdr_client::request_with_timeout(
-        socket,
-        "server.stop",
-        serde_json::json!({}),
-        within,
-    );
+    let asked = ask_stop(socket, within);
     // A server that ends as it answers may close the call first, so its end
     // is waited for whatever the call came to.
     if wait_gone(&same, within) {
@@ -208,6 +203,38 @@ fn stop_within(
         Ok(())
     } else {
         Err(format!("Herdr's server {pid} did not end"))
+    }
+}
+
+/// Asks the server on `socket` to stop with one `server.stop` line of
+/// Herdr's socket API and reads its one-line answer, read up to 64 KiB.
+fn ask_stop(socket: &Path, within: Duration) -> Result<(), String> {
+    use std::io::{BufRead, Read, Write};
+    const ID: &str = "hide:server.stop";
+    let mut stream =
+        hide_platform::ipc::LocalStream::connect_until(socket, Instant::now() + within)
+            .map_err(|error| format!("connect: {error}"))?;
+    stream
+        .set_write_timeout(Some(within))
+        .and_then(|()| stream.set_read_timeout(Some(within)))
+        .map_err(|error| format!("timeout: {error}"))?;
+    let mut line =
+        serde_json::to_vec(&serde_json::json!({"id": ID, "method": "server.stop", "params": {}}))
+            .map_err(|error| format!("encode: {error}"))?;
+    line.push(b'\n');
+    stream
+        .write_all(&line)
+        .map_err(|error| format!("write: {error}"))?;
+    let mut answer = String::new();
+    std::io::BufReader::new(stream.take(64 * 1024))
+        .read_line(&mut answer)
+        .map_err(|error| format!("read: {error}"))?;
+    let answer: serde_json::Value =
+        serde_json::from_str(&answer).map_err(|error| format!("answer: {error}"))?;
+    match &answer["error"] {
+        serde_json::Value::Null if answer["id"] == ID => Ok(()),
+        serde_json::Value::Null => Err(format!("answer for another call: {}", answer["id"])),
+        error => Err(error.to_string()),
     }
 }
 
@@ -438,7 +465,7 @@ mod tests {
         let copy = hide_kit::layout::runtime_dir(&home, build);
         std::fs::create_dir_all(&copy).unwrap();
         let exe = |name: &str| copy.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-        for program in ["hided", "hide", "hide-agent-hooks"] {
+        for program in ["hided", "hide", "hide-agent-hooks", "hide-holder"] {
             std::fs::write(exe(program), "").unwrap();
         }
         std::fs::copy(std::env::current_exe().unwrap(), exe("herdr")).unwrap();

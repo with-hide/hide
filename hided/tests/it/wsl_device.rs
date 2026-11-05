@@ -1,6 +1,6 @@
 //! A WSL distribution of this Windows PC as a device, end to end (PRD
 //! wsl-device D-01, D-07, B7, B8, B22-B28): the candidate's Linux helper,
-//! command and hooks and the pinned Linux Herdr, installed through
+//! command, hooks and pane holder, installed through
 //! `wsl.exe` into a real WSL 2 distribution and reached over the one pipe
 //! the link owns. The `windows wsl` lane sets the distribution up fresh and
 //! runs this alone; it owns the distribution, so the test may stop it and
@@ -15,7 +15,7 @@
 //!
 //! `HIDE_E2E_WSL_DISTRO` names the distribution and `HIDE_E2E_WSL_PACKAGES`
 //! the folder holding `hided-linux-x86_64`, `hide-linux-x86_64`,
-//! `hide-agent-hooks-linux-x86_64`, `hide-holder-linux-x86_64` and `herdr-linux-x86_64`.
+//! `hide-agent-hooks-linux-x86_64` and `hide-holder-linux-x86_64`.
 #![cfg(windows)]
 
 use std::io::{BufRead, Read, Write};
@@ -31,6 +31,8 @@ use hide_node_link::device::{
     Attempt, DeviceConnector, DialedTransport, EstablishError, Established, HOST_CONSENT_CONTRACT,
     HostConsent, Wake,
 };
+use hide_node_link::holders::{HolderRecovery, HolderStart, PaneHolders};
+use hide_node_link::link_panes::LinkPanes;
 use hide_node_link::protocol::{Call, RootOpened, RootRef};
 use hide_node_link::register::Registrable;
 use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalReport};
@@ -211,46 +213,39 @@ fn helper_running(distro: &str) -> bool {
     .contains("alive")
 }
 
-fn herdr(transport: &dyn DialedTransport, method: &str, params: Value) -> Value {
-    hide_herdr_client::request_with_connector(
-        &*transport.herdr_api_connector(),
-        method,
-        params,
-        Duration::from_secs(20),
-    )
-    .unwrap_or_else(|error| panic!("{method} through the link: {error}"))
+/// The panes of the node at the other end of `link`, as the core's own engine
+/// reaches them, after the node adopted the holders it found.
+fn link_panes(link: &Arc<dyn NodeLink>) -> (LinkPanes, HolderRecovery) {
+    let panes = LinkPanes::new(
+        Arc::clone(link),
+        Arc::new(|record| println!("pane record: {record}")),
+    );
+    let recovery = panes.recovered(Duration::from_secs(10)).unwrap();
+    (panes, recovery)
 }
 
-/// Every pane id a Herdr answer names, in order.
-fn panes(value: &Value) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut stack = vec![value];
-    while let Some(value) = stack.pop() {
-        match value {
-            Value::Object(map) => {
-                if let Some(pane) = map.get("pane_id").and_then(Value::as_str) {
-                    found.push(pane.to_owned());
-                }
-                stack.extend(map.values());
-            }
-            Value::Array(values) => stack.extend(values),
-            _ => {}
-        }
-    }
-    found.sort();
-    found.dedup();
-    found
+/// Starts the node's interactive shell as the pane `pane` in `cwd`, as the
+/// core's own engine starts one: a number, the pane's reservation, its
+/// start, then the number retired.
+fn start_shell(panes: &LinkPanes, pane: &str, cwd: &str) {
+    let start = HolderStart {
+        pane: pane.to_owned(),
+        program: None,
+        cwd: cwd.to_owned(),
+        env: Vec::new(),
+        rows: 24,
+        cols: 80,
+        notice: None,
+    };
+    let request = panes.request().unwrap();
+    let reserved = panes.reserve(&start, None, request).unwrap();
+    panes.start_reserved(&start, reserved, request).unwrap();
+    panes.retire(request).unwrap();
 }
 
-fn pane_of(value: &Value) -> Option<&str> {
-    match value {
-        Value::Object(map) => map
-            .get("pane_id")
-            .and_then(Value::as_str)
-            .or_else(|| map.values().find_map(pane_of)),
-        Value::Array(values) => values.iter().find_map(pane_of),
-        _ => None,
-    }
+/// The pane holders running inside the distribution, by pid.
+fn holder_pids(distro: &str) -> String {
+    as_root(distro, "pgrep -f '[h]ide-holder' || true")
 }
 
 #[test]
@@ -310,17 +305,13 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     assert_eq!(first.identity.user, USER);
     assert_eq!(first.identity.machine_id, Some(format!("wsl:{id}")));
     println!("upload={:?}", first.upload);
-    // A fresh distribution has no Herdr answering, so the kit ran before
-    // the terminals and started the pinned one inside WSL.
-    let kit = first
-        .kit
-        .as_ref()
-        .expect("the fresh distribution's kit ran");
-    assert!(kit.is_ok(), "{:?}", kit.as_ref().err());
+    // The device's panes run in pane holders its node started.
+    assert!(
+        first.node.terminals.is_ok(),
+        "the holders did not start: {:?}",
+        first.node.terminals.as_ref().err()
+    );
     let link = Arc::clone(&first.node.host);
-
-    // The account's Herdr runs inside WSL and answers through the link.
-    herdr(&*transport, "session.snapshot", json!({}));
 
     // B8: files and Git of a project by its Linux path.
     as_root(
@@ -403,14 +394,9 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     assert!(changes.to_string().contains("a.txt"), "{changes}");
 
     // B7: a pane's terminal inside WSL, its input run once.
-    let created = herdr(
-        &*transport,
-        "workspace.create",
-        json!({"cwd": project, "label": "wsl"}),
-    );
-    let pane = pane_of(&created)
-        .expect("the new workspace's pane")
-        .to_owned();
+    let pane = "wsl-pane".to_owned();
+    let (panes, _) = link_panes(&link);
+    start_shell(&panes, &pane, &project);
     let terminals = first
         .node
         .terminals
@@ -440,8 +426,10 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             .then_some(())
     });
 
-    let panes_before = herdr(&*transport, "session.snapshot", json!({}));
-    // B27: the link's end ends its helper inside WSL; Herdr and the pane stay.
+    // B27: the link's end ends its helper inside WSL; the pane's holder stays.
+    let holders_before = holder_pids(&distro);
+    assert!(!holders_before.trim().is_empty(), "no pane holder runs");
+    drop(panes);
     link.close("the test ends the link");
     let reason = closed
         .recv_timeout(TIMEOUT)
@@ -450,13 +438,10 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     wait_for("the helper to end inside WSL", || {
         (!helper_running(&distro)).then_some(())
     });
-    assert!(
-        as_root(
-            &distro,
-            "pgrep -x herdr >/dev/null && echo alive || echo gone"
-        )
-        .contains("alive"),
-        "Herdr outlives the link"
+    assert_eq!(
+        holder_pids(&distro),
+        holders_before,
+        "the pane's holder outlives the link"
     );
     drop(first);
 
@@ -467,28 +452,16 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     let again = again.unwrap_or_else(|error| panic!("reconnection: {error}"));
     assert!(!again.installed);
     assert_eq!(again.upload.sent, 0, "{:?}", again.upload);
-    let snapshot = herdr(&*transport, "session.snapshot", json!({}));
-    assert!(
-        snapshot.to_string().contains(&pane),
-        "the pane outlived the link"
-    );
+    let (panes, recovery) = link_panes(&again.node.host);
     assert_eq!(
-        panes(&snapshot),
-        panes(&panes_before),
-        "the reconnection made no pane"
+        recovery.present,
+        vec![pane.clone()],
+        "the pane outlived the link and the reconnection made no pane"
     );
+    assert_eq!(holder_pids(&distro), holders_before);
     // B26: the reconnection replays no input: the line typed once over the
     // first link ran once, and a line typed over this link runs once.
-    let pane_text = || {
-        herdr(
-            &*transport,
-            "pane.read",
-            json!({"pane_id": pane, "source": "recent", "lines": 200}),
-        )["read"]["text"]
-            .as_str()
-            .expect("the pane's text")
-            .to_owned()
-    };
+    let pane_text = || panes.read(&pane, 200).expect("the pane's text").0;
     assert_eq!(
         pane_text().matches("wsl_answered").count(),
         1,
@@ -531,6 +504,7 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
         (1, 1),
         "{text}"
     );
+    drop(panes);
     again.node.host.close("the test ends the second link");
     drop(again);
     wait_for("the second helper to end inside WSL", || {
@@ -540,8 +514,8 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     // B27: a process that owns a link and dies with no destructor run, as
     // a crashed hided does, still ends the helper inside WSL: its
     // `wsl.exe` sits in a job object that ends with the process, and the
-    // helper reads the end of its input. The same Herdr keeps running.
-    let herdr_pids = as_root(&distro, "pgrep -x herdr");
+    // helper reads the end of its input. The same pane holder keeps running.
+    let holders = holder_pids(&distro);
     let mut owner = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -573,11 +547,11 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
         (!helper_running(&distro)).then_some(())
     });
     assert_eq!(
-        as_root(&distro, "pgrep -x herdr"),
-        herdr_pids,
-        "the same Herdr outlives its owner's crash"
+        holder_pids(&distro),
+        holders,
+        "the same pane holder outlives its owner's crash"
     );
-    println!("killed owner: helper gone, herdr {}", herdr_pids.trim());
+    println!("killed owner: helper gone, holders {}", holders.trim());
 
     // B30: the Windows account's agent settings are not the WSL device's.
     assert_eq!(
@@ -821,14 +795,9 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
     // B9: the project's own server, started in its pane inside WSL, is
     // previewed through a forward on the link.
     journey.step("the page server in its pane");
-    let created = herdr(
-        &*transport,
-        "workspace.create",
-        json!({"cwd": project, "label": "journey"}),
-    );
-    let pane = pane_of(&created)
-        .expect("the new workspace's pane")
-        .to_owned();
+    let pane = "journey-pane".to_owned();
+    let (panes, _) = link_panes(&link);
+    start_shell(&panes, &pane, &project);
     let terminals = first
         .node
         .terminals
@@ -1003,7 +972,7 @@ fn a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr() {
     set_registry(&distribution_id(&distro), "RunOOBE", 0);
     set_default_user(&distro, USER);
     let sink = Arc::new(Sink::default());
-    let connector = connector(sink.clone()).with_engine(hide_node::ssh::DeviceEngine::Holders);
+    let connector = connector(sink.clone());
     let transport = connector.wsl_transport("wsl-own", &distro).unwrap();
     let (connected, _closed) = establish(&*transport, &consent(None), Wake::Allowed);
     let connected = connected.unwrap_or_else(|error| panic!("connection: {error}"));
@@ -1052,9 +1021,8 @@ fn a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr() {
     });
     let herdr = as_root(
         &distro,
-        // A Herdr program by its name: the node's own start line names
-        // Herdr (`node serve --own-herdr`), so a match on the command line
-        // would find the node.
+        // A Herdr program by its name, so a match on another program's
+        // command line does not count.
         &format!("find ~{USER} -name 'herdr*' 2>/dev/null; pgrep -a -u {USER} -x herdr || true"),
     );
     assert!(

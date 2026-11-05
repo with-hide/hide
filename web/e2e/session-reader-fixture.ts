@@ -2,15 +2,13 @@ import { expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { labelMarker, type HerdrFixture } from "./herdr-fixture";
+import { labelMarker } from "./pane-fixture";
 import { copyFixtureShim } from "./shims/build";
 import { fixtureExecutable, fixtureProgram } from "./platform-fixture";
 import { agentIn, preparePaneInput, sendKeys, withControl } from "./daemon-actions";
 import { builtHooks } from "./engine-fixture";
-import type { E2eEngine } from "./e2e-engine";
 import type { Daemon } from "./hided-fixture";
 
 export const PI_ID = "fixture-pi-native";
@@ -90,18 +88,18 @@ type NativeWriterHost = { root: string; env: { HOME?: string } };
  * On the core's own engine the stand-in also reports the session it writes
  * as the agent's own integration does (`prepareEngineWriter`).
  */
-export function prepareNativeWriter(herdr: NativeWriterHost, kind: NativeFileReader, checkout = path.join(herdr.root, "fixture")): string {
-  copyFixtureShim("claude-shim", path.join(herdr.root, "bin", fixtureExecutable(kind === "cursor" ? "cursor-agent" : kind)));
+export function prepareNativeWriter(host: NativeWriterHost, kind: NativeFileReader, checkout = path.join(host.root, "fixture")): string {
+  copyFixtureShim("claude-shim", path.join(host.root, "bin", fixtureExecutable(kind === "cursor" ? "cursor-agent" : kind)));
   const cwd = fs.realpathSync(checkout);
   if (kind === "cursor") {
     // Ordinary pinned CLI routing, independently of the product locator.
     const bucket = createHash("md5").update(cwd).digest("hex");
-    const session = path.join(herdr.env.HOME!, ".cursor", "chats", bucket, CURSOR_ID, "store.db");
+    const session = path.join(host.env.HOME!, ".cursor", "chats", bucket, CURSOR_ID, "store.db");
     fs.mkdirSync(path.dirname(session), { recursive: true });
-    fs.writeFileSync(path.join(herdr.root, "cursor-session-path.config"), session);
-    fs.writeFileSync(path.join(herdr.root, "cursor-meta-seed.json"), JSON.stringify({ schemaVersion: 1, cwd, createdAtMs: 1_790_989_200_000, hasConversation: true, isSubagent: false }));
+    fs.writeFileSync(path.join(host.root, "cursor-session-path.config"), session);
+    fs.writeFileSync(path.join(host.root, "cursor-meta-seed.json"), JSON.stringify({ schemaVersion: 1, cwd, createdAtMs: 1_790_989_200_000, hasConversation: true, isSubagent: false }));
     const graph = JSON.parse(fs.readFileSync(new URL("../../hide-session/tests/fixtures/cursor-2026.10.01/browser-graph.json", import.meta.url), "utf8")) as { roots: { first: string }; blobs: Record<string, string> };
-    const database = new DatabaseSync(path.join(herdr.root, "cursor-session-seed.db"));
+    const database = new DatabaseSync(path.join(host.root, "cursor-session-seed.db"));
     try {
       database.exec("PRAGMA user_version=1; CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE blobs(id TEXT PRIMARY KEY,data BLOB);");
       const meta = { agentId: CURSOR_ID, latestRootBlobId: graph.roots.first, createdAt: 1_790_989_200_000 };
@@ -117,13 +115,13 @@ export function prepareNativeWriter(herdr: NativeWriterHost, kind: NativeFileRea
   if (kind === "omp" && (relativeTemp.startsWith("..") || path.isAbsolute(relativeTemp))) throw new Error("omp fixture requires an owned temporary checkout");
   const encoded = kind === "pi" ? `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--` : `-tmp-${relativeTemp.replace(/[/\\:]/g, "-")}`;
   const session = kind === "grok"
-    ? path.join(herdr.env.HOME!, ".grok", "sessions", grokGroup(cwd), GROK_ID, "updates.jsonl")
-    : path.join(herdr.env.HOME!, `.${kind}`, "agent", "sessions", encoded, "timestamp_fixture.jsonl");
+    ? path.join(host.env.HOME!, ".grok", "sessions", grokGroup(cwd), GROK_ID, "updates.jsonl")
+    : path.join(host.env.HOME!, `.${kind}`, "agent", "sessions", encoded, "timestamp_fixture.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(path.join(herdr.root, `${kind}-session-path.config`), session);
+  fs.writeFileSync(path.join(host.root, `${kind}-session-path.config`), session);
   if (kind === "grok") {
-    fs.writeFileSync(path.join(herdr.root, "grok-summary-seed.json"), JSON.stringify({ info: { id: GROK_ID, cwd }, session_summary: GROK_TITLE, created_at: "2026-10-03T01:00:00Z", updated_at: "2026-10-03T01:00:00Z", num_messages: 3, current_model_id: "grok-build", generated_title: GROK_TITLE }, null, 2));
-    fs.writeFileSync(path.join(herdr.root, "grok-session-seed.jsonl"), [
+    fs.writeFileSync(path.join(host.root, "grok-summary-seed.json"), JSON.stringify({ info: { id: GROK_ID, cwd }, session_summary: GROK_TITLE, created_at: "2026-10-03T01:00:00Z", updated_at: "2026-10-03T01:00:00Z", num_messages: 3, current_model_id: "grok-build", generated_title: GROK_TITLE }, null, 2));
+    fs.writeFileSync(path.join(host.root, "grok-session-seed.jsonl"), [
       grokRecord({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "요청 보기를 만들어줘" }, _meta: { promptIndex: 0 } }),
       grokRecord({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: labelMarker({task:"Generated Grok goal",progress:"완료"}) } }, { promptId: "p-0" }),
       grokRecord({ sessionUpdate: "turn_completed", prompt_id: "p-0", stop_reason: "end_turn" }, {}, true),
@@ -137,7 +135,7 @@ export function prepareNativeWriter(herdr: NativeWriterHost, kind: NativeFileRea
     { type: "message", id: "a0000002", parentId: "a0000001", timestamp, message: { role: "assistant", content: [{ type: "text", text: labelMarker({task:"Generated Pi goal",progress:"완료"}) }], stopReason: "stop" } },
     ...(kind === "pi" ? [{ type: "session_info", id: "a0000003", parentId: "a0000002", timestamp, name: PI_TITLE }] : [{ type: "title_change", id: "a0000003", parentId: "a0000002", timestamp, title: "Old audit title", source: "user" }]),
   ];
-  fs.writeFileSync(path.join(herdr.root, `${kind}-session-seed.jsonl`), Buffer.concat([
+  fs.writeFileSync(path.join(host.root, `${kind}-session-seed.jsonl`), Buffer.concat([
     kind === "omp" ? ompTitleSlot(OMP_TITLE) : Buffer.alloc(0),
     Buffer.from(records.map(record => `${JSON.stringify(record)}\n`).join("")),
   ]));
@@ -152,16 +150,6 @@ export function nativeSessionRef(kind: NativeFileReader, session: string): strin
 /** The ID inside the native record, also shown in the sidebar, not its file reference. */
 export function nativeSessionId(kind: NativeFileReader): string {
   return { pi: PI_ID, omp: OMP_ID, grok: GROK_ID, cursor: CURSOR_ID }[kind];
-}
-
-/**
- * Herdr's integration report of a native writer's session, which the stand-in
- * has no Hide integration to replace on Herdr's engine. On the core's own
- * engine the stand-in reports it itself (`prepareEngineWriter`).
- */
-export function reportNativeWriter(herdr: HerdrFixture, kind: NativeFileReader, pane: string, session: string): void {
-  const reference = kind === "pi" || kind === "omp" ? ["--agent-session-path", session] : ["--agent-session-id", nativeSessionRef(kind, session)];
-  execFileSync(herdr.bin, ["pane", "report-agent-session", pane, "--source", `herdr:${kind}`, "--agent", kind, ...reference, "--seq", "2", "--session-start-source", "clear"], { env: herdr.env, timeout: 30_000 });
 }
 
 /** Pi's and omp's extension sends the version of the script it is; the helper answers no other. */
@@ -194,7 +182,7 @@ function sessionReport(kind: NativeFileReader, reference: string): { env: Record
 }
 
 /**
- * On the core's own engine nothing but the agent's Hide integration names a
+ * Nothing but the agent's Hide integration names a
  * pane's session, so the stand-in `kind` runs that integration's report from
  * inside its pane each time it writes or resumes its session
  * (`shims/claude-shim.c`, `report_session`): this file is the command line,
@@ -217,14 +205,12 @@ function writeSessionReport(root: string, kind: NativeFileReader, session: strin
 }
 
 /**
- * A native writer for the engine `fixture` runs on: the seeds and the session
- * path (`prepareNativeWriter`), and on the core's own engine the stand-in's
- * own session report. On Herdr the spec reports the session through Herdr's
- * integration (`reportNativeWriter`).
+ * A native writer for `fixture`'s run: the seeds and the session path
+ * (`prepareNativeWriter`), and the stand-in's own session report.
  */
-export function prepareEngineWriter(fixture: { root: string; engine: E2eEngine }, kind: NativeFileReader, checkout?: string): string {
+export function prepareEngineWriter(fixture: { root: string }, kind: NativeFileReader, checkout?: string): string {
   const session = prepareNativeWriter({ root: fixture.root, env: { HOME: path.join(fixture.root, "home") } }, kind, checkout);
-  if (fixture.engine === "own") writeSessionReport(fixture.root, kind, session);
+  writeSessionReport(fixture.root, kind, session);
   return session;
 }
 
@@ -251,9 +237,7 @@ CREATE TABLE IF NOT EXISTS part (id text PRIMARY KEY, message_id text NOT NULL R
 // checkout and a subagent's child session under it), a `-s <id>` launch
 // continues it without writing, and each reports its session id the way
 // OpenCode's integration does, from this process, the pane's foreground
-// program. On Herdr that is Herdr's OpenCode integration (`pane report-agent`
-// and `report-agent-session`); on the core's own engine it is Hide's plugin
-// asking the helper's `session` operation, and a line typed into the pane
+// program: Hide's plugin asking the helper's `session` operation, and a line typed into the pane
 // (`working`, `idle`) is the turn the plugin reports (`turn`). Every argument
 // list is logged.
 const OPENCODE_DOUBLE = String.raw`
@@ -291,46 +275,31 @@ const helper = (operation, input) => {
   const answer = JSON.parse(execFileSync(config.hooks, ["opencode", operation], { input: JSON.stringify(input), encoding: "utf8", timeout: 10000 }));
   if (answer.reported !== true) throw new Error("OpenCode fixture's " + operation + " report was refused");
 };
-if (config.herdr) {
-  const pane = process.env.HERDR_PANE_ID;
-  const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
-    .result.agents.find((agent) => agent.pane_id === pane)?.agent_session?.value;
-  for (let attempt = 1; listed() !== config.id; attempt += 1) {
-    if (attempt > 50) throw new Error("Herdr never took the double's session");
-    const seq = Date.now() * 1000 + attempt * 2;
-    execFileSync(config.herdr, ["pane", "report-agent", pane, "--source", "herdr:opencode", "--agent", "opencode",
-      "--state", "idle", "--agent-session-id", config.id, "--seq", String(seq)], { timeout: 10000 });
-    execFileSync(config.herdr, ["pane", "report-agent-session", pane, "--source", "herdr:opencode", "--agent", "opencode",
-      "--agent-session-id", config.id, "--session-start-source", "select", "--seq", String(seq + 1)], { timeout: 10000 });
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+helper("session", { session_id: config.id });
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const [request, state] = line.trim().split(" ");
+  const turn = { working: "working", idle: "done" }[state];
+  if (turn) {
+    // The real TUI redraws the interrupt hint as a turn starts and ends.
+    // Its screen transition also gives the native reader a new engine state.
+    process.stdout.write("\x1b[2J\x1b[H" + (state === "working" ? "opencode esc to interrupt\n" : "opencode fixture ready\n"));
+    helper("turn", { session_id: config.id, turn });
+    fs.writeFileSync(config.turnReceipt, request);
   }
-} else {
-  helper("session", { session_id: config.id });
-  require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
-    const [request, state] = line.trim().split(" ");
-    const turn = { working: "working", idle: "done" }[state];
-    if (turn) {
-      // The real TUI redraws the interrupt hint as a turn starts and ends.
-      // Its screen transition also gives the native reader a new engine state.
-      process.stdout.write("\x1b[2J\x1b[H" + (state === "working" ? "opencode esc to interrupt\n" : "opencode fixture ready\n"));
-      helper("turn", { session_id: config.id, turn });
-      fs.writeFileSync(config.turnReceipt, request);
-    }
-  });
-}
+});
 process.stdout.write("opencode fixture ready\n");
 setInterval(() => {}, 1 << 30);
 `;
 
-/** What the OpenCode double needs of a run: the engine, its root (and HOME under it) and, on Herdr, the binary its integration reports through. */
-type OpenCodeHost = { engine: E2eEngine; root: string; bin?: string };
+/** What the OpenCode double needs of a run: its root, with HOME under it. */
+type OpenCodeHost = { root: string };
 
 /** Installs the OpenCode double as `opencode`; answers its database's path. */
 export function prepareOpenCodeWriter(fixture: OpenCodeHost): string {
   const database = path.join(fixture.root, "home", ".local", "share", "opencode", "opencode.db");
   const bin = path.join(fixture.root, "bin");
   fs.writeFileSync(path.join(bin, "opencode-double.json"), JSON.stringify({
-    herdr: fixture.engine === "herdr" ? fixture.bin : undefined, hooks: builtHooks(), database, schema: OPENCODE_SCHEMA, id: OPENCODE_ID, title: OPENCODE_TITLE,
+    hooks: builtHooks(), database, schema: OPENCODE_SCHEMA, id: OPENCODE_ID, title: OPENCODE_TITLE,
     child: `${OPENCODE_ID}child`, childTitle: OPENCODE_CHILD_TITLE, launches: path.join(fixture.root, "opencode-launches.jsonl"),
     turnReceipt: path.join(fixture.root, "opencode-turn-receipt"),
     answer: labelMarker({task:"Generated OpenCode goal",progress:"완료"}),
@@ -354,49 +323,35 @@ export function writeOpenCodeQuestion(database: string, state: "running" | "comp
   db.close();
 }
 
-let reported = 0;
 
 /**
  * OpenCode's integration telling the engine the pane's state as OpenCode
- * moves, and waiting until the engine lists the pane so.
- * On Herdr that is its integration's `pane report-agent`, whose sequence is
- * time-based like the integration's and rises within one millisecond, since
- * Herdr keeps only a newer report. On the core's own engine it is the plugin's
+ * moves, and waiting until the engine lists the pane so: the plugin's
  * `turn` report: the line typed into the pane is read by the double
  * (`OPENCODE_DOUBLE`), which asks the helper from inside the pane.
  */
 export async function reportOpenCodeState(fixture: OpenCodeHost, daemon: Pick<Daemon, "origin" | "token" | "stateDir">, pane: string, state: "working" | "idle"): Promise<void> {
-  if (fixture.engine === "own") {
-    const request = randomUUID();
-    const receipt = path.join(fixture.root, "opencode-turn-receipt");
-    const engineRead = () => fs.readFileSync(path.join(daemon.stateDir, "Logs", "core.jsonl"), "utf8").trim().split("\n")
-      .map(line => JSON.parse(line) as { kind?: string; pane_id?: string; state_change_seq?: number; activity?: string })
-      .findLast(record => record.kind === "pane.read_record" && record.pane_id === pane);
-    const before = engineRead()?.state_change_seq;
-    expect(before, "the engine has read the initial OpenCode screen").toBeDefined();
-    await withControl(daemon, async (control) => {
-      await preparePaneInput(control, pane);
-      sendKeys(control, pane, `${request} ${state}\r`);
-      // A row already at rest cannot acknowledge a new idle report. Keep
-      // the input connection until the double has reported this command.
-      await expect.poll(() => fs.existsSync(receipt) ? fs.readFileSync(receipt, "utf8") : "",
-        { message: `OpenCode reported ${state}`, timeout: 10_000 }).toBe(request);
-      // A plugin report can change activity before the holder reads its new
-      // screen. Do not draw the next state until that engine transition lands.
-      await expect.poll(() => engineRead()?.state_change_seq,
-        { message: `the engine read OpenCode's ${state} screen`, timeout: 10_000 }).toBeGreaterThan(before!);
-      await control.until((rest) => {
-        const row = agentIn(rest, pane);
-        return row && (state === "working" ? row.activity === "working" : row.activity !== "working") ? true : undefined;
-      }, `${pane} listed ${state}`, 10_000);
-    });
-    return;
-  }
-  const herdr = fixture as unknown as HerdrFixture;
-  reported = Math.max(reported + 1, Date.now() * 1000);
-  execFileSync(herdr.bin, ["pane", "report-agent", pane, "--source", "herdr:opencode", "--agent", "opencode", "--state", state,
-    "--agent-session-id", OPENCODE_ID, "--seq", String(reported)], { env: herdr.env, timeout: 30_000 });
-  type Listed = { result: { agents: { pane_id: string; agent_status: string }[] } };
-  await expect.poll(() => (herdr.run(["agent", "list"]) as Listed).result.agents.find((agent) => agent.pane_id === pane)?.agent_status,
-    { message: `Herdr lists ${pane} ${state}`, timeout: 10_000 }).toMatch(state === "working" ? /^working$/ : /^(idle|done)$/);
+  const request = randomUUID();
+  const receipt = path.join(fixture.root, "opencode-turn-receipt");
+  const engineRead = () => fs.readFileSync(path.join(daemon.stateDir, "Logs", "core.jsonl"), "utf8").trim().split("\n")
+    .map(line => JSON.parse(line) as { kind?: string; pane_id?: string; state_change_seq?: number; activity?: string })
+    .findLast(record => record.kind === "pane.read_record" && record.pane_id === pane);
+  const before = engineRead()?.state_change_seq;
+  expect(before, "the engine has read the initial OpenCode screen").toBeDefined();
+  await withControl(daemon, async (control) => {
+    await preparePaneInput(control, pane);
+    sendKeys(control, pane, `${request} ${state}\r`);
+    // A row already at rest cannot acknowledge a new idle report. Keep
+    // the input connection until the double has reported this command.
+    await expect.poll(() => fs.existsSync(receipt) ? fs.readFileSync(receipt, "utf8") : "",
+      { message: `OpenCode reported ${state}`, timeout: 10_000 }).toBe(request);
+    // A plugin report can change activity before the holder reads its new
+    // screen. Do not draw the next state until that engine transition lands.
+    await expect.poll(() => engineRead()?.state_change_seq,
+      { message: `the engine read OpenCode's ${state} screen`, timeout: 10_000 }).toBeGreaterThan(before!);
+    await control.until((rest) => {
+      const row = agentIn(rest, pane);
+      return row && (state === "working" ? row.activity === "working" : row.activity !== "working") ? true : undefined;
+    }, `${pane} listed ${state}`, 10_000);
+  });
 }

@@ -249,7 +249,7 @@ pub(crate) fn apply(ledger: &mut Ledger, work: &Work, names: &Names) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, refused, reply, session};
     use serde_json::{Value, json};
 
     fn work() -> Work {
@@ -265,14 +265,13 @@ mod tests {
         }
     }
     fn state() -> Value {
-        json!({"type":"session_snapshot","snapshot":{
-            "version":"fixture", "protocol":crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION,
+        json!({
             "workspaces":[{"workspace_id":"w1","number":1,"label":"hide:spawn-1","focused":false,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"idle",
                 "worktree":{"repo_key":"fixture","repo_name":"project","repo_root":"/fixture","checkout_path":"/fixture/task","is_linked_worktree":true}}],
             "tabs":[{"workspace_id":"w1","tab_id":"w1:t1","number":1,"label":"hide:spawn-1","focused":false,"pane_count":1,"agent_status":"idle"}],
             "panes":[{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","terminal_id":"original","focused":false,"agent_status":"idle","revision":1}],
             "layouts":[],"agents":[]
-        }})
+        })
     }
 
     /// B8/B11: one refused name does not undo the other; the next attempt
@@ -280,26 +279,25 @@ mod tests {
     #[test]
     fn partial_naming_retries_only_the_failed_target() {
         let mut state = state();
-        let mut refused = false;
-        let herdr =
-            FakeHerdr::start_with_errors("names-partial", move |method, params| match method {
-                "session.snapshot" => Ok(state.clone()),
-                "workspace.rename" => {
-                    state["snapshot"]["workspaces"][0]["label"] = params["label"].clone();
-                    Ok(json!({"type":"ok"}))
-                }
-                "tab.rename" if !refused => {
-                    refused = true;
-                    Err(("fixture_refused".into(), "rename refused".into()))
-                }
-                "tab.rename" => {
-                    state["snapshot"]["tabs"][0]["label"] = params["label"].clone();
-                    Ok(json!({"type":"ok"}))
-                }
-                other => panic!("unexpected request {other}"),
-            });
+        let mut was_refused = false;
+        let fake = FakeEngine::start(move |method, args| match method {
+            "session" => reply(session(state.clone())),
+            "rename_workspace" => {
+                state["workspaces"][0]["label"] = args["label"].clone();
+                reply(())
+            }
+            "rename_tab" if !was_refused => {
+                was_refused = true;
+                refused("fixture_refused", "rename refused")
+            }
+            "rename_tab" => {
+                state["tabs"][0]["label"] = args["label"].clone();
+                reply(())
+            }
+            other => panic!("unexpected request {other}"),
+        });
         let mut work = work();
-        work.names = run(herdr.engine().as_ref(), &work);
+        work.names = run(fake.engine().as_ref(), &work);
         assert_eq!(
             work.names,
             Names {
@@ -307,23 +305,22 @@ mod tests {
                 tab: Outcome::Failed
             }
         );
-        work.names = run(herdr.engine().as_ref(), &work);
+        work.names = run(fake.engine().as_ref(), &work);
         assert!(work.names.finished());
-        let observed = snapshot(herdr.engine().as_ref()).unwrap();
+        let observed = snapshot(fake.engine().as_ref()).unwrap();
         assert_eq!(observed.workspaces[0].label, "task-branch");
         assert_eq!(observed.tabs[0].label, "검토 작업");
         assert_eq!(
-            herdr
-                .methods()
+            fake.methods()
                 .iter()
-                .filter(|method| *method == "workspace.rename")
+                .filter(|method| **method == "rename_workspace")
                 .count(),
             1
         );
-        let calls = herdr.methods().len();
-        assert_eq!(run(herdr.engine().as_ref(), &work), work.names);
+        let calls = fake.methods().len();
+        assert_eq!(run(fake.engine().as_ref(), &work), work.names);
         assert_eq!(
-            herdr.methods().len(),
+            fake.methods().len(),
             calls,
             "finished targets perform no IO"
         );
@@ -331,7 +328,7 @@ mod tests {
         // The next connection observes the names and records completion
         // without repeating either mutation.
         work.names = Names::default();
-        work.names = run(herdr.engine().as_ref(), &work);
+        work.names = run(fake.engine().as_ref(), &work);
         assert_eq!(
             work.names,
             Names {
@@ -339,10 +336,7 @@ mod tests {
                 tab: Outcome::Applied
             }
         );
-        assert_eq!(
-            &herdr.methods()[calls..],
-            &["session.snapshot", "session.snapshot"]
-        );
+        assert_eq!(&fake.methods()[calls..], &["session", "session"]);
     }
 
     #[test]
@@ -354,11 +348,11 @@ mod tests {
             ("1", "w1:t1", "replacement", false),
         ] {
             let mut state = state();
-            state["snapshot"]["tabs"][0]["label"] = json!(label);
-            state["snapshot"]["panes"][0]["terminal_id"] = json!(terminal);
-            let herdr = FakeHerdr::start("seed-label", move |method, _| match method {
-                "session.snapshot" => state.clone(),
-                "tab.rename" => json!({"type":"ok"}),
+            state["tabs"][0]["label"] = json!(label);
+            state["panes"][0]["terminal_id"] = json!(terminal);
+            let fake = FakeEngine::start(move |method, _| match method {
+                "session" => reply(session(state.clone())),
+                "rename_tab" => reply(()),
                 other => panic!("unexpected {other}"),
             });
             let mut work = work();
@@ -368,14 +362,14 @@ mod tests {
                 label: "1".into(),
             });
             assert_eq!(
-                run(herdr.engine().as_ref(), &work).tab,
+                run(fake.engine().as_ref(), &work).tab,
                 if allowed {
                     Outcome::Applied
                 } else {
                     Outcome::Preserved
                 }
             );
-            assert_eq!(herdr.methods().contains(&"tab.rename".into()), allowed);
+            assert_eq!(fake.methods().contains(&"rename_tab"), allowed);
         }
     }
 
@@ -386,40 +380,30 @@ mod tests {
         for change in ["terminal", "checkout", "user", "duplicate"] {
             let mut state = state();
             match change {
-                "terminal" => state["snapshot"]["panes"][0]["terminal_id"] = json!("replacement"),
+                "terminal" => state["panes"][0]["terminal_id"] = json!("replacement"),
                 "checkout" => {
-                    state["snapshot"]["workspaces"][0]["worktree"]["checkout_path"] =
-                        json!("/another")
+                    state["workspaces"][0]["worktree"]["checkout_path"] = json!("/another")
                 }
                 "user" => {
-                    state["snapshot"]["workspaces"][0]["label"] = json!("my project");
-                    state["snapshot"]["tabs"][0]["label"] = json!("my tab");
+                    state["workspaces"][0]["label"] = json!("my project");
+                    state["tabs"][0]["label"] = json!("my tab");
                 }
                 "duplicate" => {
-                    let mut other = state["snapshot"]["workspaces"][0].clone();
+                    let mut other = state["workspaces"][0].clone();
                     other["workspace_id"] = json!("w2");
-                    state["snapshot"]["workspaces"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(other);
-                    let mut other = state["snapshot"]["tabs"][0].clone();
+                    state["workspaces"].as_array_mut().unwrap().push(other);
+                    let mut other = state["tabs"][0].clone();
                     other["tab_id"] = json!("w1:t2");
-                    state["snapshot"]["tabs"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(other);
+                    state["tabs"].as_array_mut().unwrap().push(other);
                 }
                 _ => unreachable!(),
             }
-            let herdr = FakeHerdr::start_with_errors("names-preserved", move |method, _| {
-                assert_eq!(
-                    method, "session.snapshot",
-                    "unproven target must never be renamed"
-                );
-                Ok(state.clone())
+            let fake = FakeEngine::start(move |method, _| {
+                assert_eq!(method, "session", "unproven target must never be renamed");
+                reply(session(state.clone()))
             });
             assert_eq!(
-                run(herdr.engine().as_ref(), &work()),
+                run(fake.engine().as_ref(), &work()),
                 Names {
                     workspace: Outcome::Preserved,
                     tab: Outcome::Preserved

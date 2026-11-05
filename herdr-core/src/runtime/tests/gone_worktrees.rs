@@ -37,12 +37,10 @@ fn session(label: &str, agent: Option<&str>, pane: bool) -> serde_json::Value {
     };
     if !pane {
         return serde_json::json!({
-            "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
             "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
         });
     }
     serde_json::json!({
-        "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
         "workspaces": [{
             "workspace_id": "w1", "label": "topic", "number": 1, "focused": true,
             "pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1", "agent_status": "idle",
@@ -199,33 +197,34 @@ fn a_gone_worktree_holding_a_tab_the_operator_named_is_kept() {
     );
 }
 
-/// The whole path against a fake Herdr: the close is started off the lock,
+/// The whole path against a fake engine: the close is started off the lock,
 /// asks the node again, reads that the pane holds only its shell, and asks
-/// Herdr to close the pane, after which the workspace is gone.
+/// the engine to close the pane, after which the workspace is gone.
 #[test]
 fn the_core_closes_the_pane_herdr_left_in_a_gone_worktree() {
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let herdr = FakeHerdr::start("gone-worktree", {
+    let herdr = FakeEngine::start({
         let closed = Arc::clone(&closed);
         move |method, params| match method {
-            "session.snapshot" => serde_json::json!({"type": "session_snapshot",
-                "snapshot": session("", None, !closed.load(Ordering::SeqCst))}),
-            "pane.process_info" => {
-                serde_json::json!({"type": "pane_process_info", "process_info": {
-                "pane_id": params["pane_id"], "shell_pid": 42, "foreground_process_group_id": 42,
-                "foreground_processes": [{"pid": 42, "name": "zsh"}]}})
-            }
-            "pane.close" => {
-                assert_eq!(params["pane_id"], "w1:p1");
+            "session" => reply(fake::session(session(
+                "",
+                None,
+                !closed.load(Ordering::SeqCst),
+            ))),
+            "pane_processes" => reply(fake::processes(&serde_json::json!({
+                "shell_pid": 42, "foreground_process_group_id": 42,
+                "foreground_processes": [{"pid": 42, "name": "zsh"}]}))),
+            "close_pane" => {
+                assert_eq!(params["pane"], "w1:p1");
                 closed.store(true, Ordering::SeqCst);
-                serde_json::json!({"type": "ok"})
+                reply(())
             }
             other => panic!("unexpected {other}"),
         }
     });
     let shared = SharedRuntime::new(runtime());
     shared.lock().unwrap().live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
+        socket_path: herdr.scope(),
         runtime: shared.weak(),
         notifier: crate::handle::ChangeNotifier::noop(),
         engine: herdr.engine(),
@@ -244,8 +243,8 @@ fn the_core_closes_the_pane_herdr_left_in_a_gone_worktree() {
         .expect("the close is recorded");
     assert_eq!(requested["checkout"], gone());
     assert_eq!(requested["herdr_workspace_ids"], serde_json::json!(["w1"]));
-    wait_for("Herdr to be asked to close the pane", || {
-        herdr.methods().iter().any(|method| method == "pane.close")
+    wait_for("the engine to be asked to close the pane", || {
+        herdr.methods().contains(&"close_pane")
     });
 }
 

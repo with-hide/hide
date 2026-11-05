@@ -1,14 +1,15 @@
 //! A node that dialed this core (PRD core-host-node-remote-core D-04, D-10):
 //! its link arrives on the local stream the core machine's attach role hands
 //! over, and from there it is a device link like any other. The same
-//! [`RemoteHost`] carries its calls, its pane proofs and streams, its
-//! terminals and its Herdr, so the credentials it vouches for are bound to
-//! this link's identity exactly as a dialed device's are, and end with it.
+//! [`RemoteHost`] carries its calls, its pane proofs and streams and its
+//! terminals, so the credentials it vouches for are bound to this link's
+//! identity exactly as a dialed device's are, and end with it. Its panes run
+//! on the core's own engine, in pane holders the node runs, as a dialed
+//! device's do (PRD engine-bundle-4-herdr-removal D-10).
 //!
 //! The core never dials such a node: [`establish`] hands it the link that is
 //! already up as an [`Arrived`]; a link that ended is replaced only by the
-//! node dialing again. Its Herdr is reached through the link
-//! (`link_streams`), never through a socket on this machine.
+//! node dialing again.
 
 use std::sync::{Arc, Mutex};
 
@@ -26,9 +27,6 @@ pub struct InboundNode {
     pub node: String,
     /// The name its row shows: the machine's host name.
     pub label: String,
-    /// Its own Herdr socket, as the node spells it; the node's pane and
-    /// terminal services attach there, on its own machine.
-    pub herdr_socket: String,
 }
 
 /// Where the link's end goes: the core's handler, once the core took the
@@ -73,14 +71,14 @@ impl CloseSlot {
     }
 }
 
-/// A node that dialed this core, as the core reaches it: its Herdr through
-/// the link. Dropping it closes the link.
+/// A node that dialed this core, as the core reaches it. Dropping it closes
+/// the link.
 struct InboundTransport {
     link: RemoteHost,
 }
 
-/// Starts the link of `node` over `stream`: Hello, then its pane and
-/// terminal services for its own Herdr. Answers the link, for what the shell
+/// Starts the link of `node` over `stream`: Hello, then its pane holders.
+/// Answers the link, for what the shell
 /// binds to its identity (the screen relay's grant), and the node as the
 /// core takes it. Refused when the node speaks another protocol or its Hello
 /// names another machine than it claimed. Blocking; run it off the runtime
@@ -140,13 +138,7 @@ pub fn establish(
         }));
     }
     link.take_readers(hello.protocol, readers).map_err(refuse)?;
-    if panes.is_some() {
-        super::start_panes_at(Ok(node.herdr_socket.clone()), &link);
-    }
-    let terminals = match terminals {
-        Some(hook) => super::start_terminals_at(Ok(node.herdr_socket.clone()), &link, hook),
-        None => Err("this process takes no device terminals".to_owned()),
-    };
+    let terminals = super::start_holders_at(&link, terminals);
     crate::diagnostic!(json!({
         "component": "remote_host",
         "kind": "inbound.ready",
@@ -166,15 +158,7 @@ pub fn establish(
     Ok((link, arrived))
 }
 
-impl DeviceTransport for InboundTransport {
-    fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(self.link.herdr_connector())
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-}
+impl DeviceTransport for InboundTransport {}
 
 impl Drop for InboundTransport {
     fn drop(&mut self) {
@@ -218,7 +202,6 @@ mod tests {
                 home: None,
                 machine_identity: MachineIdentity::Available { id: machine },
                 reader_features: None,
-                herdr_socket: None,
                 windows_drives: None,
             };
             let response = Response {
@@ -238,7 +221,6 @@ mod tests {
         InboundNode {
             node: node.to_owned(),
             label: "laptop".to_owned(),
-            herdr_socket: "/tmp/herdr.sock".to_owned(),
         }
     }
 

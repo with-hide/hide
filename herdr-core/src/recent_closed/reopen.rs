@@ -1004,10 +1004,15 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use hide_herdr_client::HERDR_PROTOCOL_REVISION;
-
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, closed_layout, processes, refused, reply, session};
+
+    fn started() -> crate::engine::fake::Reply {
+        reply(crate::engine::StartedAgent {
+            pane_id: "pane".to_owned(),
+            terminal_id: Some("term".to_owned()),
+        })
+    }
 
     /// A restored agent resumes with the model and effort it was started
     /// with, and the new conversation that replaces a refused resume keeps
@@ -1016,29 +1021,26 @@ mod tests {
     fn a_restored_agent_starts_with_its_launch_choice_resumed_or_new() {
         let starts = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = Arc::clone(&starts);
-        let herdr =
-            FakeHerdr::start_with_errors("reopen-choice", move |method, params| match method {
-                "session.snapshot" => Ok(json!({"type": "session_snapshot", "snapshot": {
-                    "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
-                    "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
-                }})),
-                "pane.process_info" => Ok(json!({"type": "pane_process_info", "process_info": {
+        let herdr = FakeEngine::start(move |method, params| match method {
+            "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
+                "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
+            }}))),
+            "pane_processes" => reply(processes(
+                &json!({"type": "pane_process_info", "process_info": {
                     "pane_id": "pane", "shell_pid": 42, "foreground_process_group_id": 42,
                     "foreground_processes": []
-                }})),
-                "agent.start" => {
-                    let mut seen = seen.lock().unwrap();
-                    seen.push(params["args"].clone());
-                    if seen.len() == 1 {
-                        return Err(("agent_start_failed".into(), "resume refused".into()));
-                    }
-                    Ok(json!({"type": "agent_started", "argv": [], "agent": {
-                        "pane_id": "pane", "terminal_id": "term", "workspace_id": "w1",
-                        "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1
-                    }}))
+                }}),
+            )),
+            "start_agent" => {
+                let mut seen = seen.lock().unwrap();
+                seen.push(params["args"].clone());
+                if seen.len() == 1 {
+                    return refused("agent_start_failed", "resume refused");
                 }
-                other => panic!("unexpected {other}"),
-            });
+                started()
+            }
+            other => panic!("unexpected {other}"),
+        });
         let launch = hide_agent_adapter::LaunchChoice {
             model: Some("gpt-6-luna".into()),
             effort: Some("low".into()),
@@ -1097,22 +1099,20 @@ mod tests {
             (" CLAUDE_CODE ", "claude", vec!["--resume", "session"]),
             (" CODEX ", "codex", vec!["resume", "session"]),
         ] {
-            let herdr = FakeHerdr::start("reopen-alias", move |method, params| match method {
-                "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                    "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
+            let herdr = FakeEngine::start(move |method, params| match method {
+                "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                     "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
-                }}),
-                "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
-                    "pane_id": "pane", "shell_pid": 42, "foreground_process_group_id": 42,
-                    "foreground_processes": []
-                }}),
-                "agent.start" => {
+                }}))),
+                "pane_processes" => reply(processes(
+                    &json!({"type": "pane_process_info", "process_info": {
+                        "pane_id": "pane", "shell_pid": 42, "foreground_process_group_id": 42,
+                        "foreground_processes": []
+                    }}),
+                )),
+                "start_agent" => {
                     assert_eq!(params["kind"], canonical);
                     assert_eq!(params["args"], json!(args));
-                    json!({"type": "agent_started", "argv": [], "agent": {
-                        "pane_id": "pane", "terminal_id": "term", "workspace_id": "w1",
-                        "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1
-                    }})
+                    started()
                 }
                 other => panic!("unexpected {other}"),
             });
@@ -1139,17 +1139,16 @@ mod tests {
             assert!(notices.is_empty(), "{kind}: {notices:?}");
             assert_eq!(
                 herdr.methods(),
-                ["session.snapshot", "pane.process_info", "agent.start"]
+                ["session", "pane_processes", "start_agent"]
             );
         }
-        let herdr = FakeHerdr::start("reopen-alias-confirm", |method, _| match method {
-            "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
+        let herdr = FakeEngine::start(|method, _| match method {
+            "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                 "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": [{
                     "pane_id": "pane", "terminal_id": "term", "workspace_id": "w1", "tab_id": "w1:t1",
                     "name": "agent", "agent": "claude", "agent_status": "idle", "focused": false, "revision": 1
                 }]
-            }}),
+            }}))),
             other => panic!("unexpected {other}"),
         });
         assert!(agent_is_running(
@@ -1172,8 +1171,8 @@ mod tests {
 
     #[test]
     fn nested_split_reopen_applies_the_original_outer_and_inner_geometry() {
-        let herdr = FakeHerdr::start("reopen-nested-layout", |method, params| match method {
-            "layout.export" => json!({"type":"layout_export","layout": {
+        let herdr = FakeEngine::start(|method, params| match method {
+            "export_layout" => reply(closed_layout(json!({"type":"layout_export","layout": {
                 "workspace_id":"w1", "tab_id":"w1:t1", "zoomed":false,
                 "focused_pane_id":"outer-left",
                 "root":{"type":"split", "direction":"right", "ratio":0.4,
@@ -1181,8 +1180,8 @@ mod tests {
                     "second":{"type":"split", "direction":"right", "ratio":0.65,
                         "first":{"type":"pane", "pane_id":"inner-left", "cwd":"/tmp", "env":{}},
                         "second":{"type":"pane", "pane_id":"inner-right", "cwd":"/tmp", "env":{}}}}
-            }}),
-            "layout.apply" => {
+            }}))),
+            "apply_layout" => {
                 // The tab keeps its own label: Herdr would keep any label
                 // sent as the tab's name.
                 assert!(params["tab_label"].is_null());
@@ -1202,7 +1201,7 @@ mod tests {
                 );
                 assert_eq!(root["second"]["second"]["first"]["pane_id"], "inner-left");
                 assert_eq!(root["second"]["second"]["second"]["pane_id"], "inner-right");
-                json!({"type":"layout_apply","layout": {
+                reply(closed_layout(json!({"type":"layout_apply","layout": {
                     "workspace_id":"w1", "tab_id":"w1:t1", "zoomed":false,
                     "focused_pane_id":"reopened",
                     "root":{"type":"split", "direction":"right", "ratio":0.4,
@@ -1214,7 +1213,7 @@ mod tests {
                             "second":{"type":"split", "direction":"right", "ratio":0.65,
                                 "first":{"type":"pane", "pane_id":"inner-left", "cwd":"/tmp", "env":{}},
                                 "second":{"type":"pane", "pane_id":"inner-right", "cwd":"/tmp", "env":{}}}}}
-                }})
+                }})))
             }
             other => panic!("unexpected {other}"),
         });
@@ -1280,7 +1279,7 @@ mod tests {
         .expect("nested pane reopens through layout.apply");
 
         assert_eq!(outcome.focused_pane_id.as_deref(), Some("reopened"));
-        assert_eq!(herdr.methods(), ["layout.export", "layout.apply"]);
+        assert_eq!(herdr.methods(), ["export_layout", "apply_layout"]);
     }
 
     #[test]
@@ -1322,7 +1321,8 @@ mod tests {
             tab_name: Default::default(),
         };
         let error = repair_incomplete_tab_layout(
-            crate::engine::herdr::local("/tmp/hide-reopen-over-count-must-not-connect.sock")
+            FakeEngine::start(|method, _| panic!("the over-count layout asked {method}"))
+                .engine()
                 .as_ref(),
             "over-count",
             &context,
@@ -1389,9 +1389,8 @@ mod tests {
 
     #[test]
     fn pane_reopen_ignores_an_unowned_same_cwd_pane() {
-        let herdr = FakeHerdr::start("reopen-owned-pane", |method, _| match method {
-            "session.snapshot" => json!({"type":"session_snapshot","snapshot": {
-                "version":"fixture", "protocol":HERDR_PROTOCOL_REVISION,
+        let herdr = FakeEngine::start(|method, _| match method {
+            "session" => reply(session(json!({"type":"session_snapshot","snapshot": {
                 "workspaces":[], "tabs":[], "agents":[],
                 "panes":[{"pane_id":"w1:p3", "terminal_id": "fixture-terminal","workspace_id":"w1","tab_id":"w1:t1","cwd":"/tmp","focused":false,"agent_status":"idle","revision":0}],
                 "layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
@@ -1399,8 +1398,8 @@ mod tests {
                     "panes":[{"pane_id":"w1:p1","focused":true,"rect":{"x":0,"y":0,"width":40,"height":24}},
                              {"pane_id":"w1:p3","focused":false,"rect":{"x":40,"y":0,"width":40,"height":24}}],
                     "splits":[] }]
-            }}),
-            "layout.export" => json!({
+            }}))),
+            "export_layout" => reply(closed_layout(json!({
                 "type": "layout_export",
                 "layout": {
                     "workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
@@ -1409,11 +1408,8 @@ mod tests {
                         "first":{"type":"pane","pane_id":"w1:p1","cwd":"/tmp","env":{}},
                         "second":{"type":"pane","pane_id":"w1:p3","cwd":"/tmp","env":{}}}
                 }
-            }),
-            "pane.split" => json!({"type": "pane_info", "pane": {
-                "pane_id": "w1:p4", "terminal_id": "fixture-terminal", "workspace_id": "w1", "tab_id": "w1:t1",
-                "focused": true, "agent_status": "idle", "revision": 1
-            }}),
+            }))),
+            "split_pane_at" => reply("w1:p4".to_owned()),
             method => panic!("unexpected method {method}"),
         });
         let context = ClosedContext {
@@ -1473,66 +1469,55 @@ mod tests {
         .expect("fixture reopen succeeds");
 
         assert_eq!(outcome.focused_pane_id.as_deref(), Some("w1:p4"));
-        let requests = herdr.requests();
-        let split = requests
-            .iter()
-            .find(|request| request["method"] == "pane.split")
+        let split = herdr
+            .calls_of("split_pane_at")
+            .pop()
             .expect("the reopen creates its own pane");
         assert_eq!(
-            split["params"]["env"][REOPEN_INTENT_ENV],
+            split["env"][REOPEN_INTENT_ENV],
             reopen_intent_marker("first-attempt", ReopenIntentStage::Pane)
         );
-        assert!(
-            requests
-                .iter()
-                .all(|request| request["method"] != "pane.send_text")
-        );
+        assert!(herdr.calls_of("send_text").is_empty());
     }
 
     #[test]
     fn tab_reopen_ignores_unowned_same_label_workspace_and_tab() {
         let mut layout_apply_count = 0;
-        let herdr = FakeHerdr::start("reopen-owned-layout", move |method, params| match method {
-            "session.snapshot" => json!({"type":"session_snapshot","snapshot": {
-                "version":"fixture", "protocol":HERDR_PROTOCOL_REVISION,
+        let herdr = FakeEngine::start(move |method, params| match method {
+            "session" => reply(session(json!({"type":"session_snapshot","snapshot": {
                 "workspaces":[{"workspace_id":"w2","label":"Fixture","active_tab_id":"w2:t1","number":2,"focused":true,"pane_count":1,"tab_count":1,"agent_status":"idle"}],
                 "tabs":[{"workspace_id":"w2","tab_id":"w2:t1","label":"Tab","number":1,"focused":true,"pane_count":1,"agent_status":"idle"}],
                 "panes":[], "layouts":[], "agents":[]
-            }}),
-            "layout.export" => json!({"type":"layout_export","layout": {
+            }}))),
+            "export_layout" => reply(closed_layout(json!({"type":"layout_export","layout": {
                 "workspace_id":"w2", "tab_id":"w2:t1", "zoomed":false,
                 "focused_pane_id":"w2:p9",
                 "root":{"type":"pane","pane_id":"w2:p9","cwd":"/tmp","env":{}}
-            }}),
-            "workspace.create" => {
+            }}))),
+            "create_workspace" => {
                 assert_eq!(
                     params["env"][REOPEN_INTENT_ENV],
                     reopen_intent_marker("layout-intent", ReopenIntentStage::Workspace)
                 );
-                json!({"type":"workspace_created",
-                    "workspace":{"workspace_id":"w3","number":3,"label":"Fixture","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w3:t1","agent_status":"idle"},
-                    "tab":{"tab_id":"w3:t1","workspace_id":"w3","number":1,"label":"1","focused":true,"pane_count":1,"agent_status":"idle"},
-                    "root_pane":{"pane_id":"w3:p3", "terminal_id": "fixture-terminal","workspace_id":"w3","tab_id":"w3:t1","focused":true,"agent_status":"idle","revision":1}
-                })
+                reply(("w3".to_owned(), "w3:t1".to_owned(), "w3:p3".to_owned()))
             }
-            "layout.apply" => {
-                assert_eq!(params["tab_id"], "w3:t1");
-                assert!(params.get("workspace_id").is_none());
+            "apply_layout" => {
+                assert_eq!(params["tab"], "w3:t1");
                 assert_eq!(
                     params["root"]["first"]["env"][REOPEN_INTENT_ENV],
                     reopen_intent_marker("layout-intent", ReopenIntentStage::Layout)
                 );
                 layout_apply_count += 1;
                 if layout_apply_count == 1 {
-                    json!({"type":"layout_apply","layout": {
+                    reply(closed_layout(json!({"type":"layout_apply","layout": {
                         "workspace_id":"w3", "tab_id":"w3:t1", "zoomed":false,
                         "focused_pane_id":"w3:p3",
                         "root":{"type":"pane","pane_id":"w3:p3","cwd":"/tmp","env":{
                             (REOPEN_INTENT_ENV): reopen_intent_marker("layout-intent", ReopenIntentStage::Layout)
                         }}
-                    }})
+                    }})))
                 } else {
-                    json!({"type":"layout_apply","layout": {
+                    reply(closed_layout(json!({"type":"layout_apply","layout": {
                         "workspace_id":"w3", "tab_id":"w3:t1", "zoomed":false,
                         "focused_pane_id":"w3:p3",
                         "root":{"type":"split","direction":"right","ratio":0.6,
@@ -1542,13 +1527,11 @@ mod tests {
                             "second":{"type":"pane","pane_id":"w3:p4","cwd":"/tmp","env":{
                                 (REOPEN_INTENT_ENV): reopen_intent_marker("layout-intent", ReopenIntentStage::Layout)
                             }}}
-                    }})
+                    }})))
                 }
             }
-            "workspace.list" => json!({"type":"workspace_list","workspaces":[
-                {"workspace_id":"w2","number":2,"label":"other","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w2:t1","agent_status":"idle"}
-            ]}),
-            "workspace.report_metadata" => json!({"type":"ok"}),
+            "workspace_tokens" => reply(vec![("w2".to_owned(), None::<String>)]),
+            "report_workspace_token" => reply(()),
             _ => unreachable!(),
         });
         let context = ClosedContext {
@@ -1617,58 +1600,54 @@ mod tests {
             // folder's owner, made and marked here; the old index names a
             // place in another workspace and is not restored.
             [
-                "session.snapshot",
-                "layout.export",
-                "workspace.list",
-                "workspace.create",
-                "workspace.report_metadata",
-                "layout.apply",
-                "layout.apply"
+                "session",
+                "export_layout",
+                "workspace_tokens",
+                "create_workspace",
+                "report_workspace_token",
+                "apply_layout",
+                "apply_layout"
             ]
         );
     }
 
     #[test]
     fn recovered_partial_tab_layout_is_repaired_and_revalidated() {
-        let herdr = FakeHerdr::start(
-            "reopen-repair-recovered",
-            move |method, params| match method {
-                "session.snapshot" => json!({"type":"session_snapshot","snapshot": {
-                    "version":"fixture", "protocol":HERDR_PROTOCOL_REVISION,
-                    "workspaces":[{"workspace_id":"w1","label":"Fixture","active_tab_id":"w1:t2","number":1,"focused":true,"pane_count":1,"tab_count":1,"agent_status":"idle",
-                        "worktree":{"repo_key":"/tmp","repo_name":"tmp","repo_root":"/tmp","checkout_path":"/tmp","is_linked_worktree":false}}],
-                    "tabs":[{"workspace_id":"w1","tab_id":"w1:t2","label":"Tab","number":1,"focused":true,"pane_count":1,"agent_status":"idle"}],
-                    "panes":[], "layouts":[], "agents":[]
-                }}),
-                "layout.export" => json!({"type":"layout_export","layout": {
+        let herdr = FakeEngine::start(move |method, params| match method {
+            "session" => reply(session(json!({"type":"session_snapshot","snapshot": {
+                "workspaces":[{"workspace_id":"w1","label":"Fixture","active_tab_id":"w1:t2","number":1,"focused":true,"pane_count":1,"tab_count":1,"agent_status":"idle",
+                    "worktree":{"repo_key":"/tmp","repo_name":"tmp","repo_root":"/tmp","checkout_path":"/tmp","is_linked_worktree":false}}],
+                "tabs":[{"workspace_id":"w1","tab_id":"w1:t2","label":"Tab","number":1,"focused":true,"pane_count":1,"agent_status":"idle"}],
+                "panes":[], "layouts":[], "agents":[]
+            }}))),
+            "export_layout" => reply(closed_layout(json!({"type":"layout_export","layout": {
+                "workspace_id":"w1", "tab_id":"w1:t2", "zoomed":false,
+                "focused_pane_id":"w1:p2",
+                "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
+                    (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
+                }}
+            }}))),
+            "apply_layout" => {
+                assert_eq!(params["tab"], "w1:t2");
+                assert_eq!(
+                    params["root"]["second"]["env"][REOPEN_INTENT_ENV],
+                    reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
+                );
+                reply(closed_layout(json!({"type":"layout_apply","layout": {
                     "workspace_id":"w1", "tab_id":"w1:t2", "zoomed":false,
                     "focused_pane_id":"w1:p2",
-                    "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
-                        (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
-                    }}
-                }}),
-                "layout.apply" => {
-                    assert_eq!(params["tab_id"], "w1:t2");
-                    assert_eq!(
-                        params["root"]["second"]["env"][REOPEN_INTENT_ENV],
-                        reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
-                    );
-                    json!({"type":"layout_apply","layout": {
-                        "workspace_id":"w1", "tab_id":"w1:t2", "zoomed":false,
-                        "focused_pane_id":"w1:p2",
-                        "root":{"type":"split","direction":"right","ratio":0.6,
-                            "first":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
-                                (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
-                            }},
-                            "second":{"type":"pane","pane_id":"w1:p3","cwd":"/tmp","env":{
-                                (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
-                            }}}
-                    }})
-                }
-                "tab.move" => json!({"type":"tab_list","tabs":[]}),
-                _ => unreachable!(),
-            },
-        );
+                    "root":{"type":"split","direction":"right","ratio":0.6,
+                        "first":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
+                            (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
+                        }},
+                        "second":{"type":"pane","pane_id":"w1:p3","cwd":"/tmp","env":{
+                            (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
+                        }}}
+                }})))
+            }
+            "move_tab" => reply(Vec::<String>::new()),
+            _ => unreachable!(),
+        });
         let context = ClosedContext {
             workspace_id: "w1".into(),
             workspace_label: "Fixture".into(),
@@ -1728,23 +1707,16 @@ mod tests {
         );
         assert_eq!(
             herdr.methods(),
-            [
-                "session.snapshot",
-                "layout.export",
-                "layout.apply",
-                "tab.move"
-            ]
+            ["session", "export_layout", "apply_layout", "move_tab"]
         );
     }
 
     #[test]
     fn reused_agent_process_is_interrupted_before_resume() {
-        let herdr = FakeHerdr::start("reopen-interrupt", |method, params| match method {
-            "session.snapshot" => json!({
+        let herdr = FakeEngine::start(|method, params| match method {
+            "session" => reply(session(json!({
                 "type": "session_snapshot",
                 "snapshot": {
-                    "version": "fixture",
-                    "protocol": HERDR_PROTOCOL_REVISION,
                     "workspaces": [],
                     "tabs": [],
                     "panes": [],
@@ -1765,10 +1737,10 @@ mod tests {
                         "revision": 0
                     }]
                 }
-            }),
-            "pane.send_text" => {
-                assert_eq!(*params, json!({"pane_id": "w1:p1", "text": "\u{3}"}));
-                json!({"type": "ok"})
+            }))),
+            "send_text" => {
+                assert_eq!(*params, json!({"pane": "w1:p1", "text": "\u{3}"}));
+                reply(())
             }
             other => panic!("unexpected {other}"),
         });
@@ -1778,6 +1750,6 @@ mod tests {
                 .expect("reused agent is interrupted")
         );
 
-        assert_eq!(herdr.methods(), ["session.snapshot", "pane.send_text"]);
+        assert_eq!(herdr.methods(), ["session", "send_text"]);
     }
 }

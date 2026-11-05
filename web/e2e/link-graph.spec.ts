@@ -14,7 +14,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { claudeProjects, type HerdrFixture } from "./herdr-fixture";
+import { claudeProjects } from "./pane-fixture";
 import { startEngine } from "./engine-fixture";
 import { openProject, withControl } from "./daemon-actions";
 import { OMP_ID, PI_ID, prepareNativeWriter } from "./session-reader-fixture";
@@ -264,7 +264,7 @@ test(`a ${kind} archive resume keeps its selected source and uses the current co
     git(repo, ["commit", "-m", "initial"]);
     git(repo, ["worktree", "add", "-b", BRANCH, tree]);
     // The writer reads only the run's root and HOME, which an engine without a CLI environment has as well.
-    const session = prepareNativeWriter({ root: engine.root, env: { HOME: path.join(engine.root, "home") } } as unknown as HerdrFixture, kind, tree);
+    const session = prepareNativeWriter({ root: engine.root, env: { HOME: path.join(engine.root, "home") } }, kind, tree);
     const source = fs.readFileSync(path.join(engine.root, `${kind}-session-seed.jsonl`), "utf8") + `${JSON.stringify({
       type: "message", id: "pr-tool-result", timestamp: at(CREATED + 1_000),
       message: { role: "toolResult", toolCallId: "pr-tool", toolName: "bash", isError: false,

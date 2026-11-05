@@ -17,13 +17,12 @@ test("sidebar tab segments use the candidate window's real tab", { tag: "@platfo
     await enterWorkspace(page, "fixture");
     const glyph = page.locator(`[data-sidebar-tab="${fixture.tab}"]`);
     const rows = page.locator(`[data-sidebar-tab-group="${fixture.tab}"] [data-agent-open]`);
-    // The fixture closes Add project's shell. The own engine numbers the
-    // remaining tab; Herdr keeps the ordinal it assigned when creating it.
-    await expect(glyph).toHaveAccessibleName(fixture.engine === "own" ? "Tab 1, 2 agents" : "Tab 2, 2 agents");
+    // The fixture closes Add project's shell; the engine numbers the remaining tab.
+    await expect(glyph).toHaveAccessibleName("Tab 1, 2 agents");
     await expect(rows).toHaveCount(2);
     await expect(page.locator(`[data-sidebar-tab-guide="${fixture.tab}"]`)).toHaveCount(1);
-    await captureElectronWindow(app, "sidebar-native-segments", { build: "worktree debug candidate", daemonPid: run.daemonPid(), privateSocket: fixture.socket });
-    await captureNativeWindow(app, "sidebar-compositor-segments", { method: "screencapture exact candidate window without activation", build: "worktree debug candidate", daemonPid: run.daemonPid(), privateSocket: fixture.socket, limits: "native keyboard and IME not exercised" });
+    await captureElectronWindow(app, "sidebar-native-segments", { build: "worktree debug candidate", daemonPid: run.daemonPid() });
+    await captureNativeWindow(app, "sidebar-compositor-segments", { method: "screencapture exact candidate window without activation", build: "worktree debug candidate", daemonPid: run.daemonPid(), limits: "native keyboard and IME not exercised" });
     await glyph.click();
     await expect(page.locator(`[data-tab="${fixture.tab}"]`).first()).toHaveAttribute("aria-selected", "true");
     await expect(rows).toHaveCount(2);

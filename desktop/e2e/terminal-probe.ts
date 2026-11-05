@@ -8,7 +8,7 @@ import path from "node:path";
 import { sendKeys, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import type { Daemon } from "../../web/e2e/hided-fixture";
-import { printFileCommand } from "../../web/e2e/herdr-fixture";
+import { printFileCommand } from "../../web/e2e/pane-fixture";
 
 export type Probe = { paneId: () => string | null; paneText: (id: string) => string; paneGrid: (id: string) => { cols: number; rows: number } | null; diagnostics?: () => string[] };
 

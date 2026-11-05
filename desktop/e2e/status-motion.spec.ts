@@ -63,7 +63,7 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   await expect(page.getByRole("status")).toHaveText("Starting Hide…");
   await expect(page.locator("#brand strong")).toHaveText("hide");
   await captureElectronWindow(app, "startup-flight", { packaged: Boolean(packaged), offline: true });
-  await captureNativeWindow(app, "startup-flight-native", { method: "screencapture exact candidate window without activation", packaged: Boolean(packaged), privateSocket: engine.socket });
+  await captureNativeWindow(app, "startup-flight-native", { method: "screencapture exact candidate window without activation", packaged: Boolean(packaged) });
   expect(await fitWindow(app, { width: 720, height: 480 })).toEqual({ width: 720, height: 480 });
   const overflow = () => page.evaluate(() => ({
     width: innerWidth, html: document.documentElement.scrollWidth, body: document.body.scrollWidth,

@@ -45,7 +45,7 @@ fn retired_history_keeps_conversation_mode_without_restoring_active_capabilities
     assert!(runtime.snapshot.ui_state.conversation_pane_ids.is_empty());
     assert!(!conversation_agent_kind("unknown-reader"));
 
-    // Direct observation admission requires this active registry lookup too.
+    // A retired agent is absent from every active registry.
     assert!(hide_agent_adapter::adapter("cursor").is_none());
     assert!(hide_agent_adapter::start_kind("cursor").is_none());
     assert!(crate::agent_hooks::runtime_of("cursor").is_none());
@@ -94,17 +94,6 @@ fn every_flag_of_the_table_is_what_the_cores_own_gates_do() {
             crate::delivery::doorbell::bell_target(kind),
             "{kind}: bell"
         );
-        // The guard is the hook's `PreToolUse` entry, the plugin's or
-        // extension's tool call, or Grok's and Cursor's own hook, so an agent
-        // has it exactly when one of those counts for it and declares it.
-        assert_eq!(
-            adapter.supports(Feature::SpawnGuard),
-            (hook || matches!(adapter.hook, hide_kit::HookSupport::Guidance(_)))
-                && declared.spawn_guard.is_some()
-                && hide_agent_hooks::HookEvent::ALL
-                    .contains(&hide_agent_hooks::HookEvent::PreToolUse),
-            "{kind}: spawn guard"
-        );
         assert_eq!(
             adapter.supports(Feature::Sleep),
             crate::agent_sleep::sleeps_kind(kind),
@@ -125,13 +114,7 @@ fn every_flag_of_the_table_is_what_the_cores_own_gates_do() {
             conversation_agent_kind(kind),
             "{kind}: conversation titles"
         );
-        // Every supported agent has Herdr's own integration, and its target
-        // is the kind Herdr reports the agent's panes as.
-        assert!(
-            adapter.supports(Feature::HerdrIntegration),
-            "{kind}: herdr integration"
-        );
-        assert_eq!(adapter.herdr.name, kind, "{kind}: herdr integration target");
+        assert_eq!(adapter.herdr.name, kind, "{kind}: kind");
     }
 }
 
@@ -151,7 +134,6 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
         chosen: false,
         skill: piece.clone(),
         hook: None,
-        herdr: None,
         update: None,
         doc_url: String::new(),
     };
@@ -178,8 +160,6 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
         [
             Feature::Skill,
             Feature::Bell,
-            Feature::SpawnGuard,
-            Feature::HerdrIntegration,
             Feature::Sleep,
             Feature::Fork,
             Feature::Start,
@@ -209,8 +189,6 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
             Feature::Guidance,
             Feature::Letters,
             Feature::Memory,
-            Feature::SpawnGuard,
-            Feature::HerdrIntegration,
             Feature::Sleep,
             Feature::Fork,
             Feature::Start,

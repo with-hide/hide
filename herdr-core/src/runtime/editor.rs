@@ -1351,7 +1351,7 @@ impl Runtime {
                     crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
                 )
                 .then_some(target_id.clone()),
-                message: "Closing this item requires the local Herdr connection".into(),
+                message: "Closing this item requires the local engine connection".into(),
             }]);
             return true;
         };
@@ -2048,11 +2048,7 @@ impl Runtime {
         let mut schedule_status_check = false;
         let timing_id = super::op_timing::pane_close_op_id(&request.key);
         match &result {
-            Ok(()) => self.op_timings.stamp(
-                &timing_id,
-                super::op_timing::Stage::HerdrAck,
-                std::time::Instant::now(),
-            ),
+            Ok(()) => {}
             Err(crate::engine::EngineError::Refused { .. }) => {
                 self.op_timings.finish(&timing_id, "refused")
             }
@@ -2064,7 +2060,7 @@ impl Runtime {
                     operation.phase = "awaiting_topology".to_owned();
                     operation.stage = "topology".to_owned();
                     operation.message = Some(
-                        "Close was accepted; waiting for Herdr to confirm the target is gone"
+                        "Close was accepted; waiting for the engine to confirm the target is gone"
                             .to_owned(),
                     );
                     operation.retryable = false;
@@ -2372,7 +2368,7 @@ impl Runtime {
             for key in &request_keys {
                 if let Some(operation) = self.close_operations.get_mut(key) {
                     operation.message = Some(
-                        "Close result is unknown; reconnect Herdr before checking status"
+                        "Close result is unknown; reconnect the engine before checking status"
                             .to_owned(),
                     );
                     operation.retryable = true;
@@ -2925,7 +2921,7 @@ impl Runtime {
                 .as_ref()
                 .cloned()
                 .ok_or_else(|| {
-                    "the local Herdr connection is unavailable; retry when it returns".to_owned()
+                    "the local engine connection is unavailable; retry when it returns".to_owned()
                 })
                 .and_then(|context| crate::recent_closed::reopen::spawn_reopen(context, request))
         };
@@ -3258,7 +3254,7 @@ impl Runtime {
         if self.live.is_none() {
             self.set_error(
                 "pane.control_unavailable",
-                "Pane close requires a live Herdr connection",
+                "Pane close requires a live engine connection",
                 true,
             );
             return true;

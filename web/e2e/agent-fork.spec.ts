@@ -12,7 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { agentIn, corePaneFocus, focusTab, newTab, withControl } from "./daemon-actions";
 import { setAgentSession } from "./fixture-agents";
-import { CLAUDE_FULL_ACCESS } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 

@@ -123,7 +123,6 @@
 .overview-graph .og-lineage .react-flow__edge-path { stroke: color-mix(in srgb, var(--muted-foreground) 50%, transparent); stroke-width: var(--graph-edge-width); }
 .overview-graph .og-lineage.og-emphasized .react-flow__edge-path { stroke: var(--muted-foreground); }
 .overview-graph .og-communication .react-flow__edge-path { stroke: var(--subtle-foreground); stroke-width: var(--graph-edge-width); }
-.overview-graph .og-direct-input .react-flow__edge-path { stroke-dasharray: var(--size-hairline) var(--spacing-xs); stroke-linecap: round; }
 .overview-graph .og-turn .react-flow__edge-path { stroke: var(--warning); stroke-width: var(--graph-edge-flow-width); }
 .overview-graph .og-emphasized .react-flow__edge-path { stroke-width: var(--graph-edge-flow-width); }
 .overview-graph .og-muted { opacity: var(--opacity-dimmed); }

@@ -5,10 +5,6 @@
 //! travel the same link as a stream, so a device pane needs no other
 //! connection to the core.
 
-pub use hide_agent_hooks::observation::{
-    DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT,
-    RECIPIENT_LIMIT as OBSERVATION_RECIPIENT_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
-};
 pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn};
 use serde::{Deserialize, Serialize};
 
@@ -48,10 +44,6 @@ pub const MAX_STREAMS: usize = 8;
 pub const MAX_CHUNK: usize = 48 * 1024;
 /// Chunks the core holds for one stream before the stream is ended.
 pub const MAX_PENDING_CHUNKS: usize = 64;
-/// Herdr streams one link carries at once (PRD core-host-node-remote-core
-/// D-20): the session subscription, controls, doorbell, find and phone
-/// reply of a node that dialed its core each hold one while they run.
-pub const MAX_HERDR_STREAMS: usize = 32;
 /// Browser relay streams one link carries at once (B15): as many as the
 /// core relays `hide browser` commands at once.
 pub const MAX_BROWSER_STREAMS: usize = 4;
@@ -98,15 +90,6 @@ pub enum PullPoint {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HookCommand {
     WorkspaceInfo {},
-    /// Metadata-only passive observation; never dispatches input or letters.
-    Observation {
-        observation: DirectObservation,
-    },
-    /// The same metadata for an agent the caller started through Herdr
-    /// directly: at most an origin, never a parent, watch or letter.
-    StartObservation {
-        observation: DirectObservation,
-    },
     LetterPull {
         prompt_digest: Option<String>,
         session: Option<String>,
@@ -277,7 +260,7 @@ pub enum ProofAnswer {
     },
 }
 
-/// What `Call::PanesStart` answers: where the node's bootstrap socket is.
+/// What `Call::HoldersStart` answers: where the node's bootstrap socket is.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PanesStarted {
     pub socket: String,

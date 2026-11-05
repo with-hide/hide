@@ -2,7 +2,7 @@ import { emptyScope, legacyRest } from "../test/legacyAgentScope";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { deviceCatalogLine, remoteTabView, remoteTargetOfPane, remoteView, supportsRemotePurpose } from "./remote";
+import { deviceCatalogLine, remoteTabView, remoteTargetOfPane, remoteView } from "./remote";
 import { queueBuffer, tabBufferKey } from "./buffers";
 import type { Device, EditorSnapshot, RemoteSession, RemoteStatus, SnapshotRest, Tab, Workspace } from "./snapshot";
 import { useShellStore, type DaemonInfo } from "./store";
@@ -137,7 +137,7 @@ function rest(focusedDevice: string, state = "connected"): SnapshotRest {
     },
     // What typing into the remote pane leaves in the core's terminal pane.
     terminal: { pane_id: PANE_A, panes: [] },
-    status: { remote: [{ target_id: "studio", state, message: null, herdr_version: "0.9.1", session: session() }] },
+    status: { remote: [{ target_id: "studio", state, message: null, session: session() }] },
   };
 }
 
@@ -220,8 +220,8 @@ describe("remote view", () => {
     const value: SnapshotRest = {
       status: {
         remote: [
-          { target_id: "studio", state: "connected", message: null, herdr_version: null, session: onDevice("studio", [PANE_A]) },
-          { target_id: "studio2", state: "connected", message: null, herdr_version: null, session: onDevice("studio2", ["remote:studio2:pane:w1:p1"]) },
+          { target_id: "studio", state: "connected", message: null, session: onDevice("studio", [PANE_A]) },
+          { target_id: "studio2", state: "connected", message: null, session: onDevice("studio2", ["remote:studio2:pane:w1:p1"]) },
         ],
       },
     };
@@ -230,13 +230,6 @@ describe("remote view", () => {
     expect(remoteTargetOfPane(value, LOCAL_PANE)).toBeNull();
     // A pane no device publishes is no device's, whatever its id spells.
     expect(remoteTargetOfPane(value, "remote:studio:pane:w9:p9")).toBeNull();
-  });
-
-  it("stores a remote purpose only from Herdr 0.9.1", () => {
-    expect(supportsRemotePurpose("0.9.1")).toBe(true);
-    expect(supportsRemotePurpose("v0.10.0")).toBe(true);
-    expect(supportsRemotePurpose("0.9.0")).toBe(false);
-    expect(supportsRemotePurpose(null)).toBe(false);
   });
 });
 
@@ -342,7 +335,6 @@ describe("deviceCatalogLine", () => {
     target_id: "studio",
     state,
     message: state === "connected" ? null : "ssh refused",
-    herdr_version: null,
     session,
     catalog,
   });

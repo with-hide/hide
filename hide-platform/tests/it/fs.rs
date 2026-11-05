@@ -682,6 +682,29 @@ fn inspection_lets_others_add_to_a_system_folder_but_not_delete_from_it() {
     }
 }
 
+/// Python's private folder on Windows (`tempfile.mkdtemp`, CPython 3.12.4
+/// and later) grants the system, the administrators and OWNER RIGHTS, which
+/// is whoever owns the folder: the current account's own folder, safe to
+/// inspect, while the same grant on a folder another account owns is not.
+#[cfg(windows)]
+#[test]
+fn an_owner_rights_grant_on_an_owned_folder_is_the_owners_own() {
+    let outer = folder();
+    let python = outer.path().join("python");
+    fs::create_dir(&python).unwrap();
+    set_access(
+        &python,
+        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)",
+    );
+    assert_eq!(
+        private::inspect_directory_entry(&python).unwrap(),
+        private::InspectionDirectory::Real,
+        "{}",
+        access_list(&python)
+    );
+    assert!(!private::others_can_modify(&python).unwrap());
+}
+
 #[test]
 fn a_private_folder_is_the_current_accounts_alone() {
     let outer = folder();

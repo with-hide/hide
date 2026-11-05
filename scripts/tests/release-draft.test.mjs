@@ -49,10 +49,10 @@ async function fixture(t, options = {}) {
     const asset = `hide-device-${platform}-${tag.slice(1)}.tar.gz`;
     const data = gzipSync(Buffer.from(asset));
     files.set(asset, data);
-    const programs = Object.fromEntries(["hided", "hide", "hide-agent-hooks", "hide-holder", "herdr"].map((name) => [name, { size: 64, sha256: "a".repeat(64) }]));
+    const programs = Object.fromEntries(["hided", "hide", "hide-agent-hooks", "hide-holder"].map((name) => [name, { size: 64, sha256: "a".repeat(64) }]));
     platforms[platform] = { asset, size: data.length, sha256: digest(data).slice(7), files: programs };
   }
-  files.set("device-bundles.json", Buffer.from(JSON.stringify({ format: 2, version: tag.slice(1), commit: sha, order: "42", platforms })));
+  files.set("device-bundles.json", Buffer.from(JSON.stringify({ format: 3, version: tag.slice(1), commit: sha, order: "42", platforms })));
   for (const [name, data] of files) await fs.writeFile(path.join(directory, name), data);
   const state = {
     release: options.release ? structuredClone(options.release) : null,

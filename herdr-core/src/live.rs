@@ -716,14 +716,7 @@ fn execute_pane_focus(
     engine: &dyn Engine,
     pane_id: &str,
 ) -> Result<PaneLayoutSnapshot, ControlFailure> {
-    execute_pane_focus_with_timeout(engine, pane_id, Duration::from_secs(5))
-}
-
-fn execute_pane_focus_with_timeout(
-    engine: &dyn Engine,
-    pane_id: &str,
-    response_timeout: Duration,
-) -> Result<PaneLayoutSnapshot, ControlFailure> {
+    let response_timeout = Duration::from_secs(5);
     // These three responses share the established absolute read deadline and
     // 64 KiB frame cap. A lost mutation response has a different outcome from
     // an authoritative read failing after Herdr already acknowledged it.
@@ -768,7 +761,7 @@ fn confirm_pane_focus_with_timeout(
     let (layout, active_tab_id) = read_pane_focus(engine, pane_id, response_timeout)?;
     if layout.focused_pane_id != pane_id || active_tab_id != layout.tab_id {
         return Err(ControlFailure::Definite(format!(
-            "Herdr did not confirm pane {pane_id}: pane {} is focused in tab {}, and workspace {} shows tab {active_tab_id}",
+            "The engine did not confirm pane {pane_id}: pane {} is focused in tab {}, and workspace {} shows tab {active_tab_id}",
             layout.focused_pane_id, layout.tab_id, layout.workspace_id
         )));
     }
@@ -1168,13 +1161,6 @@ pub enum SessionFetchError {
     SocketMissing(String),
     /// The socket exists but the request failed (connect, timeout, IO).
     Unreachable(String),
-    /// The server answered with an incompatible protocol revision.
-    Protocol {
-        message: String,
-        expected_protocol: u64,
-        received_protocol: u64,
-        received_version: Option<String>,
-    },
     /// A previously valid projection is retained while the event stream
     /// reconnects or performs an explicit snapshot resynchronization.
     Stale(String),
@@ -1187,7 +1173,6 @@ impl SessionFetchError {
         match self {
             Self::SocketMissing(_) => "socket_missing",
             Self::Unreachable(_) => "unreachable",
-            Self::Protocol { .. } => "protocol_mismatch",
             Self::Stale(_) => "stale",
             Self::Malformed(_) => "malformed",
         }
@@ -1199,47 +1184,6 @@ impl SessionFetchError {
             | Self::Unreachable(message)
             | Self::Stale(message)
             | Self::Malformed(message) => message,
-            Self::Protocol { message, .. } => message,
-        }
-    }
-
-    /// The same failure as a device's row reads it: a device's Herdr on an
-    /// older protocol gets the device's step rather than this machine's
-    /// advice to stop its session and reopen Hide (PRD device-herdr-update
-    /// D-15).
-    pub(crate) fn for_device(self) -> Self {
-        match self {
-            Self::Protocol {
-                expected_protocol,
-                received_protocol,
-                received_version,
-                ..
-            } if received_protocol < expected_protocol => Self::Protocol {
-                message: crate::engine::herdr::device_protocol_behind(
-                    received_protocol,
-                    received_version.as_deref(),
-                ),
-                expected_protocol,
-                received_protocol,
-                received_version,
-            },
-            other => other,
-        }
-    }
-
-    pub fn protocol_details(&self) -> Option<(u64, u64, Option<&str>)> {
-        match self {
-            Self::Protocol {
-                expected_protocol,
-                received_protocol,
-                received_version,
-                ..
-            } => Some((
-                *expected_protocol,
-                *received_protocol,
-                received_version.as_deref(),
-            )),
-            _ => None,
         }
     }
 }
@@ -1298,17 +1242,6 @@ pub(crate) fn fetch_session(
         .session_payload(CONTROL_WAIT)
         .map_err(|error| match error {
             EngineError::NotRunning(message) => SessionFetchError::SocketMissing(message),
-            EngineError::Protocol {
-                message,
-                expected_protocol,
-                received_protocol,
-                received_version,
-            } => SessionFetchError::Protocol {
-                message,
-                expected_protocol,
-                received_protocol,
-                received_version,
-            },
             EngineError::Answer(message) => SessionFetchError::Malformed(message),
             error => SessionFetchError::Unreachable(error.to_string()),
         })
@@ -1322,7 +1255,7 @@ pub fn project_layout_for_pane(
         .layouts
         .iter()
         .find(|layout| layout.panes.iter().any(|pane| pane.pane_id == pane_id))
-        .ok_or_else(|| format!("Herdr session has no layout containing pane {pane_id}"))?;
+        .ok_or_else(|| format!("Engine session has no layout containing pane {pane_id}"))?;
     project_layout(layout)
 }
 
@@ -1348,7 +1281,7 @@ pub fn project_layouts(
 
 pub(crate) fn project_layout(layout: &SessionLayoutPayload) -> Result<PaneLayoutSnapshot, String> {
     if layout.panes.is_empty() {
-        return Err(format!("Herdr tab {} has no panes", layout.tab_id));
+        return Err(format!("Engine tab {} has no panes", layout.tab_id));
     }
     let root = project_layout_node(layout.area, &layout.panes, &layout.splits)?;
     Ok(PaneLayoutSnapshot {
@@ -1370,20 +1303,20 @@ fn project_layout_node(
         .filter(|split| split.rect == area)
         .collect::<Vec<_>>();
     if matching_splits.len() > 1 {
-        return Err("Herdr layout contains duplicate splits for one area".to_owned());
+        return Err("Engine layout contains duplicate splits for one area".to_owned());
     }
     let Some(split) = matching_splits.first().copied() else {
         return match panes {
             [pane] => Ok(PaneLayoutNodeSnapshot::Pane {
                 pane_id: pane.pane_id.clone(),
             }),
-            [] => Err("Herdr layout produced an empty leaf".to_owned()),
-            _ => Err("Herdr layout has multiple panes without an authoritative split".to_owned()),
+            [] => Err("Engine layout produced an empty leaf".to_owned()),
+            _ => Err("Engine layout has multiple panes without an authoritative split".to_owned()),
         };
     };
     if !split.ratio.is_finite() || split.ratio <= 0.0 || split.ratio >= 1.0 {
         return Err(format!(
-            "Herdr layout split ratio {} is invalid",
+            "Engine layout split ratio {} is invalid",
             split.ratio
         ));
     }
@@ -1396,7 +1329,7 @@ fn project_layout_node(
         center < boundary
     });
     if first_panes.is_empty() || second_panes.is_empty() {
-        return Err("Herdr layout split does not divide panes into two children".to_owned());
+        return Err("Engine layout split does not divide panes into two children".to_owned());
     }
     let first = project_layout_node(
         first_area,
@@ -1424,7 +1357,7 @@ pub(crate) fn split_areas(
     match direction {
         PaneLayoutDirection::Right => {
             if area.width < 2 {
-                return Err("Herdr right split area is too narrow".to_owned());
+                return Err("The right split area is too narrow".to_owned());
             }
             let first_width =
                 ((f32::from(area.width) * ratio).round() as u16).clamp(1, area.width - 1);
@@ -1445,7 +1378,7 @@ pub(crate) fn split_areas(
         }
         PaneLayoutDirection::Down => {
             if area.height < 2 {
-                return Err("Herdr down split area is too short".to_owned());
+                return Err("The down split area is too short".to_owned());
             }
             let first_height =
                 ((f32::from(area.height) * ratio).round() as u16).clamp(1, area.height - 1);
@@ -1469,23 +1402,20 @@ pub(crate) fn split_areas(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
-    use hide_herdr_client::{ApiConnector, HERDR_PROTOCOL_REVISION, request_with_connector};
     use serde_json::Value;
 
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, refused, reply};
 
     #[test]
     fn tab_rename_uses_the_selected_host_and_reports_refusal() {
-        let host = FakeHerdr::start_with_errors("tab-rename", |method, params| {
-            assert_eq!(method, "tab.rename");
-            assert_eq!(params["tab_id"], "w1:t1");
+        let host = FakeEngine::start(|method, params| {
+            assert_eq!(method, "rename_tab");
+            assert_eq!(params["tab"], "w1:t1");
             if params["label"] == "refuse" {
-                Err(("not_found".into(), "tab unavailable".into()))
+                refused("not_found", "tab unavailable")
             } else {
-                Ok(json!({"type":"ok"}))
+                reply(())
             }
         });
         for label in ["이름", "", "refuse"] {
@@ -1499,28 +1429,17 @@ mod tests {
             );
             assert_eq!(result.is_ok(), label != "refuse");
         }
-        assert_eq!(host.methods(), ["tab.rename", "tab.rename", "tab.rename"]);
+        assert_eq!(host.methods(), ["rename_tab", "rename_tab", "rename_tab"]);
     }
 
     #[test]
-    fn protocol_revision_matches_the_canonical_contract() {
-        const CONTRACT: &str = include_str!("../../contracts/herdr-api.schema.json");
-
-        let schema: Value = serde_json::from_str(CONTRACT).expect("contract is valid JSON");
-        assert_eq!(schema["protocol"], HERDR_PROTOCOL_REVISION);
-    }
-
-    #[test]
-    fn pane_control_uses_the_official_socket_contract_for_every_mutation() {
-        let herdr = FakeHerdr::start("pane-control", |method, _| match method {
-            "pane.split" => {
-                json!({"type": "pane_info", "pane": {"pane_id": "w1:p2", "terminal_id": "fixture-terminal", "workspace_id": "w1", "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1}})
-            }
-            "pane.zoom" => zoom_answer("w1:p1", true),
-            "pane.close" => json!({"type": "ok"}),
+    fn pane_control_asks_the_engine_for_every_mutation() {
+        let engine = FakeEngine::start(|method, _| match method {
+            "split_pane" => reply("w1:p2".to_owned()),
+            "toggle_zoom" => reply(true),
+            "close_pane" => reply(()),
             other => panic!("unexpected {other}"),
         });
-        let connector = herdr.engine();
         for action in [
             PaneControlAction::Split {
                 pane_id: "w1:p1".to_owned(),
@@ -1539,82 +1458,37 @@ mod tests {
                 pane_id: "w1:p1".to_owned(),
             },
         ] {
-            execute_pane_control(connector.as_ref(), &action).expect("control request");
+            execute_pane_control(engine.engine().as_ref(), &action).expect("control request");
         }
         assert_eq!(
-            herdr.calls(),
+            engine.calls(),
             [
                 (
-                    "pane.split".to_owned(),
-                    json!({
-                        "target_pane_id": "w1:p1",
-                        "direction": "right",
-                        "right_click": "herdr",
-                        "focus": true,
-                        "cwd": "/tmp/hide-verify-shortcuts"
-                    }),
+                    "split_pane",
+                    json!({"pane": "w1:p1", "direction": "Right", "cwd": "/tmp/hide-verify-shortcuts"}),
                 ),
                 (
-                    "pane.split".to_owned(),
-                    json!({
-                        "target_pane_id": "w1:p1",
-                        "direction": "down",
-                        "right_click": "herdr",
-                        "focus": true
-                    }),
+                    "split_pane",
+                    json!({"pane": "w1:p1", "direction": "Down", "cwd": null}),
                 ),
-                (
-                    "pane.zoom".to_owned(),
-                    json!({"pane_id": "w1:p1", "mode": "toggle"})
-                ),
-                ("pane.close".to_owned(), json!({"pane_id": "w1:p1"})),
+                ("toggle_zoom", json!({"pane": "w1:p1"})),
+                ("close_pane", json!({"pane": "w1:p1"})),
             ]
         );
     }
 
-    fn one_pane_layout(pane_id: &str) -> Value {
-        json!({
-            "workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 120, "height": 60},
-            "focused_pane_id": pane_id,
-            "panes": [{"pane_id": pane_id, "focused": true,
-                       "rect": {"x": 0, "y": 0, "width": 120, "height": 60}}],
-            "splits": []
-        })
-    }
-
-    fn zoom_answer(pane_id: &str, zoom_changed: bool) -> Value {
-        json!({"type": "pane_zoom", "zoom": {
-            "changed": true, "zoom_changed": zoom_changed, "focus_changed": !zoom_changed,
-            "pane_id": pane_id, "focused_pane_id": pane_id, "zoomed": zoom_changed,
-            "reason": (!zoom_changed).then_some("single_pane"),
-            "layout": one_pane_layout(pane_id)
-        }})
-    }
-
-    fn resize_answer(pane_id: &str, changed: bool) -> Value {
-        json!({"type": "pane_resize", "resize": {
-            "changed": changed, "pane_id": pane_id, "focused_pane_id": pane_id,
-            "layout": one_pane_layout(pane_id)
-        }})
-    }
-
-    /// Herdr answers a zoom of a lone pane with `zoom_changed: false` (and
-    /// `changed: true` when only focus moved) and a resize with nothing to
-    /// move with `changed: false`. Neither sends a layout event, so both read
-    /// as Unchanged and the operation can end at the answer (PRD
-    /// instant-pane-topology D-12). The change flag decides, not `changed`.
+    /// A zoom of a lone pane and a resize with nothing to move change no
+    /// layout, so both read as Unchanged and the operation can end at the
+    /// answer (PRD instant-pane-topology D-12).
     #[test]
     fn a_zoom_or_resize_that_moved_nothing_reads_as_unchanged() {
-        let herdr = FakeHerdr::start("pane-control-unchanged", |method, params| {
-            let moved = params["pane_id"] == "w1:p2";
+        let engine = FakeEngine::start(|method, params| {
+            let moved = params["pane"] == "w1:p2";
             match method {
-                "pane.zoom" => zoom_answer(params["pane_id"].as_str().unwrap(), moved),
-                "pane.resize" => resize_answer(params["pane_id"].as_str().unwrap(), moved),
+                "toggle_zoom" | "resize_pane" => reply(moved),
                 other => panic!("unexpected {other}"),
             }
         });
-        let connector = herdr.engine();
         let zoom = |pane: &str| PaneControlAction::ToggleZoom {
             pane_id: pane.to_owned(),
         };
@@ -1630,7 +1504,7 @@ mod tests {
             (resize("w1:p2"), false),
         ] {
             let outcome =
-                execute_pane_control(connector.as_ref(), &action).expect("control request");
+                execute_pane_control(engine.engine().as_ref(), &action).expect("control request");
             assert_eq!(
                 matches!(outcome, PaneControlOutcome::Unchanged),
                 unchanged,
@@ -1639,36 +1513,13 @@ mod tests {
         }
     }
 
-    /// An answer without the change flag cannot say whether a layout event
-    /// will follow, so the operation's result is unknown, not a success.
     #[test]
-    fn a_zoom_answer_without_its_result_is_ambiguous() {
-        let herdr = FakeHerdr::start("pane-control-zoom-ok", |_, _| json!({"type": "ok"}));
-        let failure = execute_pane_control(
-            herdr.engine().as_ref(),
-            &PaneControlAction::ToggleZoom {
-                pane_id: "w1:p1".to_owned(),
-            },
-        )
-        .expect_err("a bare ok is not a zoom result");
-        assert!(
-            matches!(failure, ControlFailure::Ambiguous(_)),
-            "{failure:?}"
-        );
-    }
-
-    #[test]
-    fn remote_session_control_uses_the_official_socket_contract() {
-        let herdr = FakeHerdr::start("remote-control", |method, _| match method {
-            "workspace.focus" | "tab.focus" | "tab.close" => json!({"type": "ok"}),
-            "tab.create" => json!({
-                "type": "tab_created",
-                "tab": {"tab_id": "w1:t3", "workspace_id": "w1", "number": 1, "label": "fixture", "focused": false, "pane_count": 1, "agent_status": "idle"},
-                "root_pane": {"pane_id": "w1:p3", "terminal_id": "fixture-terminal", "workspace_id": "w1", "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1}
-            }),
+    fn remote_session_control_asks_the_engine_for_each_action() {
+        let engine = FakeEngine::start(|method, _| match method {
+            "focus_workspace" | "focus_tab" | "close_tab" => reply(()),
+            "create_tab" => reply(("w1:t3".to_owned(), "w1:p3".to_owned())),
             other => panic!("unexpected {other}"),
         });
-        let connector = herdr.engine();
         let actions = [
             RemoteControlAction::FocusWorkspace {
                 workspace_id: "w1".to_owned(),
@@ -1689,253 +1540,54 @@ mod tests {
             },
         ];
         let mut outcomes = actions.iter().map(|action| {
-            execute_remote_control(connector.as_ref(), action).expect("control request")
+            execute_remote_control(engine.engine().as_ref(), action).expect("control request")
         });
-        assert!(matches!(
-            outcomes.next(),
-            Some(RemoteControlOutcome::Acknowledged {
-                created_tab_id: None,
-                created_pane_id: None,
-            })
-        ));
-        assert!(matches!(
-            outcomes.next(),
-            Some(RemoteControlOutcome::Acknowledged {
-                created_tab_id: None,
-                created_pane_id: None,
-            })
-        ));
-        assert!(matches!(
-            outcomes.next(),
-            Some(RemoteControlOutcome::Acknowledged {
-                created_tab_id: Some(tab_id),
-                created_pane_id: Some(pane_id),
-            }) if tab_id == "w1:t3" && pane_id == "w1:p3"
-        ));
-        assert!(matches!(
-            outcomes.next(),
-            Some(RemoteControlOutcome::Acknowledged {
-                created_tab_id: None,
-                created_pane_id: None,
-            })
-        ));
-        assert_eq!(
-            herdr.calls(),
-            [
-                ("workspace.focus".to_owned(), json!({"workspace_id": "w1"})),
-                ("tab.focus".to_owned(), json!({"tab_id": "w1:t2"})),
+        for created in [None, None, Some(("w1:t3", "w1:p3")), None] {
+            match (outcomes.next(), created) {
                 (
-                    "tab.create".to_owned(),
-                    json!({
-                        "workspace_id": "w1",
-                        "cwd": "/tmp/hide-remote-tab",
-                        "focus": true,
-                        "label": "New tab"
+                    Some(RemoteControlOutcome::Acknowledged {
+                        created_tab_id: None,
+                        created_pane_id: None,
                     }),
-                ),
-                ("tab.close".to_owned(), json!({"tab_id": "w1:t3"})),
-            ]
-        );
-    }
-
-    #[test]
-    #[ignore = "requires an owned remote fixture and HERDR_TEST_REMOTE_CONTROL_* variables"]
-    fn official_remote_control_fixture_probe() {
-        let alias_name = std::env::var("HERDR_TEST_SSH_ALIAS")
-            .expect("HERDR_TEST_SSH_ALIAS names a configured SSH host");
-        let workspace_id = std::env::var("HERDR_TEST_REMOTE_CONTROL_WORKSPACE_ID")
-            .expect("HERDR_TEST_REMOTE_CONTROL_WORKSPACE_ID names the owned fixture workspace");
-        let cwd = std::env::var("HERDR_TEST_REMOTE_CONTROL_CWD")
-            .expect("HERDR_TEST_REMOTE_CONTROL_CWD names the owned fixture directory");
-        assert!(
-            cwd.starts_with("/tmp/hide-verify-"),
-            "remote control fixture must use the owned fixture namespace"
-        );
-
-        let home = std::env::var_os("HOME").expect("HOME is configured");
-        use crate::remote::DeviceConnector as _;
-        let connector = hide_node::ssh::Connector::new(None)
-            .transport(std::path::Path::new(&home), "probe", &alias_name, None)
-            .expect("SSH alias resolves")
-            .herdr_api_connector();
-        let engine = crate::engine::herdr::HerdrEngine::shared(Arc::clone(&connector));
-        let connector = &*connector;
-
-        let response = request_with_connector(
-            connector,
-            "session.snapshot",
-            json!({}),
-            Duration::from_secs(5),
-        )
-        .expect("fixture session snapshot");
-        let snapshot = response["snapshot"]
-            .as_object()
-            .map(|_| &response["snapshot"])
-            .expect("session.snapshot response contains a snapshot");
-        let workspace = snapshot["workspaces"]
-            .as_array()
-            .and_then(|workspaces| {
-                workspaces.iter().find(|workspace| {
-                    workspace["workspace_id"].as_str() == Some(workspace_id.as_str())
-                })
-            })
-            .expect("owned fixture workspace is present");
-        assert!(
-            workspace["label"]
-                .as_str()
-                .is_some_and(|label| label.starts_with("hide-verify-")),
-            "remote control refused a workspace outside the owned fixture namespace"
-        );
-        let original_tab_id = snapshot["tabs"]
-            .as_array()
-            .and_then(|tabs| {
-                tabs.iter()
-                    .find(|tab| tab["workspace_id"].as_str() == Some(workspace_id.as_str()))
-            })
-            .and_then(|tab| tab["tab_id"].as_str())
-            .expect("owned fixture workspace has a tab")
-            .to_owned();
-
-        execute_remote_control(
-            engine.as_ref(),
-            &RemoteControlAction::FocusWorkspace {
-                workspace_id: workspace_id.clone(),
-            },
-        )
-        .expect("focus owned fixture workspace");
-        execute_remote_control(
-            engine.as_ref(),
-            &RemoteControlAction::FocusTab {
-                tab_id: original_tab_id,
-            },
-        )
-        .expect("focus owned fixture tab");
-
-        let RemoteControlOutcome::Acknowledged {
-            created_tab_id: Some(created_tab_id),
-            created_pane_id: Some(created_root_pane_id),
-        } = execute_remote_control(
-            engine.as_ref(),
-            &RemoteControlAction::CreateTab {
-                workspace_id: workspace_id.clone(),
-                cwd: cwd.clone(),
-                label: "Hide remote control probe".to_owned(),
-                area_id: None,
-                group_id: None,
-                admission_id: None,
-            },
-        )
-        .expect("create fixture tab")
-        else {
-            panic!("tab.create did not return the created tab and root pane ids");
-        };
-
-        let RemoteControlOutcome::Acknowledged {
-            created_tab_id: None,
-            created_pane_id: Some(created_split_pane_id),
-        } = execute_remote_control(
-            engine.as_ref(),
-            &RemoteControlAction::Pane(PaneControlAction::Split {
-                pane_id: created_root_pane_id.clone(),
-                direction: PaneSplitDirection::Right,
-                cwd: Some(cwd),
-            }),
-        )
-        .expect("split fixture pane")
-        else {
-            panic!("pane.split did not return the created pane id");
-        };
-
-        for action in [
-            RemoteControlAction::Pane(PaneControlAction::Focus {
-                pane_id: created_split_pane_id.clone(),
-            }),
-            RemoteControlAction::Pane(PaneControlAction::ToggleZoom {
-                pane_id: created_split_pane_id.clone(),
-            }),
-            RemoteControlAction::Pane(PaneControlAction::ToggleZoom {
-                pane_id: created_split_pane_id.clone(),
-            }),
-            RemoteControlAction::Pane(PaneControlAction::Close {
-                pane_id: created_split_pane_id.clone(),
-            }),
-        ] {
-            execute_remote_control(engine.as_ref(), &action).expect("mutate only the fixture pane");
-        }
-
-        remote_snapshot_until(
-            connector,
-            "authoritative snapshot did not converge after remote controls",
-            |snapshot| {
-                let created_tab_visible = snapshot["tabs"].as_array().is_some_and(|tabs| {
-                    tabs.iter()
-                        .any(|tab| tab["tab_id"].as_str() == Some(created_tab_id.as_str()))
-                });
-                let created_root_visible = snapshot["panes"].as_array().is_some_and(|panes| {
-                    panes
-                        .iter()
-                        .any(|pane| pane["pane_id"].as_str() == Some(created_root_pane_id.as_str()))
-                });
-                let closed_split_absent = snapshot["panes"].as_array().is_some_and(|panes| {
-                    panes.iter().all(|pane| {
-                        pane["pane_id"].as_str() != Some(created_split_pane_id.as_str())
-                    })
-                });
-                created_tab_visible && created_root_visible && closed_split_absent
-            },
-        );
-    }
-
-    /// Asks the remote Herdr for its snapshot until `ready` accepts it; the
-    /// remote server applies a control on its own time.
-    #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
-    fn remote_snapshot_until(
-        connector: &dyn ApiConnector,
-        what: &str,
-        ready: impl Fn(&Value) -> bool,
-    ) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let response = request_with_connector(
-                connector,
-                "session.snapshot",
-                json!({}),
-                Duration::from_secs(5),
-            )
-            .expect("post-control session snapshot");
-            let snapshot = response["snapshot"]
-                .as_object()
-                .map(|_| &response["snapshot"])
-                .expect("session.snapshot response contains a snapshot");
-            if ready(snapshot) {
-                return;
+                    None,
+                ) => {}
+                (
+                    Some(RemoteControlOutcome::Acknowledged {
+                        created_tab_id: Some(tab_id),
+                        created_pane_id: Some(pane_id),
+                    }),
+                    Some((tab, pane)),
+                ) if tab_id == tab && pane_id == pane => {}
+                (other, _) => panic!("unexpected outcome {other:?}"),
             }
-            assert!(Instant::now() < deadline, "{what}");
-            std::thread::sleep(Duration::from_millis(50));
         }
+        assert_eq!(
+            engine.methods(),
+            ["focus_workspace", "focus_tab", "create_tab", "close_tab"]
+        );
+        assert_eq!(engine.calls_of("focus_tab"), [json!({"tab": "w1:t2"})]);
+        let created = &engine.calls_of("create_tab")[0];
+        assert_eq!(created["workspace"], "w1");
+        assert_eq!(created["cwd"], "/tmp/hide-remote-tab");
+        assert_eq!(created["label"], "New tab");
+        assert_eq!(created["focus"], true);
     }
 
     #[test]
-    fn pane_control_worker_returns_before_the_socket_receipt() {
-        // Herdr holds its answer until the spawn has returned, so a spawn that
-        // waited for the receipt would never return rather than return late.
+    fn pane_control_worker_returns_before_the_engine_answers() {
+        // The engine holds its answer until the spawn has returned, so a
+        // spawn that waited for the answer would never return rather than
+        // return late.
         let (release, held) = std::sync::mpsc::channel::<()>();
-        let herdr = FakeHerdr::start("pane-worker", move |method, _| {
-            assert_eq!(method, "pane.split");
+        let engine = FakeEngine::start(move |method, _| {
+            assert_eq!(method, "split_pane");
             held.recv_timeout(Duration::from_secs(30))
-                .expect("the test lets Herdr answer");
-            json!({"type": "pane_info", "pane": {"pane_id": "w1:p2", "terminal_id": "fixture-terminal", "workspace_id": "w1", "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1}})
+                .expect("the test lets the engine answer");
+            reply("w1:p2".to_owned())
         });
-        let context = LiveContext {
-            socket_path: herdr.socket_path().to_path_buf(),
-            runtime: Weak::new(),
-            notifier: ChangeNotifier::noop(),
-            engine: herdr.engine(),
-            node: Arc::new(hide_node::Local::of_process()),
-        };
 
         spawn_pane_control(
-            context,
+            engine.live(),
             PaneControlAction::Split {
                 pane_id: "w1:p1".to_owned(),
                 direction: PaneSplitDirection::Right,
@@ -1944,12 +1596,16 @@ mod tests {
         )
         .expect("worker starts");
 
-        // Returning at all is the proof: Herdr is still holding its answer.
-        // The worker still delivers the request; the spawn only stopped
+        // Returning at all is the proof: the engine is still holding its
+        // answer. The worker still makes the call; the spawn only stopped
         // waiting for its answer.
         release.send(()).unwrap();
-        herdr.wait_for_requests(1, Duration::from_secs(5));
-        assert_eq!(herdr.methods(), ["pane.split"]);
+        engine.wait_for_calls(1, Duration::from_secs(5));
+        assert_eq!(engine.methods(), ["split_pane"]);
+    }
+
+    fn layout(value: Value) -> SessionLayoutPayload {
+        serde_json::from_value(value).expect("a layout")
     }
 
     #[test]
@@ -1959,42 +1615,34 @@ mod tests {
             ("fixture:p1", "fixture:t1", false),
             ("fixture:p2", "fixture:t2", false),
         ] {
-            let herdr = FakeHerdr::start("focus-contract", move |method, params| {
-                if method == "workspace.get" {
-                    assert_eq!(params["workspace_id"], "fixture");
+            let engine = FakeEngine::start(move |method, params| {
+                if method == "workspace_active_tab" {
+                    assert_eq!(params["workspace"], "fixture");
                 } else {
-                    assert_eq!(params["pane_id"], "fixture:p2");
+                    assert_eq!(params["pane"], "fixture:p2");
                 }
                 match method {
-                    "pane.focus" => {
-                        json!({"type": "pane_info", "pane": {"pane_id": "fixture:p2", "terminal_id": "fixture-terminal", "workspace_id": "fixture", "tab_id": "fixture:t1", "focused": false, "agent_status": "idle", "revision": 1}})
-                    }
-                    "pane.layout" => json!({
-                        "type": "pane_layout",
-                        "layout": {
-                            "workspace_id": "fixture",
-                            "tab_id": "fixture:t1",
-                            "zoomed": false,
-                            "area": {"x": 0, "y": 0, "width": 120, "height": 60},
-                            "focused_pane_id": focused_pane,
-                            "panes": [
-                                {"pane_id": "fixture:p1", "focused": focused_pane == "fixture:p1", "rect": {"x": 0, "y": 0, "width": 60, "height": 60}},
-                                {"pane_id": "fixture:p2", "focused": focused_pane == "fixture:p2", "rect": {"x": 60, "y": 0, "width": 60, "height": 60}}
-                            ],
-                            "splits": [
-                                {"id": "fixture:split1", "direction": "right", "ratio": 0.5, "rect": {"x": 0, "y": 0, "width": 120, "height": 60}}
-                            ]
-                        }
-                    }),
-                    "workspace.get" => json!({
-                        "type": "workspace_info",
-                        "workspace": {"workspace_id": "fixture", "number": 1, "label": "fixture", "focused": false, "pane_count": 2, "tab_count": 2, "active_tab_id": active_tab, "agent_status": "idle"}
-                    }),
+                    "focus_pane" => reply(()),
+                    "pane_layout" => reply(layout(json!({
+                        "workspace_id": "fixture",
+                        "tab_id": "fixture:t1",
+                        "zoomed": false,
+                        "area": {"x": 0, "y": 0, "width": 120, "height": 60},
+                        "focused_pane_id": focused_pane,
+                        "panes": [
+                            {"pane_id": "fixture:p1", "rect": {"x": 0, "y": 0, "width": 60, "height": 60}},
+                            {"pane_id": "fixture:p2", "rect": {"x": 60, "y": 0, "width": 60, "height": 60}}
+                        ],
+                        "splits": [
+                            {"direction": "right", "ratio": 0.5, "rect": {"x": 0, "y": 0, "width": 120, "height": 60}}
+                        ]
+                    }))),
+                    "workspace_active_tab" => reply(active_tab.to_owned()),
                     other => panic!("unexpected {other}"),
                 }
             });
 
-            let result = execute_pane_focus(herdr.engine().as_ref(), "fixture:p2");
+            let result = execute_pane_focus(engine.engine().as_ref(), "fixture:p2");
             assert_eq!(
                 result.is_ok(),
                 confirmed,
@@ -2005,12 +1653,12 @@ mod tests {
                 assert_eq!(layout.pane_ids(), ["fixture:p1", "fixture:p2"]);
             }
             assert_eq!(
-                herdr.methods(),
-                ["pane.focus", "pane.layout", "workspace.get"]
+                engine.methods(),
+                ["focus_pane", "pane_layout", "workspace_active_tab"]
             );
             // Checking a proposed stream move shares the confirmation
             // contract and must not produce another focus mutation.
-            let readback = confirm_pane_focus(herdr.engine().as_ref(), "fixture:p2");
+            let readback = confirm_pane_focus(engine.engine().as_ref(), "fixture:p2");
             assert_eq!(
                 readback,
                 if confirmed {
@@ -2020,195 +1668,37 @@ mod tests {
                 }
             );
             assert_eq!(
-                herdr.methods(),
+                engine.methods(),
                 [
-                    "pane.focus",
-                    "pane.layout",
-                    "workspace.get",
-                    "pane.layout",
-                    "workspace.get"
+                    "focus_pane",
+                    "pane_layout",
+                    "workspace_active_tab",
+                    "pane_layout",
+                    "workspace_active_tab"
                 ]
             );
         }
     }
 
     #[test]
-    fn pane_focus_rejects_trickling_and_over_cap_mutation_responses_as_unknown() {
-        use hide_platform::ipc::LocalListener;
-        use std::io::{BufRead, BufReader, Write};
-
-        for over_cap in [false, true] {
-            let root = tempfile::Builder::new().prefix("hpf-").tempdir().unwrap();
-            let socket = root.path().join("peer.sock");
-            let listener = LocalListener::bind(&socket).unwrap();
-            let closer = listener.closer();
-            let server = thread::spawn(move || {
-                let Ok(mut stream) = listener.accept() else {
-                    return None;
-                };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut request = String::new();
-                BufReader::new(&mut stream).read_line(&mut request).unwrap();
-                let request: Value = serde_json::from_str(&request).unwrap();
-                if over_cap {
-                    let _ = stream.write_all(&vec![b' '; 64 * 1024 + 1]);
-                } else {
-                    // Progress defeats a per-read timeout. The peer itself is
-                    // bounded so a regressed client still ends and fails.
-                    let end = Instant::now() + Duration::from_millis(500);
-                    while Instant::now() < end && stream.write_all(b" ").is_ok() {
-                        thread::park_timeout(Duration::from_millis(5));
-                    }
-                }
-                Some(request)
-            });
-            let timeout = if over_cap {
-                Duration::from_secs(5)
-            } else {
-                Duration::from_millis(50)
-            };
-            let result = execute_pane_focus_with_timeout(
-                crate::engine::herdr::local(&socket).as_ref(),
-                "w1:p2",
-                timeout,
-            );
-            closer.close();
-            let request = server.join().unwrap().expect("focus request reached peer");
-            assert_eq!(request["method"], "pane.focus");
-            let error = result.expect_err("unfinished response must be rejected");
-            assert!(error.is_ambiguous());
-            assert!(error.message().contains(if over_cap {
-                "exceeds 64 KiB"
-            } else {
-                "timed out"
-            }));
-        }
-    }
-
-    #[test]
-    fn wire_snapshot_projects_agents_with_workspace_labels_and_verbatim_tokens() {
-        let snapshot = json!({
-            "protocol": HERDR_PROTOCOL_REVISION,
-            "version": "fixture",
-            "panes": [],
-            "tabs": [],
-            "workspaces": [
-                {"workspace_id": "w1", "label": "hide", "active_tab_id": "w1:t1", "number": 1, "focused": true, "pane_count": 1, "tab_count": 1, "agent_status": "idle"},
-            ],
-            "layouts": [],
-            "agents": [
-                {
-                    "pane_id": "w1:p1",
-                    "terminal_id": "terminal-1", "tab_id": "w1:t1", "focused": true, "revision": 1,
-                    "workspace_id": "w1",
-                    "agent": "claude",
-                    "agent_status": "working",
-                    "cwd": "/tmp/project",
-                    "tokens": {
-                        "status_working": "●",
-                        "activity": "1787963036671",
-                        "summary": "doing things",
-                        "elapsed": "6h"
-                    }
-                },
-                {
-                    "pane_id": "w9:p2",
-                    "terminal_id": "terminal-2", "tab_id": "w9:t1", "focused": false, "revision": 1, "agent_status": "idle",
-                    "workspace_id": "w9",
-                    "tokens": {"status_idle": "○", "activity": "1787963036672"}
-                }
-            ]
-        });
-        let payload = crate::engine::herdr::wire::project_snapshot(&snapshot).expect("projects");
-        assert_eq!(payload.agents.len(), 2);
-        assert_eq!(payload.agents[0].pane_id.as_deref(), Some("w1:p1"));
-        assert_eq!(payload.agents[0].workspace_label.as_deref(), Some("hide"));
-        assert_eq!(
-            payload.agents[0].tokens.get("status_working"),
-            Some(&json!("●"))
-        );
-        // A workspace without a label entry falls back to its id.
-        assert_eq!(payload.agents[1].workspace_label.as_deref(), Some("w9"));
-
-        let projected = crate::sidebar::project_agents(payload).agents;
-        assert_eq!(
-            (projected[0].demand.as_str(), projected[0].activity.as_str()),
-            ("none", "working")
-        );
-        assert_eq!(
-            (projected[1].demand.as_str(), projected[1].activity.as_str()),
-            ("none", "stopped")
-        );
-    }
-
-    #[test]
-    fn wire_snapshot_preserves_herdr_tab_labels() {
-        let snapshot = json!({
-            "protocol": HERDR_PROTOCOL_REVISION,
-            "version": "fixture",
-            "panes": [],
-            "workspaces": [{"workspace_id": "w1", "label": "verify", "active_tab_id": "w1:t1", "number": 1, "focused": true, "pane_count": 1, "tab_count": 1, "agent_status": "idle"}],
-            "tabs": [{
-                "workspace_id": "w1",
-                "tab_id": "w1:t1",
-                "label": "2",
-                "number": 2,
-                "focused": true,
-                "pane_count": 1,
-                "agent_status": "idle"
-            }],
-            "layouts": [],
-            "agents": []
-        });
-
-        let payload =
-            crate::engine::herdr::wire::project_snapshot(&snapshot).expect("projects tab metadata");
-        assert_eq!(payload.tabs.len(), 1);
-        assert_eq!(payload.tabs[0].tab_id, "w1:t1");
-        assert_eq!(payload.tabs[0].label, "2");
-    }
-
-    #[test]
-    fn protocol_mismatch_is_an_explicit_failure() {
-        let snapshot = json!({"protocol": 20, "workspaces": [], "agents": []});
-        let error = crate::engine::herdr::wire::project_snapshot(&snapshot).expect_err("must fail");
-        assert_eq!(error.state(), "protocol_mismatch");
-        assert!(error.message().contains("20"));
-    }
-
-    #[test]
-    fn session_layout_projects_authoritative_nested_tree_and_zoom() {
-        let snapshot = json!({
-            "protocol": HERDR_PROTOCOL_REVISION,
-            "version": "fixture",
-            "panes": [],
-            "tabs": [],
-            "workspaces": [{"workspace_id": "w1", "label": "verify", "active_tab_id": "w1:t1", "number": 1, "focused": true, "pane_count": 1, "tab_count": 1, "agent_status": "idle"}],
-            "agents": [],
+    fn a_layout_projects_its_nested_tree_and_zoom() {
+        let layout = project_layout(&layout(json!({
+            "workspace_id": "w1",
+            "tab_id": "w1:t1",
+            "zoomed": true,
+            "area": {"x": 0, "y": 0, "width": 120, "height": 60},
             "focused_pane_id": "w1:p3",
-            "layouts": [{
-                "workspace_id": "w1",
-                "tab_id": "w1:t1",
-                "zoomed": true,
-                "area": {"x": 0, "y": 0, "width": 120, "height": 60},
-                "focused_pane_id": "w1:p3",
-                "panes": [
-                    {"pane_id": "w1:p1", "focused": false, "rect": {"x": 0, "y": 0, "width": 60, "height": 60}},
-                    {"pane_id": "w1:p2", "focused": false, "rect": {"x": 60, "y": 0, "width": 60, "height": 30}},
-                    {"pane_id": "w1:p3", "focused": true, "rect": {"x": 60, "y": 30, "width": 60, "height": 30}}
-                ],
-                "splits": [
-                    {"id": "split_0_root", "direction": "right", "ratio": 0.5, "rect": {"x": 0, "y": 0, "width": 120, "height": 60}},
-                    {"id": "split_1_1", "direction": "down", "ratio": 0.5, "rect": {"x": 60, "y": 0, "width": 60, "height": 60}}
-                ]
-            }]
-        });
-
-        let payload =
-            crate::engine::herdr::wire::project_snapshot(&snapshot).expect("session projection");
-        let layout = project_layout_for_pane(&payload, "w1:p3").expect("layout projection");
+            "panes": [
+                {"pane_id": "w1:p1", "rect": {"x": 0, "y": 0, "width": 60, "height": 60}},
+                {"pane_id": "w1:p2", "rect": {"x": 60, "y": 0, "width": 60, "height": 30}},
+                {"pane_id": "w1:p3", "rect": {"x": 60, "y": 30, "width": 60, "height": 30}}
+            ],
+            "splits": [
+                {"direction": "right", "ratio": 0.5, "rect": {"x": 0, "y": 0, "width": 120, "height": 60}},
+                {"direction": "down", "ratio": 0.5, "rect": {"x": 60, "y": 0, "width": 60, "height": 60}}
+            ]
+        })))
+        .expect("layout projection");
         assert_eq!(layout.workspace_id, "w1");
         assert_eq!(layout.tab_id, "w1:t1");
         assert_eq!(layout.focused_pane_id, "w1:p3");
@@ -2233,11 +1723,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_socket_file_is_distinguished_from_unreachable() {
-        let error = fetch_session(
-            crate::engine::herdr::local("/nonexistent/herdr-core-test.sock").as_ref(),
-        )
-        .expect_err("must fail");
+    fn an_engine_that_is_not_running_is_distinguished_from_unreachable() {
+        let error = fetch_session(FakeEngine::absent().engine().as_ref()).expect_err("must fail");
         assert_eq!(error.state(), "socket_missing");
     }
 }

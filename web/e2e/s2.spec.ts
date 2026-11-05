@@ -13,7 +13,7 @@ import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { corePaneFocus, focusTab, newTab, openProject, tabsOf, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { executeTerminalCheck, waitForTerminal } from "./group-start-helper";
-import { panePrompt, printFileCommand, printLinesCommand } from "./herdr-fixture";
+import { panePrompt, printFileCommand, printLinesCommand } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { projectRow } from "./overview-entry";
 import { countSent, screenshot, showProjectRow } from "./wire";
@@ -51,19 +51,9 @@ async function screen(page: Page): Promise<string> {
   return page.evaluate(() => window.__hideProbe?.screenText() ?? "");
 }
 
-type ServerRun = { run: (args: string[]) => unknown };
-
-/**
- * Waits until the keyboard is in `pane` for the core and, on Herdr, for the
- * server too: Herdr confirms a focus later than the core moves it, and a focus
- * request that goes out before that confirmation is followed as a move of
- * Herdr's own. The own engine has no second focus to wait for.
- */
+/** Waits until the core holds the keyboard in `pane`. */
 async function focusConfirmed(flow: Flow, pane: string): Promise<void> {
   await withControl(flow.daemon, (control) => control.until((rest) => (corePaneFocus(rest) === pane ? true : undefined), `the core's focus in ${pane}`, 10_000));
-  if (flow.herdr.engine !== "herdr") return;
-  const current = () => ((flow.herdr as unknown as ServerRun).run(["pane", "current"]) as { result: { pane: { pane_id: string } } }).result.pane.pane_id;
-  await expect.poll(current, { timeout: 10_000 }).toBe(pane);
 }
 
 /** The tabs of the fixture's project as the daemon publishes them now. */

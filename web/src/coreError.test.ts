@@ -19,9 +19,9 @@ describe("a failure the core names by its kind", () => {
 });
 
 describe("a connection state the core names by its code", () => {
-  it("words this machine's Herdr and a device without the core's socket paths", () => {
-    expect(herdrStateText("socket_missing", korean)).toBe("Herdr가 실행 중이 아니에요.");
-    expect(herdrStateText("a_new_state", english)).toBe("Herdr is not connected.");
+  it("words this machine's terminal engine and a device without the core's socket paths", () => {
+    expect(herdrStateText("socket_missing", korean)).toBe("터미널 엔진이 실행 중이 아니에요.");
+    expect(herdrStateText("a_new_state", english)).toBe("The terminal engine is not connected.");
     expect(remoteStateText("unreachable", "Mac mini", korean)).toBe("Mac mini 기기에 연결하지 못했어요");
     expect(remoteStateText("ssh_auth_failed", "Mac mini", english)).toBe("Mac mini is not connected");
   });

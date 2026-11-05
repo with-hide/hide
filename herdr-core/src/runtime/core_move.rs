@@ -26,7 +26,6 @@ pub struct MoveSource {
     pub device_node: String,
     /// The `hided` the core installed there, which runs the move's steps.
     pub helper_path: String,
-    pub device_herdr_socket: Option<String>,
     /// The device's registration as `core-state.json` stores it, which a
     /// move back restores.
     pub registration: serde_json::Value,
@@ -192,7 +191,6 @@ impl Runtime {
             ssh_alias: ssh_alias.clone(),
             device_node,
             helper_path: helper_path.clone(),
-            device_herdr_socket: registration.herdr_socket_path.clone(),
             registration: serde_json::to_value(registration)
                 .map_err(|error| MoveSourceRefusal::Unstorable(error.to_string()))?,
             projects,
@@ -231,7 +229,6 @@ mod tests {
             ssh_alias: "studio".to_owned(),
             device_node: "studio-node".to_owned(),
             helper_path: "/opt/hide/hided".to_owned(),
-            device_herdr_socket: None,
             registration: serde_json::json!({}),
             projects: Vec::new(),
             other_linked_nodes: Vec::new(),

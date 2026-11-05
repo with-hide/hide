@@ -156,8 +156,8 @@ pub fn record_outcome(
             };
             // The file holds the hook's state now, which the next success
             // clears; the log keeps every report that did not arrive.
-            let _ = crate::spawn_guard::append_line(
-                &crate::spawn_guard::log_path(home),
+            let _ = crate::hook_log::append_line(
+                &crate::hook_log::log_path(home),
                 &serde_json::json!({
                     "component": "agent_hooks",
                     "kind": "report.failed",
@@ -285,7 +285,7 @@ mod tests {
         record_outcome(&root, "w1:p1", "claude", "Stop", &Ok(())).expect("clear");
         assert_eq!(last_failure(&root), None);
         // The log keeps the failure the success cleared from the record.
-        let log = fs::read_to_string(crate::spawn_guard::log_path(&root)).unwrap();
+        let log = fs::read_to_string(crate::hook_log::log_path(&root)).unwrap();
         let line: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
         assert_eq!(
             (&line["kind"], &line["pane"], &line["event"], &line["cause"]),

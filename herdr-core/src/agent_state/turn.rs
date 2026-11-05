@@ -615,6 +615,7 @@ pub(crate) fn agent_status_code(
         AgentDemand::Approval => AgentStatusCode::Approval,
         AgentDemand::None => match activity {
             AgentActivity::Working => AgentStatusCode::Working,
+            AgentActivity::Stopped if start != AgentStart::Settled => AgentStatusCode::Starting,
             AgentActivity::Stopped if completed && unread && finished => AgentStatusCode::Done,
             AgentActivity::Stopped if completed && unread => AgentStatusCode::Stopped,
             AgentActivity::Stopped => AgentStatusCode::Idle,

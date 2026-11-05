@@ -24,7 +24,7 @@ the run failed, and `--measurement` writes each as an error annotation titled
     ci-flaky-report.py --measurement nightly-summary.json
 
 A run with a flaky test also sets the step output `flaky=true`, so the lane
-keeps the same logs it keeps for a failure: the first attempt's daemon, Herdr
+keeps the same logs it keeps for a failure: the first attempt's daemon, holder
 and input logs are the evidence its issue needs. The reusable web/desktop
 lanes also keep immutable, attempt-named Playwright reports with the actual
 checkout SHA (`--history-record`). The existing verify job's `--retry-history`
@@ -144,7 +144,7 @@ SHARD = re.compile(r" \d+/\d+$")
 # Steps that prepare the runner rather than check the code: a failure there is
 # the runner's or a download's. Anything else, a build included, is not.
 INFRA_STEP = re.compile(
-    r"Set up job|Keep line endings as committed|Install .+|Fetch the pinned Herdr runtime|\(runner\)"
+    r"Set up job|Keep line endings as committed|Install .+|\(runner\)"
     r"|Run (actions/checkout|actions/setup-node|actions/download-artifact|pnpm/action-setup|Swatinem/rust-cache)@.+"
 )
 # A failed job with no failed step lost its runner.

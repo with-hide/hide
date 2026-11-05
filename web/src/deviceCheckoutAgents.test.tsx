@@ -64,7 +64,7 @@ it("starts both device checkouts open and offers the same persisted fold (sessio
     navigator: { devices: [LOCAL, MINI], workspaces: [], agents: [], focused_device_id: "mini" },
     status: {
       remote: [{
-        target_id: "mini", state: "connected", message: null, herdr_version: "0.9.1",
+        target_id: "mini", state: "connected", message: null,
         catalog: { state: "ready", refused: [] },
         session: {
           workspaces: [remote.workspace], agents: [remote.agent], active_tab_ids: {}, focused_workspace_id: null,

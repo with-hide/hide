@@ -12,11 +12,6 @@ use serde::{Deserialize, Serialize};
 pub const HOST_KEY_CHANGED: &str = "host key changed";
 pub const HOST_KEY_UNKNOWN: &str = "host key unknown";
 
-/// Herdr's named-session grammar, before a route is stored or dispatched.
-pub fn valid_herdr_session(session: &str) -> bool {
-    hide_platform::host::valid_herdr_session(session)
-}
-
 /// Whether `alias` is one SSH config token Hide may hand to `ssh`: never
 /// empty, an option, a path or more than one word.
 pub fn ssh_alias_is_one_token(alias: &str) -> bool {
@@ -33,7 +28,6 @@ pub enum RemoteStage {
     Alias,
     Ssh,
     Auth,
-    Herdr,
     Protocol,
     Pty,
     Git,
@@ -48,7 +42,6 @@ impl fmt::Display for RemoteStage {
             Self::Alias => "alias",
             Self::Ssh => "ssh",
             Self::Auth => "auth",
-            Self::Herdr => "herdr",
             Self::Protocol => "protocol",
             Self::Pty => "pty",
             Self::Git => "git",
@@ -202,15 +195,14 @@ pub struct CapabilityReport {
 
 impl CapabilityReport {
     /// A report with a device test's stages pending, in the order the row
-    /// lists them: the connection, the sign-in, the helper's protocol, Herdr,
-    /// the terminals and Git (PRD system-ssh-device-link B25). Each is read
+    /// lists them: the connection, the sign-in, the helper's protocol, the
+    /// terminals and Git (PRD system-ssh-device-link B25). Each is read
     /// off the connection the device already has; the test dials nothing.
     pub fn new(operation_id: impl Into<String>, host: RemoteHostIdentity) -> Self {
         let stages = [
             RemoteStage::Ssh,
             RemoteStage::Auth,
             RemoteStage::Protocol,
-            RemoteStage::Herdr,
             RemoteStage::Pty,
             RemoteStage::Git,
         ]
@@ -289,11 +281,6 @@ impl CapabilityReport {
             .iter()
             .all(|result| matches!(result.state, CapabilityState::Passed))
     }
-}
-
-/// A socket path a device registration may name: absolute, one line.
-pub fn valid_remote_socket_path(path: &str) -> bool {
-    path.starts_with('/') && path.len() > 1 && !path.bytes().any(|byte| byte.is_ascii_control())
 }
 
 /// What the operator allowed on a device: install and update Hide's node
@@ -669,9 +656,6 @@ pub enum SshProblem {
     ProxyFailed,
     /// The machine is not one Hide can run on.
     Unsupported,
-    /// The machine's system connects only on the core's own engine, which
-    /// this core does not run; nothing was installed there.
-    NeedsNewEngine,
     /// This computer has no `ssh` program.
     SshMissing,
     /// This computer's OpenSSH is older than 8.4, which cannot hand Hide a
@@ -697,7 +681,6 @@ impl SshProblem {
             Self::Unreachable => "unreachable",
             Self::ProxyFailed => "proxy_failed",
             Self::Unsupported => "unsupported",
-            Self::NeedsNewEngine => "needs_new_engine",
             Self::SshMissing => "ssh_missing",
             Self::OpenSshOld => "openssh_old",
             Self::HideUpdated => "hide_updated",
@@ -731,7 +714,6 @@ impl SshProblem {
             | Self::Unreachable
             | Self::ProxyFailed
             | Self::Unsupported
-            | Self::NeedsNewEngine
             | Self::SshMissing
             | Self::OpenSshOld
             | Self::Unclassified => FailureAction::Retry,
@@ -785,9 +767,6 @@ pub enum EstablishError {
     },
     /// This build cannot serve the device; nothing was installed.
     Unsupported(String),
-    /// The device's system connects only on the core's own engine, which
-    /// this core does not run; nothing was installed.
-    NeedsNewEngine(String),
     /// Acquiring the release kit for a known foreign platform failed.
     Download {
         os: String,
@@ -811,7 +790,6 @@ impl fmt::Display for EstablishError {
             ),
             Self::Stopped(reason)
             | Self::Unsupported(reason)
-            | Self::NeedsNewEngine(reason)
             | Self::Install(reason)
             | Self::Helper(reason) => formatter.write_str(reason),
             Self::Download { reason, .. } => formatter.write_str(reason),
@@ -1113,24 +1091,6 @@ pub struct SshHostListing {
     pub unreadable: bool,
 }
 
-/// Saved client configuration, never evidence of a reachable server.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HerdrProfile {
-    pub id: String,
-    pub label: String,
-    pub target: String,
-    pub session: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Default)]
-pub struct HerdrProfileListing {
-    pub profiles: Vec<HerdrProfile>,
-    /// Config-only resolution for profile and already registered targets.
-    pub endpoints: std::collections::BTreeMap<String, Result<String, String>>,
-    pub truncated: bool,
-}
-
 /// One WSL distribution of this PC, as Add device lists it: read from the
 /// account's registry, so listing never starts WSL (PRD wsl-device D-13).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1161,36 +1121,7 @@ pub trait DeviceConnector: Send + Sync {
         home: &std::path::Path,
         node: &str,
         alias: &str,
-        herdr_socket: Option<String>,
     ) -> Result<std::sync::Arc<dyn DialedTransport>, String>;
-
-    /// An explicit session must never silently use the default server.
-    fn transport_session(
-        &self,
-        home: &std::path::Path,
-        node: &str,
-        target: &str,
-        herdr_socket: Option<String>,
-        session: Option<String>,
-    ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
-        if session.is_some() {
-            return Err("This connector cannot select a saved Herdr session".to_owned());
-        }
-        self.transport(home, node, target, herdr_socket)
-    }
-
-    /// Reads local client profiles only, without connecting to any target.
-    fn herdr_profiles(
-        &self,
-        _home: &std::path::Path,
-        _registered: &[String],
-        _stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<HerdrProfileListing, String> {
-        Err(
-            "Saved Herdr machines are unavailable on this node. Retry after reconnecting"
-                .to_owned(),
-        )
-    }
 
     /// The concrete Host aliases of the SSH configuration of the account at
     /// `home` and where each leads, with the address of each of
@@ -1220,33 +1151,17 @@ pub trait DeviceConnector: Send + Sync {
     }
 }
 
-/// Decodes the Herdr snapshot a connection test fetched, given the device's
-/// host id and the socket it answered on, and answers the protocol revision
-/// it reports. The decode is the core's, because the snapshot's shape is its
-/// Herdr contract; the fetch is the transport's.
-pub type SnapshotCheck<'a> =
-    &'a (dyn Fn(&serde_json::Value, &str, &str) -> RemoteResult<u32> + Sync);
-
-/// One registered device as the core reaches it, whichever way its link
-/// opened: its Herdr API over that link.
-pub trait DeviceTransport: Send + Sync {
-    /// The device's Herdr API, over this transport.
-    fn herdr_api_connector(&self) -> std::sync::Arc<dyn hide_herdr_client::ApiConnector>;
-    /// The Herdr version the device reported last, if it has.
-    fn cached_herdr_version(&self) -> Option<String>;
-    /// The exact socket already resolved for this transport, without I/O.
-    fn cached_herdr_socket(&self) -> Option<String> {
-        None
-    }
-}
+/// One registered device as the core holds it, whichever way its link
+/// opened: the core keeps it while the device is registered, and dropping
+/// the last handle lets that link go.
+pub trait DeviceTransport: Send + Sync {}
 
 /// A device the core dials over SSH: it tests the connection, and installs
 /// and starts the device's node. What the core then does on the device goes
 /// through that node's link.
 pub trait DialedTransport: DeviceTransport {
-    /// Probes each stage of a connection for the operator's test; `check`
-    /// decodes the Herdr stage's snapshot.
-    fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport;
+    /// Probes each stage of a connection for the operator's test.
+    fn capability_test(&self, operation_id: &str) -> CapabilityReport;
     /// Connects, checks `consent` against the device that answered, installs
     /// this build's node when the device lacks it, and starts it. Blocking;
     /// run it off the runtime lock.
@@ -1472,7 +1387,6 @@ mod tests {
             RemoteStage::Ssh,
             RemoteStage::Auth,
             RemoteStage::Protocol,
-            RemoteStage::Herdr,
             RemoteStage::Pty,
         ] {
             report.pass(stage, "ok");

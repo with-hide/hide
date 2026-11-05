@@ -544,7 +544,6 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
         target_id: "mini",
         state: "connected",
         message: null,
-        herdr_version: "0.9.1",
         session: {
           workspaces: miniWorkspaces,
           agents: (busy ? [...REMOTE_AGENTS[content], ...BUSY_AGENTS] : REMOTE_AGENTS[content]).map((row) => ({ ...row, device_id: "mini" })),
@@ -556,7 +555,7 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
           pane_layouts: [],
         },
       },
-      { target_id: OFFLINE_DEVICE, state: "not_connected", message: null, herdr_version: null, session: null },
+      { target_id: OFFLINE_DEVICE, state: "not_connected", message: null, session: null },
     ],
   };
 }

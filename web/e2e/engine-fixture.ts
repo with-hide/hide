@@ -1,11 +1,8 @@
-// The engine a web e2e spec runs its panes on, chosen by HIDE_E2E_ENGINE
-// (PRD engine-bundle-3-core-owns D-14, D-24): `herdr` (the default) is the
-// pinned Herdr in a private, empty server; `own` is the core's own engine,
-// a daemon with the development switch on and no Herdr at all. Either way the
-// fixture makes its workspace and panes with the events the web shell sends
-// (`hided-control.mjs`) and reads them back from the snapshot, so a spec
-// written on `startLayoutStack` runs unchanged on both. A spec that looks at
-// Herdr itself stays on `herdr-fixture.ts`.
+// The engine a web e2e spec runs its panes on: the core's own engine, a
+// daemon whose node starts each pane's holder (PRD engine-bundle-4-herdr-removal
+// D-2, D-15). The fixture makes its workspace and panes with the events the
+// web shell sends (`hided-control.mjs`) and reads them back from the
+// snapshot.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -13,8 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
-import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
-import { claudeProjects, declareAgentSession, panePrompt, paneShellOf, startHerdr, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
+import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, startedAgentIn, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
+import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./pane-fixture";
 import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
 import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRun, type HideAnswer } from "./agent-pane";
@@ -23,12 +20,10 @@ import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRu
 export type HideRunner = (args: string[], run?: AgentRun) => Promise<HideAnswer>;
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { enterWorkspace } from "./wire";
-import { e2eEngine, type E2eEngine } from "./e2e-engine";
 import { git } from "./work-prs-fixture";
 
 /** What the daemon runs its panes on, and the private root the run's files live under. */
 export type EngineServer = DaemonEngine & {
-  engine: E2eEngine;
   /** The shell family a pane runs, for commands typed into it. */
   shell: PaneShell;
   /** The HOME the daemon must run in, when the engine's panes read their shell's files from it. */
@@ -36,14 +31,8 @@ export type EngineServer = DaemonEngine & {
   stop: () => void;
 };
 
-/** The selected engine, empty: a private Herdr server, or what the own engine's daemon needs. */
-export async function startEngine(engine = e2eEngine()): Promise<EngineServer> {
-  if (engine === "herdr") {
-    const server = await startHerdr({ empty: true });
-    // Hide chooses the integrated shell for panes it starts. Give its node
-    // the same shell as the private server, not the CI runner's login shell.
-    return { engine, ...server, daemonEnv: { SHELL: server.env.SHELL, HIDE_E2E_ROOT: server.root } };
-  }
+/** What the engine's daemon needs, empty. */
+export async function startEngine(): Promise<EngineServer> {
   return startOwnEngine();
 }
 
@@ -76,12 +65,11 @@ function startOwnEngine(): EngineServer {
     const daemonEnv: NodeJS.ProcessEnv = {
       SHELL: shell,
       ...(process.platform === "win32" ? { PROMPT: "fixture % " } : {}),
-      // Ubuntu's /etc/zsh/zshrc stops at compinit's question before this HOME's .zshrc (herdr-fixture.ts).
+      // Ubuntu's /etc/zsh/zshrc stops at compinit's question before this HOME's .zshrc.
       skip_global_compinit: "1",
       HIDE_E2E_ROOT: root,
     };
     return {
-      engine: "own",
       root,
       fixturePath,
       daemonEnv,
@@ -102,11 +90,10 @@ function startOwnEngine(): EngineServer {
 /**
  * One checkout, the folder `fixture` under the run's root, whose one tab
  * holds `panes` shells side by side (two by default), made through the
- * daemon on either engine. `control` is the fixture's own connection, for a
+ * daemon. `control` is the fixture's own connection, for a
  * spec that reads what the core published.
  */
 export type LayoutStack = {
-  engine: E2eEngine;
   server: EngineServer;
   daemon: Daemon;
   control: HidedControl;
@@ -135,7 +122,7 @@ export async function startLayoutStack({ panes = 2, label = "layout" }: { panes?
     const made = await openProject(control, path.join(server.root, "fixture"), "fixture");
     const ids = [made.pane];
     if (panes === 2) ids.push(await splitPane(control, made.tab, made.folder));
-    return { engine: server.engine, server, daemon, control, folder: made.folder, workspace: made.workspace, checkout: made.checkout, tab: made.tab, panes: ids, stop };
+    return { server, daemon, control, folder: made.folder, workspace: made.workspace, checkout: made.checkout, tab: made.tab, panes: ids, stop };
   } catch (error) {
     throw afterCleanup(error, stop);
   }
@@ -172,8 +159,8 @@ const FIXTURE_AGENTS = [
 ] as const;
 
 /**
- * The default fixture of a spec that looks at Hide rather than at an engine,
- * on the engine HIDE_E2E_ENGINE names: one checkout, the folder `fixture`
+ * The default fixture of a spec that looks at Hide rather than at an engine:
+ * one checkout, the folder `fixture`
  * under the run's root, whose one tab holds two panes side by side, each
  * running the `claude` shim on a session whose transcript names it
  * `Agent one` and `Agent two` (`agents: false` leaves two shells).
@@ -305,23 +292,18 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
     return listed.length === 2 && listed.every((pane) => agentIn(rest, pane)) ? listed as [string, string] : undefined;
   }, "the second fixture agent beside the first", 30_000);
   viewPane(control, panes[1]);
-  // Herdr learns a pane's session from its integration's report, the own
-  // engine from the start's `--resume` (docs/ARCHITECTURE.md, Agents on the
-  // core's own engine).
-  if (server.engine === "herdr" && !runAs) {
-    const herdr = server as EngineServer & { env: NodeJS.ProcessEnv; bin: string };
-    panes.forEach((pane, index) => declareAgentSession(herdr, pane, FIXTURE_AGENTS[index]!.session));
-    // The report reaches the core through Herdr's event stream, after the call returns.
-    await control.until((rest) => panes.every((pane, index) => agentIn(rest, pane)?.session_id === FIXTURE_AGENTS[index]!.session) || undefined, "both fixture agents on their sessions", 30_000);
-  }
+  // The engine learns a pane's session from the start's `--resume`
+  // (docs/ARCHITECTURE.md, Agents on the core's own engine).
   // The shell Add project opened is not the fixture's: its tab goes.
   await closePane(control, first.pane);
   // Each stand-in opens its input log once it runs and reads its terminal,
-  // which an engine can list it before (Herdr lists a start at once).
+  // which the engine can list it before.
   // A family's agents mark their session report instead.
   const reading = (pane: string) => fs.existsSync(runAs ? reportedMarker(server.root, pane) : paneInputLog(server.root, pane));
   await expect.poll(() => panes.every(reading), { message: "both fixture agents reading their terminals", timeout: 30_000 }).toBe(true);
-  // The first agent holds the keyboard, as a spec on Herdr's fixture found it.
+  // A spec reads the fixture's rows as they rest, never as they settle.
+  await control.until((rest) => panes.every((pane) => startedAgentIn(rest, pane)) || undefined, "both fixture agents started", 30_000);
+  // The first agent holds the keyboard.
   await focusPane(control, panes[0]);
   return { workspace: first.workspace, checkout: first.checkout, tab: one.tab, panes, runAs };
 }

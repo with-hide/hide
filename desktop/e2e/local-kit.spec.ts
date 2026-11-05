@@ -6,11 +6,11 @@
 // desktop host, attached to that daemon.
 
 import { expect, type ElectronApplication } from "@playwright/test";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { openProject } from "../../web/e2e/daemon-actions";
-import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { connectStateDir } from "../../web/e2e/hided-control.mjs";
 import { enterWorkspace } from "../../web/e2e/wire";
 import {
@@ -22,7 +22,6 @@ test.describe.configure({ timeout: 300_000 });
 test.skip(!process.env.HIDE_E2E_APP, "a packaged hide.app is required");
 
 const PARTS = ["cli", "claude_code_hook", "codex_hook", "coordination_retirement"];
-const LABELS_ID = "hide.agent-context-labels";
 
 type Applied = { kind?: string; device_id?: string; components?: { id: string; state: string; reason: string | null }[] };
 
@@ -69,14 +68,6 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
       expect(JSON.stringify(now.hooks)).toContain(path.join(resources, "hide-agent-hooks"));
       expect(now.hooks.SessionStart).toEqual(expect.arrayContaining(before.hooks.SessionStart!));
       expect({ ...now, hooks: undefined }).toEqual({ ...before, hooks: undefined });
-    }
-    // Herdr only: this step reads the plugins Herdr itself lists, and the own engine has no such list.
-    if (local.engine === "herdr") {
-      const herdr = local as EngineServer & { bin: string; env: NodeJS.ProcessEnv };
-      const plugins = spawnSync(herdr.bin, ["plugin", "list", "--json"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-      // Labels are hided's own now; the kit links no plugin (PRD labels-in-hided B2).
-      expect(plugins.status, plugins.stderr).toBe(0);
-      expect(plugins.stdout).not.toContain(LABELS_ID);
     }
 
     app = await relaunch(run.env);

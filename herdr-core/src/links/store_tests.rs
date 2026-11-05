@@ -1419,79 +1419,51 @@ fn an_archived_session_without_a_line_expires_by_its_projects_history_from_its_a
     );
 }
 
-// PRD onboarding communication B26-B29: use real SQLite, no daemon or tool calls.
-#[test]
-fn direct_observation_retention_and_count_cap_preserve_exact_session_and_server_identity() {
-    use crate::links::observation::{DirectFact, DirectOutcome, EVENT_LIMIT, RETENTION_MS};
-    use crate::model::GraphParty;
-    let connection = Connection::open_in_memory().unwrap();
-    migrate(&connection).unwrap_or_else(|_| panic!("fixture migration failed"));
-    let mut store = LinkStore {
-        connection,
-        issue_capacity: RefCell::default(),
-    };
-    let fact = DirectFact {
-        source_server: "device-local/server-one/session-named".into(),
-        call_key: "call".into(),
-        sender: GraphParty {
-            device_id: "local".into(),
-            pane_id: "pane-a".into(),
-            session: "a".repeat(64),
-        },
-        recipient: Some(GraphParty {
-            device_id: "remote".into(),
-            pane_id: "remote:device:pane:b".into(),
-            session: "b".repeat(64),
-        }),
-        at_unix_ms: T0,
-        outcome: DirectOutcome::Submitted,
-        reason: None,
-    };
-    for index in 0..EVENT_LIMIT {
-        let mut next = fact.clone();
-        next.call_key = format!("call-{index}");
-        assert!(store.apply_direct_observation(&next, T0).unwrap());
-    }
-    assert_eq!(
-        store.apply_direct_observation(&fact, T0),
-        Err("direct_observation_store_capacity".into())
-    );
-    assert_eq!(store.direct_observations(T0).unwrap().len(), EVENT_LIMIT);
-    assert_eq!(
-        store
-            .direct_observations(T0 + RETENTION_MS - 1)
-            .unwrap()
-            .len(),
-        EVENT_LIMIT
-    );
-    assert!(
-        store
-            .direct_observations(T0 + RETENTION_MS)
-            .unwrap()
-            .is_empty()
-    );
-    store.prune_direct_observations(T0 + RETENTION_MS).unwrap();
-    let mut next = fact.clone();
-    next.at_unix_ms += RETENTION_MS;
+/// Whether the store's file holds the table `name`.
+fn has_table(store: &LinkStore, name: &str) -> bool {
     store
-        .apply_direct_observation(&next, next.at_unix_ms)
+        .connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [name],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// Version 15 stops reading the passive direct-input facts the hooks' direct
+/// observation kept, and an upgrade leaves their table and rows as they were.
+#[test]
+fn an_upgrade_keeps_the_retired_direct_inputs() {
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("links.sqlite3");
+    let (store, _) = LinkStore::open(&path).unwrap();
+    assert!(!has_table(&store, "direct_observations"));
+    store
+        .connection
+        .execute_batch(
+            "CREATE TABLE direct_observations(id TEXT PRIMARY KEY, at INTEGER NOT NULL,
+                bytes INTEGER NOT NULL, fact TEXT NOT NULL);
+            INSERT INTO direct_observations VALUES('one',1,2,'{}');
+            PRAGMA user_version=14;",
+        )
         .unwrap();
-    for changed in ["server", "session", "device"] {
-        let mut distinct = next.clone();
-        match changed {
-            "server" => distinct.source_server = "device-local/server-two/session-named".into(),
-            "session" => distinct.sender.session = "c".repeat(64),
-            _ => distinct.sender.device_id = "other-device".into(),
-        }
-        store
-            .apply_direct_observation(&distinct, distinct.at_unix_ms)
-            .unwrap();
-    }
-    assert_eq!(store.direct_observations(next.at_unix_ms).unwrap().len(), 4);
+    drop(store);
+    let (store, opened) = LinkStore::open(&path).unwrap();
+    assert_eq!(opened, Opened::Existing);
+    let kept: (String, i64, i64, String) = store
+        .connection
+        .query_row(
+            "SELECT id, at, bytes, fact FROM direct_observations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(kept, ("one".to_owned(), 1, 2, "{}".to_owned()));
 }
 
 #[test]
-fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_aliases() {
+fn a_version_4_store_migrates_without_recreating_retention_aliases() {
     let state = tempfile::tempdir().unwrap();
     let path = state.path().join("links.sqlite3");
     let (store, _) = LinkStore::open(&path).unwrap();
@@ -1503,8 +1475,7 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
         .connection
         .execute_batch(ledger::UNDO_FLOW_SCHEMA)
         .unwrap();
-    store.connection.execute_batch("DROP TABLE direct_observations;
-        ALTER TABLE ledger_titles DROP COLUMN goal;
+    store.connection.execute_batch("ALTER TABLE ledger_titles DROP COLUMN goal;
         ALTER TABLE ledger_titles DROP COLUMN summary;
         ALTER TABLE ledger_titles DROP COLUMN label_at;
         ALTER TABLE ledger_titles DROP COLUMN analysed_start;
@@ -1515,7 +1486,7 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
     drop(store);
     let (store, opened) = LinkStore::open(&path).unwrap();
     assert_eq!(opened, Opened::Existing);
-    assert!(store.direct_observations(T0).unwrap().is_empty());
+    assert!(!has_table(&store, "direct_observations"));
     assert_eq!(
         store
             .connection

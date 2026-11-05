@@ -22,7 +22,6 @@ import type { Actions } from "./actions";
 import { focusBrowserDisplay } from "./browserViews";
 import { advanceHint, clearHint, holdModifiers, idleHint, modifiersOf, NO_MODIFIERS, revealedFamily, type HintState } from "./hints";
 import { browserBridge, CHECK_UPDATES_COMMAND, hostBridge, hostKind, keySystem, SETUP_COMMAND } from "./host";
-import { herdrGate } from "./herdrTakeoverRules";
 import { useSetupWalk } from "./FirstRunWizard";
 import { numberedDevices, numberedTabs, sidebarNumbers } from "./numbering";
 import { areaFrame } from "./areaFrames";
@@ -239,8 +238,6 @@ export function installKeyboard(actions: Actions): () => void {
   };
 
   const run = (id: CommandId, event: KeyboardEvent | null) => {
-    // While a Herdr on another protocol holds Hide, no command reaches a workspace (PRD herdr-takeover).
-    if (herdrGate(useShellStore.getState().rest)) return;
     if (isNumberedCommand(id)) {
       // An empty number is nothing, not a diagnostic: the hold hint shows
       // which numbers exist, and pressing past them is an ordinary miss.
@@ -618,8 +615,6 @@ export function installKeyboard(actions: Actions): () => void {
     }
   });
   const unsubscribeMenu = bridge?.onCommand((id) => {
-    // The screen that holds Hide answers no menu item (PRD herdr-takeover).
-    if (herdrGate(useShellStore.getState().rest)) return;
     // Help > Set up Hide, the host's own item outside the registry (PRD first-run-onboarding B45).
     if (id === SETUP_COMMAND) {
       useSetupWalk.getState().open();

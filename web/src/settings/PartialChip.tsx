@@ -15,9 +15,9 @@ import { docsUrl } from "./agentRows";
  * focus returns to the chip.
  */
 const GROUPS = [
-  { id: "herdr", features: ["skill", "guidance", "herdr_integration", "start"] },
+  { id: "basics", features: ["skill", "guidance", "start"] },
   { id: "sessions", features: ["titles", "sleep", "fork"] },
-  { id: "collaboration", features: ["letters", "bell", "memory", "spawn_guard"] },
+  { id: "collaboration", features: ["letters", "bell", "memory"] },
 ] as const;
 
 export function PartialChip({ agent }: { agent: KitAgent }) {

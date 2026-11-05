@@ -47,13 +47,10 @@ pub(crate) struct KitPump {
 }
 
 impl KitPump {
-    /// `herdr_socket` is the Herdr server the embedder named for this
-    /// machine; without one the node uses the one Herdr would for its home.
     pub(crate) fn spawn(
         runtime: Weak<Mutex<Runtime>>,
         notifier: ChangeNotifier,
         link: Arc<dyn NodeLink>,
-        herdr_socket: Option<String>,
         node: crate::node::NodeId,
     ) -> std::io::Result<Self> {
         let (stop, receiver) = mpsc::channel();
@@ -95,8 +92,6 @@ impl KitPump {
                         let kit = hide_node_link::protocol::Call::Kit {
                             action: action_of(&job),
                             cli_dir: LOCAL_CLI_DIR.to_owned(),
-                            herdr_socket: herdr_socket.clone(),
-                            preserve_herdr_server: false,
                             retirement_projects,
                         };
                         let report =
@@ -283,8 +278,6 @@ fn call_device(call: &DeviceKitCall) -> DeviceKitAnswer {
     let kit = hide_node_link::protocol::Call::Kit {
         action,
         cli_dir: call.cli_dir.clone(),
-        herdr_socket: call.herdr_socket.clone(),
-        preserve_herdr_server: call.preserve_herdr_server,
         retirement_projects: call.retirement_projects.clone(),
     };
     if removing {

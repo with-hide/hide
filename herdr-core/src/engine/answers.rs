@@ -36,8 +36,8 @@ impl PaneJoinResult {
     pub(crate) fn created_tab(&self) -> Result<&str, String> {
         if !self.changed {
             return Err(match &self.reason {
-                Some(reason) => format!("Herdr declined the move: {reason}"),
-                None => "Herdr declined the move".to_owned(),
+                Some(reason) => format!("The engine declined the move: {reason}"),
+                None => "The engine declined the move".to_owned(),
             });
         }
         self.created_tab_id
@@ -69,7 +69,6 @@ pub(crate) struct AgentState {
 /// Fresh delivery guard, converted here rather than exposing generated types.
 pub(crate) struct DeliveryAgent {
     pub pane_id: String,
-    pub terminal_id: String,
     pub name: String,
     pub kind: Option<String>,
     pub session: Option<String>,

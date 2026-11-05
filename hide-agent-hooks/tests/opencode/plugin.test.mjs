@@ -20,7 +20,7 @@ const { server: HidePlugin } = (await import(pathToFileURL(process.env.HIDE_OPEN
 const LOG = process.env.HIDE_OPENCODE_HELPER_LOG;
 const ANSWERS = process.env.HIDE_OPENCODE_HELPER_ANSWERS;
 
-const HERDR = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp/herdr-fixture.sock" };
+const PANE = { HIDE_PANE_ID: "w1:p1" };
 const sample = (name) => structuredClone(SAMPLES[name]);
 // The global instruction guard's corpus, which the helper's guard is run on too (`src/global_guard.rs`), with
 // `{state}` as this account's state folder.
@@ -29,23 +29,6 @@ const CORPUS = JSON.parse(readFileSync(new URL("../fixtures/global-guard-corpus.
 );
 const NAMED = CORPUS.filter((entry) => entry.named).length;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-test("post observation preserves the tool result and carries its actual native identity", async () => {
-  answer({ observation: {} });
-  const hooks = await plugin();
-  const result = { output: '{"id":"cli:agent:prompt","result":{"type":"agent_prompted"}}', metadata: {} };
-  const original = structuredClone(result);
-  await hooks["tool.execute.after"]({ tool: "bash", sessionID: "ses_child", callID: "raw-call", args: { command: "herdr agent prompt worker hi" } }, result);
-  assert.deepEqual(result, original);
-  const [observation] = await until("observation");
-  assert.equal(observation.input.session_id, "ses_child");
-  assert.equal(observation.input.observation.call_id, "raw-call");
-  assert.equal(observation.input.observation.result, original.output);
-  await hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "tool", tool: "bash", sessionID: "ses_child", callID: "failed-call", state: { status: "error", input: { command: "herdr agent prompt worker hi" } } } } } });
-  const failed = (await until("observation", 2)).find((item) => item.input.observation.call_id === "failed-call");
-  assert.equal(failed.input.observation.failed, true);
-  assert.equal(failed.input.observation.result, null);
-});
 
 /** Writes the guardrails policy the core would publish, with `rules` on the fixture project, or removes it. */
 function policy(rules) {
@@ -95,10 +78,10 @@ function client(sessions = {}, running = {}) {
   };
 }
 
-/** Loads the plugin as OpenCode does, in a process whose environment is `env` for Herdr's variables. */
-async function plugin(env = HERDR, opencode = client()) {
+/** Loads the plugin as OpenCode does, in a process whose environment is `env` for the pane's variable. */
+async function plugin(env = PANE, opencode = client()) {
   rmSync(LOG, { force: true });
-  for (const key of Object.keys(HERDR)) delete process.env[key];
+  for (const key of Object.keys(PANE)) delete process.env[key];
   Object.assign(process.env, env);
   return await HidePlugin({ client: opencode, directory: "/checkouts/fixture" });
 }
@@ -111,13 +94,13 @@ async function prompt(hooks, input = sample("chat.message").input, parts) {
   return output;
 }
 
-test("outside a Herdr pane the plugin only guards a protected project's tools", async () => {
+test("outside a pane the plugin only guards a protected project's tools", async () => {
   answer({ tool: { deny: "Not run: guarded" } });
-  for (const env of [{}, { HERDR_ENV: "1" }, { ...HERDR, HERDR_ENV: "0" }]) {
+  for (const env of [{}, { HIDE_PANE_ID: "" }]) {
     const hooks = await plugin(env);
     assert.deepEqual(Object.keys(hooks), ["tool.execute.before", "dispose"]);
-    // No protection on: nothing starts, even for a launch through Herdr.
-    await hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_a" }, { args: { command: "herdr agent start x" } });
+    // No protection on: nothing starts, even for a result handed to the system opener.
+    await hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_a" }, { args: { command: "open out/index.html" } });
     await hooks["tool.execute.before"]({ tool: "read", sessionID: "ses_a" }, { args: { filePath: ".env" } });
     await hooks["tool.execute.before"]({ tool: "question", sessionID: "ses_a" }, { args: {} });
   }
@@ -180,7 +163,7 @@ test("outside a Herdr pane the plugin only guards a protected project's tools", 
     );
     const [call] = await until("tool");
     assert.deepEqual(call.input.args, { filePath: ".env" });
-    assert.equal(call.env.HERDR_PANE_ID, undefined);
+    assert.equal(call.env.HIDE_PANE_ID, undefined);
     // OpenCode runs a relative workdir in the session's folder, not where OpenCode started.
     await hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_a" }, { args: { command: "cat .env", workdir: "sub" } }).catch(() => {});
     const [, shell] = await until("tool", 2);
@@ -221,7 +204,7 @@ test("a new root session's first prompt carries the guidance and the letters, wh
   assert.equal(call.input.first, true);
   assert.equal(call.input.prompt, "Fix the failing parser test");
   assert.equal(call.input.cwd, "/checkouts/fixture");
-  assert.equal(call.env.HERDR_PANE_ID, "w1:p1");
+  assert.equal(call.env.HIDE_PANE_ID, "w1:p1");
   assert.equal(output.parts.length, 2);
   const added = output.parts[1];
   assert.equal(added.type, "text");
@@ -268,7 +251,7 @@ test("a tool result while the root session works carries the letters due, confir
   await hooks["tool.execute.after"]({ tool: "bash", sessionID: "ses_root", callID: "call_1" }, result);
   const [ask] = await until("letters");
   assert.deepEqual(ask.input, { session_id: "ses_root" });
-  assert.equal(ask.env.HERDR_PANE_ID, "w1:p1");
+  assert.equal(ask.env.HIDE_PANE_ID, "w1:p1");
   assert.match(result.output, /^RESULT\n\n<system-reminder>\nHide letter letter-5/);
   assert.ok(result.output.endsWith("</system-reminder>"), result.output);
   // A letter cannot close Hide's reminder: only Hide's own tags remain.
@@ -405,7 +388,7 @@ test("a session first seen in a prompt is asked about once and a child found tha
     ses_root: sample("session.created").properties.info,
     ses_child: sample("session.created.child").properties.info,
   };
-  const hooks = await plugin(HERDR, client(sessions));
+  const hooks = await plugin(PANE, client(sessions));
   const child = await prompt(hooks, { ...sample("chat.message").input, sessionID: "ses_child" });
   assert.equal(child.parts.length, 1);
   const root = await prompt(hooks);
@@ -426,32 +409,27 @@ test("a slow, failing or garbled helper passes the prompt unchanged within its b
   }
 });
 
-test("a shell call that starts an agent through Herdr is refused with the helper's reason, and other calls run", async () => {
-  answer({ start: { context: "" }, tool: { deny: "Not run: use hide agent spawn" } });
+test("a shell call that hands a result to the system opener is refused with the helper's reason, and other calls run", async () => {
+  answer({ start: { context: "" }, tool: { deny: "Not run: use hide file open" } });
   const hooks = await plugin();
   const launch = sample("tool.execute.before.bash");
-  await assert.rejects(hooks["tool.execute.before"](launch.input, launch.output), {
-    message: "Not run: use hide agent spawn",
+  await assert.rejects(hooks["tool.execute.before"]({ ...launch.input }, { args: { command: "open out/index.html" } }), {
+    message: "Not run: use hide file open",
   });
   const [call] = await until("tool");
   assert.deepEqual(call.input, {
     session_id: "ses_root",
     tool: "bash",
-    command: "herdr agent start --kind claude --name helper",
+    command: "open out/index.html",
     cwd: "/checkouts/fixture",
   });
 
-  // A call that can hand a result to the system opener asks the helper too.
-  await assert.rejects(hooks["tool.execute.before"]({ ...launch.input }, { args: { command: "open out/index.html" } }));
-  const [, opener] = await until("tool", 2);
-  assert.equal(opener.input.command, "open out/index.html");
-
-  // A call that can do neither never reaches the helper.
+  // A call that hands nothing to the opener never reaches the helper.
   await hooks["tool.execute.before"]({ ...launch.input }, { args: { command: "ls -la" } });
   await hooks["tool.execute.before"]({ ...launch.input }, { args: { command: "open ." } });
   await hooks["tool.execute.before"]({ ...launch.input, tool: "read" }, { args: { filePath: "/x" } });
   await sleep(100);
-  assert.equal(calls().filter((c) => c.operation === "tool").length, 2);
+  assert.equal(calls().filter((c) => c.operation === "tool").length, 1);
 });
 
 
@@ -497,7 +475,7 @@ test("native questions run without asking Hide's tool guard", async () => {
 test("child sessions move the pane's subagent counts, and a background child stays counted after the turn", async () => {
   answer({ start: { context: "" }, prompt: { context: "", letters: [] }, subagents: { reported: true } });
   const running = {};
-  const hooks = await plugin(HERDR, client({}, running));
+  const hooks = await plugin(PANE, client({}, running));
   await hooks.event({ event: sample("session.created") });
   await prompt(hooks);
   await hooks.event({ event: sample("session.created.child") });
@@ -517,7 +495,7 @@ test("child sessions move the pane's subagent counts, and a background child sta
 
 test("the root session's turn is reported when it moves: a prompt, a permission, its answer, an abort and an end", async () => {
   answer({ start: { context: "" }, prompt: { context: "", letters: [] }, subagents: { reported: true }, turn: { reported: true } });
-  const hooks = await plugin(HERDR, client({}, {}));
+  const hooks = await plugin(PANE, client({}, {}));
   await hooks.event({ event: sample("session.created") });
   await prompt(hooks);
   await until("turn", 1);
@@ -549,7 +527,7 @@ test("the root session's turn is reported when it moves: a prompt, a permission,
 test("past its session limit the plugin forgets finished children, keeps a running one counted and guides once", async () => {
   answer({ start: { context: "HIDE-GUIDANCE" }, prompt: { context: "", letters: [] }, subagents: { reported: true } });
   const running = { ses_long: { type: "busy" } };
-  const hooks = await plugin(HERDR, client({}, running));
+  const hooks = await plugin(PANE, client({}, running));
   await until("start");
   await hooks.event({ event: sample("session.created") });
   await prompt(hooks);

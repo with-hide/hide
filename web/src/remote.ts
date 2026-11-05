@@ -214,18 +214,6 @@ export function frameStyle(frame: { x: number; y: number; width: number; height:
   return { left: percent(frame.x), top: percent(frame.y), width: percent(frame.width), height: percent(frame.height) };
 }
 
-/** Whether Herdr on the host is new enough to store a purpose (the native `supportsRemotePurpose`). */
-export function supportsRemotePurpose(version: string | null | undefined): boolean {
-  if (!version) return false;
-  const numeric = (version.startsWith("v") ? version.slice(1) : version).split(/[-+]/)[0] ?? "";
-  const parts = numeric.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return false;
-  const [major, minor, patch] = parts as [number, number, number];
-  if (major !== 0) return major > 0;
-  if (minor !== 9) return minor > 9;
-  return patch >= 1;
-}
-
 export type DeviceCatalogLine = {
   state: "loading" | "error" | "stale" | "empty" | "resolving" | "unavailable" | "partial";
   text: string;

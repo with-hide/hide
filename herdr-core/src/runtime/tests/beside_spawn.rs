@@ -4,13 +4,12 @@
 //! that cannot be placed there.
 //!
 //! The caller is an agent on a connected device, so the spawn runs every
-//! step against that device's Herdr (B13); this machine has no Herdr, so a
+//! step against that device's engine (B13); this machine has none, so a
 //! step that reached the wrong machine fails the spawn instead of passing.
 
 use super::*;
 use crate::coordination::{AgentRecord, Command};
 use crate::delivery::{Actor, ledger, worker::Worker};
-use crate::fake_herdr::FakeHerdr;
 use crate::handle::ChangeNotifier;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
 use hide_node_link::protocol::Call;
@@ -20,7 +19,7 @@ const DEVICE: &str = "mini";
 const CHECKOUT: &str = "/srv/repo.worktrees/topic";
 const CALLER: &str = "w2:p0";
 
-/// The device's node: its panes start Herdr's own shell.
+/// The device's node: its panes start the engine's own shell.
 struct Node;
 
 impl NodeLink for Node {
@@ -39,7 +38,7 @@ impl NodeLink for Node {
     }
 }
 
-/// What the device's Herdr holds: its panes with their labels, whether the
+/// What the device's engine holds: its panes with their labels, whether the
 /// agent was started, and the refusals the next calls meet.
 #[derive(Default)]
 struct Device {
@@ -49,84 +48,77 @@ struct Device {
     panes: Vec<(String, Option<String>)>,
     started: bool,
     split_refused: bool,
-    /// Whether Herdr refuses to label the split.
+    /// Whether the engine refuses to label the split.
     rename_refused: bool,
     /// Whether the caller's worktree is no longer listed.
     worktree_gone: bool,
-    /// How many more `pane.get` reads fail, as a reply lost on the way.
+    /// How many more terminal reads fail, as a reply lost on the way.
     lost_reads: usize,
 }
 
-fn device_herdr(device: Arc<Mutex<Device>>) -> FakeHerdr {
-    FakeHerdr::start_with_errors("beside-spawn", move |method, params| {
+fn device_herdr(device: Arc<Mutex<Device>>) -> Fake {
+    FakeEngine::start(move |method, params| {
         let mut device = device.lock().unwrap();
         let checkout = device.checkout.clone();
-        Ok(match method {
-            "worktree.list" if device.worktree_gone => {
-                return Err(("internal_error".into(), "the repository is gone".into()));
+        match method {
+            "worktree_path" if device.worktree_gone => {
+                refused("internal_error", "the repository is gone")
             }
-            "worktree.list" => json!({"type": "worktree_list", "source": {
-                "repo_key": "/srv/repo/.git", "repo_name": "repo", "repo_root": "/srv/repo",
-                "source_checkout_path": "/srv/repo", "source_workspace_id": "w1"},
-                "worktrees": [{"branch": "topic", "is_bare": false, "is_detached": false,
-                    "is_linked_worktree": true, "is_prunable": false, "label": "repo",
-                    "open_workspace_id": "w2", "path": checkout}]}),
-            "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-                "workspaces": [], "tabs": [], "layouts": [], "agents": [],
+            // Another branch is another checkout of the repository.
+            "worktree_path" if params["branch"] != "topic" => {
+                reply(Some(format!("/srv/{}", params["branch"].as_str().unwrap())))
+            }
+            "worktree_path" => reply(Some(checkout)),
+            "session" => reply(fake::session(json!({
                 "panes": device.panes.iter().map(|(pane, label)| json!({
                     "pane_id": pane, "workspace_id": "w2", "tab_id": "w2:t1",
-                    "terminal_id": format!("terminal-{pane}"), "focused": false,
-                    "agent_status": "idle", "revision": 1, "cwd": checkout,
-                    "label": label})).collect::<Vec<_>>()}}),
-            "pane.split" if device.split_refused => {
-                return Err(("pane_not_found".into(), "pane w2:p0 not found".into()));
+                    "terminal_id": format!("terminal-{pane}"),
+                    "agent_status": "idle", "cwd": checkout,
+                    "label": label})).collect::<Vec<_>>(),
+                "agents": if device.started { vec![child_row()] } else { Vec::new() }
+            }))),
+            "split_beside" if device.split_refused => {
+                refused("pane_not_found", "pane w2:p0 not found")
             }
-            "pane.split" => {
-                assert_eq!(params["target_pane_id"], device.caller.as_str());
-                assert_eq!(params["direction"], "right");
-                assert_eq!(params["focus"], false);
+            "split_beside" => {
+                assert_eq!(params["parent"], device.caller.as_str());
                 assert_eq!(params["cwd"], checkout.as_str());
                 device.panes.push(("w2:p1".into(), None));
-                json!({"type": "pane_info", "pane": {"workspace_id": "w2", "tab_id": "w2:t1",
-                    "pane_id": "w2:p1", "terminal_id": "terminal-w2:p1", "focused": false,
-                    "agent_status": "idle", "revision": 0}})
+                reply("w2:p1".to_owned())
             }
-            "pane.rename" if device.rename_refused => {
-                return Err(("pane_not_found".into(), "the pane is gone".into()));
-            }
-            "pane.rename" => {
-                let pane = params["pane_id"].as_str().unwrap();
+            "rename_pane" if device.rename_refused => refused("pane_not_found", "the pane is gone"),
+            "rename_pane" => {
+                let pane = params["pane"].as_str().unwrap();
                 let entry = device.panes.iter_mut().find(|(id, _)| id == pane).unwrap();
                 entry.1 = params["label"].as_str().map(str::to_owned);
-                json!({"type": "ok"})
+                reply(())
             }
-            "pane.get" if device.lost_reads > 0 => {
+            "pane_terminal" if device.lost_reads > 0 => {
                 device.lost_reads -= 1;
-                return Err(("internal_error".into(), "the reply was lost".into()));
+                unanswered("the reply was lost")
             }
-            "pane.get" => json!({"type": "pane_info", "pane": {"workspace_id": "w2",
-                "tab_id": "w2:t1", "pane_id": params["pane_id"],
-                "terminal_id": format!("terminal-{}", params["pane_id"].as_str().unwrap()),
-                "focused": false, "agent_status": "idle", "revision": 0,
-                "tokens": {"hide_prompt": "1"}}}),
-            "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
-                "pane_id": params["pane_id"], "shell_pid": 4100,
-                "foreground_process_group_id": 4100,
-                "foreground_processes": [{"pid": 4100, "name": "zsh"}]}}),
-            "agent.start" => {
+            "pane_terminal" => reply(format!("terminal-{}", params["pane"].as_str().unwrap())),
+            "pane_processes" => reply(fake::processes(&json!({
+                "shell_pid": 4100, "foreground_process_group_id": 4100,
+                "foreground_processes": [{"pid": 4100, "name": "zsh"}]}))),
+            "start_agent" => {
                 device.started = true;
-                json!({"type": "agent_started", "argv": [], "agent": child_row()})
+                reply(crate::engine::StartedAgent {
+                    pane_id: "w2:p1".into(),
+                    terminal_id: Some("terminal-w2:p1".into()),
+                })
             }
-            "agent.list" => json!({"type": "agent_list", "agents":
-                if device.started { vec![child_row()] } else { Vec::new() }}),
-            "pane.report_metadata" => json!({"type": "ok"}),
-            "pane.close" => {
-                device.panes.retain(|(pane, _)| *pane != params["pane_id"]);
-                json!({"type": "ok"})
+            "delivery_agent" => match device.started {
+                true => reply(fake::delivery_agent(&child_row())),
+                false => refused("agent_not_found", "no such agent"),
+            },
+            "report_pane_tokens" => reply(()),
+            "close_pane" => {
+                device.panes.retain(|(pane, _)| *pane != params["pane"]);
+                reply(())
             }
             other => panic!("unexpected {other}"),
-        })
+        }
     })
 }
 
@@ -146,7 +138,7 @@ struct Spawner {
     runtime: Arc<Mutex<Runtime>>,
     actor: Actor,
     device: Arc<Mutex<Device>>,
-    herdr: FakeHerdr,
+    herdr: Fake,
     path: PathBuf,
     _worker: Worker,
     client: crate::delivery::worker::Client,
@@ -186,15 +178,12 @@ fn spawner() -> Spawner {
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: DEVICE.to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
         guard.snapshot.status.remote.push(RemoteStatusSnapshot {
             target_id: DEVICE.to_owned(),
             state: "connected".to_owned(),
             message: None,
-            herdr_version: None,
             session: None,
             files: RemoteFileListSnapshot::idle(),
             catalog: Default::default(),
@@ -266,11 +255,10 @@ fn spawner() -> Spawner {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         };
         let mut guard = runtime.lock().unwrap();
         guard.ingest_remote_session(DEVICE, Ok(session));
-        // The device's Herdr names its own panes.
+        // The device's engine names its own panes.
         let observed: crate::sidebar::SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [{
                 "id": "lead", "pane_id": CALLER, "agent": "codex", "agent_status": "working",
@@ -400,7 +388,7 @@ impl Spawner {
         self.herdr
             .methods()
             .iter()
-            .filter(|seen| seen.as_str() == method)
+            .filter(|seen| **seen == method)
             .count()
     }
 }
@@ -414,16 +402,16 @@ fn a_beside_spawn_splits_the_callers_pane_for_the_child() {
     assert_eq!(child["pane"], "w2:p1");
     assert_eq!(child["parent"], "agent-1");
     assert_eq!(child["project"], CHECKOUT);
-    assert_eq!(spawner.count("pane.split"), 1);
-    assert_eq!(spawner.count("tab.create"), 0);
-    assert_eq!(spawner.count("worktree.create"), 0);
+    assert_eq!(spawner.count("split_beside"), 1);
+    assert_eq!(spawner.count("create_tab"), 0);
+    assert_eq!(spawner.count("create_worktree"), 0);
     let record = &spawner.ledger().spawns[0];
     assert!(record.beside);
     assert_eq!(record.pane.as_deref(), Some("w2:p1"));
     assert_eq!(record.path.as_deref(), Some(CHECKOUT));
 }
 
-/// B11: an attempt cut off after its split reached Herdr finds the split it
+/// B11: an attempt cut off after its split reached the engine finds the split it
 /// made on the next run, and no second pane is made.
 #[test]
 fn a_beside_spawn_asked_again_after_an_interruption_makes_one_pane() {
@@ -435,11 +423,11 @@ fn a_beside_spawn_asked_again_after_an_interruption_makes_one_pane() {
     assert_eq!(spawner.ledger().spawns[0].pane, None);
     let child = spawner.spawn("again", BESIDE).unwrap();
     assert_eq!(child["pane"], "w2:p1");
-    assert_eq!(spawner.count("pane.split"), 1);
+    assert_eq!(spawner.count("split_beside"), 1);
     assert_eq!(spawner.device.lock().unwrap().panes.len(), 2);
     // Running it once more answers the same agent.
     assert_eq!(spawner.spawn("again", BESIDE).unwrap()["id"], child["id"]);
-    assert_eq!(spawner.count("pane.split"), 1);
+    assert_eq!(spawner.count("split_beside"), 1);
 }
 
 /// B7, B8: a beside spawn whose child would work in another worktree or
@@ -474,12 +462,17 @@ fn a_beside_spawn_outside_the_callers_checkout_creates_nothing() {
         assert_eq!(spawner.spawn("elsewhere", ask), Err(refusal.to_owned()));
     }
     assert!(spawner.ledger().spawns.is_empty());
-    for method in ["pane.split", "worktree.create", "tab.create", "agent.start"] {
+    for method in [
+        "split_beside",
+        "create_worktree",
+        "create_tab",
+        "start_agent",
+    ] {
         assert_eq!(spawner.count(method), 0, "{method}");
     }
 }
 
-/// B10: a split Herdr refuses fails the spawn with its reason and opens no
+/// B10: a split the engine refuses fails the spawn with its reason and opens no
 /// tab in its place.
 #[test]
 fn a_refused_split_fails_the_spawn_without_a_tab() {
@@ -489,8 +482,8 @@ fn a_refused_split_fails_the_spawn_without_a_tab() {
         spawner.spawn("refused", BESIDE),
         Err("beside_pane_unavailable".to_owned())
     );
-    assert_eq!(spawner.count("tab.create"), 0);
-    assert_eq!(spawner.count("agent.start"), 0);
+    assert_eq!(spawner.count("create_tab"), 0);
+    assert_eq!(spawner.count("start_agent"), 0);
     assert_eq!(spawner.device.lock().unwrap().panes.len(), 1);
 }
 
@@ -515,7 +508,7 @@ fn an_intent_reused_with_another_placement_is_refused() {
 const LOCAL_CHECKOUT: &str = "/checkouts/fixture";
 
 /// A registered caller agent in pane `sender` of this machine, working in the
-/// fixture's checkout, with this machine's Herdr laid out as one tab.
+/// fixture's checkout, with this machine's engine laid out as one tab.
 fn local_spawner() -> Spawner {
     let turn = crate::coordination::SPAWN_TURN
         .lock()
@@ -547,7 +540,7 @@ fn local_spawner() -> Spawner {
             },
         );
         guard.live = Some(live::LiveContext {
-            socket_path: herdr.socket_path().to_owned(),
+            socket_path: herdr.scope(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
             engine: herdr.engine(),
@@ -617,7 +610,7 @@ fn local_spawner() -> Spawner {
 }
 
 /// B1, B2, B4 on this machine: a handoff beside the caller is split right of
-/// it, drawn at once until Herdr's layout lists it, and is an operator-owned
+/// it, drawn at once until the engine's layout lists it, and is an operator-owned
 /// root with no watch.
 #[test]
 fn a_local_beside_handoff_is_drawn_at_once_beside_its_caller() {
@@ -628,21 +621,21 @@ fn a_local_beside_handoff_is_drawn_at_once_beside_its_caller() {
     assert_eq!(child["pane"], "w2:p1");
     assert_eq!(child["parent"], Value::Null);
     assert_eq!(child["watch"], Value::Null);
-    assert_eq!(spawner.count("pane.split"), 1);
-    assert_eq!(spawner.count("tab.create"), 0);
+    assert_eq!(spawner.count("split_beside"), 1);
+    assert_eq!(spawner.count("create_tab"), 0);
     let runtime = spawner.runtime.lock().unwrap();
     assert!(
         runtime
             .pane_operations
             .values()
             .any(|operation| operation.created_pane_id.as_deref() == Some("w2:p1")),
-        "the split is drawn before Herdr's layout lists it"
+        "the split is drawn before the engine's layout lists it"
     );
 }
 
 /// The split's label is cleared once the record names the pane, and running
 /// the same command after the spawn completed answers the same agent without
-/// asking Herdr about the checkout again, even when it no longer could.
+/// asking the engine about the checkout again, even when it no longer could.
 #[test]
 fn a_completed_beside_spawn_asked_again_stays_offline() {
     let spawner = spawner();
@@ -653,12 +646,12 @@ fn a_completed_beside_spawn_asked_again_stays_offline() {
         "the label leaves the pane once the record names it"
     );
     spawner.device.lock().unwrap().worktree_gone = true;
-    let lists = spawner.count("worktree.list");
+    let lists = spawner.count("worktree_path");
     assert_eq!(spawner.spawn("done", BESIDE).unwrap()["id"], child["id"]);
-    assert_eq!(spawner.count("worktree.list"), lists);
+    assert_eq!(spawner.count("worktree_path"), lists);
 }
 
-/// A split Herdr will not label cannot be found by a retry, so it is closed
+/// A split the engine will not label cannot be found by a retry, so it is closed
 /// and the spawn fails with nothing left beside the caller.
 #[test]
 fn a_split_that_cannot_be_labelled_is_closed() {
@@ -668,7 +661,7 @@ fn a_split_that_cannot_be_labelled_is_closed() {
         spawner.spawn("unlabelled", BESIDE),
         Err("beside_pane_unavailable".to_owned())
     );
-    assert_eq!(spawner.count("pane.close"), 1);
+    assert_eq!(spawner.count("close_pane"), 1);
     assert_eq!(spawner.device.lock().unwrap().panes.len(), 1);
-    assert_eq!(spawner.count("agent.start"), 0);
+    assert_eq!(spawner.count("start_agent"), 0);
 }

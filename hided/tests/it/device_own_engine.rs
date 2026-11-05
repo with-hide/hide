@@ -111,24 +111,10 @@ impl Device {
         );
         // A holder's socket path is limited to about a hundred bytes.
         let root = tempfile::Builder::new().prefix("hdo-").tempdir_in("/tmp")?;
-        let absent = root.path().join("no-herdr");
         // The node binds its pane socket under its state folder, which must
         // stay short enough for a Unix socket path.
         let state = root.path().join("d");
-        let mut environment = Environment::new(
-            &root.path().join("r"),
-            &root.path().join("no-herdr.sock"),
-            &absent,
-            Some(&state),
-        )?;
-        for key in [
-            "HERDR_SOCKET_PATH",
-            "HERDR_BIN_PATH",
-            "HERDR_SESSION",
-            "HERDR_CONFIG_PATH",
-        ] {
-            environment.unset(key);
-        }
+        let environment = Environment::new(&root.path().join("r"), Some(&state))?;
         let packages = root.path().join("packages");
         std::fs::create_dir(&packages)?;
         shipped::place(
@@ -145,11 +131,10 @@ impl Device {
         let slot: hide_node::ssh::PaneEventsSlot = Arc::default();
         let _ = slot.set(Arc::clone(&events) as Arc<dyn hide_node::ssh::PaneEvents>);
         let transport = hide_node::ssh::Connector::new(Some(packages))
-            .with_engine(hide_node::ssh::DeviceEngine::Holders)
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_terminals(Arc::new(Unseen))
             .with_pane_events(slot)
-            .transport(&local, "own-device", "own-device", None)
+            .transport(&local, "own-device", "own-device")
             .map_err(|reason| anyhow::anyhow!("{reason}"))?;
         Ok(Self {
             _root: root,

@@ -544,11 +544,7 @@ fn behind_reveal(views: &str) -> (Fixture, Arc<Mutex<Vec<Value>>>, HeldRevealRea
         let mut runtime = f.shared.lock().unwrap();
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            crate::engine::herdr::HerdrEngine::shared(Arc::new(
-                super::device_catalog::RecordingHerdr {
-                    requests: requests.clone(),
-                },
-            )),
+            super::device_catalog::recording_engine(requests.clone()),
             Weak::new(),
             crate::handle::ChangeNotifier::noop(),
         ));
@@ -997,8 +993,6 @@ fn withdrawing_consent_drops_a_save_waiting_for_the_helper() {
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: DEVICE.to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
         runtime.set_host_consent(DEVICE, false);
@@ -1046,8 +1040,6 @@ fn withdrawing_consent_lets_a_running_save_land() {
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: DEVICE.to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
         runtime.set_host_consent(DEVICE, false);
@@ -1175,13 +1167,11 @@ fn a_device_file_tab_joins_the_device_strip_and_survives_session_syncs() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         };
         runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
             target_id: DEVICE.to_owned(),
             state: "connected".to_owned(),
             message: None,
-            herdr_version: None,
             session: Some(session.clone()),
             files: RemoteFileListSnapshot::idle(),
             catalog: Default::default(),
@@ -1472,14 +1462,12 @@ fn a_closed_device_file_reopens_only_on_its_device_and_leaves_this_machines_clos
             sign_in: None,
             ssh_alias: Some(DEVICE.to_owned()),
             wsl_distro: None,
-            herdr_socket_path: None,
             agent_count: 0,
             test: None,
             host: Default::default(),
             kit: Default::default(),
             machine_name: None,
             dials_in: false,
-            herdr_behind: None,
         });
         assert_eq!(runtime.snapshot.recent_closed.count, 1);
         assert_eq!(
@@ -1561,15 +1549,12 @@ fn studio_connecting(runtime: &mut Runtime) {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: DEVICE.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent,
         });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: DEVICE.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: crate::model::DeviceCatalogSnapshot {

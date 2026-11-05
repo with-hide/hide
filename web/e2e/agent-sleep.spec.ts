@@ -8,7 +8,7 @@
 import { expect, test } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { agentIn, focusTab, newTab, withControl } from "./daemon-actions";
-import { CLAUDE_FULL_ACCESS } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";

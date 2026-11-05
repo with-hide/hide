@@ -1363,7 +1363,7 @@ pub(crate) mod tests {
 
         let (_root, mut runtime, _) = spawned(false, T);
         child_reads(&mut runtime, "working", None, T + 1_000);
-        assert!(judged(&mut runtime), "Herdr's reading alone");
+        assert!(judged(&mut runtime), "The engine's reading alone");
 
         let (_root, mut runtime, _) = spawned(false, T);
         runtime.note_delivery_key_at("child", T + 500);

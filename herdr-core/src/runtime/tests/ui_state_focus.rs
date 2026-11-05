@@ -59,14 +59,12 @@ fn fixture() -> Runtime {
         sign_in: None,
         ssh_alias: Some("mini".to_owned()),
         wsl_distro: None,
-        herdr_socket_path: None,
         agent_count: 0,
         test: None,
         host: Default::default(),
         kit: Default::default(),
         machine_name: None,
         dials_in: false,
-        herdr_behind: None,
     });
     runtime.snapshot.navigator.focused_device_id = Some(crate::node::TEST_NODE.to_owned());
     runtime.snapshot.navigator.focused_workspace_id = Some("workspace-a".to_owned());

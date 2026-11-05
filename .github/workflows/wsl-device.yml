@@ -1,12 +1,12 @@
 # The WSL device lane (hided/tests/it/wsl_device.rs, docs/TESTING.md): this
-# build's Linux helper, command and hooks and the pinned Linux Herdr,
-# installed through `wsl.exe` into a real WSL 2 distribution on GitHub's
-# Windows runner and reached over the one pipe the link owns (PRD wsl-device
-# D-16). Windows cannot build the Linux programs, so a Linux job builds them
-# and hands them to the Windows job as an artifact. The test owns the
-# distribution `setup-wsl` makes for it: it adds a user, changes the default
-# one and stops the distribution, which it may do only on a runner.
-# `pr.yml` runs it for a change to the crates the WSL link crosses.
+# build's Linux helper, command, hooks and pane holder, installed through
+# `wsl.exe` into a real WSL 2 distribution on GitHub's Windows runner and
+# reached over the one pipe the link owns (PRD wsl-device D-16). Windows
+# cannot build the Linux programs, so a Linux job builds them and hands them
+# to the Windows job as an artifact. The test owns the distribution
+# `setup-wsl` makes for it: it adds a user, changes the default one and stops
+# the distribution, which it may do only on a runner. `pr.yml` runs it for a
+# change to the crates the WSL link crosses.
 name: wsl device lane
 
 on:
@@ -39,33 +39,13 @@ jobs:
         timeout-minutes: 5
         with:
           save: false
-      - name: Install zsh
-        # The Herdr fetch script is zsh, which the Linux image lacks. The
-        # mirror can stall (web-e2e.yml), so apt retries and gives up on a
-        # silent connection.
-        timeout-minutes: 5
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-          sudo apt-get install -y --no-install-recommends zsh
       - name: Build the Linux programs
         timeout-minutes: 20
-        run: |
-          bash scripts/verify-cargo.sh cli
-          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
-      - name: Fetch the pinned Linux Herdr
-        id: herdr
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        # hided, hide, the hooks and the pane holder.
+        run: bash scripts/verify-cargo.sh cli
       - name: Name the programs for a Linux device
         # The helper's package rule (`hided-linux-x86_64`, ...), stripped so
         # the artifact stays small.
-        env:
-          HERDR: ${{ steps.herdr.outputs.bin }}
         run: |
           kit="$RUNNER_TEMP/wsl-kit"
           mkdir -p "$kit"
@@ -73,7 +53,6 @@ jobs:
             cp "target/debug/$name" "$kit/$name-linux-x86_64"
             strip "$kit/$name-linux-x86_64"
           done
-          cp "$HERDR" "$kit/herdr-linux-x86_64"
       - uses: actions/upload-artifact@v7
         with:
           name: hide-wsl-kit

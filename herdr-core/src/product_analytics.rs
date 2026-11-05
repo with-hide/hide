@@ -116,26 +116,14 @@ pub enum PhoneRoute {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceOutcome {
-    Ready(DeviceHerdr),
+    Ready,
     Failed(DeviceFailedStep),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeviceHerdr {
-    Started,
-    HandedOff,
-    Current,
-    Kept,
-    /// An explicitly selected saved session whose server Hide leaves unchanged.
-    Preserved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceFailedStep {
     Install,
     Download,
-    HerdrStart,
-    HerdrHandoff,
 }
 
 /// Unknown means establishment failed before the helper reported its system.
@@ -196,19 +184,7 @@ impl Event {
             Self::DeviceConnected { outcome, platform } => {
                 let mut properties = Vec::with_capacity(3);
                 match outcome {
-                    DeviceOutcome::Ready(herdr) => {
-                        properties.push(("outcome", "ready"));
-                        properties.push((
-                            "herdr",
-                            match herdr {
-                                DeviceHerdr::Started => "started",
-                                DeviceHerdr::HandedOff => "handed_off",
-                                DeviceHerdr::Current => "current",
-                                DeviceHerdr::Kept => "kept",
-                                DeviceHerdr::Preserved => "preserved",
-                            },
-                        ));
-                    }
+                    DeviceOutcome::Ready => properties.push(("outcome", "ready")),
                     DeviceOutcome::Failed(step) => {
                         properties.push(("outcome", "failed"));
                         properties.push((
@@ -216,8 +192,6 @@ impl Event {
                             match step {
                                 DeviceFailedStep::Install => "install",
                                 DeviceFailedStep::Download => "download",
-                                DeviceFailedStep::HerdrStart => "herdr_start",
-                                DeviceFailedStep::HerdrHandoff => "herdr_handoff",
                             },
                         ));
                     }

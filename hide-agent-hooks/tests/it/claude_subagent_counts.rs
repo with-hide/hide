@@ -16,7 +16,7 @@
 
 use serde_json::{Value, json};
 
-use super::spawn_guard::{Machine, PANE};
+use super::pre_tool::{Machine, PANE};
 
 const PANE_SESSION: &str = "6c0fb6c0-0000-4000-8000-000000000001";
 const NESTED_SESSION: &str = "f3a9b324-0000-4000-8000-000000000002";

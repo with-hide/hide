@@ -32,8 +32,6 @@ export const kitReasonsEnglish = {
   "kitWhy.not_changed": "Hide could not install or change it.",
   "kitWhy.codex_untrusted": "Codex has not trusted Hide's agent setup yet. Review it in Codex.",
   "kitWhy.record_unsaved": "Installed, but Hide could not save that it did, so it installs it again next time.",
-  "kitWhy.herdr_absent": "Herdr is not found on this device.",
-  "kitWhy.update_herdr": "This Herdr has no integration for the agent. Update Herdr.",
   "kitWhy.retirement_pending": "Hide has not finished removing an earlier Hide's coordination. It carries on next time.",
 
   "kitUnavailable.standalone": "This Hide is not running from the installed app, so it installs nothing on this device. Open the Hide app to install.",
@@ -45,12 +43,10 @@ export const kitReasonsEnglish = {
   "kitUnavailable.other": "Hide's kit does not run on this device.",
 
   "herdrProfileRefusal.no_consent": "Allow the installation of Hide's helper, then connect.",
-  "herdrProfileRefusal.disabled": "This profile is turned off in Herdr. Turn it on there, then try again.",
-  "herdrProfileRefusal.invalid_target": "Fix this profile's SSH target in Herdr or your SSH settings, then try again.",
+  "herdrProfileRefusal.invalid_target": "Fix this device in your ssh config, then try again.",
   "herdrProfileRefusal.discovery_pending": "Hide is still reading the saved devices. Try again in a moment.",
   "herdrProfileRefusal.device_limit": "Hide already keeps as many devices as it can. Remove one you no longer use, then connect.",
-  "herdrProfileRefusal.profile_moved": "This profile now points to another server. Remove the device registered for it before, then connect again.",
-  "herdrProfileRefusal.other": "Hide did not connect this profile.",
+  "herdrProfileRefusal.other": "Hide did not connect this device.",
 } as const;
 
 const ko = {
@@ -78,8 +74,6 @@ const ko = {
   "kitWhy.not_changed": "Hide가 설치하거나 바꾸지 못했어요.",
   "kitWhy.codex_untrusted": "Codex가 아직 Hide의 설정을 신뢰하지 않았어요. Codex에서 확인하세요.",
   "kitWhy.record_unsaved": "설치했지만 설치 기록을 저장하지 못해서 다음에 다시 설치해요.",
-  "kitWhy.herdr_absent": "이 기기에서 Herdr를 찾지 못했어요.",
-  "kitWhy.update_herdr": "이 Herdr에는 이 에이전트용 연동이 없어요. Herdr를 업데이트하세요.",
   "kitWhy.retirement_pending": "이전 Hide의 조정 기능을 아직 다 지우지 못했어요. 다음에 이어서 지워요.",
 
   "kitUnavailable.standalone": "이 Hide는 설치된 앱에서 실행되지 않아서 이 기기에 아무것도 설치하지 않아요. Hide 앱을 열어 설치하세요.",
@@ -91,12 +85,10 @@ const ko = {
   "kitUnavailable.other": "이 기기에서는 Hide 도구가 동작하지 않아요.",
 
   "herdrProfileRefusal.no_consent": "Hide 헬퍼 설치를 허용한 뒤 연결하세요.",
-  "herdrProfileRefusal.disabled": "Herdr에서 이 프로필이 꺼져 있어요. Herdr에서 켠 뒤 다시 시도하세요.",
-  "herdrProfileRefusal.invalid_target": "Herdr나 SSH 설정에서 이 프로필의 SSH 대상을 고친 뒤 다시 시도하세요.",
+  "herdrProfileRefusal.invalid_target": "ssh 설정에서 이 기기를 고친 뒤 다시 시도하세요.",
   "herdrProfileRefusal.discovery_pending": "저장된 기기를 아직 읽는 중이에요. 잠시 뒤 다시 시도하세요.",
   "herdrProfileRefusal.device_limit": "등록할 수 있는 기기 수가 다 찼어요. 쓰지 않는 기기를 제거한 뒤 연결하세요.",
-  "herdrProfileRefusal.profile_moved": "이 프로필이 이제 다른 서버를 가리켜요. 전에 이 프로필로 등록한 기기를 제거한 뒤 다시 연결하세요.",
-  "herdrProfileRefusal.other": "이 프로필을 연결하지 않았어요.",
+  "herdrProfileRefusal.other": "이 기기를 연결하지 않았어요.",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 const ja = {
@@ -124,8 +116,6 @@ const ja = {
   "kitWhy.not_changed": "Hide はインストールまたは変更できませんでした。",
   "kitWhy.codex_untrusted": "Codex はまだ Hide の設定を信頼していません。Codex で確認してください。",
   "kitWhy.record_unsaved": "インストールしましたが記録を保存できなかったため、次回もう一度インストールします。",
-  "kitWhy.herdr_absent": "このデバイスに Herdr が見つかりません。",
-  "kitWhy.update_herdr": "この Herdr にはこのエージェント用の連携がありません。Herdr を更新してください。",
   "kitWhy.retirement_pending": "以前の Hide の連携機能の削除がまだ終わっていません。次回続けます。",
 
   "kitUnavailable.standalone": "この Hide はインストール済みのアプリから実行されていないため、このデバイスには何もインストールしません。Hide アプリを開いてインストールしてください。",
@@ -137,12 +127,10 @@ const ja = {
   "kitUnavailable.other": "このデバイスでは Hide ツールが動作しません。",
 
   "herdrProfileRefusal.no_consent": "Hide のヘルパーのインストールを許可してから接続してください。",
-  "herdrProfileRefusal.disabled": "このプロファイルは Herdr でオフになっています。Herdr でオンにしてからもう一度お試しください。",
-  "herdrProfileRefusal.invalid_target": "Herdr または SSH の設定でこのプロファイルの SSH 接続先を直してから、もう一度お試しください。",
+  "herdrProfileRefusal.invalid_target": "ssh設定でこのデバイスを直してから、もう一度お試しください。",
   "herdrProfileRefusal.discovery_pending": "保存されたデバイスをまだ読み取っています。少し待ってからもう一度お試しください。",
   "herdrProfileRefusal.device_limit": "登録できるデバイスの数に達しています。使っていないデバイスを削除してから接続してください。",
-  "herdrProfileRefusal.profile_moved": "このプロファイルは別のサーバーを指すようになりました。以前このプロファイルで登録したデバイスを削除してから、もう一度接続してください。",
-  "herdrProfileRefusal.other": "このプロファイルは接続されませんでした。",
+  "herdrProfileRefusal.other": "このデバイスは接続されませんでした。",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 const zhCN = {
@@ -170,8 +158,6 @@ const zhCN = {
   "kitWhy.not_changed": "Hide 无法安装或更改它。",
   "kitWhy.codex_untrusted": "Codex 尚未信任 Hide 的设置。请在 Codex 中查看。",
   "kitWhy.record_unsaved": "已安装，但 Hide 无法保存安装记录，下次会再次安装。",
-  "kitWhy.herdr_absent": "在此设备上找不到 Herdr。",
-  "kitWhy.update_herdr": "此 Herdr 没有该智能体的集成。请更新 Herdr。",
   "kitWhy.retirement_pending": "Hide 尚未移除完早先 Hide 的协调功能。下次会继续。",
 
   "kitUnavailable.standalone": "此 Hide 不是从已安装的应用运行的，因此不会在此设备上安装任何内容。请打开 Hide 应用进行安装。",
@@ -183,12 +169,10 @@ const zhCN = {
   "kitUnavailable.other": "Hide 工具无法在此设备上运行。",
 
   "herdrProfileRefusal.no_consent": "请先允许安装 Hide 的辅助程序，再进行连接。",
-  "herdrProfileRefusal.disabled": "此配置在 Herdr 中已关闭。请在 Herdr 中打开后重试。",
-  "herdrProfileRefusal.invalid_target": "请在 Herdr 或 SSH 设置中修正此配置的 SSH 目标，然后重试。",
+  "herdrProfileRefusal.invalid_target": "请在 ssh 配置中修正此设备，然后重试。",
   "herdrProfileRefusal.discovery_pending": "Hide 仍在读取已保存的设备。请稍后重试。",
   "herdrProfileRefusal.device_limit": "可登记的设备数量已满。请移除不再使用的设备后再连接。",
-  "herdrProfileRefusal.profile_moved": "此配置现在指向另一台服务器。请移除之前用它登记的设备，然后重新连接。",
-  "herdrProfileRefusal.other": "Hide 未连接此配置。",
+  "herdrProfileRefusal.other": "Hide 未连接此设备。",
 } satisfies Record<keyof typeof kitReasonsEnglish, string>;
 
 export const kitReasonsCatalogs = { en: kitReasonsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof kitReasonsEnglish>;

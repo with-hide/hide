@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 import { closePane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { elsewhereTab, finishUnseenTurn, setAgentAsking, setAgentState } from "./fixture-agents";
-import { continueFixtureTranscript } from "./herdr-fixture";
+import { continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot, sidebarOverflow } from "./wire";
 

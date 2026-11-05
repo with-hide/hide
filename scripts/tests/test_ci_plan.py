@@ -35,7 +35,6 @@ PACKAGED = FULL + ["package"]
 # The paths a pull request changed when `package.yml` had its own trigger.
 PACKAGE_INPUTS = (
     "desktop/scripts/package.mjs", "desktop/scripts/build.mjs", "desktop/package.json", "desktop/resources/entitlements.plist",
-    "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.sh", "scripts/fetch-herdr-runtime.ps1",
     "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
     "hided/build.rs", "hided/src/cli.rs", "hide-kit/src/lib.rs", "hide-agent-hooks/src/main.rs",
     ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
@@ -173,7 +172,7 @@ class Selection(unittest.TestCase):
         # The web shell, its specs and the desktop host do not reach it.
         for path in (
             "web/e2e/s3.spec.ts", "web/e2e/new-tab.spec.ts", "web/src/host.ts", "web/src/Overview.tsx", "web/playwright.config.ts",
-            "web/e2e/herdr-fixture.ts", "desktop/src/main/wirePath.ts", "desktop/src/preload/index.ts", "docs/TESTING.md",
+            "web/e2e/pane-fixture.ts", "desktop/src/main/wirePath.ts", "desktop/src/preload/index.ts", "docs/TESTING.md",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("remote-mailbox", plan(path)["lanes"])
@@ -231,7 +230,7 @@ class Selection(unittest.TestCase):
         self.assertIn("windows-desktop", plan("desktop/e2e/gone.spec.ts", status="D")["lanes"])
 
     def test_the_windows_desktop_lane_follows_what_differs_by_system(self):
-        for path in ("hided/src/lib.rs", "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "web/src/host.ts", "web/e2e/herdr-fixture.ts"):
+        for path in ("hided/src/lib.rs", "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "web/src/host.ts", "web/e2e/pane-fixture.ts"):
             with self.subTest(path=path):
                 self.assertIn("windows-desktop", plan(path)["lanes"])
         for path in ("web/src/Overview.tsx", "hide-session/src/lib.rs", "web/e2e/new-tab.spec.ts", "docs/TESTING.md"):
@@ -310,8 +309,8 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("vt", plan(path)["lanes"])
 
-    def test_the_macos_os_contract_runs_for_the_two_crates_it_tests(self):
-        for path in ("hide-herdr-client/src/lib.rs", "hide-platform/src/process.rs"):
+    def test_the_macos_os_contract_runs_for_the_crate_it_tests(self):
+        for path in ("hide-platform/src/process.rs",):
             with self.subTest(path=path):
                 lanes = set(plan(path)["lanes"])
                 self.assertTrue({"os-contract", "os-contract-macos"} <= lanes)
@@ -357,7 +356,7 @@ class Selection(unittest.TestCase):
             ("web/public/m/sw.js", set()),
             ("web/e2e/new-tab.spec.ts", set()),
             ("web/src/Overview.tsx", {"desktop-e2e"}),
-            ("web/e2e/herdr-fixture.ts", {"desktop-e2e"}),
+            ("web/e2e/pane-fixture.ts", {"desktop-e2e"}),
             ("desktop/src/main/index.ts", {"desktop-e2e"}),
             ("desktop/src/main/updater.ts", {"desktop-e2e", "package"}),
             ("desktop/src/main/updater.test.ts", set()),
@@ -365,7 +364,6 @@ class Selection(unittest.TestCase):
             ("hide-kit/src/lib.rs", {"package"}),
             ("hide-ai/src/omp.rs", {"omp-contract"}),
             ("hide-platform/src/process.rs", {"os-contract-macos", "omp-contract"}),
-            ("hide-herdr-client/src/lib.rs", {"os-contract-macos"}),
         )
         for status in ("A", "M", "D"):
             for path, expected in cases:
@@ -413,7 +411,7 @@ class Selection(unittest.TestCase):
     def test_the_desktop_lane_follows_what_the_app_runs(self):
         for path in (
             "desktop/src/main/index.ts", "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/src/shortcuts.ts",
-            "web/src/Overview.tsx", "web/index.html", "web/e2e/herdr-fixture.ts",
+            "web/src/Overview.tsx", "web/index.html", "web/e2e/pane-fixture.ts",
         ):
             with self.subTest(path=path):
                 self.assertIn("desktop-e2e", plan(path)["lanes"])
@@ -452,10 +450,8 @@ class Selection(unittest.TestCase):
         for entries in (
             [("M", ".github/workflows/pr.yml")],
             [("M", "scripts/verify-web.sh")],
-            [("M", "contracts/herdr-bundle.json")],
             [("M", "Cargo.lock")],
             [("M", "pnpm-lock.yaml")],
-            [("M", "scripts/check-runtime-gates.sh")],
             [("M", "contracts/delivery-envelope.json")],
             [("M", "web/package.json")],
             [("M", "scripts/design-scratch.mjs")],
@@ -601,7 +597,7 @@ class NamedPaths(unittest.TestCase):
 
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):
         want = {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
-        for path in ("web/e2e/herdr-fixture.ts", "web/e2e/shims/build.ts", "web/e2e/shims/noop.c", "web/e2e/test-size-baseline.json"):
+        for path in ("web/e2e/pane-fixture.ts", "web/e2e/shims/build.ts", "web/e2e/shims/noop.c", "web/e2e/test-size-baseline.json"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), want)
 
@@ -634,12 +630,11 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("agent-journey", self.lanes(path))
                 self.assertIn("rust", self.lanes(path))
-        # The live check the journey runs and the web e2e drives, and its
-        # Windows forms' test, which only the journey's Windows job runs.
+        # The live check the journey runs, and its Windows forms' test,
+        # which only the journey's Windows job runs.
         for path in ("scripts/agent_live_check/processes.py", "scripts/agent_live_check/windows.py"):
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "web-e2e", "agent-journey", "holder-restart"})
-        self.assertEqual(self.lanes("scripts/agent-live-check.py"), {"policy", "web-e2e", "agent-journey"})
+                self.assertEqual(self.lanes(path), {"policy", "agent-journey", "holder-restart"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_windows.py"), {"policy", "agent-journey"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_protection.py"), {"policy"})
 
@@ -771,11 +766,10 @@ class NamedPaths(unittest.TestCase):
         for path in (
             ".github/workflows/pr.yml",
             "scripts/ci-plan.py", "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/ci-flaky-report.py",
-            "scripts/fetch-herdr-runtime.sh", "scripts/install-nextest.sh", "scripts/toolchain-env.sh",
+            "scripts/install-nextest.sh", "scripts/toolchain-env.sh",
             # Every member but two depends on `workspace-hack`, which holds
             # nearly every third-party crate: a lock change reaches them all.
             "pnpm-lock.yaml", "web/package.json", "desktop/package.json", "Cargo.lock", ".config/nextest.toml", "clippy.toml",
-            "contracts/herdr-bundle.json", "contracts/herdr-api.schema.json",
             "mystery/file.txt", "scripts/some-new-script.sh", "web/some-new-config.json",
         ):
             with self.subTest(path=path):
@@ -802,8 +796,7 @@ class NamedPaths(unittest.TestCase):
             (workflows / name).read_text()
             for name in ("web-e2e.yml", "desktop-e2e.yml", "os-contract.yml", "remote-mailbox.yml", "package.yml")
         )
-        for helper in ("verify-cargo.sh", "verify-web.sh", "toolchain-env.sh", "install-nextest.sh", "fetch-herdr-runtime.sh",
-                       "fetch-herdr-runtime.ps1", "ci-flaky-report.py", "check-herdr-schema.py"):
+        for helper in ("verify-cargo.sh", "verify-web.sh", "toolchain-env.sh", "install-nextest.sh", "ci-flaky-report.py"):
             callers += (ROOT / "scripts" / helper).read_text()
         checked = 0
         for pattern in ci.POLICY_ONLY:
@@ -846,14 +839,11 @@ def runner_jobs(block):
     """How many runner jobs one `pr.yml` job starts: a reusable workflow starts its own."""
     if "uses: ./.github/workflows/web-e2e.yml" in block:
         shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
-        # The core's own engine runs the same tests over as many shards again.
-        engines = 2 if "\n      own-engine: true" in block else 1
         # With more than one shard parallel daemon and web builds precede them.
-        return shards * engines + (2 if shards > 1 else 0)
+        return shards + (2 if shards > 1 else 0)
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
-        # Each shard builds in place; the core's own engine runs them again.
-        engines = 2 if "\n      own-engine: true" in block else 1
-        return int(re.search(r"\n      shards: (\d+)", block).group(1)) * engines
+        # Each shard builds in place.
+        return int(re.search(r"\n      shards: (\d+)", block).group(1))
     if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-clis")):
         # A lane whose macOS leg follows the plan names both lists; the most is the longer.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
@@ -864,9 +854,9 @@ def runner_jobs(block):
         # Windows cannot build the Linux programs the distribution runs.
         return 2
     if "uses: ./.github/workflows/agent-journey.yml" in block:
-        # Both engines run stand-ins on each system but Windows; Windows has its forms job.
+        # Stand-ins run on each system but Windows; Windows has its forms job.
         systems = json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1))
-        return 2 * len([system for system in systems if system != "windows"]) + ("windows" in systems)
+        return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
         helpers = (ROOT / ".github/workflows/device-helpers.yml").read_text()
@@ -999,14 +989,11 @@ class Workflows(unittest.TestCase):
         # planned only for a change to the holder, the node's holder code, the
         # agent pins or the lane's scripts, add three.
         # Native and WASM relay interoperability adds one job on each OS.
-        # The core's own engine runs the web suite over as many shards again
-        # as Herdr's, on Linux and Windows, until the Herdr lane goes with
-        # Herdr (PRD engine-bundle-3-core-owns D-24): seven more. It runs the
-        # desktop suite again too, its two macOS shards; Windows awaits the
-        # holder lifetime fix because its CI Job forbids breakaway.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
-        self.assertLessEqual(most, 60, "a run starts more jobs than the suites and native SDK contracts need")
+        # Every suite runs once, on the core's own engine, since Herdr's lanes
+        # went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
+        self.assertLessEqual(most, 50, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1048,8 +1035,8 @@ class MacosOnPullRequests(unittest.TestCase):
         for status in ("A", "M"):
             for path in (
                 "herdr-core/src/lib.rs", "hided/src/lib.rs", "desktop/src/main/index.ts", "desktop/src/main/host.ts",
-                "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/e2e/herdr-fixture.ts",
-                "hide-herdr-client/src/lib.rs", "hide-platform/src/wsl.rs", "hide-platform/src/path.rs",
+                "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/e2e/pane-fixture.ts",
+                "hide-platform/src/wsl.rs", "hide-platform/src/path.rs",
                 "hide-kit/src/lib.rs", "hide-ai/src/omp.rs", "hide-holder/src/lib.rs",
                 "desktop/scripts/build-identity.mjs", "desktop/scripts/macos-signing.test.mjs",
                 "desktop/src/main/updater.test.ts", "Cargo.lock", "mystery/file.txt",
@@ -1081,7 +1068,6 @@ class MacosOnPullRequests(unittest.TestCase):
             ("desktop/native/notification-status/main.swift", set(MACOS_LANES) - {"holder-restart"}),
             ("desktop/resources/entitlements/app.plist", set(MACOS_LANES) - {"holder-restart"}),
             ("hide-vt/build.rs", {"vt", "holder-restart"}),
-            ("contracts/herdr-bundle.json", set(MACOS_LANES) - {"holder-restart"}),
             (".github/workflows/pr.yml", set(MACOS_LANES)),
             (".github/workflows/desktop-e2e.yml", set(MACOS_LANES)),
             (".github/actions/rust-cache/action.yml", set(MACOS_LANES)),
@@ -1513,7 +1499,7 @@ class LastGreenRun(unittest.TestCase):
                      "scripts/tests/test_ci_plan.py"):
             self.assertTrue(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         for name in ("docs/UI_BEHAVIOR.md", "AGENTS.md", "hided/README.md", "web/src/App.tsx", "Cargo.lock",
-                     "contracts/herdr-bundle.json", "web/e2e/cmdk.spec.ts", "unknown/file"):
+                     "contracts/conpty.json", "web/e2e/cmdk.spec.ts", "unknown/file"):
             self.assertFalse(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         self.assertFalse(ci.reads_no_lane("T", "docs/ARCHITECTURE.md", CRATES, ROOT))
 

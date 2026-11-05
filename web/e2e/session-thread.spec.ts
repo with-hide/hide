@@ -1,4 +1,4 @@
-// A pane's session read as a thread on either engine and hided (PRD
+// A pane's session read as a thread on the engine and hided (PRD
 // session-docs-and-assistant B25, B29): the node reads the record, reads on
 // as the session writes, and the input box's words reach that pane's program.
 // The Claude and Pi panes run on both engines; the Pi stand-in reports its
@@ -10,9 +10,9 @@ import path from "node:path";
 import { agentIn, preparePaneInput, sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
-import { continueFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
+import { continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { nativeSessionId, prepareEngineWriter, reportNativeWriter } from "./session-reader-fixture";
+import { nativeSessionId, prepareEngineWriter } from "./session-reader-fixture";
 import { sendEvent } from "./wire";
 import { afterCleanup } from "./worker-owned";
 import type { SessionThreadHistorySection, SessionThreadSection } from "../src/snapshot";
@@ -79,8 +79,7 @@ test("a Pi pane's record reads as a thread, follows what the session writes, and
     await withControl(daemon, async (control) => sendKeys(control, pane, "pi\r"));
     await expect.poll(() => fs.existsSync(session)).toBe(true);
     await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.agent_kind === "pi" ? true : undefined), `a pi agent in ${pane}`, 30_000));
-    // Herdr takes the session from its integration's report; on the own engine the stand-in made Pi's own.
-    if (fixture.engine === "herdr") reportNativeWriter(fixture as unknown as HerdrFixture, "pi", pane, session);
+    // The stand-in reported Pi's own session.
     await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionId("pi") ? true : undefined), `${pane} on its pi session`, 30_000));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"]`)).toBeVisible({ timeout: 30_000 });

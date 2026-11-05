@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { closePane, showTabOf, withControl } from "./daemon-actions";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 import { agentReading, labelAgentPane, spawnChild, startAgentInProject } from "./fixture-agents";

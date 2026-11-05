@@ -191,7 +191,6 @@ mod tests {
                 chosen: true,
                 skill: piece(hide_kit::ComponentState::Installed),
                 hook,
-                herdr: None,
                 partial: false,
                 features: Vec::new(),
                 sessions: None,

@@ -2,8 +2,6 @@ use super::worktree_command::{RemovalConsent, RemovalRefused, RemovalStart};
 use super::*;
 use crate::model::GithubReadOutcome;
 
-const MINIMUM_PURPOSE_HERDR_VERSION: (u64, u64, u64) = (0, 9, 1);
-
 /// How long a project's pull requests are trusted before the core asks again.
 const GITHUB_REREAD: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
@@ -117,33 +115,6 @@ const GITHUB_PROJECT_LIMIT: usize = 64;
 /// How long a merge Hide saw succeed reads as merged without GitHub's list
 /// saying so.
 const MERGED_HERE_LIFETIME_MS: u64 = 10 * 60 * 1000;
-
-fn herdr_version_supports_purpose(version: Option<&str>) -> bool {
-    parse_herdr_version(version.unwrap_or_default())
-        .is_some_and(|version| version >= MINIMUM_PURPOSE_HERDR_VERSION)
-}
-
-fn parse_herdr_version(version: &str) -> Option<(u64, u64, u64)> {
-    let version = version.strip_prefix('v').unwrap_or(version);
-    let numeric = version.split(['-', '+']).next()?;
-    let mut parts = numeric.split('.');
-    let parsed = (
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-    );
-    parts.next().is_none().then_some(parsed)
-}
-
-fn remote_purpose_unavailable_reason(version: Option<&str>) -> String {
-    match version {
-        Some(version) => format!(
-            "Set purpose requires Herdr 0.9.1 or newer on the remote device; {version} is installed"
-        ),
-        None => "Set purpose requires Herdr 0.9.1 or newer on the remote device; its version is unavailable"
-            .to_owned(),
-    }
-}
 
 /// Puts the measured sizes on a repository's worktrees and its shared Git
 /// directory, matched by path, and sums them for its facts line. A device's
@@ -825,14 +796,14 @@ impl Runtime {
             });
         let Some(node) = node else {
             let context = self.live.clone().ok_or_else(|| {
-                "A live Herdr connection is required to verify what is in use. Connect and review again.".to_owned()
+                "A live engine connection is required to verify what is in use. Connect and review again.".to_owned()
             })?;
             return Ok(crate::worktree_cleanup::CleanupPlace::local(
                 context, github,
             ));
         };
         let control = self.remote_controls.get(node).cloned().ok_or_else(|| {
-            "The node's Herdr connection is unavailable. Reconnect and review again.".to_owned()
+            "The node's engine connection is unavailable. Reconnect and review again.".to_owned()
         })?;
         Ok(crate::worktree_cleanup::CleanupPlace::node(
             &control,
@@ -2071,7 +2042,7 @@ impl Runtime {
         let Some(context) = self.live.as_ref().cloned() else {
             self.ingest_worktree_open_result(
                 checkout_path,
-                Err("Opening a worktree needs a live Herdr connection".to_owned()),
+                Err("Opening a worktree needs a live engine connection".to_owned()),
             );
             return true;
         };
@@ -2478,7 +2449,7 @@ impl Runtime {
                     &[],
                     Err(crate::worktree_control::RemovalFailure::new(
                         crate::model::WorktreeRemovalNotice::CloseFailed,
-                        format!("Deleting a worktree needs a live Herdr connection: {message}"),
+                        format!("Deleting a worktree needs a live engine connection: {message}"),
                     )),
                 );
             }
@@ -2973,7 +2944,7 @@ impl Runtime {
             Err(message) => {
                 self.set_error(
                     "workspace.remove_failed",
-                    format!("Removing a project with open panes needs its device's Herdr connection: {message}"),
+                    format!("Removing a project with open panes needs its device's engine connection: {message}"),
                     true,
                 );
                 return true;
@@ -3520,7 +3491,7 @@ impl Runtime {
             .map(|context| {
                 crate::worktree_control::WorktreeTarget::local(context, Arc::clone(&self.own_node))
             })
-            .ok_or_else(|| "A live Herdr connection is required".to_owned())
+            .ok_or_else(|| "A live engine connection is required".to_owned())
     }
 
     /// A device's Herdr and file helper, for a worktree task there. Both
@@ -3534,7 +3505,7 @@ impl Runtime {
             .remote_controls
             .get(device)
             .cloned()
-            .ok_or_else(|| "The device's Herdr connection is unavailable".to_owned())?;
+            .ok_or_else(|| "The device's engine connection is unavailable".to_owned())?;
         let host = self.node_link(device)?;
         Ok(crate::worktree_control::WorktreeTarget::device(
             &control, host,
@@ -4485,22 +4456,6 @@ impl Runtime {
                 "checkout_purpose.invalid",
             );
         }
-        if let Some(target_id) = remote_target_id.as_deref() {
-            let version = self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .find(|remote| remote.target_id == target_id)
-                .and_then(|remote| remote.herdr_version.as_deref());
-            if !herdr_version_supports_purpose(version) {
-                return self.fail_purpose_operation(
-                    id,
-                    remote_purpose_unavailable_reason(version),
-                    "checkout_purpose.remote_unsupported",
-                );
-            }
-        }
         // A device checkout's purpose goes to its owner workspace; its other
         // workspaces only hold tabs there (D-10).
         let session_workspace_id = if remote_target_id.is_some() {
@@ -4516,7 +4471,7 @@ impl Runtime {
         if branch.is_none() && session_workspace_id.is_none() {
             return self.fail_purpose_operation(
                 id,
-                "This detached checkout has no live Herdr workspace to hold a purpose",
+                "This detached checkout has no live engine workspace to hold a purpose",
                 "checkout_purpose.no_target",
             );
         }
@@ -4532,7 +4487,7 @@ impl Runtime {
             self.remote_controls
                 .get(target_id)
                 .cloned()
-                .ok_or_else(|| "The remote Herdr connection is unavailable".to_owned())
+                .ok_or_else(|| "The remote engine connection is unavailable".to_owned())
                 .and_then(|context| {
                     crate::worktree_control::spawn_remote_purpose_write(context, request)
                 })
@@ -4540,7 +4495,7 @@ impl Runtime {
             self.live
                 .as_ref()
                 .cloned()
-                .ok_or_else(|| "A live Herdr connection is required".to_owned())
+                .ok_or_else(|| "A live engine connection is required".to_owned())
                 .and_then(|context| crate::worktree_control::spawn_purpose_write(context, request))
         };
         if let Err(message) = spawn_result {
@@ -4888,7 +4843,7 @@ impl Runtime {
                 .map(|context| {
                     crate::worktree_control::TabTarget::local(context, self.live_generation)
                 })
-                .ok_or("start an agent: a live Herdr connection is required")
+                .ok_or("start an agent: a live engine connection is required")
         } else {
             self.remote_controls
                 .get(&device)
@@ -5717,20 +5672,5 @@ pub(super) fn with_review_proofs(
         (Some(listed), Some(proved)) => {
             Some(listed.into_iter().chain(proved.iter().cloned()).collect())
         }
-    }
-}
-
-#[cfg(test)]
-mod purpose_version_tests {
-    use super::*;
-
-    #[test]
-    fn remote_purpose_requires_the_pinned_minimum_version() {
-        assert!(!herdr_version_supports_purpose(None));
-        assert!(!herdr_version_supports_purpose(Some("0.9.0")));
-        assert!(herdr_version_supports_purpose(Some("0.9.1")));
-        assert!(herdr_version_supports_purpose(Some("v0.10.0")));
-        assert!(herdr_version_supports_purpose(Some("1.0.0-beta.1")));
-        assert!(!herdr_version_supports_purpose(Some("unknown")));
     }
 }

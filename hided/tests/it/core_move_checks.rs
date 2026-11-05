@@ -3,6 +3,8 @@
 //! sshd's system folders alone. The machine's own programs are where its
 //! account installed them, which its login shell puts on the `PATH`, and the
 //! checks find them there as the core will once it runs there.
+//! Every move is refused on the engine check until the core's own engine
+//! can move (with-hide/hide-private#491).
 #![cfg(unix)]
 
 use std::fs;
@@ -96,72 +98,18 @@ fn failed_checks(inspected: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The machine's Herdr is installed where its account installs programs,
-/// which only its login shell's `PATH` reaches: the checks ask that Herdr
-/// whether its server runs, rather than saying there is none.
+/// The core's own engine cannot move yet (with-hide/hide-private#491): the
+/// machine taking the core refuses every move on its engine check, with the
+/// reason the window shows, while its session, power and `gh` checks pass.
 #[test]
-fn a_herdr_only_the_login_shell_finds_is_the_one_the_checks_ask() {
+fn every_move_is_refused_on_the_engine_check_with_its_reason() {
     let target = Target::new();
-    let asked = target.home.join("herdr-asked");
-    answering_herdr(&target.home.join("installed/bin/herdr"), &asked);
-    fs::remove_file(&asked).ok();
 
     let inspected = target.inspect();
 
+    assert_eq!(failed_checks(&inspected), ["engine"], "{inspected}");
     assert_eq!(
-        failed_checks(&inspected),
-        Vec::<String>::new(),
-        "{inspected}"
+        inspected["failed"][0]["detail"],
+        "this version of Hide cannot move its core between machines yet"
     );
-    assert!(asked.exists(), "the login shell's herdr was asked");
-}
-
-/// A Herdr that answers it was asked by leaving `asked` behind.
-fn answering_herdr(path: &Path, asked: &Path) {
-    stand_in(
-        path,
-        &format!(
-            "[ \"$1 $2\" = \"status server\" ] && : > '{}'\necho '{{\"running\":true,\"socket\":\"/tmp/h.sock\"}}'",
-            asked.display()
-        ),
-    );
-}
-
-/// A machine the core moves to was a device first, and its helper holds the
-/// pinned Herdr its server runs: the checks ask that copy, found by the
-/// account's layout, rather than the operator's own `herdr` that comes first
-/// on the login shell's `PATH`.
-#[test]
-fn the_pinned_herdr_the_helper_holds_is_asked_before_the_accounts_own() {
-    let target = Target::new();
-    let pinned_asked = target.home.join("pinned-asked");
-    let own_asked = target.home.join("own-asked");
-    answering_herdr(
-        &target.home.join(".hide/host-helper/herdr/current/herdr"),
-        &pinned_asked,
-    );
-    answering_herdr(&target.home.join("installed/bin/herdr"), &own_asked);
-    fs::remove_file(&pinned_asked).ok();
-    fs::remove_file(&own_asked).ok();
-
-    let inspected = target.inspect();
-
-    assert_eq!(
-        failed_checks(&inspected),
-        Vec::<String>::new(),
-        "{inspected}"
-    );
-    assert!(pinned_asked.exists(), "the helper's pinned herdr was asked");
-    assert!(!own_asked.exists(), "the account's own herdr was not");
-}
-
-/// With no Herdr anywhere the account would find one, the check fails and
-/// says so, rather than passing on a Herdr it never asked.
-#[test]
-fn with_no_herdr_on_the_machine_the_herdr_check_fails() {
-    let target = Target::new();
-
-    let inspected = target.inspect();
-
-    assert_eq!(failed_checks(&inspected), ["herdr"], "{inspected}");
 }

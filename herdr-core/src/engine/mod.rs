@@ -1,13 +1,9 @@
 //! The engine boundary: the one way the core speaks to the program that runs
 //! its panes (PRD engine-bundle-1 D-2). Pane existence, split geometry, zoom,
 //! cwd, agent lifecycle and the PTY are the engine's; the core asks for them
-//! through [`Engine`] and never names the engine's protocol. There are two
-//! engines: Herdr ([`herdr::HerdrEngine`]), the one users run, and the
-//! core's own ([`own::OwnEngine`]), which runs panes in the node's holders
-//! and only a daemon with the development switch `HIDE_DEV_PANE_HOLDER` on
-//! builds (PRD engine-bundle-3-core-owns D-3, D-5). Only the Herdr module
-//! speaks Herdr's socket API and its generated wire types; the CI check
-//! `scripts/check-engine-boundary.py` keeps it so.
+//! through [`Engine`] and never names the engine's protocol. The core's own
+//! engine ([`own::OwnEngine`]), which runs panes in the node's holders, is
+//! the only one (PRD engine-bundle-4-herdr-removal D-2).
 //!
 //! Terminal bytes (`TerminalRoutes`) and a machine's own work (`NodeLink`)
 //! are already outside this boundary and do not pass through it.
@@ -20,7 +16,8 @@ use std::time::{Duration, Instant};
 pub(crate) mod answers;
 #[cfg(test)]
 pub(crate) mod contract;
-pub mod herdr;
+#[cfg(test)]
+pub(crate) mod fake;
 pub mod keys;
 pub(crate) mod own;
 pub(crate) mod tokens;
@@ -64,14 +61,6 @@ pub enum EngineError {
     Request(String),
     /// The engine answered, but not with what the call's contract promises.
     Answer(String),
-    /// The engine speaks a protocol this build does not; the message says
-    /// what the operator can do about it.
-    Protocol {
-        message: String,
-        expected_protocol: u64,
-        received_protocol: u64,
-        received_version: Option<String>,
-    },
 }
 
 impl EngineError {
@@ -92,10 +81,7 @@ impl EngineError {
     /// Whether the engine was reached and said something: a refusal, or an
     /// answer this call could not use. Nothing about the transport failed.
     pub fn answered(&self) -> bool {
-        matches!(
-            self,
-            Self::Refused { .. } | Self::Answer(_) | Self::Protocol { .. }
-        )
+        matches!(self, Self::Refused { .. } | Self::Answer(_))
     }
 
     /// The text of the failure, as `Display` writes it.
@@ -123,8 +109,7 @@ impl fmt::Display for EngineError {
             | Self::Unanswered(message)
             | Self::Malformed(message)
             | Self::Request(message)
-            | Self::Answer(message)
-            | Self::Protocol { message, .. } => formatter.write_str(message),
+            | Self::Answer(message) => formatter.write_str(message),
             Self::Refused { code, message } => write!(formatter, "{code}: {message}"),
         }
     }
@@ -174,12 +159,12 @@ pub(crate) trait Engine: Send + Sync {
     fn name(&self) -> &'static str;
     /// This engine, with every call first passing `gate`.
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a>;
-    /// How the session's watcher learns it changed: from an event stream it
-    /// subscribes to ([`Changes::Streamed`], `wake` unused), or by `wake`,
-    /// called once a change has been made, after which it reads the whole
-    /// session again ([`Changes::Pulled`]). Asked once per watcher; a later
-    /// call replaces the earlier `wake`.
-    fn changes(&self, wake: Wake) -> Changes;
+    /// How the session's watcher learns it changed: `wake`, called once a
+    /// change has been made, after which it reads the whole session again.
+    /// The session is the engine's own state, so nothing is replayed (PRD
+    /// engine-bundle-3-core-owns D-3). Asked once per watcher; a later call
+    /// replaces the earlier `wake`.
+    fn changes(&self, wake: Wake);
     /// The agent definitions the operator's folder holds now, read by the
     /// core: what an engine that starts and reads agents itself starts,
     /// recognizes and reads them by. Herdr knows its own agents and ignores
@@ -214,10 +199,6 @@ pub(crate) trait Engine: Send + Sync {
     fn agents(&self, wait: Wait) -> Answer<Vec<ProjectedAgent>>;
     /// The engine's version and protocol.
     fn ping(&self, wait: Wait) -> Answer<ServerPong>;
-    /// The changes to the session from now on, each workspace, tab, pane,
-    /// layout and agent event as it happens. `timeout` bounds the
-    /// subscription's acknowledgement; the stream itself waits.
-    fn subscribe(&self, timeout: Duration) -> Answer<EventStream>;
 
     // Workspaces.
 
@@ -232,8 +213,6 @@ pub(crate) trait Engine: Send + Sync {
     ) -> Answer<(String, String, String)>;
     /// The tab a workspace shows.
     fn workspace_active_tab(&self, wait: Wait, workspace: &str) -> Answer<String>;
-    /// The workspace that holds the keyboard focus, if any.
-    fn focused_workspace(&self, wait: Wait) -> Answer<Option<String>>;
     /// Each workspace with the value of its metadata `token`.
     fn workspace_tokens(&self, wait: Wait, token: &str) -> Answer<Vec<(String, Option<String>)>>;
     fn rename_workspace(&self, wait: Wait, workspace: &str, label: &str) -> Answer<()>;
@@ -450,8 +429,6 @@ pub(crate) trait Engine: Send + Sync {
 
     /// The pane's shell and its foreground processes.
     fn pane_processes(&self, wait: Wait, pane: &str) -> Answer<PaneProcessGroup>;
-    /// The name of the program in the pane's foreground, if any.
-    fn foreground_program(&self, wait: Wait, pane: &str) -> Answer<Option<String>>;
     /// The session a foreground `agent` was explicitly resumed with, as its
     /// kind (`id` or `path`) and value.
     fn resumed_session(
@@ -467,16 +444,8 @@ pub(crate) trait Engine: Send + Sync {
     fn pane_identity(&self, wait: Wait, pane: &str) -> Answer<PaneProof>;
     /// The pane's terminal and shell as this engine itself proves them, what
     /// a start checks it types into the pane it chose (PRD
-    /// engine-bundle-3-core-owns D-9): the core's own engine reads the
-    /// pane's record. Herdr answers `None` and leaves it to the node that
-    /// holds its socket (`Call::PaneInspect`), as before.
-    fn inspect_pane(
-        &self,
-        _wait: Wait,
-        _pane: &str,
-    ) -> Option<Answer<hide_node_link::panes::PaneIdentity>> {
-        None
-    }
+    /// engine-bundle-3-core-owns D-9): the engine reads the pane's record.
+    fn inspect_pane(&self, wait: Wait, pane: &str) -> Answer<hide_node_link::panes::PaneIdentity>;
 
     // Agents.
 
@@ -490,15 +459,6 @@ pub(crate) trait Engine: Send + Sync {
     fn agent_state(&self, wait: Wait, target: &str) -> Answer<AgentState>;
     /// An agent as a letter's delivery checks it, by name or pane.
     fn delivery_agent(&self, wait: Wait, target: &str) -> Answer<DeliveryAgent>;
-    /// [`Self::delivery_agent`] with the native session the agent reports.
-    fn observed_agent(
-        &self,
-        wait: Wait,
-        target: &str,
-    ) -> Answer<(
-        DeliveryAgent,
-        Option<hide_agent_hooks::observation::ObservationNativeSession>,
-    )>;
     /// Types `text` into the agent's input and submits it.
     fn prompt_agent(&self, wait: Wait, target: &str, text: &str) -> Answer<()>;
 
@@ -603,17 +563,6 @@ impl<'a> Gate<'a> {
 /// What an engine calls once its session changed ([`Engine::changes`]).
 pub(crate) type Wake = Arc<dyn Fn() + Send + Sync>;
 
-/// How an engine tells its watcher the session changed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Changes {
-    /// Each change is an event of the stream [`Engine::subscribe`] opens.
-    Streamed,
-    /// The engine calls the watcher's wake; the watcher reads
-    /// [`Engine::session`] again. The session is the engine's own state, so
-    /// nothing is replayed (PRD engine-bundle-3-core-owns D-3).
-    Pulled,
-}
-
 /// Whether a tab is to be zoomed on a pane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Zoom {
@@ -621,36 +570,14 @@ pub(crate) enum Zoom {
     Off,
 }
 
-/// The session's changes as the engine reports them, read one at a time
-/// until the stream ends or [`EventStream::stop`] wakes the reader.
-pub(crate) struct EventStream {
-    pub(crate) reader: Box<dyn EventReader>,
-    pub(crate) stopper: Box<dyn StopEvents>,
-}
-
-/// Reads the next event; `None` once the stream ended, with why.
-pub(crate) trait EventReader: Send {
-    fn next_event(&mut self) -> Result<Option<EventLine>, String>;
-}
-
-/// Ends a stream: its blocked reader wakes with the end.
-pub(crate) trait StopEvents: Send {
-    fn stop(&self);
-}
-
-/// One line of the event stream, read as the replica takes it.
-pub(crate) type EventLine =
-    Result<crate::session_sync::SubscriptionLine, crate::live::SessionFetchError>;
-
 /// The engine hided hands the core and asks itself for the few things that
 /// cannot wait for the core's owner thread (a pane's proof, a phone's read
 /// of a pane). It holds the one engine both use.
 #[derive(Clone)]
 pub struct EngineHandle {
     engine: SharedEngine,
-    /// The folder the core's own engine stands for, when this is that
-    /// engine: what the core keys this machine's session by where it keys a
-    /// Herdr session by its socket.
+    /// The folder the core's own engine stands for, which the core keys this
+    /// machine's session by; `None` for a test's engine.
     own_scope: Option<std::path::PathBuf>,
 }
 
@@ -670,8 +597,7 @@ impl EngineHandle {
     /// gone, and `node` is this machine's node, which reads its folders, runs
     /// its Git and answers its pane holders through the same requests a
     /// device's node answers ([`hide_node_link::link_panes::LinkPanes`]).
-    /// Only a daemon with the development switch `HIDE_DEV_PANE_HOLDER` on
-    /// builds it (PRD engine-bundle-3-core-owns D-5, D-22).
+    /// Every daemon builds it (PRD engine-bundle-4-herdr-removal D-2).
     pub fn own(
         node: Arc<dyn hide_node_link::NodeLink>,
         state_dir: std::path::PathBuf,
@@ -712,7 +638,7 @@ impl EngineHandle {
         })
     }
 
-    /// The folder the core's own engine stands for; `None` for Herdr.
+    /// The folder the core's own engine stands for; `None` for a test's engine.
     pub fn own_scope(&self) -> Option<&std::path::Path> {
         self.own_scope.as_deref()
     }

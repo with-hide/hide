@@ -454,11 +454,7 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         needs_one_of: &[],
-        options: &[
-            optional("--name", Text),
-            optional("--socket", Text),
-            switch("--json"),
-        ],
+        options: &[optional("--name", Text), switch("--json")],
         rest: None,
         answers: &["device_added"],
         refusals: &[

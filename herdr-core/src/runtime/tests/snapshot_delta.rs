@@ -176,8 +176,8 @@ fn agent_notes_state_the_view_authority_and_the_announcement_rule() {
         .split_once("## Runtime Architecture")
         .expect("a Runtime Architecture section");
     let (architecture, _) = rest
-        .split_once("## Herdr API Contract")
-        .expect("Runtime Architecture ends at the Herdr API Contract");
+        .split_once("## Herdr Source")
+        .expect("Runtime Architecture ends at the Herdr Source section");
     let (_, performance) = notes
         .split_once("## Performance Guide")
         .expect("a Performance Guide section");

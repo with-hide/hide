@@ -51,7 +51,6 @@ const KEYS = new Map<string, MessageKey>([
   ["checkout_purpose.token_failed", "taskReason.purpose.tokenFailed"],
   ["checkout_purpose.unknown_checkout", "taskReason.purpose.unknownCheckout"],
   ["checkout_purpose.invalid", "taskReason.purpose.invalid"],
-  ["checkout_purpose.remote_unsupported", "taskReason.purpose.remoteUnsupported"],
   ["checkout_purpose.no_target", "taskReason.purpose.noTarget"],
   ["agent_start.unknown_model", "coreError.start.unknownModel"],
   ["agent_start.invalid_prompt", "coreError.start.invalidPrompt"],

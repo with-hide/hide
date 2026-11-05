@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { aiSettingsFile, startHided, type Daemon } from "./hided-fixture";
-import { countSent, screenshot } from "./wire";
+import { screenshot } from "./wire";
 
 // The guidance hooks Apply writes are not written on Windows (their documentation names no shell there).
 test.skip(process.platform === "win32", "the first-run choice installs POSIX hooks");
@@ -41,77 +41,6 @@ async function start(record: boolean, options: { seedHideAi?: boolean; savedProf
 async function open(page: Page, daemon: Daemon) {
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
 }
-
-/** Only the host is doubled; the flow and saved profile discovery use real hided and pinned Herdr. */
-async function desktopBridge(page: Page) {
-  await page.addInitScript((platform) => {
-    window.hideHost = {
-      kind: "electron", platform,
-      onCommand: () => () => undefined, reportBindings: () => undefined, reportLanguage: () => undefined,
-      revealPath: () => undefined, pickFolder: async () => null, probePaths: async () => [], openPath: () => undefined,
-      notify: () => { document.documentElement.dataset.onboardingNotifications = String(Number(document.documentElement.dataset.onboardingNotifications ?? 0) + 1); },
-      onNotificationOpen: () => () => undefined, withdrawNotifications: () => undefined,
-      notificationPermission: async () => "unsupported", openNotificationSettings: () => undefined,
-      reportBadge: () => undefined, onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined,
-      browser: { sync: () => undefined, endCycle: () => undefined, capture: async () => null, command: () => undefined, onEvent: () => () => undefined },
-      updates: { onStatus: () => () => undefined, check: () => undefined, restart: () => undefined, setPrerelease: () => undefined },
-    } as never;
-  }, process.platform);
-}
-
-// Herdr only: the saved profile is Herdr's own SSH client catalog (`~/.local/state/herdr/client/endpoints.json`), which the first run reads through Herdr.
-test("desktop preserves choices through Back and reload while a disabled saved profile requires no connection @herdr", async ({ page }) => {
-  await desktopBridge(page);
-  const sent = countSent(page);
-  const { daemon } = await start(false, { savedProfile: true });
-  try {
-    await open(page, daemon);
-    await expect(tile(page, "grok", "on")).toBeVisible({ timeout: 60_000 });
-    await tile(page, "grok", "on").click();
-    await page.reload();
-    await expect(tile(page, "grok", "off")).toBeVisible();
-    await page.locator("[data-onboarding-apply]").click();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "devices", { timeout: 60_000 });
-    await expect(page.locator('[data-first-run-device]')).toHaveAttribute("data-device-state", "disabled");
-    await expect(page.locator('[data-first-run-device]')).toContainText("fixture.invalid");
-    await expect(page.locator('[data-first-run-device]')).toContainText("review");
-    await expect(page.locator('[data-first-run-device] [role=checkbox]')).toBeDisabled();
-    await page.locator("[data-first-run-back]").click();
-    await expect(tile(page, "grok", "off")).toBeVisible();
-    expect(sent.get("agent_onboarding_apply")).toBe(1);
-    expect(sent.get("herdr_profile_connect") ?? 0).toBe(0);
-    await page.locator("[data-onboarding-apply]").click();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "devices");
-    await page.locator("[data-first-run-device-skip]").click();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "notifications");
-    await page.locator('[data-first-run-next="notifications"]').click();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "project");
-    await page.locator("[data-first-run-back]").click();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "notifications");
-    expect(await page.locator("html").getAttribute("data-onboarding-notifications")).toBeNull();
-    await page.locator('[data-first-run-next="notifications"]').click();
-    await page.reload();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "project");
-    await page.locator("[data-first-run-skip]").click();
-    await expect(modal(page)).toHaveCount(0);
-    expect(sent.get("herdr_profile_connect") ?? 0).toBe(0);
-  } finally { daemon.stop(); }
-});
-
-// Herdr only: the empty read is of Herdr's own SSH client catalog, through Herdr.
-test("desktop skips Devices only after an actual empty saved-profile read @herdr", async ({ page }) => {
-  await desktopBridge(page);
-  const { daemon } = await start(false);
-  try {
-    await open(page, daemon);
-    await expect(modal(page)).toHaveAttribute("data-first-run", "agents", { timeout: 60_000 });
-    await page.locator("[data-onboarding-apply]").click();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "notifications", { timeout: 60_000 });
-    await expect(page.locator("[data-first-run-progress]")).toHaveText("2 of 3");
-    await page.locator("[data-first-run-back]").click();
-    await expect(modal(page)).toHaveAttribute("data-first-run", "agents");
-  } finally { daemon.stop(); }
-});
 
 test("a Mac with no kit record is asked once, the installed agents are on, and Apply writes only what is left on", async ({ page }) => {
   const { daemon, home } = await start(false);

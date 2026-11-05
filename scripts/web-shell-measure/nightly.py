@@ -5,9 +5,8 @@ usage: nightly.py <run-dir> <record.json>
 
 <run-dir> is one `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` run of
 run.sh with `--isolated-headless` (docs/PERFORMANCE_TESTING.md, "The nightly
-performance lane"), on either engine (`MEASURE_ENGINE`), which the record
-names. Every figure is derived again from the run's raw files
-through summarize.py, so the record follows the measurement contract rather
+performance lane"), on the engine identity.txt names. Every figure is
+derived again from the run's raw files through summarize.py, so the record follows the measurement contract rather
 than a copy of it. It writes the run's record to <record.json>, the same
 figures as a table on stdout and on $GITHUB_STEP_SUMMARY when Actions sets
 one, and exits 1 when:
@@ -19,7 +18,7 @@ The first two are the record's `failures`, which `ci-flaky-report.py
 --measurement` annotates for the nightly report. A missing measurement is
 not one: the step that stopped the run failed first, and its log says why.
 No historical figure is a limit. The echo has no agreed limit, so it is
-reported with `pass: null`, and the frame window does not run here.
+reported with `pass: null`.
 """
 import hashlib
 import json
@@ -31,11 +30,6 @@ import summarize
 
 HERE = Path(__file__).resolve().parent
 LANE = {"scenario": "topology", "scale": "operator", "isolated_headless": "true"}
-FRAMES = {
-    "covered": False,
-    "reason": "headless Chrome calls animation frames at a nominal 60 Hz, so every interval sits on the "
-              "16.7 ms budget and the strict check measures the browser's scheduler rather than the shell",
-}
 
 
 def identity(run):
@@ -66,7 +60,7 @@ def fixture(run, ident, failures):
     scale = json.loads((run / "scale.json").read_text())
     wrong = [f"{key} {ident.get(key)!r}, not {want!r}" for key, want in LANE.items() if ident.get(key) != want]
     target = scale.get("target") or {}
-    wrong += [f"{key}: the private server has {scale.get(key)}, the scale asks for {target.get(key)}"
+    wrong += [f"{key}: the daemon has {scale.get(key)}, the scale asks for {target.get(key)}"
               for key in ("workspaces", "tabs", "panes") if scale.get(key) != target.get(key)]
     if wrong:
         failures.append({"name": "fixture: not the lane's topology at operator scale", "error": "; ".join(wrong)})
@@ -96,7 +90,7 @@ def memory(path):
 def stages(run):
     timing = summarize.timing(run / "isolated" / "hide-state" / "Logs" / "core.jsonl")
     return {op: {"records": row["records"], "outcomes": row["outcomes"],
-                 "herdr_share_ms": row["herdr_share_ms"], "hide_share_ms": row["hide_share_ms"]}
+                 "drawn_ms": row["stages"]["drawn_ms"], "sent_ms": row["stages"]["sent_ms"]}
             for op, row in timing.items()}
 
 
@@ -111,10 +105,9 @@ def build(run):
             return None
 
     ident = part("identity", lambda: identity(run)) or {}
-    # A run before the engine line was written ran on Herdr.
-    engine = ident.get("engine", "herdr")
+    engine = ident.get("engine")
     record = {
-        "lane": "topology at operator scale" + ("" if engine == "herdr" else f", {engine} engine"),
+        "lane": f"topology at operator scale, {engine} engine",
         "engine": engine,
         "date": ident.get("started_at", "")[:10] or None,
         "started_at": ident.get("started_at"),
@@ -122,7 +115,7 @@ def build(run):
         "run": os.environ.get("GITHUB_RUN_ID") and (
             f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
             f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"),
-        "identity": {"hided_sha256": ident.get("hided_sha256"), "herdr_version": ident.get("herdr_version"),
+        "identity": {"hided_sha256": ident.get("hided_sha256"),
                      "chrome_version": ident.get("chrome_version"), "driver_sha256": driver_sha256(),
                      # The hosted image's name and version; absent off Actions.
                      "runner_image": " ".join(filter(None, (os.environ.get("ImageOS"), os.environ.get("ImageVersion")))) or None,
@@ -134,7 +127,6 @@ def build(run):
         "stages": part("stage times", lambda: stages(run)),
         "memory": {"settled": part("memory settled", lambda: memory(run / "memory-settled.json")),
                    "after_topology": part("memory after topology", lambda: memory(run / "memory-after-topology.json"))},
-        "frames": FRAMES,
         "failures": failures,
         "missing": missing,
     }
@@ -159,13 +151,12 @@ def table(record):
     if record["failures"] or record["missing"]:
         verdict = "**Failed**: " + "; ".join([f["name"] for f in record["failures"]] + record["missing"])
     else:
-        verdict = ("**Passed**: every measurement is valid. No limit is checked: the echo has no agreed limit "
-                   "and the frame window is not covered on this runner.")
+        verdict = ("**Passed**: every measurement is valid. No limit is checked: the echo has no agreed limit.")
     lines = [
         f"### Performance: {record['lane']}, {record['date']}", "", verdict, "",
         f"Fixture: {fixture.get('workspaces')} workspaces, {fixture.get('tabs')} tabs, {fixture.get('panes')} panes, "
         f"{fixture.get('printing_targets')} printing, {fixture.get('agents_reported')} agents reported; "
-        f"{ident['chrome_version']} headless; {ident['herdr_version'] or 'no Herdr'}; hided {str(ident['hided_sha256'])[:12]}; "
+        f"{ident['chrome_version']} headless; hided {str(ident['hided_sha256'])[:12]}; "
         f"driver {ident['driver_sha256'][:12]}; image {ident['runner_image'] or 'not a hosted runner'}; {ident['load']}", "",
         "| Key echo at operator scale | n | p50 | p95 | p99 | max | verdict |",
         "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
@@ -181,11 +172,11 @@ def table(record):
         lines.append(
             f"| {kind} | {row['count']} | {row['timeouts']} | {ms(screen['p50'])} | {ms(screen['p95'])} | {ms(screen['max'])} | "
             f"{ms(frame['p50'])} | {ms(frame['p95'])} | {ms(frame['max'])} |")
-    lines += ["", "| `pane_op.timing` | records | Herdr share p50 | p95 | Hide share p50 | p95 |",
+    lines += ["", "| `pane_op.timing` | records | drawn p50 | p95 | sent p50 | p95 |",
               "| --- | ---: | ---: | ---: | ---: | ---: |"]
     for op, row in (record["stages"] or {}).items():
-        herdr, hide = row["herdr_share_ms"], row["hide_share_ms"]
-        lines.append(f"| {op} | {row['records']} | {ms(herdr['p50'])} | {ms(herdr['p95'])} | {ms(hide['p50'])} | {ms(hide['p95'])} |")
+        drawn, sent = row["drawn_ms"], row["sent_ms"]
+        lines.append(f"| {op} | {row['records']} | {ms(drawn['p50'])} | {ms(drawn['p95'])} | {ms(sent['p50'])} | {ms(sent['p95'])} |")
     settled, after = record["memory"]["settled"] or {}, record["memory"]["after_topology"] or {}
     lines += [
         "",
@@ -196,8 +187,6 @@ def table(record):
         "",
         f"Memory, settled then after topology: hided {mib(settled.get('hided_rss_kb'))} then {mib(after.get('hided_rss_kb'))}, "
         f"Chrome tree {mib(settled.get('chrome_tree_rss_kb'))} then {mib(after.get('chrome_tree_rss_kb'))}.",
-        "",
-        f"Frame window: not covered by this lane; {record['frames']['reason']}.",
         "",
         "<details><summary>The run's record</summary>", "", "```json", json.dumps(record, indent=2), "```", "", "</details>", "",
     ]

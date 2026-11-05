@@ -62,7 +62,6 @@ fn run(runtime: AgentRuntime, hook: &Value, shell: &str, home: &Path, cwd: &Path
     };
     let mut child = command
         .env(hide_platform::host::HOME_VARIABLE, home)
-        .env_remove("HERDR_PANE_ID")
         .env_remove("HIDE_CAP_REF")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -267,7 +266,7 @@ fn run_grok(command: &str, shell: &str, home: &Path, payload: &str) -> Output {
     let mut child = Command::new(shell)
         .args(["-NoProfile", "-NonInteractive", "-Command", command])
         .env(hide_platform::host::HOME_VARIABLE, home)
-        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HIDE_PANE_ID", "w1:p2")
         .env("GROK_HOOK_EVENT", "pre_tool_use")
         .env_remove("HIDE_CAP_REF")
         .stdin(Stdio::piped())
@@ -284,10 +283,10 @@ fn run_grok(command: &str, shell: &str, home: &Path, payload: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-/// A launch the spawn guard reads from the event; with no `hide` to ask, the
-/// guard lets it run and writes one `daemon.unreachable` line, which only a
-/// helper that read the event on stdin can write.
-const LAUNCH: &str = "herdr agent start set-g --kind claude";
+/// An opening the opener guard reads from the event; with no `hide` to ask,
+/// the guard lets it run and writes one `daemon.unreachable` line, which only
+/// a helper that read the event on stdin can write.
+const OPENING: &str = "start report.html";
 
 fn guard_log(home: &Path) -> String {
     std::fs::read_to_string(
@@ -315,7 +314,7 @@ fn grok_runs_the_helper_through_the_powershell_it_starts_only_while_it_is_there(
         "sessionId": "grok-session",
         "cwd": cwd,
         "toolName": "run_terminal_command",
-        "toolInput": { "command": LAUNCH },
+        "toolInput": { "command": OPENING },
     })
     .to_string();
     let mut homes = 0;
@@ -511,7 +510,6 @@ fn agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails
             .unwrap();
         let mut child = agy_shell(command)
             .env(hide_platform::host::HOME_VARIABLE, &home)
-            .env_remove("HERDR_PANE_ID")
             .env_remove("HIDE_CAP_REF")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -567,7 +565,6 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     let mut shell = agy_shell(command);
     shell
         .env(hide_platform::host::HOME_VARIABLE, &home)
-        .env_remove("HERDR_PANE_ID")
         .env_remove("HIDE_CAP_REF")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

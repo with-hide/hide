@@ -107,7 +107,7 @@ impl Runtime {
             self.mark_remote_files_unavailable(
                 status_index,
                 root_path.clone(),
-                "Remote file root is not part of the authoritative Herdr session".to_owned(),
+                "Remote file root is not part of the authoritative engine session".to_owned(),
                 generation,
             );
             self.set_error(
@@ -2897,7 +2897,7 @@ impl Runtime {
         if pending.generation != self.live_generation {
             self.push_diagnostic(
                 "pane.fork.connection_changed",
-                format!("Herdr was replaced while {source_pane_id} was being forked"),
+                format!("The engine was replaced while {source_pane_id} was being forked"),
             );
             return false;
         }

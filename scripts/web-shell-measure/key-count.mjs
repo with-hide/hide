@@ -9,12 +9,9 @@
 //
 // The keys spell distinct markers (`mNNNNN` and a space, Enter after every
 // 100th), so a lost or moved key also breaks a marker. The pane runs
-// `stty -echo -icanon; cat` for a scrollback reader, or `tee <receipt>`
-// for a local byte receipt, so the reader returns what the pane received.
-// MEASURE_PANE_READ is the shell command that prints the pane's logical
-// lines (default: `$HERDR_BIN_PATH pane read $MEASURE_PANE_ID --source
-// recent-unwrapped --lines 4000` on the private socket); for a device pane
-// it reads the device's isolated Herdr over SSH.
+// `stty -echo -icanon; tee <receipt>`, a local byte receipt, so the reader
+// returns what the pane received. MEASURE_PANE_READ is the shell command
+// that prints it (run.sh: `cat <receipt>`).
 import { performance } from "node:perf_hooks";
 import { spawnSync } from "node:child_process";
 import { connectPage } from "./cdp.mjs";
@@ -25,11 +22,11 @@ const screenPane = process.env.MEASURE_SCREEN_PANE_ID ?? paneId;
 const count = Number(process.env.MEASURE_KEY_COUNT ?? 10_000);
 const intervalMs = Number(process.env.MEASURE_KEY_INTERVAL_MS ?? 0);
 const perLine = 100;
-if (!cdpPort || !paneId) throw new Error("MEASURE_CDP_PORT and MEASURE_PANE_ID are required");
+if (!cdpPort || !paneId || !process.env.MEASURE_PANE_READ) {
+  throw new Error("MEASURE_CDP_PORT, MEASURE_PANE_ID and MEASURE_PANE_READ are required");
+}
 if (!(count > 0 && count <= 99_999)) throw new Error("MEASURE_KEY_COUNT must be 1..99999");
-const readCommand =
-  process.env.MEASURE_PANE_READ ??
-  `"${process.env.HERDR_BIN_PATH}" pane read "${paneId}" --source recent-unwrapped --lines 4000`;
+const readCommand = process.env.MEASURE_PANE_READ;
 
 const marker = (index) => `m${String(index).padStart(5, "0")}`;
 // The typed keys, in order: markers until `count` keys, Enter after every

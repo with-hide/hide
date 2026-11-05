@@ -32,7 +32,6 @@ import { OverviewGraph } from "./OverviewGraph";
 import { OverviewHistory } from "./OverviewHistory";
 import { workKey } from "./sessionWork";
 import { OverviewProjectHome } from "./OverviewProjectHome";
-import { HerdrMovedLine } from "./HerdrTakeover";
 
 // The five Overview tabs share a device and project scope. Account usage
 // keeps its global scope. A wide detail retains the list beneath it, so
@@ -100,7 +99,6 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
         </Tabs>
         {view !== "usage" ? <ProjectChip projects={projects.map(({ workspace }) => workspace)} /> : null}
       </div>
-      <HerdrMovedLine actions={actions} />
       {unavailable && needsLiveDevice ? (
         <DeviceUnanswered device={unavailable} availability={availability} actions={actions} />
       ) : (

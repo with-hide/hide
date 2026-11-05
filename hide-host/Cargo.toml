@@ -16,7 +16,6 @@ hide-agent-adapter = { path = "../hide-agent-adapter" }
 base64 = "=0.23.1"
 cap-std = "=4.0.3"
 hide-project = { path = "../hide-project" }
-hide-herdr-client = { path = "../hide-herdr-client" }
 hide-agent-hooks = { path = "../hide-agent-hooks" }
 hide-ai = { path = "../hide-ai" }
 hide-kit = { path = "../hide-kit" }

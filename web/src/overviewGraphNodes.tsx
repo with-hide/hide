@@ -1,5 +1,5 @@
 import { BaseEdge, EdgeLabelRenderer, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronsDownUpIcon, GitBranchIcon, MailIcon, TerminalIcon } from "lucide-react";
+import { ChevronsDownUpIcon, GitBranchIcon, MailIcon } from "lucide-react";
 import { useId } from "react";
 import { AgentMark } from "./AgentMark";
 import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
@@ -42,7 +42,7 @@ export type TeamFold = { count: number; turn: number; going: number; done: numbe
 export type SessionNode = Node<{ row: GraphAgent; root: boolean; branch: string | null; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 /** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
 /** A line's letters and Herdr inputs, summed over both directions, and its hint saying them per direction. */
-export type ExchangeBadge = { letters: number; direct: number; label: string };
+export type ExchangeBadge = { letters: number; label: string };
 export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number; exchange?: ExchangeBadge }, "line">;
 
 /** Handles are invisible routing anchors; no connection can be edited. */
@@ -151,12 +151,11 @@ export function LineGraphEdge(props: EdgeProps<LineEdge>) {
   </>;
 }
 
-/** The badge at a line's middle: an envelope with its letters, a prompt with its Herdr inputs, each only when nonzero. */
-function ExchangeCount({ letters, direct, label, x, y }: ExchangeBadge & { x: number; y: number }) {
+/** The badge at a line's middle: an envelope with its letters. */
+function ExchangeCount({ letters, label, x, y }: ExchangeBadge & { x: number; y: number }) {
   return <Hint label={label} contentClassName="whitespace-pre-line">
     <span role="img" className="og-exchange nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} data-graph-exchange="true">
-      {letters ? <span><MailIcon aria-hidden="true" />{letters}</span> : null}
-      {direct ? <span><TerminalIcon aria-hidden="true" />{direct}</span> : null}
+      <span><MailIcon aria-hidden="true" />{letters}</span>
     </span>
   </Hint>;
 }

@@ -13,7 +13,7 @@ export const agentActionReasonsEnglish = {
   "agentActionRefusal.working": "This agent is working",
   "agentActionRefusal.waiting_for_you": "This agent is waiting for you",
   "agentActionRefusal.unknown_activity": "Hide cannot tell what this agent is doing",
-  "agentActionRefusal.no_conversation": "Herdr has not reported this agent's conversation yet",
+  "agentActionRefusal.no_conversation": "This agent has not reported its conversation yet",
 } as const;
 
 const ko = {
@@ -24,7 +24,7 @@ const ko = {
   "agentActionRefusal.working": "작업 중이에요",
   "agentActionRefusal.waiting_for_you": "내 답을 기다리는 중이에요",
   "agentActionRefusal.unknown_activity": "하는 일을 알 수 없어요",
-  "agentActionRefusal.no_conversation": "Herdr가 이 에이전트의 대화를 아직 알려 주지 않았어요",
+  "agentActionRefusal.no_conversation": "이 에이전트가 아직 대화를 알려 주지 않았어요",
 } satisfies Record<keyof typeof agentActionReasonsEnglish, string>;
 
 const zhCN = {
@@ -35,7 +35,7 @@ const zhCN = {
   "agentActionRefusal.working": "此智能体正在工作",
   "agentActionRefusal.waiting_for_you": "此智能体正在等你回复",
   "agentActionRefusal.unknown_activity": "Hide 无法判断此智能体在做什么",
-  "agentActionRefusal.no_conversation": "Herdr 尚未报告此智能体的对话",
+  "agentActionRefusal.no_conversation": "此智能体尚未报告其对话",
 } satisfies Record<keyof typeof agentActionReasonsEnglish, string>;
 
 const ja = {
@@ -46,7 +46,7 @@ const ja = {
   "agentActionRefusal.working": "作業中です",
   "agentActionRefusal.waiting_for_you": "あなたの返答を待っています",
   "agentActionRefusal.unknown_activity": "このエージェントが何をしているかわかりません",
-  "agentActionRefusal.no_conversation": "Herdr がこのエージェントの会話をまだ報告していません",
+  "agentActionRefusal.no_conversation": "このエージェントはまだ会話を報告していません",
 } satisfies Record<keyof typeof agentActionReasonsEnglish, string>;
 
 export const agentActionReasonsCatalogs = { en: agentActionReasonsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof agentActionReasonsEnglish>;

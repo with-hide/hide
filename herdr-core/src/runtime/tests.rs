@@ -2,7 +2,10 @@ use super::*;
 use hide_node_link::terminal::{GridSize, PaneTerminalState, TerminalControl, TerminalReport};
 use std::time::Duration;
 
-use crate::fake_herdr::FakeHerdr;
+use crate::engine::fake::{self, FakeEngine, Reply, refused, reply, unanswered};
+
+/// The stand-in engine a runtime test answers for.
+type Fake = Arc<FakeEngine<'static>>;
 
 mod agent_areas;
 #[path = "tests/agent_connection.rs"]
@@ -64,8 +67,6 @@ mod group_tabs_remote;
 mod guardrails;
 #[path = "tests/herdr_import.rs"]
 mod herdr_import;
-#[path = "tests/herdr_takeover.rs"]
-mod herdr_takeover;
 mod hide_ai_devices;
 #[path = "tests/home.rs"]
 mod home;
@@ -95,8 +96,6 @@ mod named_tab;
 mod node_agent_areas;
 #[path = "tests/node_issues.rs"]
 mod node_issues;
-#[path = "tests/observed_start.rs"]
-mod observed_start;
 #[path = "tests/operator_focus.rs"]
 mod operator_focus;
 mod overview_graph;
@@ -160,22 +159,18 @@ mod workspace_control;
 mod workspace_view;
 mod wsl_devices;
 
-/// The `tab_list` Herdr answers a `tab.move` with, carrying the tabs in
-/// their new order. Only the order is read here; the other fields are
-/// what the pinned schema requires of a tab.
-fn tab_list(ids: &[&str]) -> serde_json::Value {
-    serde_json::json!({
-        "type": "tab_list",
-        "tabs": ids.iter().enumerate().map(|(index, tab_id)| serde_json::json!({
-            "tab_id": tab_id,
-            "workspace_id": tab_id.split(':').next().unwrap_or_default(),
-            "number": index + 1,
-            "label": "fixture",
-            "focused": false,
-            "pane_count": 1,
-            "agent_status": "idle"
-        })).collect::<Vec<_>>()
-    })
+/// The answer to a tab move: the workspace's tabs in their new order.
+fn tab_list(ids: &[&str]) -> Reply {
+    reply(ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>())
+}
+
+/// Every call the engine got, as `{method, params}`.
+fn requests_of(engine: &Fake) -> Vec<serde_json::Value> {
+    engine
+        .calls()
+        .into_iter()
+        .map(|(method, params)| serde_json::json!({"method": method, "params": params}))
+        .collect()
 }
 
 fn no_worktrees() -> crate::model::WorktreeCatalogSnapshot {
@@ -371,11 +366,6 @@ pub(super) fn record_terminals(runtime: &mut Runtime) -> Arc<RecordedTerminals> 
 pub(super) fn terminal_state(state: &str, generation: u64) -> PaneTerminalState {
     PaneTerminalState {
         state: state.to_owned(),
-        mode: match state {
-            "controlling" => Some("control".to_owned()),
-            "observing" => Some("observe".to_owned()),
-            _ => None,
-        },
         generation,
         attempt: 1,
         message: None,
@@ -524,8 +514,6 @@ pub(crate) fn runtime() -> Runtime {
         schema_version: SCHEMA_VERSION,
         home: None,
         node_id: crate::node::test_node(),
-        herdr_socket_path: Some("/tmp/herdr-core-pet-runtime.sock".to_owned()),
-        herdr_bin_path: None,
         app_state_path: state
             .path()
             .join("state.json")
@@ -562,21 +550,7 @@ pub(crate) fn runtime() -> Runtime {
 /// read record.
 pub(super) fn live_runtime() -> Runtime {
     let mut runtime = runtime();
-    let socket_path = std::env::temp_dir()
-        .join(format!(
-            "herdr-core-read-record-{}-{}.sock",
-            std::process::id(),
-            NEXT_RUNTIME_STATE_ID.fetch_add(1, Ordering::Relaxed)
-        ))
-        .to_string_lossy()
-        .into_owned();
-    runtime.live = Some(live::LiveContext {
-        socket_path: socket_path.clone().into(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: crate::engine::herdr::local(&socket_path),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    runtime.live = Some(FakeEngine::absent().live());
     runtime
 }
 
@@ -986,21 +960,7 @@ fn checkout_active_tab_id(runtime: &Runtime, checkout_id: &str) -> Option<String
 /// notification actually leaves and a wait is armed.
 fn live_tab_order_runtime(checkout_path: &str) -> (Runtime, String) {
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
-    let socket_path = std::env::temp_dir()
-        .join(format!(
-            "herdr-core-view-authority-{}-{}.sock",
-            std::process::id(),
-            NEXT_RUNTIME_STATE_ID.fetch_add(1, Ordering::Relaxed)
-        ))
-        .to_string_lossy()
-        .into_owned();
-    runtime.live = Some(live::LiveContext {
-        socket_path: socket_path.clone().into(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: crate::engine::herdr::local(&socket_path),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    runtime.live = Some(FakeEngine::absent().live());
     (runtime, checkout_id)
 }
 
@@ -1037,13 +997,19 @@ struct HerdrMoves(crate::sidebar::SessionTabMoves);
 
 impl HerdrMoves {
     fn new() -> Self {
-        Self(crate::sidebar::SessionTabMoves::new(1))
+        Self(crate::sidebar::SessionTabMoves {
+            generation: 1,
+            ..Default::default()
+        })
     }
 
     /// The stream of a new replica, built after a reconnect: its count
     /// starts again.
     fn reconnected(&self) -> Self {
-        Self(crate::sidebar::SessionTabMoves::new(self.0.generation + 1))
+        Self(crate::sidebar::SessionTabMoves {
+            generation: self.0.generation + 1,
+            ..Default::default()
+        })
     }
 
     /// `payload` as the session published after Herdr moved to each of

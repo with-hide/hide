@@ -33,24 +33,24 @@ def panes(runtime):
     return runtime.pane_ids()
 
 
-def verdict(row, source_session, herdr_session, source, listed, source_agent):
-    """`row` the forked row, `herdr_session` its pane's session as Herdr
+def verdict(row, source_session, engine_session, listed, source_agent):
+    """`row` the forked row, `engine_session` its pane's session as the engine
     reports it, `listed` its `hide agent list` entry, which names the
-    session as Herdr does."""
+    session as the agent's hook reported it."""
     if not row:
         return cells.FAIL, "no row is shown as forked from the source"
     session = row.get("session_id")
     if not session or session == source_session:
         return cells.FAIL, f"the forked row's session is {session}, not one of its own"
-    status, reason = cells.emitter_verdict(herdr_session, source)
+    status, reason = cells.emitter_verdict(engine_session)
     if status != cells.PASS:
         return status, "the fork's " + reason[0].lower() + reason[1:]
     if not listed:
         return cells.FAIL, "hide agent list has no registration for the fork's pane"
-    # Hide registers a session as Herdr names it, a path for Pi and omp,
-    # while the row shows its native id, so Herdr's is matched to the registration.
-    if (herdr_session or {}).get("value") != listed.get("session"):
-        return cells.FAIL, (f"The engine reports session {(herdr_session or {}).get('value')} in the fork, Hide "
+    # Hide registers a session as the hook names it, a path for Pi and omp,
+    # while the row shows its native id, so the engine's is matched to the registration.
+    if (engine_session or {}).get("value") != listed.get("session"):
+        return cells.FAIL, (f"The engine reports session {(engine_session or {}).get('value')} in the fork, Hide "
                             f"registered {listed.get('session')}")
     if listed.get("parent") is not None or listed.get("origin") != source_agent:
         return cells.FAIL, (f"the fork is registered with parent {listed.get('parent')} and origin "
@@ -98,17 +98,17 @@ def measure(journey):
     rest = journey.daemon.snapshot() or {}
     row = record["row"] = forked_row(rest, journey.pane)
     pane = (row or {}).get("pane_id")
-    herdr_session = (journey.runtime.agent(pane) or {}).get("agent_session") if pane else None
+    engine_session = (journey.runtime.agent(pane) or {}).get("agent_session") if pane else None
     if not row:
         # A fork Hide did not mark: what Herdr and Hide show in its pane.
-        record["unmarked"] = {"herdr_session": (journey.runtime.agent(opened[0]) or {}).get("agent_session"),
+        record["unmarked"] = {"engine_session": (journey.runtime.agent(opened[0]) or {}).get("agent_session"),
                               "hide_row": {key: (journey.daemon.row(opened[0]) or {}).get(key)
                                            for key in ("session_id", "forked_from", "identity_label")}}
     listed = next((item for item in journey.controller.list_agents()
                    if pane and item.get("pane") == pane), None)
     record["prompt"].update(turn=turn, read=read)
-    record.update(herdr_session=herdr_session, listed=listed, errors=list(journey.daemon.errors))
-    status, reason = verdict(row, source_session, herdr_session, (journey.row["herdr_source"] if journey.runtime.engine == "herdr" else None), listed, journey.agent)
+    record.update(engine_session=engine_session, listed=listed, errors=list(journey.daemon.errors))
+    status, reason = verdict(row, source_session, engine_session, listed, journey.agent)
     if status == cells.PASS:
         answer = cells.with_turn(cells.reply_verdict(read, listed["session"], value), turn)
         status, reason = (status, reason + "; " + answer[1]) if answer[0] == cells.PASS else \

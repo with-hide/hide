@@ -113,8 +113,7 @@ test("the Partial chip opens by keyboard with a mark and a word per feature, and
     // A mark and a word for each feature; the table is the kit's, so a '–' is something Hide does not do.
     await expect(popover.locator("[data-agent-feature$=':no']").first()).toContainText("–");
     await expect(popover.locator("[data-agent-feature$=':yes']").first()).toContainText("✓");
-    // Every supported agent has Herdr's integration: the popover lists it and says nothing of a screen-only status.
-    await expect(popover.locator('[data-agent-feature="herdr_integration:yes"]')).toBeVisible();
+    // The popover says nothing of a screen-only status.
     await expect(popover).not.toContainText("from the screen");
     await screenshot(page, "agents-partial-popover");
     await page.keyboard.press("Escape");

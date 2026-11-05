@@ -1,45 +1,99 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use super::*;
 
 pub(super) const WAIT: Duration = Duration::from_secs(5);
 
-/// A session's stdout as the test writes it.
-pub(super) struct LineReader {
-    lines: Receiver<String>,
-    pending: Vec<u8>,
+/// What a stand-in session writes, one JSON value per call, in the form the
+/// tests read: its input, its resizes and redraws, its wheels and its
+/// release. Paste and named keys are refused, as by a transport that does
+/// not read them.
+pub(super) struct FakeWriter(pub(super) Box<dyn Write + Send>);
+
+impl FakeWriter {
+    fn line(&mut self, value: serde_json::Value) -> std::io::Result<()> {
+        let mut line = value.to_string();
+        line.push('\n');
+        self.0.write_all(line.as_bytes())?;
+        self.0.flush()
+    }
 }
 
-impl Read for LineReader {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        if self.pending.is_empty() {
-            match self.lines.recv() {
-                Ok(line) => {
-                    self.pending = line.into_bytes();
-                    self.pending.push(b'\n');
-                }
-                Err(_) => return Ok(0),
-            }
-        }
-        let count = buffer.len().min(self.pending.len());
-        buffer[..count].copy_from_slice(&self.pending[..count]);
-        self.pending.drain(..count);
-        Ok(count)
+impl SessionWriter for FakeWriter {
+    fn input(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.line(json!({"type": "terminal.input", "bytes": protocol::encode_base64(bytes)}))
+    }
+
+    fn paste(&mut self, _text: &[u8]) -> std::io::Result<()> {
+        Err(std::io::Error::other("this stand-in takes no paste"))
+    }
+
+    fn keys(&mut self, _keys: &[hide_holder_protocol::Key]) -> std::io::Result<()> {
+        Err(std::io::Error::other("this stand-in takes no named keys"))
+    }
+
+    fn resize(&mut self, size: GridSize) -> std::io::Result<()> {
+        self.line(json!({"type": "terminal.resize", "rows": size.rows, "cols": size.cols}))
+    }
+
+    /// Asked for the whole screen at the size it has, as a resize to it.
+    fn redraw(&mut self, size: GridSize) -> std::io::Result<()> {
+        self.resize(size)
+    }
+
+    fn scroll(
+        &mut self,
+        lines: i32,
+        column: Option<u16>,
+        row: Option<u16>,
+        modifiers: u8,
+    ) -> std::io::Result<()> {
+        self.line(json!({
+            "type": "terminal.scroll", "lines": lines, "column": column,
+            "row": row, "modifiers": modifiers,
+        }))
+    }
+
+    fn release(&mut self) -> std::io::Result<()> {
+        self.line(json!({"type": "terminal.release"}))
+    }
+
+    /// Refused, as by a holder built before submissions; [`holder_like`]
+    /// makes it take one whole.
+    fn submit(&mut self, _submit: &hide_holder_protocol::Submit) -> std::io::Result<()> {
+        Err(std::io::Error::other("this stand-in takes no submission"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+/// A stand-in session's events as the test sends them; its sender dropped
+/// is the session's end.
+pub(super) struct FakeEvents(pub(super) Receiver<SessionEvent>);
+
+impl SessionEvents for FakeEvents {
+    fn next_event(&mut self) -> SessionEvent {
+        self.0.recv().unwrap_or(SessionEvent::Ended {
+            category: "transport_eof",
+            message: "The stand-in session ended".to_owned(),
+        })
     }
 }
 
 /// Each key a session's writer wrote, with when it wrote it.
 pub(super) type Writes = Arc<Mutex<Vec<(Instant, Vec<u8>)>>>;
 
-/// A session's stdin as the test reads it, one line per write.
-pub(super) struct LineWriter {
+/// A session's writes as the test reads them, one value per line.
+pub(super) struct LineSink {
     lines: Sender<serde_json::Value>,
     pending: Vec<u8>,
     writes: Writes,
 }
 
-impl Write for LineWriter {
+impl Write for LineSink {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.pending.extend_from_slice(bytes);
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
@@ -64,9 +118,8 @@ impl Write for LineWriter {
 /// One session the fake attacher opened.
 pub(super) struct Opened {
     pub(super) pane: String,
-    pub(super) mode: Mode,
     pub(super) size: GridSize,
-    pub(super) output: Sender<String>,
+    pub(super) output: Sender<SessionEvent>,
     pub(super) input: Receiver<serde_json::Value>,
     pub(super) writes: Writes,
 }
@@ -74,20 +127,22 @@ pub(super) struct Opened {
 impl Opened {
     pub(super) fn frame(&self, size: GridSize, full: bool, bytes: &[u8]) {
         self.output
-            .send(
-                json!({
-                    "type": "terminal.frame", "seq": 1, "encoding": "ansi",
-                    "width": size.cols, "height": size.rows, "full": full,
-                    "bytes": protocol::encode_base64(bytes),
-                })
-                .to_string(),
-            )
+            .send(SessionEvent::Frame {
+                width: size.cols,
+                height: size.rows,
+                full,
+                bytes: bytes.to_vec(),
+            })
             .unwrap();
     }
 
-    fn close(&self, reason: Option<&str>) {
+    /// The session ends with `category`, as its transport names it.
+    fn close(&self, category: &'static str, message: &str) {
         self.output
-            .send(json!({"type": "terminal.closed", "reason": reason}).to_string())
+            .send(SessionEvent::Ended {
+                category,
+                message: message.to_owned(),
+            })
             .unwrap();
     }
 
@@ -119,17 +174,22 @@ impl Opened {
     }
 }
 
+/// Opens a stand-in session at the size it is asked for; a pane attached
+/// with no size is refused, as one that keeps no size of its own is.
 pub(super) struct FakeAttacher {
     pub(super) opened: Mutex<Sender<Opened>>,
     pub(super) refuse: Mutex<Option<String>>,
 }
 
 impl Attacher for FakeAttacher {
-    fn open(&self, pane: &str, mode: Mode, rows: u16, cols: u16) -> Result<SessionParts, String> {
+    fn open_transport(&self, pane: &str, size: Option<GridSize>) -> Result<Transport, OpenFailure> {
         if let Some(reason) = self.refuse.lock().unwrap().clone() {
-            return Err(reason);
+            return Err(OpenFailure::retried(reason));
         }
-        let (output, lines) = channel();
+        let size = size.ok_or_else(|| {
+            OpenFailure::retried(format!("Pane {pane} has no reported terminal size"))
+        })?;
+        let (output, events) = channel();
         let (written, input) = channel();
         let writes = Writes::default();
         self.opened
@@ -137,24 +197,23 @@ impl Attacher for FakeAttacher {
             .unwrap()
             .send(Opened {
                 pane: pane.to_owned(),
-                mode,
-                size: GridSize { rows, cols },
+                size,
                 output,
                 input,
                 writes: Arc::clone(&writes),
             })
             .unwrap();
-        Ok(SessionParts {
-            reader: Box::new(LineReader {
-                lines,
-                pending: Vec::new(),
-            }),
-            writer: Some(Box::new(LineWriter {
+        Ok(Transport {
+            events: Box::new(FakeEvents(events)),
+            writer: Box::new(FakeWriter(Box::new(LineSink {
                 lines: written,
                 pending: Vec::new(),
                 writes,
-            })),
+            }))),
             cleanup: Cleanup::None,
+            size: None,
+            reads_keys: false,
+            submissions: session::Submissions::Refused,
         })
     }
 }
@@ -163,9 +222,7 @@ impl Attacher for FakeAttacher {
 /// submission whole, its submit written its gap after its text, with the
 /// writes after it behind it, as the holder's own tests prove of it.
 pub(super) fn holder_like(mut transport: Transport) -> Transport {
-    transport.writer = transport
-        .writer
-        .map(|writer| Box::new(Submitting(writer)) as Box<dyn SessionWriter>);
+    transport.writer = Box::new(Submitting(transport.writer));
     transport.submissions = session::Submissions::Whole;
     transport
 }
@@ -297,21 +354,11 @@ fn harness_with(
     policy: RetryPolicy,
     cleanup: impl Fn() -> Cleanup + Send + Sync + 'static,
 ) -> Harness {
-    harness_taking(policy, cleanup, session::Submissions::AsTyped)
-}
-
-/// A harness whose sessions are holders' that take a submission whole
-/// ([`holder_like`]).
-fn submitting_harness() -> Harness {
-    harness_taking(
-        RetryPolicy::Automatic,
-        || Cleanup::None,
-        session::Submissions::Whole,
-    )
+    harness_taking(policy, cleanup, session::Submissions::Whole)
 }
 
 /// A harness whose sessions take submissions as `submissions` says: a
-/// Herdr session's lines, a holder's, or a holder's built before them.
+/// holder's, or a holder's built before them.
 fn harness_taking(
     policy: RetryPolicy,
     cleanup: impl Fn() -> Cleanup + Send + Sync + 'static,
@@ -326,36 +373,16 @@ fn harness_taking(
     let outputs = Arc::new(Outputs::default());
     struct Shared<C>(Arc<FakeAttacher>, C, session::Submissions);
     impl<C: Fn() -> Cleanup + Send + Sync> Attacher for Shared<C> {
-        fn open(
-            &self,
-            pane: &str,
-            mode: Mode,
-            rows: u16,
-            cols: u16,
-        ) -> Result<SessionParts, String> {
-            let mut parts = self.0.open(pane, mode, rows, cols)?;
-            parts.cleanup = (self.1)();
-            Ok(parts)
-        }
-
         fn open_transport(
             &self,
             pane: &str,
-            mode: Mode,
             size: Option<GridSize>,
         ) -> Result<Transport, OpenFailure> {
-            let size = size.ok_or_else(|| OpenFailure::retried("no size".into()))?;
-            let parts = self
-                .open(pane, mode, size.rows, size.cols)
-                .map_err(OpenFailure::retried)?;
-            let transport = Transport::lines(parts, mode);
+            let mut transport = self.0.open_transport(pane, size)?;
+            transport.cleanup = (self.1)();
             Ok(match self.2 {
-                session::Submissions::AsTyped => transport,
                 session::Submissions::Whole => holder_like(transport),
-                session::Submissions::Refused => Transport {
-                    submissions: session::Submissions::Refused,
-                    ..transport
-                },
+                session::Submissions::Refused => transport,
             })
         }
     }
@@ -467,7 +494,6 @@ fn an_attach_without_a_size_waits_for_one_then_attaches_at_it() {
             cols: 100
         }
     );
-    assert_eq!(opened.mode, Mode::Control);
     harness.state("w1:p1", "controlling");
     // The settled size is sent to the session it opened.
     assert_eq!(opened.next_line()["type"], "terminal.resize");
@@ -603,67 +629,6 @@ fn retry_preserves_the_canvas_until_a_matching_replacement_frame() {
     assert_eq!(written[1].1, b"\x1bcreplacement".to_vec());
 }
 
-/// B2. Herdr draws an observer at the grid it attached with and an observer
-/// cannot resize, so a view that changed size after the attach held every
-/// frame and the pane froze. The observer attaches again at the view's grid.
-#[test]
-fn an_observed_frame_at_an_old_grid_reattaches_the_observer_at_the_views_grid() {
-    let harness = harness(RetryPolicy::Automatic);
-    let opened = harness.controlling("w1:p1");
-    opened.close(Some("terminal attach taken over"));
-    let observer = harness.opened();
-    harness.state("w1:p1", "observing");
-    let view = GridSize {
-        rows: 33,
-        cols: 143,
-    };
-    harness.service.view("w1:p1", view, false);
-    observer.frame(SIZE, false, b"old");
-    let again = harness.opened();
-    assert_eq!((again.mode, again.size), (Mode::Observe, view));
-    again.frame(view, true, b"new");
-    assert_eq!(harness.wait_written(1)[0].1, b"\x1bcnew".to_vec());
-}
-
-/// B2, B8. An idle observed pane sends no frame after its size changes, so
-/// once the size has held for a moment the observer attaches again at it;
-/// a drag's intermediate sizes and the old-grid frames meanwhile attach
-/// nothing.
-#[test]
-fn an_observed_view_that_changes_size_reattaches_once_the_size_settles() {
-    let harness = harness(RetryPolicy::Automatic);
-    let opened = harness.controlling("w1:p1");
-    opened.close(Some("terminal attach taken over"));
-    let observer = harness.opened();
-    harness.state("w1:p1", "observing");
-    for cols in [160, 180, 200] {
-        harness.service.control(TerminalControl::Resize {
-            pane: "w1:p1".into(),
-            size: GridSize { rows: 33, cols },
-        });
-    }
-    observer.frame(SIZE, false, b"old");
-    let again = harness.opened();
-    assert_eq!(
-        (again.mode, again.size),
-        (
-            Mode::Observe,
-            GridSize {
-                rows: 33,
-                cols: 200
-            }
-        )
-    );
-    assert!(
-        harness
-            .opened
-            .recv_timeout(OBSERVER_RESIZE_QUIET * 3)
-            .is_err(),
-        "one new observer for the whole drag"
-    );
-    assert!(harness.written().is_empty(), "the old-grid frame was held");
-}
-
 /// R6, R7. A pane keeps its session while its canvas is rebuilt, and the
 /// view that comes back has an empty grid; Herdr sends nothing more until
 /// the pane produces output. A size that did not change is not sent on, but
@@ -700,21 +665,6 @@ fn a_rebuilt_view_for_an_attached_pane_is_given_a_frame_to_draw() {
         ),
         (json!("terminal.resize"), json!(24), json!(80))
     );
-}
-
-#[test]
-fn a_pane_another_client_controls_is_observed_once() {
-    let harness = harness(RetryPolicy::Automatic);
-    let opened = harness.controlling("w1:p1");
-    opened.close(Some("terminal attach taken over"));
-    let observer = harness.opened();
-    assert_eq!(observer.mode, Mode::Observe);
-    let state = harness.state("w1:p1", "observing");
-    assert_eq!(state.mode.as_deref(), Some("observe"));
-    harness.key("w1:p1", b"x");
-    harness.report_where(|report| {
-        matches!(report, TerminalReport::Error { kind, .. } if kind == "terminal.read_only")
-    });
 }
 
 /// A sink that panics on one pane's output stops only the thread that
@@ -826,7 +776,7 @@ fn a_reader_goes_back_to_its_pane_while_another_readers_frame_is_handed() {
         .expect("the sink took the second pane's frame");
     // The first pane's reader reads on while the second frame is in the
     // sink: its session's end reaches the core.
-    first.close(Some("pane exited"));
+    first.close("holder_failed", "pane exited");
     let deadline = Instant::now() + Duration::from_secs(2);
     let ended = loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -869,9 +819,9 @@ fn a_pane_told_closing_before_this_node_tracks_it_refuses_keys_as_closing() {
 fn an_ended_session_says_so_on_the_pane_and_a_closing_one_does_not() {
     let harness = harness(RetryPolicy::Automatic);
     let opened = harness.controlling("w1:p1");
-    opened.close(Some("pane exited"));
+    opened.close("holder_failed", "pane exited");
     let state = harness.state("w1:p1", "ended");
-    assert_eq!(state.exit_category.as_deref(), Some("terminal_closed"));
+    assert_eq!(state.exit_category.as_deref(), Some("holder_failed"));
     assert!(state.message.unwrap().contains("Retrying in 5 seconds"));
     let written = harness.wait_written(1);
     assert_eq!(written[0].1, b"\r\n[pane exited]\r\n".to_vec());
@@ -885,7 +835,7 @@ fn an_ended_session_says_so_on_the_pane_and_a_closing_one_does_not() {
     harness.report_where(|report| {
         matches!(report, TerminalReport::Error { kind, .. } if kind == "terminal.close_pending")
     });
-    second.close(None);
+    second.close("transport_eof", "The pane's holder connection ended");
     harness.state("w1:p2", "closing");
     assert_eq!(
         harness.written().len(),
@@ -900,8 +850,7 @@ fn an_attach_to_a_pane_already_attached_is_answered_with_its_state() {
     let _opened = harness.controlling("w1:p1");
     // The core asks for the attach the pane's start already made.
     harness.attach("w1:p1", Some(SIZE));
-    let state = harness.state("w1:p1", "controlling");
-    assert_eq!(state.mode.as_deref(), Some("control"));
+    harness.state("w1:p1", "controlling");
 }
 
 #[test]
@@ -1096,7 +1045,7 @@ fn a_held_enter_reaches_the_fork_a_moment_after_its_writer_wrote_the_keys_before
     // Herdr's `agent.prompt` waits from its text's flush, the gap is
     // measured between the writer's own writes, and a key typed while the
     // Enter waits goes behind it.
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     let fork = harness.controlling("w1:p2");
     fork_holding(&harness, "w1:p2", &[b"hello", b"\r", b"more"]);
     harness.service.control(TerminalControl::RequestResolve {
@@ -1112,7 +1061,7 @@ fn a_held_enter_reaches_the_fork_a_moment_after_its_writer_wrote_the_keys_before
 fn a_held_enter_waits_for_an_attaching_forks_writer_to_write_the_keys_before_it() {
     // The fork's terminal attaches after its keys were released: the queue
     // writes nothing until it has, and the gap runs from the writer's write.
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
     harness.service.control(TerminalControl::RequestResolve {
         request: "fork-1".into(),
@@ -1129,7 +1078,7 @@ fn a_letter_typed_into_the_fork_keeps_the_released_keys_behind_it_in_order() {
     // A letter's hold and the replay queue never split the operator's keys:
     // the queue writes nothing while a letter is typed and keeps the order
     // typed, the Enter apart from the keys before it.
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     let fork = harness.controlling("w1:p2");
     harness.service.shared.run(|inner, _| {
         inner
@@ -1173,7 +1122,7 @@ fn begin_letter(harness: &Harness, pane: &str) {
 fn keys_a_letter_held_go_ahead_of_a_forks_keys_released_during_it() {
     // "x" was typed during the letter, before the fork held the pane, so
     // it is written before the fork's keys when the letter ends.
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     let fork = harness.controlling("w1:p2");
     begin_letter(&harness, "w1:p2");
     harness.key("w1:p2", b"x");
@@ -1195,7 +1144,7 @@ fn keys_a_letter_held_go_ahead_of_a_forks_keys_released_during_it() {
 fn a_letter_ending_without_held_keys_keeps_a_fork_queue_that_dropped_keys_past_its_cap() {
     // "z" crossed the queue's cap and was reported; the keys queued before
     // it are still written once the letter ends.
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     let fork = harness.controlling("w1:p2");
     begin_letter(&harness, "w1:p2");
     let full = vec![b'y'; hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES];
@@ -1218,7 +1167,7 @@ fn a_letter_ending_without_held_keys_keeps_a_fork_queue_that_dropped_keys_past_i
 
 #[test]
 fn keys_a_letter_held_ahead_of_a_full_fork_queue_drop_the_latest_typed_and_report_it() {
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     let fork = harness.controlling("w1:p2");
     begin_letter(&harness, "w1:p2");
     harness.key("w1:p2", b"x");
@@ -1238,25 +1187,6 @@ fn keys_a_letter_held_ahead_of_a_full_fork_queue_drop_the_latest_typed_and_repor
     });
     assert_eq!(input_bytes(&fork, 1), b"x");
     fork.assert_no_input();
-}
-
-#[test]
-fn a_herdr_session_takes_a_forks_released_keys_as_typed() {
-    let harness = harness(RetryPolicy::Automatic);
-    let fork = harness.controlling("w1:p2");
-    fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
-    harness.service.control(TerminalControl::RequestResolve {
-        request: "fork-1".into(),
-        pane: "w1:p2".into(),
-    });
-    let writes = written(&fork, b"hello\r");
-    assert_eq!(
-        writes
-            .into_iter()
-            .map(|(_, bytes)| bytes)
-            .collect::<Vec<_>>(),
-        [b"hello".to_vec(), b"\r".to_vec()]
-    );
 }
 
 #[test]
@@ -1283,7 +1213,7 @@ fn a_holder_built_before_submissions_drops_a_forks_released_keys_and_reports_the
 fn released_keys_whose_submission_would_outlast_the_holds_age_are_dropped_and_reported() {
     // Herdr's Windows submission: one that cannot finish its gap before its
     // deadline is not started, so no text is left without its submit.
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
     harness.service.control(TerminalControl::RequestResolve {
         request: "fork-1".into(),
@@ -2023,11 +1953,11 @@ fn a_close_that_runs_before_a_spawn_s_worker_waits_and_nothing_opens_after_it() 
         late: Mutex<Sender<()>>,
     }
     impl Attacher for Late {
-        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
+        fn open_transport(&self, _: &str, _: Option<GridSize>) -> Result<Transport, OpenFailure> {
             if self.returned.load(std::sync::atomic::Ordering::SeqCst) {
                 let _ = self.late.lock().unwrap().send(());
             }
-            Err("refused".into())
+            Err(OpenFailure::retried("refused".into()))
         }
     }
     let (late_tx, late) = channel();
@@ -2286,7 +2216,7 @@ fn input_bytes(opened: &Opened, count: usize) -> Vec<u8> {
 /// over, then follow it in the order typed; none lands inside the letter.
 #[test]
 fn keys_typed_during_a_letter_follow_its_submit_in_order() {
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     let opened = harness.controlling("w1:p1");
     thread::scope(|scope| {
         let letter = scope.spawn(|| {
@@ -2316,7 +2246,7 @@ fn keys_typed_during_a_letter_follow_its_submit_in_order() {
 /// letter has been submitted.
 #[test]
 fn keys_held_for_a_letter_are_kept_when_another_letter_begins_and_follow_the_last_submit() {
-    let harness = submitting_harness();
+    let harness = harness(RetryPolicy::Automatic);
     let opened = harness.controlling("w1:p1");
     let letter = |body: &'static [u8], gap: u64| {
         harness
@@ -2498,16 +2428,7 @@ impl HolderPanes {
 }
 
 impl Attacher for HolderPanes {
-    fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-        Err("This daemon runs without a Herdr server".into())
-    }
-
-    fn open_transport(
-        &self,
-        pane: &str,
-        mode: Mode,
-        size: Option<GridSize>,
-    ) -> Result<Transport, OpenFailure> {
+    fn open_transport(&self, pane: &str, size: Option<GridSize>) -> Result<Transport, OpenFailure> {
         // Whether the holder was started when the attempt began.
         let held = self.keeps_own_size(pane);
         let gate = self.gate.lock().unwrap().take();
@@ -2518,16 +2439,12 @@ impl Attacher for HolderPanes {
                 .expect("the test let the attempt answer");
         }
         if !held {
-            return Err(OpenFailure::retried(
-                "This daemon runs without a Herdr server".into(),
-            ));
+            return Err(OpenFailure::retried(format!(
+                "Pane {pane} has no holder on this node"
+            )));
         }
         let size = size.unwrap_or(HOLDER_SIZE);
-        let parts = self
-            .fake
-            .open(pane, mode, size.rows, size.cols)
-            .map_err(OpenFailure::retried)?;
-        let mut transport = holder_like(Transport::lines(parts, mode));
+        let mut transport = holder_like(self.fake.open_transport(pane, Some(size))?);
         transport.size = Some(size);
         Ok(transport)
     }
@@ -2553,22 +2470,12 @@ fn holder_harness() -> (Harness, Arc<HolderPanes>) {
     });
     struct Shared(Arc<HolderPanes>);
     impl Attacher for Shared {
-        fn open(
-            &self,
-            pane: &str,
-            mode: Mode,
-            rows: u16,
-            cols: u16,
-        ) -> Result<SessionParts, String> {
-            self.0.open(pane, mode, rows, cols)
-        }
         fn open_transport(
             &self,
             pane: &str,
-            mode: Mode,
             size: Option<GridSize>,
         ) -> Result<Transport, OpenFailure> {
-            self.0.open_transport(pane, mode, size)
+            self.0.open_transport(pane, size)
         }
         fn keeps_own_size(&self, pane: &str) -> bool {
             self.0.keeps_own_size(pane)

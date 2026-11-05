@@ -1,142 +1,80 @@
-//! Herdr's own integration for an agent, installed and removed through the
-//! machine's Herdr CLI (PRD settings-cleanup D-13).
+//! Retires Herdr's own integration for an agent where Hide installed it
+//! (PRD settings-cleanup D-13, engine-bundle-4-herdr-removal D-12).
 //!
-//! Herdr learns an agent's session id, and for some agents its lifecycle,
-//! from a hook script or plugin that `herdr integration install <agent>`
-//! puts in the agent's configuration. Lineage, the mailbox identity, labels
-//! and sleep all need that session id, so the kit installs it when the
-//! operator switches the agent on, on this Mac with the bundled Herdr and on a
-//! device with its own.
-//!
-//! Hide only ever takes out what it put there: the kit's record names the
-//! integrations it installed (`herdr:<agent>`), and an integration that was
-//! already in place when Hide first looked is the operator's and stays, on and
-//! off. Every call is one owned child with a deadline and only the
-//! account's login variables and `HOME` (`crate::process::run`), so a daemon
-//! started from a Herdr pane never aims it at that pane's server. Only the
-//! kit pass calls it, never anything holding the runtime lock.
-//!
-//! The CLI reports every target in one `status` listing, one
-//! `<target>: <state> ... (<path>)` line each, with the state `not installed`,
-//! `current (vN)` or `outdated (vA < vB)`.
+//! Earlier builds ran `herdr integration install <agent>` so Herdr learned
+//! an agent's session; Hide runs no Herdr now, so the kit installs nothing of
+//! Herdr's and takes out only what the record says Hide put there, without
+//! a Herdr binary: the record's `herdr:<agent>` piece and the hook entries
+//! it recorded Herdr writing (`Record::herdr_hook_entries`, Codex's). An
+//! entry is taken out only when it is still byte for byte what was recorded;
+//! one the operator edited stays and is logged. An integration the operator
+//! installed first has no piece and stays. A write that fails keeps the
+//! piece, so the next pass tries again. This retirement stays for operators
+//! who skip the releases that ran Herdr.
 
-use std::collections::BTreeMap;
-use std::path::Path;
-use std::time::Duration;
+use crate::record::Record;
+use crate::{KitTarget, RemoveOutcome};
 
-use crate::KitTarget;
-
-/// How long one Herdr call may take; each answers in well under a second.
-const DEADLINE: Duration = Duration::from_secs(15);
-
-/// What Herdr reports of one integration.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Integration {
-    Current,
-    /// An older version of Herdr's script or plugin is there.
-    Outdated,
-    Missing,
+/// The record's piece for `agent`'s Herdr integration.
+pub(crate) fn code(agent: &str) -> String {
+    format!("herdr:{agent}")
 }
 
-/// The integrations of one machine, read with one `herdr integration status`.
-pub(crate) struct Statuses(BTreeMap<String, Integration>);
-
-impl Statuses {
-    /// Reads the machine's integrations; the error is the reason the row
-    /// shows, or `None` for a machine with no Herdr CLI Hide can find.
-    pub(crate) fn probe(target: &KitTarget) -> Option<Result<Self, String>> {
-        let herdr = target.herdr_bin.as_deref()?;
-        Some(
-            run(herdr, target, &["integration", "status"])
-                .and_then(|stdout| parse(&stdout))
-                .map(Self),
-        )
+/// Takes `agent`'s Herdr integration out when the record holds its piece;
+/// `None` when it holds none, so there is nothing of Hide's to retire.
+pub(crate) fn retire(
+    target: &KitTarget,
+    record: &mut Record,
+    agent: &str,
+) -> Option<RemoveOutcome> {
+    let piece = code(agent);
+    if !record.contains_piece(&piece) {
+        return None;
     }
-
-    /// `None` for a target this Herdr does not list.
-    pub(crate) fn of(&self, name: &str) -> Option<Integration> {
-        self.0.get(name).copied()
-    }
-}
-
-fn parse(stdout: &str) -> Result<BTreeMap<String, Integration>, String> {
-    let mut found = BTreeMap::new();
-    for line in stdout.lines() {
-        // `letta (experimental): not installed (...)`: the name is the first
-        // word, the state follows the colon.
-        let Some((name, state)) = line.split_once(':') else {
-            continue;
-        };
-        let Some(name) = name.split_whitespace().next() else {
-            continue;
-        };
-        let state = state.trim_start();
-        let integration = if state.starts_with("not installed") {
-            Integration::Missing
-        } else if state.starts_with("current") {
-            Integration::Current
-        } else if state.starts_with("outdated") {
-            Integration::Outdated
-        } else {
-            continue;
-        };
-        found.insert(name.to_owned(), integration);
-    }
-    if found.is_empty() {
-        return Err("`herdr integration status` listed no integration Hide can read".to_owned());
-    }
-    Ok(found)
-}
-
-pub(crate) fn install(target: &KitTarget, name: &str) -> Result<(), String> {
-    change(target, "install", name)
-}
-
-pub(crate) fn uninstall(target: &KitTarget, name: &str) -> Result<(), String> {
-    change(target, "uninstall", name)
-}
-
-fn change(target: &KitTarget, verb: &str, name: &str) -> Result<(), String> {
-    let herdr = target
-        .herdr_bin
-        .as_deref()
-        .ok_or_else(|| "Herdr is not found on this machine".to_owned())?;
-    run(herdr, target, &["integration", verb, name]).map(drop)
-}
-
-/// Runs the Herdr CLI and answers its stdout, or why it failed in a
-/// sentence: its own last line of error when it printed one.
-fn run(herdr: &Path, target: &KitTarget, args: &[&str]) -> Result<String, String> {
-    let finished = crate::process::run(herdr, args, &[], &target.home, DEADLINE, &target.stop)?;
-    if finished.succeeded() {
-        return Ok(finished.stdout);
-    }
-    let line = finished.last_error_line();
-    let what = args.join(" ");
-    Err(if line.is_empty() {
-        format!("`herdr {what}` failed")
+    let recorded = record.herdr_hook_entries(agent).to_vec();
+    let outcome = if recorded.is_empty() {
+        // Herdr's integration for this agent was never recorded entry by
+        // entry, so nothing of it can be told from the operator's; the
+        // piece goes and the files stay.
+        log(agent, "herdr_integration.unrecorded_left", 0, 0);
+        RemoveOutcome::Absent
     } else {
-        format!("`herdr {what}` failed: {line}")
-    })
+        match hide_agent_hooks::codex_trust::remove_herdr_entries(&target.home, &recorded) {
+            Ok(done) => {
+                if done.kept_or_gone > 0 {
+                    log(
+                        agent,
+                        "herdr_integration.entries_kept",
+                        done.removed,
+                        done.kept_or_gone,
+                    );
+                }
+                if done.removed > 0 {
+                    RemoveOutcome::Removed
+                } else {
+                    RemoveOutcome::Absent
+                }
+            }
+            Err(failure) => {
+                return Some(RemoveOutcome::Failed {
+                    reason: failure.message(),
+                });
+            }
+        }
+    };
+    record.forget_piece(&piece);
+    Some(outcome)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_listing_is_read_by_target_name_and_state() {
-        let listing = "\
-pi: current (v9) (/h/.pi/agent/extensions/herdr-agent-state.ts)
-claude: outdated (v3 < v10) (/h/.claude/hooks/herdr-agent-state.sh)
-codex: not installed (/h/.codex/herdr-agent-state.sh)
-letta (experimental): not installed (/h/.letta/hooks/herdr-agent-session.sh)
-";
-        let found = parse(listing).unwrap();
-        assert_eq!(found["pi"], Integration::Current);
-        assert_eq!(found["claude"], Integration::Outdated);
-        assert_eq!(found["codex"], Integration::Missing);
-        assert_eq!(found["letta"], Integration::Missing);
-        assert!(parse("herdr 0.9.1\n").is_err());
-    }
+fn log(agent: &str, kind: &str, removed: usize, kept_or_gone: usize) {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "component": "kit",
+            "kind": kind,
+            "agent": agent,
+            "removed": removed,
+            "kept_or_gone": kept_or_gone,
+        })
+    );
 }

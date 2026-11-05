@@ -29,7 +29,7 @@ fn working(facts: &PaneFacts) -> bool {
 #[test]
 fn a_recovered_node_preserves_rules_until_an_explicit_decision_and_can_remove_them() {
     let folder = Folder::new();
-    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let node = Node::start(folder.home.path(), &folder.state);
     let told = Arc::new(Told::default());
     node.holders().watch_facts(told.sink());
     let script = Script::new(
@@ -55,7 +55,7 @@ fn a_recovered_node_preserves_rules_until_an_explicit_decision_and_can_remove_th
     }
     let before: Vec<_> = panes.iter().map(|(pane, _)| folder.record(pane)).collect();
     drop(node);
-    let next = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let next = Node::start(folder.home.path(), &folder.state);
     let told = Arc::new(Told::default());
     next.holders().watch_facts(told.sink());
     let recovered = next.holders().recover(next.owner(), &next.service);

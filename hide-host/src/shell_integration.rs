@@ -4,13 +4,11 @@
 //! `[Y/n]` update question), and Hide types an agent's command only then.
 //!
 //! It is VS Code's terminal shell integration: the pane runs the shell with
-//! Hide's arguments (Herdr's `layout.apply` takes a pane's command), and the
-//! shell reads the user's own files where and in the order it would have,
-//! then reports a Herdr pane token, `hide_prompt`, which is the mark Hide
-//! reads (Herdr does not parse OSC 133 prompt marks). Outside a Herdr pane,
-//! on the core's own engine, the shell instead writes the mark on its screen
-//! as OSC 133;A, which the pane's holder counts and the engine answers as
-//! that token; a builtin writes it, so no prompt starts a process.
+//! Hide's arguments, and the shell reads the user's own files where and in
+//! the order it would have, then writes the mark on its screen as OSC 133;A,
+//! which the pane's holder counts and the core's own engine answers as the
+//! pane's `hide_prompt` token; a builtin writes it, so no prompt starts a
+//! process.
 //!
 //! - zsh reads its startup files from `ZDOTDIR`, which names files here that
 //!   read the user's own with `ZDOTDIR` as the user has it and give it back,
@@ -48,9 +46,6 @@ use std::time::{Duration, SystemTime};
 
 pub use hide_node_link::protocol::{ShellLaunch, ShellReadiness};
 
-/// The token the first prompt reports on the pane, and the value it reports.
-pub const PROMPT_TOKEN: &str = "hide_prompt";
-
 #[cfg(unix)]
 const ZSH: [(&str, &str); 4] = [
     (".zshenv", include_str!("shell_integration/zshenv.zsh")),
@@ -67,10 +62,10 @@ const BASH: [(&str, &str); 2] = [
         include_str!("shell_integration/interactive.bash"),
     ),
 ];
-/// fish's `-C` command, run after its configuration: the first prompt's
-/// mark, and outside a Herdr pane the folder (OSC 7) now and at each change.
+/// fish's `-C` command, run after its configuration: the folder (OSC 7) now
+/// and at each change, and the first prompt's mark.
 #[cfg(unix)]
-const FISH_MARK: &str = "if set -q HERDR_BIN_PATH HERDR_PANE_ID; $HERDR_BIN_PATH pane report-metadata $HERDR_PANE_ID --source hide:shell --token hide_prompt=1 >/dev/null 2>&1; else; function __hide_cwd --on-variable PWD; string match -q -r '[[:cntrl:]]' -- $PWD; or printf '\\e]7;file://%s\\a' (string replace -a % %25 -- $PWD); end; __hide_cwd; printf '\\e]133;A\\a'; end";
+const FISH_MARK: &str = "function __hide_cwd --on-variable PWD; string match -q -r '[[:cntrl:]]' -- $PWD; or printf '\\e]7;file://%s\\a' (string replace -a % %25 -- $PWD); end; __hide_cwd; printf '\\e]133;A\\a'";
 /// Windows PowerShell's `-Command`, run after the user's profile: Herdr
 /// 0.9.3's own prompt wrapper for its PowerShell panes
 /// (`WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND` in its `src/pane.rs`),
@@ -80,7 +75,7 @@ const FISH_MARK: &str = "if set -q HERDR_BIN_PATH HERDR_PANE_ID; $HERDR_BIN_PATH
 #[cfg(windows)]
 const POWERSHELL_COMMAND: &str = concat!(
     r"if ($null -eq $global:__HerdrOriginalPrompt) { $global:__HerdrOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HerdrOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }",
-    r"; if ($env:HERDR_BIN_PATH -and $env:HERDR_PANE_ID) { & $env:HERDR_BIN_PATH pane report-metadata $env:HERDR_PANE_ID --source hide:shell --token hide_prompt=1 *> $null } else { [Console]::Write([string][char]27 + ']133;A' + [string][char]7) }"
+    r"; [Console]::Write([string][char]27 + ']133;A' + [string][char]7)"
 );
 /// How long another build's folder stays after a pane was last started
 /// with it. A shell reads its later startup files only once a question in

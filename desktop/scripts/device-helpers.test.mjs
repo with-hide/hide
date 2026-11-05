@@ -38,9 +38,8 @@ function artifacts() {
 describe("bundles one run made, as a package takes them", () => {
   function made() {
     const root = artifacts();
-    const herdr = Object.fromEntries(["linux-x86_64", "linux-aarch64"].map((p) => [p, path.join(root, p, "hided")]));
     const out = path.join(root, "bundles");
-    return { out, manifest: prepareDeviceBundles(root, identity, out, herdr) };
+    return { out, manifest: prepareDeviceBundles(root, identity, out) };
   }
 
   it("takes the manifest of bundles made for this source, version and order", () => {
@@ -67,14 +66,13 @@ describe("bundles one run made, as a package takes them", () => {
 });
 
 describe("Mac device helper inputs", () => {
-  it("publishes separate five-program archives and a small manifest of their final bytes", () => {
+  it("publishes separate four-program archives and a small manifest of their final bytes", () => {
     const root = artifacts();
-    const herdr = Object.fromEntries(["linux-x86_64", "linux-aarch64"].map((p) => [p, path.join(root, p, "hided")]));
     const out = path.join(root, "bundles");
-    const file = prepareDeviceBundles(root, identity, out, herdr);
+    const file = prepareDeviceBundles(root, identity, out);
     expect(fs.statSync(file).size).toBeLessThan(16 * 1024);
     const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-    expect(manifest).toMatchObject({ format: 2, ...identity });
+    expect(manifest).toMatchObject({ format: 3, ...identity });
     expect(Object.keys(manifest.platforms).sort()).toEqual(["linux-aarch64", "linux-x86_64"]);
     for (const [platform, bundle] of Object.entries(manifest.platforms)) {
       expect(bundle.asset).toBe(`hide-device-${platform}-1.2.3.tar.gz`);
@@ -82,7 +80,7 @@ describe("Mac device helper inputs", () => {
       expect(bundle.sha256).toBe(createHash("sha256").update(archive).digest("hex"));
       expect(bundle.size).toBe(archive.length);
       expect(execFileSync("tar", ["-tzf", bundle.asset], { cwd: out, encoding: "utf8" }).trim().split("\n").sort())
-        .toEqual(["hide", "hide-agent-hooks", "hide-holder", "hided", "herdr"].sort());
+        .toEqual(["hide", "hide-agent-hooks", "hide-holder", "hided"].sort());
       expect(Object.values(bundle.files).every((f) => f.size === 64 && /^[0-9a-f]{64}$/.test(f.sha256))).toBe(true);
     }
     expect(fs.readdirSync(out).sort()).toEqual(["device-bundles.json", ...Object.values(manifest.platforms).map((b) => b.asset)].sort());

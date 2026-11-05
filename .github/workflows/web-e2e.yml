@@ -1,15 +1,14 @@
 # The web end-to-end suite as one reusable lane, so the pull request's Linux
 # shards, its macOS and Windows `@platform` jobs and all three nightly OS lanes build, fetch and
 # run the suite the same way and differ only in what they are asked here: the
-# runner, which Herdr asset to run, how many shards deal the tests out, and
-# which tests (`grep`) to keep.
+# runner, how many shards deal the tests out, and which tests (`grep`) to keep.
 #
 # CI retries a failed test once (web/playwright.config.ts). A test that passes
 # the retry is flaky: the lane passes and `Report flaky and failed tests` files
 # it as an issue (scripts/ci-flaky-report.py); a test that fails twice fails
 # the lane, and the same step annotates it for the nightly report.
 #
-# Each spec starts its own Herdr, hided and Chromium, so one worker per runner
+# Each spec starts its own hided, pane holders and Chromium, so one worker per runner
 # keeps timing assertions honest; the shards are the parallelism. A shard runs
 # the tests `scripts/e2e-shard.py` deals it from the durations in
 # web/e2e/shard-durations.json, so the shards take about the same time.
@@ -32,23 +31,10 @@ on:
         description: The GitHub-hosted runner label.
         type: string
         required: true
-      herdr-platform:
-        description: The pinned Herdr asset to run, as `fetch-herdr-runtime.sh --platform` names it.
-        type: string
-        required: true
       shards:
         description: How many shards deal the tests out.
         type: number
         required: true
-      own-engine:
-        description: >-
-          Also runs every test not tagged `@herdr` on the core's own engine
-          (HIDE_E2E_ENGINE=own, PRD engine-bundle-3-core-owns D-14, D-24): the
-          same number of shards again, each a daemon with HIDE_DEV_PANE_HOLDER
-          on over the built `hide-holder` and no Herdr fetched at all.
-        type: boolean
-        required: false
-        default: false
       grep:
         description: Playwright `--grep` filter; empty runs every test.
         type: string
@@ -129,8 +115,8 @@ jobs:
         timeout-minutes: 20
         # The first-run choice spec runs the kit from a copy laid out as an installed app,
         # which needs the agent hooks beside `hided`.
-        # The own engine's daemon starts each pane's holder from the `hide-holder` beside it.
-        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks${{ inputs.own-engine && ' -p hide-holder' || '' }}
+        # The daemon starts each pane's holder from the `hide-holder` beside it.
+        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks -p hide-holder
       - name: Keep the binaries for the shards
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
@@ -140,7 +126,7 @@ jobs:
             target/debug/hided${{ runner.os == 'Windows' && '.exe' || '' }}
             target/debug/hide${{ runner.os == 'Windows' && '.exe' || '' }}
             target/debug/hide-agent-hooks${{ runner.os == 'Windows' && '.exe' || '' }}
-            ${{ inputs.own-engine && format('target/debug/hide-holder{0}', runner.os == 'Windows' && '.exe' || '') || '' }}
+            target/debug/hide-holder${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 1
 
@@ -189,7 +175,7 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}
+    name: web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
     needs: [build, build-web]
     # Both builds are skipped for a single shard; a failure or cancellation
     # in either still stops the shards, and the lane reports the failure.
@@ -206,9 +192,6 @@ jobs:
         # shard count outside 1 to 8 has an entry, and a matrix without values
         # fails the lane.
         shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4], [1,2,3,4,5], [1,2,3,4,5,6], [1,2,3,4,5,6,7], [1,2,3,4,5,6,7,8]]')[inputs.shards] }}
-        # The own engine deals the same tests out over as many shards again,
-        # so the lane's wall-clock time stays the Herdr shards'.
-        engine: ${{ fromJSON(inputs.own-engine && '["herdr","own"]' || '["herdr"]') }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -233,7 +216,7 @@ jobs:
       - name: Build hided for Playwright
         if: ${{ inputs.shards == 1 }}
         timeout-minutes: 20
-        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks${{ inputs.own-engine && ' -p hide-holder' || '' }}
+        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks -p hide-holder
       - name: Fetch hided from the build job
         if: ${{ inputs.shards > 1 }}
         uses: actions/download-artifact@v8
@@ -244,7 +227,7 @@ jobs:
       - name: Mark the binaries executable
         if: ${{ inputs.shards > 1 && runner.os != 'Windows' }}
         # An artifact does not keep the executable bit.
-        run: chmod +x target/debug/hided target/debug/hide target/debug/hide-agent-hooks${{ inputs.own-engine && ' target/debug/hide-holder' || '' }}
+        run: chmod +x target/debug/hided target/debug/hide target/debug/hide-agent-hooks target/debug/hide-holder
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -274,7 +257,7 @@ jobs:
       - name: Install zsh
         if: runner.os == 'Linux'
         timeout-minutes: 3
-        # Herdr starts each pane's shell from SHELL, and the fixture names zsh
+        # A pane's shell starts from SHELL, and the fixture names zsh
         # so its private .zshrc sets the prompt the tests wait for. macOS has it.
         # With shards the packages come from the `build` job, so no shard asks
         # the mirror; a single shard is the only one to ask, with the build
@@ -301,44 +284,23 @@ jobs:
         # On Windows a node loads the holder's ConPTY from `holder-conpty`
         # beside its own program (`hide_kit::holders::CONPTY_SOURCE`), where
         # the app package puts it; the debug daemon runs from target/debug.
-        if: matrix.engine == 'own' && runner.os == 'Windows'
+        if: runner.os == 'Windows'
         timeout-minutes: 5
         run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        # The own engine's job runs with no Herdr on the runner.
-        if: matrix.engine == 'herdr'
-        timeout-minutes: 5
-        # The click-flow e2e attaches hided to an isolated real Herdr; the
-        # fixture refuses any binary whose version is not the pin.
-        env:
-          HERDR_PLATFORM: ${{ inputs.herdr-platform }}
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          else
-            bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
-          fi
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Put the isolated fixture programs on the Windows pane PATH
         if: runner.os == 'Windows'
         uses: ./.github/actions/windows-fixture-path
       - name: End-to-end
         timeout-minutes: 20
         env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-          HIDE_E2E_ENGINE: ${{ matrix.engine }}
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           HIDE_E2E_TRACE: "1"
           GREP: ${{ inputs.grep }}
-          # A test that looks at Herdr itself is tagged `@herdr` and runs on Herdr alone (docs/TESTING.md).
-          GREP_INVERT: ${{ matrix.engine == 'own' && '@herdr' || '' }}
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
-          if [ -n "$GREP_INVERT" ]; then args+=(--grep-invert "$GREP_INVERT"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
             # The shard's tests are dealt by their recorded durations, not by
             # Playwright's equal counts. Playwright counts a `--test-list` that
@@ -389,19 +351,19 @@ jobs:
         run: |
           python3 scripts/ci-flaky-report.py --suite web --playwright web/e2e-report.json \
             --history-record agents/runs/ci-test-history \
-            --job-name "web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}"
+            --job-name "web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}"
       - name: Keep this job attempt's test report
         continue-on-error: true
         timeout-minutes: 2
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: agents/runs/ci-test-history/
           if-no-files-found: error
           retention-days: 7
       - name: Keep the e2e run's logs
-        # The daemon, Herdr server and PTY input logs behind a failed flow
+        # The daemon and PTY input logs behind a failed flow
         # (with the screenshots the specs take, under the same directory),
         # and Playwright's own test-results: with no screenshot or trace
         # option set that is the error-context page snapshot. The wire trace
@@ -411,7 +373,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hide-e2e
             web/test-results

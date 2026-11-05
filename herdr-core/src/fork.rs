@@ -499,7 +499,7 @@ mod tests {
         ] {
             let name = fork_name(pane_id, nonce);
             assert_eq!(name, expected);
-            assert!(herdr_accepts(&name), "Herdr would refuse {name:?}");
+            assert!(herdr_accepts(&name), "The engine would refuse {name:?}");
         }
     }
 
@@ -517,7 +517,7 @@ mod tests {
         );
 
         for name in [&first, &second, &other_pane] {
-            assert!(herdr_accepts(name), "Herdr would refuse {name:?}");
+            assert!(herdr_accepts(name), "The engine would refuse {name:?}");
         }
         assert_ne!(first, second, "two forks of one parent share a name");
         assert_ne!(first, other_pane, "forks of two parents share a name");

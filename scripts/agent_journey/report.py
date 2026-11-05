@@ -20,9 +20,9 @@ def table_lines(report):
 
 def markdown(report):
     lines = ["# Agent journey", "",
-             f"Mode: {report['mode']}. Engine: {text(report.get('engine', 'herdr'))}. "
-             f"Runtime: {text(report['herdr'].get('version', report['herdr'].get('engine', 'not started')))}. "
-             f"Candidate hided sha256: {text(report['herdr'].get('hided_sha256', 'not started'))}.", "",
+             f"Mode: {report['mode']}. "
+             f"Holder sha256: {text(report['holders'].get('holder_sha256', 'not started'))}. "
+             f"Candidate hided sha256: {text(report['holders'].get('hided_sha256', 'not started'))}.", "",
              *(["**Fixture run**: the compiled stand-ins of web/e2e/shims answered in place of the CLIs and no model "
                 "read a prompt; this report is never a release's agent evidence.", ""] if report.get("fixture") else []),
              *(["**Fake model run**: the real CLIs with Hide's real kit, answered by the journey's fake model instead "

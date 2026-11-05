@@ -12,7 +12,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { connectControl } from "./hided-control.mjs";
 import { closePane, focusTab, openProject, openWorktree, showTabOf, tabOfPane, viewPane, withControl } from "./daemon-actions";
 import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject, takeOverSession } from "./fixture-agents";
-import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";

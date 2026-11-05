@@ -1,8 +1,6 @@
 //! The operator's agent definition files as the core last read them (PRD
-//! engine-bundle-3-core-owns D-17, B21, B24), with the development switch
-//! `HIDE_DEV_PANE_HOLDER` on only: the daemon hands the first read in and
-//! the state exists from then; with the switch off it never does, and the
-//! core reads no file, lists no definition and draws nothing (B1).
+//! engine-bundle-3-core-owns D-17, B21, B24): the daemon hands the first
+//! read in and the state exists from then.
 //!
 //! A read happens off the lock, on the caller's thread (`hided`'s start and
 //! `hide agent catalog`) or on a worker when Settings › Agents opens

@@ -61,7 +61,7 @@ const ZOOMED_TAB: &str = "zoomed_tab";
 #[derive(Default)]
 pub(super) struct Topology {
     workspaces: Vec<Workspace>,
-    focused_workspace: Option<String>,
+    pub(super) focused_workspace: Option<String>,
     /// The last workspace number given.
     workspace_numbers: usize,
     /// The tab the keyboard's workspace shows, each time it changed, in the
@@ -530,6 +530,14 @@ impl Topology {
             .collect())
     }
 
+    /// The next moment a pending agent start can end with nothing else
+    /// changing ([`agents::PaneAgent::start_changes_at`]), over every pane.
+    pub(super) fn next_start_change(&self, now: Instant) -> Option<Instant> {
+        self.panes()
+            .filter_map(|(_, pane)| pane.agent.as_ref()?.start_changes_at(now))
+            .min()
+    }
+
     /// Every pane, by id.
     pub(super) fn panes(&self) -> impl Iterator<Item = (&str, &Pane)> {
         self.workspaces.iter().flat_map(|workspace| {
@@ -574,10 +582,6 @@ impl Topology {
 
     pub(super) fn active_tab(&self, workspace: &str) -> Result<String, EngineError> {
         Ok(self.workspace(workspace)?.active_tab.clone())
-    }
-
-    pub(super) fn focused_workspace(&self) -> Option<String> {
-        self.focused_workspace.clone()
     }
 
     pub(super) fn workspace_tokens(&self, token: &str) -> Vec<(String, Option<String>)> {
@@ -1062,10 +1066,15 @@ impl Topology {
         workspace.tabs[tab].layout(&workspace.id)
     }
 
-    /// The whole session, as a snapshot of Herdr's would project it, its
-    /// agents named by `catalog`'s definitions.
-    pub(super) fn state(&self, catalog: &Catalog) -> Result<ProjectionState, EngineError> {
-        let now = Instant::now();
+    /// The whole session as of `now`, as a snapshot of Herdr's would
+    /// project it, its agents named by `catalog`'s definitions. `now` decides
+    /// each start's `launch_pending` and, from the same `now`, when the first
+    /// of those can change (`settles_at`, [`Self::next_start_change`]).
+    pub(super) fn state_at(
+        &self,
+        catalog: &Catalog,
+        now: Instant,
+    ) -> Result<ProjectionState, EngineError> {
         let mut state = ProjectionState {
             tab_focus: self.shown.last.clone(),
             tab_moves: Some(self.shown.moves.clone()),
@@ -1076,7 +1085,7 @@ impl Topology {
             panes: Vec::new(),
             layouts: Vec::new(),
             agents: Vec::new(),
-            herdr_version: None,
+            settles_at: self.next_start_change(now),
         };
         for workspace in &self.workspaces {
             state.workspaces.push(ProjectedWorkspace {
@@ -1646,17 +1655,7 @@ fn projected_agent(
     catalog: &Catalog,
     now: Instant,
 ) -> ProjectedAgent {
-    use crate::engine::tokens::{
-        CHILD_SESSION_TOKEN, PARENT_MACHINE_TOKEN, PARENT_PANE_TOKEN, PARENT_SESSION_TOKEN,
-        lineage_parent, session_digest, session_holds,
-    };
-    let token = |name: &str| pane.tokens.get(name).and_then(Value::as_str);
-    let own_session = agent.session.as_deref().and_then(session_digest);
-    let child_holds = session_holds(
-        lineage_parent(token(CHILD_SESSION_TOKEN)).as_deref(),
-        own_session.as_deref(),
-    );
-    let declared = |name: &str| child_holds.then(|| lineage_parent(token(name))).flatten();
+    let lineage = crate::engine::tokens::lineage(&pane.tokens, agent.session.as_deref());
     ProjectedAgent {
         pane_id: pane_id.to_owned(),
         terminal_id: pane_id.to_owned(),
@@ -1680,10 +1679,10 @@ fn projected_agent(
                 .to_owned(),
                 value: session.clone(),
             }),
-        spawned_from_pane_id: declared(PARENT_PANE_TOKEN),
-        spawned_from_machine_id: declared(PARENT_MACHINE_TOKEN),
-        declared_parent_session: declared(PARENT_SESSION_TOKEN),
-        lineage_session: own_session,
+        spawned_from_pane_id: lineage.spawned_from_pane_id,
+        spawned_from_machine_id: lineage.spawned_from_machine_id,
+        declared_parent_session: lineage.declared_parent_session,
+        lineage_session: lineage.own_session,
         state_change_seq: agent.live.seq,
         completion_seq: agent.live.completion,
         launch_pending: agent.launch_pending(now),
@@ -1912,7 +1911,7 @@ mod tests {
 
     fn pane_ids(topology: &Topology) -> Vec<String> {
         topology
-            .state(&Catalog::read(Vec::new()))
+            .state_at(&Catalog::read(Vec::new()), Instant::now())
             .unwrap()
             .panes
             .into_iter()
@@ -2006,12 +2005,12 @@ mod tests {
         );
         assert!(
             topology
-                .state(&Catalog::read(Vec::new()))
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
                 .unwrap()
                 .workspaces
                 .is_empty()
         );
-        assert_eq!(topology.focused_workspace(), None);
+        assert_eq!(topology.focused_workspace, None);
     }
 
     #[test]
@@ -2032,7 +2031,7 @@ mod tests {
         assert_eq!(pane_ids(&topology), [first.pane.clone(), beside.clone()]);
         assert_eq!(
             topology
-                .state(&Catalog::read(Vec::new()))
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
                 .unwrap()
                 .focused_pane_id
                 .as_deref(),
@@ -2042,7 +2041,7 @@ mod tests {
         assert_eq!(topology.remove_pane(&beside).unwrap(), Closed::default());
         assert_eq!(
             topology
-                .state(&Catalog::read(Vec::new()))
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
                 .unwrap()
                 .focused_pane_id
                 .as_deref(),
@@ -2270,8 +2269,11 @@ mod tests {
         let saved = serde_json::to_string(&topology.to_saved()).unwrap();
         let mut read = Topology::from_saved(serde_json::from_str(&saved).unwrap()).unwrap();
         assert_eq!(
-            read.state(&Catalog::read(Vec::new())).unwrap(),
-            topology.state(&Catalog::read(Vec::new())).unwrap()
+            read.state_at(&Catalog::read(Vec::new()), Instant::now())
+                .unwrap(),
+            topology
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
+                .unwrap()
         );
         assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "h1:p4");
         assert_eq!(read.reserve_workspace().workspace, "h2");

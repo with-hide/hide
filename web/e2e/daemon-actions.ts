@@ -12,7 +12,7 @@ import { expect } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
 import type { Daemon } from "./hided-fixture";
-import { paneProgramLine, type PaneShell } from "./herdr-fixture";
+import { paneProgramLine, type PaneShell } from "./pane-fixture";
 
 type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; first: LayoutNode; second: LayoutNode };
 type PaneLayout = { tab_id: string; focused_pane_id: string | null; zoomed: boolean; root: LayoutNode };
@@ -143,6 +143,17 @@ export type AgentRow = {
 export function agentIn(rest: Rest, pane: string): AgentRow | undefined {
   const agents = ((rest.navigator as { agents?: AgentRow[] } | undefined)?.agents ?? []);
   return agents.find((row) => row.pane_id === pane && row.agent_kind);
+}
+
+/**
+ * The agent row for `pane` once its start has settled. The engine keeps a
+ * start pending, and its row reads Starting, until the agent's screen rests
+ * past the start's settle (3 s); a row changes its line and its height when it
+ * settles, so a helper that starts an agent hands it on only through this.
+ */
+export function startedAgentIn(rest: Rest, pane: string): AgentRow | undefined {
+  const row = agentIn(rest, pane);
+  return row && row.status_code !== "starting" ? row : undefined;
 }
 
 /** A project the daemon opened: its checkout, the checkout's first tab and that tab's shell. */

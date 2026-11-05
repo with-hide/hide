@@ -1443,8 +1443,8 @@ mod tests {
     /// A reply meant for the agent must never reach the shell under it. The
     /// refusal is the core's gate at the write, not the phone's list, which
     /// is a moment behind: every projection here still says the agent is
-    /// awake. This Mac has no Herdr socket here, so an input that gets as far
-    /// as writing answers `unavailable`; `asleep` is the refusal before that.
+    /// awake. The engine here holds no pane, so an input that gets as far as
+    /// writing answers `gone`; `asleep` is the refusal before that.
     #[tokio::test]
     async fn input_to_a_pane_whose_agent_is_ending_asleep_or_waking_is_refused_at_the_write() {
         let directory = tempfile::tempdir().unwrap();
@@ -1460,7 +1460,7 @@ mod tests {
             &listed_awake,
         )
         .await;
-        assert_eq!(reason(&answer), Some("unavailable"));
+        assert_eq!(reason(&answer), Some("gone"));
 
         // Its pane closes (the end begins) after the phone listed it awake.
         gate.close("w1:p1");
@@ -1486,7 +1486,7 @@ mod tests {
             &listed_awake,
         )
         .await;
-        assert_eq!(reason(&answer), Some("unavailable"));
+        assert_eq!(reason(&answer), Some("gone"));
     }
 
     /// A reply that landed before the agent slept is answered from its claim

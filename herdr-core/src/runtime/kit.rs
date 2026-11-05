@@ -80,8 +80,6 @@ pub(crate) struct DeviceKitCall {
     pub(crate) work: DeviceKitWork,
     pub(crate) channel: Arc<dyn NodeLink>,
     pub(crate) cli_dir: String,
-    pub(crate) herdr_socket: Option<String>,
-    pub(crate) preserve_herdr_server: bool,
     pub(crate) retirement_projects: Vec<String>,
     /// The run of the shared-server turn-off this call carries, if any.
     pub(crate) daemon_off_run: Option<u64>,
@@ -358,11 +356,6 @@ impl Runtime {
                     agent.hook.as_ref(),
                     known.map(|row| row.hook.as_ref()),
                 ),
-                (
-                    "herdr",
-                    agent.herdr.as_ref(),
-                    known.map(|row| row.herdr.as_ref()),
-                ),
             ];
             for (name, piece, known) in pieces {
                 let Some(piece) = piece else {
@@ -394,19 +387,6 @@ impl Runtime {
     /// lands while an install is queued for that machine keeps it busy.
     pub(crate) fn ingest_kit_report(&mut self, device_id: &str, report: &KitReport) -> bool {
         self.diagnose_unknown_kit_agents(device_id, report);
-        // The retired labels plugin is no part the operator acts on; what was
-        // taken out, and what stayed for the next pass, goes to the log
-        // (PRD labels-in-hided D-12, design principle 13).
-        let retirement = &report.labels_retirement;
-        if !retirement.is_empty() {
-            crate::diagnostic!(serde_json::json!({
-                "component": "labels",
-                "kind": if retirement.failures.is_empty() { "plugin.retired" } else { "plugin.retire_incomplete" },
-                "device_id": device_id,
-                "removed": retirement.removed,
-                "failures": retirement.failures,
-            }));
-        }
         // What an older layout left (the standalone hcoord plugin, folders
         // `~/.hide` replaced) is no part either (PRD hide-home-layout D-13).
         let legacy = &report.legacy_retirement;
@@ -420,14 +400,6 @@ impl Runtime {
             }));
         }
         let mut snapshot = KitSnapshot::from_report(report);
-        // A status read has no server update outcome. Keep the actionable
-        // failure until a later install confirms what happened to Herdr.
-        if report.herdr.is_none() {
-            snapshot.herdr_start_failed = self
-                .kit_states
-                .get(device_id)
-                .is_some_and(|state| state.herdr_start_failed);
-        }
         self.diagnose_kit_reasons(device_id, report);
         self.install_updated_agents(device_id, &snapshot);
         snapshot.busy = self.kit_install_queued(device_id);
@@ -452,9 +424,6 @@ impl Runtime {
             }));
         }
         let mut changed = self.decide_agent_onboarding(device_id, report, refusal_new);
-        if let Some(update) = &report.herdr {
-            changed |= self.ingest_device_herdr_update(device_id, update);
-        }
         // A daemon answer the kit could not read reads as no answer; the log
         // keeps it when it appears or changes, not on every read (B13).
         let unreadable_before = self
@@ -833,23 +802,9 @@ impl Runtime {
             self.set_error("kit.unavailable", cause.as_str(), false);
             return true;
         }
-        // A failed bootstrap may have no pane or terminal services. Retry
-        // the complete connection, including upload, services and routes.
-        if state.herdr_start_failed
-            && device_id != self.node.as_str()
-            && self
-                .link_origin(device_id)
-                .is_some_and(crate::model::LinkOrigin::core_redials)
-        {
-            if self.device_host_connecting(device_id) {
-                return false;
-            }
-            self.close_device_host(device_id, "retrying Herdr bootstrap");
-            return self.retry_device_host_now(device_id, super::hosts::HostAttempt::Background);
-        }
-        // A refused pass (or this node's start failure) needs another
-        // automatic pass even when each individual kit part is installed.
-        if state.refused.is_some() || state.herdr_start_failed {
+        // A refused pass needs another automatic pass even when each
+        // individual kit part is installed.
+        if state.refused.is_some() {
             if !state.busy
                 && self
                     .link_origin(device_id)
@@ -1197,8 +1152,6 @@ impl Runtime {
                     .as_ref()
                     .and_then(|consent| consent.cli_dir.clone())
                     .unwrap_or_else(|| self.host_cli_dir.clone()),
-                herdr_socket: self.device_kit_socket(registration),
-                preserve_herdr_server: registration.herdr_session.is_some(),
                 retirement_projects: Vec::new(),
                 daemon_off_run: None,
                 connect_attempt: None,
@@ -1254,7 +1207,6 @@ impl Runtime {
         };
         // A node that dials in has no consent, so it links `hide` where a
         // device would by default, in its own home.
-        let herdr_socket = self.device_kit_socket(&registration);
         let cli_dir = registration
             .host_consent
             .and_then(|consent| consent.cli_dir)
@@ -1273,25 +1225,9 @@ impl Runtime {
             work: DeviceKitWork::Job(job),
             channel,
             cli_dir,
-            herdr_socket,
-            preserve_herdr_server: registration.herdr_session.is_some(),
             retirement_projects: self.retirement_projects(device_id),
             daemon_off_run,
         })
-    }
-
-    fn device_kit_socket(&self, registration: &crate::model::DeviceRegistration) -> Option<String> {
-        if registration.herdr_session.is_some() {
-            self.remote_connections
-                .get(&registration.id)
-                .and_then(|connection| connection.transport.device().cached_herdr_socket())
-        } else {
-            registration.herdr_socket_path.clone().or_else(|| {
-                self.remote_connections
-                    .get(&registration.id)
-                    .and_then(|connection| connection.transport.device().cached_herdr_socket())
-            })
-        }
     }
 
     /// Stores what a device's kit call answered. A call that failed keeps
@@ -1579,48 +1515,6 @@ impl Runtime {
     /// A machine's kit as its row shows it. A device the helper may not be
     /// installed on, or whose platform this build does not carry, installs
     /// nothing and says why (B17, B21); otherwise its last report stands.
-    /// What a device's node did about its Herdr server after a kit pass:
-    /// one log record for every outcome (PRD device-herdr-update B12), and
-    /// the device row's line while the server stays older than the pin (B8).
-    /// An outcome that could not tell the server's Herdr keeps the last
-    /// known one.
-    fn ingest_device_herdr_update(
-        &mut self,
-        device_id: &str,
-        update: &hide_kit::device_herdr::HerdrUpdate,
-    ) -> bool {
-        use hide_kit::device_herdr::HerdrUpdate;
-        crate::diagnostic!(update.record(device_id));
-        let behind = match update {
-            HerdrUpdate::Failed { .. } => return false,
-            HerdrUpdate::Behind {
-                server_version,
-                version,
-                cause,
-                ..
-            } => Some(crate::model::HerdrBehindSnapshot {
-                server_version: server_version.clone(),
-                version: version.clone(),
-                cause: *cause,
-            }),
-            HerdrUpdate::NoServer { .. }
-            | HerdrUpdate::Started { .. }
-            | HerdrUpdate::Current { .. }
-            | HerdrUpdate::Kept { .. }
-            | HerdrUpdate::HandedOff { .. } => None,
-        };
-        if self.device_herdr_behind.get(device_id) == behind.as_ref() {
-            return false;
-        }
-        match behind {
-            Some(behind) => self
-                .device_herdr_behind
-                .insert(device_id.to_owned(), behind),
-            None => self.device_herdr_behind.remove(device_id),
-        };
-        self.refresh_device_snapshots()
-    }
-
     pub(super) fn kit_view(&self, device_id: &str) -> KitSnapshot {
         let mut view = self.kit_view_without_sessions(device_id);
         self.fill_agent_sessions(device_id, &mut view);
@@ -1781,7 +1675,6 @@ mod tests {
                 location: None,
             },
             hook: None,
-            herdr: None,
             update: None,
             doc_url: String::new(),
         }

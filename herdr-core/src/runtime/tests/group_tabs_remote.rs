@@ -1,7 +1,7 @@
 //! Group-tabs B2/B7/B14/B22/B28: remote checkout navigation owns no PTY,
 //! explicit agent navigation reveals its group, and hidden groups do not attach.
 use super::device_catalog::{
-    RecordingHerdr, connected_status, dispatch, herdr_workspace, next_request, session, tree,
+    connected_status, dispatch, herdr_workspace, next_request, recording_engine, session, tree,
 };
 use super::*;
 use crate::model::{AgentLayoutSnapshot, LinkOrigin};
@@ -47,25 +47,16 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
             .unwrap();
         let (arrived_tx, arrived_rx) = std::sync::mpsc::sync_channel(1);
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
-        let herdr = crate::fake_herdr::FakeHerdr::start(
-            "new-group-terminal",
-            move |method, params| {
-                if method == "tab.focus" {
-                    return json!({"type":"tab_info","tab":{
-                        "tab_id":params["tab_id"],"workspace_id":"w1","number":3,"label":"shell",
-                        "focused":true,"pane_count":1,"agent_status":"idle"
-                    }});
-                }
-                assert_eq!(method, "tab.create");
-                arrived_tx.send(()).unwrap();
-                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-                json!({"type":"tab_created","tab":{
-                    "tab_id":"t3","workspace_id":"w1","number":3,"label":"shell","focused":true,"pane_count":1,"agent_status":"idle"
-                },"root_pane":{
-                    "pane_id":"p3","terminal_id":"terminal3","workspace_id":"w1","tab_id":"t3","focused":true,"agent_status":"idle","revision":0
-                }})
-            },
-        );
+        let herdr = FakeEngine::start(move |method, params| {
+            if method == "focus_tab" {
+                assert!(params["tab"].is_string());
+                return reply(());
+            }
+            assert_eq!(method, "create_tab");
+            arrived_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            terminal_created(3)
+        });
         let shared = Arc::new(Mutex::new(runtime));
         shared
             .lock()
@@ -202,7 +193,7 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
             herdr
                 .methods()
                 .iter()
-                .filter(|method| *method == "tab.create")
+                .filter(|method| **method == "create_tab")
                 .count(),
             1
         );
@@ -253,16 +244,15 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
         let (arrived_tx, arrived_rx) = std::sync::mpsc::sync_channel(1);
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
         let mut created = 0;
-        let herdr =
-            crate::fake_herdr::FakeHerdr::start("consecutive-terminals", move |method, _| {
-                assert_eq!(method, "tab.create");
-                created += 1;
-                if created == 1 {
-                    arrived_tx.send(()).unwrap();
-                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-                }
-                terminal_created(created + 2)
-            });
+        let herdr = FakeEngine::start(move |method, _| {
+            assert_eq!(method, "create_tab");
+            created += 1;
+            if created == 1 {
+                arrived_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            terminal_created(created + 2)
+        });
         let shared = Arc::new(Mutex::new(runtime));
         shared
             .lock()
@@ -396,19 +386,15 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
             herdr
                 .methods()
                 .iter()
-                .filter(|method| *method == "tab.create")
+                .filter(|method| **method == "create_tab")
                 .count(),
             if one { 1 } else { 2 }
         );
     }
 }
 
-fn terminal_created(number: usize) -> Value {
-    json!({"type":"tab_created","tab":{
-        "tab_id":format!("t{number}"),"workspace_id":"w1","number":number,"label":"shell","focused":true,"pane_count":1,"agent_status":"idle"
-    },"root_pane":{
-        "pane_id":format!("p{number}"),"terminal_id":format!("terminal{number}"),"workspace_id":"w1","tab_id":format!("t{number}"),"focused":true,"agent_status":"idle","revision":0
-    }})
+fn terminal_created(number: usize) -> Reply {
+    reply((format!("t{number}"), format!("p{number}")))
 }
 
 fn tab(id: &str) -> String {
@@ -451,8 +437,6 @@ fn setup(origin: LinkOrigin, path: &str) -> (Runtime, tempfile::TempDir) {
             id: DEVICE.into(),
             label: "Group device".into(),
             origin,
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     runtime
@@ -514,9 +498,7 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
-                requests: requests.clone(),
-            })),
+            recording_engine(requests.clone()),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -600,7 +582,7 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
                 "{boundary}"
             );
             assert_eq!(active(&runtime), Some(tab("t3").as_str()));
-            assert_eq!(next_request(&requests, 0)["method"], "pane.focus");
+            assert_eq!(next_request(&requests, 0)["method"], "focus_pane");
             runtime.ingest_remote_session(DEVICE, Ok(landed));
             assert_eq!(
                 requests.lock().unwrap().len(),
@@ -623,9 +605,7 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
-                requests: requests.clone(),
-            })),
+            recording_engine(requests.clone()),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -730,13 +710,13 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
         }
         runtime.ingest_remote_session(DEVICE, Ok(landed));
         if boundary == "catalog" {
-            assert_eq!(next_request(&requests, 0)["method"], "pane.focus");
+            assert_eq!(next_request(&requests, 0)["method"], "focus_pane");
         }
         let focuses = requests
             .lock()
             .unwrap()
             .iter()
-            .filter(|request| request["method"] == "pane.focus")
+            .filter(|request| request["method"] == "focus_pane")
             .count();
         assert_eq!(focuses, usize::from(boundary == "catalog"), "{boundary}");
         assert_eq!(
@@ -1432,9 +1412,7 @@ fn successful_remote_checkout_pane_and_tab_visits_supersede_a_global_start() {
         let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
-                requests: Arc::new(Mutex::new(Vec::new())),
-            })),
+            recording_engine(Arc::new(Mutex::new(Vec::new()))),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -1601,9 +1579,7 @@ fn inbound_and_ssh_explicit_agent_navigation_reveals_its_group_and_releases_hidd
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
-                requests: requests.clone(),
-            })),
+            recording_engine(requests.clone()),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -1614,7 +1590,7 @@ fn inbound_and_ssh_explicit_agent_navigation_reveals_its_group_and_releases_hidd
             json!({"action":"create", "name":"Second", "tab_id":tab("t2")}),
         );
         let owner = layout(&runtime).group_id.clone().unwrap();
-        assert_eq!(next_request(&requests, 0)["method"], "tab.focus");
+        assert_eq!(next_request(&requests, 0)["method"], "focus_tab");
         group(
             &mut runtime,
             &t.main,
@@ -1632,7 +1608,7 @@ fn inbound_and_ssh_explicit_agent_navigation_reveals_its_group_and_releases_hidd
             }),
         );
         runtime.sync_workspace_view();
-        assert_eq!(next_request(&requests, 1)["method"], "tab.focus");
+        assert_eq!(next_request(&requests, 1)["method"], "focus_tab");
         assert_eq!(layout(&runtime).group_id.as_deref(), Some(owner.as_str()));
         assert_eq!(active(&runtime), Some(tab("t2").as_str()));
         runtime.ingest_remote_session(DEVICE, Ok(raw(&t.main)));
@@ -1669,7 +1645,7 @@ fn inbound_and_ssh_explicit_agent_navigation_reveals_its_group_and_releases_hidd
             }),
         );
         runtime.sync_workspace_view();
-        assert_eq!(next_request(&requests, 2)["method"], "pane.focus");
+        assert_eq!(next_request(&requests, 2)["method"], "focus_pane");
         assert_eq!(layout(&runtime).group_id, None);
         assert_eq!(active(&runtime), Some(tab("t1").as_str()));
         assert!(runtime.terminal_attach_requested.contains(&pane_id("t1")));

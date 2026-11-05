@@ -87,51 +87,31 @@ enum BootstrapAnswer {
     Hook(Value),
 }
 
-/// What a node's panes are proved by: the Herdr whose panes they are, or the
-/// node's own pane holders, whose records name each pane's shell and when it
-/// started (PRD engine-bundle-3-core-owns D-9, D-22).
-#[derive(Clone, Debug)]
-pub enum PaneSource {
-    Herdr(PathBuf),
-    Holders(crate::pane_holders::PaneSlot),
-}
-
-impl PaneSource {
-    fn same(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Herdr(one), Self::Herdr(other)) => one == other,
-            (Self::Holders(_), Self::Holders(_)) => true,
-            _ => false,
-        }
+/// `pane_id`'s shell and terminal now, from the node's own pane holders
+/// (PRD engine-bundle-3-core-owns D-9, D-22). A holder pane is its own
+/// terminal, since a pane id is never reused, and its shell is the program
+/// its record names, with the start the system gave it.
+fn inspect_holder(
+    slot: &crate::pane_holders::PaneSlot,
+    pane_id: &str,
+) -> Result<PaneIdentity, &'static str> {
+    if pane_id.is_empty() || pane_id.len() > 256 {
+        return Err("invalid_request");
     }
-
-    /// `pane_id`'s shell and terminal now. A holder pane is its own
-    /// terminal, since a pane id is never reused, and its shell is the
-    /// program its record names, with the start the system gave it.
-    fn inspect(&self, pane_id: &str) -> Result<PaneIdentity, &'static str> {
-        match self {
-            Self::Herdr(socket) => pane_peer::inspect(socket, pane_id),
-            Self::Holders(slot) => {
-                if pane_id.is_empty() || pane_id.len() > 256 {
-                    return Err("invalid_request");
-                }
-                let holders = slot.holders().ok_or("bridge_unavailable")?;
-                let proof = holders.proof(pane_id).map_err(|error| match error {
-                    hide_node_link::holders::HolderError::Unreachable { .. } => "pane_unavailable",
-                    _ => "pane_not_found",
-                })?;
-                Ok(PaneIdentity {
-                    terminal_id: pane_id.to_owned(),
-                    shell_pid: i32::try_from(proof.program).map_err(|_| "pane_not_found")?,
-                    shell_started: proof.started,
-                })
-            }
-        }
-    }
+    let holders = slot.holders().ok_or("bridge_unavailable")?;
+    let proof = holders.proof(pane_id).map_err(|error| match error {
+        hide_node_link::holders::HolderError::Unreachable { .. } => "pane_unavailable",
+        _ => "pane_not_found",
+    })?;
+    Ok(PaneIdentity {
+        terminal_id: pane_id.to_owned(),
+        shell_pid: i32::try_from(proof.program).map_err(|_| "pane_not_found")?,
+        shell_started: proof.started,
+    })
 }
 
 struct Started {
-    source: PaneSource,
+    holders: crate::pane_holders::PaneSlot,
     socket_wire: String,
     folder: PathBuf,
     closer: ListenerCloser,
@@ -212,49 +192,23 @@ impl Panes {
     }
 
     /// Binds the listener in a new folder under `bridges` and starts serving
-    /// it on `scope`. Asked again for the same Herdr, answers the same
-    /// socket; another Herdr is refused, since a node serves one.
+    /// it on `scope` for the panes `holders` run. Asked again, answers the
+    /// same socket.
     pub fn start<'scope, 'env, W: Write + Send>(
         &'scope self,
         scope: &'scope Scope<'scope, 'env>,
         output: &'scope Mutex<W>,
         bridges: &Path,
-        herdr_socket: &str,
-    ) -> HostResult<PanesStarted> {
-        let herdr_socket = PathBuf::from(herdr_socket);
-        if !herdr_socket.is_absolute() {
-            return Err(HostError::new(
-                ErrorCode::InvalidPath,
-                "The Herdr socket is not an absolute path",
-            ));
-        }
-        self.start_for(scope, output, bridges, PaneSource::Herdr(herdr_socket))
-    }
-
-    /// [`Panes::start`] for the panes `source` proves: a Herdr's, or the
-    /// node's own pane holders'.
-    pub fn start_for<'scope, 'env, W: Write + Send>(
-        &'scope self,
-        scope: &'scope Scope<'scope, 'env>,
-        output: &'scope Mutex<W>,
-        bridges: &Path,
-        source: PaneSource,
+        holders: crate::pane_holders::PaneSlot,
     ) -> HostResult<PanesStarted> {
         let _starting = self
             .start_lock
             .lock()
             .map_err(|_| HostError::new(ErrorCode::Io, "The pane service lock was poisoned"))?;
         if let Some(started) = self.started.get() {
-            return if started.source.same(&source) {
-                Ok(PanesStarted {
-                    socket: started.socket_wire.clone(),
-                })
-            } else {
-                Err(HostError::new(
-                    ErrorCode::Conflict,
-                    "This node already serves the panes of another engine",
-                ))
-            };
+            return Ok(PanesStarted {
+                socket: started.socket_wire.clone(),
+            });
         }
         if self.stopped.load(Ordering::Acquire) {
             return Err(HostError::new(ErrorCode::Io, "The node is stopping"));
@@ -283,7 +237,7 @@ impl Panes {
             }
         };
         let started = Started {
-            source,
+            holders,
             socket_wire: socket_wire.clone(),
             folder,
             closer: listener.closer(),
@@ -295,16 +249,6 @@ impl Panes {
         Ok(PanesStarted {
             socket: socket_wire,
         })
-    }
-
-    /// The Herdr server this service serves, once started.
-    pub fn herdr_socket(&self) -> Option<String> {
-        self.started
-            .get()
-            .and_then(|started| match &started.source {
-                PaneSource::Herdr(socket) => Some(socket.display().to_string()),
-                PaneSource::Holders(_) => None,
-            })
     }
 
     /// Ends the listener, every stream and every waiting proof, and removes
@@ -351,14 +295,12 @@ impl Panes {
         })
     }
 
-    /// `pane_id`'s identity now, from the Herdr this service was started for.
+    /// `pane_id`'s identity now, from the holders this service was started for.
     pub fn inspect(&self, pane_id: &str) -> HostResult<PaneIdentity> {
         let started = self.started.get().ok_or_else(|| {
             HostError::new(ErrorCode::Unsupported, "The pane service is not started")
         })?;
-        started
-            .source
-            .inspect(pane_id)
+        inspect_holder(&started.holders, pane_id)
             .map_err(|reason| HostError::new(ErrorCode::NotFound, reason))
     }
 
@@ -527,16 +469,13 @@ impl Panes {
             {
                 return Err("invalid_request".to_owned());
             }
-            let pane = started
-                .source
-                .inspect(&request.pane_id)
-                .and_then(|identity| {
-                    if pane_peer::descends_from(peer, identity.shell_pid) {
-                        Ok(identity)
-                    } else {
-                        Err("caller_not_in_pane")
-                    }
-                });
+            let pane = inspect_holder(&started.holders, &request.pane_id).and_then(|identity| {
+                if pane_peer::descends_from(peer, identity.shell_pid) {
+                    Ok(identity)
+                } else {
+                    Err("caller_not_in_pane")
+                }
+            });
             let proved = match pane {
                 Ok(identity) => Proved::Pane(identity),
                 Err(_) if self.checkout_callers => {
@@ -861,7 +800,7 @@ impl Panes {
 
     /// What the node proves about the process that opened a stream: the
     /// holder of a credential issued here for a pane, still
-    /// descended from that pane's shell as its Herdr answers now, the same
+    /// descended from that pane's shell as its holder answers now, the same
     /// checks a bootstrap makes. `None` when the peer holds no such
     /// credential or the pane no longer answers for it; the core then asks
     /// `Call::PaneInspect` for the stream's command, as it always did.
@@ -884,7 +823,7 @@ impl Panes {
             })?
             .pane_id
             .clone()?;
-        let identity = started.source.inspect(&pane_id).ok()?;
+        let identity = inspect_holder(&started.holders, &pane_id).ok()?;
         pane_peer::descends_from(peer, identity.shell_pid)
             .then_some(StreamCaller { pane_id, identity })
     }
@@ -1115,7 +1054,12 @@ mod tests {
         let panes = Panes::new();
         std::thread::scope(|scope| {
             let started = panes
-                .start(scope, &output, &bridges, "/tmp/hide-test-herdr.sock")
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    crate::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let socket = hide_platform::path::from_wire(&started.socket).unwrap();
             body(&panes, &events, &socket);

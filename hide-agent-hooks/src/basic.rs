@@ -3,8 +3,8 @@
 //!
 //! Both agents document a refusal of a shell call and the start and end of a
 //! subagent, in their own payload and answer shapes. This module reads those
-//! payloads into the facts the spawn guard and the pane count need and
-//! writes the answers; the guard itself (`crate::spawn_guard`) and the count
+//! payloads into the facts the guards and the pane count need and
+//! writes the answers; the guards (`crate::pre_tool`) and the count
 //! (`crate::counters`) are the same ones Claude Code's and Codex's hooks use.
 //!
 //! | | Grok | Cursor |

@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // How long a restart after a reboot takes to give the operator their work back
 // (PRD engine-bundle-3-core-owns B44, perf-gate row 30). run.sh killed every
-// process the run started (the daemon, the Herdr server or the pane holders,
-// every pane's shell), noted MEASURE_RESTORE_T0 (epoch ms) and started the
-// daemon again, and the Herdr server first on Herdr. From t0, on this
-// machine's wall clock:
+// process the run started (the daemon, the pane holders, every pane's shell),
+// noted MEASURE_RESTORE_T0 (epoch ms) and started the daemon again. From t0,
+// on this machine's wall clock:
 // - `tabs_ms`: the daemon's snapshot lays out every tab of the fixture again.
 // - `front_ms`: the page, opened as the daemon answers, shows the measured
 //   checkout's tab with every pane of it drawn (its terminal has text).

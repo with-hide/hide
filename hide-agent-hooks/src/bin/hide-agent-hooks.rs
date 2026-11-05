@@ -29,11 +29,11 @@ use hide_agent_hooks::{antigravity, basic};
 use hide_platform::process::{OwnedChild, OwnerWatch};
 
 const PROMPT_BUDGET: Duration = Duration::from_millis(1_850);
-/// How long the spawn guard waits for the daemon's answer, inside the entry's
-/// own eight second timeout. It is spent only for a call that starts an agent
-/// through Herdr, so an ordinary shell call never waits on it.
+/// How long the opener guard waits for the daemon's answer, inside the entry's
+/// own eight second timeout. It is spent only for a call that hands a result
+/// to the system opener, so an ordinary shell call never waits on it.
 const GUARD_BUDGET: Duration = Duration::from_millis(2_500);
-/// How long the spawn guard waits for the tool call's payload.
+/// How long the guards wait for the tool call's payload.
 const GUARD_PAYLOAD_BUDGET: Duration = Duration::from_millis(500);
 const INTAKE_BUDGET: Duration = Duration::from_millis(1_650);
 /// How long a prompt hook waits for the runtime's payload to learn whether
@@ -74,20 +74,19 @@ fn main() -> ExitCode {
             if argument_value("--event", &arguments)
                 .is_some_and(|event| matches!(event.as_str(), "PostToolUse" | "PostToolUseFailure"))
             {
-                let payload =
-                    std::panic::catch_unwind(|| run_observation_hook(&arguments, started))
-                        .unwrap_or_else(|_| {
-                            if let Some(home) = home_directory() {
-                                hide_agent_hooks::delivery::diagnose(&home, "format");
-                            }
-                            None
-                        });
+                let payload = std::panic::catch_unwind(|| read_tool_result(started))
+                    .unwrap_or_else(|_| {
+                        if let Some(home) = home_directory() {
+                            hide_agent_hooks::delivery::diagnose(&home, "format");
+                        }
+                        None
+                    });
                 let _ = std::panic::catch_unwind(|| {
                     report_recorded_turn(&arguments, payload.as_ref(), started)
                 });
                 return ExitCode::SUCCESS;
             }
-            // Grok and Cursor have no Memory: their hooks carry the spawn
+            // Grok and Cursor have no Memory: their hooks carry the opener
             // guard, subagent counts and letters at their declared gaps.
             // Cursor adds session guidance; Grok observes bell submissions
             // and takes letters at the end of a turn too
@@ -125,10 +124,9 @@ fn main() -> ExitCode {
             let event = argument_value("--event", &arguments);
             if event.as_deref() == Some(HookEvent::PreToolUse.name()) {
                 // A guard that fails answers like one with nothing to say:
-                // the call runs (PRD herdr-spawn-guard D-04). A panic is one
-                // such failure, and it must not end the hook with a code the
-                // agent reads as a refusal.
-                let payload = std::panic::catch_unwind(|| run_spawn_guard(&arguments, started))
+                // the call runs. A panic is one such failure, and it must not
+                // end the hook with a code the agent reads as a refusal.
+                let payload = std::panic::catch_unwind(|| run_guards(&arguments, started))
                     .unwrap_or_else(|_| {
                         guard_failed(&arguments, "panic");
                         None
@@ -200,54 +198,17 @@ fn nothing_to_say(arguments: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Post observation never prints a permission/context decision or alters the
-/// original tool's result. Ordinary calls do no new daemon/Herdr lookup.
-/// Observes a shell call's result, and hands back the input it read for the
-/// call's turn ([`report_recorded_turn`]).
-fn run_observation_hook(arguments: &[String], started: Instant) -> Option<(Vec<u8>, bool)> {
-    use hide_agent_hooks::observation;
-    let runtime = argument_value("--runtime", arguments)?;
-    let adapter = hide_agent_adapter::adapter(&runtime)?;
-    let hide_agent_adapter::ObservationSupport::Native(dialect) = adapter.observation else {
-        return None;
-    };
-    if dialect == hide_agent_adapter::HookDialect::ClaudeCode
-        && hide_agent_hooks::runtime::ForeignOrigin::detect(|name| std::env::var_os(name)).is_some()
-    {
-        return None;
-    }
+/// A tool's result: nothing is printed and the result is not altered; in a
+/// pane the input is read for the call's turn ([`report_recorded_turn`]).
+fn read_tool_result(started: Instant) -> Option<(Vec<u8>, bool)> {
     hide_agent_hooks::pane::from_env()?;
-    let home = home_directory()?;
-    let Some((payload, truncated)) = read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET)
-    else {
-        hide_agent_hooks::delivery::diagnose(&home, "deadline");
-        return None;
-    };
-    if truncated {
-        // Claude Code's every tool reaches this hook, and a file read's
-        // result can pass the read limit; only a shell call's is observed.
-        if observation::shell_tool(hide_agent_hooks::counters::prefix_tool(&payload)) {
-            hide_agent_hooks::delivery::diagnose(&home, "format");
-        }
-        return Some((payload, truncated));
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0);
-    let failure = argument_value("--event", arguments).as_deref() == Some("PostToolUseFailure");
-    if let Some(observed) =
-        observation::native(adapter.id, &payload, false, failure, now, &|name| {
-            std::env::var(name).ok()
-        })
+    let payload = read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET);
+    if payload.is_none()
+        && let Some(home) = home_directory()
     {
-        observation::send(
-            &home,
-            &observed,
-            started + GUARD_PAYLOAD_BUDGET + observation::SEND_BUDGET,
-        );
+        hide_agent_hooks::delivery::diagnose(&home, "deadline");
     }
-    Some((payload, truncated))
+    payload
 }
 
 fn usage() -> String {
@@ -255,11 +216,11 @@ fn usage() -> String {
      --event <SessionStart|UserPromptSubmit|SubagentStart|SubagentStop|Stop|PreToolUse|PostToolUse|PostToolUseFailure> \
      [--memory-injection] [--source <install marker>]\n       \
      hide-agent-hooks hook --runtime grok \
-     --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|PostToolUseFailure|SubagentStart|SubagentStop|Stop> \
+     --event <SessionStart|UserPromptSubmit|PreToolUse|SubagentStart|SubagentStop|Stop> \
      [--source <install marker>]\n       \
      hide-agent-hooks hook --runtime antigravity \
-     --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|Stop> [--source <install marker>]\n       \
-     hide-agent-hooks <opencode|pi|omp> <start|prompt|confirm|tool|observation|letters|subagents>\n       \
+     --event <SessionStart|UserPromptSubmit|PreToolUse|Stop> [--source <install marker>]\n       \
+     hide-agent-hooks <opencode|pi|omp> <start|prompt|confirm|tool|letters|subagents>\n       \
      hide-agent-hooks doctor [--json]"
         .to_owned()
 }
@@ -287,7 +248,7 @@ fn inside_grok() -> bool {
     hide_agent_hooks::runtime::inside_grok(|name| std::env::var_os(name))
 }
 
-/// The hook of Grok or Cursor (PRD grok-cursor-hooks): the spawn guard on a
+/// The hook of Grok or Cursor (PRD grok-cursor-hooks): the opener guard on a
 /// shell call, the subagent count on the subagent and turn events, and
 /// Cursor's guidance at session start. It never fails loudly, and Cursor's
 /// permission events get an answer on every path.
@@ -433,7 +394,7 @@ fn basic_tool_call(
         let answer = match dialect {
             HookDialect::Cursor => basic::cursor_deny(&reason),
             // Grok takes Claude Code's refusal envelope.
-            _ => hide_agent_hooks::spawn_guard::deny_output(&reason),
+            _ => hide_agent_hooks::pre_tool::deny_output(&reason),
         };
         return (Some(answer), None);
     }
@@ -839,15 +800,14 @@ fn print_line(json: &str) -> bool {
         .is_ok()
 }
 
-/// The spawn guard (`hide_agent_hooks::spawn_guard`) of Claude Code's and
-/// Codex's hook: it prints Claude Code's refusal for a shell call that starts
-/// an agent through Herdr, and nothing on every other path.
-/// Judges one tool call, and hands back the input it read for the call's
-/// turn ([`report_recorded_turn`]).
-fn run_spawn_guard(arguments: &[String], started: Instant) -> Option<(Vec<u8>, bool)> {
+/// The guards of Claude Code's and Codex's `PreToolUse` hook
+/// ([`guard_refusal`]): it prints Claude Code's refusal for a call a guard
+/// refuses, and nothing on every other path. Judges one tool call, and hands
+/// back the input it read for the call's turn ([`report_recorded_turn`]).
+fn run_guards(arguments: &[String], started: Instant) -> Option<(Vec<u8>, bool)> {
     let runtime =
         argument_value("--runtime", arguments).and_then(|value| AgentRuntime::parse(&value))?;
-    runtime.dialect().adapter().spawn_guard?;
+    runtime.dialect().adapter().guard?;
     // Another agent that runs Claude Code's hooks (Grok, OpenCode, Cursor)
     // speaks through its own hook, or Hide has not verified its contract.
     if hide_agent_hooks::runtime::ForeignOrigin::detect(|name| std::env::var_os(name)).is_some() {
@@ -865,7 +825,7 @@ fn run_spawn_guard(arguments: &[String], started: Instant) -> Option<(Vec<u8>, b
         &payload,
         truncated,
     ) {
-        print_line(&hide_agent_hooks::spawn_guard::deny_output(&reason));
+        print_line(&hide_agent_hooks::pre_tool::deny_output(&reason));
     }
     Some((payload, truncated))
 }
@@ -881,12 +841,11 @@ fn guard_failed(arguments: &[String], cause: &str) {
 
 /// The guards' decision for one tool call: the reason it is refused, or
 /// `None` to let it run. The project's guardrails refuse what a protection
-/// that is on names; the spawn guard refuses a launch through Herdr and the
-/// opener guard a result handed to the system opener (neither, not in a
-/// registered checkout, the daemon unreachable and any failure of their own
-/// let it run). A refusal and an unreachable daemon are
-/// written to the guard's log here; the caller prints the answer in its
-/// runtime's form.
+/// that is on names; the opener guard refuses a result handed to the system
+/// opener (outside a registered checkout, with the daemon unreachable and on
+/// any failure of its own it lets the call run). A refusal and an unreachable
+/// daemon are written to the hooks' log here; the caller prints the answer in
+/// its runtime's form.
 fn guard_refusal(
     dialect: HookDialect,
     runtime_id: &str,
@@ -894,8 +853,6 @@ fn guard_refusal(
     payload: &[u8],
     truncated: bool,
 ) -> Option<String> {
-    use hide_agent_hooks::spawn_guard as guard;
-
     let pane = hide_agent_hooks::pane::from_env();
     let home = home_directory();
     // No agent writes the Hide global instruction, in any session or project
@@ -944,26 +901,22 @@ fn guard_refusal(
     {
         return Some(reason);
     }
-    // Outside a Herdr pane there is nothing to redirect.
+    // Outside a pane there is nothing to redirect.
     let pane = pane?;
-    // Every shell call comes through here: these two searches decide the rest.
-    if !guard::may_hold_launch(payload)
-        && !hide_agent_hooks::opener_guard::may_hold_opening(payload)
-    {
+    // Every shell call comes through here: this search decides the rest.
+    if !hide_agent_hooks::opener_guard::may_hold_opening(payload) {
         return None;
     }
-    let call = guard::read_call(payload, truncated, dialect)?;
+    let call = hide_agent_hooks::pre_tool::read_call(payload, truncated, dialect)?;
     let home = home_directory()?;
     let program = workspace_context::cli_program()?;
-    guard::pane_refusal(
+    hide_agent_hooks::opener_guard::pane_refusal(
         &home,
         runtime_id,
         &pane,
         &call.command,
-        call.cwd,
         &program,
         Instant::now() + GUARD_BUDGET,
-        &|name| std::env::var(name).ok(),
     )
 }
 

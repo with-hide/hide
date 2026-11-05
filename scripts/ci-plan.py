@@ -79,13 +79,12 @@ LANES = (
 FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis", "holder-restart"))
 
 # Crates whose change reaches what differs by operating system: the platform
-# layer, the Herdr client's IPC, the install kit and hooks, and the daemon and
+# layer, the install kit and hooks, and the daemon and
 # core that `windows check` and the OS contract run on each system.
 OS_CRATES = {
     "herdr-core",
     "hided",
     "hide-agent-hooks",
-    "hide-herdr-client",
     "hide-host",
     "hide-kit",
     "hide-platform",
@@ -100,7 +99,7 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # The remote mailbox lane builds `hided`, `hide`, the host helper and the hook
 # binary, and runs `hided`'s `remote_delivery`, `node_contract`,
 # `device_bootstrap` and `system_ssh` tests against them over the system's
-# ssh and sshd, its `held_letter_notice` test against the pinned Herdr, and
+# ssh and sshd, its `held_letter_notice` test against a real daemon, and
 # `hide-host`'s check of another account's open on a device's bridge; a
 # change to any crate they link (the device link's `hide-node` and
 # `hide-node-link` reach it through `hided`), or to the tests, can change its
@@ -237,14 +236,13 @@ MACOS_LANE_INPUTS = {
         # Desktop fixtures import the other web/e2e helpers and C shims.
         "exclude": ("web/public/m/*", "web/e2e/*.spec.ts", "web/e2e/*.md", "desktop/e2e/*.md"),
     },
-    "os-contract-macos": {"paths": ("hide-platform/*", "hide-herdr-client/*")},
+    "os-contract-macos": {"paths": ("hide-platform/*",)},
     "omp-contract": {"paths": ("hide-ai/*", "hide-platform/*")},
     "package": {
         # compile (macos) and package (macos) are one dependency chain. Keep
         # both for the package's scripts, resources, kit, hooks and updater.
         "paths": (
             "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
-            "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
             "contracts/conpty.json", "scripts/fetch-conpty.py",
             "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh", "scripts/package-e2e.sh", "scripts/package-e2e-report.py",
             "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
@@ -312,8 +310,6 @@ MACOS_PATHS = (
     # hide-vt's Zig build: the macOS target it maps and the macOS Zig and
     # inputs it downloads, which `vt (macos)` builds.
     "hide-vt/build.rs", "hide-vt/build-inputs.json",
-    # The Herdr pin names the macOS asset, which only macOS jobs run.
-    "contracts/herdr-bundle.json",
 )
 # Folders whose macOS form sits in shared files: a file there counts when it
 # holds macOS-only code. `hide-platform` is where each system's form is
@@ -378,12 +374,11 @@ POLICY_ONLY = (
     "scripts/tests/*",
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-capability-readers-off-lock.sh",
-    "scripts/check-harness-ignore-anchor.sh", "scripts/check-herdr-pin-single-source.sh",
-    "scripts/check-core-touches-no-machine.py", "scripts/check-engine-boundary.py", "scripts/rust_scan.py",
+    "scripts/check-harness-ignore-anchor.sh",
+    "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
-    "scripts/check-typed-live-remote.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
     "scripts/merge-order.py", "scripts/pull_requests.py",
     "scripts/web-shell-measure/*",
@@ -451,9 +446,8 @@ def is_journey_product(path):
             and path.stem != "tests" and not path.stem.endswith("_tests"))
 
 
-# The live check's code, which the journey runs and `agent-live-check.spec.ts`
-# drives in the web e2e; its unit tests are `policy`'s.
-LIVE_CHECK_LANES = {"web-e2e"} | JOURNEY_LANES
+# The live check's code, which the journey runs; its unit tests are `policy`'s.
+LIVE_CHECK_LANES = JOURNEY_LANES
 # Script tests that also run on another system than `policy`'s Linux, in
 # these lanes: `agent-journey.yml` runs the live check's Windows forms on Windows.
 SYSTEM_TESTS = (
@@ -467,7 +461,6 @@ NAMED_LANES = (
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
     ("scripts/agent_live_check/*", LIVE_CHECK_LANES | HOLDER_RESTART_LANES),
-    ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
     ("web/e2e/shims/live-check.h", WEB_E2E_LANES | JOURNEY_LANES),
     # The journey's controller builds the desktop e2e's spawn provider.
@@ -681,7 +674,7 @@ def classify(path, status, crates, root):
     if reader_entries(path.as_posix()):
         # `select` adds the readers' lanes and crates.
         return set(), f"read by a known set of readers: {path}", set()
-    # `pr.yml`, the scripts the lanes call, the Herdr pin and schema, lockfiles,
+    # `pr.yml`, the scripts the lanes call, the contracts, lockfiles,
     # toolchain and package configuration, and any path no rule above, in
     # `named_lanes` or in READERS names: every lane. `Cargo.lock` is among
     # them: every member but two depends on `workspace-hack`, which holds

@@ -1,9 +1,9 @@
 # The Electron desktop app end to end on one system: the debug build of the
-# host, starting its own hided through the `hide` CLI built here, against an
-# isolated pinned Herdr for that system. `pr.yml` calls it for the macOS
-# suite (`desktop-e2e`) and for the Windows `@platform` tests
+# host, starting its own hided through the `hide` CLI built here, whose
+# panes run in the `hide-holder` built beside it. `pr.yml` calls it for the
+# macOS suite (`desktop-e2e`) and for the Windows `@platform` tests
 # (`windows-desktop`), and `nightly.yml` for all three systems; each caller
-# names the runner, the Herdr asset and which tests run.
+# names the runner and which tests run.
 #
 # The window the tests draw is kept as the run's artifact when the caller asks
 # for it (`keep-screenshots`), so a reviewer can see what the app drew on a
@@ -17,11 +17,7 @@
 # `desktop/e2e/shard-durations.json` (`scripts/e2e-shard.py`). Each shard
 # builds in place: a `build` job would be one more macOS job ahead of two, for
 # about two minutes of cargo it saves each.
-#
-# A caller that sets `own-engine` also runs every test not tagged `@herdr` on
-# the core's own engine (HIDE_E2E_ENGINE=own, docs/TESTING.md), over as many
-# shards again: a daemon with HIDE_DEV_PANE_HOLDER on over the built
-# `hide-holder`, and no Herdr fetched at all.
+
 name: desktop e2e lane
 
 on:
@@ -35,19 +31,10 @@ on:
         description: The GitHub-hosted runner label.
         type: string
         required: true
-      herdr-platform:
-        description: The pinned Herdr asset to run, as `fetch-herdr-runtime.sh --platform` names it.
-        type: string
-        required: true
       shards:
         description: How many shards deal the tests out.
         type: number
         required: true
-      own-engine:
-        description: Also runs every test not tagged `@herdr` on the core's own engine, over as many shards again.
-        type: boolean
-        required: false
-        default: false
       grep:
         description: Playwright `--grep` filter; empty runs every test.
         type: string
@@ -69,7 +56,7 @@ permissions:
 
 jobs:
   e2e:
-    name: desktop e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}
+    name: desktop e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     defaults:
@@ -82,7 +69,6 @@ jobs:
         # jobs at once across every repository, so no lane asks for more than
         # four; a count outside 1 to 4 has no entry and fails the lane.
         shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4]]')[inputs.shards] }}
-        engine: ${{ fromJSON(inputs.own-engine && '["herdr","own"]' || '["herdr"]') }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -102,7 +88,7 @@ jobs:
       - uses: ./.github/actions/rust-cache
         with:
           set: workspace
-          save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && matrix.engine == 'herdr' && runner.os == 'macOS' }}
+          save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}
       - name: Install zsh and the virtual display on Linux
         if: runner.os == 'Linux'
         timeout-minutes: 5
@@ -113,17 +99,16 @@ jobs:
         # carries, and a device runs hided itself as its node.
         timeout-minutes: 20
         run: bash scripts/verify-cargo.sh cli
-      - name: Build the pane holder the own engine starts
-        # The own engine's daemon starts each pane's holder from the
-        # `hide-holder` beside it, which the fixture's app bundle links too.
-        if: matrix.engine == 'own'
+      - name: Build the pane holder
+        # The daemon starts each pane's holder from the `hide-holder` beside
+        # it, which the fixture's app bundle links too.
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
       - name: Fetch the pane holder's pinned ConPTY runtime
         # On Windows a node loads the holder's ConPTY from `holder-conpty`
         # beside its own program (`hide_kit::holders::CONPTY_SOURCE`); the
         # debug daemon runs from target/debug.
-        if: matrix.engine == 'own' && runner.os == 'Windows'
+        if: runner.os == 'Windows'
         timeout-minutes: 5
         run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
       - name: Install dependencies
@@ -144,23 +129,6 @@ jobs:
         # The browser spec opens a page in Chromium beside the Electron app.
         timeout-minutes: 5
         run: bash scripts/verify-web.sh desktop playwright-install
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        # The own engine's job runs with no Herdr on the runner.
-        if: matrix.engine == 'herdr'
-        timeout-minutes: 5
-        env:
-          HERDR_PLATFORM: ${{ inputs.herdr-platform }}
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          else
-            bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
-          fi
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Compare the binary schema and version with the pin
-        if: matrix.engine == 'herdr'
-        run: python3 scripts/check-herdr-schema.py --herdr-bin "${{ steps.herdr.outputs.bin }}"
       - name: Put the isolated fixture programs on the Windows pane PATH
         if: runner.os == 'Windows'
         uses: ./.github/actions/windows-fixture-path
@@ -171,18 +139,13 @@ jobs:
         # another shard (docs/TESTING.md, "Balancing the e2e shards").
         timeout-minutes: 20
         env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-          HIDE_E2E_ENGINE: ${{ matrix.engine }}
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           GREP: ${{ inputs.grep }}
-          # A test that looks at Herdr itself is tagged `@herdr` and runs on Herdr alone (docs/TESTING.md).
-          GREP_INVERT: ${{ matrix.engine == 'own' && '@herdr' || '' }}
           SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
-          if [ -n "$GREP_INVERT" ]; then args+=(--grep-invert "$GREP_INVERT"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
             # Dealt and checked as in web-e2e.yml. `--no-deps`: Playwright runs
             # a project's dependencies whole, so a shard holding one
@@ -237,14 +200,14 @@ jobs:
         run: |
           python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json \
             --history-record agents/runs/ci-test-history \
-            --job-name "desktop e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}"
+            --job-name "desktop e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}"
       - name: Keep this job attempt's test report
         continue-on-error: true
         timeout-minutes: 2
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: ci-test-history-desktop-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: ci-test-history-desktop-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: agents/runs/ci-test-history/
           if-no-files-found: error
           retention-days: 7
@@ -252,7 +215,7 @@ jobs:
         if: ${{ inputs.keep-screenshots && steps.suite.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-desktop-screenshots-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: hide-desktop-screenshots-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/hide-e2e/*.png
           if-no-files-found: error
       - name: Keep the e2e run's logs
@@ -260,7 +223,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-desktop-e2e-logs-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: hide-desktop-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hide-e2e
             desktop/test-results

@@ -10,7 +10,6 @@ composer cell, which reads the pane's screen only to judge it.
 import base64
 import json
 import os
-from pathlib import Path
 import secrets
 import time
 
@@ -263,7 +262,7 @@ class Journey:
 
     # Facts Hide reports ---------------------------------------------------
 
-    def herdr_agent(self):
+    def engine_agent(self):
         return self.runtime.agent(self.pane)
 
     def turn_moment(self, activity):
@@ -273,8 +272,8 @@ class Journey:
         turn or Herdr kept reading one on an idle screen (with-hide/hide-private#309)."""
         moment = {"at_ms": int(time.time() * 1000), "activity": activity}
         try:
-            agent = self.herdr_agent() or {}
-            moment["herdr"] = {key: agent.get(key) for key in ("agent_status", "interactive_ready", "launch_pending")}
+            agent = self.engine_agent() or {}
+            moment["engine"] = {key: agent.get(key) for key in ("agent_status", "interactive_ready", "launch_pending")}
             moment["screen"] = self.controller.read_pane(self.pane, visible=True)
         except ProcessError as error:
             moment["unreadable"] = str(error)
@@ -318,7 +317,7 @@ class Journey:
         last = None
         while True:
             if not self.reference:
-                self.reference = (self.herdr_agent() or {}).get("agent_session")
+                self.reference = (self.engine_agent() or {}).get("agent_session")
             read = self.conversation()
             observed = self.daemon.activities(self.pane, since)
             if trace is not None and observed and observed[-1][0] != last and len(trace) < TURN_TRACE_CAP:
@@ -414,18 +413,18 @@ class Journey:
         evidence = self.evidence("spawn", self.record["spawn"])
         if spawned[0] != cells.PASS:
             self.pane = self.pane or self.pane_of(answer)
-            self.record["spawn"]["herdr"] = self.herdr_view(worktree)
+            self.record["spawn"]["engine"] = self.engine_view(worktree)
             if self.pane:
                 self.record["spawn"]["shell_children"] = self.shell_children(self.pane)
             evidence = self.evidence("spawn", self.record["spawn"])
             self.settle("start", spawned, evidence)
             return
         turn, read, observed = self.wait_turn(0, first)
-        native = self.herdr_agent() or {}
+        native = self.engine_agent() or {}
         self.reference = native.get("agent_session") or self.reference
-        self.record["start"] = {"activities": observed, "turn": turn, "herdr_agent": native,
+        self.record["start"] = {"activities": observed, "turn": turn, "engine_agent": native,
                                 "row": self.daemon.row(self.pane)}
-        checks = [spawned, turn, cells.emitter_verdict(self.reference, (self.row["herdr_source"] if self.runtime.engine == "herdr" else None))]
+        checks = [spawned, turn, cells.emitter_verdict(self.reference)]
         if self.brief_start:
             spawn_record = self.spawn_record("journey-" + self.id)
             self.record["start"]["brief_input"] = (spawn_record or {}).get("brief_input")
@@ -756,7 +755,7 @@ class Journey:
             return
         record = {"form": self.row["wake"], "asleep": [], "awake": []}
         self.record["sleep_wake"] = record
-        before = (self.herdr_agent() or {}).get("agent_session") or {}
+        before = (self.engine_agent() or {}).get("agent_session") or {}
         record["session_before"] = before
         # The operator has looked at the pane before they choose Sleep from its menu.
         self.daemon.dispatch("pane_visit", {"pane_id": self.pane})
@@ -925,7 +924,7 @@ class Journey:
             return
         turn, read, record["activities"] = self.wait_turn(since, value, lambda _events: events)
         record["turn"] = turn
-        native = self.herdr_agent() or {}
+        native = self.engine_agent() or {}
         after = (native.get("agent_session") or {}).get("value")
         record["session_after"] = after
         if not before or before != after:
@@ -998,12 +997,12 @@ class Journey:
     def wait_ready(self):
         """The engine reads the woken agent ready for input."""
         try:
-            self.runtime.wait(lambda: (agent := self.herdr_agent()) and agent.get("interactive_ready", True)
+            self.runtime.wait(lambda: (agent := self.engine_agent()) and agent.get("interactive_ready", True)
                               and agent.get("agent_status") in ("idle", "done") and not agent.get("launch_pending"), 60)
         except ProcessError as error:
             if self.runtime.owner.cancelled.is_set():
                 raise
-            agent = self.herdr_agent() or {}
+            agent = self.engine_agent() or {}
             raise ProcessError(f"agent_not_ready_for_input: engine reads {agent.get('agent_status')}, "
                                f"interactive_ready {agent.get('interactive_ready')}, "
                                f"launch_pending {agent.get('launch_pending')}") from error
@@ -1029,10 +1028,10 @@ class Journey:
             self.agent, self.session, self.checkout = answer["value"]["id"], answer["value"]["session"], worktree.resolve()
             self.reference = None
             turn, read, record["activities"] = self.wait_turn(0, value)
-            native = self.herdr_agent() or {}
-            record["herdr_agent"], record["turn"], record["read"] = native, turn, read
+            native = self.engine_agent() or {}
+            record["engine_agent"], record["turn"], record["read"] = native, turn, read
             self.settle("start_untrusted", cells.start_verdict(spawned, turn,
-                                                               cells.emitter_verdict(native.get("agent_session"), (self.row["herdr_source"] if self.runtime.engine == "herdr" else None)),
+                                                               cells.emitter_verdict(native.get("agent_session")),
                                                                cells.reply_verdict(read, self.session, value)),
                         self.evidence("start-untrusted", record))
         finally:
@@ -1063,20 +1062,12 @@ class Journey:
         """Model requests the run's sessions of this agent made."""
         return model_requests(self.kind, self.paths, self.sessions)
 
-    def herdr_view(self, worktree):
-        """What Herdr holds for a refused spawn: its workspaces and the
-        repository's worktrees, as diagnostic evidence."""
-        if self.runtime.engine == "own":
-            rest = self.daemon.snapshot() or {}
-            return {"workspaces": (rest.get("navigator") or {}).get("workspaces", []),
-                    "worktree_exists": worktree.exists()}
-        view = {}
-        for name, args in (("workspaces", ["workspace", "list"]),
-                           ("worktrees", ["worktree", "list", "--cwd", str(self.repository)])):
-            code, out, err = self.runtime.command(args, check=False)
-            view[name] = out[:20000] if not code else {"exit": code, "stderr": err[:500], "stdout": out[:2000]}
-        view["worktree_exists"] = worktree.exists()
-        return view
+    def engine_view(self, worktree):
+        """What the core holds for a refused spawn: its workspaces and whether
+        the worktree exists, as diagnostic evidence."""
+        rest = self.daemon.snapshot() or {}
+        return {"workspaces": (rest.get("navigator") or {}).get("workspaces", []),
+                "worktree_exists": worktree.exists()}
 
     def shell_children(self, pane):
         """The processes under a refused spawn's pane shell, by pid, parent

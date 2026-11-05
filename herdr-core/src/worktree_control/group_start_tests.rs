@@ -7,7 +7,7 @@ use crate::start_claim::{BoundPane, Effect};
 use hide_node_link::panes::PaneIdentity;
 use hide_node_link::protocol::Call;
 use hide_node_link::{LinkAnswer, LinkError, NodeLink};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 const PATH: &str = "/group-start-agent-admission";
@@ -23,20 +23,25 @@ fn original() -> PaneIdentity {
     }
 }
 
+/// The created pane's shell, as the engine names it, with every identity it
+/// named; and the node, which answers whether the agent is installed.
 struct ShellNode {
     identity: Mutex<PaneIdentity>,
     inspected: Mutex<Vec<PaneIdentity>>,
 }
 
+impl ShellNode {
+    fn inspect(&self, pane_id: &str) -> PaneIdentity {
+        assert_eq!(pane_id, PANE);
+        let identity = self.identity.lock().unwrap().clone();
+        self.inspected.lock().unwrap().push(identity.clone());
+        identity
+    }
+}
+
 impl NodeLink for ShellNode {
     fn call(&self, call: Call, _: Duration) -> Result<LinkAnswer, LinkError> {
         match call {
-            Call::PaneInspect { pane_id } => {
-                assert_eq!(pane_id, PANE);
-                let identity = self.identity.lock().unwrap().clone();
-                self.inspected.lock().unwrap().push(identity.clone());
-                Ok(serde_json::to_value(identity).unwrap().into())
-            }
             Call::AgentInstalled { name } => {
                 assert_eq!(name, "codex");
                 Ok(json!("program").into())
@@ -48,8 +53,9 @@ impl NodeLink for ShellNode {
     }
 }
 
-/// Releases the socket responder even if an assertion fails while the worker
-/// waits, so dropping FakeHerdr and SharedRuntime can join their owned work.
+/// Releases the engine's responder even if an assertion fails while the
+/// worker waits, so dropping the engine and SharedRuntime can join their
+/// owned work.
 struct ReadinessGate(Option<SyncSender<()>>);
 impl ReadinessGate {
     fn release(&mut self) {
@@ -64,11 +70,11 @@ impl Drop for ReadinessGate {
     }
 }
 
-fn readiness_response() -> Value {
-    json!({"type":"pane_process_info", "process_info":{
-        "pane_id":PANE,"shell_pid":711,"foreground_process_group_id":711,
+fn readiness_response() -> crate::engine::fake::Reply {
+    crate::engine::fake::reply(crate::engine::fake::processes(&json!({
+        "shell_pid":711,"foreground_process_group_id":711,
         "foreground_processes":[{"pid":711,"name":"zsh"}]
-    }})
+    })))
 }
 
 fn read_saved_binding(path: &Path) -> BoundPane {
@@ -87,7 +93,7 @@ fn read_saved_binding(path: &Path) -> BoundPane {
 
 fn setup(
     node: Arc<ShellNode>,
-    server: &FakeHerdr,
+    server: &Arc<crate::engine::fake::FakeEngine<'static>>,
 ) -> (
     SharedRuntime,
     u64,
@@ -165,7 +171,7 @@ fn setup(
     runtime.own_node = node.clone();
     let runtime = SharedRuntime::new(runtime);
     let context = live::LiveContext {
-        socket_path: server.socket_path().to_path_buf(),
+        socket_path: server.scope(),
         runtime: runtime.weak(),
         notifier: ChangeNotifier::noop(),
         engine: server.engine(),
@@ -191,30 +197,34 @@ fn setup(
     (runtime, task, path, target)
 }
 
-fn agent_readiness_server(entered: SyncSender<()>, released: Receiver<()>) -> FakeHerdr {
-    FakeHerdr::start(
-        "group-agent-incarnation",
-        move |method, params| match method {
-            "pane.process_info" => {
-                assert_eq!(params["pane_id"], PANE);
-                entered.send(()).unwrap();
-                released
-                    .recv_timeout(Duration::from_secs(10))
-                    .expect("test releases readiness");
-                readiness_response()
-            }
-            // This answer lets the unchanged control case launch, and makes a
-            // regression observable as an actual mutation instead of fake panic.
-            "agent.start" => {
-                assert_eq!(params["pane_id"], PANE);
-                json!({"type":"agent_started", "argv":[], "agent":{
-                    "pane_id":PANE,"terminal_id":"terminal-created","workspace_id":"w-order",
-                    "tab_id":TAB,"focused":false,"agent_status":"idle","revision":1
-                }})
-            }
-            other => panic!("unexpected admission request {other}"),
-        },
-    )
+fn agent_readiness_server(
+    entered: SyncSender<()>,
+    released: Receiver<()>,
+    node: Arc<ShellNode>,
+) -> Arc<crate::engine::fake::FakeEngine<'static>> {
+    crate::engine::fake::FakeEngine::start(move |method, params| match method {
+        "inspect_pane" => {
+            crate::engine::fake::reply(node.inspect(params["pane"].as_str().unwrap()))
+        }
+        "pane_processes" => {
+            assert_eq!(params["pane"], PANE);
+            entered.send(()).unwrap();
+            released
+                .recv_timeout(Duration::from_secs(10))
+                .expect("test releases readiness");
+            readiness_response()
+        }
+        // This answer lets the unchanged control case launch, and makes a
+        // regression observable as an actual mutation instead of fake panic.
+        "start_agent" => {
+            assert_eq!(params["pane"], PANE);
+            crate::engine::fake::reply(crate::engine::StartedAgent {
+                pane_id: PANE.to_owned(),
+                terminal_id: Some("terminal-created".to_owned()),
+            })
+        }
+        other => panic!("unexpected admission request {other}"),
+    })
 }
 
 fn admission_case(change: Option<&str>) {
@@ -224,7 +234,7 @@ fn admission_case(change: Option<&str>) {
     });
     let (entered, readiness) = sync_channel(1);
     let (release, released) = sync_channel(1);
-    let server = agent_readiness_server(entered, released);
+    let server = agent_readiness_server(entered, released, node.clone());
     let (runtime, task, saved_path, target) = setup(node.clone(), &server);
     // Declared after runtime/server: on panic release their blocked worker
     // before either owner's Drop waits for it.
@@ -304,7 +314,7 @@ fn admission_case(change: Option<&str>) {
     let starts = server
         .methods()
         .into_iter()
-        .filter(|method| method == "agent.start")
+        .filter(|method| *method == "start_agent")
         .count();
     if change.is_some() {
         assert_eq!(starts, 0, "no command may reach the replacement shell");

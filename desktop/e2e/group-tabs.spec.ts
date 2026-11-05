@@ -19,7 +19,7 @@ test("named groups and new terminals render in the candidate window", async () =
     const selector = page.locator("[data-agent-group-selector]");
     const tabs = page.locator('[data-agent-tab-bar] [role=tab]');
     await expect(selector).toBeVisible();
-    const facts = { build: "worktree debug", daemonPid: run.daemonPid(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, input: "Playwright renderer", externalProvider: "controlled fixture CLI" };
+    const facts = { build: "worktree debug", daemonPid: run.daemonPid(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, input: "Playwright renderer", externalProvider: "controlled fixture CLI" };
     await compositorPresents(page);
     await captureNativeWindow(app, "group-tabs-work-native", facts);
     await selector.click();

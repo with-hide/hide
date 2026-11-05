@@ -47,7 +47,6 @@ pub fn local_device(
         sign_in: None,
         ssh_alias: None,
         wsl_distro: None,
-        herdr_socket_path: None,
         agent_count: 0,
         test: None,
         host: crate::model::DeviceHostSnapshot {
@@ -63,7 +62,6 @@ pub fn local_device(
         kit: crate::model::KitSnapshot::default(),
         machine_name: machine_name.map(str::to_owned),
         dials_in: false,
-        herdr_behind: None,
     }
 }
 
@@ -96,14 +94,12 @@ pub fn devices(
                 sign_in: None,
                 ssh_alias: registration.origin.ssh_alias().map(str::to_owned),
                 wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
-                herdr_socket_path: registration.herdr_socket_path.clone(),
                 agent_count: 0,
                 test: None,
                 host: crate::model::DeviceHostSnapshot::default(),
                 kit: crate::model::KitSnapshot::default(),
                 machine_name: None,
                 dials_in: registration.origin == crate::model::LinkOrigin::Inbound,
-                herdr_behind: None,
             });
         }
     }

@@ -590,7 +590,7 @@ class NightlyFailures(unittest.TestCase):
         self.assertIn("Expected a", opened[1]["body"])
 
     def test_a_failure_while_preparing_the_runner_is_infra(self):
-        cases = (("Fetch the pinned Herdr runtime", True), ("Run actions/checkout@v7", True), ("Install dependencies", True),
+        cases = (("Run actions/checkout@v7", True), ("Install dependencies", True),
                  ("Build the desktop app's daemon and kit binaries", False), ("Desktop suite", False))
         for step, infra in cases:
             with self.subTest(step=step):

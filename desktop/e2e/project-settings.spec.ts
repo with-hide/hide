@@ -42,7 +42,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     // so, rather than moving its issues to Local.
     await expect(sheet).toContainText("Automatic (GitHub)");
     await expect(sheet).toContainText("GitHub read failed");
-    await captureNativeWindow(app, "project-settings-connections-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: engine.socket, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture gh logged out, GitHub remote" });
+    await captureNativeWindow(app, "project-settings-connections-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture gh logged out, GitHub remote" });
     await sheet.getByRole("combobox", { name: "Issue source", exact: true }).click();
     await page.getByRole("option", { name: "Local", exact: true }).click();
     await expect(sheet).toContainText("Saved");
@@ -99,7 +99,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     await expect(location).toContainText("New worktree");
     await expect(sheet).toContainText("Saved");
     await expect.poll(() => Object.values(stored().project_settings).find((record) => record.root === repo)?.new_work).toBe("worktree");
-    await captureNativeWindow(app, "project-settings-work-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: engine.socket, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture discovery, no external GitHub" });
+    await captureNativeWindow(app, "project-settings-work-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture discovery, no external GitHub" });
     await page.keyboard.press("Escape");
     await expect(sheet).toHaveCount(0);
     await expect(gear()).toBeFocused();

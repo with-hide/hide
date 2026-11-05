@@ -1,23 +1,20 @@
 // Synthetic native-format writers on an isolated engine and hided.
 // Installed CLI measurements remain a separate acceptance boundary.
-import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { agentIn, sendKeys, tabOfPane, withControl } from "./daemon-actions";
-import type { HerdrFixture } from "./herdr-fixture";
 import type { Rest } from "./hided-control.mjs";
 import { startHided, type Daemon } from "./hided-fixture";
 import crypto from "node:crypto";
 import {
-  CURSOR_GOAL, CURSOR_ID, GROK_ID, GROK_PLAN, GROK_TITLE, OMP_ID, OMP_TITLE, OMP_UPDATED_TITLE, OPENCODE_CHILD_TITLE, OPENCODE_ID, OPENCODE_TITLE, PI_ID,
-  PI_TITLE, type NativeFileReader, appendOmpQuestion, nativeSessionId, prepareEngineWriter, prepareOpenCodeWriter, reportNativeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
+  GROK_ID, GROK_PLAN, GROK_TITLE, OMP_ID, OMP_TITLE, OMP_UPDATED_TITLE, OPENCODE_CHILD_TITLE, OPENCODE_ID, OPENCODE_TITLE, PI_ID,
+  PI_TITLE, type NativeFileReader, appendOmpQuestion, nativeSessionId, prepareEngineWriter, prepareOpenCodeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
   writeOpenCodeQuestion,
 } from "./session-reader-fixture";
-import { enterWorkspace, openSleepingProject, screenshot, sendEvent } from "./wire";
+import { enterWorkspace, openSleepingProject, screenshot } from "./wire";
 import { afterCleanup } from "./worker-owned";
-import { FakeTailscale } from "./fake-tailscale";
 import { dumpOnFailure } from "./failure-dump";
 import type { AgentRow } from "../src/snapshot";
 
@@ -42,25 +39,21 @@ function freshAgent(rest: Rest, kind: string, except: string): string | undefine
  * Starts the stand-in `kind` at the shell prompt of `pane`, as the operator
  * starts one, and waits until its session file exists, the engine lists the
  * agent and the agent's row names its session. The session reaches Hide as
- * the agent's own report: the stand-in's, from inside its pane, on the core's
- * own engine (`prepareEngineWriter`); Herdr's integration report on Herdr,
- * which the stand-in has no Hide integration to replace there.
+ * the agent's own report: the stand-in's, from inside its pane
+ * (`prepareEngineWriter`).
  */
 async function startNative(fixture: AgentFixture, daemon: Daemon, kind: NativeFileReader, pane: string, session: string): Promise<void> {
   await withControl(daemon, async (control) => sendKeys(control, pane, `${programOf(kind)}\r`));
   await expect.poll(() => fs.existsSync(session)).toBe(true);
   await withControl(daemon, (control) => control.until((rest) => nativeAgent(rest, pane, kind), `a ${kind} agent in ${pane}`, 30_000));
-  await reportSession(fixture, daemon, kind, pane, session);
+  await reportSession(daemon, kind, pane);
 }
 
 /**
- * Waits until the row of `pane` names the agent's session. On Herdr the spec
- * makes the report first, since only Herdr's integration names a native
- * writer's session there; on the core's own engine the stand-in made it when
- * it wrote or resumed its session.
+ * Waits until the row of `pane` names the agent's session, which the
+ * stand-in reported when it wrote or resumed its session.
  */
-async function reportSession(fixture: AgentFixture, daemon: Daemon, kind: NativeFileReader, pane: string, session: string): Promise<void> {
-  if (fixture.engine === "herdr") reportNativeWriter(fixture as unknown as HerdrFixture, kind, pane, session);
+async function reportSession(daemon: Daemon, kind: NativeFileReader, pane: string): Promise<void> {
   await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionId(kind) ? true : undefined), `${pane} on its ${kind} session`, 30_000));
 }
 
@@ -110,7 +103,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page);
     const row = await showNativeRow(page, sourcePane);
-    // status-model.md, Task identity: an automatic/source-less name follows the goal.
+    // with-hide/hide-private docs/task-identity.md: an automatic/source-less name follows the goal.
     const selected = kind === "pi" ? "Generated Pi goal" : kind === "grok" ? "Generated Grok goal" : initialTitle;
     await expect(row).toContainText(selected, { timeout: 30_000 });
     if (kind === "pi" || kind === "grok") await disableAgentSummaries(page);
@@ -161,7 +154,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     await sleeping.getByRole("button", { name: "Wake agent" }).click();
     const fresh = await withControl(daemon, (control) => control.until((rest) => freshAgent(rest, kind, sourcePane), `a fresh ${kind} agent`, 30_000));
     await expect.poll(() => fs.readFileSync(path.join(fixture.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[])).toContainEqual([resumeFlag, id, ...fullAccess]);
-    await reportSession(fixture, daemon, kind, fresh, session);
+    await reportSession(daemon, kind, fresh);
     await expect(sleeping).toHaveCount(0, { timeout: 30_000 });
     await expect(await showNativeRow(page, fresh)).toContainText(title);
     expect(fs.readFileSync(session)).toEqual(prior);
@@ -173,113 +166,6 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
   fixture.stop();
 });
 }
-
-for (const refusal of ["override", "duplicate"] as const) {
-// Herdr only: Cursor's retired integration supplies the historical session identity.
-test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane`, { tag: "@herdr" }, async ({ page }) => {
-  const fixture = await startFixture({ agents: false });
-  let daemon: Daemon | null = null;
-  try {
-    const home = path.join(fixture.root, "home");
-    const alternate = path.join(home, "alternate-config");
-    const env = refusal === "override"
-      ? { CURSOR_CONFIG_DIR: path.join(alternate, "cursor"), XDG_CONFIG_HOME: undefined }
-      : { CURSOR_CONFIG_DIR: path.join(home, ".cursor"), XDG_CONFIG_HOME: alternate };
-    daemon = await startHided(fixture, `cursor-root-${refusal}`, home, env);
-    const pane = fixture.panes[0];
-    const session = prepareEngineWriter(fixture, "cursor");
-    await startNative(fixture, daemon, "cursor", pane, session);
-    const other = path.join(alternate, "cursor", "chats", path.basename(path.dirname(path.dirname(session))), CURSOR_ID);
-    fs.cpSync(path.dirname(session), other, { recursive: true });
-    const copied = new DatabaseSync(path.join(other, "store.db"));
-    try {
-      const metadata = copied.prepare("SELECT value FROM meta WHERE key='0'").get() as { value: string };
-      const native = JSON.parse(Buffer.from(metadata.value, "hex").toString()) as { latestRootBlobId: string };
-      const graph = JSON.parse(fs.readFileSync(path.resolve("../hide-session/tests/fixtures/cursor-2026.10.01/browser-graph.json"), "utf8")) as { roots: { append: string } };
-      native.latestRootBlobId = graph.roots.append;
-      copied.prepare("UPDATE meta SET value=? WHERE key='0'").run(Buffer.from(JSON.stringify(native)).toString("hex"));
-    } finally { copied.close(); }
-    const before = fs.readFileSync(session);
-    const otherBefore = fs.readFileSync(path.join(other, "store.db"));
-    expect(otherBefore).not.toEqual(before);
-    const launches = path.join(fixture.root, "cursor-launches.jsonl");
-    const starts = fs.readFileSync(launches, "utf8");
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page);
-    const row = await showNativeRow(page, pane);
-    await expect(row).toContainText(CURSOR_GOAL, { timeout: 30_000 });
-    await row.click();
-    await page.locator(`[data-pane-menu="${pane}"]`).click();
-    await expect(page.locator('[data-menu-group="fork"]')).toHaveCount(0);
-    await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeDisabled();
-    // A stale client must also be refused by the core, before any close or launch.
-    await sendEvent(page, daemon, "agent_sleep", { pane_id: pane });
-    const log = () => fs.readFileSync(path.join(daemon!.stateDir, "Logs", "core.jsonl"), "utf8");
-    await expect.poll(log).toContain('"error_kind":"agent_sleep.refused"');
-    await expect.poll(log).toContain("This agent's reader does not support sleep");
-    await expect(row).toContainText(CURSOR_GOAL);
-    await expect(page.locator('[data-sleeping-session]')).toHaveCount(0);
-    await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) ? true : undefined), `${pane} still open`, 15_000));
-    expect(fs.readFileSync(launches, "utf8")).toEqual(starts);
-    expect(fs.readFileSync(session)).toEqual(before);
-    expect(fs.readFileSync(path.join(other, "store.db"))).toEqual(otherBefore);
-    await screenshot(page, `cursor-${refusal}-sleep-refusal`);
-  } catch (error) {
-    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => fixture.stop());
-  }
-  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => fixture.stop()); }
-  fixture.stop();
-});
-}
-
-// Herdr only: Cursor's retired integration supplies the historical session identity.
-test("Cursor phone reads native message units and omits an unrecorded time", { tag: "@herdr" }, async ({ browser, page }) => {
-  const fixture = await startFixture({ agents: false });
-  const tailscale = new FakeTailscale();
-  let daemon: Daemon | null = null;
-  let phoneContext: BrowserContext | undefined;
-  const errors: unknown[] = [];
-  try {
-    tailscale.ready();
-    tailscale.install();
-    daemon = await startHided(fixture, "cursor-phone", path.join(fixture.root, "home"), { HIDE_TAILSCALE_BIN: tailscale.bin });
-    const pane = fixture.panes[0];
-    const session = prepareEngineWriter(fixture, "cursor");
-    await startNative(fixture, daemon, "cursor", pane, session);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await page.locator("[data-open-settings]").click();
-    await page.locator('[data-settings-tab="mobile"]').click();
-    await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
-    await page.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
-    await expect(page.getByRole("switch", { name: "Use Tailscale", exact: true })).toHaveAttribute("aria-checked", "true");
-    await page.locator('[data-mobile-switch="true"]').click();
-    await expect(page.locator('[data-mobile-ready="true"]')).toBeVisible({ timeout: 30_000 });
-    await page.locator('[data-mobile-show-code="true"]').click();
-    const qr = page.locator("[data-mobile-qr]");
-    await expect(qr).toBeVisible();
-    const url = await qr.getAttribute("data-mobile-qr");
-    expect(url).toContain("/m/#pair=");
-    phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "ko-KR" });
-    const phone = await phoneContext.newPage();
-    await phone.goto(`${daemon.origin}/m/${url!.slice(url!.indexOf("#"))}`);
-    await phone.locator('[data-phone-pair="true"]').tap();
-    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
-    await phone.locator(`[data-phone-agent$="|${pane}"]`).tap();
-    const messages = phone.locator("[data-phone-message]");
-    await expect(messages).toHaveCount(2, { timeout: 30_000 });
-    const human = phone.locator('[data-phone-message="you"]');
-    await expect(human).toContainText("요청 보기를 만들어줘");
-    await expect(human.locator("time")).toHaveCount(0);
-    await expect(phone.locator('[data-phone-message="agent"] time')).toHaveAttribute("datetime", "2026-10-03T01:01:00.000Z");
-    await expect(phone.locator("[data-phone-older]")).toHaveCount(0);
-    await screenshot(phone, "cursor-phone-native-units-time");
-  } catch (error) { errors.push(error); }
-  try { await phoneContext?.close(); } catch (error) { errors.push(error); }
-  try { daemon?.stop(); } catch (error) { errors.push(error); }
-  try { fixture.stop(); } catch (error) { errors.push(error); }
-  try { tailscale.remove(); } catch (error) { errors.push(error); }
-  if (errors.length) throw new AggregateError(errors, "Cursor phone fixture or cleanup failed");
-});
 
 test("OpenCode's root session titles its row, waits on its question and wakes by id in a fresh pane", async ({ page }) => {
   let agents: QuestionRow[] = [];
@@ -313,7 +199,6 @@ test("OpenCode's root session titles its row, waits on its question and wakes by
     // A question keeps OpenCode's answer unfinished; its answer completes it.
     const question = () => agents.find((agent) => agent.pane_id === sourcePane)?.user_turn;
     const nativeReadState = () => ({
-      engine: fixture.engine,
       row: agents.find((agent) => agent.pane_id === sourcePane),
       files: [database, `${database}-wal`, `${database}-shm`].map(file => ({ file, size: fs.existsSync(file) ? fs.statSync(file).size : null })),
       diagnostic: fs.readFileSync(path.join(daemon!.stateDir, "Logs", "core.jsonl"), "utf8").trim().split("\n").slice(-40),

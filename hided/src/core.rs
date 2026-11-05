@@ -27,9 +27,7 @@ use hide_node::terminal::device::DeviceSink;
 use hide_node::terminal::engine_panes::LocalPanes;
 use hide_node::terminal::holder::{Holders, LocalTerminals};
 use hide_node::terminal::router::Router;
-use hide_node::terminal::{
-    Attacher, LocalAttacher, Mode, OutputSink, ReportSink, Service, SessionParts,
-};
+use hide_node::terminal::{OutputSink, ReportSink, Service};
 use tokio::sync::broadcast;
 
 use crate::terminal_hub::TerminalHub;
@@ -45,16 +43,6 @@ enum Command {
     /// A usage event the daemon observed outside the core (a phone's
     /// pairing); the owner thread hands it to the statistics worker it owns.
     ProductEvent(herdr_core::product_analytics::Event),
-    ObservationPrepare {
-        device_id: String,
-        pane_id: String,
-        expected: Context,
-        terminal: String,
-        observation: hide_node_link::panes::DirectObservation,
-        start: bool,
-        deadline: std::time::Instant,
-        reply: Sender<Result<herdr_core::direct_observation::PreparedObservation, String>>,
-    },
     DeliveryHuman {
         reply: Sender<Result<herdr_core::delivery::worker::PreparedHuman, String>>,
     },
@@ -287,18 +275,15 @@ pub struct CoreHandle {
     /// session start reads without the owner thread.
     state_dir: std::path::PathBuf,
     /// The home whose agent definition folder is read at start and on each
-    /// `hide agent catalog`, with the development switch
-    /// (`crate::env::HIDE_DEV_PANE_HOLDER`) on only; `None` reads nothing
-    /// (PRD engine-bundle-3-core-owns B1, D-17).
-    definitions_home: Option<std::path::PathBuf>,
+    /// `hide agent catalog` (PRD engine-bundle-3-core-owns B1, D-17).
+    definitions_home: std::path::PathBuf,
     /// This machine's engine, the same one the core holds: a pane's proof
     /// and a phone's read ask it without the owner thread or the runtime
-    /// lock. `None` when the daemon runs without a Herdr server.
-    engine: Option<EngineHandle>,
-    /// This machine's pane holders, when the core's own engine runs them:
-    /// the daemon lives while one of their panes may still run (PRD
-    /// engine-bundle-3-core-owns D-10).
-    holders: Option<Arc<Holders>>,
+    /// lock.
+    engine: EngineHandle,
+    /// This machine's pane holders: the daemon lives while one of their
+    /// panes may still run (PRD engine-bundle-3-core-owns D-10).
+    holders: Arc<Holders>,
     /// What a shutdown ends, taken out by the first one, so a second
     /// shutdown or the `Drop` after it finds nothing left to close.
     running: Mutex<Option<Running>>,
@@ -313,37 +298,6 @@ struct Running {
 }
 
 impl CoreHandle {
-    #[allow(clippy::too_many_arguments)] // identity facts and deadline cross the authenticated boundary intact
-    pub fn prepare_direct_observation(
-        &self,
-        device: &str,
-        pane: &str,
-        expected: &Context,
-        terminal: String,
-        observation: hide_node_link::panes::DirectObservation,
-        start: bool,
-        deadline: std::time::Instant,
-    ) -> Result<herdr_core::direct_observation::PreparedObservation, String> {
-        let (reply, result) = mpsc::channel();
-        self.commands
-            .send(Command::ObservationPrepare {
-                device_id: device.to_owned(),
-                pane_id: pane.to_owned(),
-                expected: expected.clone(),
-                terminal,
-                observation,
-                start,
-                deadline,
-                reply,
-            })
-            .map_err(|_| "observation_unavailable")?;
-        let left = deadline
-            .checked_duration_since(std::time::Instant::now())
-            .ok_or("observation_expired")?;
-        result
-            .recv_timeout(left)
-            .map_err(|_| "observation_expired")?
-    }
     /// The machine the core runs on.
     pub fn node(&self) -> &herdr_core::node::NodeId {
         &self.node
@@ -628,16 +582,14 @@ impl CoreHandle {
     }
 
     /// Read the operator's agent definition folder here, off the owner
-    /// thread and the runtime lock, and hand the result to the core; nothing
-    /// with the development switch off.
+    /// thread and the runtime lock, and hand the result to the core.
     fn read_agent_definitions(&self) {
-        if let Some(home) = &self.definitions_home {
-            let read = hide_kit::agent_definitions::read(home);
-            let _ = self.commands.send(Command::AgentDefinitions {
-                home: home.clone(),
-                read,
-            });
-        }
+        let home = &self.definitions_home;
+        let read = hide_kit::agent_definitions::read(home);
+        let _ = self.commands.send(Command::AgentDefinitions {
+            home: home.clone(),
+            read,
+        });
     }
 
     fn agent_catalog_once(
@@ -834,14 +786,11 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the Herdr import reply".to_owned())
     }
 
-    /// `own_engine` is the development switch (`crate::env::Env::own_engine`):
-    /// on, this machine's panes run in the node's holders under the core's
-    /// own engine, and `options` names no Herdr. `panes` is where each
-    /// device's node link sends its panes' proofs and command streams
-    /// (`node_panes`).
+    /// This machine's panes run in the node's holders under the core's own
+    /// engine. `panes` is where each device's node link sends its panes'
+    /// proofs and command streams (`node_panes`).
     pub fn spawn(
         options: CoreOptions,
-        own_engine: bool,
         panes: hide_node::ssh::PaneEventsSlot,
     ) -> Result<Self, String> {
         let node = options.node_id.clone();
@@ -849,14 +798,7 @@ impl CoreHandle {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .to_path_buf();
-        let definitions_home = match crate::env::pane_holder_switch()? {
-            hide_node::terminal::holder::Switch::Off => None,
-            hide_node::terminal::holder::Switch::On => Some(match options.home.as_ref() {
-                Some(home) => std::path::PathBuf::from(home),
-                None => hide_platform::host::home_dir()
-                    .map_err(|error| format!("agent definitions need a home folder: {error}"))?,
-            }),
-        };
+        let definitions_home = core_home(&options)?;
         let (command_tx, command_rx) = mpsc::channel::<Command>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (notify_tx, _) = broadcast::channel(32);
@@ -870,12 +812,14 @@ impl CoreHandle {
             holders,
         } = local_terminals(
             &options,
-            own_engine,
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
             Arc::clone(&reports),
         )?;
         let pane_holders = holders.clone();
-        let engine = local_engine(&options, &state_dir, holders, &local)?;
+        // One node answers for this machine, to the core and to its engine
+        // alike, so the core's stop closes the one that owns the panes.
+        let own_node = Arc::new(own_node(&options, &state_dir, holders, &local)?);
+        let engine = local_engine(&options, &state_dir, Arc::clone(&own_node))?;
         let terminals = Arc::new(Router::new(
             Arc::clone(&local) as Arc<dyn hide_node_link::terminal::TerminalNode>,
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
@@ -888,7 +832,7 @@ impl CoreHandle {
             .spawn(move || {
                 owner_loop(
                     options,
-                    core_engine,
+                    (own_node, core_engine),
                     panes,
                     (routes, terminal_reports),
                     command_rx,
@@ -959,15 +903,14 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped remote routes".to_owned())
     }
 
-    /// This machine's engine; `None` when the daemon runs without a Herdr
-    /// server.
-    pub fn engine(&self) -> Option<&EngineHandle> {
-        self.engine.as_ref()
+    /// This machine's engine.
+    pub fn engine(&self) -> &EngineHandle {
+        &self.engine
     }
 
-    /// The pane holders of the core's own engine; `None` for Herdr.
-    pub fn pane_holders(&self) -> Option<&Arc<Holders>> {
-        self.holders.as_ref()
+    /// This machine's pane holders, which the core's own engine runs.
+    pub fn pane_holders(&self) -> &Arc<Holders> {
+        &self.holders
     }
 
     /// The engine the core holds for a connected SSH device; see
@@ -1257,75 +1200,79 @@ impl Drop for CoreHandle {
     }
 }
 
-/// The engine that runs this machine's panes: with the development switch
-/// (`crate::env::HIDE_DEV_PANE_HOLDER`) on, the core's own engine over the
-/// node's pane holders, standing for this state folder's engine folder; off,
-/// the Herdr server at the configured socket, or none (PRD
-/// engine-bundle-3-core-owns D-5). A Herdr core over holder panes is not a
-/// mode: a socket beside the switch is refused.
+/// This machine's node: it answers for the core's home, keeps what it
+/// measured of each repository's worktrees and the View feedback in the
+/// state folder, installs the kit from the parts beside this program, and
+/// answers the core's own engine from the node's pane holders (PRD
+/// engine-bundle-3-core-owns D-5).
+fn own_node(
+    options: &CoreOptions,
+    state_dir: &std::path::Path,
+    holders: Arc<Holders>,
+    service: &Arc<Service>,
+) -> Result<hide_node::Local, String> {
+    let home = core_home(options)?;
+    let mut node = hide_node::Local::new(Some(home.clone()))
+        // What the node measured of each repository's worktrees outlives
+        // the daemon, in the core's state folder.
+        .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(state_dir))
+        .keeping_feedback_in(state_dir.to_path_buf())
+        .with_panes(Arc::new(LocalPanes::for_account(
+            holders,
+            Arc::clone(service),
+            home.clone(),
+        )));
+    // The install kit's parts ship beside this binary: in the app bundle, or
+    // in the build folder a move or a core update placed in this account's
+    // helper root, which a moved core's login item runs. A daemon anywhere
+    // else, a development build among them, installs nothing (PRD
+    // device-parity D-19).
+    if let Ok(executable) = std::env::current_exe() {
+        node = node.with_kit(hide_host::serve::KitPlace::of_program(
+            &executable,
+            Some(&home),
+        ));
+    }
+    Ok(node)
+}
+
+/// The engine that runs this machine's panes: the core's own engine over
+/// `node`'s pane holders, standing for this state folder's engine folder
+/// (PRD engine-bundle-3-core-owns D-5).
 fn local_engine(
     options: &CoreOptions,
     state_dir: &std::path::Path,
-    holders: Option<Arc<Holders>>,
-    service: &Arc<Service>,
-) -> Result<Option<EngineHandle>, String> {
-    match (holders, options.herdr_socket_path.as_deref()) {
-        (Some(_), Some(_)) => Err(format!(
-            "{} runs the core's own engine, which takes no Herdr socket",
-            crate::env::HIDE_DEV_PANE_HOLDER
-        )),
-        (Some(holders), None) => {
-            let home = core_home(options)?;
-            // The engine's folders, Git and pane holders are this machine's,
-            // asked of a node answering for the core's home as the core's own
-            // node does, by the same requests a device's node answers.
-            let node = Arc::new(
-                hide_node::Local::new(Some(home.clone())).with_panes(Arc::new(
-                    LocalPanes::for_account(holders, Arc::clone(service), home.clone()),
-                )),
-            );
-            // The engine opens knowing the operator's agents, so the restore
-            // that starts with it resumes theirs too; a folder that cannot be
-            // read leaves the built-in ones, and the core's read logs why.
-            let definitions = hide_kit::agent_definitions::read(&home)
-                .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
-            EngineHandle::own(node, state_dir.to_path_buf(), home, definitions).map(Some)
-        }
-        (None, Some(socket)) => Ok(Some(EngineHandle::herdr(hide_node::herdr(
-            std::path::Path::new(socket),
-        )))),
-        (None, None) => Ok(None),
-    }
+    node: Arc<hide_node::Local>,
+) -> Result<EngineHandle, String> {
+    let home = core_home(options)?;
+    // The operator's agents are known as the engine opens, so the restore
+    // that starts with it resumes theirs too; a folder that cannot be read
+    // leaves the built-in ones, and the core's read logs why.
+    let definitions = hide_kit::agent_definitions::read(&home)
+        .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
+    EngineHandle::own(node, state_dir.to_path_buf(), home, definitions)
 }
 
-/// This machine's terminal service: Herdr's sessions, or the pane holders
-/// when the development switch (`crate::env::HIDE_DEV_PANE_HOLDER`) is on,
-/// over the state folder's records, the holder beside this program, and on
-/// Windows the pinned ConPTY runtime beside it (`Holders::start_local`,
-/// which the node's measuring tools start too).
+/// This machine's terminal service over the pane holders, over the state
+/// folder's records, the holder beside this program, and on Windows the
+/// pinned ConPTY runtime beside it (`Holders::start_local`, which the node's
+/// measuring tools start too).
 fn local_terminals(
     options: &CoreOptions,
-    holders: bool,
     outputs: Arc<dyn OutputSink>,
     reports: Arc<dyn ReportSink>,
 ) -> Result<LocalTerminals, String> {
     use hide_node::terminal::holder::HolderFolders;
-    // Off, no holder is opened and neither folder is read.
-    let folders = match holders {
-        false => None,
-        true => {
-            let state_dir = std::path::Path::new(&options.app_state_path)
-                .parent()
-                .ok_or("the app state path has no folder")?
-                .to_path_buf();
-            Some((core_home(options)?, state_dir))
-        }
-    };
+    let state_dir = std::path::Path::new(&options.app_state_path)
+        .parent()
+        .ok_or("the app state path has no folder")?
+        .to_path_buf();
+    let home = core_home(options)?;
     Holders::start_local(
-        folders
-            .as_ref()
-            .map(|(home, state_dir)| HolderFolders { home, state_dir }),
-        local_attacher(options),
+        HolderFolders {
+            home: &home,
+            state_dir: &state_dir,
+        },
         outputs,
         reports,
     )
@@ -1341,68 +1288,26 @@ fn core_home(options: &CoreOptions) -> Result<std::path::PathBuf, String> {
     }
 }
 
-/// This machine's Herdr, through the official `herdr terminal session`
-/// client. A daemon with no Herdr server has no panes of its own, and an
-/// attach says so.
-fn local_attacher(options: &CoreOptions) -> Box<dyn Attacher> {
-    struct NoHerdr;
-    impl Attacher for NoHerdr {
-        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-            Err("This daemon runs without a Herdr server".to_owned())
-        }
-    }
-    match options.herdr_socket_path.as_deref() {
-        Some(socket) => Box::new(LocalAttacher::new(
-            options
-                .herdr_bin_path
-                .as_deref()
-                .map(std::path::PathBuf::from),
-            std::path::PathBuf::from(socket),
-        )),
-        None => Box::new(NoHerdr),
-    }
-}
-
 fn owner_loop(
     options: CoreOptions,
-    own_engine: Option<EngineHandle>,
+    (own_node, own_engine): (Arc<hide_node::Local>, EngineHandle),
     panes: hide_node::ssh::PaneEventsSlot,
     (terminals, terminal_reports): (Arc<Router>, herdr_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
     ready: Sender<Result<(), String>>,
     notify: broadcast::Sender<()>,
 ) {
-    // The core's own node answers for the home the core reads and writes
-    // for: the configured one, else the process's, as the core decides.
+    // The home the core reads and writes for: the configured one, else the
+    // process's, as the core decides.
     let home = options
         .home
         .as_ref()
         .map(std::path::PathBuf::from)
         .or_else(|| hide_platform::host::home_dir().ok());
-    let mut own_node = hide_node::Local::new(home.clone());
-    // What the node measured of each repository's worktrees outlives the
-    // daemon, in the core's state folder.
     let state_dir = std::path::Path::new(&options.app_state_path)
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
-    own_node = own_node
-        .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
-        .keeping_feedback_in(state_dir.clone());
-    if let Some(socket) = options.herdr_socket_path.as_deref() {
-        own_node = own_node.with_herdr_socket(std::path::PathBuf::from(socket));
-    }
-    // The install kit's parts ship beside this binary: in the app bundle, or
-    // in the build folder a move or a core update placed in this account's
-    // helper root, which a moved core's login item runs. A daemon anywhere
-    // else, a development build among them, installs nothing (PRD
-    // device-parity D-19).
-    if let Ok(executable) = std::env::current_exe() {
-        own_node = own_node.with_kit(hide_host::serve::KitPlace::of_program(
-            &executable,
-            home.as_deref(),
-        ));
-    }
     // The program builds devices run, and the `hide` that answers ssh's
     // sign-in questions, ship beside this binary; a daemon anywhere else
     // carries none, which leaves each device's node `unsupported` with that
@@ -1419,29 +1324,12 @@ fn owner_loop(
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
     )
-    .with_herdr_program(
-        options
-            .herdr_bin_path
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("herdr")),
-    )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>)
-    .with_device_home(device_home)
-    // A core on its own engine runs every device's panes on it too, in pane
-    // holders the device's node runs, and puts no Herdr on the device (PRD
+    // Every device's panes run on the core's own engine too, in pane
+    // holders the device's node runs, with no Herdr on the device (PRD
     // engine-bundle-3-core-owns D-22).
-    .with_engine(
-        match own_engine
-            .as_ref()
-            .and_then(EngineHandle::own_scope)
-            .is_some()
-        {
-            true => hide_node::ssh::DeviceEngine::Holders,
-            false => hide_node::ssh::DeviceEngine::Herdr,
-        },
-    );
+    .with_device_home(device_home);
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);
     // there is no WSL to reach on any other system.
     let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {
@@ -1459,27 +1347,10 @@ fn owner_loop(
             }
         }
     });
-    // Only a daemon running from a desktop package with that package's own
-    // Herdr offers to move the operator's older server onto it (PRD
-    // herdr-takeover); any other installs one that finds nothing, so a
-    // Herdr step a packaged daemon saved still goes on. A core on its own
-    // engine runs no Herdr: its Herdr session moves into the engine instead
-    // (`herdr_transition`).
-    let takeover = match own_engine.as_ref().and_then(EngineHandle::own_scope) {
-        Some(_) => None,
-        None => crate::herdr_handoff::LocalTakeover::for_daemon(
-            options.herdr_bin_path.as_deref().map(std::path::Path::new),
-            options
-                .herdr_socket_path
-                .as_deref()
-                .map(std::path::Path::new),
-            &state_dir,
-        ),
-    };
     let Some(core) = Core::create_with_product_analytics(
         options,
-        std::sync::Arc::new(own_node),
-        own_engine,
+        own_node,
+        Some(own_engine),
         std::sync::Arc::new(devices),
         terminals,
         terminal_reports,
@@ -1498,34 +1369,10 @@ fn owner_loop(
     core.on_change(move || {
         let _ = notify.send(());
     });
-    core.set_herdr_takeover(match takeover {
-        Some(takeover) => Arc::new(takeover),
-        None => Arc::new(crate::herdr_handoff::NoTakeover),
-    });
     let _ = ready.send(Ok(()));
     let mut _held_roots = hide_node::HeldRoots::default();
     while let Ok(command) = commands.recv() {
         match command {
-            Command::ObservationPrepare {
-                device_id,
-                pane_id,
-                expected,
-                terminal,
-                observation,
-                start,
-                deadline,
-                reply,
-            } => {
-                let _ = reply.send(core.prepare_direct_observation(
-                    &device_id,
-                    &pane_id,
-                    &expected,
-                    &terminal,
-                    observation,
-                    start,
-                    deadline,
-                ));
-            }
             Command::DeliveryHuman { reply } => {
                 let _ = reply.send(core.prepare_delivery_human());
             }
@@ -1831,15 +1678,13 @@ fn owner_loop(
 
 #[cfg(test)]
 impl CoreHandle {
-    /// A core with no Herdr and no registered checkout.
+    /// A core with no registered checkout.
     pub(crate) fn bare(directory: &std::path::Path) -> Self {
         Self::spawn(
             herdr_core::CoreOptions {
                 schema_version: crate::state_file::SCHEMA_VERSION,
                 home: None,
                 node_id: herdr_core::node::NodeId::parse("test-node").unwrap(),
-                herdr_socket_path: None,
-                herdr_bin_path: None,
                 app_state_path: directory.join("core-state.json").display().to_string(),
                 host_helper_root: None,
                 host_cli_dir: None,
@@ -1850,7 +1695,6 @@ impl CoreHandle {
                 machine_name: None,
                 account_state_folder: false,
             },
-            false,
             Default::default(),
         )
         .unwrap()
@@ -1937,6 +1781,36 @@ mod tests {
             Ok(())
         }
         fn end(&self, _reason: &str) {}
+    }
+
+    /// A core stopped in its process, as a Herdr move stops it before the
+    /// core role starts again, gives up this machine's panes: the next core
+    /// takes their ownership at once, or its engine never lays the panes out
+    /// again (the move's restored panes waited for an owner that never let
+    /// go).
+    #[test]
+    fn a_core_stopped_in_its_process_gives_up_the_panes_for_the_next_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let panes =
+            || hide_kit::panes::Panes::open(directory.path(), directory.path(), |_| {}).unwrap();
+        let core = CoreHandle::bare(directory.path());
+        // The engine takes the panes as it opens, on a thread of its own.
+        let started = Instant::now();
+        while panes().acquire(Duration::ZERO).is_ok() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the core's engine never took this machine's panes"
+            );
+            thread::yield_now();
+        }
+        // The daemon's stop ends the core while its routes still hold the
+        // handle, as `RunningDaemon` does.
+        core.shutdown();
+        assert!(
+            panes().acquire(Duration::from_secs(5)).is_ok(),
+            "the stopped core still owns this machine's panes"
+        );
+        drop(core);
     }
 
     /// Dropping the core's handle while a device's terminals are linked

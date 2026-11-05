@@ -574,7 +574,7 @@ export function landingOrder(mission: Mission): MissionNode[] {
   });
 }
 
-/** Why a worker's row was raised to the operator (`AgentRow.escalation`, docs/status-model.md, Delegated escalation). */
+/** Why a worker's row was raised to the operator (`AgentRow.escalation`, with-hide/hide-private docs/task-identity.md, Delegated escalation). */
 export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
 
 /**

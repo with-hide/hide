@@ -15,9 +15,9 @@ day on which no vendor released starts no journey. `reruns` prints the
 agents whose latest release failed a cell while their pin is another version
 (`agents=<id,...>`) and the systems it failed on (`systems=<JSON>`): the
 workflow measures those again at their pins, on the same commit. `record`
-judges each agent from the fake model lane's reports, one per engine and system under
-`<dir>` (the latest releases' `agent-journey-fake-<system>-<engine>` and the pinned
-rerun's `agent-journey-pinned-<system>-<engine>`), and rewrites the record issue's
+judges each agent from the fake model lane's reports, one per system under
+`<dir>` (the latest releases' `agent-journey-fake-<system>` and the pinned
+rerun's `agent-journey-pinned-<system>`), and rewrites the record issue's
 table. A miss the pinned version does not repeat is the release's: the agent
 gets its own issue, or a comment on the open one, and an agent that passes
 again closes it. A miss the pinned version repeats on the same commit is
@@ -48,7 +48,8 @@ LABEL = "agent-canary"
 RECORD_TITLE = "Agent CLI support record"
 HIDE_TITLE = "agent canary: Hide fails the agent journey with the pinned agent CLIs"
 STATE = "<!-- agent-canary-state "
-SYSTEMS = ("linux", "macos", "windows")
+# Windows runs no journey while a holder cannot leave the CI job (docs/INSTALL.md).
+SYSTEMS = ("linux", "macos")
 # The artifact names of the latest releases' reports and the pinned rerun's.
 LATEST = "agent-journey-fake"
 PINNED = "agent-journey-pinned"
@@ -74,7 +75,6 @@ def changed(versions, state):
     measured again every day until they pass."""
     rows = state["agents"].values()
     measured = {row.get("kind"): row.get("checked") for row in rows}
-    measured["herdr"] = state.get("herdr", {}).get("checked")
     return (any(measured.get(kind) != version for kind, version in versions.items())
             or any(row.get("status") in ("unknown", "hide") for row in rows))
 
@@ -85,10 +85,6 @@ def misses(row, report, system):
     a CLI that is missing or answered another version than the table, or
     `row` for a report with no row for the agent; `head` says which and how,
     and `reason`, which can name a run's own token, why."""
-    if "engine_reports" in report:
-        return [(f"{engine}/{what}", head, reason)
-                for engine, measured in report["engine_reports"].items()
-                for what, head, reason in misses(row, measured, f"{system} {engine}")]
     agent = row["id"]
     found = []
     entry = next((item for item in report.get("agents", []) if item.get("id") == agent), {})
@@ -208,13 +204,13 @@ def updated_state(state, contract, versions, results, today):
             "issue": None if passed else before.get("issue"),
         }
     hide = [results[agent] for agent in agents if results[agent][0] == "hide"]
-    return {"agents": agents, "herdr": {"checked": versions.get("herdr"), "date": today},
+    return {"agents": agents,
             "hide": {"issue": state.get("hide", {}).get("issue"),
                      "failures": [text for _, failures, _ in hide for text in failures],
                      "keys": sorted(key for _, _, keys in hide for key in keys)}}
 
 
-def render(state, pins, minimums, herdr_pin, run_url):
+def render(state, pins, minimums, run_url):
     """The record issue's body: the table, then the state for the next run."""
     lines = [
         "Each agent CLI's latest release, measured daily by the agent journey on the fake model on "
@@ -236,9 +232,7 @@ def render(state, pins, minimums, herdr_pin, run_url):
     if hide.get("issue"):
         lines += ["", f"⚠️ Hide: the pinned version fails the same cells on the same commit, so Hide is what broke "
                   f"(#{hide['issue']}); the canary measures again every day until they pass."]
-    herdr = state.get("herdr", {})
-    lines += ["", f"Herdr: latest release {herdr.get('checked')}, bundled {herdr_pin} "
-              "(moved by `.github/workflows/herdr-update.yml`).", "", f"Last run: {run_url}", "",
+    lines += ["", f"Last run: {run_url}", "",
               STATE + json.dumps(state, separators=(",", ":")) + " -->"]
     return "\n".join(lines) + "\n"
 
@@ -310,21 +304,12 @@ def apply(state, before, run_url, commit, pins, run=subprocess.run):
 
 
 def load_reports(folder, name=LATEST):
-    """Both engines on each system; a missing leg is no complete measurement.
-
-    Windows own waits for win-agent-start and bounded holder job ownership,
-    as agent-journey.yml declares. Keep engine in a failure's identity so a
-    pinned Herdr success cannot clear a native-engine failure.
-    """
+    """One report on each system the journey runs; a missing one is no measurement."""
     reports = {}
     for system in SYSTEMS:
-        engines = ("herdr",) if system == "windows" else ("herdr", "own")
-        paths = {engine: folder / f"{name}-{system}-{engine}" / "report.json" for engine in engines}
-        if all(path.is_file() for path in paths.values()):
-            measured = {engine: json.loads(path.read_text()) for engine, path in paths.items()}
-            reports[system] = {"engine_reports": measured,
-                               "selected": sorted(set.intersection(*(set(row.get("selected", []))
-                                                                      for row in measured.values())))}
+        path = folder / f"{name}-{system}" / "report.json"
+        if path.is_file():
+            reports[system] = json.loads(path.read_text())
     return reports
 
 
@@ -361,8 +346,7 @@ def main(argv=None):
        "--description", "The daily agent CLI canary's record and failures")
     apply(after, state, args.run_url, args.commit, pins)
     minimums = {row["id"]: row["minimum_version"] for row in active_rows(contract)}
-    herdr_pin = json.loads((ROOT / "contracts/herdr-bundle.json").read_text())["version"]
-    text = render(after, pins, minimums, herdr_pin, args.run_url)
+    text = render(after, pins, minimums, args.run_url)
     if number:
         gh("issue", "edit", str(number), "--body", text)
     else:

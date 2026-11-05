@@ -152,8 +152,6 @@ pub struct GridSize {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PaneTerminalState {
     pub state: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
     pub generation: u64,
     pub attempt: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -570,7 +568,6 @@ mod tests {
             pane: "w1:p1".into(),
             state: PaneTerminalState {
                 state: "controlling".into(),
-                mode: Some("control".into()),
                 generation: 3,
                 attempt: 1,
                 message: None,

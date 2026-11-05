@@ -137,7 +137,6 @@ pub struct NodeHello {
     pub node: String,
     pub label: String,
     pub build: String,
-    pub herdr_socket: String,
     /// The node build's version and order (`build_order`).
     #[serde(default)]
     pub release: crate::build_order::Release,
@@ -649,7 +648,6 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         InboundNode {
             node: node.node.clone(),
             label: node.label.clone(),
-            herdr_socket: node.herdr_socket.clone(),
         },
         stream,
         Some(hide_node::ssh::host::PaneHook {

@@ -10,8 +10,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { herdrGate } from "./herdr-gate";
 import type { Rest } from "./hided-control.mjs";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
@@ -82,28 +80,16 @@ function paneAt(rest: Rest, folder: string): true | undefined {
   return shown?.panes?.some((pane) => pane.cwd?.startsWith(folder)) ? true : undefined;
 }
 
-/**
- * A start aimed at Home with a pinned project: `~/hide` is made and the agent runs in it.
- * With `registeredFirst` the test holds Herdr's creation of Home's workspace at its socket, so it needs Herdr.
- */
-async function inOpenedHome(page: Page, check: (home: string, root: string) => Promise<void>, registeredFirst = false): Promise<void> {
+/** A start aimed at Home with a pinned project: `~/hide` is made and the agent runs in it. */
+async function inOpenedHome(page: Page, check: (home: string, root: string) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = registeredFirst ? await startHerdr() : await startFixture();
-  let gate: Awaited<ReturnType<typeof herdrGate>> | null = null;
-  let registeredWithoutPane = false;
-  if (registeredFirst) page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => {
-    try {
-      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { navigator?: { workspaces?: { is_home?: boolean; checkouts: { owner_workspace_id?: string | null; tabs: unknown[] }[] }[] } } } };
-      registeredWithoutPane ||= frame.payload?.rest?.navigator?.workspaces?.some((workspace) => workspace.is_home && workspace.checkouts.some((checkout) => !checkout.owner_workspace_id && checkout.tabs.length === 0)) ?? false;
-    } catch { /* Terminal frames are binary. */ }
-  }));
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    if (registeredFirst) gate = await herdrGate(herdr as HerdrFixture);
     // The fixture's folders are in the daemon's home, as an operator's projects
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
-    daemon = await startHided(herdr, "home", herdr.root, gate ? { HERDR_SOCKET_PATH: gate.socket } : undefined);
+    daemon = await startHided(herdr, "home", herdr.root);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await pinFixture(page);
@@ -112,17 +98,7 @@ async function inOpenedHome(page: Page, check: (home: string, root: string) => P
     expect(fs.existsSync(home)).toBe(false);
 
     await aimAtHome(page, daemon.node);
-    const held = gate?.arm("workspace.create");
     await page.locator("[data-start-submit]").click();
-    if (gate) {
-      await held;
-      // Publish the existing workspace once while Home's creation is held:
-      // the registered Home now has a row, but no Herdr owner or pane.
-      (herdr as HerdrFixture).run(["workspace", "rename", (herdr as HerdrFixture).workspace, "catalog-ready"]);
-      await expect.poll(() => registeredWithoutPane, { message: "Home is listed before Herdr creates its first pane" }).toBe(true);
-      console.log(`[${Date.now()}] Home registration listed without an owner or pane; releasing workspace.create`);
-      await gate.release();
-    }
     // B17: the agent opens in Home once Home's sync answered, so everything the
     // sync writes is on disk by the time the engine has a pane there. The core
     // spells a pane's folder as the wire does, so Home's folder is read the same way.
@@ -134,7 +110,7 @@ async function inOpenedHome(page: Page, check: (home: string, root: string) => P
     await recordFailure(page, daemon);
     throw error;
   } finally {
-    try { daemon?.stop(); } finally { try { await gate?.stop(); } finally { herdr.stop(); } }
+    try { daemon?.stop(); } finally { herdr.stop(); }
   }
 }
 
@@ -149,13 +125,6 @@ test("a start aimed at Home makes ~/hide with its guide files and runs the agent
     await expect(page.locator('nav[aria-label="Location"]')).toHaveText("~/hide");
     await screenshot(page, "home-tab-opened");
   });
-});
-
-// Herdr only: it holds Herdr's `workspace.create` at its socket (`herdrGate`) while Home is listed with no pane; the own engine has no socket to hold.
-test("Home stays selected when its empty registration is listed before its first pane @herdr", async ({ page }) => {
-  await inOpenedHome(page, async () => {
-    await expect(page.locator('nav[aria-label="Location"]')).toHaveText("~/hide");
-  }, true);
 });
 
 // @platform: The link Home makes to a project: a symbolic link on macOS and Linux, a junction on Windows.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""How often each engine writes its saved layout while the topology rounds run
+"""How often the daemon and its engine write the saved layout while the topology rounds run
 (PRD engine-bundle-3-core-owns B44, perf-gate row 29).
 
 usage: save-watch.py <group>=<path>...   (until SIGTERM, then JSON on stdout)
@@ -7,10 +7,10 @@ usage: save-watch.py <group>=<path>...   (until SIGTERM, then JSON on stdout)
 Each <path> is a file or a folder whose files are watched, recursively; every
 10 ms each file's size and modification time are read, and a change of either
 is one write, its bytes the size after it. A group names what its files are:
-`herdr` (the Herdr server's session files), `engine` (the own engine's saved
-session), `hide` (the daemon's screen saves). Locks, sockets and SQLite
+`engine` (the own engine's saved session), `hide` (the daemon's screen
+saves). Locks, sockets and SQLite
 journals are not saves and are skipped. A write that lands twice within one
-10 ms poll counts once, the same for both engines, and a save made through a
+10 ms poll counts once, the same for every build, and a save made through a
 temporary file and a rename counts the temporary file too when it lives past
 one poll: the count is what the folder showed changing, so an engine's way of
 saving is part of its number.

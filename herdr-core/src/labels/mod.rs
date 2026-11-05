@@ -105,11 +105,11 @@ impl LabelServices {
         })
     }
 
-    /// The worker for this machine's Herdr server at `socket_path`, reading
+    /// The worker for this machine's engine, whose folder is `scope`, reading
     /// conversations through the core's own node and asking in `language`.
     pub(crate) fn local_worker(
         &self,
-        socket_path: &Path,
+        scope: &Path,
         node: Arc<dyn NodeLink>,
         wake: Wake,
         language: hide_ai::OutputLanguage,
@@ -127,7 +127,7 @@ impl LabelServices {
                 target: self.store.node().to_owned(),
                 lock: LockPlace {
                     node: own_channel(&node),
-                    herdr_socket: Some(socket_path.display().to_string()),
+                    scope: Some(scope.display().to_string()),
                 },
                 input: Arc::clone(&self.input),
                 ledger: Arc::clone(&self.ledger),
@@ -155,7 +155,7 @@ impl LabelServices {
         }
     }
 
-    /// The worker for a device's Herdr server, reading through its helper
+    /// The worker for a device's engine, reading through its helper
     /// and asking in the core's `language`, not the device's.
     pub(crate) fn device_worker(
         &self,
@@ -168,10 +168,11 @@ impl LabelServices {
         LabelWorker::spawn(
             WorkerConfig {
                 target: device_target(device_id),
-                // The device's node locks the server its pane service serves.
+                // Only this core opens the device's engine, so there is no
+                // other daemon to meet.
                 lock: LockPlace {
                     node: device_channel(device_id, runtime.clone()),
-                    herdr_socket: None,
+                    scope: None,
                 },
                 input: Arc::clone(&self.input),
                 ledger: Arc::clone(&self.ledger),

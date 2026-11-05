@@ -403,8 +403,7 @@ pub fn hide_used(state_dir: &Path, herdr_socket: &str) -> bool {
 /// What moves this machine's Herdr save for the screen (D-6 to D-8, B2 to
 /// B5, B11, B14 to B17): `hided` reads the save and the server on its
 /// socket and makes the move, and the core decides what is shown, asking it
-/// on a worker of its own, never under the runtime lock, as it asks the
-/// takeover (`herdr_takeover.rs`).
+/// on a worker of its own, never under the runtime lock.
 pub trait Machine: Send + Sync {
     /// What the save offers, whose Herdr runs on its socket, and what the
     /// last move came to while the operator has not read it.

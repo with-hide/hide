@@ -992,7 +992,6 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
         target_id: device.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![project],
             agents: Vec::new(),
@@ -1005,7 +1004,6 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1019,9 +1017,7 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         device,
-        crate::engine::herdr::HerdrEngine::shared(Arc::new(
-            super::device_catalog::RecordingHerdr { requests },
-        )),
+        super::device_catalog::recording_engine(requests),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
