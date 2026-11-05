@@ -39,9 +39,6 @@ It works with the agent CLIs you already signed in to: no new API key, no hosted
   <kbd>Claude Code</kbd> <kbd>Codex</kbd> <kbd>Antigravity</kbd> <kbd>OpenCode</kbd> <kbd>Grok</kbd> <kbd>Pi</kbd> <kbd>omp</kbd>
 </p>
 
-> [!TIP]
-> **Coming from [Herdr](https://herdr.dev)?** hide offers to bring in your saved Herdr workspaces and tabs on first launch, reading the save without changing it, and leaves your Herdr as it is.
-
 ## Install
 
 [withhide.dev](https://withhide.dev) picks the installer for your system, or download it from the [latest release](https://github.com/with-hide/hide/releases/latest):
@@ -194,7 +191,6 @@ hide device add workbox                                               # another 
 - **Nothing hosted.** The app, the core and Hide AI run on machines you own, so your code goes only where your agent CLIs already send it.
 - **Credentials stay with their tools.** Agent CLIs and SSH keep their own sign-in state.
   The one thing hide reads is Codex's `auth.json` access token and account ID, which it sends to Codex's usage endpoint to show your usage.
-- **Your Herdr is left alone.** Bringing in a Herdr save only reads it; a Herdr server you run keeps running beside hide.
 - **Your phone stays in your tailnet.** It reaches your machines over your own Tailscale.
 
 ## How it works
@@ -292,5 +288,5 @@ pnpm --dir desktop dev              # the desktop app, unpackaged, against this 
 hide is fair source under the [Functional Source License 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2).
 You may use, change and redistribute it for any purpose except offering others a commercial product or service that competes with hide, and using it in your own work, including at a company, is always allowed.
 Each release becomes available under the Apache License 2.0 two years after it is published, and releases up to and including 1.1.1 remain under the Apache License 2.0.
-[NOTICE](NOTICE) carries the copyright notice and the files derived from Herdr and other projects, which keep their own licenses.
-Code taken from Herdr and other third-party components keep their own licenses, listed in [THIRD_PARTY_NOTICES](desktop/resources/THIRD_PARTY_NOTICES).
+[NOTICE](NOTICE) carries the copyright notice and the files derived from other projects, which keep their own licenses.
+Third-party components keep their own licenses, listed in [THIRD_PARTY_NOTICES](desktop/resources/THIRD_PARTY_NOTICES).
