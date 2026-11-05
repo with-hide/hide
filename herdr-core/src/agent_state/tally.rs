@@ -281,7 +281,7 @@ pub mod phone {
     };
     pub use prs::{
         MAX_FILES, MAX_PRS, MAX_SETTLED, PhoneCard, PhoneChangeRequest, PhoneFeedback, PhoneFile,
-        PhoneMerge, PhonePr, PhonePrs, PhoneProject, PhoneReason, PhoneWrite,
+        PhoneMerge, PhonePr, PhoneProject, PhonePrs, PhoneReason, PhoneWrite,
     };
 
     use std::borrow::Cow;

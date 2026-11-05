@@ -823,7 +823,10 @@ mod tests {
             &json!({"task_operation": {"kind": "worktree_create", "phase": "ready", "request_id": "r4"}}),
             "local",
         );
-        assert!(other.is_empty(), "a worktree made with no agent is no start");
+        assert!(
+            other.is_empty(),
+            "a worktree made with no agent is no start"
+        );
         let handed = answers_of(
             &json!({"task_operation": {
                 "kind": "worktree_create", "agent_kind": "claude", "phase": "ready", "request_id": "r6",

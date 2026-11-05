@@ -1115,11 +1115,7 @@ async fn pr_request(mobile: &Arc<Mobile>, phone_id: &str, kind: &str, message: &
     let bytes = match built {
         Ok(bytes) => bytes,
         Err(reason) => {
-            refusal_logged(
-                "scope.refused",
-                Some(phone_id),
-                &format!("{kind}:{reason}"),
-            );
+            refusal_logged("scope.refused", Some(phone_id), &format!("{kind}:{reason}"));
             return answer(false, Some(reason));
         }
     };
@@ -2153,11 +2149,18 @@ mod tests {
         let mobile = mobile_with(directory.path(), &gate);
         listing(&mobile, HEAD);
         let phone = paired(&mobile);
-        let ask = pr_message("merge_pr", "merge-1", json!({"head": HEAD, "method": "squash"}));
+        let ask = pr_message(
+            "merge_pr",
+            "merge-1",
+            json!({"head": HEAD, "method": "squash"}),
+        );
 
         let first = pr_request(&mobile, &phone, "merge_pr", &ask).await;
         assert_eq!(first["type"], "pr_result");
-        assert_eq!((first["request_id"].as_str(), first["pr"].as_str()), (Some("merge-1"), Some("w1#1")));
+        assert_eq!(
+            (first["request_id"].as_str(), first["pr"].as_str()),
+            (Some("merge-1"), Some("w1#1"))
+        );
         assert_eq!(first["ok"], true, "{first}");
         assert!(
             matches!(
@@ -2170,15 +2173,25 @@ mod tests {
         assert_eq!(again["ok"], true, "{again}");
 
         // A press still being sent is told so, never sent a second time.
-        assert!(matches!(mobile.reserve_input(&phone, "merge-2"), Reservation::Write));
+        assert!(matches!(
+            mobile.reserve_input(&phone, "merge-2"),
+            Reservation::Write
+        ));
         let racing = pr_request(
             &mobile,
             &phone,
             "merge_pr",
-            &pr_message("merge_pr", "merge-2", json!({"head": HEAD, "method": "squash"})),
+            &pr_message(
+                "merge_pr",
+                "merge-2",
+                json!({"head": HEAD, "method": "squash"}),
+            ),
         )
         .await;
-        assert_eq!((racing["ok"].as_bool(), reason(&racing)), (Some(false), Some("in_flight")));
+        assert_eq!(
+            (racing["ok"].as_bool(), reason(&racing)),
+            (Some(false), Some("in_flight"))
+        );
     }
 
     #[tokio::test]
@@ -2194,15 +2207,26 @@ mod tests {
             &mobile,
             &phone,
             "merge_pr",
-            &pr_message("merge_pr", "m-moved", json!({"head": "f".repeat(40), "method": "squash"})),
+            &pr_message(
+                "merge_pr",
+                "m-moved",
+                json!({"head": "f".repeat(40), "method": "squash"}),
+            ),
         )
         .await;
-        assert_eq!((moved["ok"].as_bool(), reason(&moved)), (Some(false), Some("head_moved")));
+        assert_eq!(
+            (moved["ok"].as_bool(), reason(&moved)),
+            (Some(false), Some("head_moved"))
+        );
         assert!(
             matches!(mobile.reserve_input(&phone, "m-moved"), Reservation::Write),
             "a refused merge may be sent again once the card is read"
         );
-        let mut gone = pr_message("merge_pr", "m-gone", json!({"head": HEAD, "method": "squash"}));
+        let mut gone = pr_message(
+            "merge_pr",
+            "m-gone",
+            json!({"head": HEAD, "method": "squash"}),
+        );
         gone["pr"] = json!("w9#4");
         let gone = pr_request(&mobile, &phone, "merge_pr", &gone).await;
         assert_eq!(reason(&gone), Some("gone"));
@@ -2213,7 +2237,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reading_a_card_or_its_feedback_is_not_claimed_and_a_hand_over_is_answered_by_its_start() {
+    async fn reading_a_card_or_its_feedback_is_not_claimed_and_a_hand_over_is_answered_by_its_start()
+     {
         use super::super::prs::fixture::HEAD;
         use super::super::start::Answer;
         let directory = tempfile::tempdir().unwrap();
@@ -2234,20 +2259,34 @@ mod tests {
         // The core's start answer for the hand-over's request id comes back as the start's own result.
         mobile.answers.send_replace(Arc::new(vec![(
             "hand-1".to_owned(),
-            Answer::Started { device_id: "test-node".into(), pane_id: "w1:p9".into() },
+            Answer::Started {
+                device_id: "test-node".into(),
+                pane_id: "w1:p9".into(),
+            },
         )]));
         let started = mobile
             .delegate_pr(
                 &phone,
-                &pr_message("delegate_pr", "hand-1", json!({"kind": "claude", "prompt": "Fix PR #1"})),
+                &pr_message(
+                    "delegate_pr",
+                    "hand-1",
+                    json!({"kind": "claude", "prompt": "Fix PR #1"}),
+                ),
             )
             .await;
         assert_eq!(started["type"], "start_result");
-        assert_eq!((started["ok"].as_bool(), started["pane_id"].as_str()), (Some(true), Some("w1:p9")));
+        assert_eq!(
+            (started["ok"].as_bool(), started["pane_id"].as_str()),
+            (Some(true), Some("w1:p9"))
+        );
         let refused = mobile
             .delegate_pr(
                 &phone,
-                &pr_message("delegate_pr", "hand-2", json!({"kind": "terminal", "prompt": "go"})),
+                &pr_message(
+                    "delegate_pr",
+                    "hand-2",
+                    json!({"kind": "terminal", "prompt": "go"}),
+                ),
             )
             .await;
         assert_eq!(

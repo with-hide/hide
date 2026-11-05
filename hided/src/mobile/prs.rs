@@ -237,13 +237,17 @@ mod tests {
     #[test]
     fn a_merge_is_the_card_s_own_event_for_the_head_and_method_it_showed() {
         let prs = prs(card(HEAD, false, &["squash", "merge"]));
-        let sent = payload(merge(&message(json!({"head": HEAD, "method": "squash"})), &prs).unwrap());
+        let sent =
+            payload(merge(&message(json!({"head": HEAD, "method": "squash"})), &prs).unwrap());
         assert_eq!(sent["kind"], "pr_merge");
         assert_eq!(
             sent["payload"],
             json!({"workspace_id": "w1", "pr_number": 1, "head": HEAD, "method": "squash"})
         );
-        let upper = merge(&message(json!({"head": HEAD.to_uppercase(), "method": "merge"})), &prs);
+        let upper = merge(
+            &message(json!({"head": HEAD.to_uppercase(), "method": "merge"})),
+            &prs,
+        );
         assert!(upper.is_ok(), "a commit name is not case sensitive");
     }
 
@@ -261,7 +265,10 @@ mod tests {
             json!({"head": HEAD, "method": "rebase"}),
             json!({"head": HEAD, "method": 7}),
         ] {
-            assert_eq!(merge(&message(body), &plain).unwrap_err(), "invalid_request");
+            assert_eq!(
+                merge(&message(body), &plain).unwrap_err(),
+                "invalid_request"
+            );
         }
     }
 
@@ -273,10 +280,17 @@ mod tests {
             merge(&message(json!({"head": other, "method": "squash"})), &prs).unwrap_err(),
             "head_moved"
         );
-        assert_eq!(merge(&message(json!({"method": "squash"})), &prs).unwrap_err(), "invalid_request");
+        assert_eq!(
+            merge(&message(json!({"method": "squash"})), &prs).unwrap_err(),
+            "invalid_request"
+        );
         let mut unread = message(json!({"head": HEAD, "method": "squash"}));
         unread["pr"] = json!("w1#2");
-        assert_eq!(merge(&unread, &prs).unwrap_err(), "unread", "pull request 2 has no card");
+        assert_eq!(
+            merge(&unread, &prs).unwrap_err(),
+            "unread",
+            "pull request 2 has no card"
+        );
         let mut settled = message(json!({"head": HEAD, "method": "squash"}));
         settled["pr"] = json!("w1#3");
         assert_eq!(merge(&settled, &prs).unwrap_err(), "settled");
@@ -346,7 +360,10 @@ mod tests {
             refused(json!({"kind": "claude", "prompt": "x".repeat(5000)})),
             "too_long"
         );
-        assert_eq!(refused(json!({"kind": "terminal", "prompt": "go"})), "unknown_kind");
+        assert_eq!(
+            refused(json!({"kind": "terminal", "prompt": "go"})),
+            "unknown_kind"
+        );
         assert_eq!(
             refused(json!({"kind": "claude", "prompt": "go", "model": ""})),
             "unknown_model"
@@ -365,9 +382,16 @@ mod tests {
             assert!(!sent.contains(private), "reached the phone: {private}");
         }
         let keys: Vec<&str> = prs.items.iter().map(|pr| pr.key.as_str()).collect();
-        assert_eq!(keys, ["w1#1", "w1#2", "w1#3"], "open ones by the board's order, then the merged");
+        assert_eq!(
+            keys,
+            ["w1#1", "w1#2", "w1#3"],
+            "open ones by the board's order, then the merged"
+        );
         assert!(prs.find("w1#1").unwrap().checkout);
         assert!(!prs.find("w1#2").unwrap().checkout);
-        assert_eq!(prs.find("w1#1").unwrap().card.as_ref().unwrap().files_total, 1);
+        assert_eq!(
+            prs.find("w1#1").unwrap().card.as_ref().unwrap().files_total,
+            1
+        );
     }
 }

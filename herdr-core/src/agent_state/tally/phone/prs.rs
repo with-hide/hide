@@ -90,9 +90,9 @@ pub struct PhonePr {
     pub reason: PhoneReason,
     /// The pull request's live agents on rows the phone lists, most urgent first.
     pub agents: Vec<AgentKey>,
-    /// A checkout of its branch exists on its machine: the only place a
-    /// hand-over from a phone starts, since a new worktree would move the
-    /// desktop's screen.
+    /// A checkout of its branch exists on its machine: a hand-over starts in
+    /// it, and with none in a new worktree of the branch, so the phone says
+    /// which of the two it will be.
     pub checkout: bool,
     pub card: Option<PhoneCard>,
 }
@@ -306,7 +306,8 @@ impl PhonePrs {
             }
         }
         settled.sort_by_key(|pr| std::cmp::Reverse(pr.pr.merged_at_unix_ms));
-        let omitted = open.len().saturating_sub(MAX_PRS) + settled.len().saturating_sub(MAX_SETTLED);
+        let omitted =
+            open.len().saturating_sub(MAX_PRS) + settled.len().saturating_sub(MAX_SETTLED);
         open.truncate(MAX_PRS);
         settled.truncate(MAX_SETTLED);
         let feedback = rest
@@ -331,10 +332,10 @@ impl PhonePrs {
 fn has_pull_requests(workspace: &WorkspaceIn) -> bool {
     workspace.is_git
         && !workspace.checkouts.iter().any(|checkout| {
-            checkout
-                .github
-                .as_ref()
-                .is_some_and(|github| github.failure_category == Some(hide_node_link::gh::GithubFailureCategory::NoGithubRemote))
+            checkout.github.as_ref().is_some_and(|github| {
+                github.failure_category
+                    == Some(hide_node_link::gh::GithubFailureCategory::NoGithubRemote)
+            })
         })
 }
 
@@ -385,7 +386,11 @@ fn phone_pr(
         project: workspace.id.clone(),
         group: row.group.clone(),
         reason: row.reason.clone(),
-        agents: row.agents.iter().filter_map(|row| listed(&row.pane_id)).collect(),
+        agents: row
+            .agents
+            .iter()
+            .filter_map(|row| listed(&row.pane_id))
+            .collect(),
         checkout: row.checkout_id.is_some(),
         card,
         pr,
