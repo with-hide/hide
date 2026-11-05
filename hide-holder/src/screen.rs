@@ -177,10 +177,11 @@ pub struct Frame {
     pub rows: u16,
     pub lines: Vec<Arc<Row>>,
     /// Whether each row soft-wraps onto the next one, the program's text
-    /// having run past its last column, as against ending with a line break.
+    /// having run past its last column, as against ending with a line break;
+    /// None when the parser cannot know (see [`Capture::without_wraps`]).
     /// Read for every row on every capture, since the parser can set a row's
     /// wrap when the row after it is written.
-    pub wrapped: Vec<bool>,
+    pub wrapped: Option<Vec<bool>>,
     pub cursor: Cursor,
 }
 
@@ -213,6 +214,8 @@ pub struct Capture {
     text: String,
     palette: Option<Palette>,
     frame: Option<Frame>,
+    /// Whether the parser's row wraps are the program's own.
+    wraps: bool,
 }
 
 impl Capture {
@@ -225,7 +228,16 @@ impl Capture {
             text: String::new(),
             palette: None,
             frame: None,
+            wraps: true,
         })
+    }
+
+    /// Captures no wraps: the parser reads output a pseudoconsole drew
+    /// again, which places the rows of a wrapped line itself, so every row
+    /// would read as ending with a line break.
+    #[cfg_attr(not(windows), allow(dead_code))] // only a Windows holder drops them
+    pub fn without_wraps(&mut self) {
+        self.wraps = false;
     }
 
     /// The parser's colors before anything changed them.
@@ -268,7 +280,7 @@ impl Capture {
         let default_fg = palette.default_fg.unwrap_or(Color::Default);
         let default_bg = palette.default_bg.unwrap_or(Color::Default);
         let mut lines = Vec::with_capacity(usize::from(rows));
-        let mut wrapped = Vec::with_capacity(usize::from(rows));
+        let mut wrapped = Vec::with_capacity(if self.wraps { usize::from(rows) } else { 0 });
         {
             let mut iterator = self.render.populate_row_iterator(&mut self.rows)?;
             let mut y = 0u16;
@@ -294,14 +306,18 @@ impl Capture {
                         )?)
                     }
                 };
-                wrapped.push(iterator.soft_wrapped()?);
+                if self.wraps {
+                    wrapped.push(iterator.soft_wrapped()?);
+                }
                 iterator.set_dirty(false)?;
                 lines.push(line);
                 y += 1;
             }
             while y < rows {
                 lines.push(Arc::new(Row::blank(cols, default_fg, default_bg)));
-                wrapped.push(false);
+                if self.wraps {
+                    wrapped.push(false);
+                }
                 y += 1;
             }
         }
@@ -330,7 +346,7 @@ impl Capture {
             cols,
             rows,
             lines,
-            wrapped,
+            wrapped: self.wraps.then_some(wrapped),
             cursor,
         };
         self.frame = Some(frame.clone());

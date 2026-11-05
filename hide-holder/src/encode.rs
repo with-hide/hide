@@ -22,7 +22,8 @@
 //! engine-bundle-2-pane-holder D-7).
 //!
 //! A full fragment, and a delta whose rows soft-wrap differently from the
-//! last sent, also says which rows soft-wrap, as [`WRAP_OSC`]: the cells are
+//! last sent, also says which rows soft-wrap, as [`WRAP_OSC`], unless the
+//! pane cannot know (a Windows pane, `Capture::without_wraps`): the cells are
 //! placed with autowrap off, so the receiver cannot tell a row the program's
 //! text ran past from one it ended with a line break. A program's own OSC
 //! never reaches the receiver, since a fragment is drawn from the parsed
@@ -103,15 +104,21 @@ impl Encoder {
                 // After the reset, whose soft reset shows the cursor again.
                 out.push(RESET);
                 out.push(b"\x1b[?25l");
-                write_wrapped(&mut out, &frame);
+                if let Some(wrapped) = &frame.wrapped {
+                    write_wrapped(&mut out, &frame, wrapped);
+                }
                 write_all_cells(&mut out, &frame);
                 self.shape = 0;
                 wrote = true;
             }
             Some(previous) => {
                 out.push(b"\x1b[?25l");
-                if frame.wrapped != previous.wrapped {
-                    write_wrapped(&mut out, &frame);
+                if let Some(wrapped) = frame
+                    .wrapped
+                    .as_ref()
+                    .filter(|_| frame.wrapped != previous.wrapped)
+                {
+                    write_wrapped(&mut out, &frame, wrapped);
                     wrote = true;
                 }
                 wrote |= write_changed_cells(&mut out, &frame, previous);
@@ -335,15 +342,14 @@ fn write_changed_cells(out: &mut Pieces, frame: &Frame, previous: &Frame) -> boo
 }
 
 /// Writes [`WRAP_OSC`] for `frame`.
-fn write_wrapped(out: &mut Pieces, frame: &Frame) {
-    let mut bytes = Vec::with_capacity(24 + frame.wrapped.len() / 4);
+fn write_wrapped(out: &mut Pieces, frame: &Frame, wrapped: &[bool]) {
+    let mut bytes = Vec::with_capacity(24 + wrapped.len() / 4);
     let _ = write!(bytes, "\x1b]{WRAP_OSC};{};{};", frame.cols, frame.rows);
-    let used = frame
-        .wrapped
+    let used = wrapped
         .iter()
         .rposition(|wraps| *wraps)
         .map_or(0, |last| last / 4 + 1);
-    for digit in frame.wrapped.chunks(4).take(used) {
+    for digit in wrapped.chunks(4).take(used) {
         let bits = digit
             .iter()
             .enumerate()
@@ -468,6 +474,17 @@ mod tests {
             wrap_sequences(&Encoder::default().encode(pane.take(true).unwrap(), true)),
             ["7719;4;12;302"]
         );
+    }
+
+    #[test]
+    fn a_pane_that_cannot_know_its_wraps_says_nothing_of_them() {
+        let mut pane = pane(29, 4);
+        pane.without_wraps();
+        pane.feed(format!("{URL}osc8 label").as_bytes(), &mut Vec::new());
+        let mut encoder = Encoder::default();
+        assert!(wrap_sequences(&encoder.encode(pane.take(true).unwrap(), true)).is_empty());
+        pane.feed(b"\r\nmore", &mut Vec::new());
+        assert!(wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)).is_empty());
     }
 
     #[test]

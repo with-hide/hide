@@ -234,13 +234,11 @@ fn text_after_a_character_newer_than_the_receivers_table_stays_where_the_program
 }
 
 /// Which rows a fragment's wrap sequence (`ESC ] 7719 ; cols ; rows ; hex
-/// ESC \`) says soft-wrap, decoded the way the web shell reads it.
-fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Vec<u16> {
+/// ESC \`) says soft-wrap, decoded the way the web shell reads it; None
+/// when the fragment says nothing of wraps.
+fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Option<Vec<u16>> {
     let text = String::from_utf8_lossy(&fragment.bytes);
-    let start = text
-        .find("\x1b]7719;")
-        .expect("a full fragment says its wraps")
-        + 7;
+    let start = text.find("\x1b]7719;")? + 7;
     let body = &text[start..start + text[start..].find("\x1b\\").unwrap()];
     let mut fields = body.split(';');
     let size = (fields.next().unwrap(), fields.next().unwrap());
@@ -260,12 +258,14 @@ fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Vec<u16> {
             }
         }
     }
-    rows
+    Some(rows)
 }
 
 /// with-hide/hide-private#312: a line that fills the width and ends with a
 /// line break is not a wrap, while a longer one the terminal carried onto
-/// the next row is, on every system's terminal (ConPTY on Windows).
+/// the next row is. On Windows ConPTY draws the screen again for the holder
+/// and places a wrapped line's rows itself, so its parser sees no wrap and
+/// the holder says nothing of wraps, leaving the screen its last-column rule.
 #[test]
 fn a_full_screen_says_which_rows_the_programs_text_ran_past() {
     let home = Home::new();
@@ -282,5 +282,9 @@ fn a_full_screen_says_which_rows_the_programs_text_ran_past() {
     let answered = connection.redraw();
     let full_screen = &connection.fragments[answered - 1];
     assert_eq!(full_screen.size.cols, 80);
-    assert_eq!(wrapped_rows(full_screen), [2]);
+    if cfg!(windows) {
+        assert_eq!(wrapped_rows(full_screen), None);
+    } else {
+        assert_eq!(wrapped_rows(full_screen), Some(vec![2]));
+    }
 }
