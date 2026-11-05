@@ -34,7 +34,6 @@ pub const DEVICE: &str = "remote";
 #[derive(Clone)]
 pub struct Environment {
     pub home: PathBuf,
-    root: PathBuf,
     values: BTreeMap<OsString, OsString>,
 }
 
@@ -118,17 +117,7 @@ impl Environment {
         if let Some(state_dir) = state_dir {
             values.insert("HIDE_STATE_DIR".into(), state_dir.as_os_str().to_owned());
         }
-        Ok(Self {
-            home,
-            root: root.to_path_buf(),
-            values,
-        })
-    }
-
-    /// The account's folder: its home, config, state and the files a pane's
-    /// commands leave.
-    pub fn root(&self) -> &Path {
-        &self.root
+        Ok(Self { home, values })
     }
 
     #[allow(clippy::disallowed_methods)] // env_clear: an SSH exec's environment, on Unix
@@ -361,6 +350,7 @@ impl Agent {
     #[allow(clippy::too_many_arguments)]
     fn start(
         daemon: &Daemon,
+        commands: PathBuf,
         environment: Environment,
         device: Option<&'static str>,
         hide: PathBuf,
@@ -384,7 +374,6 @@ impl Agent {
         let pane = wait_for("the fixture agent on its session", || {
             Ok(pane_on_session(&daemon.snapshot()?, session))
         })?;
-        let environment_root = environment.root().to_path_buf();
         let mut agent = Self {
             environment,
             pane,
@@ -393,7 +382,7 @@ impl Agent {
             hooks,
             device,
             daemon: daemon.clone(),
-            root: environment_root,
+            root: commands,
             sequence: 0,
         };
         agent.view(&agent.pane.clone())?;
@@ -817,8 +806,12 @@ impl Fixture {
             };
             Self::connect_device(&screen, &state, &remote_env)?;
             Self::add_local_project(&screen, &local_env.home.join("project"))?;
+            // What each pane runs for a journey is kept in the run directory,
+            // not in the device account under /tmp, so a failed run's
+            // evidence has it.
             let local = Agent::start(
                 &screen,
+                root.join("l"),
                 local_env.clone(),
                 None,
                 cli.join("hide"),
@@ -838,8 +831,11 @@ impl Fixture {
                 remote_hooks.is_file(),
                 "private remote kit lacks its hook sibling"
             );
+            let device_commands = root.join("commands-device");
+            fs::create_dir(&device_commands)?;
             let remote = Agent::start(
                 &screen,
+                device_commands,
                 remote_env.clone(),
                 Some(DEVICE),
                 remote_hide,

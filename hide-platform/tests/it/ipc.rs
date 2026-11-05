@@ -11,10 +11,22 @@ use std::time::{Duration, Instant};
 use hide_platform::ipc::{LocalListener, LocalStream, is_endpoint, remove_leftover};
 use tempfile::TempDir;
 
-/// A folder and an endpoint path inside it. Kept short: a Unix socket path
-/// is limited to about a hundred bytes.
+/// A folder the test owns, short whatever `TMPDIR` is: a Unix socket path is
+/// limited to about a hundred bytes, and macOS's own `TMPDIR` takes half of
+/// them. Windows names a pipe and has no such limit.
+fn short_folder() -> TempDir {
+    let mut folder = tempfile::Builder::new();
+    folder.prefix("hp");
+    #[cfg(unix)]
+    let folder = folder.tempdir_in("/tmp");
+    #[cfg(not(unix))]
+    let folder = folder.tempdir();
+    folder.unwrap()
+}
+
+/// A folder and an endpoint path inside it.
 fn endpoint() -> (TempDir, PathBuf) {
-    let folder = tempfile::Builder::new().prefix("hp").tempdir().unwrap();
+    let folder = short_folder();
     let path = folder.path().join("s.sock");
     (folder, path)
 }
@@ -71,10 +83,7 @@ const SUN_PATH: usize = if cfg!(any(target_os = "linux", target_os = "android"))
 /// A socket path of exactly `length` bytes in a short folder the test owns.
 #[cfg(unix)]
 fn path_of_length(length: usize) -> (TempDir, PathBuf) {
-    let folder = tempfile::Builder::new()
-        .prefix("hp")
-        .tempdir_in("/tmp")
-        .unwrap();
+    let folder = short_folder();
     let base = folder.path().as_os_str().len() + 1;
     let path = folder.path().join("s".repeat(length - base));
     assert_eq!(path.as_os_str().len(), length);
