@@ -45,8 +45,14 @@ describe("a read put back from its chunks", () => {
     const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
     const done = addChunk(beginAssembly(head({ mode: "image", size: 8, chunks: 1 }))!, 0, b64(png))!;
     expect(finishAssembly(done)).toEqual({ state: "image", url: `data:image/png;base64,${b64(png)}`, size: 8 });
-    const text = addChunk(beginAssembly(head({ mode: "image", size: 5, chunks: 1 }))!, 0, utf8("<svg>"))!;
+    const text = addChunk(beginAssembly(head({ mode: "image", size: 5, chunks: 1 }))!, 0, utf8("hello"))!;
     expect(finishAssembly(text)).toBeNull();
+  });
+
+  it("draws a vector image as an image, which is how a page's content policy keeps its scripts out", () => {
+    const svg = '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>';
+    const done = addChunk(beginAssembly(head({ mode: "image", size: svg.length, chunks: 1 }))!, 0, utf8(svg))!;
+    expect(finishAssembly(done)).toMatchObject({ state: "image", url: expect.stringMatching(/^data:image\/svg\+xml;base64,/) });
   });
 
   it("finishes an empty file as an empty text", () => {

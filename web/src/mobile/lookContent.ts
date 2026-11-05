@@ -86,12 +86,19 @@ function bytesOf(parts: readonly string[]): Uint8Array {
   return whole;
 }
 
+/** A vector image is text: `<svg` near its start, after an optional BOM, XML declaration or comment. */
+function isSvg(bytes: Uint8Array): boolean {
+  const head = String.fromCharCode(...bytes.slice(0, 512)).replace(/^\uFEFF|^\xEF\xBB\xBF/, "").trimStart();
+  return (head.startsWith("<svg") || head.startsWith("<?xml") || head.startsWith("<!--")) && head.includes("<svg");
+}
+
 const IMAGE_SIGNATURES: readonly { mime: string; matches: (bytes: Uint8Array) => boolean }[] = [
   { mime: "image/png", matches: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
   { mime: "image/jpeg", matches: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
   { mime: "image/gif", matches: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 },
   { mime: "image/webp", matches: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 },
   { mime: "image/bmp", matches: (b) => b[0] === 0x42 && b[1] === 0x4d },
+  { mime: "image/svg+xml", matches: isSvg },
   { mime: "image/avif", matches: (b) => b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70 && b[8] === 0x61 && b[9] === 0x76 && b[10] === 0x69 && b[11] === 0x66 },
 ];
 
