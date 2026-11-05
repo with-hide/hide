@@ -70,6 +70,7 @@ async function filmPhase(at) {
   if (video.getAttribute("src") !== src) video.src = src;
   if (video.readyState < 1) await Promise.race([new Promise((r) => video.addEventListener("loadedmetadata", r, { once: true })), new Promise((r) => setTimeout(r, 4000))]);
   await sleep(0);
+  if (video.readyState < 1) { const g = gen; video.addEventListener("loadedmetadata", () => { if (g === gen) video.currentTime = at; }, { once: true }); }
   const end = Number.isFinite(video.duration) && video.duration > 0 ? Math.min(TO[1], video.duration - 0.1) : TO[1];
   try { video.currentTime = at; } catch {}
   video.play().catch(() => {});
