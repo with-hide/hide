@@ -205,4 +205,20 @@ export const liveTheme = EditorView.theme({
   // An image that did not load: its alt text, muted and small, nothing else.
   ".cm-md-alt": { color: "var(--muted-foreground)", fontSize: "var(--text-caption)" },
   ".cm-md-alt[data-state='loading']": { display: "none" },
+  // A Mermaid diagram: centred in the column and never wider than it; it
+  // takes no room until it is drawn, and one that is not shows its source as
+  // a code block would.
+  ".cm-md-mermaid": { display: "block", textAlign: "center", padding: "var(--spacing-sm) 0", fontFamily: "var(--font-sans)", whiteSpace: "normal" },
+  ".cm-md-mermaid[data-state='loading']": { display: "none" },
+  ".cm-md-mermaid[data-state='failed']": { textAlign: "left" },
+  ".cm-md-mermaid svg": { display: "inline-block" },
+  ".cm-md-mermaid-source": {
+    margin: "var(--spacing-xxs) 0 0",
+    padding: "var(--spacing-xs) var(--spacing-sm)",
+    whiteSpace: "pre-wrap",
+    fontFamily: "var(--font-mono)",
+    fontSize: "0.9em",
+    lineHeight: "1.6",
+    backgroundColor: "var(--secondary)",
+  },
 });

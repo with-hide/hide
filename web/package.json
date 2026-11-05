@@ -57,6 +57,7 @@
     "jsqr": "1.4.0",
     "lucide-react": "^1.48.0",
     "material-icon-theme": "5.39.0",
+    "mermaid": "12.2.0",
     "pdfjs-dist": "^6.3.289",
     "qrcode-generator": "^2.0.4",
     "radix-ui": "^1.6.7",

@@ -17,6 +17,7 @@ import { useShellStore } from "../store";
 import { hasVisibleHtml, imageTarget, resolveInCheckout, sanitizeHtml, type ImageBase } from "./liveHtml";
 import { LiveImages, readImageFile } from "./liveImages";
 import { markdownLivePlan, MARKDOWN_LIVE_BYTE_LIMIT } from "./markdownLive";
+import { drawMermaid, showMermaidSvg, watchPalette } from "../markdownMermaid";
 
 /**
  * What a Live text can reach outside itself: where its relative paths start
@@ -227,6 +228,71 @@ class ImageWidget extends WidgetType {
   }
 }
 
+/** What each drawn diagram must let go of when CodeMirror drops its DOM. */
+const diagramWatches = new WeakMap<HTMLElement, () => void>();
+
+/**
+ * A fenced `mermaid` block drawn as its diagram. It takes no room until the
+ * picture is in; a source Mermaid cannot read shows as code under one muted
+ * line saying why, so the operator sees what to fix, and a press on either
+ * shows the source.
+ */
+class MermaidWidget extends WidgetType {
+  constructor(readonly source: string) {
+    super();
+  }
+  eq(other: MermaidWidget): boolean {
+    return other.source === this.source;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement("div");
+    root.className = "cm-md-mermaid";
+    let current = 0;
+    const draw = () => {
+      const attempt = ++current;
+      void drawMermaid(this.source).then((drawing) => {
+        if (attempt !== current) return;
+        if (drawing.kind === "svg") {
+          root.dataset.state = "drawn";
+          showMermaidSvg(root, drawing.svg);
+        } else {
+          root.dataset.state = "failed";
+          const reason = document.createElement("div");
+          reason.className = "cm-md-alt";
+          reason.dataset.state = "failed";
+          reason.textContent = translate("documents.mermaidUnavailable", { reason: drawing.reason });
+          const code = document.createElement("pre");
+          code.className = "cm-md-mermaid-source";
+          code.textContent = this.source;
+          root.replaceChildren(reason, code);
+          useShellStore.getState().noteDiagnostic(`markdown live: mermaid diagram not drawn: ${drawing.reason}`);
+        }
+        view.requestMeasure();
+      });
+    };
+    root.dataset.state = "loading";
+    draw();
+    diagramWatches.set(root, watchPalette(draw));
+    // A press on a picture has no text position under it, and CodeMirror
+    // would put the caret after the block; the diagram puts it at its own
+    // start, which shows its source.
+    root.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(root) }, userEvent: "select.pointer" });
+      view.focus();
+    });
+    return root;
+  }
+  destroy(dom: HTMLElement): void {
+    diagramWatches.get(dom)?.();
+    diagramWatches.delete(dom);
+  }
+  ignoreEvent(event: Event): boolean {
+    return event.type === "mousedown";
+  }
+}
+
 /**
  * Whether the operator has moved the caret or edited in this view. A file
  * opens with the caret at 0, which the operator did not put there, so a drawn
@@ -293,6 +359,9 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
             range.to,
           ),
         );
+        break;
+      case "mermaid":
+        ranges.push(Decoration.replace({ widget: new MermaidWidget(range.source ?? ""), block: true }).range(range.from, range.to));
         break;
       case "image":
         ranges.push(

@@ -145,4 +145,33 @@ describe("markdown live plan: HTML and images", () => {
     const focused = markdownLivePlan(markdown.parse(source), doc, { from: 0, to: 0 }, true);
     expect(focused.map((range) => range.kind)).toEqual(["html", "hide", "heading"]);
   });
+
+  it("draws a top-level mermaid fence as one diagram over its whole lines, with the text between the fences as its source", () => {
+    const source = `${AWAY}\`\`\`mermaid\nflowchart LR\n  A --> B\n\`\`\`\nafter`;
+    const ranges = plan(source);
+    expect(ranges.map((range) => [range.kind, source.slice(range.from, range.to), range.source])).toEqual([
+      ["mermaid", "```mermaid\nflowchart LR\n  A --> B\n```", "flowchart LR\n  A --> B"],
+    ]);
+  });
+
+  it("shows a mermaid fence's source while the caret is anywhere in it, edges included", () => {
+    const source = `${AWAY}\`\`\`Mermaid\ngraph TD\n  A --> B\n\`\`\``;
+    const start = source.indexOf("```");
+    for (const caret of [start, source.indexOf("A -->"), source.length]) {
+      expect(plan(source, caret).some((range) => range.kind === "mermaid")).toBe(false);
+    }
+    expect(plan(source, start - 1).map((range) => range.kind)).toEqual(["mermaid"]);
+  });
+
+  it("keeps a mermaid fence drawn under the caret a file opened with until the operator moves it", () => {
+    const source = "```mermaid\ngraph TD\n  A --> B\n```";
+    const doc = Text.of(source.split("\n"));
+    expect(markdownLivePlan(markdown.parse(source), doc, { from: 0, to: 0 }, false).map((range) => range.kind)).toEqual(["mermaid"]);
+  });
+
+  it("leaves another language, an empty diagram and a fence inside a list as code", () => {
+    for (const source of [`${AWAY}\`\`\`mermaidish\ngraph TD\n\`\`\``, `${AWAY}\`\`\`mermaid\n\n\`\`\``, `${AWAY}- item\n\n  \`\`\`mermaid\n  graph TD\n  \`\`\``]) {
+      expect(plan(source).some((range) => range.kind === "mermaid")).toBe(false);
+    }
+  });
 });

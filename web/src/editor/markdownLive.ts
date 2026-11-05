@@ -12,12 +12,14 @@
 // An HTML block, an inline `<img>` and a Markdown image are drawn as what they
 // say; the plan only names their source (`html`, `image`), and the plugin
 // sanitizes and loads it. Other inline HTML (`<br>`, `<kbd>`, `<sub>`) stays
-// source.
+// source. A top-level fenced block whose language is `mermaid` is drawn as its
+// diagram the same way (`mermaid`), and is revealed like an HTML block.
 
 import type { SyntaxNode, Tree } from "@lezer/common";
 import type { Text } from "@codemirror/state";
+import { isMermaidInfo } from "../markdownMermaid";
 
-export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image";
+export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid";
 
 export type LiveRange = {
   from: number;
@@ -34,6 +36,8 @@ export type LiveRange = {
   src?: string;
   alt?: string;
   title?: string;
+  /** `mermaid`: the diagram's source, the text between the fences. */
+  source?: string;
 };
 
 /** The Live view's whole-document byte bound: above
@@ -102,6 +106,19 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
         // drawn even while the caret is on its line.
         const text = doc.sliceString(node.from, node.to).toLowerCase();
         ranges.push({ from: node.from, to: node.to, kind: "checkbox", checked: text.includes("x") });
+        return;
+      }
+
+      if (name === "FencedCode" && parent === "Document") {
+        const diagram = mermaidSource(node, doc);
+        if (diagram !== null) {
+          const first = doc.lineAt(node.from);
+          const last = doc.lineAt(node.to);
+          if (!(embedsRevealed && overlaps(first.from, last.to))) {
+            ranges.push({ from: first.from, to: last.to, kind: "mermaid", source: diagram });
+            return false;
+          }
+        }
         return;
       }
 
@@ -217,6 +234,17 @@ function enclosing(node: SyntaxNode, name: string): { from: number; to: number }
     current = current.parent;
   }
   return null;
+}
+
+/** A fenced block's diagram when its language is `mermaid` and it holds text, else null. */
+function mermaidSource(node: SyntaxNode, doc: Text): string | null {
+  const info = node.getChild("CodeInfo");
+  const lines = node.getChildren("CodeText");
+  const first = lines[0];
+  const last = lines.at(-1);
+  if (!info || !first || !last || !isMermaidInfo(doc.sliceString(info.from, info.to))) return null;
+  const source = doc.sliceString(first.from, last.to);
+  return source.trim() === "" ? null : source;
 }
 
 /** A Markdown image's address, alt text and title, or null when it has no address. */
