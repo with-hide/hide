@@ -4,8 +4,9 @@
 // agent it opened by id, never by name (D-17).
 
 import { create } from "zustand";
-import type { AgentGroup, AgentKey, Conversation, DetailView, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, sameKey } from "./protocol";
+import { resultContent, type LookContent } from "./lookContent";
 import { NO_CHOICE, type StartChoice } from "./start";
 
 export type Screen =
@@ -21,19 +22,33 @@ export type Screen =
 
 export type Rows = { state: RowsState; text: string; lines: number; more: boolean };
 
+/** The agent's open Views, as the last `looks` frame carried them; `omitted` are the ones past hided's cap. */
+export type Looks = { rows: LookRow[]; omitted: number };
+
+/**
+ * One View opened full screen (B13). `requestId` names the read in flight, so a late frame of an earlier read, or of one the
+ * phone retried, is ignored; `shown` is set once the phone told hided it saw the content (D-15).
+ */
+export type Viewing = { row: LookRow; requestId: string; content: LookContent; shown: boolean };
+
 /**
  * `moreAskedAt` is the line count when older rows were last asked for, and
  * `olderAskedAt` the cursor older messages were last asked before, so one
  * pull asks once. `conversation` is null until hided says whether the pane
- * has one; `none` leaves the terminal alone on screen.
+ * has one; `none` leaves the terminal alone on screen. `view` is the half
+ * hided reads; `tab` is what is on screen, which is 볼 것 without hided
+ * knowing. `looks` is null until hided lists the Views.
  */
 export type Detail = {
   key: AgentKey;
   view: DetailView;
+  tab: DetailTab;
   rows: Rows | null;
   moreAskedAt: number | null;
   conversation: Conversation | "none" | null;
   olderAskedAt: number | null;
+  looks: Looks | null;
+  look: Viewing | null;
 };
 
 /**
@@ -189,6 +204,18 @@ export function applyFrame(frame: ServerFrame): void {
       patch({ detail: { ...detail, conversation } });
       return;
     }
+    case "looks": {
+      const detail = state.detail;
+      if (!detail || !sameKey(detail.key, frame)) return;
+      patch({ detail: { ...detail, looks: { rows: frame.views, omitted: frame.omitted } } });
+      return;
+    }
+    case "look_result":
+      showLook(frame.request_id, resultContent(frame.state, frame.url));
+      return;
+    case "look_changes":
+      showLook(frame.request_id, { state: "changes", files: frame.files, count: frame.count, added: frame.added, removed: frame.removed });
+      return;
     case "start_catalog":
       patch({ startCatalog: { targets: frame.targets, core_platform: frame.core_platform, kinds: frame.kinds, remembered: frame.remembered } });
       return;
@@ -198,6 +225,13 @@ export function applyFrame(frame: ServerFrame): void {
     default:
       return;
   }
+}
+
+/** Puts `content` on the View the phone is looking at, when it is the answer to the read in flight. */
+export function showLook(requestId: string, content: LookContent): void {
+  const detail = usePhone.getState().detail;
+  if (!detail?.look || detail.look.requestId !== requestId) return;
+  patch({ detail: { ...detail, look: { ...detail.look, content } } });
 }
 
 /** The choices this phone made that still name a row or group of the new list, so a long session keeps no stale ones. */

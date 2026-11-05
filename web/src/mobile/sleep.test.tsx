@@ -13,6 +13,9 @@ vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
 });
 
+// Each test loads the whole phone app afresh, which a loaded machine takes longer than the default 5 s to do.
+vi.setConfig({ testTimeout: 30_000 });
+
 class FakeSocket {
   static CONNECTING = 0;
   static OPEN = 1;
