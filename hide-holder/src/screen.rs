@@ -180,8 +180,9 @@ pub struct Frame {
     /// having run past its last column, as against ending with a line break;
     /// None when the parser cannot know (see [`Capture::without_wraps`]).
     /// Read for every row on every capture, since the parser can set a row's
-    /// wrap when the row after it is written.
-    pub wrapped: Option<Vec<bool>>,
+    /// wrap when the row after it is written; shared with the capture's last
+    /// frame, and with the frame before while no row's wrap moved.
+    pub wrapped: Option<Arc<[bool]>>,
     pub cursor: Cursor,
 }
 
@@ -216,6 +217,9 @@ pub struct Capture {
     frame: Option<Frame>,
     /// Whether the parser's row wraps are the program's own.
     wraps: bool,
+    /// The rows' wraps as this capture reads them, before they are compared
+    /// with the last frame's.
+    wrap_bits: Vec<bool>,
 }
 
 impl Capture {
@@ -229,12 +233,14 @@ impl Capture {
             palette: None,
             frame: None,
             wraps: true,
+            wrap_bits: Vec::new(),
         })
     }
 
     /// Captures no wraps: the parser reads output a pseudoconsole drew
-    /// again, which places the rows of a wrapped line itself, so every row
-    /// would read as ending with a line break.
+    /// again, which places the rows of a wrapped line itself and does not
+    /// reliably leave a soft wrap, so a wrapped row could read as ending
+    /// with a line break.
     #[cfg_attr(not(windows), allow(dead_code))] // only a Windows holder drops them
     pub fn without_wraps(&mut self) {
         self.wraps = false;
@@ -280,7 +286,7 @@ impl Capture {
         let default_fg = palette.default_fg.unwrap_or(Color::Default);
         let default_bg = palette.default_bg.unwrap_or(Color::Default);
         let mut lines = Vec::with_capacity(usize::from(rows));
-        let mut wrapped = Vec::with_capacity(if self.wraps { usize::from(rows) } else { 0 });
+        self.wrap_bits.clear();
         {
             let mut iterator = self.render.populate_row_iterator(&mut self.rows)?;
             let mut y = 0u16;
@@ -307,7 +313,7 @@ impl Capture {
                     }
                 };
                 if self.wraps {
-                    wrapped.push(iterator.soft_wrapped()?);
+                    self.wrap_bits.push(iterator.soft_wrapped()?);
                 }
                 iterator.set_dirty(false)?;
                 lines.push(line);
@@ -316,7 +322,7 @@ impl Capture {
             while y < rows {
                 lines.push(Arc::new(Row::blank(cols, default_fg, default_bg)));
                 if self.wraps {
-                    wrapped.push(false);
+                    self.wrap_bits.push(false);
                 }
                 y += 1;
             }
@@ -342,11 +348,19 @@ impl Capture {
                 shape: 0,
             },
         };
+        // Unchanged wraps keep the last frame's: no allocation.
+        let wrapped =
+            self.wraps.then(
+                || match previous.as_ref().and_then(|frame| frame.wrapped.as_ref()) {
+                    Some(last) if **last == *self.wrap_bits => Arc::clone(last),
+                    _ => Arc::from(self.wrap_bits.as_slice()),
+                },
+            );
         let frame = Frame {
             cols,
             rows,
             lines,
-            wrapped: self.wraps.then_some(wrapped),
+            wrapped,
             cursor,
         };
         self.frame = Some(frame.clone());

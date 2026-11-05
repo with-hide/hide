@@ -477,6 +477,20 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_whose_wraps_did_not_move_shares_the_last_ones() {
+        let mut pane = pane(29, 4);
+        pane.feed(format!("{URL}osc8").as_bytes(), &mut Vec::new());
+        let first = pane.take(true).unwrap().wrapped.unwrap();
+        pane.feed(b" label", &mut Vec::new());
+        let same = pane.take(false).unwrap().wrapped.unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &same));
+        pane.feed(b"\x1b[H\x1b[2K", &mut Vec::new());
+        let moved = pane.take(false).unwrap().wrapped.unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&same, &moved));
+        assert_eq!(&*moved, [false, false, false, false]);
+    }
+
+    #[test]
     fn a_pane_that_cannot_know_its_wraps_says_nothing_of_them() {
         let mut pane = pane(29, 4);
         pane.without_wraps();

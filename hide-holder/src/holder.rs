@@ -610,9 +610,10 @@ impl Holder {
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut pane = Pane::new(size, config.theme.as_ref())?;
         // ConPTY draws the console's screen again for the holder, placing
-        // the rows of a wrapped line itself, so its parser never sees a soft
-        // wrap: the pane says nothing of wraps rather than that every row
-        // ends with a line break, and the screen keeps its last-column rule.
+        // the rows of a wrapped line itself and does not reliably leave the
+        // parser a soft wrap: the pane says nothing of wraps rather than that
+        // a wrapped row ends with a line break, and the screen keeps its
+        // last-column rule.
         #[cfg(windows)]
         pane.without_wraps();
         let listener = LocalListener::bind(&config.socket).map_err(|error| {
