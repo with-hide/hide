@@ -174,6 +174,7 @@ pub(super) fn raise_for(
                 why: None,
                 action: None,
                 warning: None,
+                ci: None,
                 key: Some(raise_key.clone()),
             },
         );
@@ -243,6 +244,7 @@ pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
                 why: None,
                 action: None,
                 warning: None,
+                ci: None,
                 key: Some(key),
             },
         );
@@ -317,6 +319,7 @@ fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
                 why: None,
                 action: None,
                 warning: Some(warning.kind),
+                ci: None,
                 key: Some(act_key(target, &fact)),
             };
             // A full queue refuses the rest too; it is logged once a pass.
@@ -988,6 +991,7 @@ impl Runtime {
                 why: Some(why),
                 action: None,
                 warning: None,
+                ci: None,
                 key: Some(act.clone()),
             },
         );
@@ -1064,6 +1068,7 @@ impl Runtime {
                             why: None,
                             action: None,
                             warning: None,
+                            ci: None,
                             key: Some(wake_key),
                         },
                     );
@@ -1342,6 +1347,7 @@ impl Runtime {
                     why: None,
                     action: Some(payload.action),
                     warning: None,
+                    ci: None,
                     key: None,
                 },
             );

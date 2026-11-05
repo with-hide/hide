@@ -1,11 +1,11 @@
 //! Reporting a pane's agent to the core: its turn and its subagent counts.
 //!
-//! The report is one hook request to hided (`hide workspace status --hook`,
-//! `HookCommand::Status`), which proves the caller is in the pane like every
-//! other hook request and hands the report to the core (PRD engine-bundle-1
-//! D-7). Nothing is written to Herdr. The sibling `hide` runs within
-//! [`REPORT_TIMEOUT`], so a daemon that is gone or does not answer costs the
-//! agent's turn that long and no more (B13).
+//! The report is one hook request to hided (`HookCommand::Status`, which
+//! `hide workspace status --hook` also sends), which proves the caller is in
+//! the pane like every other hook request and hands the report to the core
+//! (PRD engine-bundle-1 D-7). Nothing is written to Herdr. The request ends
+//! within [`REPORT_TIMEOUT`], so a daemon that is gone or does not answer
+//! costs the agent's turn that long and no more (B13).
 
 use std::fs;
 use std::io;
@@ -16,8 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::{AgentRuntime, HookEvent};
 
-/// How long one report may hold the agent's hook slot, the `hide` it runs
-/// included.
+/// How long one report may hold the agent's hook slot.
 pub const REPORT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// What the helper leaves the agent of its hook's time: the process ends
@@ -90,10 +89,14 @@ pub struct HookCounts {
 /// ask comes back as the cause it is recorded under
 /// ([`crate::delivery::refusal_cause`]).
 pub fn report(report: &HookStatusReport, deadline: Instant) -> Result<(), String> {
-    let input = serde_json::to_vec(report).map_err(|_| "format".to_owned())?;
-    crate::delivery::run_cli_with_input(&["workspace", "status", "--hook"], &input, deadline)
-        .map(|_| ())
-        .map_err(|failure| failure.code.to_owned())
+    crate::delivery::ask(
+        crate::hook_request::HookCommand::Status {
+            report: report.clone(),
+        },
+        deadline,
+    )
+    .map(|_| ())
+    .map_err(|failure| failure.code.to_owned())
 }
 
 /// The last report that did not reach the core, kept so the failure is a
@@ -236,35 +239,6 @@ mod tests {
             serde_json::from_value(json!({"runtime": "grok", "version": crate::HOOK_VERSION}))
                 .unwrap();
         assert_eq!((bare.session, bare.turn, bare.counts), (None, None, None));
-    }
-
-    #[test]
-    fn a_report_without_a_daemon_to_ask_ends_at_once() {
-        // A test binary has no daemon to ask: a lane with no `hide` beside it
-        // meets the missing CLI a hook outside a Hide install meets, and one
-        // that built `hide` there (Windows) meets the daemon's absence. Both
-        // end at once with their cause.
-        let started = Instant::now();
-        let outcome = report(
-            &HookStatusReport {
-                runtime: "claude".to_owned(),
-                version: crate::HOOK_VERSION,
-                session: None,
-                turn: Some(HookTurn::Working),
-                counts: None,
-                session_start: false,
-                waiting: None,
-            },
-            started + REPORT_TIMEOUT,
-        );
-        assert!(
-            matches!(
-                outcome.as_ref().map_err(String::as_str),
-                Err("cli" | "unavailable")
-            ),
-            "{outcome:?}"
-        );
-        assert!(started.elapsed() < REPORT_TIMEOUT);
     }
 
     #[test]

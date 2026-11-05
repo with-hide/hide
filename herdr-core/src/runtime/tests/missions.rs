@@ -658,9 +658,13 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     .unwrap();
     let node = crate::node::TEST_NODE;
 
-    // The first answer about the pull request is where its wakes start.
+    // The first answer about the pull request is where its merge and
+    // review wakes start; the CI result it already has is told.
     let open = github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false);
-    assert!(runtime.note_mission_pulls(node, &open).is_empty());
+    assert_eq!(
+        runtime.note_mission_pulls(node, &open),
+        vec!["mission:mission-1:ci:fix:7:a1:passed:sender"]
+    );
     assert!(
         runtime.note_mission_pulls(node, &open).is_empty(),
         "the same answer wakes nothing"
@@ -678,7 +682,8 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:new_head:fix:7:b2:sender"]
+        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"],
+        "its CI's result on the new commit"
     );
     assert!(runtime.note_mission_pulls(node, &pushed).is_empty());
 
@@ -696,7 +701,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
         vec!["mission:mission-1:changes_requested:fix:7:b2:1:sender"]
     );
 
-    // A new commit on a done mission's pull request opens it again.
+    // A CI result on a done mission's pull request opens it again.
     without_gate(&mut runtime);
     command(
         &mut runtime,
@@ -709,6 +714,19 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     assert_eq!(runtime.note_mission_pulls(node, &pushed_again).len(), 1);
     assert_eq!(status(&runtime, "mission-1"), MissionStatus::Running);
 
+    // So does a run ending again on that commit with another result.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.note_mission_pulls(node, &checked(7, "c3", PullRequestChecks::Failed, &[])),
+        vec!["mission:mission-1:ci:fix:7:c3:failed:sender"]
+    );
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Running);
+
     // Its merge is the end it was waiting for: no wake, and it stays done.
     command(
         &mut runtime,
@@ -719,6 +737,312 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     let merged = github(vec![pull(7, "c3", PullRequestBadge::Merged, None)], false);
     assert!(runtime.note_mission_pulls(node, &merged).is_empty());
     assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
+}
+
+/// The pull request `number` at `head` with its checks at `checks`, the
+/// failed ones named `failed`.
+fn checked(number: u32, head: &str, checks: PullRequestChecks, failed: &[&str]) -> GithubSnapshot {
+    let mut pull = pull(number, head, PullRequestBadge::Open, None);
+    pull.checks = checks;
+    pull.work.failed_checks = failed
+        .iter()
+        .map(|name| crate::model::PrFailedCheck {
+            name: Some((*name).to_owned()),
+            url: None,
+        })
+        .collect();
+    github(vec![pull], false)
+}
+
+/// A node's pull request tells its Conductor when its CI ends on a commit,
+/// not when the commit arrives, and one result on one commit is one
+/// letter: a rerun that fails again, or a read that cannot say, sends
+/// nothing new.
+#[test]
+fn a_missions_pull_request_tells_its_conductor_each_ci_result_once_per_commit() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let node = crate::node::TEST_NODE;
+    let mut read = |answer: GithubSnapshot| runtime.note_mission_pulls(node, &answer);
+
+    assert!(read(checked(7, "a1", PullRequestChecks::Pending, &[])).is_empty());
+    assert!(
+        read(checked(7, "b2", PullRequestChecks::Pending, &[])).is_empty(),
+        "a new commit is no letter"
+    );
+    let failed = checked(
+        7,
+        "b2",
+        PullRequestChecks::Failed,
+        &["verify / rust", "verify / journey"],
+    );
+    assert_eq!(
+        read(failed.clone()),
+        vec!["mission:mission-1:ci:fix:7:b2:failed:sender"]
+    );
+    assert!(read(failed.clone()).is_empty(), "the same read again");
+    assert!(read(checked(7, "b2", PullRequestChecks::Pending, &[])).is_empty());
+    assert!(read(checked(7, "b2", PullRequestChecks::Unknown, &[])).is_empty());
+    assert!(
+        read(failed).is_empty(),
+        "a rerun failing again on the same commit"
+    );
+    assert_eq!(
+        read(checked(7, "b2", PullRequestChecks::Passing, &[])),
+        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"]
+    );
+    // A commit whose CI ended between two reads is still told.
+    assert_eq!(
+        read(checked(7, "c3", PullRequestChecks::Passing, &[])),
+        vec!["mission:mission-1:ci:fix:7:c3:passed:sender"]
+    );
+    // A review asking for changes still tells, with no CI result of its own.
+    let mut asked = pull(
+        7,
+        "c3",
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ChangesRequested),
+    );
+    asked.checks = PullRequestChecks::Passing;
+    assert_eq!(
+        read(github(vec![asked], false)),
+        vec!["mission:mission-1:changes_requested:fix:7:c3:1:sender"]
+    );
+}
+
+/// A CI letter's first line names the commit and the result, and a
+/// failure names the checks that failed, counting those past the first
+/// eight; a cancellation no run replaced is told apart from a failure.
+#[test]
+fn a_ci_letter_names_the_commit_the_result_and_the_failed_checks() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let node = crate::node::TEST_NODE;
+    let names: Vec<String> = (0..10).map(|index| format!("job {index}")).collect();
+    let mut failed: Vec<&str> = names.iter().map(String::as_str).collect();
+    failed.push("job 0");
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "1234567890ab", PullRequestChecks::Failed, &failed),
+    );
+    let mut cancelled = pull(7, "abcdef123456", PullRequestBadge::Open, None);
+    cancelled.checks = PullRequestChecks::Failed;
+    cancelled.work.checks_cancelled = true;
+    cancelled.work.failed_checks = vec![crate::model::PrFailedCheck {
+        name: Some("verify".into()),
+        url: None,
+    }];
+    runtime.note_mission_pulls(node, &github(vec![cancelled], false));
+    runtime.note_mission_pulls(node, &checked(7, "fedcba", PullRequestChecks::Passing, &[]));
+
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let told: Vec<String> = mission
+        .wakes
+        .iter()
+        .map(|wake| {
+            crate::runtime::missions::wake_body(mission, wake)
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    let at = r#"(mission mission-1 "Fix the bug", node fix)."#;
+    assert_eq!(
+        told,
+        [
+            format!(
+                "PR #7: CI failed on commit 1234567: job 0, job 1, job 2, job 3, job 4, job 5, job 6, job 7 and 2 more {at}"
+            ),
+            format!("PR #7: CI was cancelled on commit abcdef1 and no run replaced it {at}"),
+            format!("PR #7: CI passed on commit fedcba {at}"),
+        ]
+    );
+}
+
+/// Mission `mission-1`, started, whose node `fix` holds pull request 7.
+fn fixing_seven(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(runtime, "sender", plan()).unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+}
+
+/// The pull request 7 at `head` whose checks failed while a workflow still
+/// runs, or not, the failed ones named `failed`.
+fn failed_running(head: &str, running: bool, failed: &[&str]) -> GithubSnapshot {
+    let mut answer = checked(7, head, PullRequestChecks::Failed, failed);
+    answer.projects[0].pull_requests[0].work.checks_running = running;
+    answer
+}
+
+/// A failure ranks first among a head's checks, so one workflow failing
+/// while another still runs is not the CI's end: the letter waits for it
+/// and names every check that failed (with-hide/hide#2089 review 1).
+#[test]
+fn a_ci_letter_waits_for_every_workflow_on_the_head_to_end() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    assert!(
+        runtime
+            .note_mission_pulls(node, &failed_running("b2", true, &["static-design"]))
+            .is_empty(),
+        "verify still runs"
+    );
+    assert_eq!(
+        runtime.note_mission_pulls(
+            node,
+            &failed_running("b2", false, &["static-design", "rust workspace"])
+        ),
+        vec!["mission:mission-1:ci:fix:7:b2:failed:sender"]
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let body = crate::runtime::missions::wake_body(mission, mission.wakes.last().unwrap());
+    assert!(
+        body.starts_with("PR #7: CI failed on commit b2: static-design, rust workspace "),
+        "{body}"
+    );
+}
+
+/// A pull request whose CI already ended when Hide first reads it, as when
+/// it was named before the list held it, is told: only a merge or a review
+/// starts from the first answer (with-hide/hide#2089 review 2).
+#[test]
+fn a_ci_result_hide_reads_first_is_told() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    assert_eq!(
+        runtime.note_mission_pulls(
+            node,
+            &checked(7, "b2", PullRequestChecks::Failed, &["verify"])
+        ),
+        vec!["mission:mission-1:ci:fix:7:b2:failed:sender"]
+    );
+    assert!(
+        runtime
+            .note_mission_pulls(
+                node,
+                &checked(7, "b2", PullRequestChecks::Failed, &["verify"])
+            )
+            .is_empty()
+    );
+}
+
+/// One result on one commit is told once for good: the mission remembers
+/// it, so a failure, a pass and the same failure again send no third
+/// letter, after the first letters left the record and with no letter to
+/// match it against (with-hide/hide#2089 review 3). The same reads keep the
+/// node's last push (with-hide/hide-private#552): results on one commit move
+/// it not, a new commit does.
+#[test]
+fn a_result_told_on_a_commit_is_never_told_again() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    let pushed = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        let fix = mission.nodes.iter().find(|node| node.key == "fix").unwrap();
+        fix.pushed_at_unix_ms
+    };
+    let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
+    let passed = checked(7, "b2", PullRequestChecks::Passing, &[]);
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    let first = pushed(&runtime);
+    assert!(first.is_some(), "the first head read starts the push clock");
+    assert_eq!(runtime.note_mission_pulls(node, &failed).len(), 1);
+    assert_eq!(runtime.note_mission_pulls(node, &passed).len(), 1);
+    let sent: Vec<(String, u64)> = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .wakes
+        .iter()
+        .map(|wake| ("mission-1".to_owned(), wake.seq))
+        .collect();
+    runtime.mission_wakes_sent(&sent);
+    let stored: crate::missions::MissionBook =
+        serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
+    runtime.missions.book = stored;
+    assert!(runtime.note_mission_pulls(node, &failed).is_empty());
+    assert!(runtime.note_mission_pulls(node, &passed).is_empty());
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .wakes
+            .is_empty()
+    );
+    assert_eq!(pushed(&runtime), first, "results on one commit are no push");
+    let fix = |runtime: &mut Runtime| {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        mission
+            .nodes
+            .iter_mut()
+            .find(|node| node.key == "fix")
+            .unwrap()
+            .pushed_at_unix_ms = Some(1);
+    };
+    fix(&mut runtime);
+    // A new commit is a push, and its results are news again.
+    assert_eq!(
+        runtime.note_mission_pulls(
+            node,
+            &checked(7, "c3", PullRequestChecks::Failed, &["verify"])
+        ),
+        vec!["mission:mission-1:ci:fix:7:c3:failed:sender"]
+    );
+    assert!(
+        pushed(&runtime) > Some(1),
+        "a new commit moves the push clock"
+    );
 }
 
 /// A mission whose project is on another device shows that device's pull
@@ -834,7 +1158,7 @@ fn a_done_mission_does_not_open_beside_its_conductors_open_one() {
     let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:new_head:fix:7:b2:sender"],
+        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"],
         "the Conductor is still told"
     );
     let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
@@ -878,16 +1202,16 @@ fn a_missions_wake_waits_in_the_record_until_its_letter_is_delivered() {
     )
     .unwrap();
     let node = crate::node::TEST_NODE;
-    let open = github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false);
-    let asked = github(
-        vec![pull(
-            7,
-            "a1",
-            PullRequestBadge::Open,
-            Some(ReviewDecision::ChangesRequested),
-        )],
-        false,
+    // CI that runs on: these wakes are the review's alone.
+    let open = checked(7, "a1", PullRequestChecks::Pending, &[]);
+    let mut asked = pull(
+        7,
+        "a1",
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ChangesRequested),
     );
+    asked.checks = PullRequestChecks::Pending;
+    let asked = github(vec![asked], false);
     // A second ask on the same head is news again: GitHub's time of the
     // pull request moved with it.
     let mut asked_again = pull(
@@ -897,6 +1221,7 @@ fn a_missions_wake_waits_in_the_record_until_its_letter_is_delivered() {
         Some(ReviewDecision::ChangesRequested),
     );
     asked_again.updated_at_unix_ms = Some(2);
+    asked_again.checks = PullRequestChecks::Pending;
     let asked_again = github(vec![asked_again], false);
     runtime.note_mission_pulls(node, &open);
     let first = runtime.note_mission_pulls(node, &asked);
@@ -4670,6 +4995,7 @@ fn see(node: &mut crate::missions::MissionNode, merged: bool, closed: bool) {
         merged,
         closed,
         changes_requested: false,
+        ci_told: Vec::new(),
     });
 }
 
@@ -5976,6 +6302,7 @@ fn a_full_wake_queue_keeps_what_waits() {
         why: None,
         action: None,
         warning: None,
+        ci: None,
         key: None,
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
@@ -6732,6 +7059,7 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
             why: None,
             action: None,
             warning: None,
+            ci: None,
             key: Some(format!("filler:{at}")),
         })
         .collect();

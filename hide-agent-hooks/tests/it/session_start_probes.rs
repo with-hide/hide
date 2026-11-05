@@ -1,8 +1,9 @@
 //! SessionStart asks Memory and the Workspace probe at once: run as Claude
-//! Code runs it, the compiled helper beside a stand-in `hide` whose Memory
-//! answer waits until the probe's `workspace info --hook` has been asked. Asked
-//! one after the other, Memory would wait out its own deadline and the
-//! session would start without it.
+//! Code runs it, the compiled helper with a stand-in daemon whose Memory
+//! answer waits until the probe has been asked. Asked one after the other,
+//! Memory would wait out its own deadline and the session would start
+//! without it. No `hide` is beside the helper: every request is the hook's
+//! own, and starts no program.
 
 #![cfg(unix)]
 
@@ -13,11 +14,13 @@ use std::time::{Duration, Instant};
 
 use hide_platform::process::OwnedChild;
 
+use crate::stand_in_daemon::StandInDaemon;
 use crate::{programs, stand_ins};
 
-/// The stand-in `hide`. Memory answers only once the probe has
-/// been asked; the wait is bounded so a stand-in never outlives its test,
-/// and the helper's Memory deadline ends it sooner.
+/// The stand-in daemon's answers, by the `hide` command that sends each
+/// request. Memory answers only once the probe has been asked; the wait is
+/// bounded so a stand-in never outlives its test, and the helper's Memory
+/// deadline ends it sooner.
 const FAKE_HIDE: &str = r#"#!/bin/sh
 dir="${HOME%/*}"
 echo "$@" >> "$dir/hide-calls"
@@ -38,6 +41,7 @@ esac
 "#;
 
 struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     home: PathBuf,
     hook: PathBuf,
@@ -54,8 +58,11 @@ impl Machine {
         std::fs::create_dir_all(&bin).unwrap();
         let hook = bin.join("hide-agent-hooks");
         stand_ins::place(programs::hook(), &hook);
-        stand_ins::program(&bin.join("hide"), FAKE_HIDE);
+        let answers = root.join("answers");
+        stand_ins::program(&answers, FAKE_HIDE);
+        let daemon = StandInDaemon::serve(&answers, &[("HOME", home.clone().into())]);
         Self {
+            daemon,
             _dir: dir,
             calls: root.join("hide-calls"),
             home,
@@ -76,6 +83,7 @@ impl Machine {
             ])
             .env(hide_platform::host::HOME_VARIABLE, &self.home)
             .env("PATH", "/usr/bin:/bin")
+            .env_remove("XDG_STATE_HOME")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -89,6 +97,7 @@ impl Machine {
                 command.env_remove(key);
             }
         }
+        self.daemon.route(&mut command);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let mut input = child.take_stdin().unwrap();
         input
@@ -107,6 +116,8 @@ impl Machine {
 #[test]
 fn session_start_asks_memory_and_the_workspace_probe_at_once() {
     let machine = Machine::new();
+    // Nothing the hook could start as `hide` is there to start.
+    assert!(!machine.hook.with_file_name("hide").exists());
     let answer = machine.session_start();
     let context = answer["hookSpecificOutput"]["additionalContext"]
         .as_str()

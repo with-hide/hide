@@ -438,7 +438,7 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
 ### Agent screen rules
 
 A built-in agent's `[screen]` (`hide-agent-adapter/agents/<id>.toml`) reaches the operator only in a release, so a change to it is gated twice.
-`scripts/check-agent-screen-rules.py`, in the policy lane and `premerge-check.py`, refuses a changed `[screen]` whose `version` is not higher than the base's, and one whose agent has no captured screen under `hide-agent-adapter/tests/fixtures/screens/<id>/`; a new definition file adds an agent and is reviewed as that.
+`scripts/check-agent-screen-rules.py`, in the policy lane on every pull request and merge queue group, refuses a changed `[screen]` whose `version` is not higher than the base's, and one whose agent has no captured screen under `hide-agent-adapter/tests/fixtures/screens/<id>/`; a new definition file adds an agent and is reviewed as that.
 `hide-agent-adapter/tests/it/screens.rs` evaluates every agent's rules against each of its captures, which are the real agent's screen as Herdr drew it, colours included, named `<idle|working|blocked>-<what>.ansi` for the state the operator saw; no rule matching reads as idle, as the engine reads it.
 The first captures are the composer captures of `composer.rs` (an empty and a typed composer of six agents, all idle); a capture is never written from the rule it tests.
 The rule grammar, its limits and the evaluator have their own cases in `hide-screen-rules/tests/it/rules.rs`, taken from Herdr's manifest tests.
@@ -542,7 +542,7 @@ A partial run retains the original app-tested anchor in its plan record; it neve
 Each pull request run keeps a plan record, the `ci-plan` artifact, naming the run whose lanes ran and the main and head they checked; a run that reused one records that one, so the comparison is always with lanes that ran.
 The plan job reads the newest green run of the pull request's branch and head repository (`actions: read`) and fetches the commits and trees it needs (`--filter=blob:none`, about 9 MB for main's whole history).
 No green run, no record, a record for another head, a failed lookup, download or fetch, or a comparison that fails leaves the plan the change itself needs, and the summary says why; no failure turns into a reuse.
-This applies the merge policy's reasoning to the run itself ([CONTRIBUTING.md](../CONTRIBUTING.md#merging-into-main)): a green pull request merges without catching up with main, and `premerge-check.py` runs on the merge result before it merges, reused or not.
+This applies the merge policy's reasoning to the run itself ([CONTRIBUTING.md](../CONTRIBUTING.md#merging-into-main)): a green pull request merges without catching up with main, and the merge queue checks the merge result before it merges, reused or not.
 `ReuseGreenRun` and `LastGreenRun` in `scripts/tests/test_ci_plan.py` check the conditions, the fallbacks and the record.
 ### Where the macOS runners went
 

@@ -21,6 +21,7 @@ use hide_platform::ipc::LocalStream;
 use crate::env::Env;
 use crate::pane_auth::{Reference, Route};
 use crate::state_file::SCHEMA_VERSION;
+use hide_agent_hooks::hook_request::node_socket;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Longer than the daemon's own Factory answer limit, so the daemon's reason
@@ -243,55 +244,9 @@ fn bootstrap_remote(env: &Env, request: &Value) -> Result<Option<PathBuf>, Strin
     )
 }
 
-/// Connects to each node pane service that lives in `bridge_dir`, each
-/// connect waiting no later than `deadline`, which then bounds the stream.
+/// [`hide_agent_hooks::hook_request::live_bridges`], its reason owned.
 fn live_bridges(bridge_dir: &Path, deadline: Instant) -> Result<Vec<LocalStream>, String> {
-    let bridge_dir = bridge_dir.to_path_buf();
-    let metadata = match fs::symlink_metadata(&bridge_dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err("bridge_unavailable".to_owned()),
-    };
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || !private::owned_by_current_user(&bridge_dir).unwrap_or(false)
-        || !private::is_private(&bridge_dir).unwrap_or(false)
-    {
-        return Err("bridge_unavailable".to_owned());
-    }
-    let entries = match fs::read_dir(&bridge_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err("bridge_unavailable".to_owned()),
-    };
-    let mut streams = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|_| "bridge_unavailable".to_owned())?;
-        if !entry.file_name().to_string_lossy().starts_with("bridge-") {
-            continue;
-        }
-        // A socket on Unix, the listener's marker file on Windows; the
-        // connect tells a live listener from what a dead one left.
-        let socket = entry.path().join("bootstrap.sock");
-        let Ok(metadata) = fs::symlink_metadata(&socket) else {
-            continue;
-        };
-        if metadata.is_dir()
-            || metadata.file_type().is_symlink()
-            || !private::owned_by_current_user(&socket).unwrap_or(false)
-        {
-            continue;
-        }
-        let Ok(stream) = LocalStream::connect_until(&socket, deadline) else {
-            continue;
-        };
-        streams.push(stream);
-        let seen = streams.len();
-        if seen > 16 {
-            return Err("bridge_limit".to_owned());
-        }
-    }
-    Ok(streams)
+    hide_agent_hooks::hook_request::live_bridges(bridge_dir, deadline).map_err(str::to_owned)
 }
 
 fn bootstrap_bridges(bridge_dir: &Path, request: &Value) -> Result<Option<PathBuf>, String> {
@@ -326,46 +281,9 @@ fn bootstrap_bridges(bridge_dir: &Path, request: &Value) -> Result<Option<PathBu
     }
 }
 
+/// [`hide_agent_hooks::hook_request::read_reference`], its reason owned.
 fn read_reference(path: &Path) -> Result<Reference, String> {
-    if !path.is_absolute() {
-        return Err("invalid_reference".to_owned());
-    }
-    // The opened file is this account's own regular file and never what a
-    // link at the path leads to, so replacing the path with a link between a
-    // check and the read cannot make this helper read an unrelated file.
-    let file = private::open_own_file(path, false).map_err(|_| "credential_expired".to_owned())?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| "credential_expired".to_owned())?;
-    if !private::is_private(path).unwrap_or(false) || metadata.len() > 4096 {
-        return Err("invalid_reference".to_owned());
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(4097)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "credential_expired".to_owned())?;
-    if bytes.len() > 4096 {
-        return Err("invalid_reference".to_owned());
-    }
-    // References are written without a flush, so a power loss can leave one
-    // empty: it holds no credential, and reads as gone so a named reference
-    // renews rather than failing every command.
-    if bytes.is_empty() {
-        return Err("credential_expired".to_owned());
-    }
-    let reference: Reference =
-        serde_json::from_slice(&bytes).map_err(|_| "invalid_reference".to_owned())?;
-    if reference.token.len() != 64 || !reference.token.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("invalid_reference".to_owned());
-    }
-    let valid = match &reference.route {
-        Route::Daemon { port, origin_port } => *port != 0 && *origin_port != 0,
-        Route::Node { socket } => node_socket(socket).is_some(),
-    };
-    if !valid {
-        return Err("invalid_reference".to_owned());
-    }
-    Ok(reference)
+    hide_agent_hooks::hook_request::read_reference(path).map_err(str::to_owned)
 }
 
 pub fn request(credential: &mut Credential, query: &str) -> Result<Value, String> {
@@ -845,8 +763,8 @@ pub fn request_delivery(
     })
 }
 
-/// How long `hide workspace memory` waits for the core's answer: the hook
-/// that runs it waits 1,250 ms in all, process start included.
+/// How long `hide workspace memory` waits for the core's answer, inside the
+/// 1,250 ms a hook gives Memory (`hide_agent_hooks::memory::MEMORY_BUDGET`).
 const MEMORY_WITHIN: Duration = Duration::from_millis(1_200);
 /// The prompt a hook piped in: at most
 /// `herdr_core::memory_hook::PROMPT_LIMIT_BYTES`, its valid UTF-8 start.
@@ -877,17 +795,10 @@ pub fn request_memory_hook(env: &Env, mut ask: Value) -> Result<Value, String> {
     request_hook(env, command)
 }
 
-/// Hook reads always use the bootstrap service. Choosing a route happens
-/// before sending; neither a refusal nor a lost answer retries the command.
-///
-/// Each step that can fail has a reason of its own, which a hook records
-/// (`docs/agent-hooks.md`, What a hook records when it fails): no daemon
-/// published its socket (`hide_unavailable`), the record naming it is not
-/// trusted (`invalid_bootstrap_socket_record`), nothing took the connection
-/// there (`hide_unreachable`), the request was not written whole, so nothing
-/// ran (`request_unsent`), no answer came before the deadline and the command
-/// may have run (`request_timeout`), and the answer was not one bounded JSON
-/// line for this request (`invalid_response`).
+/// A hook's read through the bootstrap service
+/// (`hide_agent_hooks::hook_request::send`, which the hook itself also
+/// speaks), with the request's deadline. A step that failed is written to the
+/// diagnostic log as `hook.request_failed` with the system's error kind.
 pub fn request_hook(
     env: &Env,
     command: hide_node_link::panes::HookCommand,
@@ -910,160 +821,38 @@ pub fn request_hook(
 fn hook_request(
     env: &Env,
     named: Option<String>,
-    mut command: hide_node_link::panes::HookCommand,
+    command: hide_node_link::panes::HookCommand,
     deadline: Instant,
 ) -> Result<Value, String> {
-    use hide_node_link::panes::{HOOK_REQUEST_LIMIT, HookCommand, HookRequest};
+    use hide_agent_hooks::hook_request::{Caller, send};
     let request_id = fresh_request_id()?;
-    let failed = |reason: &'static str, error: Option<&std::io::Error>| {
+    let caller = Caller {
+        state_dir: &env.state_dir,
+        pane_id: env.pane_id.as_deref(),
+        named: named.as_deref().map(Path::new),
+    };
+    let sent = send(&caller, &request_id, command, deadline);
+    if sent.reference_missing {
         herdr_core::diagnostic!(json!({
             "component": "workspace_cli",
-            "kind": "hook.request_failed",
+            "kind": "hook.reference_missing",
             "request_id": request_id,
             "pane_id": env.pane_id,
-            "reason": reason,
-            "io_kind": error.map(|error| format!("{:?}", error.kind())),
         }));
-        reason.to_owned()
-    };
-    let named = match named {
-        Some(path) if path.is_empty() => return Err("invalid_reference".to_owned()),
-        Some(path) => match read_reference(Path::new(&path)) {
-            Ok(reference) => Some((PathBuf::from(path), reference)),
-            Err(reason) if reason == "credential_expired" => {
-                herdr_core::diagnostic!(json!({
-                    "component": "workspace_cli",
-                    "kind": "hook.reference_missing",
-                    "request_id": request_id,
-                    "pane_id": env.pane_id,
-                }));
-                None
-            }
-            Err(reason) => return Err(reason),
-        },
-        None => None,
-    };
-    let connect = |socket: &Path| {
-        LocalStream::connect_until(socket, deadline).map_err(|error| (UNREACHABLE, Some(error)))
-    };
-    let selected = match &named {
-        Some((
-            _,
-            Reference {
-                route: Route::Node { socket },
-                ..
-            },
-        )) => connect(&node_socket(socket).ok_or("invalid_reference")?),
-        _ => {
-            let state = named
-                .as_ref()
-                .and_then(|(path, _)| path.parent().and_then(Path::parent))
-                .unwrap_or(&env.state_dir);
-            hide_node::pane_proof::recorded_socket_path(&crate::pane_auth::bootstrap_socket_record(
-                state,
-            ))
-            .map_err(|refusal| (refusal.code(), None))
-            .and_then(|socket| connect(&socket))
-        }
-    };
-    let mut stream = match selected {
-        Ok(stream) => stream,
-        // A device's node answers for a pane whose daemon is on another
-        // machine; without one, the route's own failure stands.
-        Err((reason, error)) => {
-            let mut bridges = live_bridges(
-                &hide_kit::layout::workspace_bridges(&env.state_dir),
-                deadline,
-            )?;
-            if bridges.len() > 1 {
-                return Err("ambiguous_pane".to_owned());
-            }
-            bridges
-                .pop()
-                .ok_or_else(|| failed(reason, error.as_ref()))?
-        }
-    };
-    let mut nonce = [0u8; 16];
-    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
-    let token = named.map(|(_, reference)| reference.token);
-    let line = loop {
-        let hook = HookRequest {
-            request_id: request_id.clone(),
-            command: command.clone(),
-            token: token.clone(),
-        };
-        let request = json!({"pane_id":env.pane_id.as_deref().unwrap_or(""),"nonce":hex::encode(nonce),"one_shot":command.one_shot(),"hook":hook});
-        let line = request.to_string();
-        if line.len() < HOOK_REQUEST_LIMIT {
-            break line;
-        }
-        let HookCommand::Memory { prompt, .. } = &mut command else {
-            return Err("invalid_request".to_owned());
-        };
-        if prompt.is_empty() {
-            return Err("memory_request_too_large".to_owned());
-        }
-        *prompt = herdr_core::memory_hook::prefix(prompt, prompt.len() / 2).to_owned();
-    };
-    stream
-        .write_all(format!("{line}\n").as_bytes())
-        .map_err(|error| failed("request_unsent", Some(&error)))?;
-    let line = read_hook_line(
-        |bytes| stream.read(bytes),
-        || deadline.checked_duration_since(Instant::now()),
-    )
-    .map_err(|(reason, error)| failed(reason, error.as_ref()))?;
-    let answer: Value =
-        serde_json::from_str(&line).map_err(|_| failed("invalid_response", None))?;
-    if answer["ok"] == true && answer["request_id"] != request_id {
-        return Err(failed("invalid_response", None));
     }
-    Ok(answer)
-}
-
-/// Reads the answer's one line. The stream's deadline bounds each read, and
-/// the time left is checked again after each, so a peer that trickles bytes
-/// cannot keep the request past its deadline; the clock is supplied so that
-/// is tested without sleeping or a scheduler speed assertion. A read that
-/// fails says why with the system's answer.
-fn read_hook_line(
-    mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
-    mut remaining: impl FnMut() -> Option<Duration>,
-) -> Result<String, (&'static str, Option<std::io::Error>)> {
-    use hide_node_link::panes::HOOK_RESPONSE_LIMIT;
-    let timed_out = || ("request_timeout", None);
-    let mut answer = Vec::new();
-    let mut chunk = [0; 4096];
-    loop {
-        remaining()
-            .filter(|left| !left.is_zero())
-            .ok_or_else(timed_out)?;
-        let read = read(&mut chunk).map_err(|error| {
-            let reason = if error.kind() == std::io::ErrorKind::TimedOut {
-                "request_timeout"
-            } else {
-                "invalid_response"
-            };
-            (reason, Some(error))
-        })?;
-        remaining()
-            .filter(|left| !left.is_zero())
-            .ok_or_else(timed_out)?;
-        if read == 0 {
-            return Err(("invalid_response", None));
+    sent.answer.map_err(|failure| {
+        if failure.step {
+            herdr_core::diagnostic!(json!({
+                "component": "workspace_cli",
+                "kind": "hook.request_failed",
+                "request_id": request_id,
+                "pane_id": env.pane_id,
+                "reason": failure.reason,
+                "io_kind": failure.error.as_ref().map(|error| format!("{:?}", error.kind())),
+            }));
         }
-        let end = chunk[..read]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|at| at + 1);
-        answer.extend_from_slice(&chunk[..end.unwrap_or(read)]);
-        if answer.len() > HOOK_RESPONSE_LIMIT {
-            return Err(("invalid_response", None));
-        }
-        if end.is_some() {
-            return String::from_utf8(answer).map_err(|_| ("invalid_response", None));
-        }
-    }
+        failure.reason.to_owned()
+    })
 }
 
 /// The relay socket for one `hide browser` page command: the same scoped
@@ -1234,13 +1023,7 @@ pub fn valid_request_id(id: &str) -> bool {
 }
 
 pub fn fresh_request_id() -> Result<String, String> {
-    let mut id = [0u8; 16];
-    getrandom::getrandom(&mut id).map_err(|_| "request_unavailable".to_owned())?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "request_unavailable".to_owned())?
-        .as_millis();
-    Ok(format!("{now}-{}", hex::encode(id)))
+    hide_agent_hooks::hook_request::fresh_request_id().map_err(str::to_owned)
 }
 
 fn run_exchange(
@@ -1346,14 +1129,6 @@ async fn connect_with_limit(
         .await
         .map_err(|_| UNREACHABLE.to_owned())?;
     Ok(socket)
-}
-
-/// The node socket a device reference names: an absolute path on this
-/// machine, or nothing.
-fn node_socket(wire: &str) -> Option<PathBuf> {
-    hide_platform::path::from_wire(wire)
-        .ok()
-        .filter(|path| path.is_absolute())
 }
 
 /// Opens a stream through this device's node to the daemon behind it, as an
@@ -1506,56 +1281,6 @@ async fn claim(socket: &mut WorkspaceSocket, path: &Path) -> Result<(), String> 
 mod tests {
     use super::*;
     use std::sync::{Arc, mpsc};
-
-    #[test]
-    fn a_trickling_hook_response_cannot_renew_the_request_deadline() {
-        use std::cell::Cell;
-        let elapsed = Cell::new(Duration::ZERO);
-        let reads = Cell::new(0);
-        let answer = read_hook_line(
-            |bytes| {
-                reads.set(reads.get() + 1);
-                elapsed.set(elapsed.get() + Duration::from_secs(4));
-                bytes[0] = b' ';
-                Ok(1)
-            },
-            || Duration::from_secs(10).checked_sub(elapsed.get()),
-        );
-        assert_eq!(answer.map_err(|(reason, _)| reason), Err("request_timeout"));
-        // At 4 s, 8 s and 12 s: the third byte came past the 10 s deadline.
-        assert_eq!(reads.get(), 3);
-    }
-
-    #[test]
-    fn a_hook_response_requires_a_bounded_complete_line() {
-        for (bytes, expected) in [
-            (b"{}\n".to_vec(), Ok("{}\n".to_owned())),
-            (b"{}".to_vec(), Err("invalid_response")),
-            (
-                vec![b' '; hide_node_link::panes::HOOK_RESPONSE_LIMIT + 1],
-                Err("invalid_response"),
-            ),
-        ] {
-            let mut peer = std::io::Cursor::new(bytes);
-            let answer = read_hook_line(
-                |chunk| std::io::Read::read(&mut peer, chunk),
-                || Some(Duration::from_secs(10)),
-            );
-            assert_eq!(answer.map_err(|(reason, _)| reason), expected);
-        }
-        // A read the deadline ended is a timeout; one the stream ended is no
-        // answer, and each keeps what the system said.
-        for (kind, expected) in [
-            (std::io::ErrorKind::TimedOut, "request_timeout"),
-            (std::io::ErrorKind::ConnectionReset, "invalid_response"),
-        ] {
-            let answer = read_hook_line(|_| Err(kind.into()), || Some(Duration::from_secs(10)));
-            assert_eq!(
-                answer.map_err(|(reason, error)| (reason, error.map(|error| error.kind()))),
-                Err((expected, Some(kind)))
-            );
-        }
-    }
 
     /// A bootstrap listener recorded in `state` as a running daemon records
     /// it. Its one connection reads a request line, hands it to the test and

@@ -19,12 +19,12 @@ use crate::delivery::Actor;
 use crate::mission_criteria::{CheckKind, Criterion, CriterionState};
 use crate::mission_events::History;
 use crate::missions::{
-    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, External,
-    MISSION_LIMIT, Mission, MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope,
-    MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question,
-    Restored, Verdict, WakeEvent, WarningKind, Worker,
+    AnswerFailure, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
+    ConductorSettings, Delivery, External, MISSION_LIMIT, Mission, MissionBook, MissionCommand,
+    MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
+    PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, WarningKind, Worker,
 };
-use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
+use crate::model::{DetailItem, PrState, PullRequestBadge, PullRequestChecks, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
 
 /// The role Hide wakes a mission's Conductor as (D-39). Like the memory
@@ -399,6 +399,62 @@ pub(super) fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
         merged: pull.badge == PullRequestBadge::Merged,
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
         closed: pull.badge == PullRequestBadge::Closed,
+        ci_told: Vec::new(),
+    }
+}
+
+/// What an open `pull`'s CI ended as on its head, by the checks the list
+/// judged (`github::runs`); none while anything on the head still runs
+/// (a failure ranks first, so `Failed` alone is not the end), while it has
+/// no checks, or while they cannot be read.
+fn ci_of(pull: &crate::model::PullRequestSnapshot) -> Option<CiResult> {
+    pull.head_oid.as_ref()?;
+    if pull.badge.is_settled() || pull.checks_unfinished() {
+        return None;
+    }
+    match pull.checks {
+        PullRequestChecks::Passing => Some(CiResult::Passed),
+        PullRequestChecks::Failed if pull.work.checks_cancelled => Some(CiResult::Cancelled),
+        PullRequestChecks::Failed => Some(CiResult::Failed),
+        PullRequestChecks::Pending | PullRequestChecks::Unknown | PullRequestChecks::None => None,
+    }
+}
+
+/// Keeps the CI results `before` told beside those `seen` holds while
+/// `seen` is of the same head.
+fn keep_told(seen: &mut PrSeen, before: &PrSeen) {
+    if seen.head != before.head {
+        return;
+    }
+    for result in &before.ci_told {
+        if !seen.ci_told.contains(result) {
+            seen.ci_told.push(*result);
+        }
+    }
+}
+
+/// The CI letter of `pull` ending as `result`: a failure names the checks
+/// that failed, up to `CI_FAILED_NAMED`, and counts the rest.
+fn ci_news(pull: &crate::model::PullRequestSnapshot, result: CiResult) -> CiNews {
+    let mut names: Vec<String> = Vec::new();
+    if result == CiResult::Failed {
+        for name in pull
+            .work
+            .failed_checks
+            .iter()
+            .filter_map(|check| check.name.as_deref())
+        {
+            if !names.iter().any(|known| known == name) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    let more = names.len().saturating_sub(CI_FAILED_NAMED);
+    names.truncate(CI_FAILED_NAMED);
+    CiNews {
+        result,
+        failed: names,
+        more,
     }
 }
 
@@ -447,6 +503,49 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             news(format!("{pr} received a review asking for changes"), PR_ACT)
         }
         WakeEvent::NewHead => news(format!("{pr} has a new commit"), PR_ACT),
+        WakeEvent::Ci => {
+            let commit = wake
+                .head
+                .as_deref()
+                .map_or("-", |head| head.get(..7).unwrap_or(head));
+            let (what, act) = match &wake.ci {
+                Some(CiNews {
+                    result: CiResult::Passed,
+                    ..
+                }) => (
+                    format!("{pr}: CI passed on commit {commit}"),
+                    "go on with what waited on it",
+                ),
+                Some(CiNews {
+                    result: CiResult::Cancelled,
+                    ..
+                }) => (
+                    format!("{pr}: CI was cancelled on commit {commit} and no run replaced it"),
+                    "run it again, or find out why it was cancelled",
+                ),
+                Some(CiNews {
+                    result: CiResult::Failed,
+                    failed,
+                    more,
+                }) => {
+                    let mut names = failed.join(", ");
+                    if *more > 0 {
+                        names.push_str(&format!(" and {more} more"));
+                    }
+                    let names = if names.is_empty() {
+                        names
+                    } else {
+                        format!(": {names}")
+                    };
+                    (
+                        format!("{pr}: CI failed on commit {commit}{names}"),
+                        "see that its worker fixes it, or run it again when the failure is not the change's",
+                    )
+                }
+                None => (format!("{pr}: CI ended on commit {commit}"), PR_ACT),
+            };
+            news(what, act)
+        }
         WakeEvent::OutsideDone => news(
             format!("{} is in main", outside()),
             "start the nodes that waited on it",
@@ -574,10 +673,11 @@ fn attention_words(
 }
 
 /// Keeps `seen` as what GitHub last said of its pull request, read at
-/// `now`; whether it moved. A head Hide had not read of it is the node's
-/// last push (with-hide/hide-private#552), and so is the first head read
-/// for a node a book from before push times kept.
-pub(super) fn note_seen(node: &mut MissionNode, seen: PrSeen, now: u64) -> bool {
+/// `now`, with the CI results already told on its head; whether it moved.
+/// A head Hide had not read of it is the node's last push
+/// (with-hide/hide-private#552), and so is the first head read for a node a
+/// book from before push times kept.
+pub(super) fn note_seen(node: &mut MissionNode, mut seen: PrSeen, now: u64) -> bool {
     let unread = node.pushed_at_unix_ms.is_none();
     let held = node
         .pr_seen
@@ -589,8 +689,11 @@ pub(super) fn note_seen(node: &mut MissionNode, seen: PrSeen, now: u64) -> bool 
         node.pushed_at_unix_ms = Some(now);
     }
     match held {
-        Some(held) if *held == seen => pushed,
         Some(held) => {
+            keep_told(&mut seen, held);
+            if *held == seen {
+                return pushed;
+            }
             *held = seen;
             true
         }
@@ -602,8 +705,7 @@ pub(super) fn note_seen(node: &mut MissionNode, seen: PrSeen, now: u64) -> bool 
 }
 
 /// What a Conductor woken about a pull request of its own does.
-const PR_ACT: &str =
-    "move a stacked PR above it onto the change, answer the review, or check the new commit";
+const PR_ACT: &str = "move a stacked PR above it onto the change, or answer the review";
 
 /// Records one wake for `mission`'s Conductor and returns its letter's
 /// intent; none when `PENDING_WAKE_LIMIT` letters already wait.
@@ -615,9 +717,19 @@ pub(super) fn record_wake(
     head: Option<String>,
     key: Option<String>,
 ) -> Option<String> {
-    mission.wake_seq += 1;
-    let wake = PendingWake {
-        seq: mission.wake_seq,
+    record(mission, wake_about(node, pr, event, head, key))
+}
+
+/// A wake for the Conductor about `event`, numbered when it is recorded.
+fn wake_about(
+    node: String,
+    pr: Option<u32>,
+    event: WakeEvent,
+    head: Option<String>,
+    key: Option<String>,
+) -> PendingWake {
+    PendingWake {
+        seq: 0,
         node,
         pr,
         event,
@@ -627,8 +739,15 @@ pub(super) fn record_wake(
         why: None,
         action: None,
         warning: None,
+        ci: None,
         key,
-    };
+    }
+}
+
+/// Numbers `wake` as the mission's next and records it (`push_wake`).
+fn record(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
+    mission.wake_seq += 1;
+    wake.seq = mission.wake_seq;
     push_wake(mission, wake)
 }
 
@@ -675,6 +794,11 @@ fn wake_key(wake: &PendingWake) -> String {
         .map_or_else(|| "-".to_owned(), |number| number.to_string());
     let fact = format!("{}:{}:{pr}:{head}", wake.event.as_str(), wake.node);
     match wake.event {
+        // One result on one head is one letter, whichever read found it.
+        WakeEvent::Ci => format!(
+            "{fact}:{}",
+            wake.ci.as_ref().map_or("-", |ci| ci.result.as_str())
+        ),
         WakeEvent::Merged
         | WakeEvent::ChangesRequested
         | WakeEvent::NewHead
@@ -1978,8 +2102,10 @@ impl Runtime {
     /// Compares a new GitHub answer with the facts each mission's pull
     /// request was last seen with, and records a wake for every change that
     /// is its Conductor's to act on (D-39, B36): a merge, a review asking
-    /// for changes, a new head. A done mission reopens with a new head or a
-    /// review, unless its Conductor conducts another open mission then, and
+    /// for changes, an open one's CI ending on its head, each result once
+    /// per head, the first answer's included. A done mission reopens with a
+    /// review or a CI result, unless its Conductor conducts another open
+    /// mission then, and
     /// its merge wakes no one; a cancelled one is not woken (D-51). A stale
     /// read wakes nothing.
     /// Returns the intents of the wakes it records; each is sent as soon as
@@ -2057,7 +2183,10 @@ impl Runtime {
                     else {
                         continue;
                     };
-                    let now_seen = seen_of(pull);
+                    let mut now_seen = seen_of(pull);
+                    if let Some(before) = node.seen(number) {
+                        keep_told(&mut now_seen, before);
+                    }
                     match node.seen(number) {
                         // The first answer about a pull request is where its
                         // wakes start from; it reports nothing of its own.
@@ -2071,46 +2200,55 @@ impl Runtime {
                                 event.id =
                                     Some(format!("{}@{}:merged:{number}", node.key, node.round));
                                 merged.push(event);
-                                events.push((
+                                events.push(wake_about(
                                     node.key.clone(),
-                                    number,
+                                    Some(number),
                                     WakeEvent::Merged,
                                     None,
                                     None,
                                 ));
-                            } else if !now_seen.merged {
-                                if now_seen.changes_requested && !before.changes_requested {
-                                    // Changes asked for again on one head are
-                                    // news again: GitHub's time of the pull
-                                    // request tells the asks apart.
-                                    let key = format!(
-                                        "changes_requested:{}:{number}:{}:{}",
-                                        node.key,
-                                        now_seen
-                                            .head
-                                            .as_deref()
-                                            .map_or("-", |head| head.get(..12).unwrap_or(head)),
-                                        pull.updated_at_unix_ms.unwrap_or_default()
-                                    );
-                                    events.push((
-                                        node.key.clone(),
-                                        number,
-                                        WakeEvent::ChangesRequested,
-                                        now_seen.head.clone(),
-                                        Some(key),
-                                    ));
-                                }
-                                if now_seen.head.is_some() && now_seen.head != before.head {
-                                    events.push((
-                                        node.key.clone(),
-                                        number,
-                                        WakeEvent::NewHead,
-                                        now_seen.head.clone(),
-                                        None,
-                                    ));
-                                }
+                            } else if !now_seen.merged
+                                && now_seen.changes_requested
+                                && !before.changes_requested
+                            {
+                                // Changes asked for again on one head are
+                                // news again: GitHub's time of the pull
+                                // request tells the asks apart.
+                                let key = format!(
+                                    "changes_requested:{}:{number}:{}:{}",
+                                    node.key,
+                                    now_seen
+                                        .head
+                                        .as_deref()
+                                        .map_or("-", |head| head.get(..12).unwrap_or(head)),
+                                    pull.updated_at_unix_ms.unwrap_or_default()
+                                );
+                                events.push(wake_about(
+                                    node.key.clone(),
+                                    Some(number),
+                                    WakeEvent::ChangesRequested,
+                                    now_seen.head.clone(),
+                                    Some(key),
+                                ));
                             }
                         }
+                    }
+                    // An open pull request's CI result not yet told on its
+                    // head is told, the first answer's too; a new head is
+                    // told by its result, which names its commit.
+                    if let Some(result) = ci_of(pull)
+                        && !now_seen.ci_told.contains(&result)
+                    {
+                        now_seen.ci_told.push(result);
+                        let mut wake = wake_about(
+                            node.key.clone(),
+                            Some(number),
+                            WakeEvent::Ci,
+                            now_seen.head.clone(),
+                            None,
+                        );
+                        wake.ci = Some(ci_news(pull, result));
+                        events.push(wake);
                     }
                     // A node a book from before push times kept starts its
                     // push clock on this read.
@@ -2139,7 +2277,7 @@ impl Runtime {
             // A done mission's merge is the end it was waiting for, not work
             // for its Conductor (B41).
             if done {
-                events.retain(|(_, _, event, _, _)| *event != WakeEvent::Merged);
+                events.retain(|wake| wake.event != WakeEvent::Merged);
             }
             // A Conductor conducts one open mission at a time, so a change
             // to a done one while it conducts another wakes it with the
@@ -2181,8 +2319,8 @@ impl Runtime {
             if reopen {
                 reopened.push(mission.id.clone());
             }
-            for (node, pr, event, head, key) in events {
-                recorded.extend(record_wake(mission, node, Some(pr), event, head, key));
+            for wake in events {
+                recorded.extend(record(mission, wake));
             }
         }
         for (id, events) in ended {

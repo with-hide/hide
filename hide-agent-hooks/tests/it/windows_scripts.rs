@@ -7,9 +7,10 @@
 //! its prompt is the proof that the spawn, stdin and stdout crossed Windows,
 //! and a tool result's ask for the letters due while the session works
 //! (`letters`, PRD letters-to-busy-agents) is proved the same way: the
-//! helper it started reached for the `hide` beside it, which this folder
-//! does not hold, and recorded that in the home's delivery diagnostics,
-//! while the result went on unchanged. No daemon runs on the runner, so a
+//! helper it started asked the daemon of the home's state folder itself
+//! (`hide_agent_hooks::hook_request`), found none published there, and
+//! recorded that in the home's delivery diagnostics, while the result went
+//! on unchanged. No daemon runs on the runner, so a
 //! letter reaching the result is proved by the Unix script tests
 //! (`opencode_plugin.rs`, `pi_extension.rs`), which `docs/INSTALL.md`
 //! records.
@@ -96,6 +97,12 @@ fn the_scripts_start_the_helper_by_its_path_and_carry_its_guidance() {
         ("pi", &[&pi_extension::PI]),
         ("omp", &[&pi_extension::OMP]),
     ] {
+        let record = home
+            .join(".hide")
+            .join("agent-hooks")
+            .join("delivery-diagnostics.json");
+        // Each agent's run proves its own ask.
+        let _ = std::fs::remove_file(&record);
         let answered = run(agent, files, home, &helper);
         let added = &answered.prompts;
         assert!(
@@ -103,14 +110,14 @@ fn the_scripts_start_the_helper_by_its_path_and_carry_its_guidance() {
             "{agent}: no prompt carried the guidance: {added:?}"
         );
         assert_eq!(answered.tool_result, "RESULT", "{agent}");
-        // The ask ran the helper, which started no `hide` because none is
-        // beside it, and said so once in the home's delivery diagnostics.
-        let diagnostics = std::fs::read_to_string(
-            home.join(".hide")
-                .join("agent-hooks")
-                .join("delivery-diagnostics.json"),
-        )
-        .unwrap_or_else(|error| panic!("{agent}: no delivery diagnostics: {error}"));
-        assert!(diagnostics.contains("\"cli\""), "{agent}: {diagnostics}");
+        // The ask ran the helper, which asked the home's daemon, found none
+        // published, and said so in the home's delivery diagnostics.
+        let diagnostics = std::fs::read_to_string(&record)
+            .unwrap_or_else(|error| panic!("{agent}: no delivery diagnostics: {error}"));
+        let recorded: serde_json::Value = serde_json::from_str(&diagnostics).unwrap();
+        assert!(
+            recorded["last"].get("unavailable").is_some(),
+            "{agent}: {diagnostics}"
+        );
     }
 }

@@ -106,7 +106,9 @@ class ResidentOutput:
 
         def drain(stream):
             try:
-                while data := stream.read(4096):
+                # What the pipe holds now, up to 4 KiB: `read` would wait for
+                # 4 KiB, holding back the newest lines a failed cell reads.
+                while data := stream.read1(4096):
                     with self.lock:
                         if len(self.data) + len(data) > MAX_OUTPUT:
                             self.failed = True
@@ -119,6 +121,17 @@ class ResidentOutput:
             thread = threading.Thread(target=drain, args=(stream,), daemon=True)
             thread.start()
             self.threads.append(thread)
+
+    def line_start(self):
+        """Where the line the resident is writing now began: past the last
+        newline it wrote, so a mark taken here never splits a line."""
+        with self.lock:
+            return self.data.rfind(b"\n") + 1
+
+    def since(self, mark):
+        """What the resident wrote after `mark`, as drained so far."""
+        with self.lock:
+            return bytes(self.data[mark:])
 
     def finish(self):
         for thread in self.threads:
@@ -237,6 +250,10 @@ class Runtime:
         output = ResidentOutput(self.owner, child, self.run / (label + ".log"))
         self.servers.append((child, output, label))
         return child
+
+    def output(self, label):
+        """The output the resident started as `label` has written so far."""
+        return next(output for _, output, name in self.servers if name == label)
 
     def start(self) -> dict:
         self.resident(self.hided, [], self.daemon_env, "hided")

@@ -1,6 +1,8 @@
 //! Prompt intake has a single total deadline. Pull is read-only; only a
-//! successful stdout flush permits confirmation. All child processes are
-//! owned and their bounded stdout is drained while they run.
+//! successful stdout flush permits confirmation. The pull is a hook request
+//! the hook sends itself ([`ask`]); the confirmation is a Workspace command,
+//! run by the `hide` beside the helper, an owned child whose bounded stdout
+//! is drained while it runs.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -12,6 +14,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use hide_platform::fs::{self, private};
 use hide_platform::process::{CaptureFailureKind, OwnedChild};
 use serde::{Deserialize, Serialize};
+
+use crate::hook_request::{Caller, HookCommand, PullPoint, Timing};
 
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const CONTEXT_LIMIT: usize = 8 * 1024;
@@ -210,14 +214,15 @@ impl From<&'static str> for Failure {
 /// at most a count.
 pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failure> {
     let pull_deadline = deadline.checked_sub(CONFIRM_RESERVE).ok_or("deadline")?;
-    let mut arguments = vec!["inbox", "--hook"];
-    if let Some(digest) = &prompt.digest {
-        arguments.extend(["--prompt-digest", digest]);
-    }
-    if let Some(session) = &prompt.session {
-        arguments.extend(["--session", session]);
-    }
-    let answer = run_cli(&arguments, pull_deadline)?;
+    let answer = ask(
+        HookCommand::LetterPull {
+            prompt_digest: prompt.digest.clone(),
+            session: prompt.session.clone(),
+            point: PullPoint::Prompt,
+            bundle: true,
+        },
+        pull_deadline,
+    )?;
     let intake = intake(answer)?;
     Ok(intake.and_then(|intake| keep_plan(intake, prompt.session.as_deref())))
 }
@@ -261,17 +266,26 @@ fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
 /// agent, a letter still waiting and a session that is not the pane's own
 /// get nothing.
 pub fn pull_at_tool(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
-    pull_at_gap(deadline, session, "--tool")
+    pull_at_gap(deadline, session, PullPoint::Tool)
 }
 
 pub fn pull_at_turn_end(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
-    pull_at_gap(deadline, session, "--turn-end")
+    pull_at_gap(deadline, session, PullPoint::TurnEnd)
 }
 
-fn pull_at_gap(deadline: Instant, session: &str, point: &str) -> Result<Option<Intake>, Failure> {
+fn pull_at_gap(
+    deadline: Instant,
+    session: &str,
+    point: PullPoint,
+) -> Result<Option<Intake>, Failure> {
     let pull_deadline = deadline.checked_sub(CONFIRM_RESERVE).ok_or("deadline")?;
-    let answer = run_cli(
-        &["inbox", "--hook", "--session", session, point],
+    let answer = ask(
+        HookCommand::LetterPull {
+            prompt_digest: None,
+            session: Some(session.to_owned()),
+            point,
+            bundle: true,
+        },
         pull_deadline,
     )?;
     intake(answer)
@@ -326,17 +340,73 @@ pub fn confirm(intake: &Intake, deadline: Instant) -> Result<(), Failure> {
     Ok(())
 }
 
-fn run_cli(arguments: &[&str], deadline: Instant) -> Result<serde_json::Value, Failure> {
-    run_cli_with_input(arguments, &[], deadline)
+/// The `result` of one hook request this hook sends the daemon itself
+/// ([`crate::hook_request`]), never through a `hide` it starts.
+pub fn ask(command: HookCommand, deadline: Instant) -> Result<serde_json::Value, Failure> {
+    ask_timed(command, deadline).0
 }
 
-/// The `result` of one `hide` command run with `input` on its stdin, which
-/// must fit a pipe's buffer: it is written whole before the answer is read.
-pub(crate) fn run_cli_with_input(
-    arguments: &[&str],
-    input: &[u8],
+/// [`ask`], with how long its steps took.
+pub fn ask_timed(
+    command: HookCommand,
     deadline: Instant,
-) -> Result<serde_json::Value, Failure> {
+) -> (Result<serde_json::Value, Failure>, Timing) {
+    let (answer, timing) = ask_answer(command, deadline);
+    let result = answer.and_then(|mut answer| {
+        answer
+            .get_mut("result")
+            .map(serde_json::Value::take)
+            .ok_or_else(|| "format".into())
+    });
+    (result, timing)
+}
+
+/// The daemon's whole `ok` answer to one hook request, `result` and all,
+/// with how long its steps took; an answer that is not `ok` is its cause.
+pub fn ask_answer(
+    command: HookCommand,
+    deadline: Instant,
+) -> (Result<serde_json::Value, Failure>, Timing) {
+    if Instant::now() >= deadline {
+        return (Err("deadline".into()), Timing::default());
+    }
+    let home = match hide_platform::host::home_dir() {
+        Ok(home) => home,
+        Err(_) => return (Err("unavailable".into()), Timing::default()),
+    };
+    let state_dir = match crate::route::state_dir(&home) {
+        Ok(state_dir) => state_dir,
+        Err(cause) => return (Err(cause.into()), Timing::default()),
+    };
+    let pane_id = crate::pane::from_env();
+    let named = std::env::var_os(CAP_REF_VARIABLE).map(PathBuf::from);
+    let caller = Caller {
+        state_dir: &state_dir,
+        pane_id: pane_id.as_deref(),
+        named: named.as_deref(),
+    };
+    let request_id = match crate::hook_request::fresh_request_id() {
+        Ok(request_id) => request_id,
+        Err(_) => return (Err("cli".into()), Timing::default()),
+    };
+    let sent = crate::hook_request::send(&caller, &request_id, command, deadline);
+    let answer = sent
+        .answer
+        .map_err(|failure| Failure::from(refusal_cause(Some(failure.reason))));
+    let answer = answer.and_then(|value| {
+        if value["ok"] != true {
+            return Err(refusal_cause(value["reason"].as_str()).into());
+        }
+        Ok(value)
+    });
+    (answer, sent.timing)
+}
+
+/// The variable a pane names its persistent Workspace reference by, which a
+/// hook request names for its fresh proof to agree with.
+const CAP_REF_VARIABLE: &str = "HIDE_CAP_REF";
+
+fn run_cli(arguments: &[&str], deadline: Instant) -> Result<serde_json::Value, Failure> {
     if Instant::now() >= deadline {
         return Err("deadline".into());
     }
@@ -351,18 +421,10 @@ pub(crate) fn run_cli_with_input(
     crate::route::apply(&mut command).map_err(Failure::from)?;
     command
         .args(arguments)
-        .stdin(if input.is_empty() {
-            Stdio::null()
-        } else {
-            Stdio::piped()
-        })
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let mut child = OwnedChild::spawn(&mut command).map_err(|_| "cli")?;
-    if let Some(mut stdin) = child.take_stdin() {
-        use std::io::Write as _;
-        stdin.write_all(input).map_err(|_| "cli")?;
-    }
     let output = child
         .capture_until(deadline, OUTPUT_LIMIT)
         .map_err(|failure| Failure {
@@ -416,6 +478,25 @@ struct Diagnostics {
     /// before steps were kept has none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     step: BTreeMap<String, String>,
+    /// How long the stages of the request a cause last recorded took
+    /// (Memory's), so the record says which stage the time went to. A file
+    /// written before stages were kept has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    stages: BTreeMap<String, Stages>,
+}
+
+/// When each stage of one hook request ended, in milliseconds from the start
+/// of its budget: the request began (the hook's input read), the stream to
+/// the daemon was connected, the answer was in, and the wait ended; a stage
+/// the request did not reach is absent.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct Stages {
+    pub asked_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_ms: Option<u64>,
+    pub ended_ms: u64,
 }
 
 /// The fixed causes a hook may record: the delivery intake's sixteen (the
@@ -482,12 +563,18 @@ pub fn diagnose_failure(home: &Path, failure: &Failure) -> bool {
 /// True only when this call persisted the claim; a cause outside [`CAUSES`], a
 /// busy lock and damaged or unavailable storage all answer false.
 pub(crate) fn claim(home: &Path, cause: &str) -> bool {
-    claim_at(home, cause, None)
+    claim_at(home, cause, None, None)
 }
 
 /// [`claim`], keeping the `step` the failure stopped at beside a cause that
-/// does not name it; a step outside [`CAUSES`] answers false.
-pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
+/// does not name it, and the request's `stages`; a step outside [`CAUSES`]
+/// answers false.
+pub(crate) fn claim_at(
+    home: &Path,
+    cause: &str,
+    step: Option<&str>,
+    stages: Option<Stages>,
+) -> bool {
     if !CAUSES.contains(&cause) || step.is_some_and(|step| !CAUSES.contains(&step)) {
         return false;
     }
@@ -517,10 +604,12 @@ pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
         };
         if state.last.len() > CAUSES.len()
             || state.step.len() > CAUSES.len()
+            || state.stages.len() > CAUSES.len()
             || state
                 .last
                 .keys()
                 .chain(state.step.keys())
+                .chain(state.stages.keys())
                 .chain(state.step.values())
                 .any(|cause| !CAUSES.contains(&cause.as_str()))
         {
@@ -543,6 +632,9 @@ pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
         state.last.insert(cause.to_owned(), now);
         if let Some(step) = step {
             state.step.insert(cause.to_owned(), step.to_owned());
+        }
+        if let Some(stages) = stages {
+            state.stages.insert(cause.to_owned(), stages);
         }
         let bytes = serde_json::to_vec(&state).map_err(std::io::Error::other)?;
         fs::atomic::write_file(&path, &bytes, fs::Access::Private)?;
@@ -794,7 +886,12 @@ mod tests {
         let path = diagnostic_path(home.path());
         private::create_dir_all(path.parent().unwrap()).unwrap();
         fs::atomic::write_file(&path, br#"{"last":{"cli":0}}"#, fs::Access::Private).unwrap();
-        assert!(claim_at(home.path(), "memory_unavailable", Some("connect")));
+        assert!(claim_at(
+            home.path(),
+            "memory_unavailable",
+            Some("connect"),
+            None
+        ));
         let state: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(state["last"]["cli"], 0);
@@ -803,7 +900,8 @@ mod tests {
         assert!(!claim_at(
             home.path(),
             "memory_deadline",
-            Some("not a cause")
+            Some("not a cause"),
+            None
         ));
     }
 

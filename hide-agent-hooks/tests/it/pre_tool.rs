@@ -2,7 +2,8 @@
 //! as an agent runs it: the compiled helper with a runtime's `PreToolUse`
 //! payload on stdin, beside a stand-in `hide` that answers `workspace
 //! bootstrap` the way the daemon does (registered, refused, not running, or
-//! not answering) and records every call. The opener guard is the guard that
+//! not answering) and records every call, and with a stand-in daemon that
+//! answers the hook's own requests from the same table. The opener guard is the guard that
 //! asks the daemon, so its call drives these; what they prove is what the
 //! agent observes: the call is refused, or nothing is printed and the call
 //! runs.
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 use hide_platform::process::OwnedChild;
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 pub(crate) const PANE: &str = "w1:p2";
@@ -77,6 +79,7 @@ esac
 "#;
 
 pub(crate) struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     pub(crate) root: PathBuf,
     pub(crate) home: PathBuf,
@@ -122,11 +125,13 @@ impl Machine {
         stand_ins::place(programs::hook(), &hook);
         stand_ins::program(&bin.join("hide"), FAKE_HIDE);
         std::fs::write(root.join("mode"), daemon).unwrap();
+        let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
         // The guardrails policy the core writes at its start: no protection on.
         let policy = home.join(".hide/agent-hooks/guardrails.json");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
         std::fs::write(policy, r#"{"version":1,"projects":[]}"#).unwrap();
         Self {
+            daemon,
             _dir: dir,
             root,
             home,
@@ -191,6 +196,7 @@ impl Machine {
                 command.env_remove(key);
             }
         }
+        self.daemon.route(&mut command);
         if let Some(pane) = pane {
             command.env("HIDE_PANE_ID", pane);
         }

@@ -29,7 +29,7 @@ use hide_node::ssh::RemoteHost;
 use hide_node_link::panes::StreamCaller;
 use hide_node_link::protocol::Call;
 use hide_platform::fs::private;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::core::CoreHandle;
@@ -244,24 +244,7 @@ fn remove_local_reference(entry: &Capability) {
     }
 }
 
-/// What a reference file holds: the credential, and the way to the daemon
-/// that issued it.
-#[derive(Serialize, Deserialize)]
-pub struct Reference {
-    pub token: String,
-    #[serde(flatten)]
-    pub route: Route,
-}
-
-/// How a command reaches the daemon that issued its credential: this
-/// machine's loopback port, or, on a device, the node socket whose link to
-/// that daemon carries the command (`hide_host::panes`).
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Route {
-    Daemon { port: u16, origin_port: u16 },
-    Node { socket: String },
-}
+pub use hide_agent_hooks::hook_request::{Reference, Route};
 
 pub struct Registry {
     directory: PathBuf,

@@ -25,12 +25,20 @@ pub(crate) struct HeadRuns {
     /// unfinished runs, else the run that decides it. `None` when the runs
     /// were not judged, so no job is set aside.
     pub counted: Option<HashSet<u64>>,
+    /// The runs failed only because every run of a workflow was cancelled
+    /// and none replaced it, which a mission's CI letter calls cancelled.
+    pub cancelled: bool,
+    /// A workflow still has a run queued or running, whatever the others
+    /// add up to.
+    pub running: bool,
 }
 
 impl HeadRuns {
     const UNKNOWN: Self = Self {
         checks: PullRequestChecks::Unknown,
         counted: None,
+        cancelled: false,
+        running: false,
     };
 }
 
@@ -142,26 +150,36 @@ fn verdict(suites: &[Suite]) -> Result<HeadRuns, String> {
     let mut judged = HeadRuns {
         checks: PullRequestChecks::None,
         counted: Some(HashSet::new()),
+        cancelled: false,
+        running: false,
     };
+    // Whether every workflow that failed failed by its runs' cancelling.
+    let mut only_cancelled = true;
     for runs in workflows.values() {
-        let (checks, counted) = workflow_verdict(runs)?;
+        let (checks, counted, cancelled) = workflow_verdict(runs)?;
+        if checks == PullRequestChecks::Failed {
+            only_cancelled &= cancelled;
+        }
+        judged.running |= checks == PullRequestChecks::Pending;
         judged.checks = worse(judged.checks, checks);
         judged.counted.get_or_insert_default().extend(counted);
     }
+    judged.cancelled = judged.checks == PullRequestChecks::Failed && only_cancelled;
     Ok(judged)
 }
 
-/// One workflow's verdict and the runs it was read from.
+/// One workflow's verdict, the runs it was read from, and whether it failed
+/// only because its every run was cancelled.
 fn workflow_verdict(
     runs: &[(&Suite, &WorkflowRun)],
-) -> Result<(PullRequestChecks, Vec<u64>), String> {
+) -> Result<(PullRequestChecks, Vec<u64>, bool), String> {
     let unfinished: Vec<u64> = runs
         .iter()
         .filter(|(suite, _)| suite.status != "COMPLETED")
         .map(|(_, run)| run.id)
         .collect();
     if !unfinished.is_empty() {
-        return Ok((PullRequestChecks::Pending, unfinished));
+        return Ok((PullRequestChecks::Pending, unfinished, false));
     }
     let mut last: Option<(u64, &Suite, u64)> = None;
     let mut last_cancelled: Option<(u64, u64)> = None;
@@ -182,6 +200,7 @@ fn workflow_verdict(
         return Ok((
             PullRequestChecks::Failed,
             last_cancelled.map(|(_, id)| id).into_iter().collect(),
+            true,
         ));
     };
     let checks = match suite.conclusion.as_deref() {
@@ -189,7 +208,7 @@ fn workflow_verdict(
         Some(value) if FAILED_CONCLUSIONS.contains(&value) => PullRequestChecks::Failed,
         _ => PullRequestChecks::Unknown,
     };
-    Ok((checks, vec![id]))
+    Ok((checks, vec![id], false))
 }
 
 /// What two parts of one commit's checks add up to: a failure first, then
@@ -232,13 +251,19 @@ mod tests {
         )
     }
 
-    fn judged(suites: &[String]) -> PullRequestChecks {
+    fn head_runs(suites: &[String]) -> HeadRuns {
         let answer = format!(
             r#"{{"data":{{"repository":{{"c0":{{"checkSuites":{{"totalCount":{},"nodes":[{}]}}}}}}}}}}"#,
             suites.len(),
             suites.join(",")
         );
-        parse_head_runs(&answer, "acme/app", &commits(1)).expect("an answer")[0].checks
+        parse_head_runs(&answer, "acme/app", &commits(1))
+            .expect("an answer")
+            .remove(0)
+    }
+
+    fn judged(suites: &[String]) -> PullRequestChecks {
+        head_runs(suites).checks
     }
 
     const VERIFY: u64 = 22;
@@ -282,6 +307,48 @@ mod tests {
             "order in the answer does not matter"
         );
         assert_eq!(judged(&[passed]), PullRequestChecks::Passing);
+    }
+
+    /// A failure is a cancellation only while a workflow's every run was
+    /// cancelled with none replacing it and no other workflow failed.
+    #[test]
+    fn a_failure_of_cancelled_runs_alone_is_told_apart() {
+        let cancelled = suite(
+            VERIFY,
+            "pull_request",
+            "COMPLETED",
+            r#""CANCELLED""#,
+            "2026-11-04T16:41:00Z",
+        );
+        let replaced = suite(
+            VERIFY,
+            "pull_request",
+            "COMPLETED",
+            r#""SUCCESS""#,
+            "2026-11-04T18:31:00Z",
+        );
+        let other_failed = suite(
+            VERIFY + 1,
+            "push",
+            "COMPLETED",
+            r#""FAILURE""#,
+            "2026-11-04T17:00:00Z",
+        );
+        let alone = head_runs(std::slice::from_ref(&cancelled));
+        assert_eq!(
+            (alone.checks, alone.cancelled),
+            (PullRequestChecks::Failed, true)
+        );
+        let with_other = head_runs(&[cancelled.clone(), other_failed]);
+        assert_eq!(
+            (with_other.checks, with_other.cancelled),
+            (PullRequestChecks::Failed, false)
+        );
+        let after = head_runs(&[cancelled, replaced]);
+        assert_eq!(
+            (after.checks, after.cancelled),
+            (PullRequestChecks::Passing, false)
+        );
     }
 
     #[test]

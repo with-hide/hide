@@ -63,7 +63,8 @@ impl Runtime {
     }
 
     /// What the poll watches in one project: the repository of its open pull
-    /// requests, and the head commits of those whose checks were pending. The
+    /// requests, and the head commits of those whose checks had not finished
+    /// (`checks_unfinished`, which a mission's CI letter waits on too). The
     /// project in front with none open is watched by the repository its read
     /// named, so the list's first pull request is seen.
     fn poll_project(&self, path: &str, in_front: bool) -> Option<PollProject> {
@@ -89,7 +90,7 @@ impl Runtime {
         let heads: BTreeSet<String> = open
             .iter()
             .filter(|pull_request| {
-                pull_request.checks == crate::model::PullRequestChecks::Pending
+                pull_request.checks_unfinished()
                     && pull_request_address(&pull_request.url)
                         .is_some_and(|(owner, _)| owner == repository)
             })

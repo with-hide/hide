@@ -1511,3 +1511,84 @@ impl Drop for ActingOwner {
         }
     }
 }
+
+/// The backlog of the Unix listener that takes no connection.
+#[cfg(unix)]
+const BACKLOG: libc::c_int = 1;
+
+/// The connections the listener that takes no connection holds: a Unix
+/// queue holds its backlog and one more (Linux), or about half again
+/// (macOS); a Windows listener its queue and instances.
+#[cfg(unix)]
+const HELD: usize = BACKLOG as usize + 1;
+#[cfg(windows)]
+const HELD: usize = hide_platform::ipc::HELD_UNACCEPTED;
+
+/// A listener that takes no connection: on Unix a socket with a backlog of
+/// [`BACKLOG`], on Windows a bound listener that never accepts, whose pipe
+/// instances run out.
+#[cfg(unix)]
+fn listener_taking_none(path: &Path) -> std::os::fd::OwnedFd {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    // SAFETY: plain socket calls on a descriptor this function owns from the
+    // moment it exists; the address is zeroed and filled within its size.
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+        assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+        let owned = std::os::fd::OwnedFd::from_raw_fd(fd);
+        let mut address: libc::sockaddr_un = std::mem::zeroed();
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        let bytes = path.as_os_str().as_bytes();
+        assert!(bytes.len() < address.sun_path.len());
+        for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
+            *slot = *byte as libc::c_char;
+        }
+        let length = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+        let bound = libc::bind(fd, (&raw const address).cast(), length);
+        assert_eq!(bound, 0, "{}", std::io::Error::last_os_error());
+        // Not zero: macOS reads a backlog of zero as its default.
+        assert_eq!(
+            libc::listen(fd, BACKLOG),
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        owned
+    }
+}
+
+#[cfg(windows)]
+fn listener_taking_none(path: &Path) -> LocalListener {
+    LocalListener::bind(path).unwrap()
+}
+
+/// A connect for one exchange never outlasts its deadline, however busy the
+/// listener is: once the listener has taken all it will hold, the next
+/// connect answers `TimedOut` (or, on macOS, `ConnectionRefused` at once)
+/// rather than waiting for it to accept, which on Linux it never does.
+#[test]
+fn a_connect_to_a_listener_that_takes_nothing_more_ends_by_its_deadline() {
+    let (_folder, path) = endpoint();
+    let _listener = listener_taking_none(&path);
+    let mut held = Vec::new();
+    // Twice what the listener holds is past it on every system.
+    let refused = (0..2 * HELD).find_map(|_| {
+        match LocalStream::connect_until(&path, Instant::now() + Duration::from_millis(200)) {
+            Ok(stream) => {
+                held.push(stream);
+                None
+            }
+            Err(error) => Some(error.kind()),
+        }
+    });
+    assert!(
+        matches!(
+            refused,
+            Some(std::io::ErrorKind::TimedOut | std::io::ErrorKind::ConnectionRefused)
+        ),
+        "{refused:?} after {} connects",
+        held.len()
+    );
+}

@@ -1,5 +1,6 @@
-# Every pull request and every push to main runs this workflow, and nightly
-# calls it; the single `verify` job is what branch protection requires. Adding
+# Every pull request, every merge queue group and every push to main runs this
+# workflow, and nightly calls it; the single `verify` job is what branch
+# protection and the merge queue require. Adding
 # a lane means adding it to `scripts/ci-plan.py`'s LANES and to `verify`'s
 # `needs`; the protection rule never changes.
 #
@@ -30,7 +31,12 @@
 #
 # Each gate here has a local command in CONTRIBUTING.md under "CI gates".
 #
-# Runner placement is a capacity decision. This organization's plan runs 20
+# A merge queue group plans `policy`, `merge-rust` and `merge-web` and nothing
+# else, the checks where two changes that each passed fail together without a
+# conflict (`scripts/ci-plan.py`, MERGE_GROUP_LANES; CONTRIBUTING.md, Merging
+# into main). No other run plans the last two.
+#
+# Runner placement is a capacity decision. This organization's plan runs 60
 # jobs at once and five of them on macOS across every repository, and on
 # 2026-09-28 one run held all five for 26 minutes, so a second pull request
 # waited up to 70 minutes before its lanes started. A pull request therefore
@@ -85,6 +91,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
+  merge_group:
   # nightly.yml runs every lane once a day, with agent checks owned there.
   workflow_call:
     inputs:
@@ -197,8 +204,8 @@ jobs:
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
 
-      # Reads the pull request's body, which no merge result carries, so it is
-      # the one policy check `premerge-check.py` does not repeat.
+      # Reads the pull request's body, which no merge group carries, so a merge
+      # group's `policy` leaves it out.
       - name: A pull request that changes a screen shows it
         if: github.event_name == 'pull_request'
         env:
@@ -863,6 +870,60 @@ jobs:
       # and the nightly build what ships and save the release dependency set.
       quick-build: ${{ github.event_name == 'pull_request' }}
 
+  # A merge queue group's Rust check: formatting and Clippy over the whole
+  # workspace, without the tests the `rust` lane runs. It reads the workspace
+  # dependency set main's `rust` lane saves and saves nothing.
+  merge-rust:
+    name: merge check rust
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'merge-rust')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: workspace
+          save: false
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
+      - name: Check formatting and lint the workspace
+        run: bash scripts/verify-cargo.sh lint
+
+  # A merge queue group's web check: the web and desktop typecheck and the e2e
+  # test size budgets, without the lint, unit tests and build `checks` runs.
+  merge-web:
+    name: merge check web
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'merge-web')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: bash scripts/verify-web.sh install
+      - name: Web shell and desktop app typecheck
+        run: |
+          bash scripts/verify-web.sh web typecheck
+          bash scripts/verify-web.sh desktop typecheck
+      # Each package runs the web package's script from its own folder, where
+      # it resolves TypeScript, as its `lint` script does.
+      - name: Web end-to-end test size budget
+        working-directory: web
+        run: node ../web/scripts/check-e2e-test-size.mjs e2e
+      - name: Desktop end-to-end test size budget
+        working-directory: desktop
+        run: node ../web/scripts/check-e2e-test-size.mjs e2e
+
   relay-protocol:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'relay-protocol')
@@ -876,7 +937,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

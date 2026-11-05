@@ -43,7 +43,7 @@ class JourneySpawn(unittest.TestCase):
         runtime = SimpleNamespace(run=Path("run"), probe=Path("run/probe"))
         journey = Journey(runtime, None, SpawnBoundary(), cells.plan(contract, [row["id"]]), row,
                           Path("repository"), {}, None, branch="journey-antigravity", created=[],
-                          sessions=Path("sessions"), route={}, composer_judge=None, model=model,
+                          sessions=Path("sessions"), route={}, composer_judge=None, failure_logs=None, model=model,
                           brief_start=brief_start)
         with self.assertRaises(SpawnCommand) as captured:
             if untrusted:

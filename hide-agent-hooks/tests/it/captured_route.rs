@@ -1,7 +1,7 @@
 //! The hook process receives a shell's XDG home but no Hide route, as when
 //! the app starts from the Dock before the shell exports XDG_STATE_HOME.
-//! The sibling CLI stands in for the daemon boundary and serves letters
-//! only at the state folder captured in the installed command.
+//! A stand-in daemon serves letters only at the state folder captured in the
+//! installed command, and the sibling CLI confirms them only there.
 
 #![cfg(unix)]
 
@@ -14,6 +14,7 @@ use base64::Engine;
 use hide_platform::process::OwnedChild;
 use serde_json::json;
 
+use crate::stand_in_daemon::StandInDaemon;
 use crate::{programs, stand_ins};
 
 const HIDE: &str = r#"#!/bin/sh
@@ -84,6 +85,11 @@ fn all_seven_active_hook_transports_receive_letters_with_only_the_shells_xdg_sta
     stand_ins::program(&root.path().join("hide"), HIDE);
     // Encoding must preserve shell metacharacters and Korean path names.
     let state = home.join("state ' $경로");
+    let _daemon = StandInDaemon::serve_at(
+        Some(&state),
+        &root.path().join("hide"),
+        &[("EXPECTED_STATE_DIR", state.clone().into())],
+    );
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(state.to_str().unwrap());
     let version = hide_agent_hooks::pi_extension::VERSION;
     for (mut arguments, input) in [
@@ -145,6 +151,11 @@ fn explicit_routes_win_empty_routes_fall_back_and_malformed_routes_never_fall_ba
     stand_ins::program(&root.path().join("hide"), HIDE);
     let state = root.path().join("daemon");
     let other = root.path().join("other-daemon");
+    let _daemon = StandInDaemon::serve_at(
+        Some(&state),
+        &root.path().join("hide"),
+        &[("EXPECTED_STATE_DIR", state.clone().into())],
+    );
     let encode = |path: &Path| {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path.to_str().unwrap())
     };

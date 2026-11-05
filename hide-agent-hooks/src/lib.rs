@@ -25,6 +25,7 @@ pub mod global_guard;
 pub mod guardrails;
 pub mod guidance;
 mod hook_log;
+pub mod hook_request;
 pub mod install;
 mod lossless_json;
 pub mod memory;
@@ -41,6 +42,7 @@ pub mod runtime;
 #[cfg(all(test, unix))]
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
+pub mod state_folder;
 
 pub use counters::PaneCounters;
 pub use diagnosis::{

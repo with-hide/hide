@@ -6034,6 +6034,16 @@ pub struct PullRequestWork {
     /// holds an agent's row in progress (status-marks D-07). Core only.
     #[serde(skip)]
     pub running_checks: u32,
+    /// Its `Failed` checks are only workflow runs that were all cancelled
+    /// with none replacing them (`github::runs`), which a mission's CI
+    /// letter calls cancelled rather than failed. Core only.
+    #[serde(skip)]
+    pub checks_cancelled: bool,
+    /// A workflow run or a check on its head has not finished, which
+    /// `Failed` checks do not show (a failure ranks first): a mission's CI
+    /// letter waits until nothing runs. Core only.
+    #[serde(skip)]
+    pub checks_running: bool,
     /// Its place in the base branch's merge queue.
     pub queue: MergeQueuePlace,
     /// When the latest review request on it was made, which `리뷰 · N시간째`
@@ -6079,6 +6089,14 @@ pub struct PrCheckCounts {
 impl PullRequestSnapshot {
     pub fn state(&self) -> PrState {
         PrState::of(self.badge, self.is_draft, self.checks, self.review)
+    }
+
+    /// Something on its head's checks has not finished: they are pending,
+    /// or a workflow run or check still runs beside a failure, which ranks
+    /// first (`work.checks_running`). The advisory poll watches such a head
+    /// and a mission's CI letter waits for it, by this one rule.
+    pub(crate) fn checks_unfinished(&self) -> bool {
+        self.checks == PullRequestChecks::Pending || self.work.checks_running
     }
 }
 
