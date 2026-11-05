@@ -243,7 +243,11 @@ impl PhoneMissions {
         }
         open.sort_by_key(|mission| std::cmp::Reverse(mission.created_at_unix_ms));
         closed.sort_by_key(|mission| {
-            std::cmp::Reverse(mission.closed_at_unix_ms.unwrap_or(mission.created_at_unix_ms))
+            std::cmp::Reverse(
+                mission
+                    .closed_at_unix_ms
+                    .unwrap_or(mission.created_at_unix_ms),
+            )
         });
         let omitted = open.len().saturating_sub(MAX_OPEN) + closed.len().saturating_sub(MAX_CLOSED);
         open.truncate(MAX_OPEN);
@@ -296,14 +300,12 @@ fn phone_mission(
         .into_iter()
         .map(|source| {
             let pane = source.pane_id.as_deref();
-            let escalation = pane
-                .and_then(|pane| raw.get(pane))
-                .and_then(|agent| {
-                    Some(PhoneEscalation {
-                        cause: agent.escalation?.to_owned(),
-                        line: agent.blocked_line.map(cut),
-                    })
-                });
+            let escalation = pane.and_then(|pane| raw.get(pane)).and_then(|agent| {
+                Some(PhoneEscalation {
+                    cause: agent.escalation?.to_owned(),
+                    line: agent.blocked_line.map(cut),
+                })
+            });
             PhoneNode {
                 key: source.key,
                 title: cut(&source.title),
@@ -487,7 +489,10 @@ mod tests {
             assert!(!sent.contains(private), "reached the phone: {private}");
         }
         assert_eq!(missions.items[0].title, "mission m1");
-        assert_eq!(missions.items[0].nodes[0].worker_agent.as_deref(), Some("codex"));
+        assert_eq!(
+            missions.items[0].nodes[0].worker_agent.as_deref(),
+            Some("codex")
+        );
     }
 
     #[test]
@@ -505,25 +510,60 @@ mod tests {
             json!({}),
         );
         let mission = &projected(&rest).items[0];
-        let key = |pane: &str| Some(AgentKey { device_id: "local".into(), pane_id: pane.into() });
+        let key = |pane: &str| {
+            Some(AgentKey {
+                device_id: "local".into(),
+                pane_id: pane.into(),
+            })
+        };
         assert_eq!(mission.conductor.agent, key("w1:p1"));
         assert_eq!(mission.nodes[0].agent, key("w1:p2"));
-        assert_eq!(mission.nodes[1].agent, None, "a pane the list does not hold has no row to open");
+        assert_eq!(
+            mission.nodes[1].agent, None,
+            "a pane the list does not hold has no row to open"
+        );
     }
 
     #[test]
     fn a_worker_the_core_raised_carries_its_cause_and_the_line_its_blocked_turn_left() {
-        let mut agents = vec![agent("w1:p1", json!({})), agent("w1:p2", json!({
-            "escalation": {"cause": "child_blocked", "letter_id": null}, "request": {"end": "blocked", "line": "Login expired"},
-        }))];
+        let mut agents = vec![
+            agent("w1:p1", json!({})),
+            agent(
+                "w1:p2",
+                json!({
+                    "escalation": {"cause": "child_blocked", "letter_id": null}, "request": {"end": "blocked", "line": "Login expired"},
+                }),
+            ),
+        ];
         agents.push(agent("w1:p3", json!({"escalation": {"cause": "draft"}, "request": {"end": "done", "line": "not blocked"}})));
         let rest = rest(
-            vec![mission("m1", 10, "running", vec![node("a", json!({"pane_id": "w1:p2"})), node("b", json!({"pane_id": "w1:p3"})), node("c", json!({}))])],
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    node("a", json!({"pane_id": "w1:p2"})),
+                    node("b", json!({"pane_id": "w1:p3"})),
+                    node("c", json!({})),
+                ],
+            )],
             json!({"navigator": {"agents": agents, "devices": []}}),
         );
         let nodes = &projected(&rest).items[0].nodes;
-        assert_eq!(nodes[0].escalation, Some(PhoneEscalation { cause: "child_blocked".into(), line: Some("Login expired".into()) }));
-        assert_eq!(nodes[1].escalation, Some(PhoneEscalation { cause: "draft".into(), line: None }));
+        assert_eq!(
+            nodes[0].escalation,
+            Some(PhoneEscalation {
+                cause: "child_blocked".into(),
+                line: Some("Login expired".into())
+            })
+        );
+        assert_eq!(
+            nodes[1].escalation,
+            Some(PhoneEscalation {
+                cause: "draft".into(),
+                line: None
+            })
+        );
         assert_eq!(nodes[2].escalation, None);
     }
 
@@ -531,22 +571,39 @@ mod tests {
     fn a_mission_on_another_device_names_it_and_one_on_this_mac_does_not() {
         let mut away = mission("away", 20, "running", vec![]);
         away["device_id"] = json!("mini");
-        let rest = rest(vec![mission("home", 10, "running", vec![]), away], json!({}));
+        let rest = rest(
+            vec![mission("home", 10, "running", vec![]), away],
+            json!({}),
+        );
         let missions = projected(&rest);
         assert_eq!(missions.find("home").unwrap().device_label, None);
-        assert_eq!(missions.find("away").unwrap().device_label.as_deref(), Some("Mac mini"));
+        assert_eq!(
+            missions.find("away").unwrap().device_label.as_deref(),
+            Some("Mac mini")
+        );
     }
 
     #[test]
     fn the_frame_keeps_the_newest_missions_and_counts_the_rest() {
-        let open: Vec<Value> = (0..MAX_OPEN as u64 + 3).map(|at| mission(&format!("o{at}"), 100 + at, "running", vec![])).collect();
-        let closed: Vec<Value> = (0..MAX_CLOSED as u64 + 2).map(|at| mission(&format!("c{at}"), 100 + at, "done", vec![])).collect();
+        let open: Vec<Value> = (0..MAX_OPEN as u64 + 3)
+            .map(|at| mission(&format!("o{at}"), 100 + at, "running", vec![]))
+            .collect();
+        let closed: Vec<Value> = (0..MAX_CLOSED as u64 + 2)
+            .map(|at| mission(&format!("c{at}"), 100 + at, "done", vec![]))
+            .collect();
         let rest = rest(open.into_iter().chain(closed).collect(), json!({}));
         let missions = projected(&rest);
         assert_eq!(missions.items.len(), MAX_OPEN + MAX_CLOSED);
         assert_eq!(missions.omitted, 5);
-        assert_eq!(missions.items[0].id, format!("o{}", MAX_OPEN + 2), "the newest open mission leads");
-        assert!(missions.find("o0").is_none() && missions.find("c0").is_none(), "the oldest of each are the ones left out");
+        assert_eq!(
+            missions.items[0].id,
+            format!("o{}", MAX_OPEN + 2),
+            "the newest open mission leads"
+        );
+        assert!(
+            missions.find("o0").is_none() && missions.find("c0").is_none(),
+            "the oldest of each are the ones left out"
+        );
     }
 
     #[test]
@@ -556,6 +613,9 @@ mod tests {
         let missions = projected(&broken);
         assert!(missions.failed);
         assert!(missions.items.is_empty());
-        assert_eq!(projected(&json!({"navigator": {"agents": []}})), PhoneMissions::default());
+        assert_eq!(
+            projected(&json!({"navigator": {"agents": []}})),
+            PhoneMissions::default()
+        );
     }
 }

@@ -950,7 +950,10 @@ const ANSWER_LIMIT: usize = herdr_core::missions::ANSWER_LIMIT;
 /// What a phone's `answer_mission` asks, once it names a listed mission and a
 /// well-formed answer: the one `mission_answer` event the desktop's decision
 /// banner sends (`Event::MissionAnswer`), nothing else.
-fn mission_answer_event(message: &Value, missions: &PhoneMissions) -> Result<Vec<u8>, &'static str> {
+fn mission_answer_event(
+    message: &Value,
+    missions: &PhoneMissions,
+) -> Result<Vec<u8>, &'static str> {
     let id = message.get("mission").and_then(Value::as_str);
     let Some(mission) = id.and_then(|id| missions.find(id)) else {
         return Err("gone");
@@ -1016,11 +1019,19 @@ async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -
     let bytes = match mission_answer_event(message, &mobile.missions()) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            refusal_logged("scope.refused", Some(phone_id), &format!("mission_answer:{reason}"));
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("mission_answer:{reason}"),
+            );
             return answer(false, Some(reason));
         }
     };
-    let (mobile, phone_id, request) = (Arc::clone(mobile), phone_id.to_owned(), request_id.to_owned());
+    let (mobile, phone_id, request) = (
+        Arc::clone(mobile),
+        phone_id.to_owned(),
+        request_id.to_owned(),
+    );
     let dispatched = tokio::task::spawn_blocking(move || {
         mobile.still_admitted(&phone_id)?;
         match mobile.reserve_input(&phone_id, &request) {
@@ -1943,7 +1954,12 @@ mod tests {
         mobile.missions.send_replace(Arc::new(deciding()));
         let phone = paired(&mobile);
 
-        let first = answer_mission(&mobile, &phone, &mission_message("press-1", json!({"option": 1}))).await;
+        let first = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-1", json!({"option": 1})),
+        )
+        .await;
         assert_eq!(first["type"], "mission_result");
         assert_eq!(first["request_id"], "press-1");
         assert_eq!(first["mission"], "mission-1");
@@ -1955,7 +1971,12 @@ mod tests {
             ),
             "the press is recorded as written, so a repeat is not typed again"
         );
-        let again = answer_mission(&mobile, &phone, &mission_message("press-1", json!({"option": 1}))).await;
+        let again = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-1", json!({"option": 1})),
+        )
+        .await;
         assert_eq!(again["ok"], true, "{again}");
 
         // A press still being sent is told so, never sent a second time.
@@ -1963,8 +1984,16 @@ mod tests {
             mobile.reserve_input(&phone, "press-2"),
             Reservation::Write
         ));
-        let racing = answer_mission(&mobile, &phone, &mission_message("press-2", json!({"option": 1}))).await;
-        assert_eq!((racing["ok"].as_bool(), reason(&racing)), (Some(false), Some("in_flight")));
+        let racing = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-2", json!({"option": 1})),
+        )
+        .await;
+        assert_eq!(
+            (racing["ok"].as_bool(), reason(&racing)),
+            (Some(false), Some("in_flight"))
+        );
     }
 
     #[tokio::test]
@@ -1975,7 +2004,12 @@ mod tests {
         mobile.missions.send_replace(Arc::new(deciding()));
         let phone = paired(&mobile);
 
-        let refused = answer_mission(&mobile, &phone, &mission_message("bad", json!({"text": "   "}))).await;
+        let refused = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("bad", json!({"text": "   "})),
+        )
+        .await;
         assert_eq!(reason(&refused), Some("invalid_request"));
         assert!(
             matches!(mobile.reserve_input(&phone, "bad"), Reservation::Write),
@@ -1984,6 +2018,9 @@ mod tests {
         let mut anonymous = mission_message("x", json!({"option": 1}));
         anonymous.as_object_mut().unwrap().remove("request_id");
         let answer = answer_mission(&mobile, &phone, &anonymous).await;
-        assert_eq!((answer["ok"].as_bool(), reason(&answer)), (Some(false), Some("invalid_request")));
+        assert_eq!(
+            (answer["ok"].as_bool(), reason(&answer)),
+            (Some(false), Some("invalid_request"))
+        );
     }
 }

@@ -4,7 +4,9 @@
 //! from the core's snapshot `rest` section and carries no files, no paths and
 //! nothing else of the snapshot.
 
-pub use herdr_core::agent_state::phone::{AgentKey, PhoneAgent, PhoneMissions, Projection, project};
+pub use herdr_core::agent_state::phone::{
+    AgentKey, PhoneAgent, PhoneMissions, Projection, project,
+};
 use serde_json::Value;
 
 /// Materialize only the phone/start projection's changed inputs. Immutable
