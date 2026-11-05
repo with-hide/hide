@@ -156,7 +156,7 @@ export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "r
 
 /**
  * One changed file: its path under the checkout and its line counts. The counts are null for a file git cannot count
- * (`binary`, as hided read it) and for a new file hided did not count (a long text, or past the twentieth).
+ * (`binary`) and for a file Git does not track yet, which the desktop's list shows no number for either.
  */
 export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
 

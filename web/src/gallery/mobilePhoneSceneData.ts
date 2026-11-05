@@ -163,12 +163,12 @@ export function phoneLooks(): LookRow[] {
 const FILES: LookFile[] = [
   { path: "hide-platform/src/path.rs", status: "modified", added: 6, removed: 2, binary: false },
   { path: "hided/src/mobile/wire.rs", status: "modified", added: 71, removed: 8, binary: false },
-  { path: "hide-platform/tests/it/path.rs", status: "untracked", added: 7, removed: 0, binary: false },
+  { path: "hide-platform/tests/it/path.rs", status: "untracked", added: null, removed: null, binary: false },
   { path: "docs/diagram.pdf", status: "untracked", added: null, removed: null, binary: true },
 ];
 
 const VIEWED: Record<Exclude<PhoneLookScene, "phone-looks">, { id: string; content: LookContent }> = {
-  "phone-look-changes": { id: "v1", content: { state: "changes", files: FILES, count: 4, added: 84, removed: 10 } },
+  "phone-look-changes": { id: "v1", content: { state: "changes", files: FILES, count: 4, added: 77, removed: 10 } },
   "phone-look-doc": { id: "v4", content: { state: "text", markdown: true, text: INSTALL_GUIDE, truncated: false } },
   "phone-look-image": { id: "v2", content: { state: "image", url: CHART, size: 319_488 } },
   "phone-look-page": { id: "v3", content: { state: "page", url: "https://withhide.dev/preview" } },

@@ -2858,7 +2858,7 @@ A View the desktop closes leaves the list, and one the agent opens again is not 
 At most 64 are listed, and one line says how many more are on the Mac.
 A row opens its View full screen: `‹ 볼 것`, its name, its kind, the name of the agent that opened it and how long ago; `‹ 볼 것` goes back to the list.
 A change list shows how many files and lines changed, then each file with its name, its folder and its +/- counts (`새 파일` for an added file, `바이너리` where git counts no lines), and the line `코드 내용은 Mac에서 보세요`; no line of code is sent.
-A new file Git does not track yet is counted by the lines of its text, the way Git counts a changed file, and adds to the totals; hided reads the first 20 of them through the desktop's file readers, and a text over 1 MiB or past the twentieth shows `새 파일` alone, never `바이너리`, which is only for a file whose lines cannot be counted.
+A file Git does not track yet shows `새 파일` alone, with no number, as the desktop's list does; `바이너리` is only for a tracked file whose lines Git cannot count.
 When nothing is left to show it reads `지금은 바뀐 파일이 없어요`.
 A Markdown document is drawn with its headings, lists, tables and code blocks by the renderer the conversation uses; any other text is fixed-width and wrapped to the phone's width, never scrolling sideways, and text over 1 MiB shows its first 1 MiB and `나머지는 Mac에서 보세요`.
 An image is fitted to the width, zoomed and moved with two fingers (a double tap toggles the zoom), with its size and its pixels below it; one over 10 MiB is not opened and says `이미지가 커서 Mac에서 보세요`.

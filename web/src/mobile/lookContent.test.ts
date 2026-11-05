@@ -81,7 +81,6 @@ describe("the changed files", () => {
   it("calls a file binary only when hided found git cannot count it, and a new file left uncounted is neither", () => {
     expect(countState({ path: "a.png", status: "modified", added: null, removed: null, binary: true })).toBe("binary");
     expect(countState({ path: "a.rs", status: "modified", added: 0, removed: 0, binary: false })).toBe("counted");
-    expect(countState({ path: "src/fresh.ts", status: "untracked", added: 2, removed: 0, binary: false })).toBe("counted");
     expect(countState({ path: "src/fresh.ts", status: "untracked", added: null, removed: null, binary: false })).toBe("uncounted");
   });
 });

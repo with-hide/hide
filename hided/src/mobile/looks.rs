@@ -19,7 +19,6 @@
 //! what the phone confirmed (`look_ack`): the relay closes a peer whose
 //! queue fills, so a transfer is paced by the phone and never by a timer.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::ws::Message;
@@ -315,107 +314,28 @@ async fn changed_files(
             return Err("unavailable");
         }
     };
-    let new_files = count_new_files(mobile, request_id, view, &files).await;
-    Ok(changes_frame(
-        request_id,
-        &view.display_id,
-        &files,
-        &new_files,
-    ))
-}
-
-/// Untracked files a list reads to count their lines: each is one read through
-/// the desktop's file readers, so the rest are named `새 파일` without a count.
-const NEW_FILES_COUNTED: usize = 20;
-
-/// What reading an untracked file told: git counts none of them, so a new file
-/// is counted the way git counts a changed one, by the lines of its text.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NewFile {
-    Lines(u32),
-    Binary,
-}
-
-/// The lines of `bytes`, as `git diff --numstat` counts a new file's: every
-/// line end, and a last line that has none.
-fn count_lines(bytes: &[u8]) -> u32 {
-    let ends = bytes.iter().filter(|byte| **byte == b'\n').count();
-    let unterminated = bytes.last().is_some_and(|last| *last != b'\n');
-    u32::try_from(ends + usize::from(unterminated)).unwrap_or(u32::MAX)
-}
-
-/// Reads the first untracked files of the list (by their index) and says how
-/// many lines each has, or that it is not text. A file that cannot be read, or
-/// is longer than the text cap, stays uncounted: that is not a binary.
-async fn count_new_files(
-    mobile: &Arc<Mobile>,
-    request_id: &str,
-    view: &LookView,
-    files: &[LookChange],
-) -> HashMap<usize, NewFile> {
-    let mut counted = HashMap::new();
-    let wanted = files
-        .iter()
-        .enumerate()
-        .take(CHANGE_FILES)
-        .filter(|(_, file)| file.status == ChangedFileStatus::Untracked)
-        .take(NEW_FILES_COUNTED);
-    for (index, file) in wanted {
-        let Ok(relative) = hide_platform::path::RelPath::parse(&file.path) else {
-            continue;
-        };
-        let mut new_file = view.clone();
-        new_file.path = hide_platform::path::wire_join(&view.checkout_path, &relative);
-        let Ok(read) = read(mobile, request_id, &new_file, TEXT_CAP, false).await else {
-            continue;
-        };
-        if read.total > read.bytes.len() as u64 {
-            continue;
-        }
-        counted.insert(
-            index,
-            if is_text(&read.bytes) {
-                NewFile::Lines(count_lines(&read.bytes))
-            } else {
-                NewFile::Binary
-            },
-        );
-    }
-    counted
+    Ok(changes_frame(request_id, &view.display_id, &files))
 }
 
 /// The `look_changes` frame: every file's status and counts, never a line of
-/// code. A file is `binary` when git could not count it (its counts are
-/// absent and it is not new) or when reading it showed it is not text.
-fn changes_frame(
-    request_id: &str,
-    view_id: &str,
-    files: &[LookChange],
-    new_files: &HashMap<usize, NewFile>,
-) -> Value {
-    let counts = |index: usize, file: &LookChange| match new_files.get(&index) {
-        Some(NewFile::Lines(lines)) => (Some(*lines), Some(0), false),
-        Some(NewFile::Binary) => (None, None, true),
-        None => (
-            file.added,
-            file.removed,
-            file.added.is_none()
-                && file.removed.is_none()
-                && file.status != ChangedFileStatus::Untracked,
-        ),
-    };
+/// code. The desktop's list shows no number for a file Git does not track yet,
+/// and neither does this one; a file is `binary` only when Git tracks it and
+/// could not count it.
+fn changes_frame(request_id: &str, view_id: &str, files: &[LookChange]) -> Value {
     let (mut added, mut removed) = (0_u64, 0_u64);
     let mut rows = Vec::new();
     for (index, file) in files.iter().enumerate() {
-        let (file_added, file_removed, binary) = counts(index, file);
-        added += u64::from(file_added.unwrap_or(0));
-        removed += u64::from(file_removed.unwrap_or(0));
+        added += u64::from(file.added.unwrap_or(0));
+        removed += u64::from(file.removed.unwrap_or(0));
         if index < CHANGE_FILES {
+            let binary = file.added.is_none()
+                && file.removed.is_none()
+                && file.status != ChangedFileStatus::Untracked;
             rows.push(json!({
                 "path": cut(&file.path, URL_CHARS),
                 "status": file.status,
-                "added": file_added,
-                "removed": file_removed,
+                "added": file.added,
+                "removed": file.removed,
                 "binary": binary,
             }));
         }
@@ -812,29 +732,18 @@ mod tests {
         }
     }
 
-    /// B14: a new text file is counted by its lines as git counts a changed
-    /// one; "binary" is only what git could not count.
+    /// B14: the desktop's list shows no number for a file Git does not track
+    /// yet, so the phone shows `새 파일` alone; `binary` is only for a tracked
+    /// file Git could not count.
     #[test]
-    fn lines_are_counted_as_git_counts_a_new_file() {
-        assert_eq!(count_lines(b""), 0);
-        assert_eq!(count_lines(b"one\n"), 1);
-        assert_eq!(count_lines(b"one\ntwo"), 2);
-        assert_eq!(count_lines(b"one\ntwo\n"), 2);
-        assert_eq!(count_lines(b"\n\n"), 2);
-    }
-
-    #[test]
-    fn a_new_text_file_is_counted_and_only_what_git_cannot_count_is_binary() {
+    fn an_untracked_file_has_no_counts_and_is_no_binary() {
         use ChangedFileStatus::{Modified, Untracked};
         let files = [
             change("src/old.rs", Modified, Some((6, 2))),
             change("src/fresh.ts", Untracked, None),
             change("assets/logo.png", Modified, None),
-            change("fresh.bin", Untracked, None),
-            change("data/huge.csv", Untracked, None),
         ];
-        let new_files = HashMap::from([(1, NewFile::Lines(2)), (3, NewFile::Binary)]);
-        let frame = changes_frame("r-1", "d-1", &files, &new_files);
+        let frame = changes_frame("r-1", "d-1", &files);
         let rows: Vec<(&str, Value, Value, bool)> = frame["files"]
             .as_array()
             .unwrap()
@@ -852,18 +761,15 @@ mod tests {
             rows,
             [
                 ("src/old.rs", json!(6), json!(2), false),
-                ("src/fresh.ts", json!(2), json!(0), false),
+                ("src/fresh.ts", Value::Null, Value::Null, false),
                 ("assets/logo.png", Value::Null, Value::Null, true),
-                ("fresh.bin", Value::Null, Value::Null, true),
-                // Not read (past the twenty, or too long): new, neither counted nor binary.
-                ("data/huge.csv", Value::Null, Value::Null, false),
             ]
         );
         assert_eq!(
             (frame["added"].as_u64(), frame["removed"].as_u64()),
-            (Some(8), Some(2))
+            (Some(6), Some(2))
         );
-        assert_eq!(frame["count"], 5);
+        assert_eq!(frame["count"], 3);
     }
 
     /// B26: a device whose link could not be had is unreachable, not a read

@@ -176,25 +176,21 @@ it("lists the changed files with their counts and no code, and says when nothing
       files: [
         { path: "hide-platform/src/path.rs", status: "modified", added: 6, removed: 2, binary: false },
         { path: "docs/new.md", status: "added", added: 7, removed: 0, binary: false },
-        { path: "src/fresh.ts", status: "untracked", added: 2, removed: 0, binary: false },
-        { path: "data/huge.csv", status: "untracked", added: null, removed: null, binary: false },
+        { path: "src/fresh.ts", status: "untracked", added: null, removed: null, binary: false },
         { path: "assets/logo.png", status: "modified", added: null, removed: null, binary: true },
       ],
-      count: 5,
-      added: 15,
+      count: 4,
+      added: 13,
       removed: 2,
     });
     const body = container.querySelector('[data-phone-look-state="changes"]')!;
-    expect(container.querySelector("[data-phone-look-files]")!.getAttribute("data-phone-look-files")).toBe("5");
+    expect(container.querySelector("[data-phone-look-files]")!.getAttribute("data-phone-look-files")).toBe("4");
     const row = (path: string) => body.querySelector(`[data-phone-look-file="${path}"]`)!.textContent ?? "";
     expect(row("hide-platform/src/path.rs")).toContain("hide-platform/src");
     expect(row("docs/new.md")).toContain("New file");
-    // A new text file shows its lines and is no binary (B14); one hided did not count shows only that it is new.
+    // A file Git does not track yet shows no number, as on the desktop, and is no binary (B14).
     expect(row("src/fresh.ts")).toContain("New file");
-    expect(row("src/fresh.ts")).toContain("+2");
-    expect(row("src/fresh.ts")).not.toContain("Binary");
-    expect(row("data/huge.csv")).toContain("New file");
-    expect(row("data/huge.csv")).not.toMatch(/Binary|\+0/);
+    expect(row("src/fresh.ts")).not.toMatch(/Binary|\+0/);
     expect(row("assets/logo.png")).toContain("Binary");
     expect(body.textContent).toContain("See the code on your Mac");
     expect(container.querySelector("pre")).toBeNull();
