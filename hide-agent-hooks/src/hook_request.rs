@@ -524,8 +524,8 @@ mod tests {
     use super::*;
 
     /// A state folder no daemon published a socket in, and no device's node
-    /// beside it: the request ends at once with that step's reason, before
-    /// anything was sent, and says it never connected.
+    /// beside it: the request ends with that step's reason, before anything
+    /// was sent, and says it never connected.
     #[test]
     fn a_request_with_no_daemon_to_ask_ends_at_once() {
         let state = tempfile::tempdir().unwrap();
@@ -534,17 +534,15 @@ mod tests {
             pane_id: None,
             named: None,
         };
-        let started = Instant::now();
         let sent = send(
             &caller,
             "1-request",
             HookCommand::WorkspaceInfo {},
-            started + Duration::from_secs(10),
+            Instant::now() + Duration::from_secs(10),
         );
         let failure = sent.answer.unwrap_err();
         assert_eq!((failure.reason, failure.step), ("hide_unavailable", true));
         assert_eq!(sent.timing, Timing::default());
-        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

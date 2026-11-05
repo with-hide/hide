@@ -35,7 +35,7 @@ pub struct StandInDaemon {
     _sockets: tempfile::TempDir,
     state: PathBuf,
     closer: ListenerCloser,
-    running: Arc<Mutex<Vec<Child>>>,
+    running: Arc<Mutex<Running>>,
     accepting: Option<JoinHandle<()>>,
     answering: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
@@ -67,7 +67,7 @@ impl StandInDaemon {
             .unwrap();
         let closer = listener.closer();
         let answering = Arc::new(Mutex::new(Vec::new()));
-        let running = Arc::new(Mutex::new(Vec::new()));
+        let running = Arc::new(Mutex::new(Running::default()));
         let served = Served {
             program: program.to_path_buf(),
             envs: envs.to_vec(),
@@ -100,15 +100,21 @@ impl StandInDaemon {
 
 impl Drop for StandInDaemon {
     fn drop(&mut self) {
+        // No request is taken after this, and no answer thread is started.
         self.closer.close();
-        // A stand-in still answering (one that never does, as a stuck
-        // daemon) is ended with the service, and every one is reaped.
-        for mut child in self.running.lock().unwrap().drain(..) {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
         if let Some(accepting) = self.accepting.take() {
             let _ = accepting.join();
+        }
+        // A stand-in still answering (one that never does, as a stuck
+        // daemon) is ended with the service, and one started from here on
+        // is ended as it registers; every one is reaped.
+        let children = {
+            let mut running = self.running.lock().unwrap();
+            running.closed = true;
+            std::mem::take(&mut running.children)
+        };
+        for child in children {
+            end(child);
         }
         for thread in self.answering.lock().unwrap().drain(..) {
             let _ = thread.join();
@@ -121,7 +127,20 @@ struct Served {
     program: PathBuf,
     envs: Vec<(&'static str, OsString)>,
     state: PathBuf,
-    running: Arc<Mutex<Vec<Child>>>,
+    running: Arc<Mutex<Running>>,
+}
+
+/// The stand-ins answering now, and whether the service has ended, under one
+/// lock, so none registers after the service ended them.
+#[derive(Default)]
+struct Running {
+    closed: bool,
+    children: Vec<Child>,
+}
+
+fn end(mut child: Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 impl Served {
@@ -154,7 +173,15 @@ impl Served {
             let _ = stdin.write_all(input.as_bytes());
         }
         let stdout = child.stdout.take();
-        self.running.lock().unwrap().push(child);
+        {
+            let mut running = self.running.lock().unwrap();
+            if running.closed {
+                drop(running);
+                end(child);
+                return;
+            }
+            running.children.push(child);
+        }
         // Its output ends when it does, or when the service ends it.
         let mut output = Vec::new();
         if let Some(mut stdout) = stdout {

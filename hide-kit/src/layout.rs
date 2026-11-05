@@ -9,9 +9,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// The folder under HOME that holds everything Hide owns.
-pub const HIDE_HOME: &str = ".hide";
-
 /// A device's helper root unless the daemon was started with another, as a
 /// consent records it; `~` is the device account's home (D-11).
 pub const HELPER_ROOT: &str = "~/.hide/host-helper";
@@ -20,10 +17,6 @@ pub const HELPER_ROOT: &str = "~/.hide/host-helper";
 /// it is carried to [`HELPER_ROOT`] without asking (D-12), and the kit pass
 /// retires it once the helper runs from the new root (D-13).
 pub const LEGACY_HELPER_ROOT: &str = "~/.local/share/hide/host-helper";
-
-pub fn hide_home(home: &Path) -> PathBuf {
-    home.join(HIDE_HOME)
-}
 
 /// A disable-only switch, also written by cross-platform test fixtures.
 /// Unlike `fixture_home`, this grants no test or service-control authority.
@@ -66,62 +59,17 @@ pub fn fixture_home(home: &Path) -> bool {
     temporary && !own && home.join(FIXTURE_HOME_MARKER).is_file()
 }
 
-/// The daemon's state folder when nothing relocates it (D-04).
-pub fn default_state_dir(home: &Path) -> PathBuf {
-    hide_home(home).join("state")
-}
-
 /// The state folder builds before this layout used by default; moved once to
 /// [`default_state_dir`] by `hide connect` (D-05).
 pub fn legacy_state_dir(home: &Path) -> PathBuf {
     home.join(".local/state/hide")
 }
 
-/// The environment variable that moves the state folder away from
-/// [`default_state_dir`], named so the operator can be told which one to
-/// change or unset.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum StateVariable {
-    #[serde(rename = "HIDE_STATE_DIR")]
-    HideStateDir,
-    #[serde(rename = "XDG_STATE_HOME")]
-    XdgStateHome,
-}
-
-/// `HIDE_STATE_DIR` wins; a set `XDG_STATE_HOME` keeps `$XDG_STATE_HOME/hide`
-/// as before and is never moved; otherwise `~/.hide/state` (D-04). Empty
-/// values count as unset, as the callers read them.
-pub fn state_dir(
-    home: &Path,
-    hide_state_dir: Option<&str>,
-    xdg_state_home: Option<&str>,
-) -> PathBuf {
-    state_dir_choice(home, hide_state_dir, xdg_state_home).0
-}
-
-/// [`state_dir`] with the variable that chose it, `None` for the default.
-/// Judged by the folder, not by which variable is set: `hide connect` hands
-/// the daemon it starts the folder it chose through `HIDE_STATE_DIR`, so that
-/// variable naming the account's own folder chose nothing.
-fn state_dir_choice(
-    home: &Path,
-    hide_state_dir: Option<&str>,
-    xdg_state_home: Option<&str>,
-) -> (PathBuf, Option<StateVariable>) {
-    let (account, account_variable) = match xdg_state_home.filter(|value| !value.is_empty()) {
-        Some(xdg) => (
-            Path::new(xdg).join("hide"),
-            Some(StateVariable::XdgStateHome),
-        ),
-        None => (default_state_dir(home), None),
-    };
-    match hide_state_dir.filter(|value| !value.is_empty()) {
-        Some(dir) if Path::new(dir) != account => {
-            (PathBuf::from(dir), Some(StateVariable::HideStateDir))
-        }
-        _ => (account, account_variable),
-    }
-}
+// The state folder's rule is named under the kit, in the hook crate, so a
+// hook finds its daemon by the same rule `hide` does.
+pub use hide_agent_hooks::state_folder::{
+    HIDE_HOME, StateVariable, default_state_dir, hide_home, state_dir, state_dir_choice,
+};
 
 /// [`state_dir`] from this process's environment, for a program that has no
 /// environment registry of its own (the device helper).
@@ -649,21 +597,6 @@ mod tests {
             state_dir(home, Some("/isolated"), Some("/xdg")),
             PathBuf::from("/isolated")
         );
-    }
-
-    /// A hook finds the daemon it asks in the same folder `hide` would: the
-    /// hook's crate sits under the kit and keeps its own copy of the choice
-    /// when nothing names a folder (`hide_agent_hooks::route::state_dir`).
-    #[test]
-    fn a_hook_picks_the_state_folder_hide_picks() {
-        let home = Path::new("/Users/example");
-        for xdg in [None, Some(""), Some("/xdg")] {
-            assert_eq!(
-                hide_agent_hooks::route::account_state_dir(home, xdg.map(std::ffi::OsStr::new)),
-                state_dir(home, None, xdg),
-                "{xdg:?}"
-            );
-        }
     }
 
     #[test]

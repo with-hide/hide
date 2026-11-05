@@ -42,6 +42,7 @@ pub mod runtime;
 #[cfg(all(test, unix))]
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
+pub mod state_folder;
 
 pub use counters::PaneCounters;
 pub use diagnosis::{

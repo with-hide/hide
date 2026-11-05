@@ -205,9 +205,11 @@ impl LocalStream {
     /// Connects to the listener at `path` for one exchange that must be over
     /// by `deadline`, which then bounds every later read and write on this
     /// handle ([`set_deadline`](Self::set_deadline)). Answers as
-    /// [`connect`](Self::connect) does, except that a Windows connect waits
-    /// for a busy listener no later than the deadline, and a deadline already
-    /// passed is `TimedOut` before anything is tried.
+    /// [`connect`](Self::connect) does, except that the connect itself waits
+    /// for a busy listener (a Windows pipe with no free instance, a Unix
+    /// listener whose backlog is full) no later than the deadline and then
+    /// answers `TimedOut`, and a deadline already passed is `TimedOut` before
+    /// anything is tried.
     pub fn connect_until(path: &Path, deadline: Instant) -> io::Result<Self> {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -726,9 +728,27 @@ mod sys {
 
     use super::*;
 
-    /// A Unix connect never waits, so it has no use for `_wait`.
-    pub(super) fn connect(path: &Path, _wait: Option<Duration>) -> io::Result<RawStream> {
-        RawStream::connect(endpoint_name(path)?)
+    /// A connect with no `wait` blocks as the system's does: on Linux, until
+    /// a listener whose backlog is full takes it. With one it never waits
+    /// longer than `wait`: the connect does not block, a listener still
+    /// taking it is waited for until then, and a full backlog answers at once;
+    /// either ends `TimedOut`, as a Windows connect to a busy pipe does.
+    pub(super) fn connect(path: &Path, wait: Option<Duration>) -> io::Result<RawStream> {
+        use interprocess::ConnectWaitMode;
+        use interprocess::local_socket::ConnectOptions;
+
+        let name = endpoint_name(path)?;
+        let Some(wait) = wait else {
+            return RawStream::connect(name);
+        };
+        ConnectOptions::new()
+            .name(name)
+            .wait_mode(ConnectWaitMode::Timeout(wait))
+            .connect_sync()
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::WouldBlock => io::Error::from(io::ErrorKind::TimedOut),
+                _ => error,
+            })
     }
 
     /// A listener leaves a socket; a regular file or directory is not its.

@@ -275,27 +275,21 @@ pub fn apply(command: &mut Command) -> Result<(), &'static str> {
 
 /// The daemon state folder this hook's requests go to: the one
 /// `HIDE_STATE_DIR` names, else the route the kit installed the hook with,
-/// else the account's own, `$XDG_STATE_HOME/hide` or `~/.hide/state`, as
-/// `hide_kit::layout::state_dir` chooses it (hided's `env` tests hold the two
-/// together). An installed route that does not read is `record`, as
-/// [`apply`] has it.
+/// else the account's own ([`crate::state_folder::state_dir`]). An installed
+/// route that does not read is `record`, as [`apply`] has it.
 pub fn state_dir(home: &Path) -> Result<PathBuf, &'static str> {
-    let read = |key: &str| std::env::var_os(key).filter(|value| !value.is_empty());
+    let read = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
     if let Some(state) = read(STATE_VARIABLE) {
         return Ok(PathBuf::from(state));
     }
     if let Some(route) = installed().as_ref().map_err(|_| "record")? {
         return Ok(route.clone());
     }
-    Ok(account_state_dir(home, read("XDG_STATE_HOME").as_deref()))
-}
-
-/// The account's own state folder when nothing names another.
-pub fn account_state_dir(home: &Path, xdg_state_home: Option<&std::ffi::OsStr>) -> PathBuf {
-    match xdg_state_home.filter(|value| !value.is_empty()) {
-        Some(xdg) => Path::new(xdg).join("hide"),
-        None => home.join(".hide").join("state"),
-    }
+    Ok(crate::state_folder::state_dir(
+        home,
+        None,
+        read("XDG_STATE_HOME").as_deref(),
+    ))
 }
 
 /// The route the kit installed this hook with, read from its arguments once.
