@@ -17,11 +17,11 @@ use serde_json::json;
 
 use super::Runtime;
 use crate::mission_events::{EventKind, MissionEvent};
-use crate::mission_health::{Act, Facts, NodeFacts, WorkerLife, evaluate};
+use crate::mission_health::{Act, Facts, NodeFacts, WarnAct, WorkerLife, evaluate, warn_acts};
 use crate::missions::{
     Attention, AttentionReason, FixReason, HideAction, HideMark, Mission, MissionEnd, MissionNode,
-    MissionStatus, NodePatch, NodeStatus, OperatorAction, PendingWake, WOKEN_LIMIT, WakeEvent,
-    Woken,
+    MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, PendingWake, WOKEN_LIMIT,
+    WakeEvent, Woken,
 };
 
 /// Raises one mission holds at once; a new one past it is refused and
@@ -173,6 +173,7 @@ pub(super) fn raise_for(
                 reason: Some(reason),
                 why: None,
                 action: None,
+                warning: None,
                 ci: None,
                 key: Some(raise_key.clone()),
             },
@@ -242,6 +243,7 @@ pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
                 reason: Some(reason),
                 why: None,
                 action: None,
+                warning: None,
                 ci: None,
                 key: Some(key),
             },
@@ -289,6 +291,47 @@ fn conductor_identity(conductor: &crate::missions::Conductor) -> String {
         .clone()
         .or_else(|| conductor.actor.session.clone())
         .unwrap_or_else(|| format!("{}/{}", conductor.actor.device_id, conductor.actor.pane_id))
+}
+
+/// Queues the letter of each warning `mission` holds untold, in the
+/// Conductor's own queue and under its cap (with-hide/hide-private#552): a
+/// warning stays untold while the queue is full and the next evaluation
+/// asks again with the same key, so it is told once and never lost. Whether
+/// any was told.
+fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
+    let mut told = false;
+    for at in 0..mission.nodes.len() {
+        for slot in 0..mission.nodes[at].warnings.len() {
+            let target = &mission.nodes[at];
+            let warning = &target.warnings[slot];
+            if warning.told_unix_ms.is_some() {
+                continue;
+            }
+            let fact = format!("warn:{}:{}", warning.kind.as_str(), warning.from_unix_ms);
+            let wake = PendingWake {
+                seq: mission.wake_seq + 1,
+                node: target.key.clone(),
+                pr: target.current_pr(),
+                event: WakeEvent::Warning,
+                head: None,
+                to: None,
+                reason: None,
+                why: None,
+                action: None,
+                warning: Some(warning.kind),
+                ci: None,
+                key: Some(act_key(target, &fact)),
+            };
+            // A full queue refuses the rest too; it is logged once a pass.
+            if super::missions::push_wake(mission, wake).is_none() {
+                return told;
+            }
+            mission.wake_seq += 1;
+            mission.nodes[at].warnings[slot].told_unix_ms = Some(now);
+            told = true;
+        }
+    }
+    told
 }
 
 /// The key of one of Hide's acts on `node` (B27): the node, its work
@@ -442,6 +485,9 @@ impl Runtime {
         for id in ids {
             changed |= self.mission_health(&id, now);
         }
+        // A review's failure or a push moves a node's warnings now; the
+        // quiet that only time makes is the minute decision's.
+        changed |= self.warn_missions(now);
         // A raise with no Conductor to wait on, or whose Conductor just
         // left, reaches the operator now rather than at the minute (D-08).
         changed |= self.raise_to_operator(now);
@@ -510,6 +556,91 @@ impl Runtime {
         }
         self.save_missions();
         true
+    }
+
+    /// Brings each mission's node warnings to what `warn_acts` answers at
+    /// `now` (with-hide/hide-private#552), run where a fact moved and in the
+    /// minute decision, which is the only clock a quiet without a push
+    /// needs. Each warning standing writes its Conductor one letter, keyed by
+    /// the node, its round and the fact the warning stands on, so the same
+    /// warning is one letter after a restart too; a warning is never the
+    /// operator's. A mission whose device does not answer is left as it is
+    /// (B29). Whether the book changed.
+    pub(crate) fn warn_missions(&mut self, now: u64) -> bool {
+        let rule = self.snapshot.ui_state.conductor_settings.warn_rule();
+        let mut changed = false;
+        for index in 0..self.missions.book.missions.len() {
+            let mission = &self.missions.book.missions[index];
+            if self.mission_stale(mission) {
+                continue;
+            }
+            let pulls = self
+                .mission_project_pulls(mission)
+                .filter(|project| !project.status.stale && project.pull_requests_read);
+            let acts = warn_acts(mission, pulls, now, rule);
+            let untold = mission
+                .nodes
+                .iter()
+                .flat_map(|node| &node.warnings)
+                .any(|warning| warning.told_unix_ms.is_none());
+            if acts.is_empty() && !untold {
+                continue;
+            }
+            let mission = &mut self.missions.book.missions[index];
+            let mut moved = !acts.is_empty();
+            for act in acts {
+                match act {
+                    WarnAct::Raise { node, kind, from } => {
+                        let target = &mut mission.nodes[node];
+                        target.warnings.push(NodeWarning {
+                            kind,
+                            from_unix_ms: from,
+                            since_unix_ms: now,
+                            told_unix_ms: None,
+                        });
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.warned",
+                            "mission": mission.id, "node": target.key, "warning": kind.as_str(),
+                        }));
+                    }
+                    WarnAct::Clear { node, kind } => {
+                        let target = &mut mission.nodes[node];
+                        target.warnings.retain(|warning| warning.kind != kind);
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.warning_cleared",
+                            "mission": mission.id, "node": target.key, "warning": kind.as_str(),
+                        }));
+                    }
+                }
+            }
+            // A warning gone before its letter went says nothing the
+            // Conductor needs.
+            let standing: Vec<(String, crate::missions::WarningKind)> = mission
+                .nodes
+                .iter()
+                .flat_map(|node| {
+                    node.warnings
+                        .iter()
+                        .map(|warning| (node.key.clone(), warning.kind))
+                })
+                .collect();
+            mission.wakes.retain(|wake| {
+                wake.event != WakeEvent::Warning
+                    || wake
+                        .warning
+                        .is_some_and(|kind| standing.contains(&(wake.node.clone(), kind)))
+            });
+            moved |= tell_warnings(mission, now);
+            if moved {
+                mission.updated_at_unix_ms = now;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save_missions();
+            self.flush_mission_wakes();
+        }
+        changed
     }
 
     /// The facts one evaluation of `mission` reads.
@@ -703,13 +834,13 @@ impl Runtime {
         let node = &mut mission.nodes[at];
         node.attach_pr(pr);
         if let Some(seen) = seen {
-            super::missions::note_seen(node, seen);
+            super::missions::note_seen(node, seen, now);
         }
         if node.status == NodeStatus::Done {
             node.status = NodeStatus::Working;
             node.finished_at_unix_ms = None;
             node.in_main = None;
-            node.back_to_work();
+            node.back_to_work(now);
         }
         let mark = HideMark {
             action: HideAction::Attached,
@@ -859,6 +990,7 @@ impl Runtime {
                 reason: None,
                 why: Some(why),
                 action: None,
+                warning: None,
                 ci: None,
                 key: Some(act.clone()),
             },
@@ -935,6 +1067,7 @@ impl Runtime {
                             reason: None,
                             why: None,
                             action: None,
+                            warning: None,
                             ci: None,
                             key: Some(wake_key),
                         },
@@ -1158,7 +1291,7 @@ impl Runtime {
                 next.finished_at_unix_ms = None;
                 next.in_main = None;
                 next.resumed = Some(next.resumed_cause());
-                next.back_to_work();
+                next.back_to_work(now);
             }
             OperatorAction::Attach => {
                 let pr = attention
@@ -1168,7 +1301,7 @@ impl Runtime {
                     .ok_or("mission_attention_moved")?;
                 next.attach_pr(pr);
                 if let Some(seen) = self.pull_seen_of(mission, pr) {
-                    super::missions::note_seen(&mut next, seen);
+                    super::missions::note_seen(&mut next, seen, now);
                 }
             }
             OperatorAction::Leave => {}
@@ -1213,6 +1346,7 @@ impl Runtime {
                     reason: attention.as_ref().map(|attention| attention.reason),
                     why: None,
                     action: Some(payload.action),
+                    warning: None,
                     ci: None,
                     key: None,
                 },

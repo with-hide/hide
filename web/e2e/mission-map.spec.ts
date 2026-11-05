@@ -138,7 +138,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await map.locator("[data-detail-close]").click();
     await expect(map).toHaveCount(0);
     await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", criteria: ["두 변경이 함께 동작한다"], depends_on: ["screen"] }] })]);
-    const shown = await mission(conductor, ["mission", "show"]);
+    const shown = await mission(conductor, ["mission", "show", "--json"]);
     expect(JSON.stringify(shown.result)).toContain("together");
     await expect(map).toHaveCount(0);
     // Nor does a replan open the pane's popover again (B12).

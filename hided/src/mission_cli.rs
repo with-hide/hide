@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -41,6 +41,12 @@ pub enum MissionCli {
         mission: Option<String>,
         end: MissionEnd,
         path: String,
+    },
+    /// `show`, drawn as text unless `json` asks for the value
+    /// (with-hide/hide-private#552).
+    Show {
+        command: MissionCommand,
+        json: bool,
     },
 }
 
@@ -110,7 +116,7 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
     ),
     ("start", &["--mission"], &[]),
     ("reopen", &["--mission"], &[]),
-    ("show", &["--mission"], &[]),
+    ("show", &["--mission"], &["--json"]),
     ("take", &["--handover"], &[]),
     ("list", &[], &[]),
     ("settings", &[], &[]),
@@ -139,7 +145,7 @@ fn read_flags<'a>(
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         let arg = arg.as_str();
-        if arg == "--json" && !valued.contains(&"--json") {
+        if arg == "--json" && !valued.contains(&"--json") && !switches.contains(&"--json") {
             continue;
         }
         if valued.contains(&arg) {
@@ -511,7 +517,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 },
             }
         }
-        verb @ ("start" | "reopen" | "show") => {
+        verb @ ("start" | "reopen") => {
             let (positional, values, _) = flags(args, verb)?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
@@ -519,9 +525,27 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             let mission = mission_of(&values)?;
             match verb {
                 "start" => MissionCommand::Start { mission },
-                "reopen" => MissionCommand::Reopen { mission },
-                _ => MissionCommand::Show { mission },
+                _ => MissionCommand::Reopen { mission },
             }
+        }
+        "show" => {
+            let (positional, values, set) = flags(args, "show")?;
+            let node = match positional.as_slice() {
+                [] => None,
+                [node] => Some(key(node)?),
+                _ => return Err(USAGE.to_owned()),
+            };
+            let command = MissionCommand::Show {
+                mission: mission_of(&values)?,
+                node,
+            };
+            if !command.valid() {
+                return Err("a value is too long or holds control characters".to_owned());
+            }
+            return Ok(MissionCli::Show {
+                command,
+                json: set.iter().any(|flag| flag == "--json"),
+            });
         }
         "take" => {
             let (positional, mut values, _) = flags(args, "take")?;
@@ -577,11 +601,26 @@ fn refuse(reason: &str, next: &str) -> Result<(), String> {
 
 /// Runs a parsed `hide mission` command and prints its answer as one JSON
 /// line: `{"ok":true,"result":…}`, or the refusal's reason and next action.
+/// `show` prints its answer as text unless `--json` asks for that line.
 pub fn run(env: &Env, command: MissionCli) -> Result<(), String> {
     let command = match command {
         MissionCli::Help => {
             print!("{HELP}");
             return Ok(());
+        }
+        MissionCli::Show { command, json } => {
+            let answer = request(env, &command);
+            if !json
+                && let Ok(answer) = &answer
+                && answer["ok"] == true
+            {
+                print!(
+                    "{}",
+                    crate::mission_show::draw(&answer["result"], crate::cli::unix_ms())
+                );
+                return Ok(());
+            }
+            return print_answer(answer);
         }
         MissionCli::Command(command) => command,
         MissionCli::PlanFile { mission, path } => {
@@ -603,11 +642,12 @@ pub fn run(env: &Env, command: MissionCli) -> Result<(), String> {
     if !command.valid() {
         return refuse("mission_text_invalid", next_action("mission_text_invalid"));
     }
-    let answer = (|| {
-        let mut credential = crate::workspace_cli::Credential::acquire(env)?;
-        crate::workspace_cli::request_mission(&mut credential, &command)
-    })();
-    print_answer(answer)
+    print_answer(request(env, &command))
+}
+
+fn request(env: &Env, command: &MissionCommand) -> Result<Value, String> {
+    let mut credential = crate::workspace_cli::Credential::acquire(env)?;
+    crate::workspace_cli::request_mission(&mut credential, command)
 }
 
 /// `hide agent catalog [--machine <id>]`, printed in the agent topic's
@@ -682,6 +722,37 @@ mod tests {
 
     fn words(line: &[&str]) -> Vec<String> {
         line.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    /// with-hide/hide-private#552: `show` takes one node and prints its
+    /// value only with `--json`.
+    #[test]
+    fn show_takes_one_node_and_asks_for_json_only_with_its_switch() {
+        let show = |line: &[&str]| parse(words(line).iter());
+        assert_eq!(
+            show(&["show"]),
+            Ok(MissionCli::Show {
+                command: MissionCommand::Show {
+                    mission: None,
+                    node: None
+                },
+                json: false
+            })
+        );
+        assert_eq!(
+            show(&["show", "fix", "--mission", "mission-2", "--json"]),
+            Ok(MissionCli::Show {
+                command: MissionCommand::Show {
+                    mission: Some("mission-2".into()),
+                    node: Some("fix".into())
+                },
+                json: true
+            })
+        );
+        assert!(show(&["show", "fix", "docs"]).is_err());
+        assert!(show(&["show", "--json", "--json"]).is_err());
+        // Another verb still lets a stray --json pass, as before.
+        assert!(show(&["start", "--json"]).is_ok());
     }
 
     #[test]

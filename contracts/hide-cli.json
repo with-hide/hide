@@ -1921,6 +1921,28 @@
             ],
             "type": "object"
         },
+        "mission_node": {
+            "properties": {
+                "letters": {
+                    "type": [
+                        "array",
+                        "null"
+                    ]
+                },
+                "mission_id": {
+                    "type": "string"
+                },
+                "node": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "mission_id",
+                "node",
+                "letters"
+            ],
+            "type": "object"
+        },
         "mission_planned": {
             "properties": {
                 "mission": {
@@ -5018,9 +5040,18 @@
         },
         {
             "answers": [
-                "mission"
+                "mission",
+                "mission_node"
             ],
-            "arguments": [],
+            "arguments": [
+                {
+                    "name": "node",
+                    "required": false,
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
             "command": "mission show",
             "options": [
                 {
@@ -5030,7 +5061,16 @@
                     "value": {
                         "type": "key"
                     }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 }
+            ],
+            "refusals": [
+                "mission_node_unknown"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5234,7 +5274,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:5c21f96b0a4a662434b16a272c103d5e559716d9089e3d7d603678df336cbd85",
+    "digest": "sha256:bd5361c06c6604616fb2261ae71ca5f39bb76aec9a5a1aa4ffe1ccc8cd9d8b3f",
     "envelopes": {
         "agent": {
             "answer": "value",

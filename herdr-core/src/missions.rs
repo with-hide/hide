@@ -291,6 +291,47 @@ pub struct Woken {
     pub head: Option<String>,
 }
 
+/// What a node's warning is about (with-hide/hide-private#552): a sign that
+/// its worker is stuck, for its Conductor to judge whether to hand the node
+/// to a fresh worker. A warning goes to the Conductor alone, never to the
+/// operator, and is no attention: it waits on no one's choice.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningKind {
+    /// The review line failed `warn_review_fails` times in a row.
+    ReviewFails,
+    /// The node worked `warn_quiet_minutes` with no push and its pull
+    /// request does not just wait on others.
+    NoPush,
+}
+
+impl WarningKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReviewFails => "review_fails",
+            Self::NoPush => "no_push",
+        }
+    }
+}
+
+/// A warning a node carries now: raised once with one letter to its
+/// Conductor, and gone when its fact goes (the review passes, a new push
+/// arrives, the node finishes).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeWarning {
+    pub kind: WarningKind,
+    /// The fact it stands on, which keys its letter: for failed reviews when
+    /// the failure that reached the count was recorded, for no push the time
+    /// the quiet is counted from.
+    pub from_unix_ms: u64,
+    /// When Hide raised it.
+    pub since_unix_ms: u64,
+    /// When its letter joined the Conductor's queue; none while the queue
+    /// was full, so each evaluation after asks again until it is told.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told_unix_ms: Option<u64>,
+}
+
 /// What Hide itself did to a node last (D-07, D-15): the card's small Hide
 /// mark and the panel's line.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -444,6 +485,9 @@ pub struct PendingWake {
     pub why: Option<FixReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<OperatorAction>,
+    /// What a `warning` wake warns of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<WarningKind>,
     /// The CI result a `ci` wake tells, on `head`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<CiNews>,
@@ -491,6 +535,9 @@ pub enum WakeEvent {
     Reopened,
     /// A sleeping worker's pull request needs it; `why` says what (B10).
     Fix,
+    /// A node shows signs its worker is stuck; `warning` says which
+    /// (with-hide/hide-private#552).
+    Warning,
 }
 
 impl WakeEvent {
@@ -509,6 +556,7 @@ impl WakeEvent {
             Self::Closed => "closed",
             Self::Fix => "fix",
             Self::Reopened => "reopened",
+            Self::Warning => "warning",
         }
     }
 }
@@ -711,6 +759,19 @@ pub struct MissionNode {
     /// pane (`Runtime::record_node_launches`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launched: Option<NodeLaunch>,
+    /// When Hide read a new head on one of the node's pull requests last,
+    /// the first head it read of one included: the node's last push as
+    /// GitHub shows it. A book from before it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_at_unix_ms: Option<u64>,
+    /// When the node last went to work, from planned or from a finish: a
+    /// node back at work has gone without a push only since then. A book
+    /// from before it has none, and `started_at_unix_ms` stands in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worked_at_unix_ms: Option<u64>,
+    /// The warnings the node carries now, at most one of each kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<NodeWarning>,
 }
 
 /// The agent, model and effort Hide started a node's worker with, proven for
@@ -844,10 +905,33 @@ impl MissionNode {
         true
     }
 
-    /// The node goes back to work from a finish: a new round for the keys
-    /// of Hide's acts (B27).
-    pub(crate) fn back_to_work(&mut self) {
+    /// The node goes back to work from a finish at `now`: a new round for
+    /// the keys of Hide's acts (B27), and the time its quiet without a push
+    /// counts from.
+    pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
+        self.worked_at_unix_ms = Some(now);
+    }
+
+    /// When the node's time without a push counts from: its last push, or
+    /// when it went to work if that is later. None for a node that never
+    /// worked.
+    pub fn quiet_since(&self) -> Option<u64> {
+        let worked = self.worked_at_unix_ms.or(self.started_at_unix_ms);
+        match (self.pushed_at_unix_ms, worked) {
+            (Some(pushed), Some(worked)) => Some(pushed.max(worked)),
+            (pushed, worked) => pushed.or(worked),
+        }
+    }
+
+    /// The node's review line's failures in a row; 0 with no review line.
+    pub fn review_fails(&self) -> u32 {
+        self.criteria
+            .iter()
+            .filter(|line| line.kind == crate::mission_criteria::CriterionKind::Review)
+            .map(|line| line.fails_in_a_row)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -1107,6 +1191,14 @@ pub struct ConductorSettings {
     /// Read live by every mission; a value kept before it reads as on.
     #[serde(default = "default_clean_merged")]
     pub clean_merged: bool,
+    /// How many failed reviews in a row warn a mission's Conductor about the
+    /// node (with-hide/hide-private#552). Read live by every mission.
+    #[serde(default = "default_warn_review_fails")]
+    pub warn_review_fails: u8,
+    /// How many minutes a node at work goes with no push before its
+    /// Conductor is warned. Read live by every mission.
+    #[serde(default = "default_warn_quiet_minutes")]
+    pub warn_quiet_minutes: u16,
 }
 
 impl Default for ConductorSettings {
@@ -1118,6 +1210,8 @@ impl Default for ConductorSettings {
             default_strength: Strength::Normal,
             other_vendor: default_other_vendor(),
             clean_merged: default_clean_merged(),
+            warn_review_fails: default_warn_review_fails(),
+            warn_quiet_minutes: default_warn_quiet_minutes(),
         }
     }
 }
@@ -1167,6 +1261,19 @@ fn default_clean_merged() -> bool {
     true
 }
 
+fn default_warn_review_fails() -> u8 {
+    2
+}
+
+fn default_warn_quiet_minutes() -> u16 {
+    90
+}
+
+/// The range of `warn_review_fails`.
+pub const WARN_REVIEW_FAILS: std::ops::RangeInclusive<u8> = 1..=10;
+/// The range of `warn_quiet_minutes`: ten minutes to a day.
+pub const WARN_QUIET_MINUTES: std::ops::RangeInclusive<u16> = 10..=1440;
+
 fn default_cap() -> u8 {
     DEFAULT_CAP
 }
@@ -1211,6 +1318,11 @@ impl ConductorSettings {
         if self.candidates.len() > CANDIDATE_LIMIT {
             return Err("conductor_settings.too_many_candidates".into());
         }
+        if !WARN_REVIEW_FAILS.contains(&self.warn_review_fails)
+            || !WARN_QUIET_MINUTES.contains(&self.warn_quiet_minutes)
+        {
+            return Err("conductor_settings.warning_out_of_range".into());
+        }
         for candidate in &self.candidates {
             check_worker(
                 &candidate.agent,
@@ -1225,6 +1337,14 @@ impl ConductorSettings {
             }
         }
         Ok(())
+    }
+
+    /// The thresholds a node's warnings are judged by.
+    pub(crate) fn warn_rule(&self) -> crate::mission_health::WarnRule {
+        crate::mission_health::WarnRule {
+            review_fails: u32::from(self.warn_review_fails),
+            quiet_ms: u64::from(self.warn_quiet_minutes) * 60_000,
+        }
     }
 
     /// Reads the value `core-state.json` keeps. One kept before verification
@@ -1439,9 +1559,13 @@ pub enum MissionCommand {
         #[serde(default)]
         handover: Option<String>,
     },
+    /// The mission's view, or with `node` that node's with its worker's
+    /// newest letters (with-hide/hide-private#552).
     Show {
         #[serde(default)]
         mission: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
     },
     List,
     Settings,
@@ -1461,10 +1585,10 @@ impl MissionCommand {
                 valid_text(title, TITLE_LIMIT)
                     && github.as_deref().is_none_or(|g| valid_text(g, TITLE_LIMIT))
             }
-            Self::Plan { mission, .. }
-            | Self::Start { mission }
-            | Self::Reopen { mission }
-            | Self::Show { mission } => id_ok(mission),
+            Self::Plan { mission, .. } | Self::Start { mission } | Self::Reopen { mission } => {
+                id_ok(mission)
+            }
+            Self::Show { mission, node } => id_ok(mission) && id_ok(node),
             Self::Node { mission, node, .. } => id_ok(mission) && valid_key(node),
             Self::Record {
                 mission,
@@ -1890,6 +2014,9 @@ pub(crate) fn apply_plan(
                 hide: None,
                 woken: Vec::new(),
                 launched: None,
+                pushed_at_unix_ms: None,
+                worked_at_unix_ms: None,
+                warnings: Vec::new(),
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -2052,6 +2179,9 @@ pub(crate) fn apply_patch(
     if let Some(status) = patch.status {
         if status == NodeStatus::Working && next.started_at_unix_ms.is_none() {
             next.started_at_unix_ms = Some(now);
+        }
+        if status == NodeStatus::Working && next.status != NodeStatus::Working {
+            next.worked_at_unix_ms = Some(now);
         }
         if status.finished() && !next.status.finished() {
             next.finished_at_unix_ms = Some(now);
@@ -3370,7 +3500,7 @@ pub(crate) mod tests {
         assert!(!node.resumed_on_these_facts());
         // Back to work, Hide's acts of the next finish are a new round.
         let mut node = one("b");
-        node.back_to_work();
+        node.back_to_work(5);
         assert_eq!(node.round, 1);
     }
 

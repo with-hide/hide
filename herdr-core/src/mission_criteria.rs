@@ -203,9 +203,20 @@ pub struct Criterion {
     /// The node whose work found a defect (D-21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub found_by: Option<String>,
+    /// A review's failures recorded in a row: one more for each checker's
+    /// failure the line reads failed after, none again while the line reads
+    /// passed or skipped (with-hide/hide-private#552). The line keeps only
+    /// each checker's last answer, so this is what remembers the rounds
+    /// before it, and a replan that keeps the line keeps it too.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub fails_in_a_row: u32,
 }
 
 fn is_zero(value: &u8) -> bool {
+    *value == 0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
@@ -246,6 +257,7 @@ impl Criterion {
             rule: None,
             checkers: Vec::new(),
             found_by: None,
+            fails_in_a_row: 0,
         }
     }
 
@@ -440,7 +452,22 @@ impl Criterion {
         checker.summary = summary;
         checker.at_unix_ms = Some(now);
         self.settle();
+        self.count_failures(!pass);
         Ok(true)
+    }
+
+    /// Follows the line's verdict with its failures in a row: a failure the
+    /// review reads failed after adds one, and the line reading passed or
+    /// skipped clears them, so a late failure on a line its rule passed, or
+    /// one the Conductor skipped, counts nothing.
+    fn count_failures(&mut self, failed: bool) {
+        match self.state {
+            CriterionState::Pass | CriterionState::Skipped => self.fails_in_a_row = 0,
+            CriterionState::Fail if failed && self.kind == CriterionKind::Review => {
+                self.fails_in_a_row = self.fails_in_a_row.saturating_add(1);
+            }
+            _ => {}
+        }
     }
 
     /// The Conductor goes past the line with its reason (B11, B12); the
@@ -453,6 +480,7 @@ impl Criterion {
         self.skip = Some(skip);
         self.state = CriterionState::Skipped;
         self.by = Some(by);
+        self.count_failures(false);
         true
     }
 
@@ -589,6 +617,7 @@ pub(crate) fn plan_lines(
         line.rule = Some(input.rule);
         line.skip = before.and_then(|line| line.skip.clone());
         line.by = before.and_then(|line| line.by.clone());
+        line.fails_in_a_row = before.map_or(0, |line| line.fails_in_a_row);
         line.checkers = input
             .by
             .iter()
@@ -611,6 +640,7 @@ pub(crate) fn plan_lines(
             })
             .collect();
         line.settle();
+        line.count_failures(false);
         out.push(line);
     }
     out.extend(
@@ -802,6 +832,123 @@ mod tests {
         let again = plan_lines(&[review], &["works".into()], &[input], false, true);
         assert_eq!(again[1].checkers[0].state, CriterionState::Pass);
         assert_eq!(again[1].state, CriterionState::Pass);
+    }
+
+    /// with-hide/hide-private#552: each failure recorded on the review line
+    /// counts one more in a row, and the line passing starts the count over;
+    /// a checker passing while the line still fails does not.
+    #[test]
+    fn a_review_counts_its_failures_in_a_row_until_it_passes() {
+        let input = CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::All,
+            by: vec![worker("codex"), worker("claude")],
+        };
+        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
+        let mut review = lines[1].clone();
+        assert_eq!(review.fails_in_a_row, 0);
+        let fail = |review: &mut Criterion, slot: usize, why: &str, at: u64| {
+            review
+                .record_checker(slot, false, Some(why.into()), None, at)
+                .unwrap()
+        };
+        assert!(fail(&mut review, 0, "round 1", 1));
+        assert_eq!(review.fails_in_a_row, 1);
+        // The same answer sent again is the same record.
+        assert!(!fail(&mut review, 0, "round 1", 2));
+        assert_eq!(review.fails_in_a_row, 1);
+        // One checker passing leaves the line failed, and the count stands.
+        review.record_checker(1, true, None, None, 3).unwrap();
+        assert_eq!(
+            (review.state, review.fails_in_a_row),
+            (CriterionState::Fail, 1)
+        );
+        fail(&mut review, 0, "round 2", 4);
+        assert_eq!(review.fails_in_a_row, 2);
+        review.record_checker(0, true, None, None, 5).unwrap();
+        assert_eq!(
+            (review.state, review.fails_in_a_row),
+            (CriterionState::Pass, 0)
+        );
+        fail(&mut review, 1, "round 3", 6);
+        assert_eq!(review.fails_in_a_row, 1);
+        // A skip goes past the line, and the count with it.
+        review.skip("operator".into(), None, by(Role::Conductor));
+        assert_eq!(review.fails_in_a_row, 0);
+    }
+
+    /// with-hide/hide-private#552 review: a replan that keeps the review
+    /// line keeps its failures in a row, as it keeps its checkers' answers
+    /// and its skip, so the same plan applied again leaves the count where
+    /// the reviews put it.
+    #[test]
+    fn a_replan_that_keeps_the_review_keeps_its_failures_in_a_row() {
+        let input = CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::All,
+            by: vec![worker("codex")],
+        };
+        let plan = |existing: &[Criterion]| {
+            plan_lines(
+                existing,
+                &["works".into()],
+                std::slice::from_ref(&input),
+                false,
+                true,
+            )
+        };
+        let mut lines = plan(&[]);
+        for round in ["round 1", "round 2"] {
+            lines[1]
+                .record_checker(0, false, Some(round.into()), None, 1)
+                .unwrap();
+        }
+        assert_eq!(lines[1].fails_in_a_row, 2);
+        let again = plan(&lines);
+        assert_eq!(
+            (again[1].state, again[1].fails_in_a_row),
+            (CriterionState::Fail, 2)
+        );
+    }
+
+    /// with-hide/hide-private#552 review: the count follows the line's own
+    /// verdict, so a failure recorded on a review its rule already passed,
+    /// or one the Conductor skipped, counts nothing.
+    #[test]
+    fn a_failure_on_a_review_already_passed_or_skipped_counts_nothing() {
+        let input = CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::Majority,
+            by: vec![worker("codex"), worker("claude"), worker("opencode")],
+        };
+        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
+        let mut passed = lines[1].clone();
+        passed.record_checker(0, true, None, None, 1).unwrap();
+        passed.record_checker(1, true, None, None, 2).unwrap();
+        let mut skipped = lines[1].clone();
+        skipped.skip("operator".into(), None, by(Role::Conductor));
+        for review in [&mut passed, &mut skipped] {
+            let settled = review.state;
+            for round in ["late 1", "late 2"] {
+                review
+                    .record_checker(2, false, Some(round.into()), None, 3)
+                    .unwrap();
+            }
+            assert_eq!((review.state, review.fails_in_a_row), (settled, 0));
+        }
+    }
+
+    /// A line saved before the count reads as none in a row.
+    #[test]
+    fn a_review_line_from_before_the_count_reads_none_in_a_row() {
+        let line: Criterion =
+            serde_json::from_str(r#"{"key":"review","kind":"review","state":"fail"}"#).unwrap();
+        assert_eq!(line.fails_in_a_row, 0);
+        assert!(
+            !serde_json::to_string(&line)
+                .unwrap()
+                .contains("fails_in_a_row")
+        );
     }
 
     /// with-hide/hide#2080 review: a run queued or running again after a

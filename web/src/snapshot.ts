@@ -1507,7 +1507,18 @@ export type MissionNode = {
   attention: MissionAttention | null;
   /** What Hide itself did to the node last (D-07, D-15). */
   hide: MissionHideMark | null;
+  /** Its review's failures in a row (hide-private issue 552); absent from an older core. */
+  review_fails?: number;
+  /** When Hide last read a new head on one of its pull requests. */
+  pushed_at_unix_ms?: number | null;
+  /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
+  warnings?: MissionNodeWarning[];
 };
+
+/** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
+export type MissionWarningKind = "review_fails" | "no_push";
+/** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
+export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null };
 
 /** One mission as the map draws it (`MissionView`). */
 export type Mission = {
@@ -1620,7 +1631,7 @@ export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };

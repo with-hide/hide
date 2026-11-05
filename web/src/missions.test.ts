@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import { attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -33,6 +33,7 @@ describe("the wire values", () => {
     expect(STRENGTHS).toEqual(contract.mission_strength);
     for (const strength of contract.mission_strength) expect(english).toHaveProperty(`mission.strength.${strength}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
+    for (const kind of contract.mission_warning_kind) expect(english).toHaveProperty(`mission.warning.${kind}.short`);
     for (const action of contract.mission_landing_action) {
       expect(english).toHaveProperty(`mission.landing.${action}`);
       expect(landingLeft(node("n", { status: "done", landing: { state: "left", action } }))).toBe(action);
@@ -556,5 +557,38 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect([groups.attention, groups.working, groups.done].map((nodes) => nodes.map((one) => one.key))).toEqual([["c"], ["b"], ["a"]]);
     expect([nodeResumable(m, m.nodes[0]!), nodeResumable(m, m.nodes[4]!), nodeResumable(m, m.nodes[1]!)]).toEqual([true, true, false]);
     expect(nodeResumable(mission("m", { status: "cancelled" }), m.nodes[0]!)).toBe(false);
+  });
+});
+
+describe("a node's warnings", () => {
+  // hide-private issue 552: the card shows the first warning's short word
+  // with `+n` for the rest, and its hover says each in full as told to the
+  // Conductor; a dropped node or a cancelled mission warns of nothing.
+  const warned = node("n", {
+    status: "working",
+    review_fails: 3,
+    warnings: [
+      { kind: "review_fails", from_unix_ms: 1, since_unix_ms: 1, told_unix_ms: 1 },
+      { kind: "no_push", from_unix_ms: 0, since_unix_ms: 95 * 60_000, told_unix_ms: 95 * 60_000 },
+    ],
+  });
+
+  it("names the first on the card and each in full", () => {
+    expect(warningWords(mission("m"), warned, t)).toEqual({
+      short: "Review FAIL ×3 +1",
+      full: ["Warned the Conductor: review failed 3 times in a row", "Warned the Conductor: no push for 95 minutes"],
+    });
+    expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
+  });
+
+  it("says a warning told only once its letter was queued", () => {
+    const untold = { ...warned, warnings: [{ ...warned.warnings![1]!, told_unix_ms: null }] };
+    expect(warningWords(mission("m"), untold, t)?.full).toEqual(["Conductor to be told: no push for 95 minutes"]);
+  });
+
+  it("is none without a warning, on a dropped node or in a cancelled mission", () => {
+    expect(warningWords(mission("m"), node("n"), t)).toBeNull();
+    expect(warningWords(mission("m"), { ...warned, status: "dropped" }, t)).toBeNull();
+    expect(warningWords(mission("m", { status: "cancelled" }), warned, t)).toBeNull();
   });
 });

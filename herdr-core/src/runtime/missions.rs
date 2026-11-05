@@ -22,7 +22,7 @@ use crate::missions::{
     AnswerFailure, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
     ConductorSettings, Delivery, External, MISSION_LIMIT, Mission, MissionBook, MissionCommand,
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
-    PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, Worker,
+    PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, PullRequestChecks, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -212,6 +212,28 @@ pub struct NodeView {
     pub attention: Option<AttentionView>,
     /// What Hide itself did to the node last (D-07, D-15).
     pub hide: Option<crate::missions::HideMark>,
+    /// Its review's failures in a row (with-hide/hide-private#552).
+    pub review_fails: u32,
+    /// When Hide last read a new head on one of its pull requests.
+    pub pushed_at_unix_ms: Option<u64>,
+    /// The warnings it carries, its Conductor's alone: the card's `⚠`.
+    pub warnings: Vec<crate::missions::NodeWarning>,
+}
+
+/// Letters `hide mission show <node>` lists of the node's worker.
+const NODE_LETTER_LIMIT: usize = 5;
+/// Characters of a letter's first line it keeps.
+const NODE_LETTER_LINE: usize = 160;
+
+/// One letter of a node's worker, as `hide mission show <node>` lists it:
+/// who wrote to whom, its kind, and its first line.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodeLetter {
+    pub at_unix_ms: u64,
+    pub from: String,
+    pub to: String,
+    pub kind: String,
+    pub line: String,
 }
 
 /// One of a node's pull requests as its card draws it.
@@ -438,7 +460,11 @@ fn ci_news(pull: &crate::model::PullRequestSnapshot, result: CiResult) -> CiNews
 
 /// Records what `project`'s list says of each of `mission`'s pull requests
 /// it holds; whether anything moved.
-fn refresh_seen(mission: &mut Mission, project: &crate::model::GithubProjectSnapshot) -> bool {
+fn refresh_seen(
+    mission: &mut Mission,
+    project: &crate::model::GithubProjectSnapshot,
+    now: u64,
+) -> bool {
     let mut moved = false;
     for node in &mut mission.nodes {
         for number in node.prs.clone() {
@@ -449,7 +475,7 @@ fn refresh_seen(mission: &mut Mission, project: &crate::model::GithubProjectSnap
             else {
                 continue;
             };
-            moved |= note_seen(node, seen_of(pull));
+            moved |= note_seen(node, seen_of(pull), now);
         }
     }
     moved
@@ -584,6 +610,27 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 mission.id, mission.title, wake.node
             )
         }
+        WakeEvent::Warning => {
+            let warning = node.and_then(|node| {
+                node.warnings
+                    .iter()
+                    .find(|warning| Some(warning.kind) == wake.warning)
+            });
+            let what = match (wake.warning, node, warning) {
+                (Some(WarningKind::ReviewFails), Some(node), _) => {
+                    format!("failed its review {} times in a row", node.review_fails())
+                }
+                (Some(WarningKind::NoPush), _, Some(warning)) => format!(
+                    "has worked {} minutes with no push",
+                    warning.since_unix_ms.saturating_sub(warning.from_unix_ms) / 60_000
+                ),
+                _ => "shows signs its worker is stuck".to_owned(),
+            };
+            format!(
+                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is not told.",
+                wake.node, mission.id, mission.title, wake.node, mission.id
+            )
+        }
     }
 }
 
@@ -625,18 +672,27 @@ fn attention_words(
     }
 }
 
-/// Keeps `seen` as what GitHub last said of its pull request; whether it
-/// moved.
-pub(super) fn note_seen(node: &mut MissionNode, mut seen: PrSeen) -> bool {
-    match node
+/// Keeps `seen` as what GitHub last said of its pull request, read at
+/// `now`, with the CI results already told on its head; whether it moved.
+/// A head Hide had not read of it is the node's last push
+/// (with-hide/hide-private#552), and so is the first head read for a node a
+/// book from before push times kept.
+pub(super) fn note_seen(node: &mut MissionNode, mut seen: PrSeen, now: u64) -> bool {
+    let unread = node.pushed_at_unix_ms.is_none();
+    let held = node
         .pr_seen
         .iter_mut()
-        .find(|held| held.number == seen.number)
-    {
+        .find(|held| held.number == seen.number);
+    let pushed =
+        seen.head.is_some() && (unread || held.as_ref().is_none_or(|held| held.head != seen.head));
+    if pushed {
+        node.pushed_at_unix_ms = Some(now);
+    }
+    match held {
         Some(held) => {
             keep_told(&mut seen, held);
             if *held == seen {
-                return false;
+                return pushed;
             }
             *held = seen;
             true
@@ -682,6 +738,7 @@ fn wake_about(
         reason: None,
         why: None,
         action: None,
+        warning: None,
         ci: None,
         key,
     }
@@ -1384,8 +1441,7 @@ impl Runtime {
                         && let Some(seen) =
                             self.pull_seen(&current.device_id, &current.project, number)
                     {
-                        next.pr_seen.retain(|held| held.number != number);
-                        next.pr_seen.push(seen);
+                        note_seen(&mut next, seen, now);
                     }
                 }
                 // The Conductor moving the node settles what waited on it
@@ -1399,7 +1455,7 @@ impl Runtime {
                 // back, so one named in the same command finishes it again.
                 if current.nodes[index].status.finished() && next.status == NodeStatus::Working {
                     next.resumed = Some(current.nodes[index].resumed_cause());
-                    next.back_to_work();
+                    next.back_to_work(now);
                 }
                 let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
@@ -1575,7 +1631,7 @@ impl Runtime {
                 self.save_missions();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
             }
-            MissionCommand::Show { mission } => {
+            MissionCommand::Show { mission, node } => {
                 let id = match mission {
                     Some(id) => self
                         .missions
@@ -1590,7 +1646,21 @@ impl Runtime {
                         .map(|mission| mission.id.clone())
                         .ok_or("mission_none")?,
                 };
-                Ok((json!({"mission": self.mission_view_of(&id)}), false))
+                let Some(key) = node else {
+                    return Ok((json!({"mission": self.mission_view_of(&id)}), false));
+                };
+                let shown = self
+                    .mission_view_of(&id)
+                    .and_then(|view| view.nodes.into_iter().find(|node| node.key == key))
+                    .ok_or("mission_node_unknown")?;
+                Ok((
+                    json!({
+                        "mission_id": id,
+                        "node": shown,
+                        "letters": self.node_letters(&id, &key),
+                    }),
+                    false,
+                ))
             }
             MissionCommand::List => {
                 let items: Vec<Value> = self
@@ -2068,7 +2138,7 @@ impl Runtime {
             // too; a cancelled mission is woken, read for CI and closed by
             // nothing (D-51).
             if mission.status == MissionStatus::Cancelled {
-                changed |= refresh_seen(&mut self.missions.book.missions[index], project);
+                changed |= refresh_seen(&mut self.missions.book.missions[index], project, now);
                 continue;
             }
             let (ci_changed, spent) = super::mission_criteria::read_mission_ci(
@@ -2180,7 +2250,11 @@ impl Runtime {
                         wake.ci = Some(ci_news(pull, result));
                         events.push(wake);
                     }
-                    if node.seen(number) != Some(&now_seen) {
+                    // A node a book from before push times kept starts its
+                    // push clock on this read.
+                    if node.seen(number) != Some(&now_seen)
+                        || (node.pushed_at_unix_ms.is_none() && now_seen.head.is_some())
+                    {
                         seen_updates.push((node_index, now_seen));
                     }
                 }
@@ -2217,7 +2291,7 @@ impl Runtime {
                     .is_none();
             let mission = &mut self.missions.book.missions[index];
             for (node_index, seen) in seen_updates {
-                note_seen(&mut mission.nodes[node_index], seen);
+                note_seen(&mut mission.nodes[node_index], seen, now);
             }
             // A mission waiting on the operator's merges is done once every
             // pull request of its stack is merged, whether or not a Conductor
@@ -2491,6 +2565,53 @@ impl Runtime {
         true
     }
 
+    /// The newest letters node `key`'s worker sent or got, newest first, at
+    /// most `NODE_LETTER_LIMIT` (with-hide/hide-private#552): none for a
+    /// node with no worker, and null while the ledger cannot be read.
+    fn node_letters(&self, id: &str, key: &str) -> Option<Vec<NodeLetter>> {
+        let ledger = self.delivery_state().ok()?;
+        let agent = self
+            .missions
+            .book
+            .get(id)
+            .and_then(|mission| mission.node(key))
+            .and_then(|node| node.agent_id.as_deref());
+        let Some(worker) =
+            agent.and_then(|agent| ledger.agents.iter().find(|record| record.id == agent))
+        else {
+            return Some(Vec::new());
+        };
+        let mut letters: Vec<&crate::delivery::ledger::Letter> = ledger
+            .letters
+            .iter()
+            .filter(|letter| {
+                letter.sender.same_identity(&worker.actor)
+                    || letter.recipient.same_identity(&worker.actor)
+            })
+            .collect();
+        letters.sort_by_key(|letter| std::cmp::Reverse(letter.created_at_unix_ms));
+        Some(
+            letters
+                .into_iter()
+                .take(NODE_LETTER_LIMIT)
+                .map(|letter| NodeLetter {
+                    at_unix_ms: letter.created_at_unix_ms,
+                    from: letter.sender.name.clone(),
+                    to: letter.recipient.name.clone(),
+                    kind: letter.kind.clone(),
+                    line: letter
+                        .body
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(NODE_LETTER_LINE)
+                        .collect(),
+                })
+                .collect(),
+        )
+    }
+
     /// The view of one mission as the map draws it.
     pub(super) fn mission_view_of(&self, id: &str) -> Option<MissionView> {
         let mission = self.missions.book.get(id)?;
@@ -2629,6 +2750,9 @@ impl Runtime {
                         }
                     }),
                     hide: node.hide.clone(),
+                    review_fails: node.review_fails(),
+                    pushed_at_unix_ms: node.pushed_at_unix_ms,
+                    warnings: node.warnings.clone(),
                 }
             })
             .collect();

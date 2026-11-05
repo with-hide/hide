@@ -2820,7 +2820,7 @@ fn refused_by(record: &serde_json::Value, pid: u32, spawned_at: u64) -> bool {
             .is_some_and(|at| at >= spawned_at)
 }
 
-fn unix_ms() -> u64 {
+pub(crate) fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)

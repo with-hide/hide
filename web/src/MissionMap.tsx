@@ -1,4 +1,4 @@
-import { CogIcon, GitBranchIcon } from "lucide-react";
+import { CogIcon, GitBranchIcon, TriangleAlertIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -41,6 +41,7 @@ import {
   reportLine,
   shortCommit,
   stackWaiting,
+  warningWords,
   type NodeLook,
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
@@ -359,6 +360,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const look = nodeLook(mission, node);
   const result = cardResult(node, mission.github_stale, t);
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
+  const warning = warningWords(mission, node, t);
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
@@ -386,6 +388,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(plan ? [t("plan.chip", { progress: planCount(plan) })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
+        ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
       aria-pressed={selected}
@@ -428,10 +431,11 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           ) : null}
         </span>
       ) : null}
-      {result || attention ? (
+      {result || attention || warning ? (
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
-          {/* The marks keep one line; the ones past the card's width leave it rather than overlap, a branch truncates, and `!` keeps its place at the right end (B30). */}
+          {/* The marks keep one line; the ones past the card's width leave it rather than overlap, a branch truncates, and `⚠` and `!` keep their place at the right end (B30). */}
           <span className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span>
+          {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
           {attention ? (
             <Hint label={attention.why}>
               <span className="shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
@@ -451,6 +455,23 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {/* 노드 상세 opens the node's panel; it never shuts the panel already open, as a second press on the card does. */}
       <Satellites mission={mission} lines={satellites} dimmed={dimmed} onSelect={() => !selected && onSelect()} actions={actions} />
     </div>
+  );
+}
+
+/**
+ * A node's warning (hide-private issue 552): its worker looks stuck, and
+ * Hide told the Conductor, never the operator. The warning colour and its
+ * triangle beside the first warning's short word; each warning in full on
+ * hover, which the card's accessible name says too.
+ */
+function NodeWarning({ words, kinds }: { words: { short: string; full: string[] }; kinds: string }) {
+  return (
+    <Hint label={words.full.join("\n")}>
+      <span aria-hidden="true" className="flex shrink-0 items-center gap-xxs font-semibold text-warning" data-node-warning={kinds}>
+        <TriangleAlertIcon className="size-(--size-icon-sm)" />
+        {words.short}
+      </span>
+    </Hint>
   );
 }
 
