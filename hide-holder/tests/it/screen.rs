@@ -237,11 +237,20 @@ fn text_after_a_character_newer_than_the_receivers_table_stays_where_the_program
 /// ESC \`) says soft-wrap, decoded the way the web shell reads it.
 fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Vec<u16> {
     let text = String::from_utf8_lossy(&fragment.bytes);
-    let start = text.find("\x1b]7719;").expect("a full fragment says its wraps") + 7;
+    let start = text
+        .find("\x1b]7719;")
+        .expect("a full fragment says its wraps")
+        + 7;
     let body = &text[start..start + text[start..].find("\x1b\\").unwrap()];
     let mut fields = body.split(';');
     let size = (fields.next().unwrap(), fields.next().unwrap());
-    assert_eq!(size, (fragment.size.cols.to_string().as_str(), fragment.size.rows.to_string().as_str()));
+    assert_eq!(
+        size,
+        (
+            fragment.size.cols.to_string().as_str(),
+            fragment.size.rows.to_string().as_str()
+        )
+    );
     let mut rows = Vec::new();
     for (digit, hex) in fields.next().unwrap().chars().enumerate() {
         let bits = hex.to_digit(16).unwrap();

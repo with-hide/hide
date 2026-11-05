@@ -338,7 +338,11 @@ fn write_changed_cells(out: &mut Pieces, frame: &Frame, previous: &Frame) -> boo
 fn write_wrapped(out: &mut Pieces, frame: &Frame) {
     let mut bytes = Vec::with_capacity(24 + frame.wrapped.len() / 4);
     let _ = write!(bytes, "\x1b]{WRAP_OSC};{};{};", frame.cols, frame.rows);
-    let used = frame.wrapped.iter().rposition(|wraps| *wraps).map_or(0, |last| last / 4 + 1);
+    let used = frame
+        .wrapped
+        .iter()
+        .rposition(|wraps| *wraps)
+        .map_or(0, |last| last / 4 + 1);
     for digit in frame.wrapped.chunks(4).take(used) {
         let bits = digit
             .iter()
@@ -422,7 +426,10 @@ mod tests {
         let mut pane = pane(29, 6);
         let mut encoder = Encoder::default();
         pane.feed(URL.as_bytes(), &mut Vec::new());
-        assert_eq!(wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)), ["7719;29;6;"]);
+        assert_eq!(
+            wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7719;29;6;"]
+        );
 
         // The row is marked wrapped when the next character lands, on the row after it.
         pane.feed(b"osc8", &mut Vec::new());
@@ -437,11 +444,19 @@ mod tests {
         assert!(wrap_sequences(&unchanged_wraps).is_empty());
 
         // Nothing changed: no bytes at all.
-        assert!(encoder.encode(pane.take(false).unwrap(), false).pieces.is_empty());
+        assert!(
+            encoder
+                .encode(pane.take(false).unwrap(), false)
+                .pieces
+                .is_empty()
+        );
 
         // A line erased and rewritten short ends with a break again.
         pane.feed(b"\x1b[H\x1b[2Kshort", &mut Vec::new());
-        assert_eq!(wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)), ["7719;29;6;"]);
+        assert_eq!(
+            wrap_sequences(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7719;29;6;"]
+        );
     }
 
     #[test]
