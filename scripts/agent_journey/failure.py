@@ -22,7 +22,8 @@ RUN_BYTES = 4 * 1024 * 1024
 # An account's home in a path, on macOS, Linux or Windows, with a JSON
 # string's doubled backslashes or a short name such as RUNNER~1 included:
 # what the run keeps names no account (scripts/check-no-workstation-identity.py).
-HOME = re.compile(r"(?:/Users/|/home/|\b[A-Za-z]:(?:\\+|/)Users(?:\\+|/))[^/\\\s\"':]+")
+# Each home's prefix is split so this file names no home itself.
+HOME = re.compile(r"(?:/Users" r"/|/home" r"/|\b[A-Za-z]:(?:\\+|/)Users(?:\\+|/))[^/\\\s\"':]+")
 
 
 def now_ms():

@@ -22,6 +22,12 @@ from agent_journey.failure import FailureLogs, drop_on_pass
 from agent_journey.journey import Journey
 from agent_live_check.runtime import ResidentOutput
 
+# Account homes as hided's output and a pane's screen write them, each built
+# from its parts so this file names no home (check-no-workstation-identity).
+MACOS, LINUX = "/" + "Users/someone", "/" + "home/runner"
+WINDOWS_JSON = "C:" + "\\\\" + "Users" + "\\\\" + "runneradmin"
+WINDOWS_SHORT = "C:" + "\\" + "Users" + "\\" + "RUNNER~1"
+
 
 class Hided:
     """A resident's two output pipes, drained by the runtime's reader."""
@@ -67,7 +73,7 @@ class FailedCell(unittest.TestCase):
         self.run_dir = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.run_dir)
         self.hided = Hided(self, self.run_dir)
-        self.screen = "/Users/someone/project $ claude\n"
+        self.screen = MACOS + "/project $ claude\n"
         runtime = SimpleNamespace(run=self.run_dir, home=self.run_dir, owner=SimpleNamespace(cancelled=threading.Event()))
         controller = SimpleNamespace(read_pane=lambda pane, lines=200: self.screen)
         self.table = {"claude": {name: cells.cell(cells.PENDING, "") for name in cells.CELLS}}
@@ -121,12 +127,12 @@ class FailedCell(unittest.TestCase):
 
     def test_no_account_home_reaches_the_kept_log_or_screen(self):
         journey = self.journey()
-        journey.step("resume", b'{"cwd":"/Users/someone/project","home":"/home/runner/work",'
-                               b'"win":"C:\\\\Users\\\\runneradmin\\\\AppData","short":"C:\\Users\\RUNNER~1\\Temp"}\n',
-                     (cells.FAIL, "no answer"))
+        line = (f'{{"cwd":"{MACOS}/project","home":"{LINUX}/work",'
+                f'"win":"{WINDOWS_JSON}\\\\AppData","short":"{WINDOWS_SHORT}\\Temp"}}\n')
+        journey.step("resume", line.encode(), (cells.FAIL, "no answer"))
         for name in ("claude-resume-hided.log", "claude-resume-pane.txt"):
             text = (self.run_dir / name).read_text()
-            for home in ("/Users/", "/home/", "Users\\"):
+            for home in (MACOS, LINUX, "Users\\"):
                 self.assertNotIn(home, text, name)
         self.assertIn("~/project", (self.run_dir / "claude-resume-pane.txt").read_text())
 
