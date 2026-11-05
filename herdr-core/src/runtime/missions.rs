@@ -387,7 +387,7 @@ pub(super) fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
 /// no checks, or while they cannot be read.
 fn ci_of(pull: &crate::model::PullRequestSnapshot) -> Option<CiResult> {
     pull.head_oid.as_ref()?;
-    if pull.badge.is_settled() || pull.work.checks_running {
+    if pull.badge.is_settled() || pull.checks_unfinished() {
         return None;
     }
     match pull.checks {

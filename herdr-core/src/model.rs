@@ -6090,6 +6090,14 @@ impl PullRequestSnapshot {
     pub fn state(&self) -> PrState {
         PrState::of(self.badge, self.is_draft, self.checks, self.review)
     }
+
+    /// Something on its head's checks has not finished: they are pending,
+    /// or a workflow run or check still runs beside a failure, which ranks
+    /// first (`work.checks_running`). The advisory poll watches such a head
+    /// and a mission's CI letter waits for it, by this one rule.
+    pub(crate) fn checks_unfinished(&self) -> bool {
+        self.checks == PullRequestChecks::Pending || self.work.checks_running
+    }
 }
 
 impl Serialize for PullRequestSnapshot {

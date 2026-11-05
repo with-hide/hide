@@ -87,8 +87,9 @@ pub(crate) struct PollProject {
     /// The project the operator is looking at, read on every pass; the rest
     /// are read once per `POLL_BEHIND_EVERY`.
     pub(crate) in_front: bool,
-    /// The head commits of open pull requests whose checks were pending, at
-    /// most `POLL_PENDING_LIMIT`.
+    /// The head commits of open pull requests whose checks had not finished
+    /// (`PullRequestSnapshot::checks_unfinished`), at most
+    /// `POLL_PENDING_LIMIT`.
     pub(crate) heads: Vec<String>,
 }
 
@@ -99,6 +100,18 @@ pub(crate) struct PollAnswer {
     /// Paused after a failure, or every project at the rate limit's floor:
     /// their marks are stale until a read answers (PRD git-freshness B23).
     pub(crate) held: Vec<String>,
+}
+
+/// What a commit's checks add up to: the word the mark shows (`passing`,
+/// `pending`, `failed`, `unknown` or `none`), and whether a workflow run or
+/// check on it still runs, which a failure ranking first hides from the word
+/// and a mission's CI letter waits on. Another app's check or a status still
+/// running behind a failure of its own list reads not running here, and the
+/// project's five-minute read finds it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Verdict {
+    word: &'static str,
+    running: bool,
 }
 
 /// A failed `gh` command.
@@ -205,13 +218,13 @@ pub(crate) struct PollState {
     /// a comment, a label or a review that moves the list's tag asks nothing.
     /// At most `POLL_PROJECT_LIMIT` entries, kept for the last request's projects.
     digests: HashMap<String, u64>,
-    /// What each watched checks list last added up to (`passing`, `pending`,
-    /// `failed`, `unknown` or `none`), by endpoint; at most one per endpoint of
-    /// the last request.
-    verdicts: HashMap<String, &'static str>,
-    /// The result a head commit's two lists add up to, by project path and
-    /// head, which is what the mark shows: only a move here asks a read.
-    combined: HashMap<(String, String), &'static str>,
+    /// What each watched checks list last added up to, by endpoint; at most
+    /// one per endpoint of the last request.
+    verdicts: HashMap<String, Verdict>,
+    /// What a head commit's two lists add up to, by project path and head:
+    /// the mark, and whether anything on the head still runs. Only a move
+    /// here asks a read.
+    combined: HashMap<(String, String), Verdict>,
     /// The projects waiting out a failure, at most `POLL_PROJECT_LIMIT`.
     pauses: HashMap<String, Pause>,
     /// When each watched project was last read, kept for the last request's
@@ -498,7 +511,7 @@ fn checks_verdict(
     repository: &str,
     endpoint: &str,
     list: ChecksList,
-) -> Result<&'static str, AskFailure> {
+) -> Result<Verdict, AskFailure> {
     let commit = endpoint
         .split("/commits/")
         .nth(1)
@@ -517,7 +530,7 @@ pub(crate) fn commit_checks(
 ) -> Result<&'static str, AskFailure> {
     let runs = list_verdict(ask, repository, commit, ChecksList::CheckRuns)?;
     let status = list_verdict(ask, repository, commit, ChecksList::Status)?;
-    Ok(combine(Some(&runs), Some(&status)))
+    Ok(combine(Some(&runs), Some(&status)).word)
 }
 
 /// What one of a commit's two check lists adds up to. The check runs are
@@ -529,10 +542,14 @@ fn list_verdict(
     repository: &str,
     commit: &str,
     list: ChecksList,
-) -> Result<&'static str, AskFailure> {
+) -> Result<Verdict, AskFailure> {
     let arguments = checks_verdict_arguments(repository, commit, list)
         .ok_or_else(|| unreadable("endpoint_refused"))?;
-    let listed = verdict_word(&ask(&arguments)?)?;
+    let word = verdict_word(&ask(&arguments)?)?;
+    let listed = Verdict {
+        word,
+        running: word == "pending",
+    };
     if list == ChecksList::Status {
         return Ok(listed);
     }
@@ -546,7 +563,10 @@ fn list_verdict(
     ])?;
     let runs = crate::github::runs::parse_head_runs(&answer, repository, &[commit.to_owned()])
         .map_err(|_| unreadable("runs_unreadable"))?;
-    let runs = crate::github::runs::word(runs[0].checks);
+    let runs = Verdict {
+        word: crate::github::runs::word(runs[0].checks),
+        running: runs[0].running,
+    };
     Ok(combine(Some(&listed), Some(&runs)))
 }
 
@@ -570,17 +590,21 @@ fn unreadable(reason: &str) -> AskFailure {
 
 /// The result two of a commit's verdicts add up to, by the core's one rule
 /// (`github::runs::worse`): a failure first, then anything unfinished, then
-/// anything unrecognised.
-fn combine(runs: Option<&&'static str>, status: Option<&&'static str>) -> &'static str {
+/// anything unrecognised; something still runs when it runs on either.
+fn combine(runs: Option<&Verdict>, status: Option<&Verdict>) -> Verdict {
     use crate::model::PullRequestChecks as Checks;
-    let checks = |word: Option<&&'static str>| match word.copied() {
+    let checks = |verdict: Option<&Verdict>| match verdict.map(|verdict| verdict.word) {
         Some("failed") => Checks::Failed,
         Some("pending") => Checks::Pending,
         Some("unknown") => Checks::Unknown,
         Some("passing") => Checks::Passing,
         _ => Checks::None,
     };
-    crate::github::runs::word(crate::github::runs::worse(checks(runs), checks(status)))
+    let running = |verdict: Option<&Verdict>| verdict.is_some_and(|verdict| verdict.running);
+    Verdict {
+        word: crate::github::runs::word(crate::github::runs::worse(checks(runs), checks(status))),
+        running: running(runs) || running(status),
+    }
 }
 
 fn is_list(endpoint: &str) -> bool {
@@ -1064,6 +1088,48 @@ mod tests {
         assert_eq!(
             run(&mut state, &script, &request, now, 1060).changed,
             ["/app"]
+        );
+    }
+
+    /// A failure ranks first, so the mark reads failed while another
+    /// workflow still runs and after it ends failed too: that run ending is
+    /// still a read, which a mission's CI letter waits on.
+    #[test]
+    fn a_run_ending_behind_a_failure_asks_one_read() {
+        let suite = |workflow: u64, status: &str, conclusion: &str, updated: &str| {
+            format!(
+                r#"{{"status":"{status}","conclusion":{conclusion},"updatedAt":"{updated}","workflowRun":{{"databaseId":{workflow}0,"event":"pull_request","workflow":{{"databaseId":{workflow}}}}}}}"#
+            )
+        };
+        let design = suite(11, "COMPLETED", r#""FAILURE""#, "2026-11-05T08:31:00Z");
+        let running = suite(22, "IN_PROGRESS", "null", "2026-11-05T08:32:00Z");
+        let ended = suite(22, "COMPLETED", r#""FAILURE""#, "2026-11-05T09:10:00Z");
+        let script = Script::new();
+        script.will("check-runs", ok("runs-1"));
+        script.will("check-runs", ok("runs-2"));
+        script.will("check-runs", ok("runs-3"));
+        script.will("/status", ok("status-1"));
+        script.will("digest:check-runs", Ok("none\n".to_owned()));
+        script.will("digest:check-runs", Ok("none\n".to_owned()));
+        script.will("digest:check-runs", Ok("none\n".to_owned()));
+        script.will("digest:/status", Ok("none\n".to_owned()));
+        script.will("runs:", Ok(runs_answer(&format!("{design},{running}"))));
+        script.will("runs:", Ok(runs_answer(&format!("{design},{running}"))));
+        script.will("runs:", Ok(runs_answer(&format!("{design},{ended}"))));
+        let mut state = PollState::default();
+        let now = Instant::now();
+        let request = request(vec![project("/app", &[HEAD])]);
+        run(&mut state, &script, &request, now, 1000);
+        assert!(
+            run(&mut state, &script, &request, now, 1060)
+                .changed
+                .is_empty(),
+            "one job of the running workflow finishing"
+        );
+        assert_eq!(
+            run(&mut state, &script, &request, now, 1120).changed,
+            ["/app"],
+            "the last run ending, failed before and after"
         );
     }
 
