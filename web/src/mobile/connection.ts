@@ -11,6 +11,7 @@ import {
   MAX_MESSAGES,
   credentialHash,
   inputFailure,
+  listedAgents,
   macNameOf,
   parseFragment,
   refusalOf,
@@ -466,7 +467,7 @@ const STARTED_WAIT_MS = 15000;
 /** A started agent's detail opens once the list has it, so it never opens as "gone". */
 function openStarted(): void {
   const { startedAgent, groups } = usePhone.getState();
-  if (!startedAgent || !groups?.some((group) => group.agents.some((agent) => sameKey(agent, startedAgent)))) return;
+  if (!startedAgent || !groups || !listedAgents(groups).some((agent) => sameKey(agent, startedAgent))) return;
   patch({ startedAgent: null });
   openDetail(startedAgent);
 }

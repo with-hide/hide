@@ -84,6 +84,16 @@ export const mobileEnglish = {
   "mobile.start.defaultModel": "Default",
   "mobile.start.targetDisconnected": "Not connected",
   "mobile.start.submit": "Start",
+  "mobile.more": "Show {{count}} more",
+  "mobile.moreAsleep": "{{count}} asleep included",
+  "mobile.children_one": "{{count}} child",
+  "mobile.children_other": "{{count}} children",
+  "mobile.descendants.asking": "{{count}} asking you",
+  "mobile.descendants.working": "{{count}} working",
+  "mobile.descendants.done": "{{count}} finished",
+  "mobile.devices.viewing": "Connected · Viewing now",
+  "mobile.devices.via": "Devices connected through this Mac",
+  "mobile.devices.mixed": "{{names}} agents appear in the list with a chip, mixed by time. No separate setup needed.",
 } as const;
 
 const ko = {
@@ -169,6 +179,16 @@ const ko = {
   "mobile.start.defaultModel": "기본값",
   "mobile.start.targetDisconnected": "연결 안 됨",
   "mobile.start.submit": "시작",
+  "mobile.more": "더 보기 {{count}}",
+  "mobile.moreAsleep": "잠든 것 {{count}} 포함",
+  "mobile.children_one": "자식 {{count}}",
+  "mobile.children_other": "자식 {{count}}",
+  "mobile.descendants.asking": "{{count}}개가 묻는 중",
+  "mobile.descendants.working": "{{count}}개 작업 중",
+  "mobile.descendants.done": "{{count}}개 끝남",
+  "mobile.devices.viewing": "연결됨 · 지금 보는 중",
+  "mobile.devices.via": "이 Mac을 통해 연결된 기기",
+  "mobile.devices.mixed": "{{names}} 에이전트는 목록에 칩을 달고 시간순으로 섞여 나와요. 따로 등록하지 않아도 돼요.",
 } satisfies Catalog<typeof mobileEnglish>;
 
 const zhCN = {
@@ -254,6 +274,16 @@ const zhCN = {
   "mobile.start.defaultModel": "默认",
   "mobile.start.targetDisconnected": "未连接",
   "mobile.start.submit": "启动",
+  "mobile.more": "再显示 {{count}} 个",
+  "mobile.moreAsleep": "含 {{count}} 个已休眠",
+  "mobile.children_one": "子智能体 {{count}}",
+  "mobile.children_other": "子智能体 {{count}}",
+  "mobile.descendants.asking": "{{count}} 个在等你回答",
+  "mobile.descendants.working": "{{count}} 个工作中",
+  "mobile.descendants.done": "{{count}} 个已完成",
+  "mobile.devices.viewing": "已连接 · 正在查看",
+  "mobile.devices.via": "通过这台 Mac 连接的设备",
+  "mobile.devices.mixed": "{{names}} 的智能体会带着标签按时间顺序混排在列表里，无需另外登记。",
 } satisfies Catalog<typeof mobileEnglish>;
 
 const ja = {
@@ -339,6 +369,16 @@ const ja = {
   "mobile.start.defaultModel": "デフォルト",
   "mobile.start.targetDisconnected": "未接続",
   "mobile.start.submit": "開始",
+  "mobile.more": "さらに {{count}} 件を表示",
+  "mobile.moreAsleep": "休止中 {{count}} 件を含む",
+  "mobile.children_one": "子エージェント {{count}}",
+  "mobile.children_other": "子エージェント {{count}}",
+  "mobile.descendants.asking": "{{count}} 件が確認待ち",
+  "mobile.descendants.working": "{{count}} 件が作業中",
+  "mobile.descendants.done": "{{count}} 件が完了",
+  "mobile.devices.viewing": "接続済み · 表示中",
+  "mobile.devices.via": "この Mac 経由で接続中のデバイス",
+  "mobile.devices.mixed": "{{names}} のエージェントはチップ付きで時間順に混ざって表示されます。別途登録は不要です。",
 } satisfies Catalog<typeof mobileEnglish>;
 
 export const mobileCatalogs = { en: mobileEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof mobileEnglish>;

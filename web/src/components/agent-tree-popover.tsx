@@ -12,7 +12,7 @@ import type { AgentRow, RaisedAsk } from "../snapshot";
 import { statusText } from "../agentStatus";
 import { machineName } from "../screenMachine";
 import { useShellStore } from "../store";
-import { SIBLINGS_SHOWN } from "../sidebarTree";
+import { siblingsShown } from "../sidebarTree";
 import { useUiStore } from "../ui";
 import { askWhat, AskLine, DescendantMark, TreeChevron, TreeRails, treePlaces } from "./agent-tree";
 import { AgentPrHover } from "./pr-mark";
@@ -93,6 +93,7 @@ export function AgentTreePopover({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [shownAll, setShownAll] = useState<Set<string>>(() => new Set());
   const [finishedShown, setFinishedShown] = useState<Set<string>>(() => new Set());
+  const shownLimit = useShellStore((state) => siblingsShown(state.rest));
   const relation = useUiStore((state) => state.relation);
   const outcome = useShellStore((state) => state.rest?.status?.pane_focus_request);
   const tracked = relation?.sourcePaneId === parent.pane_id && relation.targetPaneId === opening ? relation : null;
@@ -137,14 +138,14 @@ export function AgentTreePopover({
     const kids = siblings.filter((kid) => !finishedAndRead(kid) || asks.has(kid.pane_id));
     const finished = siblings.filter((kid) => !kids.includes(kid));
     const all = shownAll.has(of.pane_id);
-    const shown = [...(all ? kids : kids.slice(0, SIBLINGS_SHOWN)), ...(finishedShown.has(of.pane_id) ? finished : [])];
+    const shown = [...(all ? kids : kids.slice(0, shownLimit)), ...(finishedShown.has(of.pane_id) ? finished : [])];
     for (const kid of shown) {
       const hasChildren = (kid.lineage_child_pane_ids ?? []).some((id) => byPane.has(id));
       const isOpen = depth < 2 && hasChildren && expanded.has(kid.pane_id);
       lines.push({ kind: "agent", agent: kid, depth, hasChildren, open: isOpen });
       if (isOpen) walk(kid, depth + 1);
     }
-    const hidden = kids.length - Math.min(kids.length, all ? kids.length : SIBLINGS_SHOWN);
+    const hidden = kids.length - Math.min(kids.length, all ? kids.length : shownLimit);
     if (hidden > 0) lines.push({ kind: "more", parent: of.pane_id, depth, count: hidden });
     if (finished.length > 0 && !finishedShown.has(of.pane_id)) lines.push({ kind: "finished", parent: of.pane_id, depth, count: finished.length });
   };

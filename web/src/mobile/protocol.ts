@@ -39,7 +39,17 @@ export type PhoneAgent = {
   sleep?: AgentSleep;
   emphasized: boolean;
   holds_notification: boolean;
+  /** Its live descendants by state, for a parent's pills; absent when it has none. */
+  descendants?: Descendants;
+  /** The children listed under it in the sidebar's order (two levels, five to a parent), and the ones behind its "더 보기". */
+  children?: PhoneAgent[];
+  more_children?: PhoneAgent[];
+  /** The core opens its children until this phone chooses otherwise: a descendant waits for the operator. */
+  children_open?: true;
 };
+
+/** What a parent's descendants are doing: asking the operator, working, finished. */
+export type Descendants = { asking: number; working: number; done: number };
 
 export type GroupId = "needs_you" | "done" | "revisit" | "working" | "seen";
 
@@ -57,7 +67,31 @@ export type PhoneSleepingSession = {
   attention: boolean;
 };
 
-export type AgentGroup = { group: GroupId; count: number; agents: PhoneAgent[]; sleeping_sessions?: PhoneSleepingSession[] };
+/** A top row of a group: an agent with its tree, or a sleeping conversation. */
+export type GroupRow = ({ kind: "agent" } & PhoneAgent) | ({ kind: "sleeping" } & PhoneSleepingSession);
+
+/**
+ * `count` is every top row of the group, the folded ones too; `rows` are the first few in recency order across the Mac and its devices,
+ * `more` the rest behind the group's "더 보기", `more_asleep` how many of those sleep.
+ */
+export type AgentGroup = { group: GroupId; count: number; rows: GroupRow[]; more?: GroupRow[]; more_asleep?: number };
+
+/** The paired Mac (`local`) and each device it reaches, with the counts of their top rows. */
+export type PhoneDevice = { device_id: string; label: string | null; local?: true; connected: boolean; needs_you: number; working: number };
+
+/** Every agent the list holds, a parent before its children, shown or folded. */
+export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
+  const all: PhoneAgent[] = [];
+  const add = (agent: PhoneAgent) => {
+    all.push(agent);
+    for (const child of agent.children ?? []) add(child);
+    for (const child of agent.more_children ?? []) add(child);
+  };
+  for (const group of groups) {
+    for (const row of [...group.rows, ...(group.more ?? [])]) if (row.kind === "agent") add(row);
+  }
+  return all;
+}
 
 export type Notifications = "on" | "off" | "unasked";
 
@@ -113,7 +147,7 @@ export type ServerFrame =
    * `interface_language` is the core's explicit choice as stored (en, ko, zh-CN, ja), or null while the phone follows its own language.
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.
    */
-  | { type: "agents"; groups: AgentGroup[]; interface_language: string | null; color_theme: string | null }
+  | { type: "agents"; groups: AgentGroup[]; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
   | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean }
   | {
       type: "conversation";
@@ -391,18 +425,23 @@ export function macNameOf(endpoint: string): string {
   }
 }
 
+/** The Mac's name with the names of the devices it reaches that are connected: `MacBook Pro + Mac mini` (PRD mobile-companion-ui B8). */
+export function machinesName(macName: string, devices: readonly PhoneDevice[]): string {
+  const names = devices.filter((device) => !device.local && device.connected && device.label).map((device) => device.label);
+  return names.length > 0 ? `${macName} + ${names.join(", ")}` : macName;
+}
+
 /** The list header's second line (B19). */
-export function headerLine(t: TFunction<"translation">, macName: string, otherPhones: number): string {
-  return otherPhones > 0 ? t("mobile.otherPhones", { name: macName, count: otherPhones }) : macName;
+export function headerLine(t: TFunction<"translation">, macName: string, otherPhones: number, devices: readonly PhoneDevice[] = []): string {
+  const name = machinesName(macName, devices);
+  return otherPhones > 0 ? t("mobile.otherPhones", { name, count: otherPhones }) : name;
 }
 
 /** Tags whose notifications the open app closes (D-21): agents no longer waiting or done. */
 export function staleTags(tags: readonly string[], groups: readonly AgentGroup[]): string[] {
   const live = new Set<string>();
-  for (const group of groups) {
-    for (const agent of group.agents) {
-      if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
-    }
+  for (const agent of listedAgents(groups)) {
+    if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
   }
   return tags.filter((tag) => !live.has(tag));
 }

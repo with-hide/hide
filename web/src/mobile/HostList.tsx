@@ -1,20 +1,21 @@
 import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
-import { LaptopIcon, PlusIcon, Trash2 } from "lucide-react";
+import { LaptopIcon, PlusIcon, ServerIcon, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { readHosts, hostLink, removeHost, revokeHost, dropHostPush, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
+import type { PhoneDevice } from "./protocol";
 
 /** Observe lists only while the picker is open. Never opens a detail or sends an action. */
-export function HostList({ t, active, choose = (host: PairedHost) => window.location.assign(hostLink(host)) }: { t: TFunction; active?: Presence; choose?: (host: PairedHost) => void }) {
+export function HostList({ t, active, machines = [], activeRoom: named, choose = (host: PairedHost) => window.location.assign(hostLink(host)) }: { t: TFunction; active?: Presence; /** The Mac being viewed when the page address does not name it (the gallery). */ activeRoom?: string; /** The devices the Mac being viewed reaches, drawn under its row (PRD mobile-companion-ui B9). */ machines?: readonly PhoneDevice[]; choose?: (host: PairedHost) => void }) {
   const [hosts, setHosts] = useState(() => {
     try { return readHosts(localStorage); } catch { return null; }
   });
   const [error, setError] = useState(false);
   const [removing, setRemoving] = useState<PairedHost | null>(null);
-  const activeRoom = location.pathname.startsWith("/p/") ? new URLSearchParams(location.search).get("host") : null;
+  const activeRoom = named ?? (location.pathname.startsWith("/p/") ? new URLSearchParams(location.search).get("host") : null);
   const [presence, setPresence] = useState<Record<string, Presence>>({});
   useEffect(() => {
     let stops: (() => void)[] = [];
@@ -58,14 +59,16 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
         </div>
         {trash}
       </div>;
-      return <div key={host.room} className="flex min-w-0 items-start">
+      const viewing = host.room === activeRoom && state?.online === true;
+      return <div key={host.room} className="flex min-w-0 flex-col">
+        <div className="flex min-w-0 items-start">
         <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-sm py-md text-left" onClick={() => choose(host)}>
           <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground" />
           <span className="flex min-w-0 flex-1 flex-col gap-xs">
             <span className="whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{host.name}</span>
             <span className="flex items-center gap-xs text-body text-muted-foreground">
               <span aria-hidden="true" className={`size-(--size-status-mark) shrink-0 rounded-full ${mismatch ? "bg-warning" : state?.online ? "bg-success" : "bg-muted-foreground"}`} />
-              {mismatch ? t("mobile.relay.updateTitle") : t(state?.online ? "mobile.connected" : "mobile.disconnected")}
+              {mismatch ? t("mobile.relay.updateTitle") : viewing ? t("mobile.devices.viewing") : t(state?.online ? "mobile.connected" : "mobile.disconnected")}
             </span>
             <span className="whitespace-normal text-body font-normal text-muted-foreground">{mismatch ?? (state?.online
               ? state.needs !== undefined ? t("mobile.relay.counts", { needs: state.needs, working: state.working ?? 0 }) : t("mobile.relay.connecting")
@@ -73,6 +76,8 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
           </span>
         </Button>
         {trash}
+        </div>
+        {host.room === activeRoom ? <ReachedDevices t={t} devices={machines} /> : null}
       </div>;
     })}
     {removing ? <div className="flex flex-col gap-sm px-sm py-md">
@@ -89,6 +94,28 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
     </div> : null}
     <Button variant="ghost" className="mt-sm min-h-(--size-touch-target) justify-start gap-sm border-t border-border px-sm text-body" onClick={() => window.location.assign("/?add=1")}><PlusIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.relay.add")}</Button>
     {error ? <p role="alert">{t("mobile.relay.storage")}</p> : null}
+  </div>;
+}
+
+/** The devices the Mac being viewed reaches: each with its state and counts, dimmed while not connected, and why no pairing is needed (B9). */
+function ReachedDevices({ t, devices }: { t: TFunction; devices: readonly PhoneDevice[] }) {
+  const reached = devices.filter((device) => !device.local);
+  if (reached.length === 0) return null;
+  const names = reached.map((device) => device.label ?? device.device_id).join(", ");
+  return <div className="ml-xl flex min-w-0 flex-col gap-sm border-l border-border pb-sm pl-md" data-phone-devices="true">
+    <p className="text-body text-muted-foreground">{t("mobile.devices.via")}</p>
+    {reached.map((device) => <div key={device.device_id} className={`flex min-w-0 flex-col gap-xs ${device.connected ? "" : "opacity-(--opacity-dimmed)"}`} data-phone-device-row={device.device_id} data-connected={device.connected ? "true" : "false"}>
+      <span className="flex min-w-0 items-center gap-sm">
+        <ServerIcon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 text-muted-foreground" />
+        <span className="min-w-0 whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{device.label ?? device.device_id}</span>
+      </span>
+      <span className="flex items-center gap-xs text-body text-muted-foreground">
+        <span aria-hidden="true" className={`size-(--size-status-mark) shrink-0 rounded-full ${device.connected ? "bg-success" : "bg-muted-foreground"}`} />
+        {t(device.connected ? "mobile.connected" : "mobile.disconnected")}
+      </span>
+      {device.connected ? <span className="text-body text-muted-foreground">{t("mobile.relay.counts", { needs: device.needs_you, working: device.working })}</span> : null}
+    </div>)}
+    <p className="whitespace-normal break-keep text-body text-muted-foreground wrap-anywhere">{t("mobile.devices.mixed", { names })}</p>
   </div>;
 }
 

@@ -108,6 +108,7 @@ struct SectionWire<'a, T> {
 
 section!(NavigatorSections, NavigatorSnapshot, s, {
     agent_scope: crate::agent_state::Scope => s.agent_scope,
+    siblings_shown: usize => s.siblings_shown,
     root_path: Option<String> => s.root_path,
     changes_root_path: Option<String> => s.changes_root_path,
     focused_device_id: Option<String> => s.focused_device_id,

@@ -54,7 +54,7 @@ function catalog(focusedCheckout: string, inactiveOpen = false): { rest: Snapsho
     agent("pane:old", "예전 작업"),
     agent("pane:beta", "베타 작업"),
   ];
-  const navigator = { devices: [LOCAL], workspaces: [alpha, beta], agents, focused_device_id: "local", focused_checkout_id: focusedCheckout };
+  const navigator = { siblings_shown: 5, devices: [LOCAL], workspaces: [alpha, beta], agents, focused_device_id: "local", focused_checkout_id: focusedCheckout };
   return { rest: legacyRest({ navigator } as unknown as SnapshotRest, agents), agents };
 }
 

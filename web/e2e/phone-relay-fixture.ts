@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { fixtureExecutable } from "./platform-fixture.ts";
 import { ownUntilWorkerExit } from "./worker-owned.ts";
+import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 import type { PhoneAgent, ServerFrame } from "../src/mobile/protocol";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -84,11 +85,11 @@ export async function startPhoneRelay(port = 0) {
   const errors: string[] = [];
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
-  const state = { protocol: 1, offline: false, refusal: "", sleeping: false, push: false, dropInputReply: false };
+  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, dropInputReply: false };
   const wire = { binaryFrames: 0 };
-  const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, groups: [
-    { group: "needs_you", count: 1, agents: [{ ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent] },
-    { group: "working", count: 2, agents: [] },
+  const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, devices: [{ device_id: "local", label: null, local: true, connected: true, needs_you: 1, working: 2 }], groups: [
+    { group: "needs_you", count: 1, rows: [{ kind: "agent", ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent & { kind: "agent" }] },
+    { group: "working", count: 2, rows: [] },
   ] });
   const server = createServer((request, response) => {
     void (async () => {

@@ -805,6 +805,10 @@ pub enum PaneFindRoute {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NavigatorSnapshot {
     pub agent_scope: crate::agent_state::Scope,
+    /// How many siblings a tree draws under one parent before its "N more"
+    /// (PRD agent-hierarchy-screens B12). The core holds the number once; the
+    /// sidebar, its popover and the phone's list all apply it.
+    pub siblings_shown: usize,
     pub root_path: Option<String>,
     /// The focused local checkout's History scope. A registered subfolder may
     /// be narrower than the Git checkout used by Explorer and editor tabs.
@@ -7356,6 +7360,7 @@ impl Snapshot {
             plans: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
+                siblings_shown: crate::agent_state::tally::lineage::SIBLINGS_SHOWN,
                 root_path: None,
                 changes_root_path: None,
                 focused_device_id: None,

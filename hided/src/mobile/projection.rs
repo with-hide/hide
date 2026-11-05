@@ -55,8 +55,16 @@ pub fn update_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use herdr_core::agent_state::phone::Line;
+    use herdr_core::agent_state::phone::{Group, GroupRow, Line};
     use serde_json::json;
+
+    /// The agent at the top of a group at `at`, which is never a sleeping row.
+    fn top(group: &Group, at: usize) -> &PhoneAgent {
+        match &group.rows[at] {
+            GroupRow::Agent(agent) => agent,
+            GroupRow::Sleeping(_) => panic!("row {at} sleeps"),
+        }
+    }
 
     #[test]
     fn typed_projection_retains_omissions_and_reset_removes_old_phone_state() {
@@ -109,7 +117,7 @@ mod tests {
         json!({
             "navigator": {
                 "agents": [
-                    agent("w1:p1", "working", json!({"activity": "working"})),
+                    agent("w1:p1", "working", json!({"activity": "working", "lineage_child_pane_ids": ["w1:p3"]})),
                     agent("w1:p2", "needs_you", json!({"demand": "approval", "mark": "turn", "state": {"line": line("Bash(cargo test) 실행을 허용할까요?", "request", "warning")}})),
                     agent("w1:p3", "working", json!({"lineage_parent_pane_id": "w1:p1", "delegated": true, "demand": "question"})),
                     agent("w1:p4", "seen", json!({"mark": "quiet", "state": {"line": line("quiet sentence", "quiet", "subtle")}})),
@@ -152,10 +160,10 @@ mod tests {
         assert_eq!(projection.groups[0].group, "seen");
         assert_eq!(projection.groups[0].count, 1);
         assert_eq!(projection.agents().count(), 0);
-        assert_eq!(
-            projection.groups[0].sleeping_sessions[0].title,
-            "Review parser"
-        );
+        let GroupRow::Sleeping(session) = &projection.groups[0].rows[0] else {
+            panic!("the group's one row is the sleeping conversation");
+        };
+        assert_eq!(session.title, "Review parser");
         let sent = serde_json::to_string(&projection).unwrap();
         for private in [
             "path",
@@ -182,9 +190,14 @@ mod tests {
             .collect();
         assert_eq!(
             order,
-            [("needs_you", 1), ("done", 1), ("working", 2), ("seen", 1)]
+            [("needs_you", 1), ("done", 1), ("working", 1), ("seen", 1)],
+            "a delegated child hangs under its parent and is no row of a group"
         );
-        let done = &projection.groups[1].agents[0];
+        let parent = top(&projection.groups[2], 0);
+        assert_eq!(parent.pane_id, "w1:p1");
+        assert_eq!(parent.children.len(), 1);
+        assert_eq!(parent.children[0].pane_id, "w1:p3");
+        let done = top(&projection.groups[1], 0);
         assert_eq!(done.device_id, "mini");
         assert_eq!(done.device_label.as_deref(), Some("mini"));
         assert_eq!(done.place.as_deref(), Some("contong · main"));
@@ -210,7 +223,7 @@ mod tests {
     #[test]
     fn phone_rows_take_the_core_mark_and_line() {
         let input = json!({"navigator": {"agents": [
-            agent("root", "working", json!({"wait": "children", "mark": "waiting",
+            agent("root", "working", json!({"wait": "children", "mark": "waiting", "lineage_child_pane_ids": ["child"],
                 "descendant_counts": {"working": 2},
                 "state": {"line": line("", "waiting", "subtle")}})),
             agent("read-question", "seen", json!({"demand": "question", "mark": "turn",
@@ -250,16 +263,16 @@ mod tests {
                 ),
                 ("root", "root", "waiting", Some(("", "waiting", "subtle"))),
                 (
-                    "read-question",
-                    "read-question",
-                    "turn",
-                    Some(("answer me", "request", "warning"))
-                ),
-                (
                     "child",
                     "root",
                     "quiet",
                     Some(("failed", "request", "warning"))
+                ),
+                (
+                    "read-question",
+                    "read-question",
+                    "turn",
+                    Some(("answer me", "request", "warning"))
                 ),
                 (
                     "kept",
@@ -303,7 +316,7 @@ mod tests {
     #[test]
     fn rows_carry_place_line_and_lineage_root() {
         let projection = project(&rest(), "local");
-        let asking = &projection.groups[0].agents[0];
+        let asking = top(&projection.groups[0], 0);
         assert_eq!(asking.place.as_deref(), Some("hide · prd/mobile-companion"));
         assert_eq!(asking.mark, "turn");
         assert_eq!(asking.line.as_ref().unwrap().tone, "warning");
@@ -313,7 +326,7 @@ mod tests {
             .find(|agent| agent.pane_id == "w1:p3")
             .unwrap();
         assert_eq!(child.root_pane_id, "w1:p1");
-        let seen = &projection.groups[3].agents[0];
+        let seen = top(&projection.groups[3], 0);
         assert_eq!(seen.place.as_deref(), Some("notes"));
         assert_eq!(seen.line, None, "a quiet sentence is not drawn");
         assert!(

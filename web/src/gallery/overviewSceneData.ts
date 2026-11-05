@@ -250,6 +250,7 @@ export function overviewWorld(now: number): OverviewWorld {
       letters: Array.from({ length: 12 }, (_, i) => ({ id: `fixture-letter-${i}`, sender: { device_id: "local", pane_id: i % 2 ? "h-a1c1" : "b-1", session: i % 2 ? "fixture-h-a1c1" : "fixture-b-1" }, recipient: { device_id: "local", pane_id: i % 2 ? "h-a1" : "h-a3", session: i % 2 ? "fixture-h-a1" : "fixture-h-a3" }, kind: i % 3 ? "progress" : "request", at_unix_ms: now - i * MINUTE })),
     },
     navigator: {
+      siblings_shown: 5,
       workspaces,
       inactive_projects: [],
       no_agent_projects: [],

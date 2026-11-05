@@ -284,7 +284,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },
     mission_events: { mission: mission.id, events: history(mission, now), dropped: 0 },
-    navigator: { devices: [{ id: "local", kind: "local", label: remote ? "Studio Mac" : "This Mac", kit: { agents: [
+    navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local", label: remote ? "Studio Mac" : "This Mac", kit: { agents: [
       { id: "claude-code", label: "Claude Code", availability: "available", enabled: true },
       { id: "codex", label: "Codex", availability: "available", enabled: true },
       { id: "pi", label: "Pi", availability: "available", enabled: true },

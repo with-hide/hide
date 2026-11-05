@@ -6,6 +6,33 @@ use crate::model::{DescendantCountsSnapshot, SidebarAgentSnapshot, WorkspaceSnap
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// How many levels of children a tree opens under a root: children and
+/// grandchildren (agent-hierarchy-screens D-12, D-38). The sidebar and the
+/// phone's list open the same two levels.
+pub const TREE_LEVELS: usize = 2;
+
+/// How many siblings a tree draws under one parent before its "N more"
+/// (agent-hierarchy-screens B12). The core holds the number once: the
+/// sidebar and its popover read it from the snapshot
+/// (`NavigatorSnapshot::siblings_shown`), the phone's list applies it where
+/// it builds its tree.
+pub const SIBLINGS_SHOWN: usize = 5;
+
+/// A parent's children as every tree lists them (PRD agent-hierarchy-screens
+/// B11): in the parent's own child order, the most urgent `tree_rank` first.
+/// The sort is stable, so equal ranks keep the parent's order. The sidebar's
+/// tree and the phone's list both take their children from here, so they
+/// cannot order siblings differently.
+pub fn children_in_order<T: Copy>(
+    child_ids: &[String],
+    find: impl Fn(&str) -> Option<T>,
+    rank: impl Fn(T) -> u8,
+) -> Vec<T> {
+    let mut children: Vec<T> = child_ids.iter().filter_map(|id| find(id)).collect();
+    children.sort_by_key(|child| rank(*child));
+    children
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct Folded {
     pub tiers: Vec<Vec<Line>>,
@@ -80,22 +107,21 @@ pub(super) fn sidebar_tree(
         references: &HashMap<*const SidebarAgentSnapshot, RowRef>,
         out: &mut Vec<TreeRow>,
     ) {
-        if parent.lineage_collapsed || depth > 2 {
+        if parent.lineage_collapsed || depth > TREE_LEVELS {
             return;
         }
-        let mut children: Vec<_> = parent
-            .lineage_child_pane_ids
-            .iter()
-            .filter_map(|id| by_pane.get(id.as_str()).copied())
-            .collect();
-        children.sort_by_key(|child| child.state.tree_rank);
+        let children = children_in_order(
+            &parent.lineage_child_pane_ids,
+            |id| by_pane.get(id).copied(),
+            |child| child.state.tree_rank,
+        );
         for child in children {
             out.push(TreeRow {
                 pane_id: child.pane_id.clone(),
                 occurrence: references[&(child as *const _)].occurrence,
                 depth,
             });
-            if depth < 2 {
+            if depth < TREE_LEVELS {
                 open(child, depth + 1, by_pane, references, out);
             }
         }

@@ -3121,6 +3121,8 @@ export type SnapshotRest = {
   remains?: RemainsSnapshot | null;
   navigator?: {
     agent_scope?: AgentScope;
+    /** How many siblings a tree shows under one parent before its "N more" (PRD agent-hierarchy-screens B12), held by the core. */
+    siblings_shown?: number;
     focused_workspace_id?: string | null;
     focused_checkout_id?: string | null;
     /** The focused checkout's root, which the Explorer reveals under. */

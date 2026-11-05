@@ -271,6 +271,9 @@ pub fn any_agent_active(agents: &[SidebarAgentSnapshot], connected: bool) -> boo
 
 /// The phone-safe projection, built only from accepted core snapshot values.
 pub mod phone {
+    mod tree;
+
+    use std::borrow::Cow;
     use std::collections::HashMap;
 
     use serde::{Deserialize, Serialize};
@@ -369,9 +372,59 @@ pub mod phone {
         pub notification_pending: bool,
         #[serde(skip)]
         pub notification_finalized: bool,
+        /// Its live descendants by state, for the pills a parent's row wears
+        /// (PRD mobile-companion-ui B2); absent for a row with none.
+        #[serde(skip_serializing_if = "Descendants::is_none")]
+        pub descendants: Descendants,
+        /// The children listed under this row, the sidebar's two levels in
+        /// the sidebar's order, at most `SIBLINGS_SHOWN` of them; the rest
+        /// wait in `more_children` behind the row's "더 보기 N" (B4).
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pub children: Vec<PhoneAgent>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pub more_children: Vec<PhoneAgent>,
+        /// Whether the row opens its children until the phone's operator
+        /// chooses otherwise: a descendant waits for them (B3).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        pub children_open: bool,
+        /// Whether Hide's own delegation made the row, and the panes that
+        /// hang under it in the sidebar's child order
+        /// (`lineage_child_pane_ids`), so the tree hangs them the same way.
+        #[serde(skip)]
+        delegated: bool,
+        #[serde(skip)]
+        child_pane_ids: Vec<String>,
+        /// Where the row stands among its siblings (`RowState::tree_rank`).
+        #[serde(skip)]
+        tree_rank: u8,
+        /// The ordering key `sort_agents` orders by (`last_activity`).
+        #[serde(skip)]
+        activity: String,
+    }
+
+    /// What a parent's descendants are doing, counted as its pills draw them.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+    pub struct Descendants {
+        /// A question, an approval or a failure waits on the operator.
+        pub asking: u64,
+        pub working: u64,
+        pub done: u64,
+    }
+
+    impl Descendants {
+        fn is_none(&self) -> bool {
+            *self == Self::default()
+        }
     }
 
     impl PhoneAgent {
+        fn visit<'a>(&'a self, out: &mut Vec<&'a PhoneAgent>) {
+            out.push(self);
+            for child in self.children.iter().chain(&self.more_children) {
+                child.visit(out);
+            }
+        }
+
         pub fn key(&self) -> AgentKey {
             AgentKey {
                 device_id: self.device_id.clone(),
@@ -432,18 +485,70 @@ pub mod phone {
         Option::<String>::deserialize(deserializer).map(|reason| reason.is_some())
     }
 
+    /// One top row of a group: an agent with its tree, or a sleeping
+    /// conversation. Both stand in one order and fold together.
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    pub enum GroupRow {
+        Agent(Box<PhoneAgent>),
+        Sleeping(PhoneSleepingSession),
+    }
+
+    impl GroupRow {
+        /// The ordering key the group sorts by: an agent's `last_activity`,
+        /// a sleeping conversation's time written as thirteen digits.
+        fn activity(&self) -> Cow<'_, str> {
+            match self {
+                Self::Agent(agent) => Cow::Borrowed(&agent.activity),
+                Self::Sleeping(session) => Cow::Owned(format!("{:013}", session.since_unix_ms)),
+            }
+        }
+
+        /// Whether the row is asleep, for the fold's "잠든 것 N 포함".
+        fn asleep(&self) -> bool {
+            match self {
+                Self::Agent(agent) => agent.mark == "asleep",
+                Self::Sleeping(_) => true,
+            }
+        }
+    }
+
+    /// One group of top rows. `count` is every top row of the group, the
+    /// folded ones too (PRD mobile-companion-ui B5); `rows` are the first few
+    /// in recency order and `more` the rest, behind the group's "더 보기 N".
     #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
     pub struct Group {
         pub group: String,
         pub count: usize,
-        pub agents: Vec<PhoneAgent>,
+        pub rows: Vec<GroupRow>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        pub sleeping_sessions: Vec<PhoneSleepingSession>,
+        pub more: Vec<GroupRow>,
+        /// How many of `more` are asleep.
+        #[serde(skip_serializing_if = "is_zero_usize")]
+        pub more_asleep: usize,
+    }
+
+    /// A machine the phone's list draws: the Mac it is paired with and every
+    /// device that Mac reaches (PRD mobile-companion-ui B8, B9).
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+    pub struct PhoneDevice {
+        pub device_id: String,
+        /// The device's name; `None` for the paired Mac, which the phone names.
+        pub label: Option<String>,
+        /// The paired Mac itself.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        pub local: bool,
+        pub connected: bool,
+        /// Its top rows in 내 차례 and in 작업 중, which add up across
+        /// devices to the groups' counts.
+        pub needs_you: usize,
+        pub working: usize,
     }
 
     #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
     pub struct Projection {
         pub groups: Vec<Group>,
+        pub devices: Vec<PhoneDevice>,
         /// The core's explicit interface language (`ui_state.interface_language`)
         /// as stored, or `None` when the operator follows the system. The phone
         /// resolves the value; it is part of the projection so a change republishes
@@ -456,8 +561,20 @@ pub mod phone {
     }
 
     impl Projection {
+        /// Every agent of the list, a parent before its children, shown or
+        /// folded.
         pub fn agents(&self) -> impl Iterator<Item = &PhoneAgent> {
-            self.groups.iter().flat_map(|group| group.agents.iter())
+            let mut all = Vec::new();
+            for row in self
+                .groups
+                .iter()
+                .flat_map(|group| group.rows.iter().chain(&group.more))
+            {
+                if let GroupRow::Agent(agent) = row {
+                    agent.visit(&mut all);
+                }
+            }
+            all.into_iter()
         }
 
         pub fn find(&self, key: &AgentKey) -> Option<&PhoneAgent> {
@@ -468,12 +585,19 @@ pub mod phone {
         pub fn sleeping(&self, id: &SleepId) -> Option<&PhoneSleepingSession> {
             self.groups
                 .iter()
-                .flat_map(|group| &group.sleeping_sessions)
-                .find(|session| &session.sleep_id == id)
+                .flat_map(|group| group.rows.iter().chain(&group.more))
+                .find_map(|row| match row {
+                    GroupRow::Sleeping(session) if &session.sleep_id == id => Some(session),
+                    _ => None,
+                })
         }
     }
 
     fn is_zero(value: &u64) -> bool {
+        *value == 0
+    }
+
+    fn is_zero_usize(value: &usize) -> bool {
         *value == 0
     }
 
@@ -725,7 +849,42 @@ pub mod phone {
                 sleep: agent
                     .get("sleep")
                     .and_then(|sleep| serde_json::from_value(sleep.clone()).ok()),
+                descendants: Descendants::of(agent.get("descendant_counts")),
+                children: Vec::new(),
+                more_children: Vec::new(),
+                children_open: false,
+                delegated: agent
+                    .get("delegated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                child_pane_ids: agent
+                    .get("lineage_child_pane_ids")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+                tree_rank: agent
+                    .pointer("/state/tree_rank")
+                    .and_then(Value::as_u64)
+                    .and_then(|rank| u8::try_from(rank).ok())
+                    .unwrap_or(u8::MAX),
+                activity: activity_key(agent),
             });
+        }
+    }
+
+    /// The row's ordering key (`SidebarAgentSnapshot::last_activity`), or the
+    /// thirteen digits of its change time when an older core sent none.
+    fn activity_key(agent: &Value) -> String {
+        match agent.get("last_activity").and_then(Value::as_str) {
+            Some(key) if !key.is_empty() => key.to_owned(),
+            _ => agent
+                .get("changed_at_unix_ms")
+                .and_then(Value::as_u64)
+                .map(|ms| format!("{ms:013}"))
+                .unwrap_or_default(),
         }
     }
 
@@ -745,15 +904,20 @@ pub mod phone {
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        let mut machines = vec![PhoneDevice {
+            device_id: node.to_owned(),
+            label: None,
+            local: true,
+            connected: true,
+            needs_you: 0,
+            working: 0,
+        }];
         for status in rest
             .pointer("/status/remote")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
         {
-            if str_of(status, "state") != "connected" {
-                continue;
-            }
             let target = str_of(status, "target_id");
             let label = devices
                 .iter()
@@ -761,6 +925,18 @@ pub mod phone {
                 .map(|device| str_of(device, "label"))
                 .filter(|label| !label.is_empty())
                 .unwrap_or(target);
+            let connected = str_of(status, "state") == "connected";
+            machines.push(PhoneDevice {
+                device_id: target.to_owned(),
+                label: Some(label.to_owned()),
+                local: false,
+                connected,
+                needs_you: 0,
+                working: 0,
+            });
+            if !connected {
+                continue;
+            }
             let session = status.get("session");
             let remote_agents = session
                 .and_then(|session| session.get("agents"))
@@ -776,54 +952,43 @@ pub mod phone {
                 &mut agents,
             );
         }
-        let mut groups: Vec<Group> = GROUP_ORDER
-            .iter()
-            .map(|group| Group {
-                group: (*group).to_owned(),
-                count: 0,
-                agents: Vec::new(),
-                sleeping_sessions: Vec::new(),
-            })
-            .collect();
-        for agent in agents {
-            match groups.iter_mut().find(|group| group.group == agent.group) {
-                Some(group) => group.agents.push(agent),
-                None => groups.push(Group {
-                    group: agent.group.clone(),
-                    count: 0,
-                    agents: vec![agent],
-                    sleeping_sessions: Vec::new(),
-                }),
-            }
-        }
-        for value in rest
+        let sleeping: Vec<PhoneSleepingSession> = rest
             .pointer("/navigator/sleeping_sessions")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-        {
-            let row = match serde_json::from_value::<PhoneSleepingSession>(value.clone()) {
-                Ok(row) if row.device_id == node => row,
-                Ok(_) => continue,
-                Err(_) => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "mobile_phone", "kind": "sleep.projection_invalid",
-                    }));
-                    continue;
+            .filter_map(|value| {
+                match serde_json::from_value::<PhoneSleepingSession>(value.clone()) {
+                    Ok(row) if row.device_id == node => Some(row),
+                    Ok(_) => None,
+                    Err(_) => {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "mobile_phone", "kind": "sleep.projection_invalid",
+                        }));
+                        None
+                    }
                 }
-            };
-            if let Some(group) = groups.iter_mut().find(|group| group.group == row.group) {
-                group.sleeping_sessions.push(row);
-            } else {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "mobile_phone", "kind": "sleep.group_invalid", "sleep_id": row.sleep_id,
-                }));
+            })
+            .collect();
+        let groups = tree::groups(agents, sleeping, &GROUP_ORDER);
+        for group in &groups {
+            for row in group.rows.iter().chain(&group.more) {
+                let GroupRow::Agent(agent) = row else {
+                    continue;
+                };
+                let Some(machine) = machines
+                    .iter_mut()
+                    .find(|machine| machine.device_id == agent.device_id)
+                else {
+                    continue;
+                };
+                match group.group.as_str() {
+                    "needs_you" => machine.needs_you += 1,
+                    "working" => machine.working += 1,
+                    _ => {}
+                }
             }
         }
-        for group in &mut groups {
-            group.count = group.agents.len() + group.sleeping_sessions.len();
-        }
-        groups.retain(|group| group.count > 0);
         let interface_language = rest
             .pointer("/ui_state/interface_language")
             .and_then(Value::as_str)
@@ -834,6 +999,7 @@ pub mod phone {
             .map(str::to_owned);
         Projection {
             groups,
+            devices: machines,
             interface_language,
             color_theme,
         }
