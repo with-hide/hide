@@ -6,7 +6,8 @@
 //! conversation or its terminal, ask for older messages or more rows, close
 //! it, send that pane a reply or one key, open the start sheet and start an
 //! agent from it, wake a sleeping agent in its pane, wake or inspect a listed
-//! sleeping conversation, register or report its push subscription, and ask
+//! sleeping conversation, answer the decision a listed mission waits on
+//! (`answer_mission`), register or report its push subscription, and ask
 //! whether hided still answers (`ping`). Anything else is refused and recorded.
 //! It never receives a file, a path, a setting or the core's snapshot; the one
 //! exception is the interface language, which rides each `agents` frame so the
@@ -26,7 +27,7 @@ use tokio::sync::mpsc;
 
 use super::conversation::{self, Tail, Transcript};
 use super::pane::{self, Input, PaneError};
-use super::projection::{AgentKey, Projection};
+use super::projection::{AgentKey, PhoneMissions, Projection};
 use super::store::{Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
 
@@ -225,6 +226,12 @@ fn agents_frame(projection: &Projection) -> Value {
         // The operator's palette; the phone keeps its own light or dark.
         "color_theme": projection.color_theme,
     })
+}
+
+/// The missions the phone lists (PRD mobile-companion-ui B28, B31-B36): the
+/// record's trimmed projection, republished when it changes.
+fn missions_frame(missions: &PhoneMissions) -> Value {
+    json!({"type": "missions", "items": missions.items, "failed": missions.failed})
 }
 
 fn meta_frame(meta: &PhoneMeta) -> Value {
@@ -618,6 +625,7 @@ async fn run(
     close: Arc<tokio::sync::Notify>,
 ) {
     let mut projection = mobile.subscribe_projection();
+    let mut missions = mobile.subscribe_missions();
     let mut meta = mobile.subscribe_meta();
     let (frames_tx, mut frames) = mpsc::channel::<Value>(8);
     let mut open = Open::default();
@@ -642,6 +650,7 @@ async fn run(
         hello,
         meta_frame(&meta.borrow_and_update()),
         agents_frame(&projection.borrow_and_update()),
+        missions_frame(&missions.borrow_and_update()),
     ];
     for frame in &first {
         if !send_frame(socket, frame, phone_id).await {
@@ -658,6 +667,11 @@ async fn run(
             changed = projection.changed() => {
                 if changed.is_err() { return; }
                 let frame = agents_frame(&projection.borrow_and_update());
+                if !send_frame(socket, &frame, phone_id).await { return; }
+            }
+            changed = missions.changed() => {
+                if changed.is_err() { return; }
+                let frame = missions_frame(&missions.borrow_and_update());
                 if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = meta.changed() => {
@@ -790,6 +804,7 @@ async fn handle(
             None
         }
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
+        "answer_mission" => Some(answer_mission(mobile, phone_id, message).await),
         "input" => {
             let busy = json!({
                 "type": "input_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight",
@@ -926,6 +941,110 @@ async fn sleeping_session(
     match dispatched {
         Ok(Ok(())) => answer(true, None),
         _ => answer(false, Some("unavailable")),
+    }
+}
+
+/// The most a phone's written answer may hold, in characters (`missions::ANSWER_LIMIT`).
+const ANSWER_LIMIT: usize = herdr_core::missions::ANSWER_LIMIT;
+
+/// What a phone's `answer_mission` asks, once it names a listed mission and a
+/// well-formed answer: the one `mission_answer` event the desktop's decision
+/// banner sends (`Event::MissionAnswer`), nothing else.
+fn mission_answer_event(message: &Value, missions: &PhoneMissions) -> Result<Vec<u8>, &'static str> {
+    let id = message.get("mission").and_then(Value::as_str);
+    let Some(mission) = id.and_then(|id| missions.find(id)) else {
+        return Err("gone");
+    };
+    let Some(key) = message.get("key").and_then(Value::as_u64) else {
+        return Err("invalid_request");
+    };
+    let resend = match message.get("resend") {
+        None => false,
+        Some(Value::Bool(resend)) => *resend,
+        Some(_) => return Err("invalid_request"),
+    };
+    let option = match message.get("option") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|option| u8::try_from(option).ok())
+                .filter(|option| *option >= 1)
+                .ok_or("invalid_request")?,
+        ),
+    };
+    let text = match message.get("text") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(text.as_str()),
+        Some(_) => return Err("invalid_request"),
+    };
+    // Sending again names no answer; a first answer names exactly one.
+    match (resend, option, text) {
+        (true, None, None) => {}
+        (false, Some(_), None) => {}
+        (false, None, Some(text))
+            if !text.trim().is_empty()
+                && text.chars().count() <= ANSWER_LIMIT
+                && !text.chars().any(char::is_control) => {}
+        _ => return Err("invalid_request"),
+    }
+    Ok(json!({
+        "schema_version": herdr_core::SCHEMA_VERSION, "kind": "mission_answer",
+        "payload": {"mission": mission.id, "key": key, "option": option, "text": text, "resend": resend},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// The operator's answer to the decision a mission waits on, from a phone.
+/// One claim per request id, taken and settled on one blocking thread, so a
+/// repeat of the same press, on this socket or another, reaches the Conductor
+/// once; the core then keeps the first answer to the question's key. A
+/// refusal the operator can act on (a changed question, no Conductor, a
+/// device that stopped answering) comes back on the mission itself, in the
+/// desktop's words, as it does for the banner.
+async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "mission_result", "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "mission_result", "request_id": request_id,
+            "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let bytes = match mission_answer_event(message, &mobile.missions()) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged("scope.refused", Some(phone_id), &format!("mission_answer:{reason}"));
+            return answer(false, Some(reason));
+        }
+    };
+    let (mobile, phone_id, request) = (Arc::clone(mobile), phone_id.to_owned(), request_id.to_owned());
+    let dispatched = tokio::task::spawn_blocking(move || {
+        mobile.still_admitted(&phone_id)?;
+        match mobile.reserve_input(&phone_id, &request) {
+            Reservation::Write => {}
+            Reservation::Seen(InputState::Written) => return Ok(()),
+            Reservation::Seen(_) => return Err("in_flight"),
+        }
+        match mobile.config.core.dispatch(bytes) {
+            Ok(()) => {
+                mobile.settle_input(&phone_id, &request, Some(InputState::Written));
+                Ok(())
+            }
+            Err(_) => {
+                // Nothing reached the core, so the phone may send this id again.
+                mobile.settle_input(&phone_id, &request, None);
+                Err("unavailable")
+            }
+        }
+    })
+    .await;
+    match dispatched {
+        Ok(Ok(())) => answer(true, None),
+        Ok(Err(reason)) => answer(false, Some(reason)),
+        Err(_) => answer(false, Some("unavailable")),
     }
 }
 

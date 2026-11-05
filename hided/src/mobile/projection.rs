@@ -4,7 +4,7 @@
 //! from the core's snapshot `rest` section and carries no files, no paths and
 //! nothing else of the snapshot.
 
-pub use herdr_core::agent_state::phone::{AgentKey, PhoneAgent, Projection, project};
+pub use herdr_core::agent_state::phone::{AgentKey, PhoneAgent, PhoneMissions, Projection, project};
 use serde_json::Value;
 
 /// Materialize only the phone/start projection's changed inputs. Immutable
@@ -16,7 +16,7 @@ pub fn update_inputs(
     have: u64,
 ) -> Result<bool, serde_json::Error> {
     if have == 0 || !kept.is_object() {
-        *kept = serde_json::json!({"navigator": {}, "status": {}, "ui_state": {}});
+        *kept = serde_json::json!({"navigator": {}, "status": {}, "ui_state": {}, "missions": {}});
     }
     let mut changed = false;
     macro_rules! field {
@@ -38,6 +38,10 @@ pub fn update_inputs(
     field!("status", "remote", rest.status.remote);
     field!("status", "background_ai", rest.status.background_ai);
     field!("status", "last_error", rest.status.last_error);
+    if rest.missions.revision > have {
+        kept["missions"] = serde_json::to_value(rest.missions.value.as_ref())?;
+        changed = true;
+    }
     if rest.task_operation.revision > have {
         kept["task_operation"] = serde_json::to_value(rest.task_operation.value.as_ref())?;
         changed = true;

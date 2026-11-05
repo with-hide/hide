@@ -271,7 +271,13 @@ pub fn any_agent_active(agents: &[SidebarAgentSnapshot], connected: bool) -> boo
 
 /// The phone-safe projection, built only from accepted core snapshot values.
 pub mod phone {
+    mod missions;
     mod tree;
+
+    pub use missions::{
+        MAX_CLOSED, MAX_OPEN, PhoneAnswer, PhoneAttention, PhoneConductor, PhoneEscalation,
+        PhoneMission, PhoneMissions, PhoneNode,
+    };
 
     use std::borrow::Cow;
     use std::collections::HashMap;
