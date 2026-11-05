@@ -1131,7 +1131,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
 
     // Its hook says which conversation it runs; the session projects it.
     engine
-        .hook_session(&pane, "claude", SESSION)
+        .hook_session(&pane, "claude", SESSION, None)
         .expect("the hook's session is taken");
     let listed = engine.agents(WAIT).unwrap();
     let session = listed[0]

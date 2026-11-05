@@ -1422,7 +1422,13 @@ impl<'g> Engine for OwnEngine<'g> {
         self.changed();
     }
 
-    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
+    fn hook_session(
+        &self,
+        pane: &str,
+        kind: &str,
+        session: &str,
+        run: Option<&str>,
+    ) -> Answer<bool> {
         self.check()?;
         let catalog = self.shared.definitions.get();
         let definition =
@@ -1432,7 +1438,7 @@ impl<'g> Engine for OwnEngine<'g> {
             })?;
         if self
             .topology()
-            .hook_session(pane, &definition.id, session)?
+            .hook_session(pane, &definition.id, session, run)?
         {
             self.changed();
         }
@@ -2182,9 +2188,12 @@ impl<'g> Engine for OwnEngine<'g> {
             )?,
         )?;
         // The longest of the shells' lines, so the start is bounded as the
-        // shell it meets will type it.
-        let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
-            .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
+        // shell it meets will type it, with the longest run it may name.
+        let line = shell_line::longest(|shell| {
+            shell_line::command(&argv, shell)
+                .map(|line| shell_line::in_run(line, Some(&shell_line::longest_run()), shell))
+        })
+        .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
         Ok(PreparedStart::new(launch, line))
     }
 
@@ -2221,19 +2230,28 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),
             )
         })?;
-        let line = shell_line::command(&argv, shell).ok_or_else(|| {
-            refused(
-                "agent_start_refused",
-                format!("the {} start cannot be typed into a shell", definition.id),
-            )
-        })?;
+        let run = agents::start_run(
+            definition,
+            &argv,
+            launch.wakes,
+            processes.shell_name(),
+            pane,
+        );
+        let line = shell_line::command(&argv, shell)
+            .map(|line| shell_line::in_run(line, run.as_deref(), shell))
+            .ok_or_else(|| {
+                refused(
+                    "agent_start_refused",
+                    format!("the {} start cannot be typed into a shell", definition.id),
+                )
+            })?;
         self.type_agent_start(
             pane,
             agents::PaneAgent::started(
                 &definition.id,
                 Some(&launch.name),
                 agents::started_session(definition, &argv, launch.wakes),
-                agents::awaits_session_report(definition, &argv, launch.wakes),
+                run,
             ),
             &line,
         )?;
@@ -3857,6 +3875,23 @@ mod tests {
         age_start(engine, pane, agents::START_SETTLE);
     }
 
+    /// A typed start line without the run a start waiting for its report
+    /// names before its program (`shell_line::in_run`), and that run.
+    fn split_run(line: &str) -> (Option<&str>, &str) {
+        let prefix = format!("{}=", hide_agent_hooks::report::RUN_VARIABLE);
+        match line
+            .strip_prefix(prefix.as_str())
+            .and_then(|rest| rest.split_once(' '))
+        {
+            Some((run, line)) => (Some(run), line),
+            None => (None, line),
+        }
+    }
+
+    fn unrun(line: String) -> String {
+        split_run(&line).1.to_owned()
+    }
+
     /// Moves the start of the agent in `pane` back by `by`.
     fn age_start(engine: &OwnEngine, pane: &str, by: std::time::Duration) {
         let mut topology = engine.topology();
@@ -3953,7 +3988,11 @@ mod tests {
             .prepare_start(launch(&pane, "worker", "claude", &["--model", "it's"]))
             .unwrap();
         engine.start_agent(WAIT, &start).unwrap();
-        assert_eq!(holders.typed(&pane), "claude --model 'it'\\''s'\r");
+        let typed = holders.typed(&pane);
+        let (run, line) = split_run(&typed);
+        assert_eq!(line, "claude --model 'it'\\''s'\r");
+        let run = run.expect("a Claude Code start names its run").to_owned();
+        assert!(hide_agent_hooks::report::valid_run(&run), "{run}");
         assert_eq!(
             holders.rules_given(1),
             [(pane.clone(), Some("claude-code".to_owned()))]
@@ -3990,7 +4029,19 @@ mod tests {
             Readiness::Launching,
             "at rest past the settle, but its hook has not reported"
         );
-        engine.hook_session(&pane, "claude", "s-1").unwrap();
+        // A late report of the run before, or one naming no run, records
+        // its session but is not this start's.
+        for stale in [Some("0123456789abcdef"), None] {
+            engine.hook_session(&pane, "claude", "s-0", stale).unwrap();
+            assert_eq!(
+                engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+                Readiness::Launching,
+                "{stale:?}"
+            );
+        }
+        engine
+            .hook_session(&pane, "claude", "s-1", Some(&run))
+            .unwrap();
         assert_eq!(
             engine.delivery_agent(WAIT, &pane).unwrap().readiness,
             Readiness::Ready
@@ -4044,7 +4095,7 @@ mod tests {
             .create_workspace(WAIT, "/other", "other", false, Env::new())
             .unwrap();
         engine
-            .hook_session(&pane, "claude", "before-start")
+            .hook_session(&pane, "claude", "before-start", None)
             .unwrap();
         let start = engine
             .prepare_start(launch(&pane, "worker", "claude", &[]))
@@ -4090,7 +4141,9 @@ mod tests {
             .prepare_start(launch(&pane, "old", "claude", &[]))
             .unwrap();
         engine.start_agent(WAIT, &old).unwrap();
-        engine.hook_session(&pane, "claude", "old-session").unwrap();
+        engine
+            .hook_session(&pane, "claude", "old-session", None)
+            .unwrap();
         holders.say(
             &pane,
             &running("claude", hide_node_link::holders::ScreenState::Working),
@@ -4150,7 +4203,9 @@ mod tests {
                     matches!(engine.start_agent(WAIT, &reuse), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
                 );
                 if outcome == "hook" {
-                    engine.hook_session(&pane, "codex", "confirmed").unwrap();
+                    engine
+                        .hook_session(&pane, "codex", "confirmed", None)
+                        .unwrap();
                     engine.start_agent(WAIT, &reuse).unwrap();
                 }
                 finish
@@ -4248,7 +4303,7 @@ mod tests {
                 admitted.recv_timeout(Duration::from_secs(5)).unwrap();
                 if observation == "hook" {
                     engine
-                        .hook_session(&pane, "claude", "same-session")
+                        .hook_session(&pane, "claude", "same-session", None)
                         .unwrap();
                     let duplicate = engine
                         .prepare_start(launch(&pane, "second", "codex", &[]))
@@ -4393,17 +4448,25 @@ mod tests {
                 .create_workspace(WAIT, "/w", "w", true, Env::new())
                 .unwrap();
             if report_first {
-                engine.hook_session(&pane, "claude-code", "first").unwrap();
-                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+                engine
+                    .hook_session(&pane, "claude-code", "first", None)
+                    .unwrap();
+                engine
+                    .hook_session(&pane, "claude-code", "latest", None)
+                    .unwrap();
                 assert!(engine.agents(WAIT).unwrap().is_empty());
             }
             holders.say(&pane, &running("claude", ScreenState::Working));
             if !report_first {
-                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+                engine
+                    .hook_session(&pane, "claude-code", "latest", None)
+                    .unwrap();
             }
             let session = || engine.agents(WAIT).unwrap()[0].agent_session.clone();
             assert_eq!(session().unwrap().value, "latest");
-            engine.hook_session(&pane, "gemini", "nested").unwrap();
+            engine
+                .hook_session(&pane, "gemini", "nested", None)
+                .unwrap();
             assert_eq!(session().unwrap().value, "latest");
             holders.say(&pane, &PaneFacts::default());
             holders.say(&pane, &running("claude", ScreenState::Working));
@@ -4413,7 +4476,7 @@ mod tests {
             );
             holders.say(&pane, &PaneFacts::default());
             engine
-                .hook_session(&pane, "gemini", "early-other-kind")
+                .hook_session(&pane, "gemini", "early-other-kind", None)
                 .unwrap();
             holders.say(&pane, &running("claude", ScreenState::Working));
             assert!(
@@ -4427,9 +4490,15 @@ mod tests {
                 "a discarded report cannot reach a later agent"
             );
             holders.say(&pane, &PaneFacts::default());
-            engine.hook_session(&pane, "claude", "closing").unwrap();
+            engine
+                .hook_session(&pane, "claude", "closing", None)
+                .unwrap();
             engine.close_pane(WAIT, &pane).unwrap();
-            assert!(engine.hook_session(&pane, "claude", "too-late").is_err());
+            assert!(
+                engine
+                    .hook_session(&pane, "claude", "too-late", None)
+                    .is_err()
+            );
         }
     }
 
@@ -4543,6 +4612,95 @@ mod tests {
         assert_eq!(
             refused(engine.prompt_agent(WAIT, "worker", "hi")),
             "agent_blocked"
+        );
+    }
+
+    /// A start whose shell takes no run (here nushell) is typed none and
+    /// waits for no report it could not be matched by: it takes input on
+    /// the settle alone, as before.
+    #[test]
+    fn a_start_into_a_shell_that_takes_no_run_waits_for_no_report() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "nu");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "claude", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        assert_eq!(holders.typed(&pane), "claude\r");
+        settle_start(&engine, &pane);
+        holders.say(&pane, &running("claude", ScreenState::Idle));
+        assert_eq!(
+            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+            Readiness::Ready
+        );
+    }
+
+    /// A start that waits for its session report and has none of its run by
+    /// its deadline failed: what is typed to it is refused before anything
+    /// is written, a late report of the run before changes nothing, and the
+    /// report of its own run, however late, lets it take input
+    /// (with-hide/hide-private#545).
+    #[test]
+    fn a_start_with_no_report_of_its_run_by_its_deadline_refuses_input_until_that_report() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "claude", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        let typed = holders.typed(&pane);
+        let run = split_run(&typed)
+            .0
+            .expect("the start names its run")
+            .to_owned();
+        age_start(&engine, &pane, agents::START_DEADLINE);
+        holders.say(&pane, &running("claude", ScreenState::Idle));
+        engine.session(WAIT).unwrap();
+        let refused = |answer: Answer<()>| match answer {
+            Err(EngineError::Refused { code, .. }) => code,
+            other => panic!("expected a refusal, got {other:?}"),
+        };
+        assert_eq!(
+            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+            Readiness::NotReady,
+            "its start is over and failed"
+        );
+        assert_eq!(
+            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            "agent_not_ready"
+        );
+        engine
+            .hook_session(&pane, "claude", "s-0", Some("0123456789abcdef"))
+            .unwrap();
+        assert_eq!(
+            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            "agent_not_ready",
+            "a late report of the run before"
+        );
+        assert_eq!(holders.typed(&pane), typed, "nothing was typed");
+
+        engine
+            .hook_session(&pane, "claude", "s-1", Some(&run))
+            .unwrap();
+        assert_eq!(
+            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+            Readiness::Ready
+        );
+        engine.prompt_agent(WAIT, "worker", "hi").unwrap();
+        assert!(
+            holders.typed(&pane).ends_with("<Enter></letter>"),
+            "{:?}",
+            holders.typed(&pane)
         );
     }
 
@@ -4876,13 +5034,11 @@ mod tests {
         next.restored().unwrap();
 
         assert_eq!(
-            holders.wait_typed(&claude),
+            unrun(holders.wait_typed(&claude)),
             "claude --resume s-1 || printf 'hide: %s ended with a failure after its resume; this pane is a shell now.\\n' 'Claude Code'\r"
         );
         assert!(
-            holders
-                .wait_typed(&gemini)
-                .starts_with("gemini --resume latest || printf"),
+            unrun(holders.wait_typed(&gemini)).starts_with("gemini --resume latest || printf"),
             "the last conversation of an agent whose session is not known"
         );
         assert_eq!(holders.typed(&twin), "", "one conversation, one pane");
@@ -4972,16 +5128,13 @@ mod tests {
         next.restored().unwrap();
 
         assert!(
-            holders
-                .wait_typed(&worker)
+            unrun(holders.wait_typed(&worker))
                 .starts_with("claude --resume s-1 --model opus --effort high || printf"),
             "{:?}",
             holders.typed(&worker)
         );
         assert!(
-            holders
-                .wait_typed(&other)
-                .starts_with("claude --resume s-2 || printf"),
+            unrun(holders.wait_typed(&other)).starts_with("claude --resume s-2 || printf"),
             "{:?}",
             holders.typed(&other)
         );
@@ -5056,18 +5209,18 @@ mod tests {
         next.restored().unwrap();
         for pane in [&working, &resting] {
             assert!(
-                holders.wait_typed(pane).starts_with("claude --resume"),
+                unrun(holders.wait_typed(pane)).starts_with("claude --resume"),
                 "{:?}",
                 holders.typed(pane)
             );
         }
 
-        assert!(next.hook_session(&working, "claude", "s-1").unwrap());
+        assert!(next.hook_session(&working, "claude", "s-1", None).unwrap());
         assert!(
-            !next.hook_session(&working, "claude", "s-1").unwrap(),
+            !next.hook_session(&working, "claude", "s-1", None).unwrap(),
             "owed once"
         );
-        assert!(!next.hook_session(&resting, "claude", "s-2").unwrap());
+        assert!(!next.hook_session(&resting, "claude", "s-2", None).unwrap());
     }
 
     /// D-8, B15: a conversation an import gave back once its Herdr stopped,
@@ -5129,9 +5282,7 @@ mod tests {
             .unwrap()
             .pane;
         assert!(
-            holders
-                .wait_typed(&tab)
-                .starts_with("claude --resume 0b6a3f1e-claude-session"),
+            unrun(holders.wait_typed(&tab)).starts_with("claude --resume 0b6a3f1e-claude-session"),
             "{:?}",
             holders.typed(&tab)
         );
@@ -5207,8 +5358,7 @@ mod tests {
             }),
         });
         assert!(
-            idle.wait_typed(&claude)
-                .starts_with("claude --resume s-1 || printf"),
+            unrun(idle.wait_typed(&claude)).starts_with("claude --resume s-1 || printf"),
             "{:?}",
             idle.typed(&claude)
         );

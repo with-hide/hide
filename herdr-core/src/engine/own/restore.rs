@@ -848,6 +848,7 @@ impl OwnEngine<'static> {
         // The longest of the shells' lines, as a start is bounded.
         let longest = shell_line::longest(|shell| {
             shell_line::resume_command(&resume.argv, &resume.shown, shell)
+                .map(|line| shell_line::in_run(line, Some(&shell_line::longest_run()), shell))
         })
         .ok_or_else(|| "the resume names no program".to_owned())?;
         let node = self.node().ok().map(|node| &**node as &dyn NodeLink);
@@ -871,20 +872,28 @@ impl OwnEngine<'static> {
             .map_err(|error| error.to_string())?;
         let shell = Shell::of(group.shell_name(), self.shared.windows)
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
-        let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
-            .ok_or_else(|| "the resume names no program".to_owned())?;
         // A restart's resume is a wake of the agent.
-        let awaits_report = super::agents::definition(&self.shared.definitions.get(), &resume.kind)
-            .is_some_and(|definition| {
-                super::agents::awaits_session_report(definition, &resume.argv, true)
-            });
+        let run = super::agents::definition(&self.shared.definitions.get(), &resume.kind).and_then(
+            |definition| {
+                super::agents::start_run(
+                    definition,
+                    &resume.argv,
+                    true,
+                    group.shell_name(),
+                    &resume.pane,
+                )
+            },
+        );
+        let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
+            .map(|line| shell_line::in_run(line, run.as_deref(), shell))
+            .ok_or_else(|| "the resume names no program".to_owned())?;
         self.type_agent_start(
             &resume.pane,
             PaneAgent::started(
                 &resume.kind,
                 resume.name.as_deref(),
                 resume.session.clone(),
-                awaits_report,
+                run,
             ),
             &line,
         )

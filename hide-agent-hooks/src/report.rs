@@ -63,6 +63,38 @@ pub struct HookStatusReport {
     /// turn says. Absent for an event that says nothing of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Vec<String>>,
+    /// The start of the agent's program this report came from, as the
+    /// engine named it in the program's environment ([`RUN_VARIABLE`]);
+    /// absent for a program the engine did not start that way. A start that
+    /// waits for its session report takes only the one whose run it named,
+    /// never a late one of the run before (with-hide/hide-private#545).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+}
+
+/// The environment variable the engine names a start's run in, typed
+/// before the agent's program on its start line.
+pub const RUN_VARIABLE: &str = "HIDE_AGENT_RUN";
+
+/// The most characters a run names.
+pub const MAX_RUN_CHARS: usize = 32;
+
+/// Whether `run` is a run the engine could have named: lowercase hex digits,
+/// at most [`MAX_RUN_CHARS`] of them.
+pub fn valid_run(run: &str) -> bool {
+    !run.is_empty()
+        && run.len() <= MAX_RUN_CHARS
+        && run
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The run this process's agent was started under, when the engine named
+/// one and it is valid; anything else names no run.
+fn this_run() -> Option<String> {
+    std::env::var(RUN_VARIABLE)
+        .ok()
+        .filter(|run| valid_run(run))
 }
 
 /// Where a session's turn stands, as its hook saw it.
@@ -90,7 +122,11 @@ pub struct HookCounts {
 /// ask comes back as the cause it is recorded under
 /// ([`crate::delivery::refusal_cause`]).
 pub fn report(report: &HookStatusReport, deadline: Instant) -> Result<(), String> {
-    let input = serde_json::to_vec(report).map_err(|_| "format".to_owned())?;
+    let report = HookStatusReport {
+        run: report.run.clone().or_else(this_run),
+        ..report.clone()
+    };
+    let input = serde_json::to_vec(&report).map_err(|_| "format".to_owned())?;
     crate::delivery::run_cli_with_input(&["workspace", "status", "--hook"], &input, deadline)
         .map(|_| ())
         .map_err(|failure| failure.code.to_owned())
@@ -225,6 +261,7 @@ mod tests {
             }),
             session_start: false,
             waiting: None,
+            run: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
@@ -254,6 +291,7 @@ mod tests {
                 counts: None,
                 session_start: false,
                 waiting: None,
+                run: None,
             },
             started + REPORT_TIMEOUT,
         );

@@ -319,7 +319,12 @@ use crate::error::HostError;
 /// link stream, the Hello's Herdr socket and the label lock's Herdr socket
 /// (the lock now names the engine folder, `scope`); a helper on 75 still
 /// takes them, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 76;
+/// 77: a pane hook's status report names the run the core's engine typed
+/// before the agent's program (`HookStatusReport::run`), and a start that
+/// waits for its session report takes only the report of its own run
+/// (with-hide/hide-private#545). A device kit on 76 names no run, so every
+/// such start there would wait to its deadline; it upgrades.
+pub const PROTOCOL_VERSION: u32 = 77;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).

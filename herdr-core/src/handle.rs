@@ -776,7 +776,7 @@ impl Core {
         };
         // The engine is asked off the runtime lock, as every engine call is.
         if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref()) {
-            match engine.hook_session(&pane, &report.runtime, session) {
+            match engine.hook_session(&pane, &report.runtime, session, report.run.as_deref()) {
                 Ok(false) => {}
                 // An agent resumed after its turn was cut off is owed one
                 // letter (PRD engine-bundle-4-herdr-removal D-22).

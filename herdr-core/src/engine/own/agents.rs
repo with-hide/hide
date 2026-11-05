@@ -40,7 +40,7 @@ pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT
 /// has not asked for input. It is a lower bound: a start whose program
 /// still leaves the terminal editing lines is pending however long it took
 /// ([`Live::line_editing`]), and one whose integration reports its session
-/// as it loads waits for that report ([`Live::awaits_report`]).
+/// as it loads waits for that report from this run ([`Live::run`]).
 pub(super) const START_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The agent definitions the engine starts and recognizes agents by: the
@@ -205,6 +205,50 @@ pub(super) fn awaits_session_report(definition: &Definition, argv: &[String], wa
         .is_some_and(|format| format.reports_session_at_start(resumes))
 }
 
+/// A run for a start that waits for its integration's report
+/// ([`Live::run`]), distinct for every start of this engine and across its
+/// restarts: the moment it was made and a count. It names a start, it
+/// proves nothing: the report it comes back on is already proved to come
+/// from the pane.
+pub(super) fn new_run() -> String {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos() as u64);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{nanos:016x}{count:08x}")
+}
+
+/// The run a start of `definition` typed as `argv` into the shell named
+/// `shell` names, when it waits for its integration's session report
+/// ([`awaits_session_report`]) and that shell types a run
+/// ([`super::shell_line::takes_run`]). A start that would wait but whose
+/// shell takes no run keeps the settle alone, and the log says so: it waits
+/// for no report it could not be matched by, so it never fails at its
+/// deadline for want of one.
+pub(super) fn start_run(
+    definition: &Definition,
+    argv: &[String],
+    wakes: bool,
+    shell: Option<&str>,
+    pane: &str,
+) -> Option<String> {
+    if !awaits_session_report(definition, argv, wakes) {
+        return None;
+    }
+    if super::shell_line::takes_run(shell) {
+        return Some(new_run());
+    }
+    crate::diagnostic!(serde_json::json!({
+        "component": "own_engine",
+        "kind": "agent.start_report_unawaited",
+        "pane_id": pane,
+        "agent": definition.id,
+        "shell": shell,
+    }));
+    None
+}
+
 /// The session a start the engine types runs, before its agent says: the
 /// one its resume names, so a woken agent names the conversation it resumed
 /// at once. Not when an agent whose integration reports its session as a
@@ -293,15 +337,17 @@ pub(super) struct Live {
     /// When the engine typed its start, until the start settled
     /// ([`PaneAgent::launch_pending`]).
     pub(super) started: Option<Instant>,
-    /// The start waits for its integration to report its session
-    /// ([`awaits_session_report`]): Claude Code's SessionStart hook, or a
-    /// woken OpenCode's plugin once it loaded the session. A woken OpenCode
-    /// on a Windows runner rested its screen past [`START_SETTLE`] before it
-    /// read keys, and the resume prompt typed then was lost (agent journey
-    /// 41962075671, with-hide/hide-private#545).
-    pub(super) awaits_report: bool,
-    /// Its integration reported its session since the engine typed this
-    /// start; a report from the run before does not count.
+    /// The run the engine named in the program's environment when the start
+    /// waits for its integration to report its session
+    /// ([`awaits_session_report`], [`new_run`]): Claude Code's SessionStart
+    /// hook, or a woken OpenCode's plugin once it loaded the session. A woken
+    /// OpenCode on a Windows runner rested its screen past [`START_SETTLE`]
+    /// before it read keys, and the resume prompt typed then was lost (agent
+    /// journey 41962075671, with-hide/hide-private#545).
+    pub(super) run: Option<String>,
+    /// Its integration reported its session for [`Self::run`]: a late
+    /// report of the run before, in the same pane or of the same resumed
+    /// session, names another run or none, and does not count.
     pub(super) reported: bool,
     /// The start's deadline passed with the report it waited for still
     /// missing, and the diagnostic said so ([`PaneAgent::report_missed`]).
@@ -342,13 +388,13 @@ pub(super) struct Live {
 }
 
 impl PaneAgent {
-    /// An agent the engine starts now; `awaits_report` when its start
-    /// takes input only once its integration reported its session.
+    /// An agent the engine starts now; `run` names the start's run when it
+    /// takes input only once its integration reported its session for it.
     pub(super) fn started(
         kind: &str,
         name: Option<&str>,
         session: Option<String>,
-        awaits_report: bool,
+        run: Option<String>,
     ) -> Self {
         Self {
             kind: kind.to_owned(),
@@ -356,20 +402,29 @@ impl PaneAgent {
             session,
             live: Live {
                 started: Some(Instant::now()),
-                awaits_report,
+                run,
                 ..Live::default()
             },
         }
     }
 
-    /// Its integration reported its session; whether that settled what its
-    /// start waited for, so the start's readiness may have moved.
-    pub(super) fn report(&mut self) -> bool {
-        let moved = self.live.started.is_some() && self.live.awaits_report && !self.live.reported;
-        if self.live.started.is_some() {
+    /// Its integration reported its session from `run`; whether that
+    /// settled what its start waited for, so the start's readiness may have
+    /// moved. Only a report of the run the start named settles it.
+    pub(super) fn report(&mut self, run: Option<&str>) -> bool {
+        let ours = self.live.started.is_some()
+            && self.live.run.is_some()
+            && self.live.run.as_deref() == run;
+        let moved = ours && !self.live.reported;
+        if ours {
             self.live.reported = true;
         }
         moved
+    }
+
+    /// Whether the start waits for its integration's report of its run.
+    fn awaits_report(&self) -> bool {
+        self.live.run.is_some()
     }
 
     /// Whether the start waited for its integration's report and its
@@ -377,7 +432,7 @@ impl PaneAgent {
     /// Its agent takes no input ([`Self::interactive`]), so a delivery waits
     /// or is refused, until a late report comes.
     pub(super) fn report_missed(&self, now: Instant) -> bool {
-        self.live.awaits_report
+        self.awaits_report()
             && !self.live.reported
             && self
                 .live
@@ -453,7 +508,7 @@ impl PaneAgent {
         self.live.shown
             && !self.live.foreground_unread
             && self.live.line_editing != Some(true)
-            && (self.live.reported || !self.live.awaits_report)
+            && (self.live.reported || !self.awaits_report())
     }
 
     /// Whether a start made at `started` has settled by `now`: its program
@@ -828,7 +883,7 @@ mod tests {
     #[test]
     fn a_started_agent_is_whatever_its_start_runs() {
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None, None));
         pane.facts(PaneFacts {
             foreground: program("cli"),
             screen: read(ScreenState::Working),
@@ -873,7 +928,7 @@ mod tests {
     #[test]
     fn a_start_waits_for_its_program_and_a_screen_without_rules_reads_idle_once_shown() {
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None, None));
         // The shell holds the terminal while the start is typed.
         pane.facts(PaneFacts::default());
         assert!(pane.agent.as_ref().unwrap().starting(Instant::now()));
@@ -901,7 +956,7 @@ mod tests {
             ..PaneFacts::default()
         };
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None, None));
         pane.facts(at("omp", Some(true)));
         let started = Instant::now() - START_SETTLE;
         pane.agent.as_mut().unwrap().live.started = Some(started);
@@ -924,7 +979,7 @@ mod tests {
             "claude-code",
             Some("worker"),
             None,
-            false,
+            None,
         ));
         pane.facts(PaneFacts {
             screen: read(ScreenState::Working),
@@ -949,7 +1004,7 @@ mod tests {
             "claude-code",
             Some("worker"),
             None,
-            false,
+            None,
         ));
         let at = |state| PaneFacts {
             foreground: program("claude"),
@@ -1002,7 +1057,7 @@ mod tests {
     #[test]
     fn a_start_takes_input_only_once_its_program_reads_keys() {
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None, None));
         let at = |line_editing| PaneFacts {
             foreground: program("pi"),
             screen: read(ScreenState::Idle),
@@ -1041,7 +1096,7 @@ mod tests {
         assert!(!agent.launch_pending(Instant::now()));
 
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None, false));
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None, None));
         pane.facts(at(None));
         pane.agent.as_mut().unwrap().live.started = Some(started);
         assert!(
@@ -1074,7 +1129,12 @@ mod tests {
         );
 
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None, true));
+        pane.agent = Some(PaneAgent::started(
+            "opencode",
+            Some("worker"),
+            None,
+            Some("run-2".to_owned()),
+        ));
         let at_rest = PaneFacts {
             foreground: program("opencode"),
             screen: read(ScreenState::Idle),
@@ -1082,27 +1142,43 @@ mod tests {
             ..PaneFacts::default()
         };
         pane.facts(at_rest.clone());
-        let started = Instant::now() - START_SETTLE;
-        pane.agent.as_mut().unwrap().live.started = Some(started);
         let agent = pane.agent.as_mut().unwrap();
+        let past_settle = agent.live.started.unwrap() + START_SETTLE;
         assert!(
-            agent.launch_pending(Instant::now()) && !agent.interactive(),
+            agent.launch_pending(past_settle) && !agent.interactive(),
             "its screen rests and reads keys past the settle, but it has not reported"
         );
-        assert!(agent.report(), "the report is what the start waited for");
-        assert!(!agent.launch_pending(Instant::now()) && agent.interactive());
-        assert!(!agent.report(), "a second report moves nothing");
+        assert!(
+            !agent.report(Some("run-1")) && !agent.report(None),
+            "a report of the run before, or of no run, is not this start's"
+        );
+        assert!(agent.launch_pending(past_settle) && !agent.interactive());
+        assert!(
+            agent.report(Some("run-2")),
+            "the report is what the start waited for"
+        );
+        assert!(!agent.launch_pending(past_settle) && agent.interactive());
+        assert!(
+            !agent.report(Some("run-2")),
+            "a second report moves nothing"
+        );
 
         let mut pane = Pane::new();
-        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None, true));
-        pane.agent.as_mut().unwrap().report();
+        pane.agent = Some(PaneAgent::started(
+            "opencode",
+            Some("worker"),
+            None,
+            Some("run-2".to_owned()),
+        ));
+        pane.agent.as_mut().unwrap().report(Some("run-2"));
         pane.facts(at_rest);
         let agent = pane.agent.as_ref().unwrap();
+        let started = agent.live.started.unwrap();
         assert!(
-            agent.launch_pending(Instant::now()),
+            agent.launch_pending(started + START_SETTLE / 2),
             "a report within the settle still waits for the settle"
         );
-        assert!(!agent.launch_pending(agent.live.started.unwrap() + START_SETTLE));
+        assert!(!agent.launch_pending(started + START_SETTLE));
     }
 
     /// A terminal whose foreground the system could not say keeps the
@@ -1115,7 +1191,7 @@ mod tests {
             "pi",
             Some("worker"),
             Some("/s/pi.jsonl".to_owned()),
-            false,
+            None,
         ));
         pane.facts(PaneFacts {
             foreground: program("pi"),
@@ -1158,7 +1234,7 @@ mod tests {
             "claude-code",
             Some("worker"),
             None,
-            true,
+            Some("run-1".to_owned()),
         ));
         pane.facts(PaneFacts {
             foreground: program("claude"),
@@ -1179,7 +1255,7 @@ mod tests {
         assert_eq!(readiness, Readiness::NotReady);
         assert!(!readiness.accepts_input(), "a delivery is refused");
 
-        assert!(agent.report(), "a late report");
+        assert!(agent.report(Some("run-1")), "a late report of this run");
         assert!(!agent.report_missed(deadline));
         assert_eq!(
             Readiness::of(
@@ -1197,7 +1273,7 @@ mod tests {
             "claude-code",
             Some("worker"),
             None,
-            false,
+            None,
         ));
         pane.facts(PaneFacts {
             foreground: program("claude"),

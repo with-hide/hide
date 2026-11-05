@@ -512,6 +512,7 @@ mod tests {
             counts: None,
             session_start: false,
             waiting: None,
+            run: None,
         }
     }
 

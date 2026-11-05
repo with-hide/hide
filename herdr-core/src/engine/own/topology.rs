@@ -1865,17 +1865,20 @@ impl Topology {
 
     /// A hook cannot claim another kind of agent. Before detection, keep
     /// only its latest report until the pane's foreground identifies it.
+    /// The report's `run` settles only the start that named it; any report
+    /// still records its session.
     pub(super) fn hook_session(
         &mut self,
         pane: &str,
         kind: &str,
         session: &str,
+        run: Option<&str>,
     ) -> Result<bool, EngineError> {
         let held = self.pane_mut(pane)?;
         match held.agent.as_mut() {
-            // A start that waited for this report may take input now.
+            // A start that waited for this run's report may take input now.
             Some(agent) if agent.kind == kind => {
-                let settles = agent.report();
+                let settles = agent.report(run);
                 Ok(self.set_agent_session(pane, kind, session)? || settles)
             }
             Some(_) => Ok(false),

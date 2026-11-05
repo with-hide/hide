@@ -136,13 +136,17 @@ pub(crate) fn answer(
 }
 
 /// A report names a known agent and, when it names one, a session id the
-/// delivery ledger would take.
+/// delivery ledger would take and a run the engine could have named.
 fn valid_status(report: &hide_node_link::panes::HookStatusReport) -> bool {
     hide_agent_adapter::adapter(&report.runtime).is_some_and(|adapter| adapter.id == report.runtime)
         && report
             .session
             .as_ref()
             .is_none_or(|session| herdr_core::delivery::valid_session(session))
+        && report
+            .run
+            .as_deref()
+            .is_none_or(hide_node_link::panes::valid_run)
 }
 
 /// Records the hook's report on the pane the proof named. Only a caller

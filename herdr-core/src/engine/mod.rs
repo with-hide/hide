@@ -178,7 +178,15 @@ pub(crate) trait Engine: Send + Sync {
     /// and ignores it. Answers true once for the first session of an agent
     /// the engine resumed after its turn was cut off under it (PRD
     /// engine-bundle-4-herdr-removal D-22), which the core then tells.
-    fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<bool> {
+    /// `run` is the start the report names (`HookStatusReport::run`): only
+    /// the start that named it takes it as its awaited report.
+    fn hook_session(
+        &self,
+        _pane: &str,
+        _kind: &str,
+        _session: &str,
+        _run: Option<&str>,
+    ) -> Answer<bool> {
         Ok(false)
     }
 

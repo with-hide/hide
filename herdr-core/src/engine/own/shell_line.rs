@@ -98,6 +98,46 @@ pub(super) fn resume_command(argv: &[String], agent: &str, shell: Shell) -> Opti
     })
 }
 
+/// Whether the shell a pane's program name says types a start's run
+/// before its program ([`in_run`]): sh, bash, zsh, dash and ksh read a
+/// prefix assignment, fish from 3.1, and Windows PowerShell and pwsh read
+/// `$env:`. Any other shell (cmd.exe, nushell, one whose name is unknown or
+/// could not be read) is typed no run, so a start there does not wait for
+/// a report it could not be matched by.
+pub(super) fn takes_run(name: Option<&str>) -> bool {
+    let Some(name) = name.filter(|name| !name.is_empty()) else {
+        return false;
+    };
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let name = name.trim_start_matches('-').to_ascii_lowercase();
+    matches!(
+        name.strip_suffix(".exe").unwrap_or(&name),
+        "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish" | "pwsh" | "powershell"
+    )
+}
+
+/// `line` run with the start's `run` named in its environment
+/// (`hide_agent_hooks::report::RUN_VARIABLE`), which the agent's hooks
+/// report back: a POSIX prefix assignment, which zsh, bash and fish 3.1
+/// read, and PowerShell's `$env:` before the line, whose programs inherit
+/// it. A run is hex digits ([`hide_agent_hooks::report::valid_run`]), so it
+/// needs no quoting. `None` leaves the line as it is.
+pub(super) fn in_run(line: String, run: Option<&str>, shell: Shell) -> String {
+    let Some(run) = run.filter(|run| hide_agent_hooks::report::valid_run(run)) else {
+        return line;
+    };
+    let variable = hide_agent_hooks::report::RUN_VARIABLE;
+    match shell {
+        Shell::Posix => format!("{variable}={run} {line}"),
+        Shell::PowerShell => format!("$env:{variable}='{run}'; {line}"),
+    }
+}
+
+/// A run as long as any the engine names, for bounding a start line.
+pub(super) fn longest_run() -> String {
+    "f".repeat(hide_agent_hooks::report::MAX_RUN_CHARS)
+}
+
 /// The longest of the lines `line` writes for each shell a pane may run,
 /// Enter included: a start or a resume is bounded as the shell it meets will
 /// type it. `None` when no shell takes it.
@@ -273,6 +313,40 @@ mod tests {
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    /// The shells a start's run is typed into, each in the form it reads;
+    /// any other shell is typed none, and a run that is not one the engine
+    /// names is never typed.
+    #[test]
+    fn a_run_is_typed_only_into_the_shells_that_read_it() {
+        for name in [
+            "sh",
+            "bash",
+            "-zsh",
+            "/bin/dash",
+            "ksh",
+            "fish",
+            "pwsh",
+            "powershell.exe",
+        ] {
+            assert!(takes_run(Some(name)), "{name}");
+        }
+        for name in [Some("cmd.exe"), Some("nu"), Some("xonsh"), Some(""), None] {
+            assert!(!takes_run(name), "{name:?}");
+        }
+        let line = command(&words(&["claude", "--resume", "s 1"]), Shell::Posix).unwrap();
+        assert_eq!(
+            in_run(line.clone(), Some("0af3"), Shell::Posix),
+            "HIDE_AGENT_RUN=0af3 claude --resume 's 1'"
+        );
+        assert_eq!(in_run(line.clone(), None, Shell::Posix), line);
+        assert_eq!(in_run(line.clone(), Some("0AF3; rm"), Shell::Posix), line);
+        let line = command(&words(&["claude"]), Shell::PowerShell).unwrap();
+        assert_eq!(
+            in_run(line, Some("0af3"), Shell::PowerShell),
+            "$env:HIDE_AGENT_RUN='0af3'; & claude"
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! travel the same link as a stream, so a device pane needs no other
 //! connection to the core.
 
-pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn};
+pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn, valid_run};
 use serde::{Deserialize, Serialize};
 
 /// Recovery advice shared by local and device pane refusals.
@@ -270,6 +270,38 @@ pub struct PanesStarted {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A device's hook reaches the core inside this request, through the
+    /// device's helper and the node link, so the run its report names
+    /// arrives as the hook wrote it; a report naming none reads as before.
+    #[test]
+    fn a_status_report_keeps_its_run_across_the_link() {
+        let request = HookRequest {
+            request_id: "r-1".to_owned(),
+            command: HookCommand::Status {
+                report: HookStatusReport {
+                    runtime: "claude-code".to_owned(),
+                    version: 1,
+                    session: Some("s-1".to_owned()),
+                    turn: None,
+                    counts: None,
+                    session_start: true,
+                    waiting: None,
+                    run: Some("18e51117be6f8bc000000001".to_owned()),
+                },
+            },
+            token: None,
+        };
+        let line = serde_json::to_string(&request).unwrap();
+        assert_eq!(serde_json::from_str::<HookRequest>(&line).unwrap(), request);
+        let older: HookStatusReport =
+            serde_json::from_value(json!({"runtime": "claude-code", "version": 1})).unwrap();
+        assert_eq!(older.run, None);
+        assert!(valid_run("18e51117be6f8bc000000001"));
+        for invalid in ["", "0AF3", "0af3 rm", &"f".repeat(33)] {
+            assert!(!valid_run(invalid), "{invalid}");
+        }
+    }
 
     /// A device kit older than letter bundles asks without `bundle`, which
     /// reads as false, so the core hands it its letters as before.

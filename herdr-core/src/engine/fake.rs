@@ -309,7 +309,13 @@ impl<'g> Engine for FakeEngine<'g> {
         *lock(&self.shared.wake) = Some(wake);
     }
 
-    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
+    fn hook_session(
+        &self,
+        pane: &str,
+        kind: &str,
+        session: &str,
+        _run: Option<&str>,
+    ) -> Answer<bool> {
         self.ask(
             "hook_session",
             json!({"pane": pane, "kind": kind, "session": session}),
