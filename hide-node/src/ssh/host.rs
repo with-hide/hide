@@ -3080,7 +3080,8 @@ mod tests {
 
     /// The kit's parts follow the helper's rule, each on its own: a build
     /// that lacks one still installs the helper and names what it left out.
-    // A payload is made only where files have modes (`read_package`).
+    // The core's own programs here carry their Unix names; a Windows core's
+    // `.exe` names are `a_core_finds_its_own_programs_by_their_exe_name_and_its_conpty_folder_bare`'s.
     #[cfg(unix)]
     #[test]
     fn a_device_payload_carries_every_kit_part_the_build_has() {

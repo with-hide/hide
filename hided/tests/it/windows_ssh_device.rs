@@ -402,7 +402,12 @@ impl<'a> Walk<'a> {
     }
 
     /// Ends the pane, then the link, the link even when the pane did not end.
+    /// It looks at the device first, so what a holder started before the
+    /// test's own look, such as a pane's shell, is known before it ends.
     fn close(&mut self) -> Result<(), String> {
+        if let Err(error) = self.device.running() {
+            eprintln!("what runs on the device before the walk ends is unknown: {error}");
+        }
         let ended = match self.pane.take() {
             Some((panes, pane)) => panes
                 .terminate(&pane)
