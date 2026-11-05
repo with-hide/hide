@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
-import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
+import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, startedAgentIn, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
 import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./pane-fixture";
 import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
@@ -301,6 +301,8 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
   // A family's agents mark their session report instead.
   const reading = (pane: string) => fs.existsSync(runAs ? reportedMarker(server.root, pane) : paneInputLog(server.root, pane));
   await expect.poll(() => panes.every(reading), { message: "both fixture agents reading their terminals", timeout: 30_000 }).toBe(true);
+  // A spec reads the fixture's rows as they rest, never as they settle.
+  await control.until((rest) => panes.every((pane) => startedAgentIn(rest, pane)) || undefined, "both fixture agents started", 30_000);
   // The first agent holds the keyboard.
   await focusPane(control, panes[0]);
   return { workspace: first.workspace, checkout: first.checkout, tab: one.tab, panes, runAs };

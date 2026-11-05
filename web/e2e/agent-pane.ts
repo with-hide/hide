@@ -15,7 +15,7 @@ import { connectStateDir } from "./hided-control.mjs";
 import { fixtureExecutable } from "./platform-fixture";
 import { copyFixtureShim } from "./shims/build";
 import { configureSpawnProvider, writeSessionReporter } from "./spawn-provider";
-import { agentIn, focusPane, restoreFocusAfterInput, waitForInputGate } from "./daemon-actions";
+import { focusPane, restoreFocusAfterInput, startedAgentIn, waitForInputGate } from "./daemon-actions";
 
 /** One `hide` command's exit status and standard output. */
 export type HideAnswer = { status: number; out: string };
@@ -55,7 +55,7 @@ export async function agentPane(fixture: AgentPaneFixture, stateDir: string, pan
     const marker = reportedMarker(fixture.root, pane);
     await expect.poll(() => fs.existsSync(marker), { message: `${pane} ran its session reporter`, timeout: 20_000 }).toBe(true);
     const session = fs.readFileSync(marker, "utf8");
-    await control.until((rest) => agentIn(rest, pane)?.session_id === session || undefined, `${pane} on its reported native session`, 20_000);
+    await control.until((rest) => startedAgentIn(rest, pane)?.session_id === session || undefined, `${pane} on its reported native session, started`, 20_000);
   } finally {
     control.close();
   }

@@ -145,6 +145,17 @@ export function agentIn(rest: Rest, pane: string): AgentRow | undefined {
   return agents.find((row) => row.pane_id === pane && row.agent_kind);
 }
 
+/**
+ * The agent row for `pane` once its start has settled. The engine keeps a
+ * start pending, and its row reads Starting, until the agent's screen rests
+ * past the start's settle (3 s); a row changes its line and its height when it
+ * settles, so a helper that starts an agent hands it on only through this.
+ */
+export function startedAgentIn(rest: Rest, pane: string): AgentRow | undefined {
+  const row = agentIn(rest, pane);
+  return row && row.status_code !== "starting" ? row : undefined;
+}
+
 /** A project the daemon opened: its checkout, the checkout's first tab and that tab's shell. */
 export type OpenedProject = { folder: string; workspace: string; checkout: string; tab: string; pane: string };
 

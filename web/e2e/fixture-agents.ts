@@ -9,7 +9,7 @@
 import path from "node:path";
 import { prepareAgentInput, waitForAgentInput } from "./agent-pane";
 import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
-import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
+import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, startedAgentIn, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 
@@ -53,18 +53,14 @@ export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pa
  * Gives the stand-in in `pane` a new session, as Claude Code reports one
  * after `/clear`, and waits until its row names it, through Hide's
  * SessionStart hook the stand-in runs from inside its pane
- * (`shims/claude-shim.c`, `session_request`), and no longer reads Starting:
- * a fresh start stays pending until its screen rests past the engine's
- * settle, and a row still reading Starting changes height when it settles.
+ * (`shims/claude-shim.c`, `session_request`), and its start has settled
+ * (`startedAgentIn`).
  */
 export async function setAgentSession(fixture: Pick<EngineServer, "root">, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string): Promise<void> {
   await withControl(daemon, async (control) => {
     await waitForAgentInput(fixture.root, pane);
     sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
-    await control.until((rest) => {
-      const row = agentIn(rest, pane);
-      return row?.session_id === session && row.status_code !== "starting" ? true : undefined;
-    }, `${pane} on session ${session}, started`, 20_000);
+    await control.until((rest) => startedAgentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}, started`, 20_000);
   });
 }
 
@@ -109,11 +105,11 @@ export async function startAgentIn(fixture: Pick<EngineServer, "root">, daemon: 
     await preparePaneInput(control, pane);
     prepareAgentInput(fixture.root, pane);
     sendKeys(control, pane, "claude\r");
-    return control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
+    return control.until((rest) => startedAgentIn(rest, pane), `an agent started in ${pane}`, 30_000);
   });
   if (!session) return row;
   await setAgentSession(fixture, daemon, pane, session);
-  return withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane), `the agent in ${pane}`));
+  return withControl(daemon, (control) => control.until((rest) => startedAgentIn(rest, pane), `the agent in ${pane}`));
 }
 
 let projectAgents = 0;
@@ -140,11 +136,7 @@ export async function startAgentInProject(fixture: EngineServer, daemon: Pick<Da
     }, `an agent in a tab of ${project.folder}`, 30_000);
     // The engine learns the pane's session from the start's resume.
     await closePane(control, project.pane);
-    // A row still reading Starting grows a line when it settles, which moves the rows below it.
-    await control.until((rest) => {
-      const row = agentIn(rest, made.pane);
-      return row?.session_id === session && row.status_code !== "starting" ? true : undefined;
-    }, `${made.pane} on session ${session}, started`, 20_000);
+    await control.until((rest) => startedAgentIn(rest, made.pane)?.session_id === session || undefined, `${made.pane} on session ${session}, started`, 20_000);
     return { ...made, session };
   });
 }

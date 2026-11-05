@@ -16,7 +16,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { agentIn, focusTab, openProject, openWorktree, sendKeys, tabOfPane, viewPane, withControl } from "./daemon-actions";
+import { focusTab, openProject, openWorktree, sendKeys, startedAgentIn, tabOfPane, viewPane, withControl } from "./daemon-actions";
 import type { HidedControl } from "./hided-control.mjs";
 import { startEngine } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
@@ -82,7 +82,7 @@ async function agentInWorktree(control: HidedControl, dir: string): Promise<stri
   const { pane } = await openWorktree(control, dir);
   viewPane(control, pane);
   sendKeys(control, pane, "claude\r");
-  await control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
+  await control.until((rest) => startedAgentIn(rest, pane), `an agent started in ${pane}`, 30_000);
   return pane;
 }
 
