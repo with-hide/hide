@@ -160,6 +160,7 @@ section!(RestSections, Snapshot, s, {
     overview_graph: OverviewGraphSnapshot => s.overview_graph,
     missions: crate::runtime::missions::MissionsSnapshot => s.missions,
     mission_events: crate::runtime::mission_events::MissionEventsSnapshot => s.mission_events,
+    mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot => s.mission_brief,
     plans: crate::runtime::plans::PlansSnapshot => s.plans,
     sessions: SessionsSnapshot => s.sessions,
     card: CheckoutCardSnapshot => s.card,

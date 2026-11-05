@@ -601,6 +601,30 @@ impl LinkStore {
             .map_err(failed)
     }
 
+    /// The session a file's cursor names, a subagent's file naming the
+    /// session it adds to; `None` before a read named one.
+    pub(super) fn file_session(
+        &self,
+        device: &str,
+        path: &str,
+    ) -> Result<Option<SessionIdentity>, String> {
+        self.connection
+            .query_row(
+                "SELECT agent, session FROM cursors WHERE device=?1 AND path=?2 \
+                 AND session IS NOT NULL",
+                [device, path],
+                |row| {
+                    Ok(SessionIdentity {
+                        device_id: device.to_owned(),
+                        agent: row.get(0)?,
+                        session_id: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(failed)
+    }
+
     /// Where the last read of a file stopped.
     pub fn checkpoint(
         &self,
@@ -2305,6 +2329,160 @@ impl LinkStore {
             .collect();
         Ok(summary)
     }
+
+    /// What a summary pass reads of `sessions` beyond their own rows, so the
+    /// worker recomputes only the projects a write to them can move
+    /// (with-hide/hide-private#571). It mirrors what [`Self::summary_in`],
+    /// [`Self::ledger_summaries_in`] and [`Self::ledger_issue_refs_in`] join a
+    /// session by: its folder, the repositories of what it printed, named or
+    /// reviewed, the sessions it continues (a line it now joins them in), its
+    /// ancestors (whose subtree counts carry its missed work) and its children
+    /// (whose parent edge its first read can rename). A session that
+    /// continues it needs no walk forward: it joins a line only with members
+    /// of that line, which this chain back already names. A reach past
+    /// [`REACH_LIMIT`] sessions is refused, and the caller recomputes every
+    /// project.
+    pub(super) fn session_reach(
+        &self,
+        sessions: &BTreeSet<SessionIdentity>,
+    ) -> Result<SessionReach, String> {
+        let mut reach = SessionReach::default();
+        let mut children = self
+            .connection
+            .prepare_cached(
+                "SELECT id FROM session_parents \
+                 WHERE parent_device=?1 AND parent_agent=?2 AND parent_id=?3",
+            )
+            .map_err(failed)?;
+        let mut folders = self
+            .connection
+            .prepare_cached(
+                "SELECT DISTINCT folder FROM session_named_prs WHERE device=?1 AND agent=?2 \
+                 AND id=?3 AND repo_name='' AND folder<>''",
+            )
+            .map_err(failed)?;
+        let mut repos = self
+            .connection
+            .prepare_cached(
+                "SELECT DISTINCT COALESCE(r.repo, x.name) FROM (\
+                 SELECT repo_name AS name FROM session_prs WHERE device=?1 AND agent=?2 AND id=?3 \
+                 UNION SELECT repo_name FROM session_named_prs \
+                 WHERE device=?1 AND agent=?2 AND id=?3 AND repo_name<>'' \
+                 UNION SELECT repo_name FROM session_reviews WHERE device=?1 AND agent=?2 AND id=?3 \
+                 UNION SELECT repo FROM ledger_sightings \
+                 WHERE device=?1 AND agent=?2 AND id=?3 AND repo<>'') x \
+                 LEFT JOIN repo_names r ON r.name=x.name",
+            )
+            .map_err(failed)?;
+        for session in sessions {
+            let key = SessionKey {
+                device: session.device_id.clone(),
+                agent: session.agent.clone(),
+                id: session.session_id.clone(),
+            };
+            let mut ids = BTreeSet::from([key.id.clone()]);
+            if let Some(row) = self.session(&key)? {
+                if let Some(cwd) = row.cwd {
+                    reach.places.push((key.device.clone(), cwd));
+                }
+                // The chain `chain_root` walks back, as far as it walks.
+                let mut next = row.continues;
+                for _ in 0..20 {
+                    let Some(id) = next else { break };
+                    if !ids.insert(id.clone()) {
+                        break;
+                    }
+                    next = self
+                        .session(&SessionKey {
+                            device: key.device.clone(),
+                            agent: key.agent.clone(),
+                            id,
+                        })?
+                        .and_then(|row| row.continues);
+                }
+            }
+            let mut held = key.clone();
+            let mut walked = BTreeSet::from([key.clone()]);
+            for _ in 0..32 {
+                let parent: Option<SessionKey> = self
+                    .connection
+                    .query_row(
+                        "SELECT parent_device, parent_agent, parent_id FROM session_parents \
+                         WHERE device=?1 AND agent=?2 AND id=?3",
+                        params![held.device, held.agent, held.id],
+                        |row| {
+                            Ok(SessionKey {
+                                device: row.get(0)?,
+                                agent: row.get(1)?,
+                                id: row.get(2)?,
+                            })
+                        },
+                    )
+                    .optional()
+                    .map_err(failed)?;
+                let Some(parent) = parent else { break };
+                if !walked.insert(parent.clone()) {
+                    break;
+                }
+                ids.insert(parent.id.clone());
+                held = parent;
+            }
+            let found: Vec<String> = children
+                .query_map(params![key.device, key.agent, key.id], |row| row.get(0))
+                .and_then(Iterator::collect)
+                .map_err(failed)?;
+            ids.extend(found);
+            if ids.len() > REACH_LIMIT {
+                return Err("links_reach_capacity".to_owned());
+            }
+            reach.ids.extend(ids);
+            let found: Vec<String> = folders
+                .query_map(params![key.device, key.agent, key.id], |row| row.get(0))
+                .and_then(Iterator::collect)
+                .map_err(failed)?;
+            reach
+                .places
+                .extend(found.into_iter().map(|folder| (key.device.clone(), folder)));
+            let found: Vec<String> = repos
+                .query_map(params![key.device, key.agent, key.id], |row| row.get(0))
+                .and_then(Iterator::collect)
+                .map_err(failed)?;
+            reach.repos.extend(found);
+        }
+        let mut owners = self
+            .connection
+            .prepare_cached("SELECT DISTINCT project FROM prs WHERE repo=?1")
+            .map_err(failed)?;
+        for repo in &reach.repos {
+            let found: Vec<String> = owners
+                .query_map([repo], |row| row.get(0))
+                .and_then(Iterator::collect)
+                .map_err(failed)?;
+            reach.owners.extend(found);
+        }
+        Ok(reach)
+    }
+}
+
+/// The most sessions one changed session's reach may name; past it the
+/// summary pass recomputes every project rather than place it.
+pub(super) const REACH_LIMIT: usize = 256;
+
+/// What a summary pass reads of changed sessions outside their own rows
+/// ([`LinkStore::session_reach`]).
+#[derive(Debug, Default)]
+pub(super) struct SessionReach {
+    /// The ids of the sessions whose lines or work rows a change to them can
+    /// move: each one, the sessions it continues, its ancestors and children.
+    pub(super) ids: BTreeSet<String>,
+    /// The folders they work in or named a pull request from by number
+    /// alone, each on its device.
+    pub(super) places: Vec<DevicePath>,
+    /// The repositories (the record's keys) of the pull requests and issues
+    /// they printed, named or reviewed.
+    pub(super) repos: BTreeSet<String>,
+    /// The projects holding a pull request of one of those repositories.
+    pub(super) owners: BTreeSet<String>,
 }
 
 /// The checkout a session in `cwd` worked in: the deepest one holding it, so
@@ -2940,7 +3118,7 @@ pub struct ArchivedSession {
 }
 
 /// A folder on a device.
-type DevicePath = (String, String);
+pub(super) type DevicePath = (String, String);
 
 impl SessionRow {
     /// The session worked in one of `paths`, on that path's device.
@@ -2990,6 +3168,16 @@ pub(super) struct ProjectPass {
 }
 
 impl ProjectPass {
+    /// The folders the project's sessions work in, each on its device.
+    pub(super) fn paths(&self) -> &[DevicePath] {
+        &self.paths
+    }
+
+    /// The project's repository, as the record keys it.
+    pub(super) fn repo(&self) -> Option<&str> {
+        self.project.repo.as_deref()
+    }
+
     /// The names a pull request's repository goes by: the table's, then its
     /// own name when the table does not hold it.
     fn repo_names(&self, repo: &str) -> Vec<String> {

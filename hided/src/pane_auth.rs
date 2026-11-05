@@ -35,7 +35,11 @@ use serde_json::json;
 use crate::core::CoreHandle;
 use crate::state_file::new_token;
 
-const MAX_CAPABILITIES: usize = 64;
+/// Live capabilities this daemon holds at once: every agent pane holds one
+/// for as long as it runs, so the cap sits well above the panes an operator
+/// keeps open (missions run past a hundred). A capability is a small entry
+/// and, for a local pane, one reference file of about a hundred bytes.
+const MAX_CAPABILITIES: usize = 1024;
 const CAPABILITY_LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
 pub use hide_node_link::panes::{CHECKOUT_NEXT_ACTION, PANE_NEXT_ACTION, refusal_next_action};
 const UNCLAIMED_LIFETIME: Duration = Duration::from_secs(30);
@@ -198,6 +202,19 @@ fn pane_binding(identity: PaneIdentity) -> Binding {
     }
 }
 
+/// A caller turned away because the registry is full: its hooks cannot
+/// register it or record its prompts, which the operator otherwise sees only
+/// as input not confirmed, so the refusal is logged.
+fn note_capability_limit(pane_id: &str, live: usize) {
+    herdr_core::diagnostic!(json!({
+        "component": "pane_auth",
+        "kind": "pane_auth.capability_limit",
+        "pane_id": pane_id,
+        "live": live,
+        "limit": MAX_CAPABILITIES,
+    }));
+}
+
 fn entry_alive(entry: &Capability) -> bool {
     if let Binding::Desk { pid, started } = entry.binding {
         return entry.path.is_file()
@@ -322,6 +339,7 @@ impl Registry {
             return Ok((existing.path.clone(), false, token.clone()));
         }
         if entries.len() >= MAX_CAPABILITIES {
+            note_capability_limit(&attestation.pane_id, entries.len());
             return Err("capability_limit");
         }
         let token = new_token();
@@ -384,6 +402,7 @@ impl Registry {
             return Ok((token.clone(), false));
         }
         if entries.len() >= MAX_CAPABILITIES {
+            note_capability_limit(&attestation.pane_id, entries.len());
             return Err("capability_limit");
         }
         let token = new_token();

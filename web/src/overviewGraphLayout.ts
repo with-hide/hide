@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useReducedMotion } from "./lib/useReducedMotion";
 import type { OverviewGraphModel } from "./overviewGraphModel";
 import { ForceMap, type MapPoint, type Point } from "./overviewMapLayout";
 import { useShellStore } from "./store";
@@ -66,20 +67,6 @@ function useGraphScale(): number {
     return () => observer.disconnect();
   }, []);
   return scale;
-}
-
-/** The operator's reduced-motion setting, followed while the graph is open. */
-function useReducedMotion(): boolean {
-  const query = "(prefers-reduced-motion: reduce)";
-  const [reduced, setReduced] = useState(() => window.matchMedia?.(query).matches ?? false);
-  useEffect(() => {
-    const media = window.matchMedia?.(query);
-    if (!media) return;
-    const change = () => setReduced(media.matches);
-    media.addEventListener("change", change);
-    return () => media.removeEventListener("change", change);
-  }, []);
-  return reduced;
 }
 
 /**

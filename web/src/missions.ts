@@ -8,6 +8,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
+import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
 import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
@@ -613,6 +614,37 @@ export function turnItems(mission: Mission, workerRow: (node: MissionNode) => Ag
     if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null) });
   }
   return items;
+}
+
+/** A step's state on the map: finished, being worked, or only planned (the worker has not reached it). */
+export type StepTone = "done" | "working" | "plan";
+
+/** A step of a node as the card's bar and the panel's list draw it; `changed` once the worker's plan differs from the Conductor's. */
+export type NodeStep = { title: string; tone: StepTone; changed: boolean };
+
+/**
+ * How a node's work goes, from the one source that is true now: the worker's
+ * own plan once it exists (`worker`), else the steps the Conductor planned
+ * (`plan`), never both as two lists. A worker step whose title is not one of
+ * the Conductor's steps is `changed`; with no planned steps nothing is, since
+ * there was nothing to change. `now` is the worker's current step. Null when
+ * the node has neither.
+ */
+export function nodeSteps(node: MissionNode): { source: "worker" | "plan"; steps: NodeStep[]; now: string | null } | null {
+  const plan = node.plan;
+  if (plan) {
+    // `planCells` lists the plan's steps in this order, a dropped step left out.
+    const rows = planChecklist(plan).filter(({ step }) => step.status !== "dropped");
+    const cells = planCells(plan);
+    const steps = rows.map(({ step }, index): NodeStep => ({
+      title: step.title,
+      tone: cells[index] === "done" ? "done" : cells[index] === "working" || cells[index] === "hold" ? "working" : "plan",
+      changed: node.steps.length > 0 && !node.steps.includes(step.title),
+    }));
+    if (steps.length > 0) return { source: "worker", steps, now: plan.progress.finished ? null : (stepOf(plan, plan.progress.current)?.title ?? null) };
+  }
+  if (node.steps.length === 0) return null;
+  return { source: "plan", steps: node.steps.map((title) => ({ title, tone: "plan", changed: false })), now: null };
 }
 
 /** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */

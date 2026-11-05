@@ -1,15 +1,15 @@
 // A session's own plan over invented values (PRD hide-plan), one state per
 // `state` parameter: running, review, finished, and a plan whose steps are
 // handed to other agents, at work (`delegated`) and finished
-// (`delegated-finished`, PRD hide-plan-delegate B25-B30). The checklist the pane chip
+// (`delegated-finished`, PRD hide-plan-delegate B25-B30); `pick` presses a step's card to open its panel. The checklist the pane chip
 // opens (PRD mission-plan-visibility B3-B6) sits beside the map the 보기 slot
 // draws, both the real components. Nothing leaves this scene.
-import { useLayoutEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { PlanMap } from "../PlanMap";
+import { DetailPanel } from "../DetailPanel";
 import { PlanPopoverBody } from "../PanePlanChip";
 import type { PlanDelegation, PlanStep, PlanView, SnapshotRest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
@@ -55,7 +55,8 @@ export function planFixture(state: string, now: number): PlanView {
   };
 }
 
-const CHILD = { device_id: "local", agent: "codex", session_id: "gallery-plan-child" };
+// The web-ui agent works on the Mac mini, so its card and panel wear the device chip as a mission's do.
+const CHILD = { device_id: "mini", agent: "codex", session_id: "gallery-plan-child" };
 
 function handed(state: PlanDelegation["state"], name: string, agent: string, session: WorkSession | null): PlanDelegation {
   return { state, attempt: 1, agent_id: `gallery-${name}`, name, agent, pane_id: session ? `w1:${name}` : null, session };
@@ -102,11 +103,27 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
   const [shown] = plans as [PlanView, ...PlanView[]];
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: { plans: { items: plans } } as unknown as SnapshotRest, agents: [], connection: "live" });
+    // The 보기 slot holds the plan, so its head wears the kind mark and the `?` as the app's does.
+    const rest = { navigator: { devices: [{ id: "local", kind: "local", label: null }, { id: "mini", kind: "remote", label: "Mac mini" }] }, status: { remote: [{ target_id: "mini", state: "connected" }] }, plans: { items: plans }, ui_state: { detail: { items: [{ kind: "plan", session: SESSION }], shown: true } } } as unknown as SnapshotRest;
+    useShellStore.setState({ rest, agents: [], connection: "live" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
   }, [plans, theme, params]);
+  // A picked step is a press on its card, as the operator makes it, once the layout drew the card.
+  const pick = params.get("pick");
+  useEffect(() => {
+    if (!pick) return;
+    let frame = 0;
+    let left = 120;
+    const press = () => {
+      const card = document.querySelector<HTMLElement>(`[data-plan-step="${pick}"]`);
+      if (card) card.click();
+      else if ((left -= 1) > 0) frame = requestAnimationFrame(press);
+    };
+    frame = requestAnimationFrame(press);
+    return () => cancelAnimationFrame(frame);
+  }, [pick, plans]);
   const width = Number(params.get("width") ?? 1080);
   return (
     <TooltipProvider>
@@ -115,7 +132,7 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
           <PlanPopoverBody paneId={shown.pane_id} plan={shown} onLarge={() => undefined} openPane={() => undefined} />
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-md border border-border">
-          <PlanMap session={SESSION} actions={actions} />
+          <DetailPanel actions={actions} />
         </div>
       </div>
     </TooltipProvider>

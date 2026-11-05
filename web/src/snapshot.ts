@@ -1445,6 +1445,9 @@ export type MissionEvent = {
 /** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
 export type MissionEventsSnapshot = { mission: string | null; events: MissionEvent[]; dropped: number };
 
+/** The brief of the node whose folded box the operator opened (`mission_brief`): one node at a time, `text` null when the node holds none. */
+export type MissionBriefSnapshot = { mission: string | null; node: string | null; text: string | null };
+
 /** The agent a node or a candidate names, with its model and effort. */
 export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
 
@@ -1485,6 +1488,10 @@ export type MissionNode = {
   review: string | null;
   /** The node's finish lines as they stand now (PRD mission-map-git-criteria B32). */
   criteria: MissionCriterion[];
+  /** The steps its Conductor planned for the node (at most 8): what the card and the panel show until the worker's own `plan` exists, and what a step of that plan is compared with. */
+  steps: string[];
+  /** The size in bytes of the brief its worker was started on; none until a worker is bound. The text is read when the panel's folded box opens (`mission_brief`). */
+  brief_bytes: number | null;
   /** Lines that pass or were skipped of `criteria` (what the gate counts), and how many were skipped; B28's `기준 n/m ⤳k` shows `criteria_met - criteria_skipped` as `n`. */
   criteria_met: number;
   criteria_skipped: number;
@@ -1631,7 +1638,9 @@ export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number };
+/** Which way every mission's map runs: what a node waits on above it, or to its left. */
+export type MissionMapFlow = "down" | "across";
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number; map_flow?: MissionMapFlow };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };
@@ -3114,6 +3123,8 @@ export type SnapshotRest = {
   missions?: MissionsSnapshot;
   /** The events of the mission open in the 보기 slot (PRD mission-plan-visibility D-22). */
   mission_events?: MissionEventsSnapshot;
+  /** The brief of the one node whose folded box was opened; `text` is null when it holds none. */
+  mission_brief?: MissionBriefSnapshot;
   /** Each pane's own plan (PRD hide-plan). */
   plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;

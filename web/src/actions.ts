@@ -1908,6 +1908,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     settleMissionNode(missionId: string, node: string, action: import("./snapshot").MissionOperatorAction, since?: number) {
       dispatch({ schema_version: 2, kind: "mission_attention", payload: { mission: missionId, node, action, ...(since === undefined ? {} : { since_unix_ms: since }) } });
     },
+    /** The panel's folded 지시 원문 was opened: the core puts that node's brief in the `mission_brief` section. */
+    readMissionBrief(missionId: string, node: string) {
+      dispatch({ schema_version: 2, kind: "mission_brief_read", payload: { mission: missionId, node } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);

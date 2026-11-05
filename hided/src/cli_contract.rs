@@ -853,6 +853,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_dependency_cycle",
             "mission_criteria_missing",
             "mission_criteria_too_many",
+            "mission_steps_invalid",
             "mission_checkers_invalid",
             "mission_external_invalid",
             "mission_machine_node_refused",
