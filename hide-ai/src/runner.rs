@@ -14,7 +14,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -156,7 +156,7 @@ fn lossy(drained: Drained) -> String {
 /// stderr.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 pub(crate) fn run(spec: &Spec<'_>, cancel: &CancelToken) -> Result<Run, RunError> {
-    let mut command = Command::new(spec.binary.path());
+    let mut command = spec.binary.command();
     if let Environment::Login = spec.environment {
         hide_platform::process::restrict_to_login_environment(&mut command);
     }
@@ -377,6 +377,7 @@ fn sweep(root: &Path) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn a_private_file_is_unreadable_to_others_and_gone_with_its_owner() {

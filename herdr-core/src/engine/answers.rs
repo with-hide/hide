@@ -208,6 +208,36 @@ pub(crate) struct AgentLaunch {
     /// nothing is typed to it before it takes keys. A spawn that resumes is
     /// known by its resume at once, as its caller asked.
     pub(crate) wakes: bool,
+    /// The file the start runs in place of the definition's program name,
+    /// as the pane's node read it (`StartForm::Direct`); `None` starts the
+    /// program by its name.
+    pub(crate) program: Option<StartProgram>,
+}
+
+/// A program a start names by its file, and the words before its own
+/// arguments: npm's Windows launcher read as the program it runs
+/// (`hide_platform::programs::Start`). `name` is the program name the node
+/// was asked about, so a start whose definition names another program runs
+/// that one by its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StartProgram {
+    pub(crate) name: String,
+    pub(crate) program: String,
+    pub(crate) leading: Vec<String>,
+}
+
+impl StartProgram {
+    /// The file a node's start form names, if it names one.
+    pub(crate) fn of(name: &str, form: &hide_node_link::protocol::StartForm) -> Option<Self> {
+        match form {
+            hide_node_link::protocol::StartForm::Direct { program, leading } => Some(Self {
+                name: name.to_owned(),
+                program: program.clone(),
+                leading: leading.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// A start its engine accepted to send ([`super::Engine::prepare_start`]),

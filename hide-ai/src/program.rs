@@ -8,6 +8,11 @@
 //! given the `PATH` its program was found on, here and nowhere else, because a
 //! program found on the login shell's folders and run with the daemon's would
 //! be reported ready and then die looking for its interpreter.
+//!
+//! What runs is how the program starts (`programs::Start`): on Windows npm's
+//! launcher is read as the program it runs, so a child is started without
+//! `cmd.exe` reading its arguments again, and a batch file that cannot be
+//! read is run as found.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -15,10 +20,11 @@ use std::process::Command;
 
 use hide_platform::programs;
 
-/// A CLI that was found, and the `PATH` it was found on.
+/// A CLI that was found, how it starts, and the `PATH` it was found on.
 #[derive(Clone, Debug)]
 pub(crate) struct Program {
     path: PathBuf,
+    start: programs::Start,
     /// What the child's `PATH` is set to; `None` leaves the environment's own,
     /// for a program the caller named by file and nothing searched for.
     search: Option<OsString>,
@@ -44,11 +50,38 @@ impl Program {
         } else {
             programs::Program::find(search.as_deref()?, binary.to_str()?)?.into_path()
         };
-        Some(Self { path, search })
+        // A program named by file runs with the environment's own `PATH`,
+        // which is where its launcher's Node is found.
+        let start = programs::start(
+            &path,
+            &search
+                .clone()
+                .or_else(|| std::env::var_os("PATH"))
+                .unwrap_or_default(),
+        );
+        Some(Self {
+            path,
+            start,
+            search,
+        })
     }
 
+    /// The file that was found, which a backend reports and looks beside.
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// A command that starts the program, with the words its launcher puts
+    /// first; its environment is the caller's to set ([`Self::apply`]).
+    pub(crate) fn command(&self) -> Command {
+        match &self.start {
+            programs::Start::Direct { program, leading } => {
+                let mut command = Command::new(program);
+                command.args(leading);
+                command
+            }
+            programs::Start::Batch => Command::new(&self.path),
+        }
     }
 
     /// Gives `command` the `PATH` this program was found on.
@@ -59,9 +92,9 @@ impl Program {
     }
 }
 
-/// Shared by every backend that starts a user-installed CLI, and by the core
-/// before it asks Herdr to start one in a pane: where `binary` is, if it is
+/// Shared by every backend that starts a user-installed CLI, and by the node
+/// before the core starts one in a pane: how `binary` starts, if it is
 /// anywhere the account's own terminal would find it.
-pub fn resolve_binary(binary: &Path) -> Option<PathBuf> {
-    Program::resolve(binary, None).map(|program| program.path)
+pub fn resolve_start(binary: &Path) -> Option<programs::Start> {
+    Program::resolve(binary, None).map(|program| program.start)
 }

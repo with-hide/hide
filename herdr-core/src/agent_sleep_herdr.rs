@@ -431,6 +431,7 @@ pub(crate) fn start_agent(
         args: request.args.clone(),
         codex_daemon: request.codex_daemon,
         wakes: true,
+        program: None,
     }) {
         Ok(start) => start,
         // A Codex whose daemon Hide has not read answers its own code

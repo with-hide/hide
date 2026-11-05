@@ -1827,15 +1827,35 @@ pub fn handle_with_progress(
     }
 }
 
-/// How the node starts the agent program `name` (`Call::AgentInstalled`):
-/// the program its `PATH` search finds, run through `cmd.exe` when that is a
-/// batch file on Windows, or `None` when nothing is found.
+/// How the node starts the agent program `name` (`Call::AgentInstalled`),
+/// read afresh at each ask: the program its `PATH` search finds, named by
+/// its file and npm's launcher read as the program it runs where the shell
+/// would find another file by the name (Windows), a batch file Windows runs
+/// through `cmd.exe` when that launcher cannot be read, or `None` when
+/// nothing is found.
 fn agent_start_form(name: &Path) -> Option<crate::protocol::StartForm> {
-    hide_ai::resolve_binary(name).map(|program| {
-        if hide_platform::programs::runs_through_cmd(&program) {
-            crate::protocol::StartForm::Batch
-        } else {
-            crate::protocol::StartForm::Program
+    use crate::protocol::StartForm;
+    use hide_platform::programs::{START_NAMES_FILE, Start};
+    hide_ai::resolve_start(name).map(|start| match start {
+        Start::Batch => StartForm::Batch,
+        Start::Direct { .. } if !START_NAMES_FILE => StartForm::Program,
+        Start::Direct { program, leading } => {
+            // The wire carries text; a path that is not text cannot be named
+            // to the shell, so the start goes by the name as a batch file's.
+            let words = std::iter::once(program.into_os_string())
+                .chain(leading)
+                .map(std::ffi::OsString::into_string)
+                .collect::<Result<Vec<_>, _>>();
+            match words {
+                Ok(mut words) => StartForm::Direct {
+                    program: words.remove(0),
+                    leading: words,
+                },
+                Err(_) => {
+                    eprintln!("agent.start_form_not_text");
+                    StartForm::Batch
+                }
+            }
         }
     })
 }

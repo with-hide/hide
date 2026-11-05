@@ -266,6 +266,7 @@ fn run_agent_fork_with_registration(
             request.agent.kind(),
             args,
             request.codex_daemon,
+            None,
             &check,
         )
         .map_err(start_error_message);

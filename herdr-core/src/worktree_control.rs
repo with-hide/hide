@@ -22,7 +22,7 @@ use crate::live::{
 use crate::recent_closed::reopen::export_reopen_layout;
 use hide_node_link::git::{BranchConfigKey, GitCommand};
 use hide_node_link::process::ProcessStart;
-use hide_node_link::protocol::{Call, StartForm};
+use hide_node_link::protocol::Call;
 
 pub(crate) const CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIRM_POLL: Duration = Duration::from_millis(100);
@@ -1592,18 +1592,15 @@ fn launch_agent(
     if let Err(reason) = check() {
         return Launch::Failed(AgentFailure::reason(reason));
     }
-    // Herdr would type the command into the pane's shell and wait for an
-    // agent that can never appear; say so before asking it. A device's PATH
-    // is not this machine's, so there its Herdr answers for it.
+    // The engine would type the command into the pane's shell and wait for
+    // an agent that can never appear; say so before asking it. A device's
+    // PATH is not this machine's, so there its Herdr answers for it. Asked
+    // before every start: how the node starts the program now is what the
+    // start names and whether its first input can ride it.
+    let mut form = None;
     if let Some(node) = agent_node {
-        match crate::node_access::call_as::<Option<StartForm>>(
-            node,
-            Call::AgentInstalled {
-                name: kind.to_owned(),
-            },
-            AGENT_CHECK_TIMEOUT,
-        ) {
-            Ok(Some(_)) => {}
+        match crate::start_prompt::start_form(node, kind, AGENT_CHECK_TIMEOUT) {
+            Ok(Some(answer)) => form = Some(answer),
             Ok(None) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.not_installed",
@@ -1623,7 +1620,7 @@ fn launch_agent(
     // (`start_prompt::launched`, docs/delivery.md, The input ladder).
     let mut typed = None;
     if let Some(prompt) = prompt {
-        match crate::start_prompt::launched(kind, &args, prompt, here) {
+        match crate::start_prompt::launched(kind, &args, prompt, here, form.as_ref()) {
             Ok(Some(words)) => args.extend(words),
             Err(crate::start_prompt::Refusal::Prompt(detail)) => {
                 return Launch::Failed(AgentFailure::with_detail(
@@ -1631,7 +1628,14 @@ fn launch_agent(
                     detail,
                 ));
             }
-            Ok(None) | Err(crate::start_prompt::Refusal::Start(_)) => typed = Some(prompt),
+            Ok(None) => typed = Some(prompt),
+            Err(crate::start_prompt::Refusal::Start(detail)) => {
+                crate::diagnostic!(json!({
+                    "component": "task", "kind": "task.launch_refused", "task": id,
+                    "pane_id": pane_id, "agent_kind": kind, "detail": detail,
+                }));
+                typed = Some(prompt);
+            }
         }
     }
     let name = crate::fork::task_agent_name(kind, pane_id);
@@ -1642,6 +1646,9 @@ fn launch_agent(
         args,
         codex_daemon,
         wakes: false,
+        program: form
+            .as_ref()
+            .and_then(|form| crate::engine::StartProgram::of(kind, form)),
     }) {
         Ok(start) => start,
         // An unread Codex is named by its own code; the rest is a wire fault.
@@ -2964,6 +2971,7 @@ fn open_worktree(
 mod tests {
     use super::*;
     use crate::engine::fake::{FakeEngine, Reply, processes, refused, reply, session, unanswered};
+    use hide_node_link::protocol::StartForm;
     use serde_json::Value;
     use std::collections::VecDeque;
     use std::process::Command;
@@ -4946,7 +4954,7 @@ mod tests {
         ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
             match call {
                 hide_node_link::protocol::Call::AgentInstalled { .. } => Ok(
-                    crate::node_access::LinkAnswer::Parsed(serde_json::to_value(self.0).unwrap()),
+                    crate::node_access::LinkAnswer::Parsed(serde_json::to_value(&self.0).unwrap()),
                 ),
                 other => Err(crate::node_access::LinkError::Unknown(format!("{other:?}"))),
             }

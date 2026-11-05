@@ -922,6 +922,7 @@ fn start_or_degrade_agent(
             &agent.kind,
             args,
             codex_daemon,
+            None,
         );
         if result.is_ok() || (pane_was_clear && agent_is_running(engine, pane_id, &agent.kind)) {
             return Some(started(agent.session_id.as_ref()));
@@ -949,6 +950,7 @@ fn start_or_degrade_agent(
         &agent.kind,
         launch,
         codex_daemon,
+        None,
     ) && !(pane_was_clear && agent_is_running(engine, pane_id, &agent.kind))
     {
         notices.push(format!(

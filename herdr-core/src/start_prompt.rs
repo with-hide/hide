@@ -6,6 +6,8 @@
 //! input, and launched as the agent's start argument only in the cells the
 //! agent journey proves.
 
+use hide_node_link::protocol::StartForm;
+
 /// Why a start that would launch its first input types it instead.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
@@ -30,14 +32,18 @@ impl Refusal {
 /// (`LaunchDialect::prompt_form`); `Ok(None)` for an agent that does not
 /// declare the launch prompt, typed as every input is by default. The
 /// journey proves a launch only for an agent that declares it, started on
-/// this machine (`here`), on macOS or Linux: a device's start and every start
-/// on Windows, where the journey starts each CLI through npm's `.cmd`
-/// launcher, are typed until a cell proves them.
+/// this machine (`here`) as `form` says its node starts the program
+/// ([`start_form`]): by its name on macOS and Linux, by its file on Windows,
+/// npm's launcher read as the program it runs. A device's start, a start
+/// whose node did not say, one whose program Windows runs through `cmd.exe`
+/// (`StartForm::Batch`), and one whose Windows command line would pass the
+/// system's limit are typed.
 pub(crate) fn launched(
     kind: &str,
     native: &[String],
     prompt: &str,
     here: bool,
+    form: Option<&StartForm>,
 ) -> Result<Option<Vec<String>>, Refusal> {
     if !hide_agent_adapter::adapter(kind).is_some_and(|row| row.launch_prompt()) {
         return Ok(None);
@@ -48,12 +54,63 @@ pub(crate) fn launched(
             "it starts on a device, where no journey cell proves a launch".into(),
         ));
     }
-    if cfg!(windows) {
-        return Err(Refusal::Start(
-            "no Windows journey cell proves a launch".into(),
-        ));
+    match form {
+        None => Err(Refusal::Start(
+            "the pane's machine did not say how the agent's program starts".into(),
+        )),
+        Some(StartForm::Batch) => Err(Refusal::Start(
+            "its program is a batch file that is not npm's launcher, which cmd.exe would read again".into(),
+        )),
+        Some(StartForm::Direct { program, leading })
+            if windows_command_line(program, leading, native, &words)
+                > hide_platform::process::WINDOWS_COMMAND_LINE_LIMIT =>
+        {
+            Err(Refusal::Start(
+                "its Windows command line would pass the system's limit".into(),
+            ))
+        }
+        Some(StartForm::Program | StartForm::Direct { .. }) => Ok(Some(words)),
     }
-    Ok(Some(words))
+}
+
+/// How the pane's node starts `kind`'s program now (`Call::AgentInstalled`),
+/// asked before every start, since an update of the agent can move what its
+/// launcher runs: `None` when the program is not on the node's `PATH`.
+pub(crate) fn start_form(
+    node: &dyn crate::node_access::NodeLink,
+    kind: &str,
+    timeout: std::time::Duration,
+) -> Result<Option<StartForm>, crate::node_access::LinkError> {
+    crate::node_access::call_as::<Option<StartForm>>(
+        node,
+        hide_node_link::protocol::Call::AgentInstalled {
+            name: kind.to_owned(),
+        },
+        timeout,
+    )
+}
+
+/// The UTF-16 units of the command line a start of `program` with these
+/// words gives Windows, its terminating null included, as `Start-Process`
+/// builds it (the program quoted, then the arguments quoted for the C
+/// runtime), with room for the few words the engine adds (`codex_launch`).
+fn windows_command_line(
+    program: &str,
+    leading: &[String],
+    native: &[String],
+    words: &[String],
+) -> usize {
+    /// The engine's own words: a definition's `[start]` arguments and the
+    /// Codex daemon flag, a few dozen units today.
+    const ENGINE_WORDS: usize = 256;
+    let arguments = leading
+        .iter()
+        .chain(native)
+        .chain(words)
+        .map(|word| hide_shell::quote::windows_argument(word))
+        .collect::<Vec<_>>()
+        .join(" ");
+    program.encode_utf16().count() + 2 + 1 + arguments.encode_utf16().count() + 1 + ENGINE_WORDS
 }
 
 /// The words a start of `kind` adds to carry `prompt` as one argument in the
@@ -135,9 +192,10 @@ mod tests {
 
     #[test]
     fn a_first_input_launches_only_where_the_agent_declares_it_and_the_journey_proves_it() {
+        let by_name = StartForm::Program;
         let words = |kind: &str, native: &[&str], prompt: &str, here: bool| {
             let native: Vec<String> = native.iter().map(|word| (*word).to_owned()).collect();
-            launched(kind, &native, prompt, here)
+            launched(kind, &native, prompt, here, Some(&by_name))
         };
         // Typed by default: OpenCode, Pi and Cursor declare no launch.
         for kind in ["opencode", "pi", "cursor"] {
@@ -155,24 +213,52 @@ mod tests {
             words("codex", &[], "go", false),
             Err(Refusal::Start(_))
         ));
-        let launched_here = words("codex", &[], "-x\ny", true);
-        if cfg!(windows) {
-            assert!(matches!(launched_here, Err(Refusal::Start(_))));
-        } else {
-            assert_eq!(
-                launched_here,
-                Ok(Some(vec!["--".into(), "-x\u{2028}y".into()]))
-            );
-            assert_eq!(
-                words("antigravity", &[], "@a", true),
-                Ok(Some(vec!["-i".into(), "@a".into()]))
-            );
-            // A whole brief, 16 KiB, rides the start.
-            let brief = "x".repeat(16 * 1024);
-            assert_eq!(
-                words("claude", &[], &brief, true),
-                Ok(Some(vec!["--".into(), brief]))
-            );
+        assert_eq!(
+            words("codex", &[], "-x\ny", true),
+            Ok(Some(vec!["--".into(), "-x\u{2028}y".into()]))
+        );
+        assert_eq!(
+            words("antigravity", &[], "@a", true),
+            Ok(Some(vec!["-i".into(), "@a".into()]))
+        );
+        // A whole brief, 16 KiB, rides the start.
+        let brief = "x".repeat(16 * 1024);
+        assert_eq!(
+            words("claude", &[], &brief, true),
+            Ok(Some(vec!["--".into(), brief]))
+        );
+    }
+
+    /// How the node starts the program decides with the rest: a Windows
+    /// start that names its file launches, a program `cmd.exe` would run,
+    /// a node that did not say, and a Windows command line past the
+    /// system's limit are typed.
+    #[test]
+    fn a_first_input_rides_only_a_start_whose_node_says_it_reaches_the_program_whole() {
+        let direct = StartForm::Direct {
+            program: "C:\\nodejs\\node.exe".into(),
+            leading: vec!["C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js".into()],
+        };
+        let brief = format!("-{}", "x".repeat(16 * 1024 - 1));
+        assert_eq!(
+            launched("codex", &[], &brief, true, Some(&direct)),
+            Ok(Some(vec!["--".into(), brief.clone()]))
+        );
+        for form in [None, Some(&StartForm::Batch)] {
+            assert!(matches!(
+                launched("codex", &[], &brief, true, form),
+                Err(Refusal::Start(_))
+            ));
         }
+        // A task's first prompt may be 64 KiB, twice what Windows takes.
+        let long = "x".repeat(MAX_PROMPT_BYTES);
+        assert!(matches!(
+            launched("codex", &[], &long, true, Some(&direct)),
+            Err(Refusal::Start(_))
+        ));
+        assert_eq!(
+            launched("codex", &[], &long, true, Some(&StartForm::Program)),
+            Ok(Some(vec!["--".into(), long]))
+        );
     }
 }

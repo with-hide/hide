@@ -537,6 +537,7 @@ pub(crate) fn start_agent(
     kind: &str,
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
+    program: Option<crate::engine::StartProgram>,
 ) -> Result<String, String> {
     start_agent_checked(
         engine,
@@ -548,6 +549,7 @@ pub(crate) fn start_agent(
         kind,
         args,
         codex_daemon,
+        program,
         &|| Ok(()),
     )
     .map_err(|error| match error {
@@ -580,6 +582,7 @@ pub(crate) fn start_agent_checked(
     kind: &str,
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
+    program: Option<crate::engine::StartProgram>,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<String, crate::agent_start::StartError> {
     let start = engine
@@ -590,6 +593,7 @@ pub(crate) fn start_agent_checked(
             args,
             codex_daemon,
             wakes: false,
+            program,
         })
         .map_err(|detail| crate::agent_start::StartError::NotStarted {
             reason: "agent_start.failed".into(),

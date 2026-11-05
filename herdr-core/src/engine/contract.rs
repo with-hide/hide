@@ -28,6 +28,10 @@ use crate::recent_closed::{ClosedLayoutNode, ClosedSplitDirection};
 
 const WAIT: Wait = Wait::Each(Duration::from_secs(10));
 const SHOWN_WITHIN: Duration = Duration::from_secs(30);
+/// How long a start may take to reach its program, the start wait a spawn
+/// gives an agent's screen.
+#[cfg(windows)]
+const START_WITHIN: Duration = Duration::from_secs(120);
 
 /// A command line for the engine's default shell that prints `word-42`,
 /// spelled so that the line itself does not contain what it prints.
@@ -371,13 +375,23 @@ fn holder_root() -> (tempfile::TempDir, [std::path::PathBuf; 3]) {
     (root, folders)
 }
 
+/// The shell the contract's command lines are written for, whatever shell
+/// this account uses: a POSIX shell, and Windows PowerShell on Windows.
+fn contract_shell() -> Vec<std::ffi::OsString> {
+    if cfg!(windows) {
+        vec!["powershell.exe".into()]
+    } else {
+        vec!["/bin/sh".into()]
+    }
+}
+
 /// A node over `home` and `state_dir`, as a daemon's: its pane holders
 /// started from the built holder (`HIDE_TEST_HOLDER_BIN`), whose panes run
-/// `/bin/sh` (PowerShell on Windows), and the service that runs their
-/// terminals.
+/// `shell`, and the service that runs their terminals.
 fn built_node(
     home: &std::path::Path,
     state_dir: &std::path::Path,
+    shell: Vec<std::ffi::OsString>,
 ) -> (
     std::sync::Arc<hide_node::Local>,
     std::sync::Arc<hide_node::terminal::Service>,
@@ -416,13 +430,6 @@ fn built_node(
     )
     .expect("the node's holders open");
     let holders = terminals.holders;
-    // The contract's command lines are a POSIX shell's and Windows
-    // PowerShell's, whatever shell this account uses.
-    let shell = if cfg!(windows) {
-        vec!["powershell.exe".into()]
-    } else {
-        vec!["/bin/sh".into()]
-    };
     let panes = Arc::new(LocalPanes::new(
         Arc::clone(&holders),
         Arc::clone(&terminals.service),
@@ -436,8 +443,13 @@ fn built_node(
 
 impl BuiltHolders {
     pub(crate) fn start() -> Self {
+        Self::start_in(contract_shell())
+    }
+
+    /// The engine over holders whose panes run `shell`.
+    pub(crate) fn start_in(shell: Vec<std::ffi::OsString>) -> Self {
         let (root, [home, state_dir, folder]) = holder_root();
-        let (node, service) = built_node(&home, &state_dir);
+        let (node, service) = built_node(&home, &state_dir, shell);
         // Asked as every own engine asks its machine's holders: through the
         // machine's node, here this machine's in-process node, by the
         // requests a device's node answers over its link (D-22).
@@ -516,6 +528,7 @@ fn the_own_engine_refuses_an_agent_start_over_a_running_program() {
             args: Vec::new(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
+            program: None,
         })
         .unwrap();
     let error = engine.start_agent(WAIT, &start).unwrap_err();
@@ -699,7 +712,7 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
     let folder = hide_platform::path::to_wire(&folder).unwrap();
     let engine_dir = hide_kit::layout::engine_dir(&state_dir);
     let open = || {
-        let (node, service) = built_node(&home, &state_dir);
+        let (node, service) = built_node(&home, &state_dir, contract_shell());
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
@@ -859,7 +872,7 @@ fn a_restored_tab_whose_pane_is_in_a_subfolder_stays_in_the_folder_its_workspace
     let sub = hide_platform::path::to_wire(&sub).unwrap();
     let engine_dir = hide_kit::layout::engine_dir(&state_dir);
     let open = || {
-        let (node, service) = built_node(&home, &state_dir);
+        let (node, service) = built_node(&home, &state_dir, contract_shell());
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
@@ -1053,6 +1066,142 @@ fn an_own_engine_pane_names_itself_and_proves_its_recorded_shell() {
     built.stop();
 }
 
+/// A first input launched as a start's argument reaches the program npm's
+/// Windows launcher runs exactly as the start decision gave it
+/// (with-hide/hide-private#573): each start types its line into a real
+/// pane's PowerShell, which hands it to `Start-Process`, in Windows
+/// PowerShell 5.1 and in PowerShell 7, whose passing of native arguments
+/// differs. One input holds what `cmd.exe` would read (`%`, `%PATH%`, `&`,
+/// `^`, `"`), backslashes before a quote and a line break; the other is
+/// 16 KiB starting with `-`, the agent journey's `start` cell. The stand-in
+/// Codex is a script under npm's own launcher, run by the runner's Node.
+#[cfg(windows)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_launched_first_input_reaches_npms_program_whole_in_windows_powershell() {
+    launched_input_reaches_npms_program("powershell.exe");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_launched_first_input_reaches_npms_program_whole_in_powershell_7() {
+    launched_input_reaches_npms_program("pwsh.exe");
+}
+
+#[cfg(windows)]
+fn launched_input_reaches_npms_program(shell: &str) {
+    use hide_node_link::protocol::StartForm;
+    use hide_platform::programs::{self, Start};
+
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let running = Running(BuiltHolders::start_in(vec![shell.into()]));
+    let built = &running.0;
+    let engine = &built.engine;
+    engine.set_agent_definitions(std::sync::Arc::new(
+        hide_agent_adapter::definition::Catalog::read(Vec::new()),
+    ));
+
+    // A local npm install of Codex whose script writes the words it was
+    // given to the file its pane names.
+    let install = tempfile::tempdir().unwrap();
+    let package = install
+        .path()
+        .join("node_modules")
+        .join("@openai")
+        .join("codex");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("bin").join("codex.js"),
+        "#!/usr/bin/env node\nrequire('fs').writeFileSync(process.env.HIDE_TEST_ARGV, JSON.stringify(process.argv.slice(2)));\n",
+    )
+    .unwrap();
+    let bin = install.path().join("node_modules").join(".bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let launcher = bin.join("codex.cmd");
+    std::fs::write(
+        &launcher,
+        include_str!("../../../hide-platform/tests/fixtures/launchers/npm-script.cmd"),
+    )
+    .unwrap();
+    // As a node answers `Call::AgentInstalled` (hide-host's
+    // `agent_start_form`), Node found on the runner's `PATH`.
+    let search = std::env::var_os("PATH").expect("the runner's PATH holds Node");
+    let form = match programs::start(&launcher, &search) {
+        Start::Direct { program, leading } => StartForm::Direct {
+            program: program.into_os_string().into_string().unwrap(),
+            leading: leading
+                .into_iter()
+                .map(|word| word.into_string().unwrap())
+                .collect(),
+        },
+        Start::Batch => panic!("npm's launcher is read as the program it runs"),
+    };
+
+    let short = "100% of %PATH% & a ^ b \"quoted\" a\\\"b c:\\dir\\\nnext line";
+    let long: String = std::iter::once('-')
+        .chain("%PATH% & ^ \"x\" \\\" ".chars().cycle())
+        .take(16 * 1024)
+        .collect();
+    for (index, input) in [short, long.as_str()].into_iter().enumerate() {
+        let written = install.path().join(format!("argv-{index}.json"));
+        let env = BTreeMap::from([(
+            "HIDE_TEST_ARGV".to_owned(),
+            written.to_str().unwrap().to_owned(),
+        )]);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, &built.folder, &format!("launch-{index}"), false, env)
+            .expect("a workspace is made");
+        prompted(engine, &pane);
+        until("the shell alone holds its terminal", || {
+            engine
+                .pane_processes(WAIT, &pane)
+                .is_ok_and(|processes| processes.shell_holds_terminal())
+        });
+        let words = crate::start_prompt::launched("codex", &[], input, true, Some(&form))
+            .expect("the start carries the input")
+            .expect("Codex declares a launch");
+        let start = engine
+            .prepare_start(super::AgentLaunch {
+                pane_id: pane.clone(),
+                name: format!("launched-{index}"),
+                kind: "codex".into(),
+                args: words.clone(),
+                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+                wakes: false,
+                program: super::StartProgram::of("codex", &form),
+            })
+            .expect("the start is prepared");
+        engine
+            .start_agent(WAIT, &start)
+            .unwrap_or_else(|error| panic!("{shell} takes the start: {error:?}"));
+        let given = || -> Option<Vec<String>> {
+            serde_json::from_str(&std::fs::read_to_string(&written).ok()?).ok()
+        };
+        // A 16 KiB line is typed key by key into the shell's line editor.
+        until_within("the program records its arguments", START_WITHIN, || {
+            given().is_some()
+        });
+        let given = given().unwrap();
+        assert_eq!(given, words, "{shell} changed a word on its way");
+        assert_eq!(
+            given.last().map(String::as_str),
+            Some(input.replace('\n', "\u{2028}").as_str()),
+            "{shell} did not hand the input over as its last word"
+        );
+    }
+}
+
 /// PRD engine-bundle-3-core-owns B18's hook cells: on the core's own engine
 /// a Claude whose hook said its conversation is put to sleep in its pane by
 /// its own quit key and woken there resuming that conversation by id, the
@@ -1110,6 +1259,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
             args: Vec::new(),
             codex_daemon: CodexDaemon::Unsupported,
             wakes: false,
+            program: None,
         })
         .expect("the start is prepared");
     start_at_shell_reusing_name(
@@ -1200,9 +1350,13 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     built.stop();
 }
 
-#[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
 fn until(what: &str, done: impl Fn() -> bool) {
-    let deadline = Instant::now() + SHOWN_WITHIN;
+    until_within(what, SHOWN_WITHIN, done);
+}
+
+#[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
+fn until_within(what: &str, within: Duration, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + within;
     while !done() {
         assert!(Instant::now() < deadline, "{what} never happened");
         std::thread::sleep(Duration::from_millis(100));
