@@ -1503,9 +1503,13 @@ pub enum MissionCommand {
         #[serde(default)]
         handover: Option<String>,
     },
+    /// The mission's view, or with `node` that node's with its worker's
+    /// newest letters (with-hide/hide-private#552).
     Show {
         #[serde(default)]
         mission: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
     },
     List,
     Settings,
@@ -1525,10 +1529,10 @@ impl MissionCommand {
                 valid_text(title, TITLE_LIMIT)
                     && github.as_deref().is_none_or(|g| valid_text(g, TITLE_LIMIT))
             }
-            Self::Plan { mission, .. }
-            | Self::Start { mission }
-            | Self::Reopen { mission }
-            | Self::Show { mission } => id_ok(mission),
+            Self::Plan { mission, .. } | Self::Start { mission } | Self::Reopen { mission } => {
+                id_ok(mission)
+            }
+            Self::Show { mission, node } => id_ok(mission) && id_ok(node),
             Self::Node { mission, node, .. } => id_ok(mission) && valid_key(node),
             Self::Record {
                 mission,

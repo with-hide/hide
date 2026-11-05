@@ -6707,10 +6707,10 @@ fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
         json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
     )
     .unwrap();
-    let worked = runtime.missions.book.get("mission-1").unwrap().nodes[0]
-        .quiet_since()
-        .unwrap();
     let minute = 60_000;
+    // It went to work two hours ago, so a push read now is after it.
+    let worked = crate::runtime::unix_milliseconds() - 120 * minute;
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms = Some(worked);
     assert!(!runtime.warn_missions(worked + 89 * minute));
     assert!(runtime.warn_missions(worked + 90 * minute));
     let (kinds, letters) = warnings_of(&runtime);
@@ -6736,4 +6736,126 @@ fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
     runtime.note_mission_pulls(crate::node::TEST_NODE, &pushed);
     assert!(runtime.warn_missions(crate::runtime::unix_milliseconds()));
     assert_eq!(warnings_of(&runtime), (vec![], vec![]));
+}
+
+/// with-hide/hide-private#552 c1: `show <node>` answers that node's view
+/// alone with its worker's newest letters, newest first, and refuses a node
+/// the plan does not have; without a node it answers the whole mission as
+/// before.
+#[test]
+fn show_of_a_node_answers_its_view_and_its_workers_newest_letters() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let actor = |pane: &str| runtime.delivery_observations[pane].actor.clone();
+    let (conductor, worker, reviewer) = (actor("sender"), actor("recipient"), actor("reviewer"));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for (n, (from, to)) in [
+        (&conductor, &worker),
+        (&worker, &conductor),
+        (&conductor, &reviewer),
+        (&worker, &conductor),
+        (&conductor, &worker),
+        (&worker, &conductor),
+        (&conductor, &worker),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        crate::delivery::mailbox::send(
+            &mut ledger,
+            from,
+            to,
+            &format!("letter-{n}"),
+            &format!("letter {n}\nmore of it"),
+            "progress",
+            None,
+            1_000 + n as u64,
+        )
+        .unwrap();
+    }
+    runtime.publish_delivery(Arc::new(ledger), true);
+
+    let (whole, _) = command(&mut runtime, "sender", json!({"op": "show"})).unwrap();
+    assert_eq!(whole["mission"]["nodes"].as_array().unwrap().len(), 2);
+    let (shown, changed) =
+        command(&mut runtime, "sender", json!({"op": "show", "node": "fix"})).unwrap();
+    assert!(!changed);
+    assert_eq!(shown["mission_id"], "mission-1");
+    assert_eq!(shown["node"]["key"], "fix");
+    assert_eq!(shown["node"], whole["mission"]["nodes"][0]);
+    let lines: Vec<&str> = shown["letters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|letter| letter["line"].as_str().unwrap())
+        .collect();
+    // The reviewer's letter is not the worker's; five at most, newest first.
+    assert_eq!(
+        lines,
+        ["letter 6", "letter 5", "letter 4", "letter 3", "letter 1"]
+    );
+    assert_eq!(shown["letters"][0]["from"], "sender");
+    assert_eq!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "show", "node": "nope"})
+        )
+        .unwrap_err(),
+        "mission_node_unknown"
+    );
+}
+
+/// with-hide/hide-private#552: a node a book from before push times kept,
+/// whose pull request GitHub shows at the head Hide already read, starts its
+/// push clock on the first read rather than counting its quiet from when it
+/// started work.
+#[test]
+fn a_node_from_before_push_times_starts_its_clock_on_the_next_read() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "pr": 7}}),
+    )
+    .unwrap();
+    let open = github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false);
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &open);
+    fn node(runtime: &mut Runtime) -> &mut crate::missions::MissionNode {
+        &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0]
+    }
+    assert!(node(&mut runtime).pushed_at_unix_ms.is_some());
+    // As a book written before the field reads.
+    node(&mut runtime).pushed_at_unix_ms = None;
+    let before = crate::runtime::unix_milliseconds();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &open);
+    assert!(
+        node(&mut runtime)
+            .pushed_at_unix_ms
+            .is_some_and(|at| at >= before)
+    );
 }

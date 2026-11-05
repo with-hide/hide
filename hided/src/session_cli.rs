@@ -138,7 +138,7 @@ pub fn draw(value: &Value) -> String {
 /// a space: a list or record line is one line, so a title cannot draw a
 /// line of its own, such as a forged `[AI 요약]` mark. A read's events keep
 /// their lines; they carry no marks.
-fn one_line(value: &Value) -> Value {
+pub(crate) fn one_line(value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(
             text.chars()
@@ -203,7 +203,7 @@ fn tag(source: &Value) -> &'static str {
     }
 }
 
-fn age(now: u64, at: &Value) -> String {
+pub(crate) fn age(now: u64, at: &Value) -> String {
     let Some(at) = at.as_u64() else {
         return "-".to_owned();
     };

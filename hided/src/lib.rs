@@ -30,6 +30,7 @@ pub mod index;
 pub mod link_mux;
 pub mod login_item;
 pub mod mission_cli;
+mod mission_show;
 pub mod mobile;
 pub mod node_browser;
 pub mod node_cli;

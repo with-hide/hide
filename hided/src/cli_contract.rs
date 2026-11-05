@@ -1093,12 +1093,23 @@ pub const COMMANDS: &[Spec] = &[
             "mission_other_project",
         ],
     },
-    spec(
-        &["mission", "show"],
-        &[],
-        &[optional("--mission", Key)],
-        &["mission"],
-    ),
+    // The mission as text, or one node of it with its worker's newest
+    // letters; --json prints the answer line (with-hide/hide-private#552).
+    Spec {
+        words: &["mission", "show"],
+        arguments: &[Arg {
+            name: "node",
+            value: Key,
+            required: false,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[optional("--mission", Key), switch("--json")],
+        rest: None,
+        answers: &["mission", "mission_node"],
+        refusals: &["mission_node_unknown"],
+    },
     spec(&["mission", "list"], &[], &[], &["mission_list"]),
     spec(&["mission", "settings"], &[], &[], &["mission_settings"]),
     Spec {
@@ -1381,6 +1392,20 @@ fn answers() -> Value {
     map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
     map.insert("mission_list".into(), shape(&["items"]));
     map.insert("mission_settings".into(), shape(&["settings"]));
+    // One node of the mission and its worker's newest letters, null while
+    // the ledger cannot be read.
+    map.insert(
+        "mission_node".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "string"},
+                "node": object,
+                "letters": {"type": ["array", "null"]},
+            },
+            "required": ["mission_id", "node", "letters"],
+        }),
+    );
     // The plan's own record and, for the caller's own plan, the summary its
     // hook keeps (`contracts/delivery-envelope.json`, `plan_context`).
     map.insert("plan".into(), shape(&["session", "plan"]));

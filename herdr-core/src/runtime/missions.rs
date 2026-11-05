@@ -220,6 +220,22 @@ pub struct NodeView {
     pub warnings: Vec<crate::missions::NodeWarning>,
 }
 
+/// Letters `hide mission show <node>` lists of the node's worker.
+const NODE_LETTER_LIMIT: usize = 5;
+/// Characters of a letter's first line it keeps.
+const NODE_LETTER_LINE: usize = 160;
+
+/// One letter of a node's worker, as `hide mission show <node>` lists it:
+/// who wrote to whom, its kind, and its first line.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodeLetter {
+    pub at_unix_ms: u64,
+    pub from: String,
+    pub to: String,
+    pub kind: String,
+    pub line: String,
+}
+
 /// One of a node's pull requests as its card draws it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NodePrView {
@@ -559,17 +575,21 @@ fn attention_words(
 
 /// Keeps `seen` as what GitHub last said of its pull request, read at
 /// `now`; whether it moved. A head Hide had not read of it is the node's
-/// last push (with-hide/hide-private#552).
+/// last push (with-hide/hide-private#552), and so is the first head read
+/// for a node a book from before push times kept.
 pub(super) fn note_seen(node: &mut MissionNode, seen: PrSeen, now: u64) -> bool {
+    let unread = node.pushed_at_unix_ms.is_none();
     let held = node
         .pr_seen
         .iter_mut()
         .find(|held| held.number == seen.number);
-    if seen.head.is_some() && held.as_ref().is_none_or(|held| held.head != seen.head) {
+    let pushed =
+        seen.head.is_some() && (unread || held.as_ref().is_none_or(|held| held.head != seen.head));
+    if pushed {
         node.pushed_at_unix_ms = Some(now);
     }
     match held {
-        Some(held) if *held == seen => false,
+        Some(held) if *held == seen => pushed,
         Some(held) => {
             *held = seen;
             true
@@ -1487,7 +1507,7 @@ impl Runtime {
                 self.save_missions();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
             }
-            MissionCommand::Show { mission } => {
+            MissionCommand::Show { mission, node } => {
                 let id = match mission {
                     Some(id) => self
                         .missions
@@ -1502,7 +1522,21 @@ impl Runtime {
                         .map(|mission| mission.id.clone())
                         .ok_or("mission_none")?,
                 };
-                Ok((json!({"mission": self.mission_view_of(&id)}), false))
+                let Some(key) = node else {
+                    return Ok((json!({"mission": self.mission_view_of(&id)}), false));
+                };
+                let shown = self
+                    .mission_view_of(&id)
+                    .and_then(|view| view.nodes.into_iter().find(|node| node.key == key))
+                    .ok_or("mission_node_unknown")?;
+                Ok((
+                    json!({
+                        "mission_id": id,
+                        "node": shown,
+                        "letters": self.node_letters(&id, &key),
+                    }),
+                    false,
+                ))
             }
             MissionCommand::List => {
                 let items: Vec<Value> = self
@@ -2078,7 +2112,11 @@ impl Runtime {
                             }
                         }
                     }
-                    if node.seen(number) != Some(&now_seen) {
+                    // A node a book from before push times kept starts its
+                    // push clock on this read.
+                    if node.seen(number) != Some(&now_seen)
+                        || (node.pushed_at_unix_ms.is_none() && now_seen.head.is_some())
+                    {
                         seen_updates.push((node_index, now_seen));
                     }
                 }
@@ -2387,6 +2425,53 @@ impl Runtime {
         self.snapshot.ui_state.conductor_settings = settings;
         self.persist_ui_state();
         true
+    }
+
+    /// The newest letters node `key`'s worker sent or got, newest first, at
+    /// most `NODE_LETTER_LIMIT` (with-hide/hide-private#552): none for a
+    /// node with no worker, and null while the ledger cannot be read.
+    fn node_letters(&self, id: &str, key: &str) -> Option<Vec<NodeLetter>> {
+        let ledger = self.delivery_state().ok()?;
+        let agent = self
+            .missions
+            .book
+            .get(id)
+            .and_then(|mission| mission.node(key))
+            .and_then(|node| node.agent_id.as_deref());
+        let Some(worker) =
+            agent.and_then(|agent| ledger.agents.iter().find(|record| record.id == agent))
+        else {
+            return Some(Vec::new());
+        };
+        let mut letters: Vec<&crate::delivery::ledger::Letter> = ledger
+            .letters
+            .iter()
+            .filter(|letter| {
+                letter.sender.same_identity(&worker.actor)
+                    || letter.recipient.same_identity(&worker.actor)
+            })
+            .collect();
+        letters.sort_by_key(|letter| std::cmp::Reverse(letter.created_at_unix_ms));
+        Some(
+            letters
+                .into_iter()
+                .take(NODE_LETTER_LIMIT)
+                .map(|letter| NodeLetter {
+                    at_unix_ms: letter.created_at_unix_ms,
+                    from: letter.sender.name.clone(),
+                    to: letter.recipient.name.clone(),
+                    kind: letter.kind.clone(),
+                    line: letter
+                        .body
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(NODE_LETTER_LINE)
+                        .collect(),
+                })
+                .collect(),
+        )
     }
 
     /// The view of one mission as the map draws it.
