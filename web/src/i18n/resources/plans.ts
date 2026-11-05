@@ -58,6 +58,10 @@ export const plansEnglish = {
   "plan.side.next": "Next",
   "plan.side.left": "Left",
   "plan.side.handed": "Handed to",
+  "plan.step.number": "Step {{number}}",
+  "plan.panel.of": "Step {{number}} of {{total}}",
+  "plan.panel.nothing": "Nothing yet",
+  "plan.panel.none": "None",
 } as const;
 
 const ko: Catalog<typeof plansEnglish> = {
@@ -115,6 +119,10 @@ const ko: Catalog<typeof plansEnglish> = {
   "plan.side.next": "다음",
   "plan.side.left": "남긴 것",
   "plan.side.handed": "맡긴 일",
+  "plan.step.number": "단계 {{number}}",
+  "plan.panel.of": "단계 {{number}} / {{total}}",
+  "plan.panel.nothing": "아직 없음",
+  "plan.panel.none": "없음",
 };
 
 const zh: Catalog<typeof plansEnglish> = {
@@ -172,6 +180,10 @@ const zh: Catalog<typeof plansEnglish> = {
   "plan.side.next": "下一步",
   "plan.side.left": "产出",
   "plan.side.handed": "已委派",
+  "plan.step.number": "步骤 {{number}}",
+  "plan.panel.of": "第 {{number}} / {{total}} 步",
+  "plan.panel.nothing": "暂无",
+  "plan.panel.none": "无",
 };
 
 const ja: Catalog<typeof plansEnglish> = {
@@ -229,6 +241,10 @@ const ja: Catalog<typeof plansEnglish> = {
   "plan.side.next": "次",
   "plan.side.left": "残したもの",
   "plan.side.handed": "任せた仕事",
+  "plan.step.number": "ステップ {{number}}",
+  "plan.panel.of": "ステップ {{number}} / {{total}}",
+  "plan.panel.nothing": "まだありません",
+  "plan.panel.none": "なし",
 };
 
 export const plansCatalogs = { en: plansEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof plansEnglish>;

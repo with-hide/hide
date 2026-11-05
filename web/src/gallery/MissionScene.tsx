@@ -25,11 +25,12 @@
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { AgentMark } from "../AgentMark";
 import { createActions } from "../actions";
+import { KindHelpButton } from "../components/kind-help-dialog";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { MissionMap } from "../MissionMap";
+import { DetailPanel } from "../DetailPanel";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
 import type { AgentRow, Device, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
@@ -329,7 +330,12 @@ export function withMissionAsk(rest: SnapshotRest, deviceId: string, now: number
 /** The page's title as the Settings sheet draws it above the tab. */
 function SettingsPageTitle() {
   const { t } = useInterfaceTranslation();
-  return <h2 className="mb-lg truncate text-headline font-semibold">{t("settings.tabs.conductor")}</h2>;
+  return (
+    <div className="mb-lg flex min-w-0 items-center gap-sm">
+      <h2 className="truncate text-headline font-semibold">{t("settings.tabs.conductor")}</h2>
+      <KindHelpButton from="mission" />
+    </div>
+  );
 }
 
 export function MissionScene({ params }: { params: URLSearchParams }) {
@@ -347,7 +353,9 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     const closed = ["done", "cancelled", "no-pr", "exempt"].includes(state);
     const conductor = { pane_id: CONDUCTOR_PANE, device_id: "local", mark: closed ? "asleep" : state === "decision" ? "quiet" : "going" };
     const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "no-conductor" || state === "failed" ? [] : state === "decision" ? [conductor, raised] : [conductor]) as unknown as AgentRow[];
-    useShellStore.setState({ rest: fixture.rest, agents, connection: "live" });
+    // The 보기 slot holds the mission, so its head wears the kind mark and the `?` as the app's does.
+    const rest = { ...fixture.rest, ui_state: { ...fixture.rest.ui_state, detail: { items: [{ kind: "mission" as const, mission: "mission-1" }], shown: true } } } as SnapshotRest;
+    useShellStore.setState({ rest, agents, connection: "live" });
     // The popover pinned, as a press, the Show task steps chord or a first plan watched leaves it.
     useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -380,7 +388,7 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
             <PaneWorkChip paneId={CONDUCTOR_PANE} actions={actions} />
           </div>
         ) : (
-          <MissionMap missionId="mission-1" actions={actions} />
+          <DetailPanel actions={actions} />
         )}
       </div>
     </TooltipProvider>
