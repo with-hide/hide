@@ -2,12 +2,12 @@
 // a native launcher and by npm's script launchers, with real process ancestry.
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentFixture } from "./engine-fixture";
+import type { EngineServer } from "./engine-fixture";
 import { fixtureExecutable } from "./platform-fixture";
 
 export const resumeFlags: Record<string, string> = { codex: "resume", opencode: "-s", pi: "--session", agy: "--conversation" };
 
-export function startProgram(fixture: AgentFixture, kind: string): string {
+export function startProgram(fixture: Pick<EngineServer, "root">, kind: string): string {
   const definition = ({ claude: "claude-code", agy: "antigravity" } as Record<string, string>)[kind] ?? kind;
   const screen = kind === "omp" ? "omp fixture ready\r\n" : fs.readFileSync(path.resolve("..", "hide-agent-adapter", "tests", "fixtures", "screens", definition, "idle-empty-composer.ansi"), "utf8");
   const config = {

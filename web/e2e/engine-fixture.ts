@@ -186,7 +186,65 @@ export type AgentFixture = EngineServer & {
 
 export async function startFixture({ agents = true, family = false }: { agents?: boolean; family?: boolean } = {}): Promise<AgentFixture> {
   const server = await startEngine();
-  let made: Opened | null = null;
+  const { opened, need } = openedByFirstDaemon(server, (control, daemon) => openFixture(control, server, daemon, family ? "family" : agents ? "agents" : "shells"));
+  return {
+    ...server,
+    // The stand-in reports a new session through Hide's own hook from inside its pane (`setAgentSession`).
+    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: builtHooks() },
+    opened,
+    get workspace() { return need().workspace; },
+    get checkout() { return need().checkout; },
+    get tab() { return need().tab; },
+    get panes() { return need().panes; },
+    get inputLogs() { const [one, two] = need().panes; return [paneInputLog(server.root, one), paneInputLog(server.root, two)] as [string, string]; },
+    ready: async () => { need(); },
+    family,
+    runAs: (pane) => {
+      const runAs = need().runAs;
+      if (!runAs) throw new Error("only a family fixture's agents run hide commands: startFixture({ family: true })");
+      return runAs(pane);
+    },
+  };
+}
+
+/**
+ * One agent that runs `hide` as a real agent does, from inside its pane: the
+ * family fixture's parent alone, in a Git checkout `fixture` on `main`, for a
+ * spec whose subject is a command an agent runs (a spawn), not a family.
+ * Made, like `startFixture`'s, through the first daemon `startHided` starts.
+ */
+export type CallerFixture = EngineServer & {
+  workspace: string;
+  checkout: string;
+  tab: string;
+  /** The agent's pane. */
+  pane: string;
+  /** The way to run `hide` as the agent in `pane` (`agent-pane.ts`). */
+  runAs: (pane: string) => HideRunner;
+};
+
+export async function startCaller(): Promise<CallerFixture> {
+  const server = await startEngine();
+  const { opened, need } = openedByFirstDaemon(server, (control, daemon) => openCaller(control, server, daemon));
+  return {
+    ...server,
+    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: builtHooks() },
+    opened,
+    get workspace() { return need().workspace; },
+    get checkout() { return need().checkout; },
+    get tab() { return need().tab; },
+    get pane() { return need().pane; },
+    runAs: (pane) => need().runAs(pane),
+  };
+}
+
+/**
+ * Makes a fixture's checkout and panes with `open` through the first daemon
+ * `startHided` starts on `server`; `need` reads what it made. A setup that
+ * gives up keeps the daemon's last snapshot and output as run evidence.
+ */
+function openedByFirstDaemon<T>(server: EngineServer, open: (control: HidedControl, daemon: OpenedDaemon) => Promise<T>): { opened: (daemon: OpenedDaemon) => Promise<void>; need: () => T } {
+  let made: T | null = null;
   const need = () => {
     if (!made) throw new Error("the fixture's checkout and panes are made by its first daemon: read them after startHided");
     return made;
@@ -210,7 +268,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
       terminalBytes += bytes;
     });
     try {
-      made = await openFixture(control, server, daemon, family ? "family" : agents ? "agents" : "shells");
+      made = await open(control, daemon);
     } catch (error) {
       // Run evidence for a reviewer: what the daemon published when the setup gave up.
       const keep = process.env.HIDE_E2E_SCREENSHOT_DIR;
@@ -224,27 +282,11 @@ export async function startFixture({ agents = true, family = false }: { agents?:
       control.close();
     }
   };
-  return {
-    ...server,
-    // The stand-in reports a new session through Hide's own hook from inside its pane (`setAgentSession`).
-    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: builtHooks() },
-    opened,
-    get workspace() { return need().workspace; },
-    get checkout() { return need().checkout; },
-    get tab() { return need().tab; },
-    get panes() { return need().panes; },
-    get inputLogs() { const [one, two] = need().panes; return [paneInputLog(server.root, one), paneInputLog(server.root, two)] as [string, string]; },
-    ready: async () => { need(); },
-    family,
-    runAs: (pane) => {
-      const runAs = need().runAs;
-      if (!runAs) throw new Error("only a family fixture's agents run hide commands: startFixture({ family: true })");
-      return runAs(pane);
-    },
-  };
+  return { opened, need };
 }
 
 type Opened = { workspace: string; checkout: string; tab: string; panes: [string, string]; runAs?: (pane: string) => HideRunner };
+type Caller = { workspace: string; checkout: string; tab: string; pane: string; runAs: (pane: string) => HideRunner };
 
 async function openFixture(control: HidedControl, server: EngineServer, daemon: OpenedDaemon, kind: "shells" | "agents" | "family"): Promise<Opened> {
   const dir = path.join(server.root, "fixture");
@@ -268,20 +310,9 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
   // A family's agents run `hide` as a real agent does, from inside their panes.
   const runAs = kind === "family" ? installAgentRunner(server as AgentPaneFixture, daemon.stateDir) : undefined;
   for (const agent of FIXTURE_AGENTS) writeFixtureTranscript(claudeProjects(server), agent.session, { task: agent.task });
-  const start = (session: string, target?: Record<string, unknown>) => control.send("agent_start_in_checkout", {
-    checkout_path: folder, provider: "claude", resume_session_id: session, request_id: `e2e-${crypto.randomUUID()}`, ...(target ? { target } : {}),
-  });
-  start(FIXTURE_AGENTS[0].session);
-  const one = await control.until((rest) => {
-    const tab = checkoutAt(rest, folder)?.tabs.find((id) => id !== first.tab);
-    const pane = tab ? tabPanes(rest, tab)[0] : undefined;
-    const area = tab ? areaShowing(rest, tab) : undefined;
-    return tab && pane && area && agentIn(rest, pane) ? { tab, pane, area } : undefined;
-  }, "the first fixture agent in a tab of its own", 30_000);
-  viewPane(control, one.pane);
+  const { start, one } = await startFirstAgent(control, folder, first.tab);
   if (runAs) {
-    // The parent reports its session before it can name itself as one.
-    await control.until((rest) => agentIn(rest, one.pane)?.session_id === FIXTURE_AGENTS[0].session || undefined, `${one.pane} on its session`, 30_000);
+    await parentOnItsSession(control, one.pane);
     const spawned = await runAs(one.pane)(["agent", "spawn", "--parent", "here", "--beside", "--name", "agent-two", "--intent", "fixture-two", "--kind", "claude", "--repo", fs.realpathSync.native(dir), "--branch", "main", "--", "--resume", FIXTURE_AGENTS[1].session]);
     if (spawned.status !== 0) throw new Error(`the fixture's parent could not spawn its child: ${spawned.out}`);
   } else {
@@ -296,16 +327,58 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
   // (docs/ARCHITECTURE.md, Agents on the core's own engine).
   // The shell Add project opened is not the fixture's: its tab goes.
   await closePane(control, first.pane);
+  await agentsResting(control, server, panes, Boolean(runAs));
+  return { workspace: first.workspace, checkout: first.checkout, tab: one.tab, panes, runAs };
+}
+
+/** The family fixture's parent alone (`startCaller`). */
+async function openCaller(control: HidedControl, server: EngineServer, daemon: OpenedDaemon): Promise<Caller> {
+  const dir = path.join(server.root, "fixture");
+  // A spawn names its checkout by repository and branch.
+  gitRepository(dir);
+  const first = await openProject(control, dir, "fixture");
+  const runAs = installAgentRunner(server as AgentPaneFixture, daemon.stateDir);
+  writeFixtureTranscript(claudeProjects(server), FIXTURE_AGENTS[0].session, { task: FIXTURE_AGENTS[0].task });
+  const { one } = await startFirstAgent(control, first.folder, first.tab);
+  await parentOnItsSession(control, one.pane);
+  // The shell Add project opened is not the fixture's: its tab goes.
+  await closePane(control, first.pane);
+  await agentsResting(control, server, [one.pane], true);
+  return { workspace: first.workspace, checkout: first.checkout, tab: one.tab, pane: one.pane, runAs };
+}
+
+/** Starts the fixture's first agent in a tab of its own in `folder`, as the start panel does, and sizes its pane. */
+async function startFirstAgent(control: HidedControl, folder: string, projectTab: string) {
+  const start = (session: string, target?: Record<string, unknown>) => control.send("agent_start_in_checkout", {
+    checkout_path: folder, provider: "claude", resume_session_id: session, request_id: `e2e-${crypto.randomUUID()}`, ...(target ? { target } : {}),
+  });
+  start(FIXTURE_AGENTS[0].session);
+  const one = await control.until((rest) => {
+    const tab = checkoutAt(rest, folder)?.tabs.find((id) => id !== projectTab);
+    const pane = tab ? tabPanes(rest, tab)[0] : undefined;
+    const area = tab ? areaShowing(rest, tab) : undefined;
+    return tab && pane && area && agentIn(rest, pane) ? { tab, pane, area } : undefined;
+  }, "the first fixture agent in a tab of its own", 30_000);
+  viewPane(control, one.pane);
+  return { start, one };
+}
+
+/** The parent reports its session before it can name itself as one. */
+async function parentOnItsSession(control: HidedControl, pane: string): Promise<void> {
+  await control.until((rest) => agentIn(rest, pane)?.session_id === FIXTURE_AGENTS[0].session || undefined, `${pane} on its session`, 30_000);
+}
+
+/** Waits until every agent of `panes` reads its terminal and rests, then gives the first the keyboard. */
+async function agentsResting(control: HidedControl, server: EngineServer, panes: [string, ...string[]], family: boolean): Promise<void> {
   // Each stand-in opens its input log once it runs and reads its terminal,
   // which the engine can list it before.
   // A family's agents mark their session report instead.
-  const reading = (pane: string) => fs.existsSync(runAs ? reportedMarker(server.root, pane) : paneInputLog(server.root, pane));
-  await expect.poll(() => panes.every(reading), { message: "both fixture agents reading their terminals", timeout: 30_000 }).toBe(true);
+  const reading = (pane: string) => fs.existsSync(family ? reportedMarker(server.root, pane) : paneInputLog(server.root, pane));
+  await expect.poll(() => panes.every(reading), { message: "the fixture's agents reading their terminals", timeout: 30_000 }).toBe(true);
   // A spec reads the fixture's rows as they rest, never as they settle.
-  await control.until((rest) => panes.every((pane) => startedAgentIn(rest, pane)) || undefined, "both fixture agents started", 30_000);
+  await control.until((rest) => panes.every((pane) => startedAgentIn(rest, pane)) || undefined, "the fixture's agents started", 30_000);
   // The first agent holds the keyboard.
   await focusPane(control, panes[0]);
-  return { workspace: first.workspace, checkout: first.checkout, tab: one.tab, panes, runAs };
 }
 
 /** Makes `dir` a Git repository on `main` with one commit. */
