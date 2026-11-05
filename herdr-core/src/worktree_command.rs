@@ -3,7 +3,7 @@
 //!
 //! The runtime admits it under its lock (`Runtime::worktree_remove_command`)
 //! and starts the same removal the dialog's `remove_worktree` event starts:
-//! the deletion gate, the host's recheck, the close of the checkout's Herdr
+//! the deletion gate, the host's recheck, the close of the checkout's
 //! workspace and panes, then Git. The daemon waits for that removal's record
 //! to end ([`answer`]) and answers the caller with how it ended, so a raw
 //! `git worktree remove` never leaves the workspace behind.
@@ -47,8 +47,8 @@ impl WorktreeRemove {
     }
 }
 
-/// `hide workspace remove`: the worktree removed, with its Herdr workspace
-/// and panes closed first.
+/// `hide workspace remove`: the worktree removed, with its workspace and
+/// panes closed first.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WorktreeRemoved {
     /// The checkout's path, as the command named it.

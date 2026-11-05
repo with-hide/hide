@@ -59,7 +59,7 @@ A documents-only overlap (`*.md`, `*.pen`, `site/`) never stacks; it is resolved
 
 ## Issues
 
-Development issues (flaky tests, nightly failures, the agent canary, the Herdr preview notice, follow-ups) live in the private with-hide/hide-private, where CI files its own ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
+Development issues (flaky tests, nightly failures, the agent canary, follow-ups) live in the private with-hide/hide-private, where CI files its own ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
 The public with-hide/hide takes only user bug reports and feature requests through its issue forms; an agent opens a development issue in with-hide/hide-private (`gh issue create --repo with-hide/hide-private`, and the `issue` skill with that repository as its target).
 A pull request that ends one names it across repositories, `Closes with-hide/hide-private#N`.
 
@@ -111,7 +111,7 @@ On 2026-09-27 one session replaced it with a build that predated a merged fix, d
 - Replace `/Applications/hide.app` only when the operator asked for it in the session doing the replacing; another session's approval, a PRD, or a verification plan is not that authority.
 - Keep the bundle you replace as `/Applications/hide-previous-<version>.app.bak`, and never delete a `.bak` another session left; the version is `CFBundleShortVersionString` in its `Contents/Info.plist`.
 - Before a live check, read the installed `Contents/Info.plist` version and `hide --help` from its `Contents/Resources`, and say in the run record which build answered.
-- Launch it with the `HERDR_*` and `HIDE_*` variables stripped from the launching shell (`env -u HERDR_BIN_PATH -u HERDR_SOCKET_PATH … open /Applications/hide.app`): a Herdr pane carries the socket, identity and binary path of the Herdr that opened it, and the app would attach to that pane's server rather than the one a Dock launch finds.
+- Launch it with the `HIDE_*` variables stripped from the launching shell (`env -u HIDE_STATE_DIR … open /Applications/hide.app`): a shell that set one, such as `HIDE_STATE_DIR` for an isolated run, points the app at that state folder rather than the one a Dock launch finds.
 - Package without `HIDE_VERSION`: the script names a local build `<newest release>-main.<commit>`, such as `0.4.0-main.f77c2a43`, and only a release sets `HIDE_VERSION` (`docs/BUILD.md`).
 
 ## Runtime Architecture
@@ -143,11 +143,11 @@ Before diagnosing, changing, reviewing, or verifying terminal responsiveness, re
 It owns the reproduction procedure, the isolation checklist, the measurement boundaries, the invariants a fix has to preserve, and the regression ownership table; historical run measurements are not acceptance thresholds.
 
 - Explain the added work per input, the notification fan-out, and the pending-work bound before adding anything to a high-frequency path; publish only actual state transitions, and never drop input to do so.
-- The session-sync thread that applies Herdr's events never blocks: a socket read that opens its own connection, a subprocess, an HTTP request or an fsync runs on a worker or a save thread, and a publish whose catalog inputs did not move repeats no catalog build, purpose sync or path resolution.
+- The session-sync thread that applies the engine's events never blocks: a socket read that opens its own connection, a subprocess, an HTTP request or an fsync runs on a worker or a save thread, and a publish whose catalog inputs did not move repeats no catalog build, purpose sync or path resolution.
 - No subprocesses, blocking I/O, or large serialization under `Mutex<Runtime>`: `snapshot_delta_payload` takes owned data under the lock and `serialize_snapshot_delta` serializes outside it, and `ChangeNotifier` announces once per burst.
   No per-tick or per-tab git forks: the catalog reads repository facts from what the core's own node answers about its paths (`Call::PathFacts`, read from the repository's own files there, never from a `git` process), asked off the lock.
 - Report idle and driven measurements separately, with the load and workload recorded for each.
-- Native verification targets one precisely identified candidate PID/window and an isolated Herdr server; the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/PERFORMANCE_TESTING.md` for isolation and foreground-interaction boundaries.
+- Native verification targets one precisely identified candidate PID/window and an isolated state folder (`HIDE_STATE_DIR`); the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/PERFORMANCE_TESTING.md` for isolation and foreground-interaction boundaries.
 
 <!-- harness:agents-namespace:start -->
 ## Harness Namespace (`agents/`)

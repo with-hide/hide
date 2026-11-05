@@ -214,7 +214,7 @@ pub struct PsPane {
     pub worktree: bool,
     pub tab: Option<String>,
     pub tab_id: Option<String>,
-    /// Herdr's pane id on `machine`.
+    /// The pane's id on `machine`.
     pub pane: String,
     /// The pane's own title, for a pane that holds no agent.
     pub title: Option<String>,

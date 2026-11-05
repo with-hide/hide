@@ -249,7 +249,7 @@ pub struct PaneRead {
 }
 
 /// `hide pane send`: the pane typed into and what reached it. Each field
-/// says what Herdr took, never what the program in the pane did with it:
+/// says what the pane took, never what the program in the pane did with it:
 /// `enter_sent` is an Enter written, not a prompt accepted.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PaneSent {

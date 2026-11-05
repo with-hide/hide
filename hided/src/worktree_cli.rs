@@ -1,6 +1,6 @@
 //! `hide workspace remove <path> [--delete-branch] [--force]`: removes a
 //! worktree of the caller's machine through the delete dialog's own path, so
-//! its Herdr workspace and panes close with it. The daemon runs it
+//! its workspace and panes close with it. The daemon runs it
 //! (`herdr_core::worktree_command`).
 
 use herdr_core::worktree_command::WorktreeRemove;
