@@ -2359,6 +2359,22 @@ fn a_node_pull_request_is_handed_to_an_agent_on_the_node() {
 /// worktree is asked of the node's engine, never of this machine.
 #[test]
 fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
+    assert_eq!(node_pull_request_worktree(false), (true, false));
+}
+
+/// A hand-over from the phone makes the same worktree and starts the same
+/// agent, and asks the engine not to focus the tab it makes, so the desktop's
+/// screen and keyboard stay where the operator left them (PRD
+/// mobile-companion-ui B44).
+#[test]
+fn a_phone_hand_over_makes_the_worktree_without_focusing_its_tab() {
+    assert_eq!(node_pull_request_worktree(true), (false, true));
+}
+
+/// Hands the node's pull request 7 over and returns whether the engine was
+/// asked to focus the new worktree's tab and whether the slot says the start
+/// stays behind.
+fn node_pull_request_worktree(stay_behind: bool) -> (bool, bool) {
     let repo = repo(Some("https://github.com/acme/app.git"), "feature");
     git(&repo.root, &["branch", "pr-branch"]);
     let node = Recording::of(Some(FakeDevice::new()));
@@ -2389,7 +2405,7 @@ fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
         &shared,
         "pr_delegate",
         serde_json::json!({"workspace_id": workspace_id, "pr_number": 7, "provider": "claude",
-            "prompt": "Fix the failing checks", "request_id": "start-pr-7"}),
+            "prompt": "Fix the failing checks", "request_id": "start-pr-7", "stay_behind": stay_behind}),
     );
     herdr.wait_for_calls(1, Duration::from_secs(10));
     let asked = herdr.calls();
@@ -2418,6 +2434,12 @@ fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
         ),
         ("worktree_create", Some(NODE), Some("start-pr-7"))
     );
+    (
+        asked[0].1["focus"]
+            .as_bool()
+            .expect("the focus the engine was asked for"),
+        operation.stays_behind,
+    )
 }
 
 /// A GitHub issue #number of acme/app as the issue read answers it.
