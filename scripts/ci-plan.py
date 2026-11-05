@@ -63,7 +63,21 @@ LANES = (
     "remote-mailbox",
     "desktop-e2e",
     "package",
+    "merge-rust",
+    "merge-web",
 )
+# A merge queue group runs these and `policy` and nothing else, and no other run
+# plans them. A group commit is main with the pull requests queued ahead of it and
+# this one merged in, each of which passed `verify` on its own; what two changes
+# that each passed break together without a conflict is mostly a compile, type or
+# baseline failure (on 2026-10-05 one pull request removed an export another one
+# imported, and both had passed), which these find in minutes. A behavior only
+# the two changes together break is left to main's push run, which plans every
+# lane (CONTRIBUTING.md, Merging into main).
+MERGE_GROUP_ONLY_LANES = ("merge-rust", "merge-web")
+MERGE_GROUP_LANES = ("policy",) + MERGE_GROUP_ONLY_LANES
+# What a path can plan: every lane but the merge group's own.
+PATH_LANES = tuple(lane for lane in LANES if lane not in MERGE_GROUP_ONLY_LANES)
 # What a full plan runs. `package` builds host packages and device kits from cold
 # on their runners, so it runs for a change to what goes into one (PACKAGE_PATHS) and
 # nothing else: main's push runs leave it out, the nightly calls
@@ -76,7 +90,7 @@ LANES = (
 # in a pane holder across a node restart on all three systems, for a change to
 # the holder, the node's holder code, the pins or the lane's own scripts; the
 # nightly runs it on its own.
-FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis", "holder-restart"))
+FULL_LANES = tuple(lane for lane in PATH_LANES if lane not in ("package", "agent-clis", "holder-restart"))
 
 # Crates whose change reaches what differs by operating system: the platform
 # layer, the install kit and hooks, and the daemon and
@@ -379,7 +393,7 @@ POLICY_ONLY = (
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
-    "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
+    "scripts/check-release-assets.mjs", "scripts/release-draft.mjs",
     "scripts/merge-order.py", "scripts/pull_requests.py",
     "scripts/web-shell-measure/*",
     # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
@@ -713,7 +727,7 @@ def select(entries, crates, root=ROOT, full_reason=None):
             reasons[lane].append(reason)
     if full:
         # Preserve main/nightly defaults; a PR editing CI exercises everything.
-        for lane in LANES if all_lanes else FULL_LANES:
+        for lane in PATH_LANES if all_lanes else FULL_LANES:
             reasons[lane] = list(full)
         packages = {crate["name"] for crate in crates.values()}
     planned = [lane for lane in LANES if reasons[lane]]
@@ -880,6 +894,11 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         for lane in owned:
             result["reasons"].pop(lane, None)
         return result
+    if event == "merge_group":
+        why = "merge group: the checks two changes that each passed can fail together"
+        result = {"full": False, "lanes": list(MERGE_GROUP_LANES), "rust_packages": [],
+                  "reasons": {lane: [why] for lane in MERGE_GROUP_LANES}}
+        return with_macos(result, False, ["merge group: no macOS job"])
     if draft:
         # A draft is not a merge candidate: no lane runs, `aggregate` fails
         # `verify` for it, and marking the pull request ready for review

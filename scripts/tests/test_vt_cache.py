@@ -21,6 +21,7 @@ ON_MAIN = "${{ github.ref == 'refs/heads/main' }}"
 USERS = {
     ('vt.yml', 'build'): ON_MAIN,
     ('pr.yml', 'rust'): False,
+    ('pr.yml', 'merge-rust'): False,
     ('pr.yml', 'windows-check'): False,
     ('release.yml', 'test'): False,
     ('holder-restart.yml', 'restart'): False,

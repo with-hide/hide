@@ -52,8 +52,8 @@ Do these three things, at these three moments, on every task; `python3 scripts/m
 
 1. Before the first line of code: start on an open pull request's branch, and open yours with `--base <that branch>`, only when the work needs what that pull request adds (an API, state, schema or contract); work that only might touch the same files starts from main, like work that does not.
 2. After the first push: run `python3 scripts/merge-order.py <number>` (or `--branch <name>` before the pull request exists) and act on its `Do:` line and nothing else; `Stay as you are` is the usual answer, and a stack is only ever joined by merging the layer below, never by rebasing and never by merging main into an upper layer.
-3. Before a merge, the lead only, and this includes a merge `/ship` is about to make: run `python3 scripts/merge-order.py` with no argument first and take the green pull requests in the order it prints, each through `python3 scripts/premerge-check.py <number>` and the merge command that prints; a delegated session never merges.
-   [`.claude/skills/merge-green/SKILL.md`](.claude/skills/merge-green/SKILL.md) is that procedure step by step, for any agent runtime: the check runs under the machine's shared lock (`lockf -k /tmp/hide-premerge.lock …`), a pass merges without asking the operator again, and the merged branch's worktree is removed.
+3. Before a merge, the lead only, and this includes a merge `/ship` is about to make: run `python3 scripts/merge-order.py` with no argument first and add the green pull requests to the merge queue in the order it prints (`gh pr merge <number> --match-head-commit <head>`); a delegated session never merges.
+   [`.claude/skills/merge-green/SKILL.md`](.claude/skills/merge-green/SKILL.md) is that procedure step by step, for any agent runtime: the queue checks each one on main with the ones ahead of it and merges it, without asking the operator again, and the merged branch's worktree is removed.
 
 A documents-only overlap (`*.md`, `*.pen`, `site/`) never stacks; it is resolved once, by merging main right before the merge.
 
@@ -66,7 +66,7 @@ A pull request that ends one names it across repositories, `Closes with-hide/hid
 ## Before Opening A Pull Request
 
 `main` takes pull-request merges only, and the `verify` workflow has to pass; this repository currently uses merge commits, and no one, maintainer included, can push around branch protection.
-A green pull request does not need the latest main to merge: `python3 scripts/premerge-check.py <number>` decides against main as it is now and prints the merge command.
+A green pull request does not need the latest main to merge: the merge queue checks it on main as it is then, with the pull requests queued ahead of it.
 When main's push run fails, follow `CONTRIBUTING.md`, When main's push run fails: it owns the merge freeze, the narrow exception for unrelated development changes during an existing Windows-only failure, the rule that a failure only in macOS jobs does not freeze merges, and the full verification required before release.
 `CONTRIBUTING.md` lists every gate with its local command; run the lanes the diff touches before opening the pull request, and change a gate that is wrong in the same pull request with the reason in the description.
 While you wait for CI, keep a background watch on the run and act when it ends; `CONTRIBUTING.md`, Waiting for CI, owns the commands.
