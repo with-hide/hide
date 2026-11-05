@@ -175,8 +175,8 @@ impl LocalPanes {
                 .collect(),
             size,
             // The screen's colors reach a holder by a theme message once a
-            // screen draws it; until then its color answers are the xterm
-            // defaults.
+            // screen draws it; until then it answers no foreground or
+            // background question (with-hide/hide-private#405).
             theme: Theme {
                 foreground: None,
                 background: None,

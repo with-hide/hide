@@ -14,10 +14,11 @@ use std::path::PathBuf;
 
 use hide_holder_protocol::{Capability, ClientMessage, CloseReason, MAX_INPUT, NoticeReason};
 
-use crate::support::{Connection, HOLD_WRITES, Holder, Home, Script, wait_until};
+use crate::support::{Connection, HOLD_WRITES, Holder, Home, Script, node_theme, wait_until};
 
 /// A color question, which every system's terminal passes to the holder to
-/// answer (on Windows ConPTY answers none of them itself, `meaning.rs`).
+/// answer from the node's theme (on Windows ConPTY answers none of them
+/// itself, `meaning.rs`).
 const QUESTION: &[u8] = b"\x1b]11;?\x07";
 
 /// Enough questions that their answers, about 25 bytes each, pass 64 KiB.
@@ -39,7 +40,7 @@ fn questioning(home: &Home) -> (Script, Holder, PathBuf) {
         one.extend_from_slice(format!("again-{step}").as_bytes());
         steps.push(one);
     }
-    let script = Script::new(home, steps);
+    let script = Script::new(home, steps).with_theme(node_theme());
     let release = home.path().join("release");
     let hold: OsString = release.clone().into();
     let holder = script.start_with(home, &[(HOLD_WRITES, &hold)]);

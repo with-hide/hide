@@ -12,8 +12,8 @@
 //! record no longer reserves it.
 //!
 //! `--theme` is the node's theme in `Theme::to_arg`'s form, so the program's
-//! first color question is answered with it; without it the parser's own
-//! defaults answer until a theme message comes.
+//! first color question is answered with it; without it no foreground or
+//! background question is answered until a theme message gives them.
 //!
 //! It is started as a resident child (`hide_platform::process::start_resident`)
 //! lent one pipe, on which it says `ready holder=<pid> program=<pid>
