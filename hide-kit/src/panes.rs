@@ -1474,8 +1474,15 @@ impl Panes {
     /// `wait` for the lock of a holder known to have ended.
     fn remove_stale_socket(&self, pane: &str, wait: Duration) {
         let socket = layout::holder_socket(&self.state_dir, pane);
-        if let Ok(true) = hide_platform::ipc::remove_leftover(&socket, wait) {
-            self.emit("pane_holder.stale_socket_removed", json!({ "pane": pane }));
+        match hide_platform::ipc::remove_leftover(&socket, wait) {
+            Ok(true) => self.emit("pane_holder.stale_socket_removed", json!({ "pane": pane })),
+            Ok(false) => {}
+            // Kept: a listener still answers or holds its lock, or the
+            // system refused the removal; the next reconcile tries again.
+            Err(error) => self.emit(
+                "pane_holder.stale_socket_kept",
+                json!({ "pane": pane, "error": error.to_string() }),
+            ),
         }
     }
 

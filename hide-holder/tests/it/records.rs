@@ -236,6 +236,34 @@ fn holders_in(home: &Path) -> Vec<u32> {
     found
 }
 
+/// Asserts that `holder` is the one process running a holder under `home`;
+/// otherwise names each process found by its parent, start and name, and
+/// says whether a second look still finds it, which
+/// with-hide/hide-private#498 needs to tell another holder from a passing
+/// copy of this one.
+fn assert_one_holder(home: &Path, holder: u32) {
+    let found = holders_in(home);
+    if found == [holder] {
+        return;
+    }
+    let described: Vec<String> = found
+        .iter()
+        .map(|pid| {
+            format!(
+                "{pid}: parent {:?}, start {:?}, name {:?}",
+                hide_platform::process::parent_of(*pid).ok(),
+                hide_platform::process::start_time(*pid).ok(),
+                hide_platform::process::name_of(*pid).ok(),
+            )
+        })
+        .collect();
+    panic!(
+        "one holder {holder} was expected, found {found:?} (a second look finds {:?}):\n{}",
+        holders_in(home),
+        described.join("\n")
+    );
+}
+
 #[test]
 fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     let folder = Folder::new();
@@ -272,7 +300,7 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
         .record("p1")
         .holder
         .expect("the holder wrote itself in");
-    assert_eq!(holders_in(folder.home.path()), vec![holder.pid]);
+    assert_one_holder(folder.home.path(), holder.pid);
     // The same pane id with another command is another intent, refused.
     let other = folder.request("p1", role_program("flood"), Vec::new());
     assert!(
@@ -310,7 +338,7 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     assert!(again.incarnation > ended.incarnation, "{again:?}");
     let second = again.holder.expect("the holder wrote itself in");
     assert_ne!(second, holder);
-    assert_eq!(holders_in(folder.home.path()), vec![second.pid]);
+    assert_one_holder(folder.home.path(), second.pid);
     folder.panes.close(folder.owner(), "p1").unwrap();
     assert!(folder.panes.forget(folder.owner(), "p1").is_err());
     drop(replacement);
@@ -548,7 +576,11 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
         );
     }
     let socket = layout::holder_socket(&folder.state, "p1");
-    assert!(!socket.exists());
+    assert!(
+        !socket.exists(),
+        "{:?}",
+        EVENTS.lock().unwrap_or_else(PoisonError::into_inner)
+    );
     let mut lock = socket.into_os_string();
     lock.push(".lock");
     assert!(!Path::new(&lock).exists());
@@ -832,7 +864,11 @@ fn an_earlier_start_that_left_processes_holds_its_id_until_they_end() {
         Err(StartRefusal::EarlierRuns(left)) => assert!(left.contains(&program.pid), "{left:?}"),
         other => panic!("the pane's id was taken while its program ran: {other:?}"),
     }
+    let left = named.program;
     drop(named);
+    // The holder's end ends its program, on Windows by its job a moment
+    // after: the id is free once the program it names has ended.
+    left.wait_gone();
     let started = folder.start(&request);
     assert_eq!(started.phase, Phase::Running, "{started:?}");
     assert_ne!(started.program, Some(program), "{started:?}");
