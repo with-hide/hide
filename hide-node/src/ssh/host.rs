@@ -214,7 +214,7 @@ impl HelperPackages {
     /// `hided.exe` on Windows) is accepted only for this daemon's own
     /// platform, which is what the package and a development build carry.
     pub fn find(&self, os: &str, arch: &str) -> Result<PathBuf, String> {
-        self.find_program(HELPER_NAME, os, arch).map_err(|()| {
+        self.find_built_program(HELPER_NAME, os, arch).map_err(|()| {
             format!(
                 "This Hide build does not include the device helper for {} {arch}; files and Git on this device stay unavailable until a build that packages it is installed",
                 platform_label(os)
@@ -236,7 +236,7 @@ impl HelperPackages {
         let holder = match bundled {
             Some(holder) => holder,
             None => {
-                let holder = self.find_program(HOLDER_NAME, os, arch).map_err(|()| {
+                let holder = self.find_built_program(HOLDER_NAME, os, arch).map_err(|()| {
                     EstablishError::Unsupported(format!(
                         "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
                         platform_label(os)
@@ -251,7 +251,7 @@ impl HelperPackages {
         // folder beside the node's program (`hide_kit::holders`).
         if os == "windows" {
             let conpty = self
-                .find_folder(hide_kit::holders::CONPTY_SOURCE, os, arch)
+                .find_built_folder(hide_kit::holders::CONPTY_SOURCE, os, arch)
                 .map_err(|()| {
                     EstablishError::Unsupported(format!(
                         "This Hide build does not include the pane holder's ConPTY runtime for {} {arch}; the core's own engine cannot run this device's panes",
@@ -283,7 +283,7 @@ impl HelperPackages {
         // rule. Only a missing foreign helper goes to the release cache. This
         // runs on the connection worker, never under the runtime mutex, and
         // the bounded synchronous request cannot outlive that worker.
-        if self.find_program(HELPER_NAME, os, arch).is_err()
+        if self.find_built_program(HELPER_NAME, os, arch).is_err()
             && (os != std::env::consts::OS || arch != std::env::consts::ARCH)
             && device_bundles::supported(os, arch)
         {
@@ -303,7 +303,7 @@ impl HelperPackages {
             missing: Vec::new(),
         };
         for name in [CLI_NAME, HOOKS_NAME] {
-            match self.find_program(name, os, arch) {
+            match self.find_built_program(name, os, arch) {
                 Ok(path) => match read_package(&device_program(name, os), &path) {
                     Ok(package) => payload.files.push(package),
                     Err(reason) => payload.missing.push(reason),
@@ -320,13 +320,13 @@ impl HelperPackages {
     /// The program `name` for `os`/`arch`, by the helper's rule: this build's
     /// own copy carries its system's program name (`hided.exe` on Windows),
     /// as the package and a development build name it.
-    fn find_program(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
+    fn find_built_program(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
         self.find_named(name, &device_program(name, os), os, arch)
     }
 
     /// The folder `name` for `os`/`arch`, by the helper's rule: a folder has
     /// the same name on every system (`holder-conpty`).
-    fn find_folder(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
+    fn find_built_folder(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
         self.find_named(name, name, os, arch)
     }
 
