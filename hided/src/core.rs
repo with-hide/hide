@@ -187,6 +187,19 @@ enum Command {
         device_id: String,
         reply: Sender<Option<EngineHandle>>,
     },
+    /// The Views a pane's agent has open, for a phone's 볼 것 tab.
+    AgentLooks {
+        pane_id: String,
+        reply: Sender<herdr_core::LookViews>,
+    },
+    /// A checkout's change-list read, prepared under the lock; the Git read
+    /// runs where the caller runs it, never on the owner thread.
+    CheckoutChanges {
+        device_id: String,
+        checkout_path: String,
+        committed: bool,
+        reply: Sender<Result<herdr_core::PreparedChanges, String>>,
+    },
     InputGate {
         reply: Sender<Arc<herdr_core::input_gate::PaneInputGate>>,
     },
@@ -913,6 +926,39 @@ impl CoreHandle {
         &self.holders
     }
 
+    /// The Views the agent in `pane_id` has open; see `Core::agent_looks`.
+    pub fn agent_looks(&self, pane_id: &str) -> Result<herdr_core::LookViews, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::AgentLooks {
+                pane_id: pane_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the looks reply".to_owned())
+    }
+
+    /// The prepared change-list read of a checkout; see
+    /// `Core::prepare_checkout_changes`.
+    pub fn prepare_checkout_changes(
+        &self,
+        device_id: &str,
+        checkout_path: &str,
+        committed: bool,
+    ) -> Result<herdr_core::PreparedChanges, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::CheckoutChanges {
+                device_id: device_id.to_owned(),
+                checkout_path: checkout_path.to_owned(),
+                committed,
+                reply,
+            })
+            .map_err(|_| "core_unavailable".to_owned())?;
+        rx.recv().map_err(|_| "core_unavailable".to_owned())?
+    }
+
     /// The engine the core holds for a connected SSH device; see
     /// `Core::device_engine`.
     pub fn device_engine(&self, device_id: &str) -> Result<Option<EngineHandle>, String> {
@@ -1564,6 +1610,21 @@ fn owner_loop(
             }
             Command::DeviceEngine { device_id, reply } => {
                 let _ = reply.send(core.device_engine(&device_id));
+            }
+            Command::AgentLooks { pane_id, reply } => {
+                let _ = reply.send(core.agent_looks(&pane_id));
+            }
+            Command::CheckoutChanges {
+                device_id,
+                checkout_path,
+                committed,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_checkout_changes(
+                    &device_id,
+                    &checkout_path,
+                    committed,
+                ));
             }
             Command::InputGate { reply } => {
                 let _ = reply.send(core.input_gate());

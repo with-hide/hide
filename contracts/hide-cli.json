@@ -4318,6 +4318,7 @@
                 "mission_dependency_cycle",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
+                "mission_steps_invalid",
                 "mission_checkers_invalid",
                 "mission_external_invalid",
                 "mission_machine_node_refused"
@@ -5274,7 +5275,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:bd5361c06c6604616fb2261ae71ca5f39bb76aec9a5a1aa4ffe1ccc8cd9d8b3f",
+    "digest": "sha256:07011e721abb3a5238b4c1b7abe05e0faab7a5a07428678cc14103a1bdbe020a",
     "envelopes": {
         "agent": {
             "answer": "value",

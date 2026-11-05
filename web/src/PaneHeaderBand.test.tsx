@@ -40,7 +40,9 @@ async function mount(value = header, agents: AgentRow[] = [], options: { rest?: 
   Element.prototype.scrollIntoView = () => {};
   initializeInterfaceI18n("en");
   useUiStore.setState({relation: null});
-  const rest = options.rest ?? {status: {pane_focus_request: null}} as SnapshotRest;
+  const given = options.rest ?? {status: {pane_focus_request: null}} as SnapshotRest;
+  // The core names the sibling cap on every snapshot's navigator.
+  const rest = {...given, navigator: {siblings_shown: 5, ...given.navigator}} as SnapshotRest;
   // The core names every row's machine; a fixture row that names none is this one's.
   for (const agent of agents) if (agent.device_id === LOCAL) agent.device_id = localDeviceId(rest);
   useShellStore.setState({agents, rest});
@@ -51,7 +53,7 @@ async function mount(value = header, agents: AgentRow[] = [], options: { rest?: 
   const root = createRoot(container);
   await act(async () => root.render(<TooltipProvider><header><PaneHeadChildren paneId={options.paneId ?? "parent"} actions={actions}/></header><PaneHeaderBand paneId={options.paneId ?? "parent"} header={value} actions={actions}/></TooltipProvider>));
   const answer = async (outcome: PaneFocusRequest) => {
-    await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: outcome}} as SnapshotRest}));
+    await act(async () => useShellStore.setState({rest: {...useShellStore.getState().rest!, status: {pane_focus_request: outcome}} as SnapshotRest}));
   };
   return {container, actions, events, answer, unmount: async () => { await act(async () => root.unmount()); }};
 }
@@ -384,7 +386,7 @@ it("blocks Open on a raised descendant whose device is not connected and says wh
   const band = header.band!;
   const {container, unmount} = await mount({ ...header, band: { ...band, action: {pane_id: pane, label: "자식 검증"}, raised: { ...band.raised!, raised_pane_id: pane, pane_id: pane, open_pane_id: pane, open_device_id: "mini" } } });
   try {
-    await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: null, remote: [{target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused"}]}} as unknown as SnapshotRest}));
+    await act(async () => useShellStore.setState({rest: {...useShellStore.getState().rest!, status: {pane_focus_request: null, remote: [{target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused"}]}} as unknown as SnapshotRest}));
     expect(container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.disabled).toBe(true);
     expect(container.querySelector("[data-pane-band-unreachable]")?.textContent).toBe("Hide cannot reach mini");
   } finally { await unmount(); }
@@ -394,7 +396,7 @@ it("opens the card of the displayed repository even when another project has the
   const {actions, events, unmount} = await mount();
   const url = "https://github.com/acme/other/pull/7";
   try {
-    await act(async () => useShellStore.setState({rest: {navigator: {focused_device_id: "local", devices: [{id: "local", kind: "local"}], workspaces: [
+    await act(async () => useShellStore.setState({rest: {navigator: {siblings_shown: 5, focused_device_id: "local", devices: [{id: "local", kind: "local"}], workspaces: [
       {id: "here", device_id: "local", pull_requests: [{number: 7, url: "https://github.com/acme/here/pull/7"}], checkouts: []},
       {id: "other", device_id: "local", pull_requests: [{number: 7, url}], checkouts: []},
     ] as unknown as Workspace[]}} as SnapshotRest}));
@@ -463,7 +465,7 @@ it("leaves a header alone when a snapshot section it does not draw moves, and re
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
-  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: [] }, ui_state: { theme: "dark" }, status: { pane_focus_request: null, remote: [] } } as unknown as SnapshotRest;
+  const rest = { navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local" }], workspaces: [] }, ui_state: { theme: "dark" }, status: { pane_focus_request: null, remote: [] } } as unknown as SnapshotRest;
   useShellStore.setState({ agents, rest });
   const draws: Record<string, number> = { shell: 0, parent: 0 };
   const container = document.body.appendChild(document.createElement("div"));
@@ -525,7 +527,7 @@ it.each([["hq3mini", "a dialed device"], ["b06a260a-6c14-5287-9caf-672044350d94"
   // The core names the row's device on the row itself.
   const agent = legacyAgentRow({ id: "a", pane_id: pane, device_id: target, device_pane_id: "w1:p4", identity_label: "Fix the login", agent_kind: "claude", session_id: "s-1" });
   useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: {
-    navigator: { devices: [{ id: core, kind: "local" }, { id: target, kind: "remote" }] },
+    navigator: { siblings_shown: 5, devices: [{ id: core, kind: "local" }, { id: target, kind: "remote" }] },
     status: { pane_focus_request: null, remote: [{ target_id: target, state: "connected", message: null, session: { agents: [agent] } }] },
   } as unknown as SnapshotRest } });
   const container = document.createElement("div");

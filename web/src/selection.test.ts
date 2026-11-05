@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dedent, followScroll, movedSelection, rowContinues, selectionToText, type CellRow } from "./selection";
 
-/** A row of `width` cells holding `text`, padded with written spaces the way a Herdr frame draws it. */
+/** A row of `width` cells holding `text`, padded with written spaces the way a holder's frame draws it. */
 function row(text: string, width: number): CellRow {
   const cells: CellRow = [];
   for (const char of text) cells.push(char);
@@ -12,6 +12,14 @@ function row(text: string, width: number): CellRow {
 describe("selectionToText", () => {
   it("trims the padding a frame writes to the column edge", () => {
     expect(selectionToText([row("short", 12)], 0, 12)).toBe("short");
+  });
+
+  // hide-private issue 312: the copy reads the same wraps a link's join does.
+  it("keeps a full row the holder says ends with a line break apart from the next", () => {
+    const rows = [row("http://127.0.0.1:41811/a.html", 29), row("osc8 label", 29)];
+    expect(selectionToText(rows, 0, 29, [false, false])).toBe("http://127.0.0.1:41811/a.html\nosc8 label");
+    expect(selectionToText(rows, 0, 29, [true, false])).toBe("http://127.0.0.1:41811/a.htmlosc8 label");
+    expect(selectionToText(rows, 0, 29, null)).toBe("http://127.0.0.1:41811/a.htmlosc8 label");
   });
 
   it("joins a row that fills its width onto the next without a break", () => {

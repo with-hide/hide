@@ -271,6 +271,15 @@ pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
     })
 }
 
+/// The installation this running program belongs to ([`pane_install`] of
+/// its own executable): the one the panes it starts name, and the one its
+/// answers to a pane's `hide` confirm.
+pub fn running_install() -> Option<PaneInstall> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|program| pane_install(&program))
+}
+
 pub(crate) fn build_layout(executable: &Path) -> Option<(PathBuf, String)> {
     let version_dir = executable.parent()?;
     let version = version_dir

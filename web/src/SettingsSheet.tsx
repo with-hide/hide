@@ -19,6 +19,7 @@ import { awayDevice, coreMachineName, machineName } from "./screenMachine";
 import { SETTINGS_GROUPS, type SettingsTab } from "./settings";
 import { AboutTab } from "./settings/AboutTab";
 import { AgentsTab } from "./settings/AgentsTab";
+import { KindHelpButton } from "./components/kind-help-dialog";
 import { ConductorTab } from "./settings/ConductorTab";
 import { DeskSettingsPage } from "./DeskScreen";
 import { DevicesTab } from "./settings/DevicesTab";
@@ -104,6 +105,8 @@ function SettingsSheet({ actions }: { actions: Actions }) {
             <header className="flex items-center gap-sm px-xl pb-lg pt-lg">
               <div className="flex min-w-0 flex-1 items-center gap-sm">
                 <h2 className="truncate text-headline font-semibold" data-settings-page-title={tab}>{t(`settings.tabs.${tab}`)}</h2>
+                {/* The Mission page carries the same `?` as a mission's and a task's page: the window that tells the two apart. */}
+                {tab === "conductor" ? <KindHelpButton from="mission" /> : null}
                 {/* Another machine's name shows only while it is the selected device (B6), beside the page title (B4). */}
                 {selected ? (
                   <Hint label={t("settings.ownerRemote", { device: selected.name })}>

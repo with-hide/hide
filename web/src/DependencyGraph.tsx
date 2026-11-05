@@ -29,8 +29,8 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
   const marker = `dependency-arrow-${useId()}`;
   const values = graph.layers.flat();
   const down = flow === "down";
-  // What the layout depends on: the nodes and the edges, not the object a snapshot rebuilt.
-  const structure = JSON.stringify([values.map(idOf), graph.edges.map((edge) => [edge.from, edge.to])]);
+  // What the layout depends on: the nodes, the edges and the way it runs, not the object a snapshot rebuilt.
+  const structure = JSON.stringify([values.map(idOf), graph.edges.map((edge) => [edge.from, edge.to]), flow]);
   const placement = useDependencyPlacement(box, structure, flow, gaps, order);
   const places = placement ? values.map((value) => placement.nodes.get(idOf(value))) : [];
   const placed = placement !== null && places.every((place) => place !== undefined);
@@ -73,7 +73,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
         if (!from || !to) return [];
         const local = (rect: DOMRect): Box => ({ left: rect.left - origin.left, right: rect.right - origin.left, top: rect.top - origin.top, bottom: rect.bottom - origin.top });
         const gap = parseFloat(getComputedStyle(box.current!).getPropertyValue(gaps.nodes)) / 2 || 0;
-        return [{ id: `${edge.from}~${edge.to}`, d: backPath(local(from), local(to), gap) }];
+        return [{ id: `${edge.from}~${edge.to}`, d: backPath(local(from), local(to), gap, flow) }];
       }),
     [overlayKey, structure, placement],
   );
@@ -100,7 +100,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
   );
   if (placed) {
     return (
-      <div ref={box} className="relative" style={{ width: placement.width, height: placement.height }} data-dependency-graph="true" data-dependency-edges={graph.edges.length} data-dependency-layout="layered">
+      <div ref={box} className="relative" style={{ width: placement.width, height: placement.height }} data-dependency-graph="true" data-dependency-flow={flow} data-dependency-edges={graph.edges.length} data-dependency-layout="layered">
         {values.map((value, index) => (
           <div key={idOf(value)} className="absolute" style={{ left: places[index]!.x, top: places[index]!.y }} data-dependency-layer={places[index]!.layer}>
             {draw(value)}
@@ -111,7 +111,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
     );
   }
   return (
-    <div ref={box} className={cn("relative flex w-fit", down ? "flex-col items-center" : "items-start")} style={{ gap: `var(${gaps.layers})` }} data-dependency-graph="true" data-dependency-edges={graph.edges.length} data-dependency-layout="columns">
+    <div ref={box} className={cn("relative flex w-fit", down ? "flex-col items-center" : "items-start")} style={{ gap: `var(${gaps.layers})` }} data-dependency-graph="true" data-dependency-flow={flow} data-dependency-edges={graph.edges.length} data-dependency-layout="columns">
       {graph.layers.map((layer, index) => (
         <div key={index} className={cn("flex", down ? "flex-row items-start" : "flex-col")} style={{ gap: `var(${gaps.nodes})` }} data-dependency-layer={index}>
           {layer.map(draw)}

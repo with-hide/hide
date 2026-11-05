@@ -202,7 +202,7 @@
     "textarea": 1
   },
   "web/src/mobile/App.tsx": {
-    "button": 2
+    "button": 1
   },
   "web/src/mobile/StartSheet.tsx": {
     "select": 3,

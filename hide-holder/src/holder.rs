@@ -102,8 +102,8 @@ const INPUT_QUEUE_CAP: usize = 1024 * 1024;
 /// and a connection that sends more is ended as one past the cap is.
 const SUBMIT_COST: usize = 4 * 1024;
 
-/// The most connections reading their hello at once; one past it is closed
-/// with `opening_full`.
+/// The most connections opening at once, from their accept until the run
+/// thread takes them; one past it is closed with `opening_full`.
 const MAX_OPENING: usize = 8;
 
 /// How long the listener gives one refusal of a connection past
@@ -149,12 +149,17 @@ enum Event {
         stream: LocalStream,
         version: u16,
         sends: Vec<Capability>,
+        slot: OpeningSlot,
     },
     /// What a connection asks of the run thread: all it sends but the
     /// program's input, which its reader hands the PTY writer itself.
+    /// `applied` is dropped once the run thread has acted on it, and the
+    /// reader reads the connection's next message only then, so input sent
+    /// after a resize reaches a program that already has the new size.
     Message {
         generation: u64,
         message: Control,
+        applied: Sender<()>,
     },
     /// A connection's input passed [`INPUT_QUEUE_CAP`] waiting bytes.
     InputQueueFull {
@@ -176,6 +181,7 @@ enum Event {
         stream: LocalStream,
         version: u16,
         sends: Vec<Capability>,
+        slot: OpeningSlot,
     },
     /// A watch's node let go (`None`), or its stream ended or failed.
     WatchGone {
@@ -607,7 +613,15 @@ impl Holder {
         // program runs, one write of the record says it runs and the socket
         // listens; a failure from here to the spawn leaves no program, and
         // the dropped listener takes its endpoint with it.
-        let pane = Pane::new(size, config.theme.as_ref())?;
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut pane = Pane::new(size, config.theme.as_ref())?;
+        // ConPTY draws the console's screen again for the holder, placing
+        // the rows of a wrapped line itself and does not reliably leave the
+        // parser a soft wrap: the pane says nothing of wraps rather than that
+        // a wrapped row ends with a line break, and the screen keeps its
+        // last-column rule.
+        #[cfg(windows)]
+        pane.without_wraps();
         let listener = LocalListener::bind(&config.socket).map_err(|error| {
             format!(
                 "{} could not be listened on: {error}",
@@ -806,10 +820,16 @@ impl Holder {
                     stream,
                     version,
                     sends,
-                } => self.take_over(stream, version, sends),
+                    slot,
+                } => {
+                    // Taken: no longer opening, before it is welcomed.
+                    drop(slot);
+                    self.take_over(stream, version, sends);
+                }
                 Event::Message {
                     generation,
                     message,
+                    applied: _applied,
                 } => {
                     // A connection that was taken over may still have sent
                     // something; it no longer holds the pane.
@@ -875,7 +895,11 @@ impl Holder {
                     stream,
                     version,
                     sends,
-                } => self.watch(stream, version, sends),
+                    slot,
+                } => {
+                    drop(slot);
+                    self.watch(stream, version, sends);
+                }
                 Event::WatchGone { generation, error } => {
                     if self.watch.as_ref().map(|watch| watch.generation) == Some(generation) {
                         let closed = match error {
@@ -1494,7 +1518,10 @@ impl Answers {
         let length = answers.len();
         let mut refused = self.refused.lock().unwrap_or_else(PoisonError::into_inner);
         let queued = self.queued.load(Ordering::SeqCst);
-        if queued + length > ANSWER_QUEUE_CAP {
+        // A run of refusals ends only once the program took every answer
+        // that waits: ending it as soon as one parse's few answers fit would
+        // start a new run at the next big one.
+        if queued + length > ANSWER_QUEUE_CAP || (refused.is_some() && queued > 0) {
             match refused.as_mut() {
                 Some((count, bytes)) => {
                     *count += 1;
@@ -2018,16 +2045,21 @@ fn read_connection(
                     }
                 };
                 let ends = matches!(control, Control::Release | Control::Terminate);
+                let (applied, waited) = mpsc::channel();
                 if events
                     .send(Event::Message {
                         generation,
                         message: control,
+                        applied,
                     })
                     .is_err()
                     || ends
                 {
                     return;
                 }
+                // Ends when the run thread dropped `applied`: it acted on the
+                // message, passed it over, or ended.
+                let _ = waited.recv();
             }
             Err(error) => {
                 let _ = events.send(Event::Gone { generation, error });
@@ -2053,25 +2085,40 @@ struct AcceptSide {
     master: PtyMaster,
 }
 
-/// How many connections are reading their hello, which the pane's end waits
-/// to reach none.
+/// The connections still opening: those reading their hello, which the
+/// pane's end waits to reach none, and the [`MAX_OPENING`] slots, which a
+/// connection holds from its accept until the run thread takes it
+/// ([`OpeningSlot`]), so a connection already welcomed holds none.
 #[derive(Default)]
 struct Opening {
     count: Mutex<usize>,
     idle: Condvar,
+    slots: Mutex<usize>,
+}
+
+/// One of the [`MAX_OPENING`] slots, given back when dropped.
+struct OpeningSlot(Arc<Opening>);
+
+impl Drop for OpeningSlot {
+    fn drop(&mut self) {
+        *self.0.slots.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+    }
 }
 
 impl Opening {
-    /// Counts one more, unless `MAX_OPENING` are already.
-    fn enter(&self) -> bool {
-        let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
-        if *count >= MAX_OPENING {
-            return false;
+    /// A slot and one more reading its hello, unless `MAX_OPENING` slots
+    /// are held already.
+    fn enter(opening: &Arc<Self>) -> Option<OpeningSlot> {
+        let mut slots = opening.slots.lock().unwrap_or_else(PoisonError::into_inner);
+        if *slots >= MAX_OPENING {
+            return None;
         }
-        *count += 1;
-        true
+        *slots += 1;
+        *opening.count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        Some(OpeningSlot(opening.clone()))
     }
 
+    /// One fewer reading its hello.
     fn leave(&self) {
         let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
         *count -= 1;
@@ -2080,7 +2127,7 @@ impl Opening {
         }
     }
 
-    /// Waits until none is opening, or `deadline` passes.
+    /// Waits until none is reading its hello, or `deadline` passes.
     fn wait_idle(&self, deadline: Instant) -> bool {
         let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
         while *count > 0 {
@@ -2115,7 +2162,7 @@ impl AcceptSide {
                     return;
                 }
             };
-            if !self.opening.enter() {
+            let Some(slot) = Opening::enter(&self.opening) else {
                 refuse(
                     &stream,
                     Closed::new(
@@ -2126,7 +2173,7 @@ impl AcceptSide {
                     &self.log,
                 );
                 continue;
-            }
+            };
             let side = Asked {
                 sender: self.sender.clone(),
                 ending: self.ending.clone(),
@@ -2138,7 +2185,7 @@ impl AcceptSide {
             };
             let opening = self.opening.clone();
             spawn_named("connection-opening", move || {
-                side.open(stream);
+                side.open(stream, slot);
                 opening.leave();
             });
         }
@@ -2198,7 +2245,7 @@ impl Asked {
             .clone()
     }
 
-    fn open(&self, stream: LocalStream) {
+    fn open(&self, stream: LocalStream, slot: OpeningSlot) {
         let log = &self.log;
         let mut bounded = stream.duplicate();
         bounded.set_deadline(Instant::now() + HELLO_LIMIT);
@@ -2210,7 +2257,7 @@ impl Asked {
         let hello = match read_opening(&mut bounded) {
             Ok(FirstMessage::Hello(hello)) => hello,
             Ok(FirstMessage::Ask(ask)) => return self.answer(&stream, ask),
-            Ok(FirstMessage::Watch(hello)) => return self.watch(stream, &hello),
+            Ok(FirstMessage::Watch(hello)) => return self.watch(stream, &hello, slot),
             Err(error) => {
                 let closed = Closed::new(hello_reason(&error), error.to_string());
                 refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
@@ -2234,6 +2281,7 @@ impl Asked {
             stream,
             version,
             sends,
+            slot,
         };
         if let Err(mpsc::SendError(Event::Opened { stream, .. })) = self.sender.send(opened) {
             let closed = self
@@ -2245,7 +2293,7 @@ impl Asked {
 
     /// Hands an accepted watch to the holder's loop, which replaces any watch
     /// before it; a watch that does not take facts has nothing to follow.
-    fn watch(&self, stream: LocalStream, hello: &Hello) {
+    fn watch(&self, stream: LocalStream, hello: &Hello, slot: OpeningSlot) {
         let log = &self.log;
         let (version, sends) = match agree(hello, &WATCH_SENDS) {
             Ok(agreed) => agreed,
@@ -2267,6 +2315,7 @@ impl Asked {
             stream,
             version,
             sends,
+            slot,
         };
         if let Err(mpsc::SendError(Event::Watch { stream, .. })) = self.sender.send(opened) {
             let closed = self
@@ -2417,6 +2466,74 @@ mod tests {
         assert_eq!(held.len(), 2, "{held:?}");
         assert_eq!(held[1].reason, NoticeReason::AnswersRefused);
         assert_eq!(held[1].count, 1001);
+    }
+
+    /// A connection the run thread took gives its opening slot back at once,
+    /// however late its opening thread ends, while the pane's end still
+    /// waits for that thread; one still reading its hello keeps its slot.
+    #[test]
+    fn a_taken_connection_holds_no_opening_slot_while_its_thread_ends() {
+        let opening = Arc::new(Opening::default());
+        let mut slots: Vec<OpeningSlot> = (0..MAX_OPENING)
+            .map(|_| Opening::enter(&opening).unwrap())
+            .collect();
+        assert!(Opening::enter(&opening).is_none());
+        // The run thread takes one before its thread has ended.
+        drop(slots.pop());
+        let ninth = Opening::enter(&opening).expect("the taken connection's slot is free");
+        assert!(
+            !opening.wait_idle(Instant::now()),
+            "nine threads still read"
+        );
+        // Threads that end free no slot that is still held.
+        for _ in 0..MAX_OPENING + 1 {
+            opening.leave();
+        }
+        assert!(opening.wait_idle(Instant::now()));
+        assert!(Opening::enter(&opening).is_none());
+        drop(ninth);
+        assert!(Opening::enter(&opening).is_some());
+    }
+
+    /// Once answers are refused, a parse whose few answers would fit beside
+    /// what waits is refused too: the run ends only when the program has
+    /// taken every answer that waits, so one run is logged and told once
+    /// however the program's output was cut into reads.
+    #[test]
+    fn a_refusal_run_ends_only_once_the_program_took_what_waits() {
+        let (writes, written) = mpsc::channel();
+        let (events, told) = mpsc::channel();
+        let answers = Answers {
+            writes,
+            queued: Arc::new(AtomicUsize::new(0)),
+            refused: Arc::new(Mutex::new(None)),
+            events,
+            log: Log::open(None, "p").unwrap(),
+        };
+        let told = || -> Vec<(NoticeReason, u64)> {
+            told.try_iter()
+                .map(|event| match event {
+                    Event::Notice(notice) => (notice.reason, notice.count),
+                    _ => panic!("not a notice"),
+                })
+                .collect()
+        };
+        answers.send(vec![b'a'; ANSWER_QUEUE_CAP - 100]);
+        answers.send(vec![b'b'; 1000]);
+        assert_eq!(told(), [(NoticeReason::AnswersRefused, 1)]);
+        // A short read's answer would fit beside what waits.
+        answers.send(vec![b'c'; 10]);
+        answers.send(vec![b'd'; 1000]);
+        assert_eq!(told(), []);
+        // The program takes what waits, as the writer counts it.
+        let PtyWrite::Answers(first) = written.try_recv().unwrap() else {
+            panic!("not answers");
+        };
+        assert!(written.try_recv().is_err(), "a refused answer was queued");
+        answers.queued.fetch_sub(first.len(), Ordering::SeqCst);
+        answers.send(vec![b'e'; 10]);
+        assert_eq!(told(), [(NoticeReason::AnswersResumed, 3)]);
+        assert!(matches!(written.try_recv(), Ok(PtyWrite::Answers(e)) if e == [b'e'; 10]));
     }
 
     /// The program's answer to input is drawn at once, however recently the

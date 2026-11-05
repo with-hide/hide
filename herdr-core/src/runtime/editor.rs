@@ -720,7 +720,7 @@ impl Runtime {
                     message: operation.message.clone(),
                     retryable: operation.retryable
                         && (!matches!(operation.phase.as_str(), "failed" | "refused")
-                            || operation.request.context.replacement_shell),
+                            || operation.request.context.replacement_in_tab),
                 },
             )
             .collect();
@@ -895,7 +895,6 @@ impl Runtime {
                                         .map(|index| (area.id.clone(), index))
                                 })
                             }),
-                        replacement_shell: self.primary_needs_shell(session_workspace_id, tab_id),
                         replacement_in_tab: false,
                         tab_name: match (tab.naming.operator_name(), tab.naming.manual_name()) {
                             (Some(name), _) => ClosedTabName::Named(name.to_owned()),
@@ -1119,12 +1118,6 @@ impl Runtime {
         operation.retryable = true;
         operation.deadline_at_unix_ms = None;
         let operation = operation.clone();
-        if !operation.replacement_effect_started {
-            self.finish_agent_effect(
-                &operation.request.context.checkout_path,
-                &format!("close:{key}"),
-            );
-        }
         self.clear_close_guards(&operation);
         self.restore_close_selection(operation.selection_restore.as_ref());
         self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
@@ -1313,16 +1306,6 @@ impl Runtime {
             }]);
             return true;
         };
-        context.replacement_shell &= matches!(
-            target,
-            crate::recent_closed::capture::CloseCaptureTarget::Tab { .. }
-        ) || tab.panes.len() == 1;
-        // A failed last terminal must remain explicitly closable even when
-        // its folder cannot launch a replacement shell. The project registration stays.
-        context.replacement_shell &= !tab
-            .panes
-            .iter()
-            .all(|pane| pane.failed_terminal_id.is_some());
         let retain_for_reopen = !self.archive_closes_pane(&target_id)
             && !self
                 .snapshot
@@ -1336,14 +1319,7 @@ impl Runtime {
                         && record.phase == crate::agent_sleep::DormantPhase::Closing
                         && record.close_key.is_none()
                 });
-        // A shell inside the tab keeps the tab, so the primary workspace keeps
-        // its tab too and needs no new one.
         context.replacement_in_tab = retain_for_reopen && self.keeps_named_tab(&target, &tab);
-        context.replacement_shell |= context.replacement_in_tab;
-        let new_tab_shell = context.replacement_shell && !context.replacement_in_tab;
-        if new_tab_shell && !self.admit_agent_tab(&context.checkout_path) {
-            return true;
-        }
         let Some(live_context) = self.live.as_ref().cloned() else {
             self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: matches!(
@@ -1378,14 +1354,6 @@ impl Runtime {
             panes: self.closed_panes(&tab),
             target,
         };
-        if new_tab_shell
-            && !self.reserve_agent_effect(
-                &request.context.checkout_path,
-                &format!("close:{}", request.key),
-            )
-        {
-            return true;
-        }
         let pane_ids = Self::close_operation_pane_ids(&request.target, &request.panes);
         let mut scope_pane_ids = tab
             .panes
@@ -1752,7 +1720,7 @@ impl Runtime {
         };
         operation.phase = "failed".to_owned();
         operation.stage = "capture".to_owned();
-        operation.message = Some(if operation.request.context.replacement_shell {
+        operation.message = Some(if operation.request.context.replacement_in_tab {
             "The close could not be prepared. Nothing was closed; retry when the connection is ready.".to_owned()
         } else {
             format!("Restore information was not prepared; the item was not closed: {message}")
@@ -1760,12 +1728,6 @@ impl Runtime {
         operation.retryable = true;
         operation.deadline_at_unix_ms = None;
         let operation = operation.clone();
-        if !operation.replacement_effect_started {
-            self.finish_agent_effect(
-                &operation.request.context.checkout_path,
-                &format!("close:{key}"),
-            );
-        }
         self.clear_close_guards(&operation);
         // Nothing was closed, so the tab returns to its place and so does the
         // operator, as after a refusal.
@@ -1910,13 +1872,13 @@ impl Runtime {
     ) -> Option<crate::recent_closed::capture::CloseEffectRequest> {
         let operation = self.close_operations.get_mut(key)?;
         let request = &operation.request;
-        operation.replacement_effect_started |= request.context.replacement_shell;
+        operation.replacement_effect_started |= request.context.replacement_in_tab;
         operation.phase = "transmitting".into();
         operation.stage = "close_request".into();
         operation.message = None;
         operation.retryable = false;
         operation.deadline_at_unix_ms = Some(unix_milliseconds().saturating_add(
-            if request.context.replacement_shell {
+            if request.context.replacement_in_tab {
                 3 * CLOSE_STAGE_TIMEOUT_MS
             } else {
                 CLOSE_STAGE_TIMEOUT_MS
@@ -1938,16 +1900,13 @@ impl Runtime {
                 }
             }),
             failed_terminals: request.failed_terminals.clone(),
-            retain_for_reopen: request.retain_for_reopen,
             allow_replacement_create: operation.allow_replacement_create,
             key: request.key.clone(),
             connection_generation: request.connection_generation,
             target: request.target.clone(),
-            replacement: (request.context.replacement_shell
-                && (matches!(
-                    request.target,
-                    crate::recent_closed::capture::CloseCaptureTarget::Tab { .. }
-                ) || request.panes.len() == 1))
+            replacement: request
+                .context
+                .replacement_in_tab
                 .then(|| request.context.clone()),
         };
         self.push_diagnostic(
@@ -1970,61 +1929,12 @@ impl Runtime {
         request: &crate::recent_closed::capture::CloseEffectRequest,
         result: Result<(), crate::engine::EngineError>,
     ) -> bool {
-        if !request.retain_for_reopen && !self.close_operations.contains_key(&request.key) {
-            return false;
-        }
-        if !self.close_operations.contains_key(&request.key) {
-            // A result can outlive the runtime that created its reservation.
-            // Rehydrate that reservation without putting it back on the
-            // confirmed stack, then let the same identity checks and
-            // topology gate handle the result.
-            let tab_id = match &request.target {
-                crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
-                    pane_id.clone()
-                }
-                crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id } => tab_id.clone(),
-            };
-            self.ensure_pending_close_from_request(
-                &crate::recent_closed::capture::CloseCaptureRequest {
-                    failed_terminals: request.failed_terminals.clone(),
-                    retain_for_reopen: request.retain_for_reopen,
-                    key: request.key.clone(),
-                    connection_generation: request.connection_generation,
-                    context: ClosedContext {
-                        workspace_id: String::new(),
-                        workspace_label: String::new(),
-                        workspace_ids_before_close: Vec::new(),
-                        tab_ids_before_close: Vec::new(),
-                        pane_ids_before_close: Vec::new(),
-                        checkout_id: String::new(),
-                        checkout_path: String::new(),
-                        tab_id,
-                        tab_label: request.key.clone(),
-                        tab_index: 0,
-                        agent_area: None,
-                        agent_group: None,
-                        replacement_shell: false,
-                        replacement_in_tab: false,
-                        tab_name: ClosedTabName::Unnamed,
-                    },
-                    panes: Vec::new(),
-                    target: request.target.clone(),
-                },
-            );
-            let item = self
-                .recent_closed
-                .iter()
-                .position(|item| item.key() == request.key)
-                .and_then(|index| self.recent_closed.remove(index));
-            if let Some(operation) = self.close_operations.get_mut(&request.key) {
-                operation.item = item;
-                operation.phase = "transmitting".to_owned();
-                operation.stage = "close_request".to_owned();
-                operation.retryable = false;
-                operation.deadline_at_unix_ms =
-                    Some(unix_milliseconds().saturating_add(CLOSE_STAGE_TIMEOUT_MS));
-            }
-        }
+        // An answer for a close that is no longer pending confirms nothing new.
+        // The core's own engine takes the target out of its layout before its
+        // close call returns, so the session that shows it gone can complete
+        // the close first; putting it back in flight would take its entry off
+        // the reopen list and wait for a session the engine has no reason to
+        // send again (with-hide/hide-private#418).
         let Some(operation) = self.close_operations.get(&request.key).cloned() else {
             return false;
         };
@@ -2081,14 +1991,14 @@ impl Runtime {
                         "close_request"
                     }
                     .to_owned();
-                    operation.message = Some(if !operation.request.context.replacement_shell {
+                    operation.message = Some(if !operation.request.context.replacement_in_tab {
                         "The item was not closed. Check its current state before closing it again."
                     } else if code == "replacement_failed" {
                         "The replacement shell is unconfirmed; its place stays reserved. Nothing was closed. Retry when the connection is ready."
                     } else {
                         "The item was not closed. The replacement shell remains available; retry the close."
                     }.to_owned());
-                    operation.retryable = operation.request.context.replacement_shell;
+                    operation.retryable = operation.request.context.replacement_in_tab;
                     operation.deadline_at_unix_ms = None;
                 }
                 let operation = self.close_operations.get(&request.key).cloned();
@@ -2156,7 +2066,7 @@ impl Runtime {
             if !matches!(operation.phase.as_str(), "completed" | "failed" | "refused") {
                 break;
             }
-            if operation.request.context.replacement_shell
+            if operation.request.context.replacement_in_tab
                 && matches!(operation.phase.as_str(), "failed" | "refused")
             {
                 break;

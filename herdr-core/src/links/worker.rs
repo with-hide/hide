@@ -16,6 +16,7 @@ use super::ledger::{
 use super::store::{
     ArchivedSession, CapacityCrossings, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks,
 };
+use super::summary_scope::{Dirty, Placement};
 use super::{
     BACKFILL_MS, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary, ReviewFact, files_present,
     link_code, now_ms,
@@ -446,6 +447,9 @@ pub(in crate::links) struct State {
     pub(in crate::links) projects: Arc<Vec<ProjectFacts>>,
     /// Projects posted but not yet written, kept while the store is closed.
     projects_due: bool,
+    /// The projects' facts were written and the outputs derived from them
+    /// not refreshed yet.
+    outputs_owed: bool,
     panes: Arc<Vec<PaneFact>>,
     /// Parents posted but not yet written.
     parents: Option<Arc<Vec<ParentFact>>>,
@@ -469,7 +473,13 @@ pub(in crate::links) struct State {
     /// The last write's failure, while writes keep failing: a panel then
     /// says the record failed rather than showing what it could not keep.
     write_failure: Option<String>,
+    /// When the first change since the last summary pass came.
     dirty_at: Option<Instant>,
+    /// What changed since the last summary pass, and what each project's
+    /// last pass read, so a pass recomputes only the projects a change can
+    /// move (with-hide/hide-private#571).
+    dirty: Dirty,
+    placement: Placement,
     listed: Option<Instant>,
     panes_at: Option<Instant>,
     pruned: Option<Instant>,
@@ -487,6 +497,7 @@ impl State {
             search: None,
             projects: Arc::default(),
             projects_due: false,
+            outputs_owed: false,
             panes: Arc::default(),
             parents: None,
             reviews: None,
@@ -502,6 +513,8 @@ impl State {
             filling: false,
             write_failure: None,
             dirty_at: None,
+            dirty: Dirty::default(),
+            placement: Placement::default(),
             listed: None,
             panes_at: None,
             pruned: None,
@@ -517,9 +530,37 @@ impl State {
         }
         if failure != self.write_failure {
             self.write_failure = failure.clone();
-            self.dirty_at.get_or_insert_with(Instant::now);
+            self.changed_all();
         }
         failure.is_none()
+    }
+
+    /// A change whose projects cannot be known: the next summary pass
+    /// recomputes every project.
+    pub(in crate::links) fn changed_all(&mut self) {
+        self.dirty.all();
+        self.dirty_at.get_or_insert_with(Instant::now);
+    }
+
+    /// A write to one session's rows: the next summary pass recomputes the
+    /// projects it can reach.
+    pub(in crate::links) fn changed(&mut self, session: SessionIdentity) {
+        self.dirty.session(session);
+        self.dirty_at.get_or_insert_with(Instant::now);
+    }
+
+    /// A session file's read was written: the session its cursor names
+    /// changed. A read that names no session wrote only its cursor, which no
+    /// summary reads.
+    pub(in crate::links) fn read_written(&mut self, store: &LinkStore, device: &str, path: &str) {
+        match store.file_session(device, path) {
+            Ok(Some(session)) => self.changed(session),
+            Ok(None) => {}
+            Err(code) => {
+                log_write(&code, "file_session");
+                self.changed_all();
+            }
+        }
     }
 
     /// Whether a device has files to read and is not waiting out a failure.
@@ -691,7 +732,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             if store.is_ok() {
                 // The facts posted while it was closed are the newest ones.
                 state.panes_at = None;
-                state.dirty_at.get_or_insert_with(Instant::now);
+                state.changed_all();
             }
         }
         if let Some(request) = panel {
@@ -747,7 +788,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             if let Err(code) = &result {
                 log_write(code, "delete");
             } else {
-                state.dirty_at.get_or_insert_with(Instant::now);
+                state.changed_all();
             }
             sink.deleted(request, result);
         }
@@ -757,7 +798,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 log_write(code, "ledger_call");
             }
             if matches!(&result, Ok(LedgerAnswer::Saved | LedgerAnswer::Attempt(_))) {
-                state.dirty_at.get_or_insert_with(Instant::now);
+                state.changed_all();
             }
             let _ = answer.send(result);
             if let Ok(mut mailbox) = client.0.0.lock() {
@@ -797,7 +838,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 state.parents.get_or_insert(parents);
             }
             state.wrote(children.map(|_| ()), "parents");
-            state.dirty_at.get_or_insert_with(Instant::now);
+            state.changed_all();
         }
         if let Some(reviews) = state.reviews.take() {
             let written = store.apply_reviews(&reviews, now_ms());
@@ -806,7 +847,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 state.reviews.get_or_insert(reviews);
             }
             state.wrote(written, "reviews");
-            state.dirty_at.get_or_insert_with(Instant::now);
+            state.changed_all();
         }
         if state.ledger_retry_at.is_none_or(|at| at <= Instant::now()) {
             for _ in 0..16 {
@@ -834,8 +875,8 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 if let Ok(mut mailbox) = client.0.0.lock() {
                     mailbox.ledger_pending = mailbox.ledger_pending.saturating_sub(1);
                 }
-                state.dirty_at.get_or_insert_with(Instant::now);
                 update_context(client, store, &session);
+                state.changed(session);
             }
         }
         if std::mem::take(&mut state.projects_due) {
@@ -844,9 +885,19 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 let result = store.apply_project(project, now_ms());
                 state.wrote(result, "project");
             }
+            state.outputs_owed = true;
+            state.changed_all();
+        }
+        // Outputs are derived for every session at once: until a refresh
+        // after the projects' facts lands, a session's own write could land
+        // it for sessions it does not reach, so it is retried here and marks
+        // every project when it does.
+        if state.outputs_owed {
             let result = store.refresh_ledger_outputs();
-            state.wrote(result, "ledger_outputs");
-            state.dirty_at.get_or_insert_with(Instant::now);
+            if state.wrote(result, "ledger_outputs") {
+                state.outputs_owed = false;
+                state.changed_all();
+            }
         }
         if state.panes_at.is_none_or(|at| at.elapsed() >= PANES_EVERY) {
             if !state.panes.is_empty() {
@@ -865,18 +916,16 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                         state.wrote(Err(code), "panes");
                     }
                 }
-                for pane in state.panes.iter() {
-                    update_context(
-                        client,
-                        store,
-                        &SessionIdentity {
-                            device_id: pane.device_id.clone(),
-                            agent: pane.agent.clone(),
-                            session_id: pane.session_id.clone(),
-                        },
-                    );
+                let panes = Arc::clone(&state.panes);
+                for pane in panes.iter() {
+                    let session = SessionIdentity {
+                        device_id: pane.device_id.clone(),
+                        agent: pane.agent.clone(),
+                        session_id: pane.session_id.clone(),
+                    };
+                    update_context(client, store, &session);
+                    state.changed(session);
                 }
-                state.dirty_at.get_or_insert_with(Instant::now);
             }
             state.panes_at = Some(Instant::now());
         }
@@ -930,7 +979,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         if state.pruned.is_none_or(|at| at.elapsed() >= PRUNE_EVERY) {
             prune(store, own, paths, &state.archived, sink);
             state.pruned = Some(Instant::now());
-            state.dirty_at.get_or_insert_with(Instant::now);
+            state.changed_all();
         }
         if state
             .dirty_at
@@ -1187,7 +1236,7 @@ fn read_turn(
             continue;
         }
         refresh_reader_context(client, store, &paths.local_device, &answer);
-        state.dirty_at.get_or_insert_with(Instant::now);
+        state.read_written(store, &paths.local_device, &answer.path);
         if more {
             state.queue.push_front(candidate);
         }
@@ -1240,6 +1289,8 @@ fn device_turn(store: &mut LinkStore, sink: &impl Sink, state: &mut State, clien
     state
         .devices
         .retain(|id, _| devices.iter().any(|(device, _)| device == id));
+    let mut written = Vec::new();
+    let failure = state.write_failure.clone();
     for (device, channel) in devices {
         let entry = state
             .devices
@@ -1268,7 +1319,7 @@ fn device_turn(store: &mut LinkStore, sink: &impl Sink, state: &mut State, clien
             }
         }
         if !entry.queue.is_empty() {
-            read_device(
+            let paths = read_device(
                 store,
                 &device,
                 channel.as_ref(),
@@ -1276,11 +1327,17 @@ fn device_turn(store: &mut LinkStore, sink: &impl Sink, state: &mut State, clien
                 &mut state.write_failure,
                 client,
             );
-            state.dirty_at.get_or_insert_with(Instant::now);
+            written.extend(paths.into_iter().map(|path| (device.clone(), path)));
         }
         if entry.queue.is_empty() {
             finish_device(store, &device, entry);
         }
+    }
+    if state.write_failure != failure {
+        state.changed_all();
+    }
+    for (device, path) in written {
+        state.read_written(store, &device, &path);
     }
 }
 
@@ -1291,7 +1348,8 @@ fn read_device(
     entry: &mut DeviceQueue,
     write_failure: &mut Option<String>,
     client: &LinkClient,
-) {
+) -> Vec<String> {
+    let mut written = Vec::new();
     let batch = entry
         .queue
         .drain(..entry.queue.len().min(links::READ_FILE_LIMIT))
@@ -1333,7 +1391,7 @@ fn read_device(
             }
             entry.failed();
             log_device(device, "read", &link_code(&error, "device_helper"));
-            return;
+            return written;
         }
     };
     if answers.ignored_answers > 0 {
@@ -1381,10 +1439,12 @@ fn read_device(
         }
         *write_failure = None;
         refresh_reader_context(client, store, device, answer);
+        written.push(answer.path.clone());
         if answer.has_more && answer.error.is_none() {
             entry.queue.push_back(candidate);
         }
     }
+    written
 }
 
 fn list_device(
@@ -1488,11 +1548,32 @@ fn prune(
     }
 }
 
-pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, sink: &impl Sink) {
+/// Recomputes the summaries of the projects a change since the last pass can
+/// move and publishes every project's summary when one changed; a project no
+/// change reaches keeps the summary its last pass made, which a pass over it
+/// would make again (with-hide/hide-private#571). Answers how many projects
+/// it recomputed.
+pub(in crate::links) fn publish_summaries(
+    store: &LinkStore,
+    state: &mut State,
+    sink: &impl Sink,
+) -> usize {
     let current = state.projects.iter().map(|p| p.key.as_str()).collect();
     store.forget_capacity_except(&current);
+    state.placement.keep(&current);
+    let scope = state
+        .placement
+        .scope(store, std::mem::take(&mut state.dirty));
     let mut summaries = BTreeMap::new();
-    for project in state.projects.iter() {
+    let mut recomputed = 0;
+    let projects = Arc::clone(&state.projects);
+    for project in projects.iter() {
+        let held = state.summaries.get(&project.workspace_id);
+        if let Some(held) = held.filter(|_| !scope.includes(&project.key)) {
+            summaries.insert(project.workspace_id.clone(), held.clone());
+            continue;
+        }
+        recomputed += 1;
         // One pass reads the project's places, fences and repository names for
         // its summary and for both ledger reads, not once per pull request.
         let pass = store.pass(&project.key);
@@ -1506,6 +1587,7 @@ pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, 
             Ok(None) => Err("ledger_project_missing".to_owned()),
             Err(code) => Err(code.clone()),
         };
+        let mut failed = pass.is_err();
         match summary {
             Ok(mut summary) => {
                 match ledger
@@ -1514,8 +1596,9 @@ pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, 
                 {
                     Ok(refs) => summary.record_issues = refs,
                     Err(code) => {
+                        failed = true;
                         log_write(&code, "ledger_issue_refs");
-                        if let Some(held) = state.summaries.get(&project.workspace_id) {
+                        if let Some(held) = held {
                             summary.record_issues = held.record_issues.clone();
                         }
                     }
@@ -1525,8 +1608,9 @@ pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, 
                         match store.ledger_creators(&work) {
                             Ok(creators) => summary.creators = creators,
                             Err(code) => {
+                                failed = true;
                                 log_write(&code, "ledger_creators");
-                                if let Some(held) = state.summaries.get(&project.workspace_id) {
+                                if let Some(held) = held {
                                     summary.creators = held.creators.clone();
                                 }
                             }
@@ -1534,13 +1618,16 @@ pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, 
                         summary.work = work;
                     }
                     Err(code) => {
+                        failed = true;
                         log_write(&code, "ledger_summary");
-                        if let Some(held) = state.summaries.get(&project.workspace_id) {
+                        if let Some(held) = held {
                             summary.work = held.work.clone();
                             summary.creators = held.creators.clone();
                         }
                     }
                 }
+                let read = pass.as_ref().ok().and_then(Option::as_ref);
+                state.placement.place(&project.key, read, &summary, failed);
                 summaries.insert(project.workspace_id.clone(), summary);
             }
             Err(code) => {
@@ -1548,8 +1635,10 @@ pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, 
                     "component": "links", "kind": "summary.failed",
                     "workspace_id": project.workspace_id, "code": code,
                 }));
-                if let Some(held) = state.summaries.get(&project.workspace_id) {
-                    summaries.insert(project.workspace_id.clone(), held.clone());
+                let held = held.cloned().unwrap_or_default();
+                state.placement.place(&project.key, None, &held, true);
+                if state.summaries.contains_key(&project.workspace_id) {
+                    summaries.insert(project.workspace_id.clone(), held);
                 }
             }
         }
@@ -1558,6 +1647,7 @@ pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, 
         state.summaries = summaries.clone();
         sink.summaries(summaries);
     }
+    recomputed
 }
 
 /// A read that recorded requests changes which of them a label still owes a

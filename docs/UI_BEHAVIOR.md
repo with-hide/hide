@@ -319,11 +319,7 @@ An older build may discard Agent layout state; returning starts with all current
 A Workspace of an SSH device the core dials has the same named-group and draft controls but keeps its existing single-area restriction within each group.
 A machine that dials in to the core, which is what the machine the core moved off becomes, keeps its Agent areas as this machine does: its tree, splits and active area are the same before a move, after it and after the move back, its Herdr shows the tab of the area in use, and the panes of every area's tab are live.
 
-Closing a primary Herdr workspace's last tab or last pane while a linked worktree remains first creates a shell at the checkout root in the same area and position.
-That tab stays in its area, marked closing, until Herdr confirms the close, so the area is never empty while the shell is made.
-The existing close guards run first, and linked workspaces remain untouched.
-If shell creation fails, nothing closes; if closing is refused, the shell remains.
-Retry close reuses that intent's shell, while Dismiss ends the failed intent; detailed Herdr failures are diagnostic-only.
+Closing a primary checkout's last tab or last pane closes it like any other tab, even while a linked worktree remains, and its linked worktrees stay open.
 
 A tab the operator named is a place they keep, like a channel: its name outlives the agents in it.
 A tab is named when the operator gave it its name through Rename, which Hide records for that tab; clearing the name in Rename makes it unnamed again.
@@ -667,6 +663,7 @@ The reference never holds a line break, so pasting it into a prompt never submit
 An agent row in the sidebar, and an agent's mark on a pull request row, can be dragged onto a terminal: the drag shows the reference under the pointer, and the drop types it with a space after it, never Enter, and focuses that terminal, so the operator only adds what to say.
 A drop on the agent's own pane or on a pane of another device is refused, because a pane id names a pane only on the machine that owns it.
 The right-click leaves the drag selection as it was, so Copy copies what the operator selected; the program in the pane never hears it.
+Copy joins a row whose text reaches the last column to the next with no break, except, in a pane with no agent and off Windows, a row the program ended with a line break, the same rule a link's join follows (Terminal links).
 A wheel over the pane moves a drag selection with the text it covers: the pane has no scrollback of its own, so the highlight is placed again on the rows that text moved to, drawn only for the part still on screen.
 Clipping the highlight preserves the original selection ends and Copy text; reversing the scroll while part remains visible restores the complete highlight.
 Once none of it is on screen the highlight goes, but Copy (⌘C, the menu, Ctrl+C where a selection makes it copy) still takes the text that was selected, until the next click, drag, select all or key; Ctrl+C interrupts again only after that.
@@ -869,6 +866,8 @@ In Korean prose such as `보드 보기 (docs/README.md)에 C안을 추가했습�
 A URL cannot be checked, so it is the longest spelling from its scheme whose brackets balance, which holds no quote and which does not end on sentence punctuation: in `PR #682 (https://github.com/o/r/pull/682)이 끝났습니다`, only `https://github.com/o/r/pull/682` is the link, `https://en.wikipedia.org/wiki/Mercury_(planet)` keeps its brackets, and `https://ko.wikipedia.org/wiki/서울이` links all of it.
 Ranges follow the terminal's actual cells, including wide glyphs, combining sequences and wrapped rows.
 A path or URL the terminal wrapped at its last column, or a TUI broke at its own margin and indented, is one link across its rows; a URL spans rows only where the terminal wrapped it, because it cannot be checked.
+In a pane with no agent, a URL spans rows only where the program's text ran past the last column: one that fills its row exactly and ends with a line break stays one link, apart from a word starting the next row (hide-private issue 312); on Windows the pane cannot tell, and such a URL still joins ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+In an agent's pane a URL reaching the last column still joins the next row's first token, because an agent's screen breaks its own long lines with line breaks and a URL cut there would open only its first row.
 Under the pointer a link is underlined and the pointer becomes a hand; a click on it is the link's and never reaches the program, and a drag across it selects its text and opens nothing.
 A click opens it in the front Workspace: a URL or an HTML file (`.html`, `.htm` or `.xhtml`, case-insensitive) as a browser display, another file in View at its line (an ordinary tab, not a preview), a folder revealed in the Explorer.
 A file in another registered checkout opens the same way in the front Workspace and moves no checkout: the pane that printed it stays on screen, the Explorer keeps its tree and selection, and the file stays that checkout's document, so its own Workspace shows the same text and closing one view leaves the other.
@@ -1677,7 +1676,7 @@ Worktrees with no agents folds worktrees with no unresolved agent, excluding pri
 ### Purpose, pinning, and PR chrome
 
 A checkout's one-line purpose is set from the checkout row's or Overview header's `Set purpose…` context item, with a character count and a warning near the limit; saving an empty purpose clears it, and display falls back through branch description, representative agent title, and pull-request title in that order.
-Any project row can be pinned from its right-click menu: a row Herdr shows without a registration is registered with its device and root by the same Pin, so pinning never needs a separate add, unless its folder is outside that machine's home, which is not registered without Add a project's question and says `홈 밖 폴더는 프로젝트 추가에서 확인한 뒤에 고정할 수 있어요.` instead (PRD wsl-device B18); pinned projects are drawn once under a `Pinned · N` section, its header led by a pin glyph and its rows carrying none, between the raised groups and the activity-ordered project list, one hairline setting each section off from the one above, the first from the raised groups when there are any, in the tree's own order (device first, then latest activity), and only while at least one project is pinned.
+Any project row can be pinned from its right-click menu: a row Herdr shows without a registration is registered with its device and root by the same Pin, so pinning never needs a separate add, unless its folder is outside that machine's home, which is not registered without Add a project's question and says `홈 밖 폴더는 프로젝트 추가에서 확인한 뒤에 고정할 수 있어요.` instead (PRD wsl-device B18); pinned projects are drawn once under a `Pinned · N` section, its header led by a pin glyph and its rows carrying none, between the raised groups and the activity-ordered project list, one hairline setting each section off from the one above, the first from the raised groups when there are any, in the tree's own order (device first, then name, never activity, so a conversation updating in a pinned project does not move it), and only while at least one project is pinned.
 The pin lives on the project's registration and survives a relaunch; removing the registration takes the pin with it.
 A pinned project is exempt from its device's inactive fold whatever its activity; its own stale worktrees still fold behind their own `Inactive N` row.
 PR state colour is a semantic-colour exception to otherwise neutral chrome, one colour per state on every surface, including during hover and selection (docs/status-model.md, Pull request visual states; operator approval, 2026-10-10): failed red, pending amber, mergeable green, draft grey, merged purple with the merge icon, and closed dim.
@@ -2708,6 +2707,7 @@ An agent installed later appears in these rows off and is never turned on by a p
 ### Mission
 
 Settings › Mission (`미션`; the tab was named Conductor until the skill and the map became hide-mission), in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
+The page's title carries a `?` that opens the one window telling a mission from a task, the same one a mission's page and a task's page open from the kind mark in their head (`미션`, `태스크`); it shows both side by side, a Conductor sending work to three workers at once and one agent finishing its steps in turn, each as a short picture that plays when the window opens and again on `다시 보기`, lights the side the press came from (Mission, here), and with the reduced-motion setting on draws each picture finished and offers no replay; Esc or a press outside closes it ([A mission's map and a plan's map](#tasks-the-보기-slot-and-the-pr-list)).
 `동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
 `머지되면 작업 공간 정리` (Clean up a worktree once merged), right under them and on by default, is a switch with one line under it: `PR이 머지된 갈래의 워크트리와 빌드 캐시를 지워요. 고치던 파일이 남아 있거나 쓰는 중이면 그대로 둬요.`
 On, a done node whose pull request GitHub reports merged has that branch's worktree removed with its build cache when its tree is clean and no agent pane or running program is in it, the branch always kept; a worktree that holds changes or is in use stays, is named in the diagnostic log and stays in the project's disk cleanup (`머지됨 N → 정리`), and nothing is removed while GitHub's answer is missing ([hide-private missions.md: What Hide settles in a mission by itself](delivery.md#missions)).
@@ -2814,10 +2814,23 @@ The five-minute expiry and, on the hosted app, end-to-end encryption note sit be
 Pairing refusals use the same layout and keep their existing recovery actions.
 연결 opens the list and a one-time hint to keep hide on the Home Screen; an expired or spent code says so, a fifth phone is told the limit and to revoke one on the Mac, and a page opened with no code or credential says to scan the QR in Settings > Mobile.
 The list's header shows hide, the device name and how many other phones are connected; it has no unlabelled connection dot.
+The device name is the paired Mac's, followed by the names of the devices connected through it (`+ Mac mini`).
 On the hosted app the wrapping device name opens the shared bottom sheet: each device row shows its name, labelled connection state and counts or last-seen time, with remove and connect-another actions.
+Under the Mac being viewed the sheet lists 이 Mac을 통해 연결된 기기 with each one's state and its 내 차례 and 작업 중 counts, a device that is not connected dimmed and marked 연결 안 됨, and one line saying those agents need no pairing of their own and are mixed into the list; there is no device filter.
 A protocol mismatch uses the same device-first layout, the two version numbers with labels, and a secondary action to choose another device.
 Home-screen and notification prompts are plain rows separated by spacing, without repeated filled accent buttons or enclosing cards.
 Agents sit in 내 차례, 읽을 것, 작업 중 and 확인함, the sidebar's own section names, with their counts, each row with its status mark (the sidebar's five marks and the word that leads its line), task name, project and branch, the SSH device's chip, the elapsed time and the request or news line, and the list updates live.
+A group's title counts every top row of the group, the folded ones too.
+Inside a group the rows of this Mac and of its connected devices are mixed and ordered by the same last activity as the sidebar, newest first, so an agent that just moved on the Mac mini stands above an older row of this Mac.
+A group shows its newest rows and folds the rest under `더 보기 N`, which opens them in place: 내 차례 5, 읽을 것 3, 작업 중 5 and 확인함 3 (the first two are the sidebar's own raised caps); 다시 볼 것 does not fold.
+When the folded rows include sleeping conversations the fold reads `더 보기 N · 잠든 것 M 포함`, and sleeping rows follow the same order and fold as the others.
+A delegated child is not a row of its group.
+It hangs under its parent as an indented row behind a vertical rail, two levels deep at most, with its own status mark, title, elapsed time and request or news line, in the sidebar's child order.
+A parent shows its children's counts by state (asking, working, done) and `자식 N ⌄` or `자식 N ›`, which opens or folds the children; the rest of the parent row opens the parent's detail.
+A parent opens expanded when a descendant asks the operator for something (an error, an approval or a question) and folded otherwise, and a change made on the phone stays on that phone: the desktop sidebar's folds never move.
+A parent keeps at most five children in view and folds the rest under `더 보기 N`, which opens them in place.
+What lies deeper than the second level waits behind that row's `더 보기 N`, so every agent can still be opened and answered from the phone.
+A child whose parent is not in the list is a row of its group again.
 Local sleeping conversations appear as separate rows in the core-selected group, with Wake or Check status and no conversation detail or reply bar.
 Those controls are disabled while disconnected or while one sleep request is waiting; a refused request keeps the row and asks the operator to check connection and session status before trying again.
 With no agents the list is one line, 실행 중인 에이전트가 없어요.
@@ -2829,7 +2842,7 @@ Pressing 시작 again for the same text and choice after a lost answer sends the
 While hided is out of reach the sheet shows the unreachable line and keeps what was written; a refused start shows its reason inside the sheet and keeps the text, which is cleared only by a start that went.
 When hided is out of reach the last list stays dimmed under "연결 안 됨 · Mac의 Hide가 꺼져 있거나 폰의 Tailscale이 꺼져 있어요. 다시 시도 중", the app retries on its own, and it shows the same line when opened without a network.
 A Mac that went to sleep shows it too: the phone asks hided when it has heard nothing for 20 seconds and shows the line 10 seconds after an unanswered ask, and on returning to the phone it asks at once, so the connected state never outlasts a hided that has stopped answering by more than 30 seconds.
-A row opens its detail: ← 목록, the elapsed time and the row's head, with 대화 | 터미널 between ← 목록 and the elapsed time when the agent has a conversation to show, a Claude Code, Codex, Grok, Pi, omp, Cursor or OpenCode agent on this Mac whose session Herdr reports.
+A row opens its detail: ← 목록, the elapsed time and the row's head, with 대화 | 터미널 | 볼 것 between ← 목록 and the elapsed time (each tab only when it has something to show; 볼 것 is described below), a Claude Code, Codex, Grok, Pi, omp, Cursor or OpenCode agent on this Mac whose session Herdr reports.
 The header keeps the back label, view tabs and elapsed time at their content widths and wraps them when they do not fit, so a narrow phone or a long elapsed time never overlaps the controls.
 대화 is the agent's own conversation, its newest 30 messages with the newest at the bottom: the operator's messages as ❯ blocks on a grey ground, the agent's Markdown drawn at full width (headings, emphasis, lists, tables, code wrapped without highlighting and a `mermaid` fence as its diagram the way Markdown Live draws it, shown as code until it is drawn, a link or an image as its text), an interruption as 중단됨, and the time after each turn; pulling to the top loads 30 older messages at a time up to the first, and at 300 it says 최근 300개까지 볼 수 있어요.
 What the agent writes next arrives on its own, and tool output and injected context are never shown.
@@ -2838,7 +2851,33 @@ Cursor uses its native graph units under the same page and text bounds; a record
 OpenCode uses its own messages from its database, paged by message with the same 30-message and text bounds; every page, idle poll and copied pager proves the root session and exact checkout again, and a session rewound under the phone is read anew.
 An unavailable or changed native source falls back through the existing feature-local refusal path; no transcript is borrowed from another session and no new banner is added.
 터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, in the shared body text size, each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
-Every detail has the quick keys (Enter, Escape, 위 화살표, 아래 화살표, Ctrl-C by accessible name) and a one-line reply with 보내기; a reply is sent with Enter after it and clears on success, a failure keeps the text with the reason under it, and a reply over 2,000 characters is named before it is sent.
+볼 것 is the third tab, `대화 | 터미널 | 볼 것` (`터미널 | 볼 것` for an agent with no conversation), and it is there only while the agent has a View open now; the number of Views not seen is on it.
+The list's eye row, the 볼 것 mark, opens the detail on this tab; a row that asks a question or needs an approval, and every other row, opens on the conversation as before, and 대화 goes straight to the agent's conversation.
+The tab lists the Views the agent opened, `안 본 것 N` above `본 것 N`, newest first: a tile with the kind's icon and a dot when the View is not seen, its name, its kind (변경 내용, 문서, 이미지, 웹 화면, 파일) and how long ago it was opened.
+A View the desktop closes leaves the list, and one the agent opens again is not seen again and returns to 안 본 것.
+At most 64 are listed, and one line says how many more are on the Mac.
+A row opens its View full screen: `‹ 볼 것`, its name, its kind, the name of the agent that opened it and how long ago; `‹ 볼 것` goes back to the list.
+A change list shows how many files and lines changed, then each file with its name, its folder and its +/- counts (`새 파일` for an added file, `바이너리` where git counts no lines), and the line `코드 내용은 Mac에서 보세요`; no line of code is sent.
+A file Git does not track yet shows `새 파일` alone, with no number, as the desktop's list does; `바이너리` is only for a tracked file whose lines Git cannot count.
+When nothing is left to show it reads `지금은 바뀐 파일이 없어요`.
+A Markdown document is drawn with its headings, lists, tables and code blocks by the renderer the conversation uses; any other text is fixed-width and wrapped to the phone's width, never scrolling sideways, and text over 1 MiB shows its first 1 MiB and `나머지는 Mac에서 보세요`.
+An image is fitted to the width, zoomed and moved with two fingers (a double tap toggles the zoom), with its size and its pixels below it; one over 10 MiB is not opened and says `이미지가 커서 Mac에서 보세요`.
+A PDF, a video, any other binary and a file that is not text show their name, their kind and `Mac에서 열어 보세요`.
+A web page shows its address and the screen the desktop app shows of it now, as a picture the width of the phone that scrolls down, with `<기기>에서 찍은 화면 · <몇 초> 전` under it: the device is the Mac whose desktop app took it, and the time keeps counting on the phone (PRD mobile-companion-ui B20, D-11).
+A refresh button beside the address takes it again under a new request; the picture on view stays, and the button waits with a spinner, until the new one comes or says it cannot.
+When the screen cannot be taken (the desktop app is closed, the page is not the front tab of its View area, another agent or the operator's Comment mode holds the page, or the page is on another machine's window) the picture is replaced by the address and `지금은 화면을 가져올 수 없어요` alone, refresh stays pressable to try again, and why goes only to the diagnostic log as `look.page_unavailable` (B21, design principle 13).
+Taking the picture never selects a tab, moves the keyboard or raises a window, so a page that is behind another tab is answered "cannot be taken now" and is not brought forward (B22).
+Without a connection the last picture stays dimmed under the unreachable line and refresh does not press (B45).
+While a View loads its place shows a spinner; a read that fails says `불러오지 못했어요` with `다시`, which starts the read again from the beginning under a new request; a View that is no longer open says `이 결과물은 이제 열려 있지 않아요`; one in a checkout on a device that is not connected says `기기가 연결되어 있지 않아요`.
+A View the phone drew an answer about is seen, on the phone and on the desktop alike, through the Desk's own seen-by-id path: the dot and the eye leave both, and an agent with no View left unseen returns to its own group.
+That is its content (a change list, a document, an image) and also what it shows when it has no content to show: the name of a PDF or a video, an image over 10 MiB, a web page's picture or, when none can be taken, its address.
+A loading screen and a View that is closed, failed or on a device that is not connected are not seen.
+An agent with a View not seen stands in 내 차례 on the phone as on the desktop and returns to its own group when every View is seen; a notice still follows the group it would be in without it, so a View sends none.
+The reply bar is on the tab and on a View, and the quick keys are not.
+A reply sent while a View is open leaves with its name in front (`[경로 구분자 수정] …`), and the field's hint names the View it is about.
+While hided is out of reach the last list or content stays dimmed under the unreachable line, and nothing new can be opened.
+The phone asks for a View only by its id, and only for one open now; the rule that keeps it so is in [ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion).
+Every other detail view has the quick keys (Enter, Escape, 위 화살표, 아래 화살표, Ctrl-C by accessible name) and a one-line reply with 보내기; a reply is sent with Enter after it and clears on success, a failure keeps the text with the reason under it, and a reply over 2,000 characters is named before it is sent.
 When hide cannot tell whether a reply reached the pane, the line says so and asks the operator to check the terminal before sending it again.
 An agent whose process Hide ended and whose pane holds a bare shell (a keep-pane sleep, described with the pane body above) shows its state in the terminal's place, in the desktop pane's words: Sleeping with its last progress line and Wake agent; Waking… with how old the resumed conversation is; or `Couldn’t resume this conversation` with the core's reason, Retry and Start new session.
 The 대화 | 터미널 switch is not offered there, the reply bar and the quick keys are disabled, and the core refuses an input to such a pane at the write (`asleep`, drawn as one line under the bar), from the moment its end begins until the agent is back, so nothing a phone sends reaches the shell under the agent; a repeated request keeps the answer its first send recorded.
@@ -2850,6 +2889,17 @@ A notification's title is the root's row title and, with a sentence, its body is
 The sentence is the core's chosen row detail, untranslated, and may appear in lock-screen previews according to the phone's setting (operator-approved update 2026-10-13); tapping the notice opens that agent's detail.
 See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for native question and plain-text question behavior, and cached-worker compatibility.
 A revoked phone shows "이 폰의 연결이 해제됐어요. Mac에서 QR을 다시 여세요." and drops its own push subscription; a subscription it could not drop goes to the log, and the storage line appears only when browser storage failed.
+A bar at the foot of the lists has 에이전트 and 미션, each an icon, its name and, when something waits on the operator, a count: 에이전트 shows the 내 차례 rows and 미션 the missions that have anything in their 내 차례, and a count of 0 draws no badge.
+The bar is on the two lists only; a detail, an agent's or a mission's, has none, and its back arrow returns to the list it was opened from.
+미션 shows every mission this Mac holds in the Mission tool's own four groups, 내 차례, 진행 중, 머지 기다림 and 끝남, with the same counts and order; 끝남 shows its newest three and `모두 ›` opens the rest in place.
+A row has its state word, the title, one line (the question, the blocked step, the merge order or the step now running), a cell per step with `n/m`, the time it has run, and, for a mission on another device, that device's chip; a mission whose device does not answer keeps its last values dimmed and counts no time.
+With no mission the tab is one line, 진행 중인 미션이 없어요, and under it 아무 에이전트 터미널에서 /hide-mission으로 시작해요; a record Hide could not read says so in one line, as the desktop's does.
+A row opens the mission's page: ← 미션, the elapsed time, the title, the Conductor's state with how many steps are done and `대화 ›` (the Conductor's own detail), and the cells for every step.
+When the Conductor asks a decision it stands first on the page: the question, why it matters, the node it stopped, one button per choice with the recommended one marked, and a written answer at the foot of the page.
+The answer goes to the Conductor as the desktop's decision banner sends it, and the same words (`보냄 · 차례 기다림`, `Conductor가 읽는 중`, and `전달 확인 안 됨` with 다시 보내기, which types nothing a second time) say where the answer is.
+A question that changed while the phone was open, a mission with no Conductor, or a device that stopped answering shows its reason under the question in the desktop's own words and keeps what was written; pressing the same answer twice reaches the Conductor once, and a press that could not leave the phone says the Mac is out of reach.
+Away from the Mac the page keeps its last content dimmed under the unreachable line and nothing on it presses: no choice, no written answer.
+Under the decision 지금 lists the steps that wait on someone and the steps at work, each with its mark, title, pull request number, what it waits on or follows (`#2091 다음`) and its worker, and 끝남 N is folded until it is opened; a step whose worker the list holds opens that agent's detail, and its back arrow returns to the page.
 The app follows the phone's light or dark setting, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 
 Directional terminal focus stays within the keyboard owner's drawn tab and Agent area, on local and remote devices.

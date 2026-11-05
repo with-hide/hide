@@ -3608,6 +3608,14 @@ fn bytes_frame(header: &Value, bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Splits a binary frame `bytes_frame` made into its header and its bytes;
+/// `None` when it is not one.
+pub(crate) fn split_bytes_frame(frame: &[u8]) -> Option<(Value, &[u8])> {
+    let length = u32::from_be_bytes(frame.get(..4)?.try_into().ok()?) as usize;
+    let header = serde_json::from_slice(frame.get(4..4 + length)?).ok()?;
+    Some((header, &frame[4 + length..]))
+}
+
 /// A read the daemon could not serve as bytes: the file is past the read cap,
 /// or the disk refused it. The client shows one line and offers no retry.
 fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
@@ -3641,7 +3649,7 @@ fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
 /// in its own task and hands its frames to the client loop through a bounded
 /// channel: the socket keeps carrying typing and snapshots meanwhile, and a
 /// full channel holds the read back instead of buffering it.
-async fn stream_device_file_bytes(
+pub(crate) async fn stream_device_file_bytes(
     frames: tokio::sync::mpsc::Sender<Message>,
     core: Arc<CoreHandle>,
     boundary: Arc<Boundary>,
@@ -3808,11 +3816,34 @@ impl AskedRange {
     }
 }
 
+/// Where the frames of a `file_bytes` read go: a client's socket, or the
+/// channel a phone's read collects them from (`mobile::looks`), so one reader
+/// of a file answers both and the phone's reads confine a path by the same
+/// boundary as the desktop's.
+pub(crate) trait FrameSink: Send {
+    fn deliver(
+        &mut self,
+        message: Message,
+    ) -> impl std::future::Future<Output = Result<(), ()>> + Send;
+}
+
+impl FrameSink for WebSocket {
+    async fn deliver(&mut self, message: Message) -> Result<(), ()> {
+        self.send(message).await.map_err(|_| ())
+    }
+}
+
+impl FrameSink for tokio::sync::mpsc::Sender<Message> {
+    async fn deliver(&mut self, message: Message) -> Result<(), ()> {
+        self.send(message).await.map_err(|_| ())
+    }
+}
+
 /// A `file_bytes` read keeps only one bounded chunk in memory. Sending each
 /// frame before reading the next gives the socket backpressure even when all
 /// eight authenticated clients ask for the maximum range together.
-async fn send_file_bytes(
-    socket: &mut WebSocket,
+pub(crate) async fn send_file_bytes(
+    socket: &mut impl FrameSink,
     boundary: &Boundary,
     roots: &crate::RootFollower,
     event: &Value,
@@ -3832,7 +3863,7 @@ pub(crate) type OpenedFile = Result<(PathBuf, std::fs::File, u64), Refusal>;
 /// Answers a `file_bytes` event with the file `opened` gave for its path, or
 /// with the refusal: the same frames whichever daemon read the file.
 pub(crate) async fn send_opened_file_bytes(
-    socket: &mut WebSocket,
+    socket: &mut impl FrameSink,
     event: &Value,
     opened: OpenedFile,
 ) -> Result<(), ()> {
@@ -3847,27 +3878,24 @@ pub(crate) async fn send_opened_file_bytes(
         Ok(source) => source,
         Err(refusal) => {
             return socket
-                .send(Message::Text(
+                .deliver(Message::Text(
                     refused("file_bytes", &path, refusal).to_string().into(),
                 ))
-                .await
-                .map_err(|_| ());
+                .await;
         }
     };
     let wanted = length.unwrap_or_else(|| total.saturating_sub(offset.min(total)));
     if wanted > boundary::MAX_FILE_BYTES {
         return socket
-            .send(file_bytes_error(&request_id, &path, "too_large"))
-            .await
-            .map_err(|_| ());
+            .deliver(file_bytes_error(&request_id, &path, "too_large"))
+            .await;
     }
     let mut file = tokio::fs::File::from_std(file);
     let start = offset.min(total);
     if start > 0 && file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
         return socket
-            .send(file_bytes_error(&request_id, &path, "read_failed"))
-            .await
-            .map_err(|_| ());
+            .deliver(file_bytes_error(&request_id, &path, "read_failed"))
+            .await;
     }
     let end = start.saturating_add(wanted).min(total);
     let displayed = hide_platform::path::to_wire_lossy(&real);
@@ -3879,9 +3907,8 @@ pub(crate) async fn send_opened_file_bytes(
             Ok(read) => read,
             Err(_) => {
                 return socket
-                    .send(file_bytes_error(&request_id, &path, "read_failed"))
-                    .await
-                    .map_err(|_| ());
+                    .deliver(file_bytes_error(&request_id, &path, "read_failed"))
+                    .await;
             }
         };
         buffer.truncate(read);
@@ -3897,9 +3924,8 @@ pub(crate) async fn send_opened_file_bytes(
             "eof": eof,
         });
         socket
-            .send(Message::Binary(bytes_frame(&header, &buffer).into()))
-            .await
-            .map_err(|_| ())?;
+            .deliver(Message::Binary(bytes_frame(&header, &buffer).into()))
+            .await?;
         cursor += read as u64;
         if eof {
             return Ok(());
@@ -4022,7 +4048,7 @@ pub(crate) fn roots_current(roots: &crate::RootFollower) -> bool {
 
 /// Whether `root` is a checkout the core's catalog carries for `device`,
 /// bringing the roots current once before saying no (see `admit_event`).
-fn device_root_known(
+pub(crate) fn device_root_known(
     boundary: &Boundary,
     roots: &crate::RootFollower,
     device: &str,

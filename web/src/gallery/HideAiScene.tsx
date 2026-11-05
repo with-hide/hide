@@ -270,6 +270,7 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
   const actions = useMemo(() => createActions(() => true), []);
   const rest = useMemo(() => ({
     navigator: {
+      siblings_shown: 5,
       focused_device_id: "local", focused_checkout_id: "main", focused_workspace_id: "herdr-ide",
       devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }],
       workspaces: [{ id: "herdr-ide", label: "herdr-ide", device_id: "local", path: "/projects/herdr-ide", checkouts: [{ id: "main", workspace_id: "herdr-ide", path: "/projects/herdr-ide", label: "main", tabs: [], active_tab_id: null, strip: [] }] }],

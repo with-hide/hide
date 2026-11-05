@@ -54,6 +54,17 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary_id(hided::it) & test(/^core_move::/)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# A Windows core's ssh walks (hided/tests/it/windows_ssh_device.rs) send
+# this build's programs over the runner's loopback ssh, uncompressed through
+# `ssh.exe`'s input, at 4 to 10 MiB/s (300 MiB for the Linux walk). In their
+# first runs, both at once on the `windows wsl` lane (2026-11-05), they took
+# 53 to 84 s, of which the upload took 31 to 73 s; the default guard ends a
+# test at 120 s. They get the remote mailbox's 240 s, and two hung attempts
+# still end inside their step's 15-minute limit.
+[[profile.ci.overrides]]
+filter = 'binary_id(hided::it) & test(/^windows_ssh_device::/)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 # On Windows this test prints the job objects the run had (the test's own job,
 # and whether a job above the starter's kept the resident child); CI shows the
 # line even when the test passes, as the record of what the runner's jobs are.

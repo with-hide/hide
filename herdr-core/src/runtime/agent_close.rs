@@ -1,6 +1,5 @@
-//! Replacement shells: one in a new tab preserves Herdr's protected
-//! primary-workspace boundary, and one inside the closing tab keeps a tab the
-//! operator named when its last agent leaves.
+//! The replacement shell a close leaves inside the closing tab, which keeps
+//! a tab the operator named when its last agent leaves.
 use super::*;
 
 impl Runtime {
@@ -30,37 +29,19 @@ impl Runtime {
                 .any(|agent| agent.pane_id == *pane_id)
     }
 
-    pub(super) fn primary_needs_shell(&self, workspace: &str, tab: &str) -> bool {
-        let Some(primary) = self.herdr_worktrees.get(workspace) else {
-            return false;
-        };
-        !primary.is_linked_worktree
-            && self
-                .herdr_workspace_tab_order
-                .get(workspace)
-                .is_some_and(|tabs| tabs.as_slice() == [tab])
-            && self.herdr_worktrees.iter().any(|(id, tree)| {
-                id != workspace && tree.is_linked_worktree && tree.repo_key == primary.repo_key
-            })
-    }
-
-    /// `shell` is the replacement's tab, or its pane when it went into the
-    /// closing tab.
+    /// `shell` is the replacement's pane in the closing tab.
     pub(crate) fn ingest_close_replacement(
         &mut self,
         request: &crate::recent_closed::capture::CloseEffectRequest,
         shell: &str,
         payload: SessionSnapshotPayload,
     ) -> Result<(), String> {
+        if request.replacement.is_none() {
+            return Err("replacement context is missing".into());
+        }
         // A shell made in the closing tab is the close's own even when the
         // close moved on while it was made, so a retry closes beside it.
-        if request
-            .replacement
-            .as_ref()
-            .is_some_and(|context| context.replacement_in_tab)
-        {
-            self.note_shell_in_tab(&request.key, shell);
-        }
+        self.note_shell_in_tab(&request.key, shell);
         let operation = self
             .close_operations
             .get(&request.key)
@@ -70,55 +51,7 @@ impl Runtime {
         {
             return Err("close intent changed while preparing its shell".into());
         }
-        let context = request
-            .replacement
-            .as_ref()
-            .ok_or("replacement context is missing")?;
-        if context.replacement_in_tab {
-            return self.ingest_shell_in_tab(request, shell, payload);
-        }
-        let tab_id = shell;
-        let in_projection = payload.tabs.iter().any(|tab| tab.tab_id == tab_id);
-        let has_layout = payload.layouts.iter().any(|layout| layout.tab_id == tab_id);
-        self.queue_restored_agent_tab(context, tab_id, &format!("close:{}", request.key))?;
-        self.finish_agent_effect(&context.checkout_path, &format!("close:{}", request.key));
-        self.close_operations
-            .get_mut(&request.key)
-            .expect("checked")
-            .replacement_id = Some(tab_id.to_owned());
-        // The owned fresh projection includes both tabs. Arrange the shell before
-        // removing the old tab so its area cannot collapse between the two effects.
-        self.ingest_session(Ok(payload));
-        if !self
-            .workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(self.node.as_str(), &context.checkout_path))
-            .is_some_and(|view| view.agent_tab_group(tab_id).is_some())
-            && self.workspace_views.is_some()
-        {
-            crate::diagnostic!(serde_json::json!({
-                "component": "agent_close",
-                "kind": "close.replacement_unplaced",
-                "tab_id": tab_id,
-                "in_projection": in_projection,
-                "layout_read": has_layout,
-            }));
-            return Err(
-                "The replacement shell could not be placed; the original tab was not closed".into(),
-            );
-        }
-        let operation = self
-            .close_operations
-            .get(&request.key)
-            .ok_or("close intent disappeared")?;
-        if let Some(message) = self.close_precondition_failure(operation) {
-            return Err(message);
-        }
-        if let Some(operation) = self.close_operations.get_mut(&request.key) {
-            operation.deadline_at_unix_ms =
-                Some(unix_milliseconds().saturating_add(CLOSE_STAGE_TIMEOUT_MS));
-        }
-        Ok(())
+        self.ingest_shell_in_tab(request, shell, payload)
     }
 
     /// A shell in the closing tab that carries this close's marker is the
@@ -226,31 +159,15 @@ impl Runtime {
         let Some(operation) = self.close_operations.get(key).cloned() else {
             return false;
         };
-        if !operation.request.context.replacement_shell
+        if !operation.request.context.replacement_in_tab
             || !matches!(operation.phase.as_str(), "refused" | "failed")
         {
             return false;
         }
-        let in_tab = operation.request.context.replacement_in_tab;
         let reuse = operation.replacement_id.as_ref().is_some_and(|id| {
-            if in_tab {
-                self.layout_holding_pane(id)
-                    .is_some_and(|layout| layout.tab_id == operation.scope_id)
-            } else {
-                self.herdr_workspace_tab_order
-                    .values()
-                    .any(|tabs| tabs.contains(id))
-            }
+            self.layout_holding_pane(id)
+                .is_some_and(|layout| layout.tab_id == operation.scope_id)
         });
-        if !reuse
-            && !in_tab
-            && !self.reserve_agent_effect(
-                &operation.request.context.checkout_path,
-                &format!("close:{key}"),
-            )
-        {
-            return true;
-        }
         let mut operation = operation;
         if !reuse && let Some(gone) = operation.replacement_id.take() {
             // A shell that left the tab is no longer one of its panes.

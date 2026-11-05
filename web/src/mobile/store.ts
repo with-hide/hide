@@ -4,8 +4,10 @@
 // agent it opened by id, never by name (D-17).
 
 import { create } from "zustand";
-import type { AgentGroup, AgentKey, Conversation, DetailView, Notice, Notifications, PairPayload, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
-import { mergeConversation, sameKey } from "./protocol";
+import type { PressedAnswer } from "../missionAnswer";
+import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import { keyTag, listedAgents, mergeConversation, sameKey } from "./protocol";
+import { resultContent, type LookContent } from "./lookContent";
 import { NO_CHOICE, type StartChoice } from "./start";
 
 export type Screen =
@@ -19,21 +21,50 @@ export type Screen =
   /** hided refused this phone for good: an expired code, the phone limit, a revoke. */
   | "refused";
 
+/** The bottom bar's places (PRD mobile-companion-ui B28); the PR tab is one more entry here and in `PHONE_TABS`. */
+export type PhoneTab = "agents" | "missions";
+
+/** An answer sent from a mission's page that the core has not yet kept or refused; the page draws it as the desktop's banner does. */
+export type MissionAnswerSent = { requestId: string; mission: string; pressed: PressedAnswer };
+
+/**
+ * The answer this mission's page waits on, if any. One rule for "a press of this mission is still out":
+ * the guard in `answerMission` and the page's buttons read it, so an answer left over from another
+ * mission's page never stops this one.
+ */
+export function answerSentFor(sent: MissionAnswerSent | null, mission: string): MissionAnswerSent | null {
+  return sent?.mission === mission ? sent : null;
+}
+
 export type Rows = { state: RowsState; text: string; lines: number; more: boolean };
+
+/** The agent's open Views, as the last `looks` frame carried them; `omitted` are the ones past hided's cap. */
+export type Looks = { rows: LookRow[]; omitted: number };
+
+/**
+ * One View opened full screen (B13). `requestId` names the read in flight, so a late frame of an earlier read, or of one the
+ * phone retried, is ignored; `shown` is set once the phone told hided it saw the content (D-15).
+ */
+export type Viewing = { row: LookRow; requestId: string; content: LookContent; shown: boolean; refreshing: boolean };
 
 /**
  * `moreAskedAt` is the line count when older rows were last asked for, and
  * `olderAskedAt` the cursor older messages were last asked before, so one
  * pull asks once. `conversation` is null until hided says whether the pane
- * has one; `none` leaves the terminal alone on screen.
+ * has one; `none` leaves the terminal alone on screen. `view` is the half
+ * hided reads; `tab` is what is on screen, which is 볼 것 without hided
+ * knowing. `looks` is null until hided lists the Views.
  */
 export type Detail = {
   key: AgentKey;
   view: DetailView;
+  tab: DetailTab;
   rows: Rows | null;
   moreAskedAt: number | null;
   conversation: Conversation | "none" | null;
   olderAskedAt: number | null;
+  looks: Looks | null;
+  look: Viewing | null;
 };
 
 /**
@@ -75,7 +106,29 @@ type PhoneState = {
   vapidKey: string | null;
   /** Null until the first list arrives; kept across a lost connection. */
   groups: AgentGroup[] | null;
+  /** The paired Mac and the devices it reaches, as the last list carried them. */
+  devices: PhoneDevice[];
+  /**
+   * What this phone's operator chose on the list, which the desktop's sidebar never sees (PRD mobile-companion-ui D-03): a parent's
+   * children opened or closed against what the core opened by default, keyed by `device|pane`; and the folds that were opened, keyed
+   * `group:<id>` or `children:<device|pane>`. Both keep only rows and groups the list still has.
+   */
+  childrenOpen: Record<string, boolean>;
+  foldsOpen: Record<string, true>;
   detail: Detail | null;
+  /** The bottom bar's place while no detail is open, and the mission whose page is open on the missions tab; an agent opened from a step returns to it. */
+  tab: PhoneTab;
+  missionOpen: string | null;
+  /** Null until the first missions frame; kept across a lost connection, dimmed under the unreachable line (B45). */
+  missions: PhoneMission[] | null;
+  /** The record could not be read on the Mac. */
+  missionsFailed: boolean;
+  /** The folds this phone opened on the missions tab: `closed` for 끝남's `모두`, `done:<mission>` for a page's 끝남; only missions the record still has. */
+  missionFolds: Record<string, true>;
+  /** What was typed for each mission's decision, kept until its answer is accepted (B35). */
+  missionDrafts: Record<string, string>;
+  missionAnswer: MissionAnswerSent | null;
+  missionAnswerError: { mission: string; notice: Notice } | null;
   /** The deep link waiting for the first list (B32). */
   pendingOpen: AgentKey | null;
   pendingInput: PendingInput | null;
@@ -107,7 +160,18 @@ const initial: PhoneState = {
   notifications: "unasked",
   vapidKey: null,
   groups: null,
+  devices: [],
+  childrenOpen: {},
+  foldsOpen: {},
   detail: null,
+  tab: "agents",
+  missionOpen: null,
+  missions: null,
+  missionsFailed: false,
+  missionFolds: {},
+  missionDrafts: {},
+  missionAnswer: null,
+  missionAnswerError: null,
   pendingOpen: null,
   pendingInput: null,
   inputError: null,
@@ -146,8 +210,26 @@ export function applyFrame(frame: ServerFrame): void {
       patch({ pushMode: frame.push_mode, otherPhones: frame.other_phones });
       return;
     case "agents":
-      patch({ groups: frame.groups, interfaceLanguage: frame.interface_language, colorTheme: frame.color_theme });
+      patch({
+        groups: frame.groups,
+        devices: frame.devices,
+        ...keptChoices(state, frame.groups),
+        interfaceLanguage: frame.interface_language,
+        colorTheme: frame.color_theme,
+      });
       return;
+    case "missions": {
+      const listed = new Set(frame.items.map((mission) => mission.id));
+      patch({
+        missions: frame.items,
+        missionsFailed: frame.failed,
+        // A mission that left the record takes its page and its draft with it.
+        missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
+        missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),
+        missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("done:") || listed.has(key.slice("done:".length)))),
+      });
+      return;
+    }
     case "sleep_result":
       if (state.sleepAction?.requestId === frame.request_id && state.sleepAction?.sleepId === frame.sleep_id) {
         patch({ sleepAction: { sleepId: frame.sleep_id, requestId: null, error: !frame.ok } });
@@ -171,6 +253,18 @@ export function applyFrame(frame: ServerFrame): void {
       patch({ detail: { ...detail, conversation } });
       return;
     }
+    case "looks": {
+      const detail = state.detail;
+      if (!detail || !sameKey(detail.key, frame)) return;
+      patch({ detail: { ...detail, looks: { rows: frame.views, omitted: frame.omitted } } });
+      return;
+    }
+    case "look_result":
+      showLook(frame.request_id, resultContent(frame.state, frame.url));
+      return;
+    case "look_changes":
+      showLook(frame.request_id, { state: "changes", files: frame.files, count: frame.count, added: frame.added, removed: frame.removed });
+      return;
     case "start_catalog":
       patch({ startCatalog: { targets: frame.targets, core_platform: frame.core_platform, kinds: frame.kinds, remembered: frame.remembered } });
       return;
@@ -182,12 +276,72 @@ export function applyFrame(frame: ServerFrame): void {
   }
 }
 
+/** Puts `content` on the View the phone is looking at, when it is the answer to the read in flight. */
+export function showLook(requestId: string, content: LookContent): void {
+  const detail = usePhone.getState().detail;
+  if (!detail?.look || detail.look.requestId !== requestId) return;
+  patch({ detail: { ...detail, look: { ...detail.look, content, refreshing: false } } });
+}
+
+/** The choices this phone made that still name a row or group of the new list, so a long session keeps no stale ones. */
+function keptChoices(state: PhoneState, groups: AgentGroup[]): Pick<PhoneState, "childrenOpen" | "foldsOpen"> {
+  const rows = new Set(listedAgents(groups).map((agent) => keyTag(agent)));
+  const folds = new Set([...groups.map((group) => foldKey.group(group.group)), ...[...rows].map(foldKey.children)]);
+  return {
+    childrenOpen: Object.fromEntries(Object.entries(state.childrenOpen).filter(([tag]) => rows.has(tag))),
+    foldsOpen: Object.fromEntries(Object.entries(state.foldsOpen).filter(([key]) => folds.has(key))),
+  };
+}
+
+export const foldKey = {
+  group: (id: string) => `group:${id}`,
+  children: (tag: string) => `children:${tag}`,
+};
+
+/** Opens or closes a parent's children on this phone only. */
+export function setChildrenOpen(agent: PhoneAgent, open: boolean): void {
+  usePhone.setState((state) => ({ childrenOpen: { ...state.childrenOpen, [keyTag(agent)]: open } }));
+}
+
+/** Opens a fold in place: a group's or a parent's "더 보기". */
+export function openFold(key: string): void {
+  usePhone.setState((state) => ({ foldsOpen: { ...state.foldsOpen, [key]: true } }));
+}
+
+export function setTab(tab: PhoneTab): void {
+  usePhone.setState({ tab, missionOpen: null });
+}
+
+/** Opens a mission's page on the missions tab. */
+export function openMission(id: string): void {
+  usePhone.setState({ tab: "missions", missionOpen: id, missionAnswerError: null });
+}
+
+export function closeMission(): void {
+  usePhone.setState({ missionOpen: null, missionAnswerError: null });
+}
+
+/** Opens or closes a fold on the missions tab, on this phone only. */
+export function setMissionFold(key: string, open: boolean): void {
+  usePhone.setState((state) => {
+    const folds = { ...state.missionFolds };
+    if (open) folds[key] = true;
+    else delete folds[key];
+    return { missionFolds: folds };
+  });
+}
+
+export function setMissionDraft(id: string, text: string): void {
+  usePhone.setState((state) => ({ missionDrafts: { ...state.missionDrafts, [id]: text }, missionAnswerError: null }));
+}
+
+/** The mission a page shows, from the current record; null once it left the list. */
+export function missionOf(missions: readonly PhoneMission[] | null, id: string | null): PhoneMission | null {
+  return missions?.find((mission) => mission.id === id) ?? null;
+}
+
 /** The agent a detail shows, from the current list; null once it left the list. */
-export function agentOf(groups: AgentGroup[] | null, key: AgentKey | null) {
+export function agentOf(groups: AgentGroup[] | null, key: AgentKey | null): PhoneAgent | null {
   if (!groups || !key) return null;
-  for (const group of groups) {
-    const agent = group.agents.find((candidate) => sameKey(candidate, key));
-    if (agent) return agent;
-  }
-  return null;
+  return listedAgents(groups).find((candidate) => sameKey(candidate, key)) ?? null;
 }

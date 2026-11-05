@@ -1908,6 +1908,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     settleMissionNode(missionId: string, node: string, action: import("./snapshot").MissionOperatorAction, since?: number) {
       dispatch({ schema_version: 2, kind: "mission_attention", payload: { mission: missionId, node, action, ...(since === undefined ? {} : { since_unix_ms: since }) } });
     },
+    /** The panel's folded 지시 원문 was opened: the core puts that node's brief in the `mission_brief` section. */
+    readMissionBrief(missionId: string, node: string) {
+      dispatch({ schema_version: 2, kind: "mission_brief_read", payload: { mission: missionId, node } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
@@ -2953,7 +2957,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const here = current();
       const paneId = target ?? useShellStore.getState().focusedPaneId;
       const pane = here?.tab?.panes.find((row) => row.id === paneId);
-      if (!here?.tab?.id || !pane) return diagnostic("create_pane: no focused pane");
+      // Named, because a split that sends nothing is otherwise invisible:
+      // the core's keyboard pane outside the tab it shows was the whole
+      // trace of a flaky split (with-hide/hide-private issue 476).
+      if (!here?.tab?.id || !pane) return diagnostic(`create_pane: no focused pane in the visible tab (pane ${paneId ?? "none"}, tab ${here?.tab?.id ?? "none"})`);
       const requestId = remoteRequestId();
       dispatch({
         schema_version: 2,

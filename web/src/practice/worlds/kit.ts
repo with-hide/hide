@@ -450,6 +450,7 @@ export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowM
   const focused = focusedPane(model);
   const rest: SnapshotRest = {
     navigator: {
+      siblings_shown: 5,
       agent_scope: scope,
       devices: [{ agent_scope: scope, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: agents.length, test: null }],
       workspaces,

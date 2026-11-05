@@ -1,6 +1,6 @@
 // The Sessions tree under one root (docs/UI_BEHAVIOR.md, Sessions): every
-// opened row shows its children at any depth, five siblings at a time as in
-// the sidebar, and the indent stops at SESSION_INDENT_LEVELS so a narrow Tools
+// opened row shows its children at any depth, the sidebar's number of siblings
+// at a time, and the indent stops at SESSION_INDENT_LEVELS so a narrow Tools
 // column keeps room for titles; deeper rows hang from their parent's rail.
 import { cappedPlaces } from "./components/agent-tree";
 import { childrenOf } from "./components/agent-tree-popover";
@@ -16,7 +16,7 @@ export const SESSION_INDENT_LEVELS = 3;
  * display order (most urgent sibling first), with the sidebar's sibling limit
  * and the capped rails. A root that is not opened draws only itself.
  */
-export function sessionTreeLines(root: AgentRow, byPane: ReadonlyMap<string, AgentRow>, opened: ReadonlySet<string>, shownAll: ReadonlySet<string>): SidebarTreeLine[] {
+export function sessionTreeLines(root: AgentRow, byPane: ReadonlyMap<string, AgentRow>, opened: ReadonlySet<string>, shownAll: ReadonlySet<string>, siblings: number): SidebarTreeLine[] {
   const rows: BoardRow[] = [];
   const seen = new Set<string>();
   const walk = (agent: AgentRow, depth: number) => {
@@ -27,7 +27,7 @@ export function sessionTreeLines(root: AgentRow, byPane: ReadonlyMap<string, Age
     if (opened.has(agent.pane_id)) for (const child of childrenOf(agent, byPane)) walk(child, depth + 1);
   };
   walk(root, 0);
-  return sidebarTreeLines(rows, shownAll, (depths) => cappedPlaces(depths, SESSION_INDENT_LEVELS));
+  return sidebarTreeLines(rows, shownAll, siblings, (depths) => cappedPlaces(depths, SESSION_INDENT_LEVELS));
 }
 
 /** The path of the checkout whose tab holds `pane`, for the branch's tooltip. */

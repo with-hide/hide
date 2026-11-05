@@ -3,6 +3,8 @@ import { cn } from "./lib/utils";
 import { ProjectLanePin } from "./ProjectLanePin";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
+import { KindHelpButton } from "./components/kind-help-dialog";
+import { KindMark } from "./components/kind-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -42,7 +44,8 @@ function sessionTitle(s: ReturnType<typeof useShellStore.getState>, session: Wor
   return read?.session && read.record && workKey(read.session) === workKey(session) ? recordTitle(read.record, summariesEnabled(s.rest?.status?.background_ai)) : null;
 }
 
-function useItemTitle(item: DetailItem | null): string {
+/** `bare` leaves out the kind a mission or plan title opens with, where the head already wears the kind's own mark. */
+function useItemTitle(item: DetailItem | null, bare = false): string {
   const { t } = useInterfaceTranslation();
   return useShellStore((s) => {
     if (!item) return "";
@@ -50,7 +53,10 @@ function useItemTitle(item: DetailItem | null): string {
       const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id);
       return t("detail.pr", { number: item.number, project: project?.label ?? "" });
     }
-    if (item.kind === "mission") return t("detail.mission", { title: missionOf(s.rest, item.mission)?.title ?? item.mission });
+    if (item.kind === "mission") {
+      const title = missionOf(s.rest, item.mission)?.title ?? item.mission;
+      return bare ? title : t("detail.mission", { title });
+    }
     if (item.kind === "branch") {
       const row = s.suggestions?.project?.workspace_id === item.workspace_id ? s.suggestions.project.rows.find((candidate) => candidate.id === item.row) : undefined;
       const name = row?.attempt?.branch?.name ?? item.row;
@@ -65,7 +71,7 @@ function useItemTitle(item: DetailItem | null): string {
       return t("projectTool.remains.title", { name: checkout?.branch ?? checkout?.label ?? "" });
     }
     const title = sessionTitle(s, item.session);
-    if (item.kind === "plan") return title ? t("detail.plan", { title }) : t("detail.planUntitled");
+    if (item.kind === "plan") return bare ? (title ?? t("detail.planUntitled")) : title ? t("detail.plan", { title }) : t("detail.planUntitled");
     return title ? t("detail.record", { title }) : t("detail.recordUntitled");
   });
 }
@@ -103,6 +109,7 @@ export function DetailPanel({ actions }: { actions: Actions }) {
   const item = items?.at(-1) ?? null;
   const before = items && items.length > 1 ? items[items.length - 2]! : null;
   const title = useItemTitle(item);
+  const name = useItemTitle(item, true);
   const back = useItemTitle(before?.kind === "record" && item?.kind === "record" ? before : null);
   const url = useShellStore((s) => {
     if (item?.kind !== "pull_request") return null;
@@ -121,8 +128,15 @@ export function DetailPanel({ actions }: { actions: Actions }) {
           </Button>
         </Hint>
         <span className="flex min-w-0 flex-1 items-center gap-xs font-semibold" data-detail-title={title}>
-          <DetailIcon item={item} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate" title={title}>{title}</span>
+          {item.kind === "mission" || item.kind === "plan" ? (
+            <>
+              <KindMark kind={item.kind === "mission" ? "mission" : "task"} />
+              <KindHelpButton from={item.kind === "mission" ? "mission" : "task"} />
+            </>
+          ) : (
+            <DetailIcon item={item} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+          )}
+          <span className="min-w-0 truncate" title={title}>{item.kind === "mission" || item.kind === "plan" ? name : title}</span>
         </span>
         {url ? (
           <Hint label={t("detail.github")}>

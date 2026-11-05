@@ -3,14 +3,19 @@
 // A program can mark a link itself (OSC 8), but most print URLs and paths as
 // plain text, so the rows are read when xterm asks about the row under the
 // pointer: an http(s) URL, or a path-shaped token that becomes a link only
-// once the filesystem says it exists (`terminalLinkProvider.ts` asks). Herdr's
-// frames carry no wrap flag, so a token cut at a row's end may continue on
-// the next row: at the terminal's edge (the continuation `selection.ts` reads
-// for a copy) or at a TUI's own margin, after the indentation it starts its
-// wrapped line with; a row that ends short followed by one that starts at the
-// left edge is two lines, as `ls` prints them. Every way to join the pieces
-// is offered longest first, and the existence check decides which spelling
-// is real; a URL cannot be checked, so it joins only at the terminal's edge.
+// once the filesystem says it exists (`terminalLinkProvider.ts` asks). A token
+// cut at a row's end may continue on the next row: at the terminal's edge
+// (the continuation `selection.ts` reads for a copy) or at a TUI's own margin,
+// after the indentation it starts its wrapped line with; a row that ends
+// short followed by one that starts at the left edge is two lines, as `ls`
+// prints them. Every way to join the pieces is offered longest first, and the
+// existence check decides which spelling is real. A URL cannot be checked, so
+// it joins only at the terminal's edge, and only across a real soft wrap when
+// the pane's holder said which rows soft-wrap (`terminalWrap.ts`): a URL that
+// fills its row and ends with a line break is not joined to the next row's
+// first word (hide-private issue 312). Without that fact a row that reaches
+// its last column is read as continuing, as before; `terminalWrap.ts` says
+// when the fact applies.
 
 import { rowContinues, type CellRow } from "./selection";
 
@@ -80,8 +85,10 @@ function rowRuns(cells: CellRow, row: number): Run[] {
  * Every link that may cover row `at`, one group per token on that row. A
  * group's candidates are the ways to join that token with its neighbours on
  * the rows around it, longest first; the caller takes the first that holds.
+ * `wraps`, beside `rows`, says whether each row soft-wraps onto the next, or
+ * is null when that is not known.
  */
-export function linkCandidates(rows: CellRow[], at: number): LinkCandidate[][] {
+export function linkCandidates(rows: CellRow[], at: number, wraps: boolean[] | null = null): LinkCandidate[][] {
   const runsByRow = new Map<number, Run[]>();
   const runsOf = (row: number) => {
     let runs = runsByRow.get(row);
@@ -117,7 +124,7 @@ export function linkCandidates(rows: CellRow[], at: number): LinkCandidate[][] {
     for (let from = 0; from <= own; from += 1) {
       for (let to = own; to < chain.length; to += 1) {
         const pieces = chain.slice(from, to + 1);
-        group.push(...joined(rows, pieces));
+        group.push(...joined(rows, wraps, pieces));
       }
     }
     group.sort((a, b) => spellingLength(b) - spellingLength(a) || b.text.length - a.text.length);
@@ -135,14 +142,28 @@ function spellingLength(candidate: LinkCandidate): number {
   return candidate.target.kind === "path" ? candidate.target.path.length : candidate.text.length;
 }
 
-function joined(rows: CellRow[], pieces: Run[]): LinkCandidate[] {
+/**
+ * How a token piece's row runs into the next piece: `edge` when the row's
+ * text reaches its last column and, where the holder said, soft-wraps there;
+ * `ended` when it reaches the last column of a row the holder said ends with
+ * a line break; `margin` into a TUI's indentation; null when the pieces
+ * cannot join. A wrap counts only at a row whose text reaches its last
+ * column: a soft-wrapped row that ends in blanks ends the token there.
+ */
+function rowBreak(rows: CellRow[], wraps: boolean[] | null, piece: Run, next: Run): "edge" | "ended" | "margin" | null {
+  if (rowContinues(rows[piece.row] ?? [])) return wraps?.[piece.row] === false ? "ended" : "edge";
+  return next.start > 0 ? "margin" : null;
+}
+
+function joined(rows: CellRow[], wraps: boolean[] | null, pieces: Run[]): LinkCandidate[] {
   const raw = pieces.map((piece) => piece.text).join("");
   if (raw.length > MAX_TEXT) return [];
-  const breaks = pieces.slice(0, -1).map((piece, index) => (rowContinues(rows[piece.row] ?? []) ? "edge" : pieces[index + 1]!.start > 0 ? "margin" : null));
+  const breaks = pieces.slice(0, -1).map((piece, index) => rowBreak(rows, wraps, piece, pieces[index + 1]!));
   if (breaks.includes(null)) return [];
   return interpretations(raw).flatMap((parsed) => {
-    // URLs retain their existing parser and edge-only wrap rule.
-    if (parsed.target.kind === "url" && breaks.includes("margin")) return [];
+    // A URL joins only where the row's text ran on: never at a TUI's margin
+    // or across a line break the holder said; a path's existence decides.
+    if (parsed.target.kind === "url" && breaks.some((kind) => kind === "margin" || kind === "ended")) return [];
     const spans = trimSpans(rows, pieces, parsed.lead, parsed.trail);
     return spans ? [{ spans, text: parsed.text, target: parsed.target, original: parsed.original }] : [];
   });

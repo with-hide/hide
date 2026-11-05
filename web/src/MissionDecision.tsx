@@ -7,8 +7,9 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import type { Mission, MissionAnswerState } from "./snapshot";
+import type { Mission } from "./snapshot";
 import { composingKey } from "./keys";
+import { ANSWER_LIMIT, PRESSED_MS, answerView, pressedShown, reasonKey, writtenAnswer, type PressedAnswer } from "./missionAnswer";
 
 // The decision a mission waits on, answered where it is asked, first in the
 // page's 내 차례 (PRD mission-plan-visibility D-13, D-20, D-30, B25-B30, B39;
@@ -20,19 +21,10 @@ import { composingKey } from "./keys";
 // that answer is. One typed without Herdr confirming it is typed again only
 // when the operator sends it again, so a question is answered once (B26).
 
-/** The longest written answer the core takes (`missions::ANSWER_LIMIT`), counted in UTF-16 units so the field's own cap never lets past what the core refuses. */
-export const ANSWER_LIMIT = 500;
-
-/** How long a pressed answer reads as sent before the core's own answer arrives; past it the banner draws the core's state again. */
-const PRESSED_MS = 5_000;
-
 export function DecisionBanner({ mission, device, actions, onNode }: { mission: Mission; device: string | null; actions: Actions; onNode: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
   const question = mission.question;
-  // A decision from before questions is answered under key 0, as the core keeps it.
-  const key = question?.key ?? 0;
-  // `failed` is the failure shown when it was pressed, so only a new one ends it.
-  const [pressed, setPressed] = useState<{ key: number; text: string; failed: Mission["answer_failed"]; resend: boolean } | null>(null);
+  const [pressed, setPressed] = useState<PressedAnswer | null>(null);
   const [writing, setWriting] = useState(false);
   const [draft, setDraft] = useState("");
   const writeButton = useRef<HTMLButtonElement>(null);
@@ -41,17 +33,17 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   // While the mission's device does not answer, the wait is not counted on (B35).
   const waited = useElapsed(mission.stale ? null : (question?.asked_at_unix_ms ?? null));
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
-  const answer = mission.answer?.key === key ? mission.answer : null;
-  // Sending an unconfirmed answer again shows it sending until the core moves it on.
-  const resending = pressed?.resend === true && answer?.state === "unconfirmed";
+  const view = answerView(mission, device, pressed);
+  const { key, options, sent, unreachable, closed } = view;
 
   // What was pressed shows until the core answers for it, refuses it, or asks something else (B26).
+  const shown = pressed === null || pressedShown(mission, pressed, view);
   useEffect(() => {
     if (!pressed) return;
-    if ((answer && !resending) || pressed.key !== key || pressed.failed !== mission.answer_failed) return setPressed(null);
+    if (!shown) return setPressed(null);
     const timer = window.setTimeout(() => setPressed(null), PRESSED_MS);
     return () => window.clearTimeout(timer);
-  }, [pressed, answer, resending, key, mission.answer_failed]);
+  }, [pressed, shown]);
   useEffect(() => {
     if (writing) field.current?.focus();
     else if (returnFocus.current) {
@@ -60,13 +52,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
     }
   }, [writing]);
 
-  const sent: { text: string; state: MissionAnswerState } | null = answer && !resending ? { text: answer.text, state: answer.state } : pressed ? { text: pressed.text, state: "sending" } : null;
-  const gone = !mission.conductor.present;
   const offline = mission.stale;
-  const unsupported = !mission.conductor.takes_answers;
-  const unreachable = gone || offline || unsupported;
-  const closed = unreachable || sent !== null;
-  const options = question?.options ?? [];
 
   const choose = (index: number) => {
     actions.answerMission(mission.id, key, { option: index + 1 });
@@ -86,8 +72,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
       setWriting(false);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      // The core takes one line: a tab or another control character becomes a space.
-      const text = draft.replace(/\p{Cc}/gu, " ").trim();
+      const text = writtenAnswer(draft);
       if (!text) return;
       actions.answerMission(mission.id, key, { text });
       setPressed({ key, text, failed: mission.answer_failed, resend: false });
@@ -97,15 +82,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   };
 
   // Why the operator cannot answer now, or why the last answer did not arrive (B28, B39).
-  const reason = offline && device
-    ? t("mission.banner.offline", { device })
-    : !sent && mission.answer_failed
-      ? t(`mission.banner.failed.${mission.answer_failed}`)
-      : gone
-        ? t("mission.noConductor")
-        : unsupported
-          ? t("mission.banner.unsupported")
-          : null;
+  const reason = view.reason ? t(reasonKey(view.reason), { device }) : null;
 
   return (
     <div
@@ -190,7 +167,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           )}
         </div>
       )}
-      {reason ? <p className={cn("min-w-0 text-caption", !sent && mission.answer_failed && !offline ? "text-mission-failed" : "text-muted-foreground")} data-mission-banner-reason={offline ? "offline" : (mission.answer_failed ?? (gone ? "no_conductor" : unsupported ? "unsupported" : undefined))}>{reason}</p> : null}
+      {reason ? <p className={cn("min-w-0 text-caption", !sent && mission.answer_failed && !offline ? "text-mission-failed" : "text-muted-foreground")} data-mission-banner-reason={offline ? "offline" : (mission.answer_failed ?? view.reason?.kind)}>{reason}</p> : null}
     </div>
   );
 }

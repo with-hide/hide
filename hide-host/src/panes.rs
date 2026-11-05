@@ -79,6 +79,10 @@ struct Bootstrap {
     one_shot: bool,
     #[serde(default)]
     hook: Option<hide_node_link::panes::HookRequest>,
+    /// The Hide installation the caller's pane names (`HIDE_INSTALL`), when
+    /// it names one: only that installation's node answers for it.
+    #[serde(default)]
+    install: Option<String>,
 }
 
 #[derive(Clone)]
@@ -129,6 +133,9 @@ pub struct Panes {
     clients: AtomicUsize,
     next: AtomicU64,
     checkout_callers: bool,
+    /// The installation this node is ([`crate::kit::running_install`]),
+    /// which its answers name; `None` for a build of no installation.
+    install: Option<String>,
     opens: Mutex<Opens>,
 }
 
@@ -180,6 +187,7 @@ impl Panes {
             clients: AtomicUsize::new(0),
             next: AtomicU64::new(1),
             checkout_callers: false,
+            install: None,
             opens: Mutex::new(Opens::default()),
         }
     }
@@ -188,6 +196,15 @@ impl Panes {
     /// [`crate::serve::Services::checkout_callers`] says.
     pub fn with_checkout_callers(mut self, checkout_callers: bool) -> Self {
         self.checkout_callers = checkout_callers;
+        self
+    }
+
+    /// Names the installation this node is: a pane of another one is refused
+    /// (`other_install`) before it is proved, even by its folder, and every
+    /// reference this node answers names this one, which the pane's `hide`
+    /// requires (with-hide/hide-private#497).
+    pub fn with_install(mut self, install: Option<String>) -> Self {
+        self.install = install;
         self
     }
 
@@ -378,7 +395,7 @@ impl Panes {
                         // Recorded before the caller hears it, so what the
                         // caller does next is recorded after it.
                         report_refusal(output, None, "bridge_busy");
-                        let _ = answer_client(&mut stream, Err("bridge_busy".to_owned()));
+                        let _ = answer_client(&mut stream, Err("bridge_busy".to_owned()), None);
                         continue;
                     }
                     scope.spawn(move || {
@@ -428,7 +445,7 @@ impl Panes {
             Ok(request) => self.serve_bootstrap(stream, request, output),
             Err(reason) => {
                 report_refusal(output, None, reason);
-                let _ = answer_client(&mut stream, Err(reason.to_owned()));
+                let _ = answer_client(&mut stream, Err(reason.to_owned()), None);
             }
         }
     }
@@ -442,7 +459,7 @@ impl Panes {
             .map(str::to_owned);
         let Some(started) = self.started.get() else {
             report_refusal(output, named, "bridge_unavailable");
-            let _ = answer_client(&mut stream, Err("bridge_unavailable".to_owned()));
+            let _ = answer_client(&mut stream, Err("bridge_unavailable".to_owned()), None);
             return;
         };
         let mut core_refused = false;
@@ -461,6 +478,11 @@ impl Panes {
                 || !request.nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
             {
                 return Err("invalid_nonce".to_owned());
+            }
+            if let Some(install) = request.install.as_deref()
+                && self.install.as_deref() != Some(install)
+            {
+                return Err(hide_agent_hooks::hook_request::install::OTHER_INSTALL.to_owned());
             }
             if request
                 .hook
@@ -633,7 +655,7 @@ impl Panes {
         {
             report_refusal(output, named, reason);
         }
-        let delivered = answer_client(&mut stream, result.clone()).is_ok();
+        let delivered = answer_client(&mut stream, result.clone(), self.install.as_deref()).is_ok();
         if !delivered || result.is_err() {
             if let Some(path) = created_reference {
                 let _ = fs::remove_file(&path);
@@ -942,23 +964,38 @@ fn report_refusal(output: &Mutex<impl Write>, pane_id: Option<String>, reason: &
     );
 }
 
-/// A reference with no wire spelling is not answered at all, so its caller
-/// reads the end of the stream and the issuer withdraws the reference.
+/// Writes the caller's answer, which names this node's installation
+/// (`install`) when it carries a reference or the core's answer to a hook. A
+/// reference with no wire spelling, or an answer past the hook response
+/// limit, is not answered at all, so its caller reads the end of the stream
+/// and the issuer withdraws the reference.
 fn answer_client(
     stream: &mut LocalStream,
     result: Result<BootstrapAnswer, String>,
+    install: Option<&str>,
 ) -> io::Result<()> {
     let answer = match result {
         Ok(BootstrapAnswer::Reference { path, info }) => {
             let reference = hide_platform::path::to_wire(&path).map_err(io::Error::other)?;
             let mut answer = info.unwrap_or_else(|| json!({"ok":true}));
             answer["reference"] = json!(reference);
+            answer["install"] = json!(install);
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err(io::Error::other("hook response too large"));
             }
             answer
         }
-        Ok(BootstrapAnswer::Hook(answer)) => answer,
+        // The core's answer to a hook, which this node gives the pane: it
+        // names this node's installation, as a reference does.
+        Ok(BootstrapAnswer::Hook(mut answer)) => {
+            if let Some(fields) = answer.as_object_mut() {
+                fields.insert("install".to_owned(), json!(install));
+            }
+            if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
+                return Err(io::Error::other("hook response too large"));
+            }
+            answer
+        }
         Err(reason) => {
             json!({"ok":false,"reason":reason,"next_action":hide_node_link::panes::refusal_next_action(&reason)})
         }
@@ -1007,7 +1044,7 @@ mod tests {
             ),
         ] {
             let (mut writer, reader) = LocalStream::pair().unwrap();
-            answer_client(&mut writer, Err(reason.to_owned())).unwrap();
+            answer_client(&mut writer, Err(reason.to_owned()), None).unwrap();
             let mut line = String::new();
             std::io::BufReader::new(reader)
                 .read_line(&mut line)
@@ -1044,6 +1081,11 @@ mod tests {
     /// A started pane service in a short `/tmp` folder (a socket path has a
     /// length bound), its events, and the socket a plain shell connects to.
     fn with_service(body: impl FnOnce(&Panes, &mpsc::Receiver<Value>, &Path)) {
+        with_service_of(Panes::new(), body)
+    }
+
+    /// [`with_service`] for the pane service `panes`.
+    fn with_service_of(panes: Panes, body: impl FnOnce(&Panes, &mpsc::Receiver<Value>, &Path)) {
         let root = tempfile::Builder::new()
             .prefix("hp")
             .tempdir_in("/tmp")
@@ -1051,7 +1093,6 @@ mod tests {
         let bridges = root.path().join("b");
         let (sender, events) = mpsc::channel();
         let output = Mutex::new(Events(sender));
-        let panes = Panes::new();
         std::thread::scope(|scope| {
             let started = panes
                 .start(
@@ -1095,6 +1136,70 @@ mod tests {
                 return event;
             }
         }
+    }
+
+    /// A node answers only for its own installation's panes
+    /// (with-hide/hide-private#497): a request naming another installation
+    /// is refused before anything is proved or sent up, even where the node
+    /// proves a caller by its folder, and the reference or hook answer it
+    /// does give names its installation, which the pane requires.
+    #[test]
+    fn a_node_answers_only_for_its_own_installation() {
+        use std::io::BufRead;
+        let mine = "root:/helper";
+        let panes = Panes::new()
+            .with_checkout_callers(true)
+            .with_install(Some(mine.to_owned()));
+        let request = |install: &str| json!({"pane_id": "w1:p1", "nonce": "0".repeat(32), "install": install});
+        with_service_of(panes, |_, events, socket| {
+            let answer = ask(socket, request("app")).join().unwrap();
+            assert_eq!(answer["ok"], false);
+            assert_eq!(answer["reason"], "other_install");
+            assert_eq!(
+                next_event(events, "refused"),
+                json!({"event": "refused", "pane_id": "w1:p1", "reason": "other_install"})
+            );
+        });
+        // The pane's own installation passes the check and goes on to the
+        // pane's proof, which this node, given no pane holders, cannot make.
+        let panes = Panes::new().with_install(Some(mine.to_owned()));
+        with_service_of(panes, |_, _, socket| {
+            let answer = ask(socket, request(mine)).join().unwrap();
+            assert_eq!(answer["reason"], "bridge_unavailable");
+        });
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("ref.json");
+        let (mut writer, reader) = LocalStream::pair().unwrap();
+        answer_client(
+            &mut writer,
+            Ok(BootstrapAnswer::Reference { path, info: None }),
+            Some(mine),
+        )
+        .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(reader)
+            .read_line(&mut line)
+            .unwrap();
+        let answer: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(answer["ok"], true);
+        assert_eq!(answer["install"], mine);
+
+        // The core's answer to a hook, which the pane's hook requires to
+        // name its installation too (with-hide/hide-private#575).
+        let (mut writer, reader) = LocalStream::pair().unwrap();
+        let hook =
+            json!({"type": "workspace_result", "request_id": "1-r", "ok": true, "result": {}});
+        answer_client(&mut writer, Ok(BootstrapAnswer::Hook(hook)), Some(mine)).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(reader)
+            .read_line(&mut line)
+            .unwrap();
+        let answer: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            (&answer["request_id"], &answer["install"]),
+            (&json!("1-r"), &json!(mine))
+        );
     }
 
     /// A shell of the node's own account, in no pane, gets exactly the

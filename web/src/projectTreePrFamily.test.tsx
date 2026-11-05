@@ -59,7 +59,7 @@ function catalog(agents: AgentRow[], drawn?: [string, number][], github?: Github
       tabs: [{ id: "tab:alpha", label: "main", panes: agents.map((row) => ({ id: row.pane_id })) }],
     }],
   } as unknown as Workspace;
-  const navigator = { devices: [LOCAL], workspaces: [project], agents, focused_device_id: "local", focused_checkout_id: "checkout:alpha-main" };
+  const navigator = { siblings_shown: 5, devices: [LOCAL], workspaces: [project], agents, focused_device_id: "local", focused_checkout_id: "checkout:alpha-main" };
   const rest = legacyRest({ navigator } as unknown as SnapshotRest, agents);
   if (drawn) {
     const tree = rest.navigator!.workspaces![0]!.checkouts[0]!.agent_scope.sidebar_tree;

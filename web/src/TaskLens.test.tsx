@@ -41,7 +41,7 @@ function snapshot(agents: AgentRow[], cards: TaskCardScope[], view: TaskView = "
   const checkout = (id: string, project: string) => ({ id, workspace_id: project, label: "main", branch: "main", path: `/${project}`, agent_scope: emptyScope(), tabs: [{ id: `${id}-tab`, panes: agents.map((agent) => ({ id: agent.pane_id })) }] }) as unknown as Checkout;
   const project = (id: string, label: string) => ({ id, device_id: "local", label, path: `/${id}`, is_git: true, agent_scope: emptyScope(), checkouts: [checkout(`${id}-main`, id)] }) as unknown as Workspace;
   return {
-    navigator: { devices: [{ id: "local", kind: "local", label: "Local", agent_scope: scope }], focused_device_id: "local", focused_checkout_id: "hide-main", workspaces: [project("hide", "herdr-ide"), project("site", "site")], agents },
+    navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local", label: "Local", agent_scope: scope }], focused_device_id: "local", focused_checkout_id: "hide-main", workspaces: [project("hide", "herdr-ide"), project("site", "site")], agents },
     ui_state: { task_view: view, sessions_expanded_agent_pane_ids: folds, left_sidebar_visible: true },
   } as unknown as SnapshotRest;
 }

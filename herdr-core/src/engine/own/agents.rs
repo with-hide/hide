@@ -26,6 +26,7 @@ use hide_node_link::holders::{
     ForegroundProgram, PaneFacts, RuleSet, ScreenRead, ScreenRules, ScreenState,
 };
 
+use super::shell_line::stripped_title;
 use crate::engine::answers::PaneSessionKind;
 
 /// How long a start the engine typed may take to show its program in the
@@ -523,7 +524,10 @@ pub(super) fn apply(
         cwd.clone_from(reported);
         applied.changed = true;
     }
-    if before.title != facts.title {
+    // The title is compared, and projected, without the activity glyph an
+    // agent turns in front of it every frame (Claude Code's spinner), as
+    // Herdr compares it: a turning glyph alone is no change of the session.
+    if stripped(&before) != stripped(facts) {
         applied.changed = true;
     }
     let program = facts.foreground.as_ref();
@@ -655,6 +659,11 @@ pub(super) fn apply(
         }
     }
     applied
+}
+
+/// The title `facts` carry as a session shows it ([`stripped_title`]).
+pub(super) fn stripped(facts: &PaneFacts) -> Option<String> {
+    facts.title.as_deref().and_then(stripped_title)
 }
 
 /// The state `screen` reads for an agent that was `before`: at rest after
@@ -807,6 +816,22 @@ mod tests {
         fn status(&self) -> Option<&'static str> {
             self.agent.as_ref().map(|agent| agent.live.status.as_str())
         }
+    }
+
+    /// Claude Code turns a spinner glyph in front of its title every frame:
+    /// the title's text alone is the session's, as Herdr compares it.
+    #[test]
+    fn a_title_whose_spinner_alone_turns_changes_nothing_and_new_text_does() {
+        let mut pane = Pane::new();
+        let titled = |title: &str| PaneFacts {
+            title: Some(title.to_owned()),
+            ..PaneFacts::default()
+        };
+        assert!(pane.facts(titled("⠋ Fix the tests")).changed);
+        for turned in ["⠙ Fix the tests", "◐ Fix the tests", "✳ Fix the tests"] {
+            assert!(!pane.facts(titled(turned)).changed, "{turned}");
+        }
+        assert!(pane.facts(titled("✳ Fix the build")).changed);
     }
 
     #[test]

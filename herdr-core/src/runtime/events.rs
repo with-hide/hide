@@ -987,6 +987,8 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) other_vendor: Option<bool>,
     #[serde(default)]
     pub(super) clean_merged: Option<bool>,
+    #[serde(default)]
+    pub(super) map_flow: Option<crate::missions::MapFlow>,
 }
 
 /// `mission_answer`: the operator's answer from a mission's decision banner
@@ -1744,6 +1746,8 @@ pub(super) enum Event {
     MissionAnswer(MissionAnswerPayload),
     MissionEnd(MissionEndPayload),
     MissionAttention(super::mission_health::MissionAttentionPayload),
+    /// `mission_brief_read`: the operator opened the folded brief of a node.
+    MissionBriefRead(super::mission_brief::BriefReadPayload),
     /// `mission_reopen`: the operator opens a closed mission again (PRD
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
@@ -2094,6 +2098,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             super::mission_health::MissionAttentionPayload,
             MissionAttention
         ),
+        "mission_brief_read" => decode!(super::mission_brief::BriefReadPayload, MissionBriefRead),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
@@ -4060,6 +4065,9 @@ impl Runtime {
                 if let Some(clean_merged) = payload.clean_merged {
                     settings.clean_merged = clean_merged;
                 }
+                if let Some(map_flow) = payload.map_flow {
+                    settings.map_flow = map_flow;
+                }
                 self.set_conductor_settings(settings)
             }
             Event::MissionAnswer(payload) => self.mission_answer_event(
@@ -4071,6 +4079,7 @@ impl Runtime {
             ),
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
+            Event::MissionBriefRead(payload) => self.mission_brief_read(payload),
             Event::MissionReopen(payload) => self.mission_reopen_event(&payload.mission),
             Event::MissionHandover(payload) => {
                 self.mission_handover_event(&payload.mission, &payload.token)

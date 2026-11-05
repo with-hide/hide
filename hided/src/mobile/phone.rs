@@ -6,11 +6,15 @@
 //! conversation or its terminal, ask for older messages or more rows, close
 //! it, send that pane a reply or one key, open the start sheet and start an
 //! agent from it, wake a sleeping agent in its pane, wake or inspect a listed
-//! sleeping conversation, register or report its push subscription, and ask
-//! whether hided still answers (`ping`). Anything else is refused and recorded.
-//! It never receives a file, a path, a setting or the core's snapshot; the one
-//! exception is the interface language, which rides each `agents` frame so the
-//! phone speaks the language the operator chose.
+//! sleeping conversation, answer the decision a listed mission waits on
+//! (`answer_mission`), register or report its push subscription, ask
+//! whether hided still answers (`ping`), and look at one View an agent of its
+//! open detail opened (`look_open`, `look_ack`, `look_seen`). Anything else is
+//! refused and recorded. It never receives a path, a setting or the core's
+//! snapshot, and a file only as the content of a View that is open now, asked
+//! for by its id (`looks.rs`); the one setting is the interface language,
+//! which rides each `agents` frame so the phone speaks the language the
+//! operator chose.
 //!
 //! Every frame to the phone goes through `encode`, the one place a relay
 //! transport would wrap in end-to-end encryption (PRD D-01).
@@ -25,8 +29,9 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::conversation::{self, Tail, Transcript};
+use super::looks;
 use super::pane::{self, Input, PaneError};
-use super::projection::{AgentKey, Projection};
+use super::projection::{AgentKey, PhoneMissions, Projection};
 use super::store::{Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
 
@@ -218,11 +223,19 @@ fn agents_frame(projection: &Projection) -> Value {
     json!({
         "type": "agents",
         "groups": projection.groups,
+        // The Mac and the devices it reaches, for the header and the device sheet.
+        "devices": projection.devices,
         // The core's language as stored, or null to follow the phone's own.
         "interface_language": projection.interface_language,
         // The operator's palette; the phone keeps its own light or dark.
         "color_theme": projection.color_theme,
     })
+}
+
+/// The missions the phone lists (PRD mobile-companion-ui B28, B31-B36): the
+/// record's trimmed projection, republished when it changes.
+fn missions_frame(missions: &PhoneMissions) -> Value {
+    json!({"type": "missions", "items": missions.items, "failed": missions.failed})
 }
 
 fn meta_frame(meta: &PhoneMeta) -> Value {
@@ -275,6 +288,10 @@ struct Open {
     /// reason as a start: the write may already be on its way and its request
     /// id must be settled. The pane call's own limits bound it.
     input: Option<tokio::task::JoinHandle<()>>,
+    /// The content of the one View the phone is looking at, sent a window of
+    /// chunks at a time. It ends with the detail or with the next request:
+    /// it only reads, so nothing is owed to a request id.
+    look: Option<looks::Transfer>,
 }
 
 /// Runs one slow piece of a phone's work beside the socket loop, so the loop
@@ -325,9 +342,12 @@ fn spawn_detail(
         let mut transcript: Option<Transcript> = None;
         // Whether the phone was last told the pane has a conversation.
         let mut told: Option<bool> = None;
+        // The Views the phone was last told the agent has open.
+        let mut told_looks: Option<herdr_core::LookViews> = None;
         loop {
             let ask = *asks.borrow_and_update();
             let mut outgoing = Vec::new();
+            outgoing.extend(looks_step(&mobile, &key, &mut told_looks).await);
             if ask.view == View::Conversation {
                 let (next, frame) = conversation_step(&mobile, &key, transcript.take()).await;
                 transcript = next;
@@ -367,6 +387,43 @@ fn spawn_detail(
             }
         }
     })
+}
+
+/// The Views the agent in `pane_id` has open, asked of the core on a blocking
+/// thread: its owner thread answers, and no worker of the runtime waits for it.
+async fn agent_looks(mobile: &Arc<Mobile>, pane_id: &str) -> Result<herdr_core::LookViews, String> {
+    let (core, pane_id) = (Arc::clone(mobile.core()), pane_id.to_owned());
+    tokio::task::spawn_blocking(move || core.agent_looks(&pane_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// The list of Views the agent has open, when it differs from the last one
+/// sent: a View opened, closed or looked at moves it.
+async fn looks_step(
+    mobile: &Arc<Mobile>,
+    key: &AgentKey,
+    told: &mut Option<herdr_core::LookViews>,
+) -> Option<Value> {
+    let looks = match agent_looks(mobile, &key.pane_id).await {
+        Ok(looks) => looks,
+        Err(message) => {
+            looks_failed(&message);
+            return None;
+        }
+    };
+    if told.as_ref() == Some(&looks) {
+        return None;
+    }
+    let frame = looks::list_frame(key, &looks);
+    *told = Some(looks);
+    Some(frame)
+}
+
+fn looks_failed(message: &str) {
+    herdr_core::diagnostic!(json!({
+        "component": "mobile_phone", "kind": "looks.read_failed", "message": message,
+    }));
 }
 
 fn conversation_failed(message: &str) {
@@ -616,6 +673,7 @@ async fn run(
     close: Arc<tokio::sync::Notify>,
 ) {
     let mut projection = mobile.subscribe_projection();
+    let mut missions = mobile.subscribe_missions();
     let mut meta = mobile.subscribe_meta();
     let (frames_tx, mut frames) = mpsc::channel::<Value>(8);
     let mut open = Open::default();
@@ -640,6 +698,7 @@ async fn run(
         hello,
         meta_frame(&meta.borrow_and_update()),
         agents_frame(&projection.borrow_and_update()),
+        missions_frame(&missions.borrow_and_update()),
     ];
     for frame in &first {
         if !send_frame(socket, frame, phone_id).await {
@@ -656,6 +715,11 @@ async fn run(
             changed = projection.changed() => {
                 if changed.is_err() { return; }
                 let frame = agents_frame(&projection.borrow_and_update());
+                if !send_frame(socket, &frame, phone_id).await { return; }
+            }
+            changed = missions.changed() => {
+                if changed.is_err() { return; }
+                let frame = missions_frame(&missions.borrow_and_update());
                 if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = meta.changed() => {
@@ -741,6 +805,7 @@ async fn handle(
             });
             let (older, older_asks) = mpsc::channel(1);
             mobile.set_viewing(connection, Some(key.clone()));
+            open.look = None;
             let task = spawn_detail(Arc::clone(mobile), key, frames.clone(), asks, older_asks);
             open.detail = Some(Detail { ask, older, task });
             None
@@ -784,10 +849,29 @@ async fn handle(
         }
         "close" => {
             open.detail = None;
+            open.look = None;
             mobile.set_viewing(connection, None);
             None
         }
+        "look_open" => look_open(mobile, phone_id, message, open, frames, projection).await,
+        "look_ack" => {
+            match (
+                open.look.as_ref(),
+                message.get("request_id").and_then(Value::as_str),
+                message.get("seq").and_then(Value::as_u64),
+            ) {
+                (Some(transfer), Some(request_id), Some(seq)) => transfer.ack(request_id, seq),
+                (_, Some(_), Some(_)) => {}
+                _ => refusal_logged("scope.refused", Some(phone_id), "look_ack"),
+            }
+            None
+        }
+        "look_seen" => {
+            look_seen(mobile, phone_id, message, projection).await;
+            None
+        }
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
+        "answer_mission" => Some(answer_mission(mobile, phone_id, message).await),
         "input" => {
             let busy = json!({
                 "type": "input_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight",
@@ -871,6 +955,115 @@ async fn handle(
     }
 }
 
+/// The answer to a `look_*` request that cannot go on: its state says why.
+fn look_refused(message: &Value, state: &str) -> Value {
+    json!({
+        "type": "look_result", "request_id": message.get("request_id"),
+        "view_id": message.get("view_id"), "state": state,
+    })
+}
+
+/// Why a `look_*` request was turned away: the `state` its answer carries and
+/// the `reason` `scope.refused` records.
+#[derive(Debug, Eq, PartialEq)]
+struct LookRefusal {
+    state: &'static str,
+    reason: String,
+}
+
+/// The first checks of a `look_open` or `look_seen`, which need nothing from
+/// the core (PRD mobile-companion-ui D-16): the request carries no field
+/// beyond the ids, and the agent is one the phone's list holds.
+fn look_scope<'a>(
+    message: &'a Value,
+    projection: &Projection,
+) -> Result<(AgentKey, looks::Request<'a>), LookRefusal> {
+    let request = looks::request(message).map_err(|error| match error {
+        looks::Malformed::Beyond(field) => LookRefusal {
+            state: "refused",
+            reason: format!("look_field:{field}"),
+        },
+        looks::Malformed::Invalid => LookRefusal {
+            state: "refused",
+            reason: "look_request".to_owned(),
+        },
+    })?;
+    let key = key_of(message)
+        .filter(|key| projection.find(key).is_some())
+        .ok_or_else(|| LookRefusal {
+            state: "gone",
+            reason: "not_an_agent".to_owned(),
+        })?;
+    Ok((key, request))
+}
+
+/// The View a `look_open` or `look_seen` names, checked in the order that
+/// keeps the phone to the Views of an agent it can see: `look_scope`, the
+/// phone still let in, and the View among the Views the core lists that agent
+/// has open now. Every refusal is recorded as `scope.refused`; `Err` is the
+/// answer to send.
+async fn look_target(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    projection: &Projection,
+) -> Result<(String, herdr_core::LookView), Value> {
+    let (key, request) = match look_scope(message, projection) {
+        Ok(scope) => scope,
+        Err(refusal) => {
+            refusal_logged("scope.refused", Some(phone_id), &refusal.reason);
+            return Err(look_refused(message, refusal.state));
+        }
+    };
+    if mobile.still_admitted(phone_id).is_err() {
+        return Err(look_refused(message, "refused"));
+    }
+    let looks = match agent_looks(mobile, &key.pane_id).await {
+        Ok(looks) => looks,
+        Err(failure) => {
+            looks_failed(&failure);
+            return Err(look_refused(message, "unavailable"));
+        }
+    };
+    match looks::find(&looks, request.view_id) {
+        Some(view) => Ok((request.request_id.to_owned(), view)),
+        None => {
+            // Closed since the list was drawn, or never this agent's.
+            refusal_logged("scope.refused", Some(phone_id), "view_not_open");
+            Err(look_refused(message, "closed"))
+        }
+    }
+}
+
+/// `look_open`: starts sending the View's content; the next one replaces it.
+async fn look_open(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    open: &mut Open,
+    frames: &mpsc::Sender<Value>,
+    projection: &Arc<Projection>,
+) -> Option<Value> {
+    let (request_id, view) = match look_target(mobile, phone_id, message, projection).await {
+        Ok(target) => target,
+        Err(answer) => return Some(answer),
+    };
+    if request_id.is_empty() {
+        refusal_logged("scope.refused", Some(phone_id), "look_request");
+        return Some(look_refused(message, "refused"));
+    }
+    open.look = Some(looks::open(mobile, &request_id, view, frames.clone()));
+    None
+}
+
+/// `look_seen`: the phone showed the View, so it is seen, on the phone and on
+/// the desktop (B24). Repeating it changes nothing.
+async fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projection: &Projection) {
+    if let Ok((_, view)) = look_target(mobile, phone_id, message, projection).await {
+        mobile.mark_seen(&view);
+    }
+}
+
 /// The answer to a phone's `ping`: its own number back, so the phone knows
 /// hided is there. The page cannot see the protocol-level ping hided sends, so
 /// this is how a phone learns that a Mac gone to sleep stopped answering. It
@@ -924,6 +1117,121 @@ async fn sleeping_session(
     match dispatched {
         Ok(Ok(())) => answer(true, None),
         _ => answer(false, Some("unavailable")),
+    }
+}
+
+/// The most a phone's written answer may hold, in characters (`missions::ANSWER_LIMIT`).
+const ANSWER_LIMIT: usize = herdr_core::missions::ANSWER_LIMIT;
+
+/// What a phone's `answer_mission` asks, once it names a listed mission and a
+/// well-formed answer: the one `mission_answer` event the desktop's decision
+/// banner sends (`Event::MissionAnswer`), nothing else.
+fn mission_answer_event(
+    message: &Value,
+    missions: &PhoneMissions,
+) -> Result<Vec<u8>, &'static str> {
+    let id = message.get("mission").and_then(Value::as_str);
+    let Some(mission) = id.and_then(|id| missions.find(id)) else {
+        return Err("gone");
+    };
+    let Some(key) = message.get("key").and_then(Value::as_u64) else {
+        return Err("invalid_request");
+    };
+    let resend = match message.get("resend") {
+        None => false,
+        Some(Value::Bool(resend)) => *resend,
+        Some(_) => return Err("invalid_request"),
+    };
+    let option = match message.get("option") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|option| u8::try_from(option).ok())
+                .filter(|option| *option >= 1)
+                .ok_or("invalid_request")?,
+        ),
+    };
+    let text = match message.get("text") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(text.as_str()),
+        Some(_) => return Err("invalid_request"),
+    };
+    // Sending again names no answer; a first answer names exactly one.
+    match (resend, option, text) {
+        (true, None, None) => {}
+        (false, Some(_), None) => {}
+        (false, None, Some(text))
+            if !text.trim().is_empty()
+                && text.chars().count() <= ANSWER_LIMIT
+                && !text.chars().any(char::is_control) => {}
+        _ => return Err("invalid_request"),
+    }
+    Ok(json!({
+        "schema_version": herdr_core::SCHEMA_VERSION, "kind": "mission_answer",
+        "payload": {"mission": mission.id, "key": key, "option": option, "text": text, "resend": resend},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// The operator's answer to the decision a mission waits on, from a phone.
+/// One claim per request id, taken and settled on one blocking thread, so a
+/// repeat of the same press, on this socket or another, reaches the Conductor
+/// once; the core then keeps the first answer to the question's key. A
+/// refusal the operator can act on (a changed question, no Conductor, a
+/// device that stopped answering) comes back on the mission itself, in the
+/// desktop's words, as it does for the banner.
+async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "mission_result", "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "mission_result", "request_id": request_id,
+            "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let bytes = match mission_answer_event(message, &mobile.missions()) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("mission_answer:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    let (mobile, phone_id, request) = (
+        Arc::clone(mobile),
+        phone_id.to_owned(),
+        request_id.to_owned(),
+    );
+    let dispatched = tokio::task::spawn_blocking(move || {
+        mobile.still_admitted(&phone_id)?;
+        match mobile.reserve_input(&phone_id, &request) {
+            Reservation::Write => {}
+            Reservation::Seen(InputState::Written) => return Ok(()),
+            Reservation::Seen(_) => return Err("in_flight"),
+        }
+        match mobile.config.core.dispatch(bytes) {
+            Ok(()) => {
+                mobile.settle_input(&phone_id, &request, Some(InputState::Written));
+                Ok(())
+            }
+            Err(_) => {
+                // Nothing reached the core, so the phone may send this id again.
+                mobile.settle_input(&phone_id, &request, None);
+                Err("unavailable")
+            }
+        }
+    })
+    .await;
+    match dispatched {
+        Ok(Ok(())) => answer(true, None),
+        Ok(Err(reason)) => answer(false, Some(reason)),
+        Err(_) => answer(false, Some("unavailable")),
     }
 }
 
@@ -1171,6 +1479,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_look_request_names_an_agent_and_a_view_id_and_nothing_a_path_could_ride_in() {
+        let projection = sleeping_projection(None);
+        let ask = |field: Option<&str>, pane: &str| {
+            let mut message = json!({
+                "type": "look_open", "request_id": "r-1", "device_id": "test-node",
+                "pane_id": pane, "view_id": "view-1",
+            });
+            if let Some(field) = field {
+                message[field] = json!("/etc/passwd");
+            }
+            message
+        };
+        let refused = |message: &Value| look_scope(message, &projection).err();
+        assert!(look_scope(&ask(None, "w1:p1"), &projection).is_ok());
+        for field in ["path", "root", "checkout", "file"] {
+            assert_eq!(
+                refused(&ask(Some(field), "w1:p1")),
+                Some(LookRefusal {
+                    state: "refused",
+                    reason: format!("look_field:{field}")
+                })
+            );
+        }
+        // An agent the list does not hold is gone, whatever View it names.
+        assert_eq!(
+            refused(&ask(None, "w9:p9")),
+            Some(LookRefusal {
+                state: "gone",
+                reason: "not_an_agent".to_owned()
+            })
+        );
+        let mut no_view = ask(None, "w1:p1");
+        no_view.as_object_mut().unwrap().remove("view_id");
+        assert_eq!(
+            refused(&no_view).map(|refusal| refusal.reason),
+            Some("look_request".to_owned())
+        );
+    }
+
+    #[test]
     fn a_phone_can_act_only_on_a_current_local_sleep_intent() {
         let mut row = json!({
             "sleep_id": "sleep-a-1", "node_id": "local", "kind": "pi",
@@ -1225,6 +1573,8 @@ mod tests {
         directory: &std::path::Path,
         gate: &Arc<herdr_core::input_gate::PaneInputGate>,
     ) -> Arc<Mobile> {
+        let core = Arc::new(crate::core::CoreHandle::bare(directory));
+        let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
         Mobile::start(super::super::Config {
             state_dir: directory.join("state"),
             home: directory.to_path_buf(),
@@ -1235,13 +1585,21 @@ mod tests {
                 search_path: None,
             },
             host_name: None,
-            core: Arc::new(crate::core::CoreHandle::bare(directory)),
+            core: Arc::clone(&core),
             input_gate: Arc::clone(gate),
             renderers: Arc::default(),
             start_demand: Arc::default(),
             // These tests drive the phone boundary directly, never a network supervisor.
             open: tokio::sync::watch::channel(false).1,
             desktop: Arc::default(),
+            boundary: Arc::clone(&boundary),
+            roots: Arc::new(crate::RootFollower::new(
+                Arc::clone(&core),
+                boundary,
+                Arc::new(crate::watch::WatchService::new(Arc::clone(&core))),
+                Arc::new(crate::index::IndexService::new()),
+            )),
+            browser_control: Arc::default(),
         })
     }
 
@@ -1387,6 +1745,37 @@ mod tests {
         second.abort();
         let _ = second.await;
         mobile.shutdown().await;
+    }
+
+    /// B21: a page whose screen cannot be taken (no desktop window here, no
+    /// such checkout) is a refusal with its reason, which `take` logs, and
+    /// never a picture or a hang; the phone is answered with the address.
+    #[tokio::test]
+    async fn a_page_with_no_desktop_window_cannot_be_shot() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let view = herdr_core::LookView {
+            device_id: "test-node".to_owned(),
+            checkout_path: "/repo".to_owned(),
+            display_id: "browser-1".to_owned(),
+            kind: herdr_core::DisplayKind::Browser,
+            label: "landing".to_owned(),
+            path: String::new(),
+            url: Some("http://localhost:5173/".to_owned()),
+            committed: None,
+            output: None,
+            unseen: true,
+            at_unix_ms: 1,
+        };
+        let reason = super::super::page_shot::take(&mobile, &view, super::super::looks::IMAGE_CAP)
+            .await
+            .err()
+            .expect("no window, no picture");
+        assert!(
+            !reason.is_empty(),
+            "the refusal names its reason for the log"
+        );
     }
 
     #[tokio::test]
@@ -1666,7 +2055,7 @@ mod tests {
         let mut projection = Projection::default();
         assert_eq!(
             agents_frame(&projection),
-            json!({"type": "agents", "groups": [], "interface_language": null, "color_theme": null})
+            json!({"type": "agents", "groups": [], "devices": [], "interface_language": null, "color_theme": null})
         );
         projection.interface_language = Some("ko".to_owned());
         let frame = agents_frame(&projection);
@@ -1674,5 +2063,221 @@ mod tests {
         assert_eq!(frame["type"], "agents");
         projection.color_theme = Some("neutral".to_owned());
         assert_eq!(agents_frame(&projection)["color_theme"], "neutral");
+    }
+
+    /// The list frame is the tree the core decided: a group's rows are tagged
+    /// by kind, a parent carries its children, and the devices ride beside.
+    #[test]
+    fn the_agents_frame_carries_the_tree_and_the_devices() {
+        let agent = |pane: &str, extra: Value| {
+            let mut row = json!({
+                "pane_id": pane, "group": "working", "mark": "going", "identity_label": pane,
+                "agent_kind": "claude", "status_code": "idle", "demand": "none",
+                "last_activity": "1790000000000", "state": {"tree_rank": 2},
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            row
+        };
+        let projection = super::super::projection::project(
+            &json!({"navigator": {"agents": [
+                agent("p", json!({"lineage_child_pane_ids": ["c"]})),
+                agent("c", json!({"delegated": true, "lineage_parent_pane_id": "p"})),
+            ]}}),
+            "test-node",
+        );
+        let frame = agents_frame(&projection);
+        let row = &frame["groups"][0]["rows"][0];
+        assert_eq!(
+            (row["kind"].as_str(), row["pane_id"].as_str()),
+            (Some("agent"), Some("p"))
+        );
+        assert_eq!(row["children"][0]["pane_id"], "c");
+        assert_eq!(frame["groups"][0]["count"], 1);
+        assert_eq!(
+            frame["devices"],
+            json!([{"device_id": "test-node", "label": null, "local": true, "connected": true, "needs_you": 0, "working": 1}])
+        );
+    }
+
+    /// One mission waiting on a decision, as the projection lists it.
+    fn deciding() -> PhoneMissions {
+        let rest = json!({
+            "navigator": {"agents": []},
+            "missions": {"items": [{
+                "id": "mission-1", "title": "Ship it", "device_id": "test-node", "status": "running",
+                "decision": "Merge now?",
+                "question": {"key": 4, "options": ["merge", "wait"], "recommend": 1, "asked_at_unix_ms": 1},
+                "conductor": {"pane_id": "w1:p1", "name": "Conductor", "agent_kind": "claude", "present": true, "takes_answers": true},
+                "nodes": [], "created_at_unix_ms": 1,
+            }]},
+        });
+        PhoneMissions::project(
+            &rest,
+            "test-node",
+            &super::super::projection::project(&rest, "test-node"),
+        )
+    }
+
+    fn mission_message(request_id: &str, body: Value) -> Value {
+        let mut message = json!({
+            "type": "answer_mission", "request_id": request_id, "mission": "mission-1", "key": 4,
+        });
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(body.as_object().unwrap().clone());
+        message
+    }
+
+    #[test]
+    fn a_phone_answer_is_the_one_event_the_desktop_banner_sends() {
+        let missions = deciding();
+        let event = |body: Value| {
+            mission_answer_event(&mission_message("r", body), &missions)
+                .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap())
+        };
+        let option = event(json!({"option": 2})).unwrap();
+        assert_eq!(option["kind"], "mission_answer");
+        assert_eq!(
+            option["payload"],
+            json!({"mission": "mission-1", "key": 4, "option": 2, "text": null, "resend": false})
+        );
+        let text = event(json!({"text": "  merge after lunch "})).unwrap();
+        assert_eq!(text["payload"]["text"], "  merge after lunch ");
+        assert_eq!(text["payload"]["option"], Value::Null);
+        let resend = event(json!({"resend": true})).unwrap();
+        assert_eq!(
+            resend["payload"],
+            json!({"mission": "mission-1", "key": 4, "option": null, "text": null, "resend": true})
+        );
+    }
+
+    #[test]
+    fn a_phone_answer_naming_no_listed_mission_or_no_single_answer_is_refused() {
+        let missions = deciding();
+        let refused = |message: Value| mission_answer_event(&message, &missions).unwrap_err();
+        let mut other = mission_message("r", json!({"option": 1}));
+        other["mission"] = json!("mission-9");
+        assert_eq!(refused(other), "gone");
+        let mut no_key = mission_message("r", json!({"option": 1}));
+        no_key.as_object_mut().unwrap().remove("key");
+        assert_eq!(refused(no_key), "invalid_request");
+        for body in [
+            json!({}),
+            json!({"option": 0}),
+            json!({"option": 300}),
+            json!({"option": "1"}),
+            json!({"option": 1, "text": "both"}),
+            json!({"option": 1, "resend": true}),
+            json!({"text": "   "}),
+            json!({"text": "two\nlines"}),
+            json!({"text": "x".repeat(ANSWER_LIMIT + 1)}),
+            json!({"text": 7}),
+            json!({"resend": "yes"}),
+            json!({"resend": true, "text": "again"}),
+        ] {
+            assert_eq!(
+                refused(mission_message("r", body.clone())),
+                "invalid_request",
+                "{body}"
+            );
+        }
+        // The limit counts characters, so a full line of Korean is taken.
+        let full = "가".repeat(ANSWER_LIMIT);
+        assert!(
+            mission_answer_event(&mission_message("r", json!({"text": full})), &missions).is_ok()
+        );
+    }
+
+    /// A phone the Mac let in, so a request reaches its claim.
+    fn paired(mobile: &Arc<Mobile>) -> String {
+        let code = {
+            let mut inner = mobile.lock();
+            inner.settings.enabled = true;
+            inner.exposure = super::super::Exposure::Relay;
+            inner.phones.new_code(super::super::now_ms());
+            inner.phones.code().unwrap().0.to_owned()
+        };
+        mobile.pair(&code, "Phone").unwrap().0.id
+    }
+
+    #[tokio::test]
+    async fn the_same_answer_request_is_answered_from_its_claim_and_reaches_the_core_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(deciding()));
+        let phone = paired(&mobile);
+
+        let first = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-1", json!({"option": 1})),
+        )
+        .await;
+        assert_eq!(first["type"], "mission_result");
+        assert_eq!(first["request_id"], "press-1");
+        assert_eq!(first["mission"], "mission-1");
+        assert_eq!(first["ok"], true, "{first}");
+        assert!(
+            matches!(
+                mobile.reserve_input(&phone, "press-1"),
+                Reservation::Seen(InputState::Written)
+            ),
+            "the press is recorded as written, so a repeat is not typed again"
+        );
+        let again = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-1", json!({"option": 1})),
+        )
+        .await;
+        assert_eq!(again["ok"], true, "{again}");
+
+        // A press still being sent is told so, never sent a second time.
+        assert!(matches!(
+            mobile.reserve_input(&phone, "press-2"),
+            Reservation::Write
+        ));
+        let racing = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-2", json!({"option": 1})),
+        )
+        .await;
+        assert_eq!(
+            (racing["ok"].as_bool(), reason(&racing)),
+            (Some(false), Some("in_flight"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_answer_claims_nothing_and_a_request_without_an_id_is_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(deciding()));
+        let phone = paired(&mobile);
+
+        let refused = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("bad", json!({"text": "   "})),
+        )
+        .await;
+        assert_eq!(reason(&refused), Some("invalid_request"));
+        assert!(
+            matches!(mobile.reserve_input(&phone, "bad"), Reservation::Write),
+            "a refused answer may be sent again once it is fixed"
+        );
+        let mut anonymous = mission_message("x", json!({"option": 1}));
+        anonymous.as_object_mut().unwrap().remove("request_id");
+        let answer = answer_mission(&mobile, &phone, &anonymous).await;
+        assert_eq!(
+            (answer["ok"].as_bool(), reason(&answer)),
+            (Some(false), Some("invalid_request"))
+        );
     }
 }

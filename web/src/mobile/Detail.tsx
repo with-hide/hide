@@ -10,7 +10,7 @@ import { OfflineText } from "./OfflineText";
 // reply are on every detail, whatever its group.
 
 import { AnsiUp } from "ansi_up";
-import { ArrowLeftIcon, CircleAlertIcon, MoonIcon } from "lucide-react";
+import { ArrowLeftIcon, CircleAlertIcon, ImageIcon, MoonIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Elapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -21,7 +21,8 @@ import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
 import { AgentHead, DETAIL_INSET, Place } from "./parts";
-import { loadMore, loadOlder, onReplyResult, sendKey, sendReply, setView, wakeAgent } from "./connection";
+import { closeLook, loadMore, loadOlder, onReplyResult, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { LookViewer, LooksList, useKindWord } from "./Looks";
 import {
   MAX_MESSAGES,
   MAX_REPLY_CHARS,
@@ -34,8 +35,10 @@ import {
   type Conversation,
   type ConversationMessage,
   sleepTarget,
+  replyAbout,
   type AgentKey,
-  type DetailView,
+  type DetailTab,
+  type LookKind,
 } from "./protocol";
 import { agentOf, usePhone } from "./store";
 
@@ -57,6 +60,13 @@ function ansiRows(text: string): AnsiRow[] {
   });
 }
 
+/** The tab on screen: 볼 것 only while the agent has Views (or hided has not listed them yet) or one is open; else the half hided reads. */
+function shownTab(detail: NonNullable<ReturnType<typeof usePhone.getState>["detail"]>, hasConversation: boolean): DetailTab {
+  const empty = detail.looks !== null && detail.looks.rows.length === 0 && !detail.look;
+  const tab = detail.tab === "looks" && empty ? detail.view : detail.tab;
+  return tab === "conversation" && !hasConversation ? "terminal" : tab;
+}
+
 export function Detail({ onBack }: { onBack: () => void }) {
   const { t } = useInterfaceTranslation();
   const detail = usePhone((s) => s.detail);
@@ -67,33 +77,50 @@ export function Detail({ onBack }: { onBack: () => void }) {
   const rows = detail?.rows ?? null;
   const conversation = detail?.conversation ?? null;
   const hasConversation = conversation !== null && conversation !== "none";
-  const showsConversation = detail?.view === "conversation" && conversation !== "none";
+  const hasLooks = (detail?.looks?.rows.length ?? 0) > 0;
+  const unseen = detail?.looks?.rows.filter((row) => row.unseen).length ?? 0;
+  const tab = detail ? shownTab(detail, hasConversation) : "conversation";
+  const viewing = tab === "looks" ? (detail?.look ?? null) : null;
+  const showsConversation = tab === "conversation" && conversation !== "none";
   // A pane that left the list is gone for the reply bar too (B28).
   const gone = rows?.state === "gone" || (groups !== null && !agent);
   // The shell under a sleeping agent is not who the operator was talking to: its state stands in the terminal's place and nothing can be sent.
   const sleep = agent?.sleep ?? null;
-  const rowsNote = !showsConversation && rows ? rowsProblem(rows.state) : null;
-  const note = rowsNote ?? (gone && (showsConversation || !rows) ? rowsProblem("gone") : null);
+  const rowsNote = tab !== "looks" && !showsConversation && rows ? rowsProblem(rows.state) : null;
+  const note = rowsNote ?? (gone && (showsConversation || !rows || tab === "looks") ? rowsProblem("gone") : null);
+  const offline = unreachable && !connected;
   return (
     <main className="flex h-full flex-col" data-phone-detail={detail ? `${detail.key.device_id}|${detail.key.pane_id}` : ""}>
       <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
         {/* Keep each label's width; wrap when the phone cannot fit all three items. */}
         <div className="flex flex-wrap items-center gap-sm pt-sm">
           <div className="flex min-w-max flex-1 basis-0">
-            <Button variant="ghost" onClick={onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-body text-foreground" data-phone-back="true">
+            <Button variant="ghost" onClick={viewing ? closeLook : onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-body text-foreground" data-phone-back={viewing ? "looks" : "true"}>
               <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-              {t("mobile.list")}
+              {viewing ? t("mobile.tab.looks") : t("mobile.list")}
             </Button>
           </div>
-          {hasConversation && detail && !sleep ? (
-            <Tabs value={detail.view} onValueChange={(value) => setView(value as DetailView)} className="shrink-0">
+          {!viewing && (hasConversation || hasLooks) && detail && !sleep ? (
+            <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="shrink-0">
               <TabsList>
-                <TabsTrigger value="conversation" className="h-(--size-touch-target) px-sm text-body" data-phone-view="conversation">
-                  {t("mobile.tab.conversation")}
-                </TabsTrigger>
+                {hasConversation ? (
+                  <TabsTrigger value="conversation" className="h-(--size-touch-target) px-sm text-body" data-phone-view="conversation">
+                    {t("mobile.tab.conversation")}
+                  </TabsTrigger>
+                ) : null}
                 <TabsTrigger value="terminal" className="h-(--size-touch-target) px-sm text-body" data-phone-view="terminal">
                   {t("mobile.tab.terminal")}
                 </TabsTrigger>
+                {hasLooks ? (
+                  <TabsTrigger value="looks" className="h-(--size-touch-target) gap-xs px-sm text-body" data-phone-view="looks">
+                    {t("mobile.tab.looks")}
+                    {unseen > 0 ? (
+                      <span className="inline-flex h-(--size-badge-height) min-w-(--size-badge-height) items-center justify-center rounded-full bg-warning px-xs font-mono text-micro text-status-foreground" data-phone-looks-unseen={unseen}>
+                        {unseen}
+                      </span>
+                    ) : null}
+                  </TabsTrigger>
+                ) : null}
               </TabsList>
             </Tabs>
           ) : null}
@@ -101,14 +128,16 @@ export function Detail({ onBack }: { onBack: () => void }) {
             <Elapsed since={agent?.changed_at_unix_ms} />
           </span>
         </div>
-        {agent ? (
+        {viewing ? (
+          <ViewingHead row={viewing.row} opener={agent?.title ?? ""} />
+        ) : agent ? (
           <div className="mt-xs flex flex-col gap-xs">
             <AgentHead agent={agent} large />
             <Place agent={agent} inset={DETAIL_INSET} />
           </div>
         ) : null}
       </header>
-      {unreachable && !connected ? (
+      {offline ? (
         <div role="status" className="shrink-0 bg-secondary px-lg py-sm text-subhead text-subtle-foreground" data-phone-unreachable="true">
           <OfflineText />
         </div>
@@ -120,6 +149,11 @@ export function Detail({ onBack }: { onBack: () => void }) {
       ) : null}
       {sleep && detail ? (
         <SleepState sleep={sleep} agentKey={detail.key} />
+      ) : tab === "looks" && detail ? (
+        // The last list and the last content stay under the unreachable line, dimmed (B45).
+        <div className={`flex min-h-0 flex-1 flex-col ${offline ? "opacity-(--opacity-dimmed)" : ""}`} aria-busy={offline}>
+          {viewing ? <LookViewer row={viewing.row} content={viewing.content} refreshing={viewing.refreshing} /> : <LooksList looks={detail.looks} />}
+        </div>
       ) : !showsConversation ? (
         <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} />
       ) : conversation ? (
@@ -129,8 +163,31 @@ export function Detail({ onBack }: { onBack: () => void }) {
           <p className="text-body text-muted-foreground">{t("mobile.loading")}</p>
         </div>
       )}
-      <ReplyBar disabled={gone || !connected || sleep !== null} />
+      <ReplyBar disabled={gone || !connected || sleep !== null} about={viewing?.row.name ?? null} keys={tab !== "looks"} />
     </main>
+  );
+}
+
+/** The head of a View on screen: its name, its kind, who opened it and how long ago (B13). */
+function ViewingHead({ row, opener }: { row: { name: string; kind: LookKind; at: number }; opener: string }) {
+  const { t } = useInterfaceTranslation();
+  const word = useKindWord()(row.kind);
+  return (
+    <div className="mt-xs flex flex-col gap-xs" data-phone-viewing={row.name}>
+      <h1 className="break-all text-title font-medium text-foreground">{row.name}</h1>
+      <p className="flex min-w-0 flex-wrap items-center gap-x-sm text-body text-muted-foreground">
+        {row.kind === "image" ? <ImageIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null}
+        <span>{word}</span>
+        {opener ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="min-w-0 break-keep wrap-anywhere">{t("mobile.look.openedBy", { name: opener })}</span>
+          </>
+        ) : null}
+        <span aria-hidden="true">·</span>
+        <Elapsed since={row.at} className="font-mono" />
+      </p>
+    </div>
   );
 }
 
@@ -314,7 +371,11 @@ function AgentMessage({ message, time }: { message: ConversationMessage; time: R
   );
 }
 
-function ReplyBar({ disabled }: { disabled: boolean }) {
+/**
+ * `about` is the name of the View on screen: the reply leaves with it in front, in brackets (B30). `keys` is false on 볼 것, where
+ * the quick keys answer nothing the operator is looking at.
+ */
+function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string | null; keys: boolean }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState("");
   const pending = usePhone((s) => s.pendingInput);
@@ -331,6 +392,7 @@ function ReplyBar({ disabled }: { disabled: boolean }) {
   const shown = tooLong ? inputFailure("too_long") : error;
   return (
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-xs">
+      {keys ? (
       <div className="grid grid-cols-5 gap-sm" role="group" aria-label={t("mobile.quickKeys")}>
         {QUICK_KEYS.map((quick) => (
           <Button
@@ -346,17 +408,18 @@ function ReplyBar({ disabled }: { disabled: boolean }) {
           </Button>
         ))}
       </div>
+      ) : null}
       <form
-        className="mt-sm flex gap-sm pb-md"
+        className={`${keys ? "mt-sm" : "mt-xs"} flex gap-sm pb-md`}
         onSubmit={(event) => {
           event.preventDefault();
-          sendReply(text);
+          sendReply(about ? replyAbout(about, text) : text);
         }}
       >
         <Input
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder={t("mobile.replyPlaceholder")}
+          placeholder={about ? t("mobile.look.replyAbout", { name: about }) : t("mobile.replyPlaceholder")}
           aria-label={t("mobile.reply")}
           disabled={disabled}
           enterKeyHint="send"

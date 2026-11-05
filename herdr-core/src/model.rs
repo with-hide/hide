@@ -81,6 +81,8 @@ pub struct Snapshot {
     /// The events of the mission open in the 보기 slot only (PRD
     /// mission-plan-visibility D-22).
     pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
+    /// The brief of the one node whose folded box the operator opened.
+    pub mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot,
     /// Each pane's session's own plan (PRD hide-plan D-10).
     pub plans: crate::runtime::plans::PlansSnapshot,
     pub navigator: NavigatorSnapshot,
@@ -655,6 +657,55 @@ pub struct RecordViewSnapshot {
     pub session: crate::links::ledger::SessionIdentity,
 }
 
+/// A View the agent in a pane opened that is still open, as the phone's
+/// 볼 것 tab lists it (PRD mobile-companion-ui D-07): the same tile a session
+/// record's gallery draws, with whether the operator has looked at it. It
+/// names the View by the checkout that holds it; the phone asks for its
+/// content by `display_id` alone and hided finds the path here (D-16).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookView {
+    pub device_id: String,
+    /// The checkout whose View list holds it.
+    pub checkout_path: String,
+    pub display_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Which Changes group a diff shows; absent for anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed: Option<bool>,
+    /// What a file is as a 결과물 by its extension (`image`, `pdf`, `video`,
+    /// `board`, `document`); absent for any other file and for a View that
+    /// is not a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<&'static str>,
+    pub unseen: bool,
+    /// When the agent opened it while unseen, else when it was last looked at.
+    pub at_unix_ms: u64,
+}
+
+/// The Views a pane's agent has open, newest first, and how many more than
+/// the list's bound there were.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LookViews {
+    pub views: Vec<LookView>,
+    pub omitted: usize,
+}
+
+/// One file of a checkout's change list, as the phone shows it: a name and
+/// line counts, never a line of code (PRD mobile-companion-ui D-08).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookChange {
+    /// Relative to the checkout root.
+    pub path: String,
+    pub status: ChangedFileStatus,
+    /// Absent for a file git cannot count: an untracked file or a binary.
+    pub added: Option<u32>,
+    pub removed: Option<u32>,
+}
+
 /// Where a Send stands (B21, B27, B28, B20).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ViewFeedbackSendSnapshot {
@@ -805,6 +856,10 @@ pub enum PaneFindRoute {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NavigatorSnapshot {
     pub agent_scope: crate::agent_state::Scope,
+    /// How many siblings a tree draws under one parent before its "N more"
+    /// (PRD agent-hierarchy-screens B12). The core holds the number once; the
+    /// sidebar, its popover and the phone's list all apply it.
+    pub siblings_shown: usize,
     pub root_path: Option<String>,
     /// The focused local checkout's History scope. A registered subfolder may
     /// be narrower than the Git checkout used by Explorer and editor tabs.
@@ -7353,9 +7408,11 @@ impl Snapshot {
             overview_graph: OverviewGraphSnapshot::default(),
             missions: Default::default(),
             mission_events: Default::default(),
+            mission_brief: Default::default(),
             plans: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
+                siblings_shown: crate::agent_state::tally::lineage::SIBLINGS_SHOWN,
                 root_path: None,
                 changes_root_path: None,
                 focused_device_id: None,

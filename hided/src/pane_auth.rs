@@ -35,7 +35,11 @@ use serde_json::json;
 use crate::core::CoreHandle;
 use crate::state_file::new_token;
 
-const MAX_CAPABILITIES: usize = 64;
+/// Live capabilities this daemon holds at once: every agent pane holds one
+/// for as long as it runs, so the cap sits well above the panes an operator
+/// keeps open (missions run past a hundred). A capability is a small entry
+/// and, for a local pane, one reference file of about a hundred bytes.
+const MAX_CAPABILITIES: usize = 1024;
 const CAPABILITY_LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
 pub use hide_node_link::panes::{CHECKOUT_NEXT_ACTION, PANE_NEXT_ACTION, refusal_next_action};
 const UNCLAIMED_LIFETIME: Duration = Duration::from_secs(30);
@@ -198,6 +202,19 @@ fn pane_binding(identity: PaneIdentity) -> Binding {
     }
 }
 
+/// A caller turned away because the registry is full: its hooks cannot
+/// register it or record its prompts, which the operator otherwise sees only
+/// as input not confirmed, so the refusal is logged.
+fn note_capability_limit(pane_id: &str, live: usize) {
+    herdr_core::diagnostic!(json!({
+        "component": "pane_auth",
+        "kind": "pane_auth.capability_limit",
+        "pane_id": pane_id,
+        "live": live,
+        "limit": MAX_CAPABILITIES,
+    }));
+}
+
 fn entry_alive(entry: &Capability) -> bool {
     if let Binding::Desk { pid, started } = entry.binding {
         return entry.path.is_file()
@@ -322,6 +339,7 @@ impl Registry {
             return Ok((existing.path.clone(), false, token.clone()));
         }
         if entries.len() >= MAX_CAPABILITIES {
+            note_capability_limit(&attestation.pane_id, entries.len());
             return Err("capability_limit");
         }
         let token = new_token();
@@ -384,6 +402,7 @@ impl Registry {
             return Ok((token.clone(), false));
         }
         if entries.len() >= MAX_CAPABILITIES {
+            note_capability_limit(&attestation.pane_id, entries.len());
             return Err("capability_limit");
         }
         let token = new_token();
@@ -736,18 +755,13 @@ pub struct BootstrapRequest {
     pub install: Option<String>,
 }
 
-/// The installation this daemon is (`hide_host::kit::pane_install`), the
+/// The installation this daemon is (`hide_host::kit::running_install`), the
 /// one its own panes name; `None` for a build run from anywhere else, whose
 /// panes name none.
 fn own_install() -> Option<&'static str> {
     static OWN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    OWN.get_or_init(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| hide_host::kit::pane_install(&exe))
-            .map(|install| install.id)
-    })
-    .as_deref()
+    OWN.get_or_init(|| hide_host::kit::running_install().map(|install| install.id))
+        .as_deref()
 }
 
 #[derive(Clone, Debug)]
@@ -798,7 +812,7 @@ fn attest_bootstrap(
     if let Some(install) = request.install.as_deref()
         && own != Some(install)
     {
-        return Err("other_install");
+        return Err(hide_agent_hooks::hook_request::install::OTHER_INSTALL);
     }
     let pane = if request.pane_id.is_empty() {
         Err("pane_not_connected")
@@ -1213,6 +1227,12 @@ fn answer_bootstrap(
                 }
             }
             let mut answer = crate::hook_request::answer(core, &cap, &hook, desktop);
+            // The answer names this daemon's installation, which a hook in a
+            // pane that names one requires (`hook_request::install::confirm`).
+            answer["install"] = json!(own_install());
+            if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
+                return Err("response_too_large");
+            }
             if !request.one_shot && answer["ok"] == true {
                 answer["reference"] = json!(
                     hide_platform::path::to_wire(&path).map_err(|_| "reference_unavailable")?
@@ -1278,12 +1298,16 @@ fn answer_bootstrap(
         });
     // The reference crosses in the wire spelling, as the device bridge's
     // does; one without it is refused and withdrawn like an undelivered one.
+    // The answer names this daemon's installation, which a caller that named
+    // one requires (`workspace_cli::read_bootstrap_answer`).
     let wire = match &result {
         Ok((path, _)) => hide_platform::path::to_wire(path).ok(),
         Err(_) => None,
     };
     let answer = match (&result, &wire) {
-        (Ok(_), Some(reference)) => json!({"ok": true, "reference": reference}),
+        (Ok(_), Some(reference)) => {
+            json!({"ok": true, "reference": reference, "install": own_install()})
+        }
         (Ok(_), None) => json!({"ok": false, "reason": "reference_unavailable"}),
         (Err(reason), _) => json!({"ok": false, "reason": reason}),
     };

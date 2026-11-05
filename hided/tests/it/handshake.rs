@@ -143,6 +143,32 @@ async fn a_pane_of_another_installation_is_refused_by_this_accounts_daemon() {
     drop(dir);
 }
 
+/// A hook in a pane of another installation is refused the same way, before
+/// its command runs (with-hide/hide-private#575): its request names the
+/// pane's installation as `hide`'s does.
+#[tokio::test]
+async fn a_hook_of_another_installations_pane_is_refused_by_this_accounts_daemon() {
+    let (dir, mut env) = test_env(true);
+    let running = hided::start_daemon(env.clone())
+        .await
+        .expect("start daemon");
+    env.pane_id = None;
+    env.install = Some(hide_agent_hooks::route::install_of_root(
+        &dir.path().join("elsewhere"),
+    ));
+    let answer = tokio::task::spawn_blocking(move || {
+        hided::workspace_cli::request_hook(
+            &env,
+            hide_node_link::panes::HookCommand::WorkspaceInfo {},
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(answer.unwrap_err(), "other_install");
+    running.stop();
+    drop(dir);
+}
+
 /// The `hide` CLI an agent runs reaches the daemon's pane bootstrap from
 /// every shell an agent runs it in on Windows: Claude Code runs commands in
 /// Git Bash and Codex in PowerShell. Git Bash starts a program with the

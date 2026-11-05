@@ -14,7 +14,9 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { usePaneAgents } from "./PaneHeaderBand";
+import { useMapPick } from "./mapPick";
 import { PlanGraph } from "./PlanGraph";
+import { PlanStepPanel } from "./PlanStepPanel";
 import { evidenceWords, planCells, planOfSession, planProposed, stepDelegationWord, stepOf } from "./plans";
 import type { PlanStep, PlanView, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
@@ -107,8 +109,14 @@ function PlanBody({ plan, actions }: { plan: PlanView; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const proposed = planProposed(plan);
   const openPane = (paneId: string) => actions.openAgent(paneId);
+  // The pick works as a mission's does: a card opens its panel beside the map, Escape or a press on the map's empty ground lets go of it (B30).
+  const { selected, select, panel, onKeyDown, onMapClick } = useMapPick(
+    plan.steps.map((one) => one.key),
+    "[data-plan-step]",
+  );
+  const step = selected ? plan.steps.find((one) => one.key === selected)! : null;
   return (
-    <div className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-plan={plan.pane_id} data-plan-review={plan.review} data-plan-finished={plan.progress.finished || undefined}>
+    <div className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-plan={plan.pane_id} data-plan-review={plan.review} data-plan-finished={plan.progress.finished || undefined} onKeyDown={onKeyDown}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-plan-scroll="true">
         <PlanHead plan={plan} />
         {proposed ? (
@@ -125,11 +133,20 @@ function PlanBody({ plan, actions }: { plan: PlanView; actions: Actions }) {
         {proposed && plan.ask ? <p className="px-md pb-sm text-caption text-muted-foreground" data-plan-ask="true">{plan.ask}</p> : null}
         <PlanOwner plan={plan} actions={actions} />
         <div className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:flex-1 mission-wide:flex-row">
-          <div className="min-w-0 px-md pb-md pt-sm mission-wide:min-h-0 mission-wide:flex-1 mission-wide:overflow-auto" data-plan-map="true">
-            <PlanGraph plan={plan} openPane={openPane} />
+          <div className="min-w-0 px-md pb-md pt-sm mission-wide:min-h-0 mission-wide:flex-1 mission-wide:overflow-auto" onClick={onMapClick} data-plan-map="true">
+            <PlanGraph plan={plan} selected={selected} onSelect={(key) => select(selected === key ? null : key)} />
           </div>
-          <div className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:w-(--size-mission-side) mission-wide:shrink-0 mission-wide:overflow-auto mission-wide:border-l mission-wide:border-t-0">
-            <PlanSide plan={plan} openPane={openPane} />
+          {/* The column beside the map: a pick's panel, else the plan's summary. */}
+          <div
+            ref={panel}
+            className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:w-(--size-mission-side) mission-wide:shrink-0 mission-wide:overflow-auto mission-wide:border-l mission-wide:border-t-0"
+            data-plan-panel={step?.key}
+          >
+            {step ? (
+              <PlanStepPanel plan={plan} step={step} number={plan.steps.indexOf(step) + 1} onClose={() => select(null)} openPane={openPane} />
+            ) : (
+              <PlanSide plan={plan} openPane={openPane} />
+            )}
           </div>
         </div>
       </div>

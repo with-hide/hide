@@ -13,12 +13,6 @@ use hide_node_link::panes::HookStatusReport;
 use super::Runtime;
 
 impl Runtime {
-    /// The hook facts, for a device coordinator that lays them on its own
-    /// session (`session_sync`).
-    pub(crate) fn hook_facts(&self) -> crate::agent_hooks::facts::SharedHookFacts {
-        std::sync::Arc::clone(&self.hook_facts)
-    }
-
     /// Replaces the hook facts with the ones the last run saved; done once,
     /// before any coordinator starts.
     pub(crate) fn install_hook_facts(&mut self, facts: crate::agent_hooks::facts::HookFacts) {

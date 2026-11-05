@@ -24,7 +24,7 @@ pub(super) fn shell(
     command: &str,
     dirty: Dirty<'_>,
 ) -> Option<Refusal> {
-    let line = shell_line(command);
+    let line = shell_line(command, hide_shell::Syntax::Posix);
     let mut dir = cwd.to_path_buf();
     let mut checked = 0usize;
     for (index, words) in line.commands.iter().enumerate() {

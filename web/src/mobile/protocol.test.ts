@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { initializeInterfaceI18n } from "../i18n/instance";
-import { MAX_MESSAGES, boxDrawingRow, headerLine, mergeConversation, messageTime, macNameOf, noticeText, notificationRow, openKey, parseFragment, replyProblem, rowsProblem, staleTags, toBase64Url, type AgentGroup, type ConversationMessage, type PhoneAgent } from "./protocol";
+import { MAX_MESSAGES, boxDrawingRow, headerLine, listedAgents, machinesName, mergeConversation, messageTime, macNameOf, noticeText, notificationRow, openKey, parseFragment, replyProblem, rowsProblem, staleTags, toBase64Url, type AgentGroup, type ConversationMessage, type PhoneAgent } from "./protocol";
 
 const CREDENTIAL = "a".repeat(64);
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
@@ -60,25 +60,25 @@ function agent(group: AgentGroup["group"], pane: string, root = pane, demand = "
 
 describe("staleTags", () => {
   it("retains a read root question even though its group is Seen", () => {
-    expect(staleTags(["local|root"], [{ group: "seen", count: 1, agents: [agent("seen", "root", "root", "question")] }])).toEqual([]);
-    expect(staleTags(["local|root"], [{ group: "seen", count: 1, agents: [agent("seen", "root")] }])).toEqual(["local|root"]);
+    expect(staleTags(["local|root"], [{ group: "seen", count: 1, rows: [{ kind: "agent", ...agent("seen", "root", "root", "question") }] }])).toEqual([]);
+    expect(staleTags(["local|root"], [{ group: "seen", count: 1, rows: [{ kind: "agent", ...agent("seen", "root") }] }])).toEqual(["local|root"]);
   });
 
   it("keeps the notification of a root still waiting or done, through a child's request", () => {
     const groups: AgentGroup[] = [
-      { group: "needs_you", count: 1, agents: [agent("needs_you", "child", "root")] },
-      { group: "seen", count: 1, agents: [agent("seen", "other")] },
+      { group: "needs_you", count: 1, rows: [{ kind: "agent", ...agent("needs_you", "child", "root") }] },
+      { group: "seen", count: 1, rows: [{ kind: "agent", ...agent("seen", "other") }] },
     ];
     expect(staleTags(["local|root", "local|other", "local|gone"], groups)).toEqual(["local|other", "local|gone"]);
   });
 
   it("keeps a root's notification while a delegated child, only ever Working, still asks", () => {
     const groups: AgentGroup[] = [
-      { group: "working", count: 1, agents: [agent("working", "child", "root", "question")] },
-      { group: "seen", count: 1, agents: [agent("seen", "root")] },
+      { group: "working", count: 1, rows: [{ kind: "agent", ...agent("working", "child", "root", "question") }] },
+      { group: "seen", count: 1, rows: [{ kind: "agent", ...agent("seen", "root") }] },
     ];
     expect(staleTags(["local|root"], groups)).toEqual([]);
-    expect(staleTags(["local|root"], [{ group: "seen", count: 1, agents: [agent("seen", "root")] }])).toEqual(["local|root"]);
+    expect(staleTags(["local|root"], [{ group: "seen", count: 1, rows: [{ kind: "agent", ...agent("seen", "root") }] }])).toEqual(["local|root"]);
   });
 });
 
@@ -154,5 +154,26 @@ describe("messageTime", () => {
     const now = new Date(2026, 8, 29, 15, 0);
     expect(messageTime(new Date(2026, 8, 29, 9, 5).getTime(), now)).toBe("09:05");
     expect(messageTime(new Date(2026, 8, 28, 23, 41).getTime(), now)).toBe("9/28 23:41");
+  });
+});
+
+describe("the tree and the machines of the list", () => {
+  it("reaches a nested child, shown or folded, wherever it stands", () => {
+    const parent = { ...agent("working", "root"), children: [agent("working", "child", "root")], more_children: [agent("working", "later", "root")] };
+    const groups: AgentGroup[] = [{ group: "working", count: 1, rows: [{ kind: "agent", ...parent }] }];
+    expect(listedAgents(groups).map((row) => row.pane_id)).toEqual(["root", "child", "later"]);
+    // A child that holds a notification keeps its root's.
+    const asking = { ...parent, children: [{ ...agent("working", "child", "root", "question") }] };
+    expect(staleTags(["local|root"], [{ group: "working", count: 1, rows: [{ kind: "agent", ...asking, holds_notification: false }] }])).toEqual([]);
+  });
+
+  it("names the Mac with the devices it reaches that are connected", () => {
+    const devices = [
+      { device_id: "local", label: null, local: true as const, connected: true, needs_you: 0, working: 0 },
+      { device_id: "mini", label: "Mac mini", connected: true, needs_you: 0, working: 0 },
+      { device_id: "old", label: "Old box", connected: false, needs_you: 0, working: 0 },
+    ];
+    expect(machinesName("MacBook Pro", devices)).toBe("MacBook Pro + Mac mini");
+    expect(machinesName("MacBook Pro", devices.slice(0, 1))).toBe("MacBook Pro");
   });
 });

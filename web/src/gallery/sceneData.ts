@@ -430,6 +430,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
   const world = devices !== "one" ? deviceWorld(content, workspaces, now, folds, devices === "busy") : null;
   const rest: SnapshotRest = {
     navigator: {
+      siblings_shown: 5,
       workspaces: world ? [...workspaces, world.home] : workspaces,
       inactive_projects: [{ device_id: "local", expanded: folds.inactiveProjectsOpen, project_ids: ["old-prototype", "dotfiles", "research-notes"] }],
       no_agent_projects: [{ device_id: "local", expanded: folds.noAgentsOpen, project_ids: NO_AGENT_PROJECTS }],

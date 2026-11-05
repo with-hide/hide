@@ -8,7 +8,8 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, LineMode, RowMark, SleepingSession } from "../snapshot";
+import type { WorkerEscalation } from "../missions";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -39,7 +40,17 @@ export type PhoneAgent = {
   sleep?: AgentSleep;
   emphasized: boolean;
   holds_notification: boolean;
+  /** Its live descendants by state, for a parent's pills; absent when it has none. */
+  descendants?: Descendants;
+  /** The children listed under it in the sidebar's order (two levels, five to a parent), and the ones behind its "더 보기". */
+  children?: PhoneAgent[];
+  more_children?: PhoneAgent[];
+  /** The core opens its children until this phone chooses otherwise: a descendant waits for the operator. */
+  children_open?: true;
 };
+
+/** What a parent's descendants are doing: asking the operator, working, finished. */
+export type Descendants = { asking: number; working: number; done: number };
 
 export type GroupId = "needs_you" | "done" | "revisit" | "working" | "seen";
 
@@ -57,7 +68,59 @@ export type PhoneSleepingSession = {
   attention: boolean;
 };
 
-export type AgentGroup = { group: GroupId; count: number; agents: PhoneAgent[]; sleeping_sessions?: PhoneSleepingSession[] };
+/** A top row of a group: an agent with its tree, or a sleeping conversation. */
+export type GroupRow = ({ kind: "agent" } & PhoneAgent) | ({ kind: "sleeping" } & PhoneSleepingSession);
+
+/**
+ * `count` is every top row of the group, the folded ones too; `rows` are the first few in recency order across the Mac and its devices,
+ * `more` the rest behind the group's "더 보기", `more_asleep` how many of those sleep.
+ */
+export type AgentGroup = { group: GroupId; count: number; rows: GroupRow[]; more?: GroupRow[]; more_asleep?: number };
+
+/** The paired Mac (`local`) and each device it reaches, with the counts of their top rows. */
+export type PhoneDevice = { device_id: string; label: string | null; local?: true; connected: boolean; needs_you: number; working: number };
+
+/** Every agent the list holds, a parent before its children, shown or folded. */
+export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
+  const all: PhoneAgent[] = [];
+  const add = (agent: PhoneAgent) => {
+    all.push(agent);
+    for (const child of agent.children ?? []) add(child);
+    for (const child of agent.more_children ?? []) add(child);
+  };
+  for (const group of groups) {
+    for (const row of [...group.rows, ...(group.more ?? [])]) if (row.kind === "agent") add(row);
+  }
+  return all;
+}
+
+/**
+ * One step of a mission as the phone receives it (`hided/src/mobile/missions.rs`): what the shared mission rules read (`MissionNodeBrief`), the
+ * worker's kind and row, and the escalation the core raised for its worker. Nothing else of the core's node reaches the phone.
+ */
+export type PhoneMissionNode = MissionNodeBrief & {
+  delivery: MissionDelivery | null;
+  base_pr: number | null;
+  stage: number | null;
+  worker_agent: string | null;
+  /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
+  agent: AgentKey | null;
+  escalation: WorkerEscalation | null;
+};
+
+/** A mission as the phone receives it: the shared rules' `MissionBrief`, with what the two screens draw. */
+export type PhoneMission = MissionBrief<PhoneMissionNode> & {
+  title: string;
+  device_id: string;
+  /** The device a mission away from the paired Mac runs on; null on the Mac. */
+  device_label: string | null;
+  question: MissionQuestion | null;
+  answer: MissionAnswer | null;
+  answer_failed: MissionAnswerFailure | null;
+  conductor: { present: boolean; takes_answers: boolean; name: string; agent_kind: string; agent: AgentKey | null };
+  started_at_unix_ms: number | null;
+  stale: boolean;
+};
 
 export type Notifications = "on" | "off" | "unasked";
 
@@ -65,8 +128,58 @@ export type PushMode = "off" | "app_closed" | "always";
 
 export type RowsState = "ok" | "gone" | "device_unreachable" | "unavailable";
 
-/** Which half of a detail the phone shows. */
+/** Which half of a detail hided reads for the phone. */
 export type DetailView = "conversation" | "terminal";
+
+/**
+ * What a detail shows: one of the two halves, or the agent's Views. 볼 것 is the phone's own choice: hided sends the Views with
+ * the detail and is never told which tab is up (PRD mobile-companion-ui D-06).
+ */
+export type DetailTab = DetailView | "looks";
+
+/** What a View is on the phone: hided names it by what the phone can show of it (hided/src/mobile/looks.rs `Shown`). */
+export type LookKind = "changes" | "page" | "doc" | "image" | "other";
+
+/** One row of the 볼 것 list: a View the agent opened that is open now. It carries no path; the phone asks for its content by `id` alone (D-16). */
+export type LookRow = {
+  id: string;
+  kind: LookKind;
+  name: string;
+  unseen: boolean;
+  /** When the agent opened it while unseen, else when it was last looked at (epoch ms). */
+  at: number;
+  /** A page's address. */
+  url?: string;
+};
+
+export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed" | "conflict";
+
+/**
+ * One changed file: its path under the checkout and its line counts. The counts are null for a file git cannot count
+ * (`binary`) and for a file Git does not track yet, which the desktop's list shows no number for either.
+ */
+export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
+
+/** The answer states of `look_result`: everything that is not content. */
+export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable";
+
+/**
+ * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,
+ * an image of the desktop app's page now) also names the address, when it was taken (ms) and the device that took it.
+ */
+export type LookHead = {
+  type: "look_head";
+  request_id: string;
+  view_id: string;
+  mode: "text" | "markdown" | "image" | "page";
+  size: number;
+  total: number;
+  truncated: boolean;
+  chunks: number;
+  url?: string;
+  taken_at?: number;
+  taken_by?: string;
+};
 
 /** One message of an agent's conversation (hided/src/mobile/conversation.rs). */
 export type ConversationMessage = {
@@ -113,7 +226,11 @@ export type ServerFrame =
    * `interface_language` is the core's explicit choice as stored (en, ko, zh-CN, ja), or null while the phone follows its own language.
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.
    */
-  | { type: "agents"; groups: AgentGroup[]; interface_language: string | null; color_theme: string | null }
+  | { type: "agents"; groups: AgentGroup[]; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
+  /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read. */
+  | { type: "missions"; items: PhoneMission[]; failed: boolean }
+  /** hided's answer to `answer_mission`; what the core does with it comes back on the mission itself. */
+  | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean }
   | {
       type: "conversation";
@@ -126,6 +243,13 @@ export type ServerFrame =
       /** The cursor for the page before the oldest message; null at the start. */
       before?: number | null;
     }
+  /** The agent's open Views, newest first; sent again only when they change. `omitted` counts the ones past hided's cap. */
+  | { type: "looks"; device_id: string; pane_id: string; views: LookRow[]; omitted: number }
+  | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string }
+  | { type: "look_changes"; request_id: string; view_id: string; files: LookFile[]; count: number; added: number; removed: number }
+  | LookHead
+  | { type: "look_chunk"; request_id: string; seq: number; data: string }
+  | { type: "look_end"; request_id: string; view_id: string }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
   /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }
@@ -144,9 +268,17 @@ export type PhoneMessage =
   | { type: "older"; before: number }
   | { type: "more" }
   | { type: "close" }
+  /** Content of one View by its id, only while it is open; hided refuses anything else and logs it (D-16). */
+  | { type: "look_open"; request_id: string; device_id: string; pane_id: string; view_id: string }
+  /** The chunks up to `seq` arrived; hided sends a window of four ahead of the last one confirmed. */
+  | { type: "look_ack"; request_id: string; seq: number }
+  /** The View's content was shown: it is seen, here and on the desktop (D-15). */
+  | { type: "look_seen"; device_id: string; pane_id: string; view_id: string }
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
+  /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
+  | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   | { type: "start_sheet"; open: boolean }
   | { type: "start_agent"; request_id: string; text: string; target: string; kind: StartKind; model?: string }
   | { type: "push_subscription"; subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }
@@ -169,7 +301,7 @@ export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
 type LimitKey = "mobile.input.tooLong" | "mobile.start.tooLong" | "mobile.refusal.phoneLimit";
 
 /** The other input, refusal, row and start sentences carry no value. */
-type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}`>, LimitKey>;
+type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}`>, LimitKey>;
 
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
@@ -233,6 +365,20 @@ export function inputFailure(reason: string | null): Notice {
       return { key: "mobile.input.offline" };
     default:
       return { key: "mobile.input.failed" };
+  }
+}
+
+/** The line under a mission's answer for one hided refused or the connection lost (B35); a changed question, a missing Conductor and a lost device come back on the mission, in the desktop's words. */
+export function missionAnswerFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "in_flight":
+      return { key: "mobile.mission.answer.inFlight" };
+    case "gone":
+      return { key: "mobile.mission.answer.gone" };
+    case "offline":
+      return { key: "mobile.mission.answer.offline" };
+    default:
+      return { key: "mobile.mission.answer.failed" };
   }
 }
 
@@ -391,18 +537,29 @@ export function macNameOf(endpoint: string): string {
   }
 }
 
+/** The Mac's name with the names of the devices it reaches that are connected: `MacBook Pro + Mac mini` (PRD mobile-companion-ui B8). */
+/** The name the phone shows for the device `id`: the paired Mac's own name for this Mac, the label of a connected device otherwise. */
+export function deviceNameOf(devices: readonly PhoneDevice[], id: string, macName: string): string {
+  const device = devices.find((candidate) => candidate.device_id === id);
+  return device && !device.local && device.label ? device.label : macName;
+}
+
+export function machinesName(macName: string, devices: readonly PhoneDevice[]): string {
+  const names = devices.filter((device) => !device.local && device.connected && device.label).map((device) => device.label);
+  return names.length > 0 ? `${macName} + ${names.join(", ")}` : macName;
+}
+
 /** The list header's second line (B19). */
-export function headerLine(t: TFunction<"translation">, macName: string, otherPhones: number): string {
-  return otherPhones > 0 ? t("mobile.otherPhones", { name: macName, count: otherPhones }) : macName;
+export function headerLine(t: TFunction<"translation">, macName: string, otherPhones: number, devices: readonly PhoneDevice[] = []): string {
+  const name = machinesName(macName, devices);
+  return otherPhones > 0 ? t("mobile.otherPhones", { name, count: otherPhones }) : name;
 }
 
 /** Tags whose notifications the open app closes (D-21): agents no longer waiting or done. */
 export function staleTags(tags: readonly string[], groups: readonly AgentGroup[]): string[] {
   const live = new Set<string>();
-  for (const group of groups) {
-    for (const agent of group.agents) {
-      if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
-    }
+  for (const agent of listedAgents(groups)) {
+    if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
   }
   return tags.filter((tag) => !live.has(tag));
 }
@@ -428,4 +585,23 @@ export function notificationRow({
   // iOS offers push only to a Home Screen app; a Safari tab has no PushManager.
   if (!supported) return "install_first";
   return "enable";
+}
+
+/** The unseen Views first and then the seen ones, each in hided's order (newest first): what the 볼 것 list draws (B12). */
+export function splitLooks(rows: readonly LookRow[]): { unseen: LookRow[]; seen: LookRow[] } {
+  return { unseen: rows.filter((row) => row.unseen), seen: rows.filter((row) => !row.unseen) };
+}
+
+/** The most characters of a View's name a reply carries in front of it. */
+const ABOUT_CHARS = 60;
+
+/**
+ * A reply sent while looking at a View begins with its name in brackets, so the agent knows which result the words are about (B30).
+ * A control character in a name would make the reply refused, so it becomes a space.
+ */
+export function replyAbout(name: string, text: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = name.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/[[\]]/g, "").trim();
+  const shown = [...clean].slice(0, ABOUT_CHARS).join("");
+  return shown ? `[${shown}] ${text}` : text;
 }

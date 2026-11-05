@@ -762,8 +762,18 @@ pub(crate) fn sort_agents(agents: &mut [SidebarAgentSnapshot]) {
         group_of(left)
             .rank()
             .cmp(&group_of(right).rank())
-            .then_with(|| right.last_activity.cmp(&left.last_activity))
+            .then_with(|| recent_first(&left.last_activity, &right.last_activity))
     });
+}
+
+/// Most recent activity first, by the rows' ordering keys
+/// (`SidebarAgentSnapshot::last_activity`): thirteen digits of epoch
+/// milliseconds sort above Herdr's zero-padded sequence, so a row with a
+/// time always stands above one with only a sequence. Every surface that
+/// orders rows by recency, a phone's mixed devices included, compares with
+/// this.
+pub(crate) fn recent_first(left: &str, right: &str) -> std::cmp::Ordering {
+    right.cmp(left)
 }
 
 pub fn group_of(agent: &SidebarAgentSnapshot) -> AgentGroup {
@@ -1083,8 +1093,10 @@ pub mod push {
         pub place: String,
     }
 
-    /// Root rows use their core group, which a raised descendant already moved
-    /// to Needs You; a delegated row never notifies on its own (PRD B9).
+    /// Root rows use the group notices follow (`notice_group`: their core
+    /// group, which a raised descendant already moved to Needs You, and not
+    /// the Needs You a View to look at puts a row in); a delegated row never
+    /// notifies on its own (PRD B9).
     /// Existing human delivery notices own undelivered-letter and
     /// unconfirmed-watch notifications.
     fn effective(projection: &Projection) -> BTreeMap<AgentKey, (Effective, &PhoneAgent)> {
@@ -1100,15 +1112,15 @@ pub mod push {
                 // A read ask listed in Needs You is read: it clears a notice
                 // and never announces again (needs-you-cleanup D-10, B12).
                 Effective::Seen
-            } else if agent.notification_finalized && agent.group == "needs_you" {
+            } else if agent.notification_finalized && agent.notice_group == "needs_you" {
                 // A later judgment updates the row, not a finalized notice.
                 Effective::Done
-            } else if agent.notification_pending && agent.group == "done" {
+            } else if agent.notification_pending && agent.notice_group == "done" {
                 // The lifecycle stopped before its asynchronous judgment.
                 // Explicit asks still announce immediately.
                 Effective::Working
             } else {
-                Effective::from_group(&agent.group)
+                Effective::from_group(&agent.notice_group)
             };
             roots.insert(agent.key(), (state, agent));
         }

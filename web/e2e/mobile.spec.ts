@@ -227,12 +227,19 @@ function coreLog(daemon: Daemon): string {
     .join("\n");
 }
 
+type Listed = { kind: string; pane_id?: string; children?: Listed[]; more_children?: Listed[] };
+
+/** Whether a top row, or a child under it, is the pane. */
+function lists(row: Listed, pane: string): boolean {
+  return row.pane_id === pane || [...(row.children ?? []), ...(row.more_children ?? [])].some((child) => lists(child, pane));
+}
+
 /** The group the phone was last told a pane is in, from its own `agents` frames. */
 function groupOf(frames: string[], pane: string): string | null {
   for (let index = frames.length - 1; index >= 0; index -= 1) {
-    const frame = JSON.parse(frames[index] ?? "{}") as { type?: string; groups?: { group: string; agents: { pane_id: string }[] }[] };
+    const frame = JSON.parse(frames[index] ?? "{}") as { type?: string; groups?: { group: string; rows: Listed[]; more?: Listed[] }[] };
     if (frame.type !== "agents") continue;
-    return frame.groups?.find((group) => group.agents.some((agent) => agent.pane_id === pane))?.group ?? null;
+    return frame.groups?.find((group) => [...group.rows, ...(group.more ?? [])].some((row) => lists(row, pane)))?.group ?? null;
   }
   return null;
 }

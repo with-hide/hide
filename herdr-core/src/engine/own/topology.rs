@@ -1121,7 +1121,6 @@ impl Topology {
                         ))
                     })?;
                     let listed = pane.agent.as_ref().filter(|agent| agent.listed(now));
-                    let title = pane.live.facts.title.clone();
                     state.panes.push(ProjectedPane {
                         terminal_id: pane_id.clone(),
                         restore_error: pane.failed.clone(),
@@ -1140,10 +1139,7 @@ impl Topology {
                         cwd: Some(pane.cwd.clone()),
                         tokens: pane.tokens.clone(),
                         label: pane.label.clone(),
-                        terminal_title_stripped: title
-                            .as_deref()
-                            .and_then(super::shell_line::stripped_title),
-                        terminal_title: title,
+                        terminal_title: agents::stripped(&pane.live.facts),
                         pane_id: pane_id.clone(),
                     });
                     if let Some(agent) = listed {

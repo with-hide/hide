@@ -103,6 +103,11 @@ pub struct TurnCounts {
     pub done: usize,
 }
 
+/// The raised sections and how many rows each lists before its "N more": the
+/// sidebar's Needs You and Done, and the phone's 내 차례 and 읽을 것, which
+/// stop at the same counts.
+pub const RAISED_SHOWN: [(&str, usize); 2] = [("needs_you", 5), ("done", 3)];
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Raised {
     pub group: String,
@@ -1054,7 +1059,7 @@ impl Cache {
                 }
             }
             let live_references = row_references(&live);
-            let raised = [("needs_you", 5), ("done", 3)]
+            let raised = RAISED_SHOWN
                 .into_iter()
                 .filter_map(|(group, cap)| {
                     let ids: Vec<_> = live

@@ -89,7 +89,7 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: Option<&str>) {
 /// Whether a word or a redirection of `command`, or of a command it
 /// substitutes, names the file.
 fn shell_names(command: &str, names: &dyn Fn(&str) -> bool) -> bool {
-    let line = hide_shell::shell_line(command);
+    let line = hide_shell::shell_line(command, hide_shell::Syntax::Posix);
     line.commands.iter().flatten().any(|word| names(word))
         || line.targets.iter().any(|(_, target)| names(target))
         || line

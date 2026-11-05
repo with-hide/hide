@@ -274,8 +274,7 @@ impl Runtime {
             // Every device's pull requests are read with this machine's
             // login, by the repository its checkout's `origin` names.
             self.own_node(),
-        )
-        .with_hook_facts(self.hook_facts());
+        );
         // Its machine is read through its node, as this machine is through
         // its own: a node that dials in, and a WSL distribution of this PC.
         if registration.origin.reports_own_facts() {

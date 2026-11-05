@@ -4,26 +4,23 @@ import { OfflineText } from "./OfflineText";
 // detail is `Detail.tsx`. Every value comes from the store the socket writes.
 
 import { BellIcon, ChevronRightIcon, LaptopIcon, Loader2Icon, PlusIcon, XIcon } from "lucide-react";
-import { StatusMark } from "../components/status-mark";
 import { useEffect, useState } from "react";
-import { useElapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
-import { lineText, markWords, rowDimmed } from "../agentRow";
 import { Button } from "../components/ui/button";
-import { agentProductName } from "../agentAdapters";
-import { sleepingCaption } from "../sleeping-session";
-import { actOnSleepingSession, closeDetail, openDetail, openStartSheet, pairNow } from "./connection";
+import { closeDetail, openStartSheet, pairNow } from "./connection";
 import { Detail } from "./Detail";
-import { AgentHead, LIST_INSET, Place } from "./parts";
+import { GroupRows } from "./ListRows";
+import { MissionDetail } from "./MissionDetail";
+import { MissionsScreen } from "./MissionsScreen";
 import { StartSheet } from "./StartSheet";
+import { TabBar } from "./TabBar";
 import {
   GROUP_TITLE,
   REFUSAL_NOTICE,
   headerLine,
+  machinesName,
   noticeText,
   notificationRow,
-  type PhoneAgent,
-  type PhoneSleepingSession,
 } from "./protocol";
 import { closeStaleNotifications, enableNotifications, permission, pushSupported } from "./push";
 import { patch, usePhone } from "./store";
@@ -38,11 +35,16 @@ export function App() {
   const detail = usePhone((s) => s.detail);
   const name = usePhone((s) => s.macName);
   const deviceProtocol = usePhone((s) => s.deviceProtocol);
+  const tab = usePhone((s) => s.tab);
+  const missionOpen = usePhone((s) => s.missionOpen);
   if (screen === "version") return <VersionScreen t={t} name={name} protocol={deviceProtocol} app={String(PHONE_PROTOCOL)} />;
   if (screen === "pair") return <PairScreen />;
   if (screen === "refused") return <Guidance refused />;
   if (screen === "unpaired") return <Guidance refused={false} />;
-  return detail ? <Detail onBack={closeDetail} /> : <ListScreen />;
+  // A worker or a Conductor opened from a mission step is the agent's own detail, on either tab (B36).
+  if (detail) return <Detail onBack={closeDetail} />;
+  if (tab === "missions") return missionOpen ? <MissionDetail /> : <MissionsScreen />;
+  return <ListScreen />;
 }
 
 /** The page the QR opens (B11). */
@@ -91,23 +93,26 @@ function standalone(): boolean {
   return iosStandalone || window.matchMedia("(display-mode: standalone)").matches;
 }
 
-function ListScreen() {
+/**
+ * `hosted` and `picker` are the gallery's: the list as a hosted phone draws it,
+ * with the device sheet already open on the Mac it names. A phone passes neither.
+ */
+export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolean; picker?: { room: string; open: boolean } }) {
   const { t } = useInterfaceTranslation();
   const macName = usePhone((s) => s.macName);
   const otherPhones = usePhone((s) => s.otherPhones);
   const connected = usePhone((s) => s.connected);
   const unreachable = usePhone((s) => s.unreachable);
   const groups = usePhone((s) => s.groups);
+  const devices = usePhone((s) => s.devices);
   const installHint = usePhone((s) => s.installHint);
   const relayError = usePhone((s) => s.relayError);
   useEffect(() => {
     if (groups && connected) void closeStaleNotifications(groups);
   }, [groups, connected]);
   const dim = unreachable && !connected;
-  const agents = groups?.flatMap((group) => group.agents) ?? [];
-  const sleeping = groups?.flatMap((group) => group.sleeping_sessions ?? []) ?? [];
   return (
-    <main className="phone-safe-bottom flex min-h-full flex-col">
+    <main className="flex min-h-full flex-col">
       <header className="phone-safe-top px-xl" data-phone-connected={connected ? "true" : "false"}>
         <div className="flex items-center justify-between pt-lg">
           <h1 className="text-headline font-semibold text-foreground">hide</h1>
@@ -123,10 +128,10 @@ function ListScreen() {
             </button>
           </div>
         </div>
-        {hostedPhone() ? <HostPicker name={macName} /> : macName ? (
-          <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones)}>
+        {hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? (
+          <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones, devices)}>
             <LaptopIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
-            <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones)}</span>
+            <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones, devices)}</span>
           </p>
         ) : null}
       </header>
@@ -140,7 +145,7 @@ function ListScreen() {
       {installHint && !standalone() ? <InstallHint /> : null}
       {connected ? <NotificationRow /> : null}
       <div className={dim ? "opacity-(--opacity-dimmed)" : undefined} aria-busy={dim}>
-        {groups && agents.length === 0 && sleeping.length === 0 ? (
+        {groups && groups.length === 0 ? (
           <p className="px-lg py-xxl text-center text-title text-muted-foreground" data-phone-empty="true">
             {t("mobile.noAgents")}
           </p>
@@ -156,91 +161,14 @@ function ListScreen() {
                   {group.count}
                 </span>
               </h2>
-              <ul className="divide-y divide-border border-b border-border">
-                {group.agents.map((agent) => (
-                  <AgentRow key={`${agent.device_id}|${agent.pane_id}`} agent={agent} />
-                ))}
-                {group.sleeping_sessions?.map((session) => (
-                  <SleepingRow key={session.sleep_id} session={session} />
-                ))}
-              </ul>
+              <GroupRows group={group} />
             </section>
           );
         })}
       </div>
+      <TabBar active="agents" />
       <StartSheet />
     </main>
-  );
-}
-
-function SleepingRow({ session }: { session: PhoneSleepingSession }) {
-  const { t } = useInterfaceTranslation();
-  const connected = usePhone((state) => state.connected);
-  const action = usePhone((state) => state.sleepAction);
-  const pending = action?.sleepId === session.sleep_id && !!action.requestId;
-  const uncertain = session.phase === "close_unknown" || session.phase === "wake_unknown";
-  const failed = (action?.sleepId === session.sleep_id && action.error) || session.attention;
-  const caption = t(sleepingCaption(session));
-  const lineShown = failed || session.phase !== "sleeping" || session.checking;
-  return (
-    <li className="flex min-h-(--size-touch-target) flex-col gap-xs py-md" data-phone-sleeping={session.sleep_id}>
-      <div className="flex min-w-0 items-center gap-sm">
-        {/* A grey moon at full strength; sleeping says itself there, waking or failing on the line below (status-marks D-21, B31). */}
-        <span className="flex size-(--size-agent-mark) shrink-0 items-center justify-center"><StatusMark mark="asleep" data-phone-mark="asleep" /></span>
-        <span className="min-w-0 flex-1 truncate text-title text-subtle-foreground">{session.title}<span className="sr-only">, {agentProductName(session.agent_kind)}{lineShown ? null : `, ${caption}`}</span></span>
-      </div>
-      <div className={`flex min-w-0 items-center justify-between gap-sm ${LIST_INSET}`}>
-        <span className="min-w-0 break-words text-subhead text-muted-foreground" role={failed ? "status" : undefined}>
-          {failed ? t("panes.sleep.requestFailed") : lineShown ? caption : null}
-        </span>
-        {session.wake_available || uncertain ? (
-          <Button
-            variant="ghost"
-            className="min-h-(--size-touch-target) shrink-0 text-body"
-            disabled={!connected || !!action?.requestId || session.checking}
-            data-phone-sleep-action={session.wake_available ? "wake" : "check"}
-            onClick={() => actOnSleepingSession(session.sleep_id, session.wake_available ? "wake_sleeping_session" : "check_sleeping_session")}
-          >
-            {session.checking ? t("agents.checking") : pending ? t(session.wake_available ? "panes.sleep.waking" : "agents.checking") : session.wake_available ? t("panes.sleep.wake") : t("workspace.checkStatus")}
-          </Button>
-        ) : null}
-      </div>
-    </li>
-  );
-}
-
-const LINE_TONE = { warning: "text-warning", news: "text-foreground", subtle: "text-subtle-foreground" } as const;
-
-function AgentRow({ agent }: { agent: PhoneAgent }) {
-  const { t } = useInterfaceTranslation();
-  const elapsed = useElapsed(agent.changed_at_unix_ms);
-  // Opening a row on the phone does not wake it, so the desktop's "wakes when opened" is not said here.
-  const words = agent.status_code === "sleeping" && agent.mark === "asleep" ? t("panes.sleep.sleeping") : markWords(t, agent);
-  const label = [words, agent.title, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
-  return (
-    <li className={rowDimmed(agent) ? "opacity-(--opacity-dimmed)" : undefined}>
-      <button
-        type="button"
-        aria-label={label}
-        data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
-        className="flex min-h-(--size-touch-target) w-full flex-col gap-xs py-md text-left outline-none focus-visible:bg-accent active:bg-accent"
-        onClick={() => openDetail({ device_id: agent.device_id, pane_id: agent.pane_id })}
-      >
-        <span className="flex w-full items-center gap-sm">
-          <span className="min-w-0 flex-1">
-            <AgentHead agent={agent} large={false} />
-          </span>
-          <span className="shrink-0 font-mono text-body text-muted-foreground">{elapsed}</span>
-          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-        </span>
-        <Place agent={agent} inset={LIST_INSET} />
-        {agent.line ? (
-          <span className={`line-clamp-2 ${LIST_INSET} text-body ${LINE_TONE[agent.line.tone]}`} data-phone-line={agent.line.mode}>
-            {lineText(t, { wait: agent.wait, status_code: agent.status_code, descendant_counts: { working: agent.descendants_working }, background_left: agent.background_left }, agent.line)}
-          </span>
-        ) : null}
-      </button>
-    </li>
   );
 }
 

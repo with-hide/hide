@@ -832,6 +832,16 @@ mod tests {
             Some(herdr_core::missions::Strength::Thorough)
         );
         assert!(plan.strength_why.is_some());
+        // The nodes show the steps the guide asks for, within the limits the core holds them to.
+        let steps: Vec<_> = plan
+            .nodes
+            .iter()
+            .filter_map(|node| node.steps.as_ref())
+            .collect();
+        assert!(steps.len() >= 2, "the guide shows steps on its nodes");
+        for step in steps.into_iter().flatten() {
+            assert!(step.chars().count() <= herdr_core::missions::STEP_CHARS);
+        }
     }
 
     #[test]

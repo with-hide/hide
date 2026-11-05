@@ -552,6 +552,31 @@ mod tests {
         );
     }
 
+    /// A View to look at lists the row in Needs You and calls no notice
+    /// (unseen-agent-views D-13, B12): the notice follows the group the row
+    /// would have without it.
+    #[test]
+    fn a_row_with_a_view_to_look_at_is_listed_in_needs_you_and_never_announced() {
+        let mut transitions = Transitions::default();
+        let looking = |group: &str| {
+            let mut look = row("w1:p1", group, "none", None);
+            look["look"] = json!({"group": "seen", "count": 1});
+            project(&rest(json!([look])), "local")
+        };
+        let working = project(
+            &rest(json!([row("w1:p1", "working", "none", None)])),
+            "local",
+        );
+        transitions.observe(&working);
+        let opened = looking("needs_you");
+        let listed = opened.agents().next().unwrap();
+        assert_eq!(listed.group, "needs_you");
+        assert!(
+            transitions.observe(&opened).0.is_empty(),
+            "an unseen View announces nothing"
+        );
+    }
+
     /// The worker receives the row's sentence and status unchanged, not a
     /// translated body. An old worker ignores the additive fields.
     #[test]

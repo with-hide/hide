@@ -13,8 +13,8 @@ pub(crate) fn spawn(
 ) -> Result<SessionSyncHandle, String> {
     let (sender, receiver) = channel();
     let worker_sender = sender.clone();
-    let republish_pending = Arc::new(AtomicBool::new(false));
-    let worker_republish = Arc::clone(&republish_pending);
+    let republish = Arc::new(RepublishFlags::default());
+    let worker_republish = Arc::clone(&republish);
     let worker = thread::Builder::new()
         .name("herdr-core-session-sync".to_owned())
         .spawn(move || {
@@ -29,7 +29,7 @@ pub(crate) fn spawn(
         .map_err(|error| format!("session sync worker could not be started: {error}"))?;
     Ok(SessionSyncHandle {
         sender,
-        republish_pending,
+        republish,
         worker: Some(worker),
     })
 }
@@ -39,7 +39,7 @@ fn run_coordinator(
     usage_paths: Option<crate::usage::UsagePaths>,
     receiver: Receiver<CoordinatorMessage>,
     sender: Sender<CoordinatorMessage>,
-    republish_pending: Arc<AtomicBool>,
+    republish: Arc<RepublishFlags>,
 ) {
     let home_path = usage_paths.as_ref().and_then(|paths| paths.home.clone());
     let mut lineage_writer = match context.ledger_machine().and_then(|machine| {
@@ -65,10 +65,10 @@ fn run_coordinator(
     let mut defer_background_reads = true;
     let mut next_operation_tick = Instant::now() + ASYNC_OPERATION_TICK_INTERVAL;
     let mut catalog_cache = CatalogState {
-        wake: Some(RepublishWaker {
-            sender: sender.clone(),
-            pending: Arc::clone(&republish_pending),
-        }),
+        wake: Some(RepublishWaker::asking(
+            sender.clone(),
+            Arc::clone(&republish),
+        )),
         ..Default::default()
     };
     // The runtime's settled worktree removals the catalog was last rebuilt for.
@@ -155,10 +155,7 @@ fn run_coordinator(
     // The engine wakes this thread once its session changed, and the session
     // is read whole on each wake and published as it is (`pulled.rs`).
     {
-        let waker = RepublishWaker {
-            sender: sender.clone(),
-            pending: Arc::clone(&republish_pending),
-        };
+        let waker = RepublishWaker::engine(sender.clone(), Arc::clone(&republish));
         context.engine.changes(Arc::new(move || waker.wake()));
     }
     let mut pulled: Option<super::pulled::PulledSession> = None;
@@ -427,11 +424,12 @@ fn run_coordinator(
             settles_at,
             Instant::now(),
         );
-        let message = match receiver.recv_timeout(timeout) {
+        // A settle that comes due is published whatever the read shows.
+        let (message, settle) = match receiver.recv_timeout(timeout) {
             Err(RecvTimeoutError::Timeout) if settle_due(settles_at, Instant::now()) => {
-                Ok(CoordinatorMessage::Republish)
+                (Ok(CoordinatorMessage::Republish), true)
             }
-            message => message,
+            message => (message, false),
         };
         match message {
             Ok(CoordinatorMessage::RefreshTopology) => {
@@ -446,17 +444,26 @@ fn run_coordinator(
                 return;
             }
             Ok(CoordinatorMessage::Republish) => {
-                // Cleared before the read, so a wake that lands during the
-                // publish asks for the next one rather than being lost.
-                republish_pending.store(false, Ordering::Release);
-                // The engine woke this thread because its session changed:
-                // the session is read again, whole, and published.
+                let asked = republish.take() || settle;
+                // The engine woke this thread because its session changed, or
+                // the core asked: the session is read again, whole, and
+                // published.
                 if pulled.is_none() {
                     // Not connected yet; the connect reads it.
                     continue;
                 }
                 let started_at = Instant::now();
                 match super::pulled::PulledSession::read(&context) {
+                    // A burst of the engine's changes that the session does
+                    // not show, or that a publish already read, publishes
+                    // nothing more: a publish rebuilds every pane and agent
+                    // under the runtime lock.
+                    Ok(session)
+                        if !publishes(
+                            asked,
+                            pulled.as_ref().map(|previous| previous.published_state()),
+                            session.published_state(),
+                        ) => {}
                     Ok(session) => {
                         let moved = pulled.as_ref().is_none_or(|previous| {
                             previous.published_state().agents != session.published_state().agents
@@ -520,6 +527,13 @@ fn run_coordinator(
     }
 }
 
+/// Whether a session read is published: one a wake of the core's asked for
+/// always is, one the engine's wake brought only when it differs from the
+/// last one published.
+fn publishes(asked: bool, previous: Option<&ProjectionState>, read: &ProjectionState) -> bool {
+    asked || previous != Some(read)
+}
+
 fn log_sync_failure(context: &SessionSyncContext, kind: &str, error: &SessionFetchError) {
     crate::diagnostic!(json!({
         "component": "session_sync",
@@ -538,9 +552,6 @@ fn publish_session(
     labels: &mut Option<LabelWorker>,
 ) -> bool {
     let mut payload = session.project();
-    // The delivery observation this pass makes, which only its own ingest
-    // below may lay turns for.
-    let mut observed = None;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
@@ -548,61 +559,29 @@ fn publish_session(
         observe_labels(worker, session.published_state());
         worker.overlay()
     });
-    // Observe native state from the payload before the overlay is laid on
-    // it (the remote path below), so no label adds UI timestamps to what
-    // delivery sees; the overlay is only consulted for what each session
-    // read says the agent waits for. This is bounded memory work; no
-    // delivery I/O or notifier is started here.
-    if let Some(runtime) = context.runtime.upgrade()
-        && let Ok(mut guard) = runtime.lock()
-    {
-        if let SessionSyncTarget::Remote { target_id, .. } = &context.target
-            && !guard.remote_coordinator_is_current(target_id, &context.engine)
-        {
-            return false;
-        }
-        observed = Some(match &context.target {
-            SessionSyncTarget::Local { socket_path } => {
-                let node = guard.node().clone();
-                guard.observe_delivery(
-                    node.as_str(),
-                    &payload,
-                    socket_path.to_str(),
-                    overlay.as_ref(),
-                )
-            }
-            SessionSyncTarget::Remote { target_id, .. } => {
-                let pass = guard.observe_delivery(target_id, &payload, None, overlay.as_ref());
-                // Sleeping agents Herdr no longer lists are drawn from their
-                // records before the session is scoped to the device.
-                guard.settle_node_agent_sleep(target_id, &mut payload);
-                pass
-            }
-        });
-    }
+    // A pass observes its panes for delivery in the same step under the lock
+    // that lays their turns (`observe_device_session` here, the ingest for
+    // this machine), so a tool or turn-end ask never meets an observation
+    // whose turn is not laid yet (with-hide/hide-private#560). That step is
+    // bounded memory work; no delivery I/O or notifier is started in it.
     if let SessionSyncTarget::Remote { target_id, .. } = &context.target {
-        if let Some(overlay) = &overlay {
-            overlay.apply(&mut payload);
-        }
-        // The device's hooks report to the core, never to its Herdr, so their
-        // facts are laid here the way the labels are (`agent_hooks::facts`).
-        let hook_tokens = context.hook_facts.as_ref().map(|facts| {
-            facts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .lay(
-                    &mut payload,
-                    |pane| crate::address::scoped_pane_id(target_id, pane),
-                    |pane| crate::address::is_pane_of(pane, target_id),
-                )
-        });
-        // The doorbell reads the turn the core decides from these facts.
-        let turns = crate::runtime::delivery::delivery_turns(&payload);
+        let Some(runtime) = context.runtime.upgrade() else {
+            return false;
+        };
+        let hook_tokens = match runtime.lock() {
+            Ok(mut guard) => {
+                if !guard.remote_coordinator_is_current(target_id, &context.engine) {
+                    return false;
+                }
+                guard.observe_device_session(target_id, &mut payload, overlay.as_ref())
+            }
+            Err(_) => return false,
+        };
+        drop(runtime);
         let projection = session.published_state().project_remote(target_id, payload);
         let (fetched, excluded) = match projection {
             Ok((mut session, excluded)) => {
                 session.pane_hook_tokens = hook_tokens
-                    .unwrap_or_default()
                     .into_iter()
                     .map(|(pane, tokens)| {
                         (crate::address::scoped_pane_id(target_id, &pane), tokens)
@@ -629,9 +608,6 @@ fn publish_session(
             Ok(mut guard) => {
                 if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                     return false;
-                }
-                if let Some(pass) = observed {
-                    guard.lay_delivery_turns(target_id, pass, turns);
                 }
                 guard.ingest_remote_session(target_id, fetched)
             }
@@ -816,11 +792,15 @@ fn publish_session(
     // update itself is not held for that answer: it is ingested now with
     // the differing focus left alone, and the read runs on its own worker
     // outside the lock.
+    let host_scope = match &context.target {
+        SessionSyncTarget::Local { socket_path } => socket_path.to_str(),
+        SessionSyncTarget::Remote { .. } => None,
+    };
     let (changed, readback) = match runtime.lock() {
         Ok(mut guard) => {
-            // The overlay and the payload are the ones this pass observed,
-            // so its ingest lays the turns its observations wait on.
-            guard.ingest_observed_session(Ok(payload), Some(precomputed), observed, overlay)
+            // The ingest observes this payload for delivery and lays the
+            // turns its observations wait on, with this pass's overlay.
+            guard.ingest_observed_session(payload, Some(precomputed), host_scope, overlay)
         }
         Err(_) => return false,
     };
@@ -1614,6 +1594,44 @@ fn settle_due(settles_at: Option<Instant>, now: Instant) -> bool {
 
 fn next_reconnect_delay(current: Duration) -> Duration {
     current.saturating_mul(2).min(RECONNECT_MAX_DELAY)
+}
+
+#[cfg(test)]
+mod republish_tests {
+    use super::*;
+    use crate::engine::fake::session;
+
+    /// Wakes before the coordinator takes the first are one message, and only
+    /// a wake of the core's asks for a publish the session may not show.
+    #[test]
+    fn engine_wakes_ask_for_no_publish_and_a_core_wake_does_once() {
+        let (sender, receiver) = channel();
+        let flags = Arc::new(RepublishFlags::default());
+        let engine = RepublishWaker::engine(sender.clone(), Arc::clone(&flags));
+        let core = RepublishWaker::asking(sender, Arc::clone(&flags));
+        engine.wake();
+        engine.wake();
+        assert_eq!(receiver.try_iter().count(), 1);
+        assert!(!flags.take());
+        engine.wake();
+        core.wake();
+        assert_eq!(receiver.try_iter().count(), 1);
+        assert!(flags.take());
+        assert!(!flags.take());
+    }
+
+    /// An engine wake whose read equals the last publish (a title whose
+    /// spinner alone turned) publishes nothing; a changed read, the first
+    /// read and a wake the core asked for do.
+    #[test]
+    fn only_a_read_that_moved_or_one_the_core_asked_for_is_published() {
+        let one = session(json!({"panes": [{"pane_id": "w1:p1", "terminal_title": "Fix"}]}));
+        let two = session(json!({"panes": [{"pane_id": "w1:p1", "terminal_title": "Fix it"}]}));
+        assert!(!publishes(false, Some(&one), &one));
+        assert!(publishes(false, Some(&one), &two));
+        assert!(publishes(false, None, &one));
+        assert!(publishes(true, Some(&one), &one));
+    }
 }
 
 #[cfg(test)]
