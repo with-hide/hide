@@ -1149,9 +1149,6 @@ pub struct Runtime {
     delivery_observations: HashMap<String, delivery::Observation>,
     /// Counts `observe_delivery` passes; fences each observation's laid turn.
     delivery_observe_generation: u64,
-    /// The observe passes running now, which a pull at a tool event or turn
-    /// end waits on (`delivery::passes`).
-    delivery_passes: Arc<crate::delivery::passes::Passes>,
     /// View openers waiting for their document, Sends under way, and the
     /// feedback worker (PRD view-opener-feedback).
     view_feedback: view_feedback::FeedbackRuntime,
@@ -2323,7 +2320,6 @@ impl Runtime {
             delivery_client: None,
             delivery_observations: HashMap::new(),
             delivery_observe_generation: 0,
-            delivery_passes: Arc::default(),
             view_feedback: view_feedback::FeedbackRuntime::default(),
             view_sessions: view_sessions::ViewSessions::default(),
             composer_marks: Vec::new(),

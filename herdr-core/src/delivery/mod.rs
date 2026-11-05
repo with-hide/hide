@@ -6,7 +6,6 @@ mod human;
 pub(crate) mod ladder;
 pub mod ledger;
 pub mod mailbox;
-pub(crate) mod passes;
 pub mod typed;
 pub mod watch;
 pub mod worker;

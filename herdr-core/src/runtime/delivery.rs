@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::delivery::doorbell::Turn;
 use crate::delivery::ledger::Ledger;
-use crate::delivery::worker::{Authority, Client, LayWait, Prepared, PreparedHuman};
+use crate::delivery::worker::{Authority, Client, Prepared, PreparedHuman};
 use crate::delivery::{Actor, Command};
 use crate::labels::overlay::LabelOverlay;
 use crate::sidebar::SessionSnapshotPayload;
@@ -399,16 +399,6 @@ impl Runtime {
         self.follow_resumed_conductors(device);
         self.follow_session_thread(device, payload);
         ObservedPass(generation)
-    }
-
-    /// Marks `pass` running until the returned guard drops: its sync pass
-    /// holds it to its end, so a pull at a tool event or turn end that finds
-    /// a pane's turn not yet laid by it waits for it (`delivery::passes`).
-    pub(crate) fn begin_delivery_pass(
-        &self,
-        pass: ObservedPass,
-    ) -> crate::delivery::passes::Running {
-        self.delivery_passes.begin(pass.0)
     }
 
     /// Observes `payload` and lays the turn the session ingest lays from it,
@@ -1520,28 +1510,6 @@ impl Runtime {
             }
             _ => None,
         };
-        // A tool event's or a turn end's ask that finds its pane's turn not
-        // yet laid by the pass that observed it waits for that pass, outside
-        // this lock, and reads the pane again (`delivery::passes`).
-        let lay_wait = match (&command, &target) {
-            (
-                Command::Pull {
-                    point:
-                        hide_node_link::panes::PullPoint::Tool
-                        | hide_node_link::panes::PullPoint::TurnEnd,
-                    ..
-                },
-                Some(observed),
-            ) if observed.projected_turn().is_none()
-                && self.delivery_passes.running(observed.observed_generation) =>
-            {
-                Some(LayWait {
-                    passes: Arc::clone(&self.delivery_passes),
-                    generation: observed.observed_generation,
-                })
-            }
-            _ => None,
-        };
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
@@ -1554,10 +1522,6 @@ impl Runtime {
         )
         .worded_in(self.interface_language())
         .then(after);
-        let prepared = match lay_wait {
-            Some(wait) => prepared.after_lay(wait),
-            None => prepared,
-        };
         let prepared = match forced {
             Some(engine) => prepared.forced_through(engine),
             None => prepared,
@@ -1907,6 +1871,7 @@ impl Runtime {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn delivery_observation(&self, actor: &Actor) -> Option<Observation> {
         self.delivery_observations
             .get(&actor.pane_id)
@@ -3636,131 +3601,6 @@ pub(crate) mod tests {
             Some("session_mismatch")
         );
         drop(guard);
-        drop(worker);
-    }
-
-    /// Grok working on a turn, a `--now` letter for it, and a sync pass that
-    /// has observed its pane again and not yet laid its turn: the turn-end
-    /// ask the agent's Stop hook sends then, prepared, with the pass and the
-    /// payload it will lay.
-    fn turn_end_ask_between_observation_and_lay(
-        root: &std::path::Path,
-    ) -> (
-        Arc<std::sync::Mutex<Runtime>>,
-        Worker,
-        Prepared,
-        ObservedPass,
-        crate::delivery::passes::Running,
-        SessionSnapshotPayload,
-        String,
-    ) {
-        let (runtime, sender, _, path) = fixture(root);
-        let (worker, client) =
-            Worker::store(Arc::downgrade(&runtime), ChangeNotifier::noop(), path).unwrap();
-        let mut guard = runtime.lock().unwrap();
-        guard.install_delivery_client(client);
-        let own = crate::engine::tokens::session_digest("hook-session");
-        let payload = |seq: u64| -> SessionSnapshotPayload {
-            serde_json::from_value(json!({"agents":[
-                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
-                {"id":"recipient","pane_id":"recipient","agent":"grok","agent_status":"working","state_change_seq":seq,"lineage_session":own},
-            ]}))
-            .unwrap()
-        };
-        guard.observe_delivery_laid(crate::node::TEST_NODE, &payload(2), None, None);
-        let recipient = guard.delivery_observations["recipient"].actor.clone();
-        let sender_context = authority(&sender).context;
-        let send = guard
-            .prepare_delivery(
-                crate::node::TEST_NODE,
-                "sender",
-                &sender_context,
-                None,
-                Command::Send {
-                    target: "recipient".into(),
-                    intent: "urgent".into(),
-                    body: "urgent body".into(),
-                    kind: "request".into(),
-                    now: true,
-                    force: false,
-                },
-            )
-            .unwrap();
-        drop(guard);
-        let letter = send.run(Duration::from_secs(5)).unwrap();
-        let mut guard = runtime.lock().unwrap();
-        // The pane changed on screen: a pass observes it, and lays its turn
-        // only after its work outside the lock.
-        let next = payload(3);
-        let pass = guard.observe_delivery(crate::node::TEST_NODE, &next, None, None);
-        let running = guard.begin_delivery_pass(pass);
-        assert!(
-            guard.delivery_observations["recipient"]
-                .projected_turn()
-                .is_none(),
-            "the ask arrives before the pass laid the turn"
-        );
-        let prepared = guard
-            .prepare_delivery(
-                crate::node::TEST_NODE,
-                "recipient",
-                &authority(&recipient).context,
-                None,
-                Command::Pull {
-                    prompt_digest: None,
-                    session: Some("hook-session".into()),
-                    point: hide_node_link::panes::PullPoint::TurnEnd,
-                    bundle: true,
-                },
-            )
-            .unwrap();
-        drop(guard);
-        (
-            runtime,
-            worker,
-            prepared,
-            pass,
-            running,
-            next,
-            letter["id"].as_str().unwrap().to_owned(),
-        )
-    }
-
-    /// The turn-end ask that arrives between a pass's observation of the
-    /// pane and its lay waits for that pass, off the runtime's lock, and
-    /// hands over the letter the turn it lays makes due.
-    #[test]
-    fn a_turn_end_ask_between_a_pass_observation_and_its_lay_gets_the_letter() {
-        let root = tempfile::tempdir().unwrap();
-        let (runtime, worker, prepared, pass, running, next, letter) =
-            turn_end_ask_between_observation_and_lay(root.path());
-        let asking = std::thread::spawn(move || prepared.run(Duration::from_secs(60)));
-        {
-            let mut guard = runtime.lock().unwrap();
-            guard.lay_delivery_turns(crate::node::TEST_NODE, pass, delivery_turns(&next));
-        }
-        drop(running);
-        let intake = asking.join().unwrap().unwrap();
-        assert_eq!(intake["ids"], json!([letter]));
-        assert!(intake["context"].as_str().unwrap().contains("urgent body"));
-        drop(worker);
-    }
-
-    /// An ask that cannot wait, past the limit of waiting asks, is answered
-    /// at once from the pane as it was read, as when no pass runs: no letter,
-    /// and the letter stays for a later ask.
-    #[test]
-    fn a_turn_end_ask_past_the_waiting_limit_is_answered_at_once_as_before() {
-        let root = tempfile::tempdir().unwrap();
-        let (runtime, worker, prepared, _pass, _running, _, _) =
-            turn_end_ask_between_observation_and_lay(root.path());
-        runtime
-            .lock()
-            .unwrap()
-            .delivery_passes
-            .hold_waiting(crate::delivery::passes::WAITING_LIMIT);
-        let intake = prepared.run(Duration::from_secs(60)).unwrap();
-        assert_eq!(intake["ids"], json!([]));
         drop(worker);
     }
 

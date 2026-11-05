@@ -47,16 +47,6 @@ pub struct Prepared {
     /// whose composer is read before the letter is recorded (PRD
     /// engine-bundle-1 D-14).
     forced: Option<crate::engine::SharedEngine>,
-    /// For a tool event's or a turn end's ask whose pane's turn was not yet
-    /// laid, the pass that will lay it.
-    lay_wait: Option<LayWait>,
-}
-
-/// The observe pass a pull waits on before it reads its pane again
-/// (`delivery::passes`).
-pub(crate) struct LayWait {
-    pub(crate) passes: Arc<super::passes::Passes>,
-    pub(crate) generation: u64,
 }
 
 /// A step that follows a command's answer, given that answer.
@@ -206,7 +196,6 @@ impl Prepared {
             answered: None,
             then: None,
             forced: None,
-            lay_wait: None,
         }
     }
 
@@ -235,26 +224,9 @@ impl Prepared {
         self
     }
 
-    /// Waits for `wait`'s pass before the ask is answered, and answers it
-    /// from the pane as that pass left it.
-    pub(crate) fn after_lay(mut self, wait: LayWait) -> Self {
-        self.lay_wait = Some(wait);
-        self
-    }
-
     /// Called by the request worker after owner-thread preparation. Its wait
-    /// never holds Runtime's mutex. A wait for a pass ends within `timeout`,
-    /// and the store's answer keeps its own `timeout` after it, as for an
-    /// ask that did not wait.
-    pub fn run(mut self, timeout: Duration) -> Result<Value, String> {
-        if let Some(wait) = self.lay_wait.take() {
-            self.target = laid_target(
-                &self.client,
-                wait,
-                self.target.take(),
-                Instant::now() + timeout,
-            );
-        }
+    /// never holds Runtime's mutex.
+    pub fn run(self, timeout: Duration) -> Result<Value, String> {
         let result = if let Some(answer) = self.answered {
             Ok(answer)
         } else if let Command::Agents { command } = self.command {
@@ -291,31 +263,6 @@ impl Prepared {
         }
         result
     }
-}
-
-/// The pull's pane as the pass it waited on left it, once that pass ended;
-/// at the deadline or past the limit of waiting pulls, the pane as it was
-/// read, which answers as if no pass had been running.
-fn laid_target(
-    client: &Client,
-    wait: LayWait,
-    target: Option<Observation>,
-    deadline: Instant,
-) -> Option<Observation> {
-    let waited = wait.passes.wait(wait.generation, deadline);
-    let observed = target?;
-    if waited != super::passes::Waited::Ended {
-        crate::diagnostic!(json!({"component":"delivery","kind":"pull.lay_wait_ended",
-            "pane_id":observed.actor.pane_id,"reason":waited.reason()}));
-        return Some(observed);
-    }
-    let again = client.runtime.upgrade().and_then(|runtime| {
-        runtime
-            .lock()
-            .ok()
-            .and_then(|guard| guard.delivery_observation(&observed.actor))
-    });
-    Some(again.unwrap_or(observed))
 }
 
 impl Client {
