@@ -13,4 +13,5 @@ jobs:
       - name: Hold observation window
         run: sleep 90
       - name: Controlled result
-        run: exit 0
+        run: |
+          if [ "${{ github.run_attempt }}" -le 2 ]; then exit 1; fi
