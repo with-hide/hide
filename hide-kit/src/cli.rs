@@ -1,5 +1,6 @@
 //! The `hide` command in the account's command folder: a Unix link, or a
-//! Windows command shim and directory junction (no symlink privilege).
+//! Windows command shim (`cli_windows.rs`), with a directory junction beside
+//! the desktop app's (no symlink privilege).
 //!
 //! The name is Hide's to replace only when it is absent or is already a link
 //! into a place only Hide puts it: an app bundle's `Contents/Resources`, or

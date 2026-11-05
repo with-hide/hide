@@ -234,6 +234,11 @@ pub struct PaneInstall {
     pub id: String,
     /// Its own `hide` command, at a path that outlives one build.
     pub cli: PathBuf,
+    /// The folder a pane's `PATH` starts with, which holds this
+    /// installation's `hide` and nothing else (`hide_kit::current::path_folder`),
+    /// so the pane's `hide` is its own whoever holds the account's command
+    /// folder; `None` where the pane's `hide` hands itself over instead.
+    pub path_first: Option<PathBuf>,
 }
 
 impl PaneInstall {
@@ -254,7 +259,7 @@ impl PaneInstall {
 
 /// The installation the program at `executable` belongs to: the desktop
 /// package it runs from, or the helper root its build sits in (a device
-/// helper's, or a build Hide placed there), whose `current` link leads to the
+/// helper's, or a build Hide placed there), whose `current` leads to the
 /// build that runs now. A Cargo build or any other copy belongs to none.
 pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
     let cli = if cfg!(windows) { "hide.exe" } else { "hide" };
@@ -262,12 +267,14 @@ pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
         return Some(PaneInstall {
             id: hide_agent_hooks::route::APP_INSTALL.to_owned(),
             cli: kit_dir.join(cli),
+            path_first: None,
         });
     }
     let (root, _) = build_layout(executable)?;
     Some(PaneInstall {
         id: hide_agent_hooks::route::install_of_root(&root),
         cli: root.join(hide_kit::CURRENT).join(cli),
+        path_first: hide_kit::current::path_folder(&root),
     })
 }
 
@@ -413,21 +420,14 @@ fn expand(path: &str, home: &Path) -> HostResult<PathBuf> {
     Ok(expanded)
 }
 
-/// Points `<root>/current` at `version` through a link made beside it and
-/// renamed over it, so the name is never missing in between. On Linux a
-/// program started through `current` at that moment can, rarely, be told it
-/// does not exist (see `replace_link`).
+/// Points `<root>/current` at `version` (`hide_kit::current::point`).
 fn point_current(root: &Path, version: &str) -> HostResult<()> {
-    let current = root.join(hide_kit::CURRENT);
-    if hide_platform::fs::link::is_link_to(&current, Path::new(version)) {
-        return Ok(());
-    }
-    hide_platform::fs::link::replace_link(Path::new(version), &current).map_err(|error| {
+    hide_kit::current::point(root, version).map_err(|error| {
         HostError::new(
             ErrorCode::Io,
             format!(
                 "{} could not be pointed at {version}: {error}",
-                current.display()
+                root.join(hide_kit::CURRENT).display()
             ),
         )
     })
@@ -541,7 +541,7 @@ pub fn adopt_build(root: &Path, version: &str, kept: &str) -> HostResult<()> {
     Ok(())
 }
 
-/// Removes every build, the `current` link and then the root itself, which
+/// Removes every build, `current` and then the root itself, which
 /// is removed only when nothing else is left in it: the root is the folder
 /// the operator allowed Hide to own, but a file someone else put there is not
 /// Hide's to delete.
@@ -553,11 +553,11 @@ fn remove_root(root: &Path) -> hide_kit::RemoveOutcome {
         }
     }
     let herdr_kept = remove_herdr(root);
-    let current = root.join(hide_kit::CURRENT);
-    if std::fs::symlink_metadata(&current).is_ok_and(|meta| meta.file_type().is_symlink())
-        && let Err(error) = hide_platform::fs::link::remove_link(&current)
-    {
-        failures.push(format!("{} stayed: {error}", current.display()));
+    if let Err(error) = hide_kit::current::remove(root) {
+        failures.push(format!(
+            "{} stayed: {error}",
+            root.join(hide_kit::CURRENT).display()
+        ));
     }
     if !failures.is_empty() {
         return hide_kit::RemoveOutcome::Failed {
@@ -683,6 +683,8 @@ mod tests {
         let root = dir.join("host-helper");
         std::fs::create_dir_all(root.join(version)).unwrap();
         std::fs::write(root.join(version).join("hided"), b"helper").unwrap();
+        // What `current` leads to.
+        programs(&root.join(version), &["hide", "hide-agent-hooks"]);
         Placement {
             root,
             version: version.to_owned(),
@@ -818,9 +820,9 @@ mod tests {
             }),
             "{report:?}"
         );
-        assert!(hide_platform::fs::link::is_link_to(
-            &placement.root.join("current"),
-            Path::new(&placement.version)
+        assert!(hide_kit::current::leads_to(
+            &placement.root,
+            &placement.version
         ));
         assert!(
             placement
@@ -858,12 +860,18 @@ mod tests {
         point_current(&placement.root, &placement.version).unwrap();
         remove_other_builds(&placement.root, &placement.version);
 
-        assert!(hide_platform::fs::link::is_link_to(
-            &placement.root.join("current"),
-            Path::new("bbbbbbbbbbbbbbbb")
+        assert!(hide_kit::current::leads_to(
+            &placement.root,
+            "bbbbbbbbbbbbbbbb"
         ));
         assert!(!placement.root.join(&older.version).exists());
-        assert!(placement.root.join("current/hided").is_file());
+        assert!(
+            placement
+                .root
+                .join(hide_kit::CURRENT)
+                .join(format!("hide{}", std::env::consts::EXE_SUFFIX))
+                .is_file()
+        );
         // Only build folders are Hide's to remove.
         assert!(placement.root.join("notes.txt").is_file());
     }
@@ -887,10 +895,7 @@ mod tests {
         let refusal = report.refused.expect("the pass stops before anything");
         assert_eq!(refusal.cause, hide_kit::RefusalCause::Record);
         assert_eq!(refusal.path.as_deref(), ledger.to_str());
-        assert!(hide_platform::fs::link::is_link_to(
-            &placement.root.join("current"),
-            Path::new(&older.version)
-        ));
+        assert!(hide_kit::current::leads_to(&placement.root, &older.version));
         assert!(placement.root.join(&older.version).is_dir());
         assert_eq!(std::fs::read_to_string(ledger).unwrap(), bytes);
         assert!(!placement.home.join(".hide/kit").exists());
@@ -902,13 +907,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         for build in ["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", "cccccccccccccccc"] {
-            std::fs::create_dir_all(root.join(build)).unwrap();
+            programs(&root.join(build), &["hide", "hide-agent-hooks"]);
         }
         adopt_build(root, "cccccccccccccccc", "bbbbbbbbbbbbbbbb").unwrap();
-        assert!(hide_platform::fs::link::is_link_to(
-            &root.join("current"),
-            Path::new("cccccccccccccccc")
-        ));
+        assert!(hide_kit::current::leads_to(root, "cccccccccccccccc"));
         let mut left: Vec<String> = std::fs::read_dir(root)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -994,9 +996,9 @@ mod tests {
         )
         .unwrap();
         assert!(!folder.exists());
-        assert!(hide_platform::fs::link::is_link_to(
-            &placement.root.join(hide_kit::CURRENT),
-            Path::new(&placement.version)
+        assert!(hide_kit::current::leads_to(
+            &placement.root,
+            &placement.version
         ));
     }
 

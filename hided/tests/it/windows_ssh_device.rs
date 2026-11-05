@@ -971,7 +971,14 @@ fn a_windows_device_reaches_its_programs_through_no_link_under_the_redirection_g
         &wire_home,
         vec![("PATH".to_owned(), path)],
     );
-    let own = root.join(hide_kit::CURRENT).join("hide.exe");
+    // As Windows spells the path, with no `/` the layout's names carry.
+    let own = PathBuf::from(
+        root.join(hide_kit::CURRENT)
+            .join("hide.exe")
+            .display()
+            .to_string()
+            .replace('/', "\\"),
+    );
     // The answer's words are split in the line, so its echo never reads as
     // the answer.
     let line = format!(

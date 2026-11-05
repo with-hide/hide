@@ -8,7 +8,7 @@
 //! A daemon builds one beside the holders [`Holders::start_local`] opened.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hide_host::kit::PaneInstall;
@@ -148,29 +148,37 @@ impl LocalPanes {
                 code: "invalid_cwd".to_owned(),
                 message: format!("{} is not a folder path: {error}", start.cwd),
             })?;
+        // The shell's own variables, then the caller's, then the pane's own
+        // name for itself and its installation, which no caller's variable
+        // replaces (PRD engine-bundle-3-core-owns D-9): the holder removes
+        // every Herdr variable, so a process in the pane names this pane
+        // alone.
+        let mut env: Vec<(OsString, OsString)> = env
+            .into_iter()
+            .chain(
+                start
+                    .env
+                    .iter()
+                    .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+            )
+            .chain([(
+                OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
+                OsString::from(&start.pane),
+            )])
+            .chain(self.install.iter().flat_map(PaneInstall::variables))
+            .collect();
+        if let Some(folder) = self
+            .install
+            .as_ref()
+            .and_then(|install| install.path_first.as_deref())
+        {
+            put_first_on_path(&mut env, folder, std::env::var_os("PATH"))?;
+        }
         Ok(StartRequest {
             pane: start.pane.clone(),
             program,
             cwd,
-            // The shell's own variables, then the caller's, then the pane's
-            // own name for itself and its installation, which no caller's
-            // variable replaces (PRD engine-bundle-3-core-owns D-9): the
-            // holder removes every Herdr variable, so a process in the pane
-            // names this pane alone.
-            env: env
-                .into_iter()
-                .chain(
-                    start
-                        .env
-                        .iter()
-                        .map(|(name, value)| (OsString::from(name), OsString::from(value))),
-                )
-                .chain([(
-                    OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
-                    OsString::from(&start.pane),
-                )])
-                .chain(self.install.iter().flat_map(PaneInstall::variables))
-                .collect(),
+            env,
             size,
             // The screen's colors reach a holder by a theme message once a
             // screen draws it; until then its color answers are the xterm
@@ -204,6 +212,35 @@ impl LocalPanes {
             message: "this connection has not acquired its pane records".to_owned(),
         })
     }
+}
+
+/// Puts `folder` first on the `PATH` in `env`: the last one `env` names,
+/// in any case of the name as Windows reads it, else `inherited`, the one
+/// the pane would inherit. A folder `PATH` cannot hold is refused.
+fn put_first_on_path(
+    env: &mut Vec<(OsString, OsString)>,
+    folder: &Path,
+    inherited: Option<OsString>,
+) -> Result<(), HolderError> {
+    let is_path = |name: &OsString| {
+        name.to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("PATH"))
+    };
+    let named = env
+        .iter()
+        .rev()
+        .find(|(name, _)| is_path(name))
+        .map(|(_, value)| value.clone())
+        .or(inherited);
+    let folders =
+        std::iter::once(folder.to_path_buf()).chain(named.iter().flat_map(std::env::split_paths));
+    let path = std::env::join_paths(folders).map_err(|error| HolderError::Refused {
+        code: "invalid_path".to_owned(),
+        message: format!("{} cannot go on a PATH: {error}", folder.display()),
+    })?;
+    env.retain(|(name, _)| !is_path(name));
+    env.push((OsString::from("PATH"), path));
+    Ok(())
 }
 
 /// The folders the foreground members other than the pane's `shell` work in,
@@ -598,5 +635,42 @@ fn ask_error(error: OpenError) -> HolderError {
         error => HolderError::Unreachable {
             message: error.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pane of an installation that names a folder finds that folder first
+    /// on its `PATH`, ahead of the caller's or the inherited one, whatever
+    /// case the caller wrote the name in, and the rest of the `PATH` stays.
+    #[test]
+    fn the_installation_s_folder_comes_first_on_the_pane_s_path() {
+        let folder = std::env::temp_dir().join("hide-current");
+        let first = std::env::temp_dir().join("first");
+        let second = std::env::temp_dir().join("second");
+        let joined = |folders: &[&PathBuf]| std::env::join_paths(folders).unwrap();
+
+        let mut env = vec![
+            (OsString::from("Path"), joined(&[&first, &second])),
+            (OsString::from("HOME"), OsString::from("home")),
+        ];
+        put_first_on_path(&mut env, &folder, Some(joined(&[&second]))).unwrap();
+        assert_eq!(
+            env,
+            [
+                (OsString::from("HOME"), OsString::from("home")),
+                (OsString::from("PATH"), joined(&[&folder, &first, &second])),
+            ]
+        );
+
+        let mut env = Vec::new();
+        put_first_on_path(&mut env, &folder, Some(joined(&[&second]))).unwrap();
+        assert_eq!(env, [(OsString::from("PATH"), joined(&[&folder, &second]))]);
+
+        let mut env = Vec::new();
+        put_first_on_path(&mut env, &folder, None).unwrap();
+        assert_eq!(env, [(OsString::from("PATH"), joined(&[&folder]))]);
     }
 }

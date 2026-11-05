@@ -378,6 +378,67 @@ pub fn replace_file(from: &Path, to: &Path) -> io::Result<FileId> {
     Ok(id)
 }
 
+/// The tag of the name a replaced program is set aside under.
+const SET_ASIDE: &str = "hide-aside";
+
+/// Renames the file `from` over `to`, as [`replace_file`] does, also while a
+/// process runs the program at `to`. Windows refuses to replace a running
+/// program's image but lets it be renamed, so when the rename is refused,
+/// `to` is first renamed aside, under a hidden name beside it, and `from`
+/// then takes the name; for that moment `to` names nothing, and a failure
+/// gives the old program its name back. The set-aside copy is removed at
+/// once when nothing runs it, and otherwise by [`remove_set_aside`] once its
+/// process has ended. macOS and Linux replace a running program's name in
+/// one step and set nothing aside.
+pub fn replace_program(from: &Path, to: &Path) -> io::Result<()> {
+    let refused = match fs::rename(from, to) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    // Windows answers access denied for a running program's image, and a
+    // sharing violation while another process has the file open.
+    let running =
+        refused.kind() == io::ErrorKind::PermissionDenied || refused.raw_os_error() == Some(32);
+    if !cfg!(windows) || !running || !to.is_file() {
+        return Err(refused);
+    }
+    let name = to
+        .file_name()
+        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let aside = to.with_file_name(super::temporary_name(name, SET_ASIDE));
+    fs::rename(to, &aside)?;
+    if let Err(error) = fs::rename(from, to) {
+        let _ = fs::rename(&aside, to);
+        return Err(error);
+    }
+    let _ = fs::remove_file(&aside);
+    Ok(())
+}
+
+/// Removes every copy of the program `to` that [`replace_program`] set aside
+/// and no process runs any longer; a copy still running stays for a later
+/// call. Answers how many stay.
+pub fn remove_set_aside(to: &Path) -> io::Result<usize> {
+    let (Some(folder), Some(name)) = (to.parent(), to.file_name()) else {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    };
+    // `temporary_name`'s form, without the process and count that end it.
+    let prefix = format!(".{}.{SET_ASIDE}-", name.to_string_lossy());
+    let mut stayed = 0;
+    for entry in fs::read_dir(folder)? {
+        let entry = entry?;
+        if !entry.file_name().to_string_lossy().starts_with(&prefix) {
+            continue;
+        }
+        match fs::remove_file(entry.path()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => stayed += 1,
+        }
+    }
+    Ok(stayed)
+}
+
 /// Makes an open folder's entries durable: `fsync` on Unix, and on Windows
 /// `FlushFileBuffers` on the same folder opened again with the right to add
 /// an entry, which a flush asks of its handle (etcd's `fileutil.OpenDir`
