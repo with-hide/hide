@@ -331,7 +331,7 @@ try {
       if (owned.length === 0 || owned.some((hook) => ![hook.command, ...(hook.args ?? [])].join(" ").includes(bundled("hide-agent-hooks")))) throw new Error(`${folder} hook paths are missing or stale`);
       if (process.platform === "win32" && owned.some((hook) => folder === ".claude"
         ? hook.command !== "powershell.exe" || !hook.args?.includes("-Command")
-        : !hook.command.startsWith("if (Test-Path -LiteralPath"))) throw new Error(`${folder} hooks do not use PowerShell`);
+        : !hook.command.startsWith("if ([System.IO.File]::Exists("))) throw new Error(`${folder} hooks do not use PowerShell`);
     }
     return "command resolves in a fresh shell; both hooks installed; foreign settings preserved; coordination retirement complete";
   }
