@@ -210,7 +210,7 @@ function ShotBody({ name, content, refreshing }: { name: string; content: Extrac
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background px-lg py-md" data-phone-look-state="shot">
       <PageAddress address={content.address} refreshing={refreshing} />
-      <div className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-md border border-border bg-card">
+      <div className="min-h-0 overflow-auto overscroll-contain rounded-md border border-border bg-card">
         <img src={content.url} alt={name} draggable={false} className="block h-auto w-full select-none" data-phone-look-shot="true" />
       </div>
       <p className="shrink-0 pt-sm text-body text-muted-foreground" data-phone-look-taken={content.takenBy}>
