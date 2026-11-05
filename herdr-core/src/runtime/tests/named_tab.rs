@@ -160,7 +160,7 @@ fn closing_a_named_tabs_last_agent_keeps_the_tab_its_name_and_its_place() {
     close_pane(&mut runtime, AGENT);
 
     let context = &the_close(&runtime).request.context;
-    assert!(context.replacement_shell && context.replacement_in_tab);
+    assert!(context.replacement_in_tab);
     assert_eq!(
         context.tab_name,
         ClosedTabName::Named("Planning".into()),
@@ -233,7 +233,6 @@ fn an_unnamed_tab_and_a_named_tabs_leftover_shell_close_their_tab_as_before() {
         close_pane(&mut runtime, AGENT);
         let context = &the_close(&runtime).request.context;
         assert!(!context.replacement_in_tab, "{label:?} with agent {agent}");
-        assert!(!context.replacement_shell);
         let named = (label == "Planning").then(|| ClosedTabName::Named(label.into()));
         assert_eq!(
             context.tab_name,

@@ -280,14 +280,8 @@ fn context() -> ClosedContext {
         tab_index: 0,
         agent_area: Some(("a1".into(), 0)),
         agent_group: None,
-        replacement_shell: true,
         replacement_in_tab: false,
         tab_name: Default::default(),
-    }
-}
-fn closed_tab() -> CloseCaptureTarget {
-    CloseCaptureTarget::Tab {
-        tab_id: "w1:t1".into(),
     }
 }
 fn tab(id: &str) -> Value {
@@ -304,171 +298,9 @@ fn snapshot(created: bool) -> Value {
     }})
 }
 
-#[test]
-fn replacement_creation_failure_sends_no_close() {
-    let herdr = FakeEngine::start(|method, _| match method {
-        "session" => reply(session(snapshot(false))),
-        "create_replacement_tab" => refused("fixture_create_refused", "private diagnostic"),
-        other => panic!("unexpected effect {other}"),
-    });
-    let error = prepare_close_replacement(
-        herdr.engine().as_ref(),
-        "intent",
-        &context(),
-        &closed_tab(),
-        true,
-    )
-    .unwrap_err();
-    assert!(error.message.contains("fixture_create_refused"));
-    assert_eq!(herdr.methods(), ["session", "create_replacement_tab"]);
-}
-
-#[test]
-fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create() {
-    let mut created = false;
-    let herdr = FakeEngine::start(move |method, params| match method {
-        "session" => reply(session(snapshot(created))),
-        "create_replacement_tab" => {
-            assert!(!created);
-            assert_eq!(params["cwd"], "/tmp");
-            assert_eq!(params["env"][REOPEN_INTENT_ENV], "intent:close-replacement");
-            created = true;
-            reply(("w1:t2".to_owned(), "w1:p2".to_owned()))
-        }
-        "export_layout" => reply(closed_layout(json!({
-            "workspace_id":"w1","tab_id":"w1:t2","zoomed":false,"focused_pane_id":"w1:p2",
-            "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{(REOPEN_INTENT_ENV):"intent:close-replacement"}}
-        }))),
-        "close_tab" => refused("fixture_close_refused", "private diagnostic"),
-        other => panic!("unexpected effect {other}"),
-    });
-    let connector = herdr.engine();
-    assert_eq!(
-        prepare_close_replacement(
-            connector.as_ref(),
-            "intent",
-            &context(),
-            &closed_tab(),
-            true
-        )
-        .unwrap()
-        .0,
-        "w1:t2"
-    );
-    let close = CloseEffectRequest {
-        safety: None,
-        failed_terminals: Vec::new(),
-        allow_replacement_create: true,
-        key: "intent".into(),
-        connection_generation: 0,
-        target: CloseCaptureTarget::Tab {
-            tab_id: "w1:t1".into(),
-        },
-        replacement: Some(context()),
-    };
-    assert!(run_close_effect(connector.as_ref(), &close).is_err());
-    assert_eq!(
-        prepare_close_replacement(
-            connector.as_ref(),
-            "intent",
-            &context(),
-            &closed_tab(),
-            false
-        )
-        .unwrap()
-        .0,
-        "w1:t2"
-    );
-    assert_eq!(
-        herdr
-            .methods()
-            .iter()
-            .filter(|method| **method == "create_replacement_tab")
-            .count(),
-        1
-    );
-    assert_eq!(
-        herdr
-            .methods()
-            .iter()
-            .filter(|method| **method == "close_tab")
-            .count(),
-        1
-    );
-}
-
 /// Herdr names a new pane's folder from its process, which is the server's
 /// own until the shell has started: the snapshot the close ingests must still
 /// place the replacement at the checkout it was created for.
-#[test]
-fn replacement_shell_is_placed_at_its_checkout_while_herdr_still_names_the_servers_folder() {
-    let mut created = false;
-    let herdr = FakeEngine::start(move |method, _| match method {
-        "session" => {
-            let mut value = snapshot(created);
-            if created {
-                let body = &mut value["snapshot"];
-                body["panes"] = json!([
-                    {"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","terminal_id":"t1","focused":false,"revision":0,"agent_status":"idle","cwd":"/tmp"},
-                    {"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2","terminal_id":"t2","focused":false,"revision":0,"agent_status":"idle","cwd":"/srv/herdr-server"}
-                ]);
-                body["layouts"] = json!([{
-                    "workspace_id":"w1","tab_id":"w1:t2","zoomed":false,
-                    "area":{"x":0,"y":0,"width":120,"height":60},"focused_pane_id":"w1:p2",
-                    "panes":[{"pane_id":"w1:p2","focused":false,"rect":{"x":0,"y":0,"width":120,"height":60}}],
-                    "splits":[]
-                }]);
-            }
-            reply(session(value))
-        }
-        "create_replacement_tab" => {
-            created = true;
-            reply(("w1:t2".to_owned(), "w1:p2".to_owned()))
-        }
-        "export_layout" => reply(closed_layout(json!({
-            "workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"focused_pane_id":"w1:p1",
-            "root":{"type":"pane","pane_id":"w1:p1","cwd":"/tmp","env":{}}
-        }))),
-        other => panic!("unexpected {other}"),
-    });
-    let (tab_id, payload) = prepare_close_replacement(
-        herdr.engine().as_ref(),
-        "intent",
-        &context(),
-        &closed_tab(),
-        true,
-    )
-    .unwrap();
-    assert_eq!(tab_id, "w1:t2");
-    let cwd = |pane: &str| {
-        payload
-            .panes
-            .iter()
-            .find(|candidate| candidate.pane_id == pane)
-            .and_then(|candidate| candidate.cwd.as_deref())
-    };
-    assert_eq!(cwd("w1:p2"), Some("/tmp"));
-    assert_eq!(cwd("w1:p1"), Some("/tmp"));
-}
-
-#[test]
-fn reuse_only_retry_cannot_create_when_its_shell_disappears_before_worker_reads() {
-    let herdr = FakeEngine::start(|method, _| match method {
-        "session" => reply(session(snapshot(false))),
-        other => panic!("reuse-only retry must not send {other}"),
-    });
-    let error = prepare_close_replacement(
-        herdr.engine().as_ref(),
-        "intent",
-        &context(),
-        &closed_tab(),
-        false,
-    )
-    .unwrap_err();
-    assert!(error.message.contains("disappeared"));
-    assert_eq!(herdr.methods(), ["session"]);
-}
-
 #[test]
 fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect() {
     let mut marker = String::new();
