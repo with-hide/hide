@@ -379,10 +379,12 @@ pub fn ask_answer(
         Err(cause) => return (Err(cause.into()), Timing::default()),
     };
     let pane_id = crate::pane::from_env();
+    let install = crate::route::pane_install();
     let named = std::env::var_os(CAP_REF_VARIABLE).map(PathBuf::from);
     let caller = Caller {
         state_dir: &state_dir,
         pane_id: pane_id.as_deref(),
+        install: install.as_deref(),
         named: named.as_deref(),
     };
     let request_id = match crate::hook_request::fresh_request_id() {
@@ -448,7 +450,10 @@ fn run_cli(arguments: &[&str], deadline: Instant) -> Result<serde_json::Value, F
 /// its own: no daemon published its socket (`unavailable`), the record
 /// naming it is not trusted (`record`), nothing took the connection
 /// (`connect`), the request was not written whole (`unsent`), no answer came
-/// in time (`timeout`), the answer was unreadable (`answer`). A reason with
+/// in time (`timeout`), the answer was unreadable (`answer`). The pane's own
+/// installation did not answer: only another one did, refusing the pane
+/// (`other_install`), or one answered without naming the pane's, as an
+/// earlier build does (`unconfirmed`; `hook_request::install`). A reason with
 /// no cause of its own is the daemon's refusal (`refused`), and an answer
 /// without one is malformed (`format`); `cli` is kept for a `hide` that could
 /// not be run.
@@ -465,6 +470,8 @@ pub fn refusal_cause(reason: Option<&str>) -> &'static str {
         Some("request_unsent") => "unsent",
         Some("request_timeout") => "timeout",
         Some("invalid_response") => "answer",
+        Some(crate::hook_request::install::INSTALL_UNCONFIRMED) => "unconfirmed",
+        Some(crate::hook_request::install::OTHER_INSTALL) => "other_install",
         Some(_) => "refused",
         None => "format",
     }
@@ -499,7 +506,7 @@ pub struct Stages {
     pub ended_ms: u64,
 }
 
-/// The fixed causes a hook may record: the delivery intake's sixteen (the
+/// The fixed causes a hook may record: the delivery intake's eighteen (the
 /// steps and refusals of [`refusal_cause`], `cli`, `deadline`, `format`,
 /// `confirm`, `stdout` and `session_conflict`), the guards' one (`guard`: the daemon could
 /// not be asked), OpenCode's plugin's one (`plugin`: it skipped or gave up on
@@ -509,7 +516,7 @@ pub struct Stages {
 /// `guardrails_words`: a shell call named more words than are checked;
 /// `guardrails_failed`: the hook failed or ran out of time before it judged a
 /// call).
-const CAUSES: [&str; 26] = [
+const CAUSES: [&str; 28] = [
     "session_conflict",
     "cli",
     "deadline",
@@ -524,6 +531,8 @@ const CAUSES: [&str; 26] = [
     "unsent",
     "timeout",
     "answer",
+    "unconfirmed",
+    "other_install",
     "refused",
     "stdout",
     "guard",
@@ -852,6 +861,8 @@ mod tests {
             ("request_unsent", "unsent"),
             ("request_timeout", "timeout"),
             ("invalid_response", "answer"),
+            ("install_unconfirmed", "unconfirmed"),
+            ("other_install", "other_install"),
         ];
         for (reason, cause) in steps {
             assert_eq!(refusal_cause(Some(reason)), cause, "{reason}");

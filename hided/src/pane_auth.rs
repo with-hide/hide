@@ -812,7 +812,7 @@ fn attest_bootstrap(
     if let Some(install) = request.install.as_deref()
         && own != Some(install)
     {
-        return Err("other_install");
+        return Err(hide_agent_hooks::hook_request::install::OTHER_INSTALL);
     }
     let pane = if request.pane_id.is_empty() {
         Err("pane_not_connected")
@@ -1227,6 +1227,12 @@ fn answer_bootstrap(
                 }
             }
             let mut answer = crate::hook_request::answer(core, &cap, &hook, desktop);
+            // The answer names this daemon's installation, which a hook in a
+            // pane that names one requires (`hook_request::install::confirm`).
+            answer["install"] = json!(own_install());
+            if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
+                return Err("response_too_large");
+            }
             if !request.one_shot && answer["ok"] == true {
                 answer["reference"] = json!(
                     hide_platform::path::to_wire(&path).map_err(|_| "reference_unavailable")?
