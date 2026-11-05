@@ -116,7 +116,7 @@ describe("linkCandidates", () => {
     expect(texts(linkCandidates(margin, 0))).toEqual([["https://example.com/a"]]);
   });
 
-  // with-hide/hide-private#312: the 29-character URL fills its 29-column row.
+  // hide-private issue 312: the 29-character URL fills its 29-column row.
   it("keeps a URL that fills its row and ends with a line break apart from the next row's first word", () => {
     const rows = [row("http://127.0.0.1:41811/a.html", 29), row("osc8 label", 29)];
     expect(texts(linkCandidates(rows, 0, [false, false]))).toEqual([["http://127.0.0.1:41811/a.html"]]);
@@ -127,6 +127,11 @@ describe("linkCandidates", () => {
     const rows = [row("http://127.0.0.1:41811/a.html", 29), row("osc8 label", 29)];
     expect(texts(linkCandidates(rows, 0, [true, false]))[0]![0]).toBe("http://127.0.0.1:41811/a.htmlosc8");
     expect(texts(linkCandidates(rows, 1, [true, false]))[0]![0]).toBe("http://127.0.0.1:41811/a.htmlosc8");
+  });
+
+  it("ends a URL at a soft-wrapped row whose text stops short of the last column", () => {
+    const rows = [row("see https://a.example/x ", 24), row("and more", 24)];
+    expect(texts(linkCandidates(rows, 0, [true, false]))).toEqual([["https://a.example/x"]]);
   });
 
   it("joins a URL at the last column when no wrap is known, as before", () => {

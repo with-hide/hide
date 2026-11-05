@@ -13,8 +13,9 @@
 // it joins only at the terminal's edge, and only across a real soft wrap when
 // the pane's holder said which rows soft-wrap (`terminalWrap.ts`): a URL that
 // fills its row and ends with a line break is not joined to the next row's
-// first word (with-hide/hide-private#312). Without that fact a row that
-// reaches its last column is read as continuing, as before.
+// first word (hide-private issue 312). Without that fact a row that reaches
+// its last column is read as continuing, as before; `terminalWrap.ts` says
+// when the fact applies.
 
 import { rowContinues, type CellRow } from "./selection";
 
@@ -142,15 +143,15 @@ function spellingLength(candidate: LinkCandidate): number {
 }
 
 /**
- * How a token piece's row runs into the next piece: `wrap` across a soft wrap
- * the holder said, `edge` at the last column with no such fact, `ended` at
- * the last column of a row the holder said ends with a line break, `margin`
- * into a TUI's indentation, or null when the pieces cannot join.
+ * How a token piece's row runs into the next piece: `edge` when the row's
+ * text reaches its last column and, where the holder said, soft-wraps there;
+ * `ended` when it reaches the last column of a row the holder said ends with
+ * a line break; `margin` into a TUI's indentation; null when the pieces
+ * cannot join. A wrap counts only at a row whose text reaches its last
+ * column: a soft-wrapped row that ends in blanks ends the token there.
  */
-function rowBreak(rows: CellRow[], wraps: boolean[] | null, piece: Run, next: Run): "wrap" | "edge" | "ended" | "margin" | null {
-  const wrapped = wraps?.[piece.row];
-  if (wrapped) return "wrap";
-  if (rowContinues(rows[piece.row] ?? [])) return wrapped === false ? "ended" : "edge";
+function rowBreak(rows: CellRow[], wraps: boolean[] | null, piece: Run, next: Run): "edge" | "ended" | "margin" | null {
+  if (rowContinues(rows[piece.row] ?? [])) return wraps?.[piece.row] === false ? "ended" : "edge";
   return next.start > 0 ? "margin" : null;
 }
 

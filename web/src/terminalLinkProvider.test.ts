@@ -385,7 +385,7 @@ function screenShowing(rows: string[], cols: number) {
   };
 }
 
-// with-hide/hide-private#312, decided per pane: a pane with no agent follows
+// hide-private issue 312, decided per pane: a pane with no agent follows
 // the holder's wraps; an agent's TUI hard-wraps its own long lines, so its
 // pane keeps the last-column rule.
 describe("a URL that fills its row", () => {

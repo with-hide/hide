@@ -22,11 +22,10 @@ import { hostBridge, holdsCommandKey, type ProbedPath } from "./host";
 import { remoteTargetOfPane } from "./remote";
 import { windowDeviceId } from "./screenMachine";
 import { bufferRow, type CellRow } from "./selection";
-import { agentsByPane, allAgents } from "./paneAgents";
-import { catalogWorkspaces, localDeviceId, type AgentRow, type Checkout, type SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, localDeviceId, type Checkout, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { absolutePathRoot, JOIN_ROWS, linkCandidates, osc8Target, type LinkCandidate, type LinkTarget } from "./terminalLinks";
-import { terminalWraps, wrapsOf } from "./terminalWrap";
+import { paneRowWraps } from "./terminalWrap";
 
 /** A path the host found: its physical spelling and kind. */
 export type FoundPath = NonNullable<ProbedPath>;
@@ -254,19 +253,6 @@ function containsCell(range: IBufferRange, x: number, y: number): boolean {
     && (y !== range.end.y || x <= range.end.x);
 }
 
-/**
- * Whether each buffer row `top` to `bottom` (one-based) soft-wraps, as the
- * pane's holder said; null where that does not decide a URL's join. The pane
- * keeps no scrollback, so a buffer row is the screen row the holder named.
- * An agent's pane is left to the edge rule: agent TUIs break their own long
- * lines with line breaks (Claude Code's renderer hard-wraps), so a URL one
- * broke across rows carries no soft wrap and would be cut at the first row.
- */
-function rowWraps(term: Terminal, paneId: string, agents: AgentRow[], rest: SnapshotRest | null, top: number, bottom: number): boolean[] | null {
-  if (agentsByPane(allAgents(agents, rest?.status?.remote)).has(paneId)) return null;
-  return wrapsOf(terminalWraps(term), term.cols, term.rows, top - 1, bottom - 1);
-}
-
 /** The same bounded row read and cached path check for hover and right-click. */
 async function linksOnRow(term: Terminal, paneId: string, y: number) {
   const buffer = term.buffer.active;
@@ -274,10 +260,9 @@ async function linksOnRow(term: Terminal, paneId: string, y: number) {
   const bottom = Math.min(buffer.length, y + JOIN_ROWS);
   const rows: CellRow[] = [];
   for (let line = top; line <= bottom; line += 1) rows.push(bufferRow(buffer.getLine(line - 1), term.cols));
-  const state = useShellStore.getState();
-  const rest = state.rest;
-  const groups = linkCandidates(rows, y - top, rowWraps(term, paneId, state.agents, rest, top, bottom));
+  const groups = linkCandidates(rows, y - top, paneRowWraps(term, paneId, top - 1, bottom - 1));
   if (groups.length === 0) return [];
+  const rest = useShellStore.getState().rest;
   const bridge = hostBridge();
   const chosen = await resolveGroups(groups, paneContext(rest, paneId, windowDeviceId(rest?.navigator?.devices)), bridge ? (paths) => bridge.probePaths(paths) : null);
   return chosen.map(({ candidate, resolved }) => ({ candidate, resolved, range: rangeOf(candidate, top) }));

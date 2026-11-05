@@ -36,7 +36,7 @@ import { holdTerminalFont, setTerminalFontFamily, watchPixelRatio, type Terminal
 import { remoteControl, remoteTargetOfPane } from "./remote";
 import { keyPayload, noteTerminalFocus } from "./keyTarget";
 import { bufferRow, followScroll, movedSelection, selectionToText, type CellRow } from "./selection";
-import { followWraps, forgetWraps } from "./terminalWrap";
+import { followWraps, forgetWraps, paneRowWraps } from "./terminalWrap";
 import { osc8Handler, registerTerminalLinks, terminalLinkAtCell, terminalPathOwner, type LinkState, type TerminalContextLink, type TerminalLinkActions } from "./terminalLinkProvider";
 import { isHtmlFile } from "./browserViews";
 import { pointerModifiers, wheelRows } from "./wheel";
@@ -740,7 +740,7 @@ function selectedText(instance: Instance): string | null {
   const buffer = term.buffer.active;
   const rows: CellRow[] = [];
   for (let y = range.start.y; y <= range.end.y; y += 1) rows.push(bufferRow(buffer.getLine(y), term.cols));
-  return selectionToText(rows, range.start.x, range.end.x);
+  return selectionToText(rows, range.start.x, range.end.x, paneRowWraps(term, instance.paneId, range.start.y, range.end.y));
 }
 
 /** The copy text of the pane's selection, for the probe; null without a selection or an instance. */

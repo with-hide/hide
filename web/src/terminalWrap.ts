@@ -12,8 +12,16 @@
 // this stream, since the holder draws frames from what it parsed.
 //
 // The answer is unknown (null) until a frame said it: a holder built before
-// it says nothing, and a grid resized here before the holder's next full
+// it says nothing, a Windows holder never says it (ConPTY places a wrapped
+// line's rows itself and does not reliably leave a soft wrap), and a grid resized here before the holder's next full
 // frame no longer matches the size it was said for.
+//
+// `paneRowWraps` is the one answer to whether a pane's row runs on into the
+// next, for its links (`terminalLinks.ts`) and its copy (`selection.ts`)
+// alike: unknown, and in an agent's pane, they keep the last-column rule.
+
+import { agentsByPane, allAgents } from "./paneAgents";
+import { useShellStore } from "./store";
 
 /** The private OSC the holder writes. */
 export const WRAP_OSC = 7719;
@@ -50,6 +58,21 @@ export function wrapsOf(wraps: Wraps | null, cols: number, rows: number, top: nu
   const answer: boolean[] = [];
   for (let row = top; row <= bottom; row += 1) answer.push(wraps.bits[row] === 1);
   return answer;
+}
+
+/**
+ * Whether each screen row `top` to `bottom` (zero-based, inclusive) of the
+ * pane soft-wraps, as its holder said; null where the last-column rule
+ * holds instead. The pane keeps no scrollback, so a buffer row is the screen
+ * row the holder named. An agent's pane is left to that rule: agent TUIs
+ * break their own long lines with line breaks (Claude Code's renderer
+ * hard-wraps), so a URL one broke across rows carries no soft wrap and would
+ * be cut at the first row, and a copy of its output split at every full row.
+ */
+export function paneRowWraps(term: Followed & { cols: number; rows: number }, paneId: string, top: number, bottom: number): boolean[] | null {
+  const { agents, rest } = useShellStore.getState();
+  if (agentsByPane(allAgents(agents, rest?.status?.remote)).has(paneId)) return null;
+  return wrapsOf(terminalWraps(term), term.cols, term.rows, top, bottom);
 }
 
 /** The part of xterm's parser the wraps are read through. */
