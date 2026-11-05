@@ -130,9 +130,10 @@ export function fileTag(name: string): string {
   return dot > 0 && dot < name.length - 1 ? name.slice(dot + 1, dot + 5).toUpperCase() : "";
 }
 
-/** Whether the counts are unknown, as for a binary file (B14). */
-export function uncounted(file: LookFile): boolean {
-  return file.added === null && file.removed === null;
+/** How a changed file's counts read (B14): counted, a binary hided found git cannot count, or a new file left uncounted (only its 새 파일 chip shows). */
+export function countState(file: LookFile): "counted" | "binary" | "uncounted" {
+  if (file.binary) return "binary";
+  return file.added === null && file.removed === null ? "uncounted" : "counted";
 }
 
 /** The most an image zooms to. */

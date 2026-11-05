@@ -161,10 +161,10 @@ export function phoneLooks(): LookRow[] {
 }
 
 const FILES: LookFile[] = [
-  { path: "hide-platform/src/path.rs", status: "modified", added: 6, removed: 2 },
-  { path: "hided/src/mobile/wire.rs", status: "modified", added: 71, removed: 8 },
-  { path: "hide-platform/tests/it/path.rs", status: "added", added: 7, removed: 0 },
-  { path: "docs/diagram.pdf", status: "added", added: null, removed: null },
+  { path: "hide-platform/src/path.rs", status: "modified", added: 6, removed: 2, binary: false },
+  { path: "hided/src/mobile/wire.rs", status: "modified", added: 71, removed: 8, binary: false },
+  { path: "hide-platform/tests/it/path.rs", status: "untracked", added: 7, removed: 0, binary: false },
+  { path: "docs/diagram.pdf", status: "untracked", added: null, removed: null, binary: true },
 ];
 
 const VIEWED: Record<Exclude<PhoneLookScene, "phone-looks">, { id: string; content: LookContent }> = {

@@ -174,19 +174,28 @@ it("lists the changed files with their counts and no code, and says when nothing
       request_id,
       view_id: "v2",
       files: [
-        { path: "hide-platform/src/path.rs", status: "modified", added: 6, removed: 2 },
-        { path: "docs/new.md", status: "added", added: 7, removed: 0 },
-        { path: "assets/logo.png", status: "modified", added: null, removed: null },
+        { path: "hide-platform/src/path.rs", status: "modified", added: 6, removed: 2, binary: false },
+        { path: "docs/new.md", status: "added", added: 7, removed: 0, binary: false },
+        { path: "src/fresh.ts", status: "untracked", added: 2, removed: 0, binary: false },
+        { path: "data/huge.csv", status: "untracked", added: null, removed: null, binary: false },
+        { path: "assets/logo.png", status: "modified", added: null, removed: null, binary: true },
       ],
-      count: 3,
-      added: 13,
+      count: 5,
+      added: 15,
       removed: 2,
     });
     const body = container.querySelector('[data-phone-look-state="changes"]')!;
-    expect(container.querySelector("[data-phone-look-files]")!.getAttribute("data-phone-look-files")).toBe("3");
-    expect(body.querySelector('[data-phone-look-file="hide-platform/src/path.rs"]')!.textContent).toContain("hide-platform/src");
-    expect(body.querySelector('[data-phone-look-file="docs/new.md"]')!.textContent).toContain("New file");
-    expect(body.querySelector('[data-phone-look-file="assets/logo.png"]')!.textContent).toContain("Binary");
+    expect(container.querySelector("[data-phone-look-files]")!.getAttribute("data-phone-look-files")).toBe("5");
+    const row = (path: string) => body.querySelector(`[data-phone-look-file="${path}"]`)!.textContent ?? "";
+    expect(row("hide-platform/src/path.rs")).toContain("hide-platform/src");
+    expect(row("docs/new.md")).toContain("New file");
+    // A new text file shows its lines and is no binary (B14); one hided did not count shows only that it is new.
+    expect(row("src/fresh.ts")).toContain("New file");
+    expect(row("src/fresh.ts")).toContain("+2");
+    expect(row("src/fresh.ts")).not.toContain("Binary");
+    expect(row("data/huge.csv")).toContain("New file");
+    expect(row("data/huge.csv")).not.toMatch(/Binary|\+0/);
+    expect(row("assets/logo.png")).toContain("Binary");
     expect(body.textContent).toContain("See the code on your Mac");
     expect(container.querySelector("pre")).toBeNull();
     expect(last("look_seen")).toMatchObject({ view_id: "v2" });
@@ -229,20 +238,26 @@ it("says a View is not open any more, and a failed read starts over under a new 
 });
 
 it("names what the phone cannot show: a page's address, a binary, an image past its cap, an unreachable device", async () => {
-  const { container, serve, last, press, unmount } = await openLooks();
+  const { container, serve, last, press, socket, unmount } = await openLooks();
   try {
     const answer = async (id: string, state: ServerFrame & { type: "look_result" }) => {
       await press(`[data-phone-look="${id}"]`);
       await serve({ ...state, request_id: last("look_open").request_id as string });
     };
+    const seen = () => socket.sent.filter((message) => message.type === "look_seen").map((message) => message.view_id);
     await answer("v1", { type: "look_result", request_id: "", view_id: "v1", state: "other" });
     expect(container.querySelector('[data-phone-look-state="other"]')!.textContent).toContain("Open it on your Mac");
+    // A PDF or an image past its cap was opened and its name drawn: it is seen too (B24, D-15).
+    expect(seen()).toEqual(["v1"]);
     await press('[data-phone-back="looks"]');
     await answer("v3", { type: "look_result", request_id: "", view_id: "v3", state: "too_large" });
     expect(container.querySelector('[data-phone-look-state="too_large"]')!.textContent).toContain("See it on your Mac");
+    expect(seen()).toEqual(["v1", "v3"]);
     await press('[data-phone-back="looks"]');
     await answer("v2", { type: "look_result", request_id: "", view_id: "v2", state: "device_unreachable" });
     expect(container.querySelector('[data-phone-look-state="device_unreachable"]')!.textContent).toContain("isn't connected");
+    // Nothing of it was drawn, so it stays unseen.
+    expect(seen()).toEqual(["v1", "v3"]);
   } finally {
     await unmount();
   }

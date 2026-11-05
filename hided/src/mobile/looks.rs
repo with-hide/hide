@@ -19,12 +19,13 @@
 //! what the phone confirmed (`look_ack`): the relay closes a peer whose
 //! queue fills, so a transfer is paced by the phone and never by a timer.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::ws::Message;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use herdr_core::{DisplayKind, LookView, LookViews};
+use herdr_core::{ChangedFileStatus, DisplayKind, LookChange, LookView, LookViews};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
@@ -314,32 +315,115 @@ async fn changed_files(
             return Err("unavailable");
         }
     };
-    let added: u64 = files
+    let new_files = count_new_files(mobile, request_id, view, &files).await;
+    Ok(changes_frame(
+        request_id,
+        &view.display_id,
+        &files,
+        &new_files,
+    ))
+}
+
+/// Untracked files a list reads to count their lines: each is one read through
+/// the desktop's file readers, so the rest are named `새 파일` without a count.
+const NEW_FILES_COUNTED: usize = 20;
+
+/// What reading an untracked file told: git counts none of them, so a new file
+/// is counted the way git counts a changed one, by the lines of its text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NewFile {
+    Lines(u32),
+    Binary,
+}
+
+/// The lines of `bytes`, as `git diff --numstat` counts a new file's: every
+/// line end, and a last line that has none.
+fn count_lines(bytes: &[u8]) -> u32 {
+    let ends = bytes.iter().filter(|byte| **byte == b'\n').count();
+    let unterminated = bytes.last().is_some_and(|last| *last != b'\n');
+    u32::try_from(ends + usize::from(unterminated)).unwrap_or(u32::MAX)
+}
+
+/// Reads the first untracked files of the list (by their index) and says how
+/// many lines each has, or that it is not text. A file that cannot be read, or
+/// is longer than the text cap, stays uncounted: that is not a binary.
+async fn count_new_files(
+    mobile: &Arc<Mobile>,
+    request_id: &str,
+    view: &LookView,
+    files: &[LookChange],
+) -> HashMap<usize, NewFile> {
+    let mut counted = HashMap::new();
+    let wanted = files
         .iter()
-        .filter_map(|file| file.added)
-        .map(u64::from)
-        .sum();
-    let removed: u64 = files
-        .iter()
-        .filter_map(|file| file.removed)
-        .map(u64::from)
-        .sum();
-    let rows: Vec<Value> = files
-        .iter()
+        .enumerate()
         .take(CHANGE_FILES)
-        .map(|file| {
-            json!({
+        .filter(|(_, file)| file.status == ChangedFileStatus::Untracked)
+        .take(NEW_FILES_COUNTED);
+    for (index, file) in wanted {
+        let Ok(relative) = hide_platform::path::RelPath::parse(&file.path) else {
+            continue;
+        };
+        let mut new_file = view.clone();
+        new_file.path = hide_platform::path::wire_join(&view.checkout_path, &relative);
+        let Ok(read) = read(mobile, request_id, &new_file, TEXT_CAP, false).await else {
+            continue;
+        };
+        if read.total > read.bytes.len() as u64 {
+            continue;
+        }
+        counted.insert(
+            index,
+            if is_text(&read.bytes) {
+                NewFile::Lines(count_lines(&read.bytes))
+            } else {
+                NewFile::Binary
+            },
+        );
+    }
+    counted
+}
+
+/// The `look_changes` frame: every file's status and counts, never a line of
+/// code. A file is `binary` when git could not count it (its counts are
+/// absent and it is not new) or when reading it showed it is not text.
+fn changes_frame(
+    request_id: &str,
+    view_id: &str,
+    files: &[LookChange],
+    new_files: &HashMap<usize, NewFile>,
+) -> Value {
+    let counts = |index: usize, file: &LookChange| match new_files.get(&index) {
+        Some(NewFile::Lines(lines)) => (Some(*lines), Some(0), false),
+        Some(NewFile::Binary) => (None, None, true),
+        None => (
+            file.added,
+            file.removed,
+            file.added.is_none()
+                && file.removed.is_none()
+                && file.status != ChangedFileStatus::Untracked,
+        ),
+    };
+    let (mut added, mut removed) = (0_u64, 0_u64);
+    let mut rows = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let (file_added, file_removed, binary) = counts(index, file);
+        added += u64::from(file_added.unwrap_or(0));
+        removed += u64::from(file_removed.unwrap_or(0));
+        if index < CHANGE_FILES {
+            rows.push(json!({
                 "path": cut(&file.path, URL_CHARS),
                 "status": file.status,
-                "added": file.added,
-                "removed": file.removed,
-            })
-        })
-        .collect();
-    Ok(json!({
-        "type": "look_changes", "request_id": request_id, "view_id": view.display_id,
+                "added": file_added,
+                "removed": file_removed,
+                "binary": binary,
+            }));
+        }
+    }
+    json!({
+        "type": "look_changes", "request_id": request_id, "view_id": view_id,
         "files": rows, "count": files.len(), "added": added, "removed": removed,
-    }))
+    })
 }
 
 /// What the file readers answered: the bytes up to the cap, the file's size,
@@ -358,6 +442,15 @@ async fn read(
     cap: u64,
     refuse_past_cap: bool,
 ) -> Result<Read, &'static str> {
+    if view.device_id != mobile.node().as_str() {
+        // A device that is not linked has nothing to read, which the phone
+        // words as that and not as a read that failed (B26).
+        let (core, device) = (Arc::clone(mobile.core()), view.device_id.clone());
+        let linked = tokio::task::spawn_blocking(move || core.node_link(&device).map(|_| ())).await;
+        if let Some(state) = link_state(linked.unwrap_or(Ok(())), &view.display_id) {
+            return Err(state);
+        }
+    }
     let event = json!({
         "schema_version": 2, "kind": "file_bytes",
         "payload": {
@@ -427,6 +520,18 @@ async fn read(
     reading.abort();
     outcome?;
     Ok(Read { bytes, total })
+}
+
+/// The `look_result` state for a device whose link could not be had: it is
+/// `device_unreachable`, and why goes to the log (B26). A link that is up says
+/// nothing.
+fn link_state(link: Result<(), String>, view_id: &str) -> Option<&'static str> {
+    let reason = link.err()?;
+    herdr_core::diagnostic!(json!({
+        "component": "mobile_phone", "kind": "look.device_unreachable",
+        "view_id": view_id, "reason": reason,
+    }));
+    Some("device_unreachable")
 }
 
 /// Whether the bytes of a text document are text: UTF-8, allowing the cut at
@@ -696,6 +801,80 @@ mod tests {
             chunks("r-3", &looked, Shown::Document, read, &frames, window).await;
             assert_eq!(sent_next(&mut sent).await["mode"], mode, "{name}");
         }
+    }
+
+    fn change(path: &str, status: ChangedFileStatus, counts: Option<(u32, u32)>) -> LookChange {
+        LookChange {
+            path: path.to_owned(),
+            status,
+            added: counts.map(|counts| counts.0),
+            removed: counts.map(|counts| counts.1),
+        }
+    }
+
+    /// B14: a new text file is counted by its lines as git counts a changed
+    /// one; "binary" is only what git could not count.
+    #[test]
+    fn lines_are_counted_as_git_counts_a_new_file() {
+        assert_eq!(count_lines(b""), 0);
+        assert_eq!(count_lines(b"one\n"), 1);
+        assert_eq!(count_lines(b"one\ntwo"), 2);
+        assert_eq!(count_lines(b"one\ntwo\n"), 2);
+        assert_eq!(count_lines(b"\n\n"), 2);
+    }
+
+    #[test]
+    fn a_new_text_file_is_counted_and_only_what_git_cannot_count_is_binary() {
+        use ChangedFileStatus::{Modified, Untracked};
+        let files = [
+            change("src/old.rs", Modified, Some((6, 2))),
+            change("src/fresh.ts", Untracked, None),
+            change("assets/logo.png", Modified, None),
+            change("fresh.bin", Untracked, None),
+            change("data/huge.csv", Untracked, None),
+        ];
+        let new_files = HashMap::from([(1, NewFile::Lines(2)), (3, NewFile::Binary)]);
+        let frame = changes_frame("r-1", "d-1", &files, &new_files);
+        let rows: Vec<(&str, Value, Value, bool)> = frame["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["path"].as_str().unwrap(),
+                    row["added"].clone(),
+                    row["removed"].clone(),
+                    row["binary"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("src/old.rs", json!(6), json!(2), false),
+                ("src/fresh.ts", json!(2), json!(0), false),
+                ("assets/logo.png", Value::Null, Value::Null, true),
+                ("fresh.bin", Value::Null, Value::Null, true),
+                // Not read (past the twenty, or too long): new, neither counted nor binary.
+                ("data/huge.csv", Value::Null, Value::Null, false),
+            ]
+        );
+        assert_eq!(
+            (frame["added"].as_u64(), frame["removed"].as_u64()),
+            (Some(8), Some(2))
+        );
+        assert_eq!(frame["count"], 5);
+    }
+
+    /// B26: a device whose link could not be had is unreachable, not a read
+    /// that failed; a linked one says nothing.
+    #[test]
+    fn a_device_without_a_link_is_unreachable_and_a_linked_one_is_not() {
+        assert_eq!(link_state(Ok(()), "d-1"), None);
+        assert_eq!(
+            link_state(Err("The device helper is not ready".to_owned()), "d-1"),
+            Some("device_unreachable")
+        );
     }
 
     #[tokio::test]

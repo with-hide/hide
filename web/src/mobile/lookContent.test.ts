@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addChunk, beginAssembly, clampOffset, fileTag, finishAssembly, LOOK_IMAGE_CAP, LOOK_TEXT_CAP, resultContent, splitPath, uncounted, zoomBy } from "./lookContent";
+import { addChunk, beginAssembly, clampOffset, fileTag, finishAssembly, LOOK_IMAGE_CAP, LOOK_TEXT_CAP, resultContent, splitPath, countState, zoomBy } from "./lookContent";
 import { replyAbout, splitLooks, type LookHead, type LookRow } from "./protocol";
 
 const head = (over: Partial<LookHead> = {}): LookHead => ({ type: "look_head", request_id: "r", view_id: "v", mode: "text", size: 3, total: 3, truncated: false, chunks: 1, ...over });
@@ -78,9 +78,11 @@ describe("the changed files", () => {
     expect(fileTag(".gitignore")).toBe("");
   });
 
-  it("calls a file with no counts a binary", () => {
-    expect(uncounted({ path: "a.png", status: "modified", added: null, removed: null })).toBe(true);
-    expect(uncounted({ path: "a.rs", status: "modified", added: 0, removed: 0 })).toBe(false);
+  it("calls a file binary only when hided found git cannot count it, and a new file left uncounted is neither", () => {
+    expect(countState({ path: "a.png", status: "modified", added: null, removed: null, binary: true })).toBe("binary");
+    expect(countState({ path: "a.rs", status: "modified", added: 0, removed: 0, binary: false })).toBe("counted");
+    expect(countState({ path: "src/fresh.ts", status: "untracked", added: 2, removed: 0, binary: false })).toBe("counted");
+    expect(countState({ path: "src/fresh.ts", status: "untracked", added: null, removed: null, binary: false })).toBe("uncounted");
   });
 });
 

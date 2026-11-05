@@ -428,11 +428,14 @@ function failLoadingLook(): void {
   patch({ detail: { ...detail, look: { ...detail.look, content: { state: "failed" } } } });
 }
 
-/** The content of the View on screen was drawn: it is seen, once, here and on the desktop (B24, D-15). */
+/** What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15). */
+const SEEN_STATES: readonly string[] = ["text", "image", "changes", "page", "other", "too_large"];
+
+/** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */
 function markLookSeen(): void {
   const detail = usePhone.getState().detail;
   const look = detail?.look;
-  if (!detail || !look || look.shown || !["text", "image", "changes"].includes(look.content.state)) return;
+  if (!detail || !look || look.shown || !SEEN_STATES.includes(look.content.state)) return;
   const sent = send({ type: "look_seen", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id });
   if (sent) patch({ detail: { ...detail, look: { ...look, shown: true } } });
 }

@@ -10,7 +10,7 @@ import { RowButton } from "../components/ui/row-button";
 import { formatBytes } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useInterfaceTranslation } from "../i18n/translator";
-import { clampOffset, fileTag, splitPath, uncounted, zoomBy, type LookContent } from "./lookContent";
+import { clampOffset, countState, fileTag, splitPath, zoomBy, type LookContent } from "./lookContent";
 import { openLook, retryLook } from "./connection";
 import { renderMarkdown } from "./markdown";
 import { splitLooks, type LookFile, type LookKind, type LookRow } from "./protocol";
@@ -248,6 +248,7 @@ function FileRow({ file }: { file: LookFile }) {
   const { t } = useInterfaceTranslation();
   const { name, folder } = splitPath(file.path);
   const created = file.status === "added" || file.status === "untracked";
+  const counts = countState(file);
   return (
     <div className="flex min-h-(--size-touch-target) items-center gap-md py-md" data-phone-look-file={file.path}>
       <span aria-hidden="true" className="flex size-(--size-icon-button-standard) shrink-0 items-center justify-center rounded-md bg-secondary font-mono text-micro text-subtle-foreground">
@@ -260,13 +261,12 @@ function FileRow({ file }: { file: LookFile }) {
         </span>
         {folder ? <span className="break-all text-body text-muted-foreground">{folder}</span> : null}
       </span>
-      {uncounted(file) ? (
-        <span className="shrink-0 text-body text-muted-foreground">{t("mobile.look.binary")}</span>
-      ) : (
+      {counts === "binary" ? <span className="shrink-0 text-body text-muted-foreground">{t("mobile.look.binary")}</span> : null}
+      {counts === "counted" ? (
         <span className="shrink-0 text-body">
           <Counts added={file.added ?? 0} removed={file.removed ?? 0} />
         </span>
-      )}
+      ) : null}
     </div>
   );
 }

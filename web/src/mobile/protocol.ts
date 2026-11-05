@@ -154,8 +154,11 @@ export type LookRow = {
 
 export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed" | "conflict";
 
-/** One changed file: its path under the checkout and its line counts; both counts are null for a file git cannot count (a binary). */
-export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null };
+/**
+ * One changed file: its path under the checkout and its line counts. The counts are null for a file git cannot count
+ * (`binary`, as hided read it) and for a new file hided did not count (a long text, or past the twentieth).
+ */
+export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
 
 /** The answer states of `look_result`: everything that is not content. */
 export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable";
