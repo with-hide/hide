@@ -46,7 +46,7 @@ import {
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionNode, MissionStatus } from "./snapshot";
+import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionStatus } from "./snapshot";
 import { useShellStore } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { TFunction } from "i18next";
@@ -91,6 +91,8 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
   const wide = useWide(root);
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const log = useShellStore((s) => missionEventsOf(s.rest, mission.id));
+  // Settings › Mission keeps which way every mission's map runs.
+  const flow = useShellStore((s) => s.rest?.ui_state?.conductor_settings?.map_flow) ?? "down";
   const open = missionOpen(mission);
   // The page's clock ticks by the minute; a closed mission's times end where it closed.
   const minute = useMinuteClock();
@@ -135,9 +137,10 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
               }}
               data-mission-map="true"
             >
-              <MissionMapCanvas wide={wide} page={page}>
+              <MissionMapCanvas wide={wide} page={page} flow={flow} onFlow={(next) => actions.setConductorSettings({ map_flow: next })}>
                 <Graph
                   actions={actions}
+                  flow={flow}
                   mission={mission}
                   events={log?.events ?? null}
                   end={end}
@@ -278,7 +281,7 @@ function ReportLine({ mission }: { mission: Mission }) {
 
 type GraphCard = { key: string; node: MissionNode | null };
 
-function Graph({ mission, events, end, selected, onSelect, actions }: { mission: Mission; events: MissionEvent[] | null; end: number; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
+function Graph({ mission, flow, events, end, selected, onSelect, actions }: { mission: Mission; flow: MissionMapFlow; events: MissionEvent[] | null; end: number; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
   const nodes = mission.nodes;
   const graph = useMemo(() => {
     const shown = new Set(nodes.map((node) => node.key));
@@ -313,7 +316,7 @@ function Graph({ mission, events, end, selected, onSelect, actions }: { mission:
     <DependencyGraphView
       graph={graph}
       idOf={(card) => card.key}
-      flow="down"
+      flow={flow}
       gaps={{ layers: "--size-mission-layer-gap", nodes: "--size-mission-node-gap" }}
       edgeLook={edgeLook}
       overlay={overlay}

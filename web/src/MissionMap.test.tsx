@@ -965,6 +965,26 @@ it("sums up an open mission beside the map until a node is picked: needs a look,
   } finally { await map.unmount(); }
 });
 
+it("runs every mission's map down until the operator turns it across with →, which Settings › Mission keeps, and the turned map fits again (UI_BEHAVIOR, A mission's map)", async () => {
+  const map = await mount({ items: [mission({ nodes: [node("a", { status: "working" }), node("b"), node("c", { depends_on: ["a"] })] })] });
+  try {
+    const flow = () => map.q("[data-dependency-graph]")!.dataset.dependencyFlow;
+    const option = (which: "down" | "across") => map.q(`[data-mission-direction-option="${which}"]`) as HTMLButtonElement;
+    expect([flow(), option("down").dataset.state, option("across").dataset.state]).toEqual(["down", "on", "off"]);
+    await act(async () => (map.q('[data-mission-zoom-step="out"]') as HTMLButtonElement).click());
+    expect(map.q("[data-mission-canvas]")!.dataset.missionCanvas).toBe("zoomed");
+    // Pressing the way it already runs sends nothing.
+    await act(async () => option("down").click());
+    expect(map.events).toEqual([]);
+    await act(async () => option("across").click());
+    expect(map.events).toEqual([{ schema_version: 2, kind: "conductor_settings_set", payload: { map_flow: "across" } }]);
+    // The map turns on the core's echo, not before it, and fits again.
+    expect(flow()).toBe("down");
+    await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, ui_state: { ...state.rest!.ui_state!, conductor_settings: { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", other_vendor: true, clean_merged: true, map_flow: "across" } } } })));
+    expect([flow(), option("across").dataset.state, map.q("[data-mission-canvas]")!.dataset.missionCanvas]).toEqual(["across", "on", "fit"]);
+  } finally { await map.unmount(); }
+});
+
 it("opens the map at 맞춤 and steps it with − and + between 40% and 200%, 맞춤 bringing it back (UI_BEHAVIOR, A mission's map)", async () => {
   const map = await mount({ items: [mission({ nodes: [node("a", { status: "working" }), node("b", { depends_on: ["a"] })] })] });
   try {

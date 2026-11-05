@@ -987,6 +987,8 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) other_vendor: Option<bool>,
     #[serde(default)]
     pub(super) clean_merged: Option<bool>,
+    #[serde(default)]
+    pub(super) map_flow: Option<crate::missions::MapFlow>,
 }
 
 /// `mission_answer`: the operator's answer from a mission's decision banner
@@ -4059,6 +4061,9 @@ impl Runtime {
                 }
                 if let Some(clean_merged) = payload.clean_merged {
                     settings.clean_merged = clean_merged;
+                }
+                if let Some(map_flow) = payload.map_flow {
+                    settings.map_flow = map_flow;
                 }
                 self.set_conductor_settings(settings)
             }

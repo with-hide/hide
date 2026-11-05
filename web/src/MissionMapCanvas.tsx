@@ -1,20 +1,23 @@
-import { MinusIcon, PlusIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowRightIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "./components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { Hint } from "./components/ui/tooltip";
 import { holdsCommandKey, keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { clampMapZoom, mapFit, mapLayout, MAX_MAP_ZOOM, MIN_MAP_ZOOM, stepMapZoom } from "./missionMapZoom";
+import type { MissionMapFlow } from "./snapshot";
 import { anchoredScroll, wheelZoomFactor, type Point, type Size } from "./viewers/viewerZoom";
 
 // The box a mission's map is drawn in (with-hide/hide-private
 // docs/tasks-and-pr-list.md, A mission's map): it opens at 맞춤 and keeps fitting while the operator has not
 // zoomed, so a panel opening beside it or a resized slot fits it again; a
 // pinch or a wheel with ⌘ (Ctrl off macOS) zooms around the pointer, a
-// drag from an empty spot moves the map, and − · % · + · 맞춤 sit at its
-// lower right. A plain wheel scrolls as any box does.
+// drag from an empty spot moves the map, and ↓ → · − · % · + · 맞춤 sit at
+// its lower right. A plain wheel scrolls as any box does. ↓ and → turn
+// every mission's map to run down or across, and the turned map fits again.
 
 /** How far a press moves before it is a drag rather than a press on the map. */
 const DRAG_SLOP = 4;
@@ -40,7 +43,7 @@ type Measured = {
  * left beside the panel; in a narrow slot the box is as tall as its map,
  * up to `page`'s height, and the panel follows under it.
  */
-export function MissionMapCanvas({ wide, page, children }: { wide: boolean; page: HTMLElement | null; children: ReactNode }) {
+export function MissionMapCanvas({ wide, page, flow, onFlow, children }: { wide: boolean; page: HTMLElement | null; flow: MissionMapFlow; onFlow: (flow: MissionMapFlow) => void; children: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [box, boxRef] = useState<HTMLDivElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -110,6 +113,17 @@ export function MissionMapCanvas({ wide, page, children }: { wide: boolean; page
     box.scrollTop = 0;
   };
 
+  // A map turned the other way is another shape: it fits again from its start.
+  const drawnFlow = useRef(flow);
+  useLayoutEffect(() => {
+    if (drawnFlow.current === flow) return;
+    drawnFlow.current = flow;
+    setChosen(null);
+    if (!box) return;
+    box.scrollLeft = 0;
+    box.scrollTop = 0;
+  }, [flow, box]);
+
   const ready = measured !== null;
   useEffect(() => {
     if (!box || !ready) return undefined;
@@ -163,6 +177,34 @@ export function MissionMapCanvas({ wide, page, children }: { wide: boolean; page
         </div>
       </div>
       <div ref={controls} role="group" aria-label={t("mission.zoom")} className="absolute bottom-sm right-sm flex items-center gap-xxs rounded-md border border-border bg-popover p-xxs shadow-lg" data-mission-zoom={percent}>
+        <ToggleGroup
+          type="single"
+          value={flow}
+          onValueChange={(value) => {
+            if ((value === "down" || value === "across") && value !== flow) onFlow(value);
+          }}
+          aria-label={t("mission.flow")}
+          className="bg-transparent p-0"
+          data-mission-direction={flow}
+        >
+          {/* The hint sits inside: as the item's own trigger its `data-state` would hide which way is on. */}
+          <ToggleGroupItem value="down" className="px-xs" aria-label={t("mission.flow.down")} data-mission-direction-option="down">
+            <Hint label={t("mission.flow.down")}>
+              <span className="flex">
+                <ArrowDownIcon />
+              </span>
+            </Hint>
+          </ToggleGroupItem>
+          {/* The hint sits inside: as the item's own trigger its `data-state` would hide which way is on. */}
+          <ToggleGroupItem value="across" className="px-xs" aria-label={t("mission.flow.across")} data-mission-direction-option="across">
+            <Hint label={t("mission.flow.across")}>
+              <span className="flex">
+                <ArrowRightIcon />
+              </span>
+            </Hint>
+          </ToggleGroupItem>
+        </ToggleGroup>
+        <span aria-hidden="true" className="mx-xxs h-(--size-icon) w-(--size-hairline) bg-border" />
         <Button variant="ghost" size="icon-sm" aria-label={t("documents.zoomOut")} disabled={scale <= MIN_MAP_ZOOM + SCALE_EPSILON} onClick={() => zoomTo(stepMapZoom(scale, "out"), null)} data-mission-zoom-step="out">
           <MinusIcon />
         </Button>

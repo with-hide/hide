@@ -32,7 +32,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Device, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -338,7 +338,13 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
   const state = params.get("state") ?? "running";
   const pane = PANE_STATES[state];
   const fixture = useMemo(() => missionFixture(pane ?? state, Date.now()), [pane, state]);
-  const actions = useMemo(() => createActions(() => true), []);
+  // The map's ↓ and → turn it here as the core's echo would; `flow=across` opens it turned.
+  const actions = useMemo(() => createActions((event) => {
+    const flow = event.kind === "conductor_settings_set" ? (event.payload as { map_flow?: MissionMapFlow }).map_flow : undefined;
+    if (flow) useShellStore.setState((shell) => ({ rest: shell.rest ? withMapFlow(shell.rest, flow) : shell.rest }));
+    return true;
+  }), []);
+  const flow = params.get("flow") === "across" ? "across" : "down";
   const pick = params.get("pick");
   useLayoutEffect(() => {
     // The decision state's fix worker is one the core raised: its own line says why it stopped.
@@ -347,13 +353,13 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     const closed = ["done", "cancelled", "no-pr", "exempt"].includes(state);
     const conductor = { pane_id: CONDUCTOR_PANE, device_id: "local", mark: closed ? "asleep" : state === "decision" ? "quiet" : "going" };
     const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "no-conductor" || state === "failed" ? [] : state === "decision" ? [conductor, raised] : [conductor]) as unknown as AgentRow[];
-    useShellStore.setState({ rest: fixture.rest, agents, connection: "live" });
+    useShellStore.setState({ rest: withMapFlow(fixture.rest, flow), agents, connection: "live" });
     // The popover pinned, as a press, the Show task steps chord or a first plan watched leaves it.
     useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
-  }, [fixture, pane, state, theme, params]);
+  }, [fixture, pane, state, theme, params, flow]);
   // A picked node is a press on its card, as the operator makes it, once the layout drew the card.
   useEffect(() => {
     if (!pick) return;
@@ -385,4 +391,9 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
       </div>
     </TooltipProvider>
   );
+}
+
+function withMapFlow(rest: SnapshotRest, flow: MissionMapFlow): SnapshotRest {
+  const settings = rest.ui_state?.conductor_settings;
+  return settings ? { ...rest, ui_state: { ...rest.ui_state!, conductor_settings: { ...settings, map_flow: flow } } } : rest;
 }

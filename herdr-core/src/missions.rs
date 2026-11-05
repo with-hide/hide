@@ -1170,7 +1170,8 @@ impl crate::dag::Node for NodeInput {
 
 /// Settings › Mission (D-31): the values a new plan starts from. A plan
 /// changed in conversation keeps its own values (B3, B48); the cleanup of
-/// merged worktrees applies to every mission at once.
+/// merged worktrees and the way every mission's map is drawn apply to every
+/// mission at once.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConductorSettings {
@@ -1199,6 +1200,28 @@ pub struct ConductorSettings {
     /// Conductor is warned. Read live by every mission.
     #[serde(default = "default_warn_quiet_minutes")]
     pub warn_quiet_minutes: u16,
+    /// Which way every mission's map runs, chosen on the map itself. Left
+    /// out while it is the default, so a build from before it still reads
+    /// the rest of Settings › Mission until the operator turns a map.
+    #[serde(default, skip_serializing_if = "MapFlow::is_down")]
+    pub map_flow: MapFlow,
+}
+
+/// Which way a mission's map runs: the work a node waits on above it
+/// (`down`), or to its left (`across`), for a mission whose many
+/// independent nodes would draw one row too wide to read.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MapFlow {
+    #[default]
+    Down,
+    Across,
+}
+
+impl MapFlow {
+    fn is_down(&self) -> bool {
+        *self == Self::Down
+    }
 }
 
 impl Default for ConductorSettings {
@@ -1212,6 +1235,7 @@ impl Default for ConductorSettings {
             clean_merged: default_clean_merged(),
             warn_review_fails: default_warn_review_fails(),
             warn_quiet_minutes: default_warn_quiet_minutes(),
+            map_flow: MapFlow::Down,
         }
     }
 }
