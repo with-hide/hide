@@ -249,6 +249,19 @@ impl Criterion {
         }
     }
 
+    /// A ci line an earlier build saved before `sent_back` existed: failed
+    /// with its rerun counted is how it recorded a spent rerun, which had
+    /// sent the node back to work already. Read on every restore; a line
+    /// this build saved in that state has `sent_back` set anyway.
+    pub(crate) fn carry_spent_rerun(&mut self) {
+        if self.kind == CriterionKind::Ci
+            && self.state == CriterionState::Fail
+            && self.reruns >= RERUN_LIMIT
+        {
+            self.sent_back = true;
+        }
+    }
+
     /// Whether the line is one only the operator's answer goes past (D-13).
     pub(crate) fn protected(&self) -> bool {
         matches!(self.kind, CriterionKind::Check | CriterionKind::Ci)
@@ -474,17 +487,23 @@ impl Criterion {
         if self.skip.is_none() {
             match checks {
                 Checks::Passing => {
-                    if self.state == CriterionState::Fail && self.reruns < RERUN_LIMIT {
+                    let after_failure = self.state == CriterionState::Fail || self.rerunning;
+                    if after_failure && self.reruns < RERUN_LIMIT {
                         self.reruns += 1;
                     }
                     self.rerunning = false;
                     self.state = CriterionState::Pass;
                 }
-                Checks::Pending if self.state == CriterionState::Fail => self.rerunning = true,
-                Checks::Pending => self.state = CriterionState::Open,
+                Checks::Pending => {
+                    // A run after a failure is the rerun; the line is open
+                    // while it is queued or running.
+                    self.rerunning |= self.state == CriterionState::Fail;
+                    self.state = CriterionState::Open;
+                }
                 Checks::Failed => {
-                    let rerun_failed = self.state == CriterionState::Fail && self.rerunning;
-                    let after_rerun = self.state != CriterionState::Fail && self.reruns > 0;
+                    let rerun_failed = self.rerunning;
+                    let after_rerun =
+                        !self.rerunning && self.state != CriterionState::Fail && self.reruns > 0;
                     if (rerun_failed || after_rerun) && !self.sent_back {
                         self.reruns = self.reruns.max(RERUN_LIMIT);
                         self.sent_back = true;
@@ -757,6 +776,21 @@ mod tests {
         let again = plan_lines(&[review], &["works".into()], &[input], false, true);
         assert_eq!(again[1].checkers[0].state, CriterionState::Pass);
         assert_eq!(again[1].state, CriterionState::Pass);
+    }
+
+    /// with-hide/hide#2080 review: a run queued or running again after a
+    /// failure leaves the line open, not failed, while it still counts as
+    /// the rerun.
+    #[test]
+    fn a_ci_line_is_open_while_a_run_after_its_failure_has_not_finished() {
+        let mut line = Criterion::new("ci", CriterionKind::Ci);
+        line.read_ci(A, PullRequestChecks::Failed, 1);
+        line.read_ci(A, PullRequestChecks::Pending, 2);
+        assert_eq!((line.state, line.rerunning), (CriterionState::Open, true));
+        assert!(
+            line.read_ci(A, PullRequestChecks::Failed, 3).spent,
+            "its rerun failed"
+        );
     }
 
     #[test]

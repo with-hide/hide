@@ -34,11 +34,15 @@ impl HeadRuns {
     };
 }
 
-/// What each of `count` commits' runs add up to, in the order the query named
-/// them, from a `HideHeadRuns` answer. A commit GitHub does not know, or one
+/// What each of `commits`' runs add up to, in the order the query named them,
+/// from a `HideHeadRuns` answer about `repository`. A commit GitHub does not know, or one
 /// with more runs than were read, is `Unknown`; an answer that does not read
 /// is an error.
-pub(crate) fn parse_head_runs(output: &str, count: usize) -> Result<Vec<HeadRuns>, String> {
+pub(crate) fn parse_head_runs(
+    output: &str,
+    repository: &str,
+    commits: &[String],
+) -> Result<Vec<HeadRuns>, String> {
     #[derive(Deserialize)]
     struct Answer {
         data: Data,
@@ -61,13 +65,15 @@ pub(crate) fn parse_head_runs(output: &str, count: usize) -> Result<Vec<HeadRuns
     let answer: Answer = serde_json::from_str(output).map_err(|error| {
         format!("the runs query returned an answer Hide could not read: {error}")
     })?;
-    let mut commits = answer
+    let mut answered = answer
         .data
         .repository
         .ok_or("the runs query found no repository")?;
-    (0..count)
-        .map(|index| {
-            let commit = commits
+    commits
+        .iter()
+        .enumerate()
+        .map(|(index, head)| {
+            let commit = answered
                 .remove(&format!("c{index}"))
                 .ok_or_else(|| format!("the runs query left out commit {index}"))?;
             let Some(commit) = commit else {
@@ -77,6 +83,8 @@ pub(crate) fn parse_head_runs(output: &str, count: usize) -> Result<Vec<HeadRuns
                 crate::diagnostic!(serde_json::json!({
                     "component": "github",
                     "kind": "checks.runs_capped",
+                    "repository": repository,
+                    "head": head,
                     "runs": commit.suites.total,
                     "cap": HEAD_RUNS_SUITE_LIMIT,
                 }));
@@ -230,10 +238,14 @@ mod tests {
             suites.len(),
             suites.join(",")
         );
-        parse_head_runs(&answer, 1).expect("an answer")[0].checks
+        parse_head_runs(&answer, "acme/app", &commits(1)).expect("an answer")[0].checks
     }
 
     const VERIFY: u64 = 22;
+
+    fn commits(count: usize) -> Vec<String> {
+        (0..count).map(|index| format!("{index:040x}")).collect()
+    }
 
     /// with-hide/hide #2075's second run: cancelled, then failed, then passed
     /// on the same head, beside a first run that had passed earlier.
@@ -303,10 +315,13 @@ mod tests {
             HEAD_RUNS_SUITE_LIMIT + 1
         );
         assert_eq!(
-            parse_head_runs(&answer, 2).expect("an answer"),
+            parse_head_runs(&answer, "acme/app", &commits(2)).expect("an answer"),
             [HeadRuns::UNKNOWN, HeadRuns::UNKNOWN]
         );
-        assert!(parse_head_runs(&answer, 3).is_err(), "a commit left out");
-        assert!(parse_head_runs("{}", 1).is_err());
+        assert!(
+            parse_head_runs(&answer, "acme/app", &commits(3)).is_err(),
+            "a commit left out"
+        );
+        assert!(parse_head_runs("{}", "acme/app", &commits(1)).is_err());
     }
 }

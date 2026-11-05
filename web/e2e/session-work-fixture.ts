@@ -76,6 +76,7 @@ const [a,b] = args;
 if(a==="auth"&&b==="status") process.exit(0);
 if(a==="api"&&b==="user") {process.stdout.write("example-user\\n");process.exit(0);}
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) { process.stdout.write("[]\\n"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) { process.stdout.write('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}\\n'); process.exit(0); }
 if(a==="repo"&&b==="view") {
  const deadline=Date.now()+15000;

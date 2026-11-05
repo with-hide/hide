@@ -544,7 +544,7 @@ fn list_verdict(
         "-f".to_owned(),
         query,
     ])?;
-    let runs = crate::github::runs::parse_head_runs(&answer, 1)
+    let runs = crate::github::runs::parse_head_runs(&answer, repository, &[commit.to_owned()])
         .map_err(|_| unreadable("runs_unreadable"))?;
     let runs = crate::github::runs::word(runs[0].checks);
     Ok(combine(Some(&listed), Some(&runs)))

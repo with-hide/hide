@@ -172,6 +172,7 @@ const done = (text) => { console.log(text); process.exit(0); };
 if (key === "auth status") process.exit(0);
 if (key === "api user") done("example-user");
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) done("[]");
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) done('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}');
 if (key === "repo view") done('{"nameWithOwner":"acme/repo"}');
 if (key === "issue list") done(${JSON.stringify(JSON.stringify(issues))});

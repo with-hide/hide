@@ -1031,10 +1031,11 @@ struct Listed {
 /// Adds to each open pull request's checks what GitHub Actions' runs on its
 /// head add up to (`runs`), which the open list's job rows cannot say: a
 /// cancelled run's jobs stay listed beside its replacement's, and a run queued
-/// before its first job is not listed. Its card then counts only the jobs of
-/// the runs that decide. When the runs cannot be read, a pull request whose
-/// rollup listed Actions jobs reads `Unknown` rather than what the jobs alone
-/// would say, and the reason goes to the diagnostic log.
+/// before its first job is not listed. Its card then counts only the jobs
+/// shown to be of the runs that decide. When the runs cannot be read, every
+/// open pull request reads `Unknown`: nothing then says no run is queued on
+/// its head, so neither a pass nor "no checks" is known, and the reason goes
+/// to the diagnostic log.
 fn judge_head_runs(
     run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
     repository: Result<&str, &GhFailure>,
@@ -1053,7 +1054,8 @@ fn judge_head_runs(
         crate::diagnostic!(serde_json::json!({
             "component": "github",
             "kind": "pull_requests.runs_unread",
-            "heads": heads.len(),
+            "repository": repository.ok(),
+            "heads": heads,
             "message": failure.reason,
         }));
         HashMap::new()
@@ -1075,15 +1077,14 @@ fn judge_head_runs(
                         .into_iter()
                         .filter(|job| {
                             !job.is_actions_job()
-                                || job.run_id().is_none_or(|run| counted.contains(&run))
+                                || job.run_id().is_some_and(|run| counted.contains(&run))
                         })
                         .collect();
                     OpenChecks::of(Some(counted)).apply(pull_request);
                 }
                 pull_request.checks = runs::worse(pull_request.checks, runs.checks);
             }
-            (None, Some(_)) => pull_request.checks = PullRequestChecks::Unknown,
-            (None, None) => {}
+            (None, _) => pull_request.checks = PullRequestChecks::Unknown,
         }
     }
 }
@@ -1104,7 +1105,8 @@ fn read_head_runs(
             GhFailure::network("the repository name cannot be asked about its runs".to_owned())
         })?;
         let answer = run(&["api", "graphql", "-f", &query])?;
-        let verdicts = runs::parse_head_runs(&answer, batch.len()).map_err(GhFailure::network)?;
+        let verdicts =
+            runs::parse_head_runs(&answer, repository, batch).map_err(GhFailure::network)?;
         judged.extend(batch.iter().cloned().zip(verdicts));
     }
     Ok(judged)
@@ -4144,7 +4146,7 @@ mod tests {
         let gh = TwoLists::new(
             &format!(
                 "[{},{},{}]",
-                listed_at(1, "a", "OPEN", "h1"),
+                listed_at(1, "a", "OPEN", &head('1')),
                 listed_at(2, "b", "MERGED", "h2"),
                 listed_at(3, "c", "CLOSED", "h3"),
             ),
@@ -4263,11 +4265,15 @@ mod tests {
             r#""CANCELLED""#,
             "2026-11-04T16:41:23Z",
         );
+        // A job whose address names no run is not shown to be the deciding
+        // run's, so it is not counted either.
+        let unplaced = job("verify", "verify", "COMPLETED", r#""FAILURE""#);
         let passed = open_pull(
             &[
                 design.clone(),
                 cancelled[0].clone(),
                 cancelled[1].clone(),
+                unplaced,
                 run_job("verify", 200, "desktop e2e", "COMPLETED", r#""SUCCESS""#),
                 run_job("verify", 200, "verify", "COMPLETED", r#""SUCCESS""#),
             ],
@@ -4481,16 +4487,20 @@ mod tests {
         assert_eq!(checks, PullRequestChecks::Failed);
     }
 
+    /// with-hide/hide#2080 review: without the runs nothing says a run is
+    /// not queued on a head, so no open pull request reads passing or as
+    /// having no checks, which would take a mission's ci line away.
     #[test]
-    fn unread_runs_leave_only_the_pull_requests_with_actions_jobs_unknown() {
+    fn unread_runs_leave_every_open_pull_request_unknown() {
         let gh = TwoLists::new(
             &format!(
-                "[{},{}]",
+                "[{},{},{}]",
                 listed_at(1, "a", "OPEN", &head('1')),
-                listed_at(2, "b", "OPEN", &head('2'))
+                listed_at(2, "b", "OPEN", &head('2')),
+                listed_at(3, "c", "OPEN", &head('3'))
             ),
             &format!(
-                r#"[{{"number":1,"statusCheckRollup":[{}]}},{}]"#,
+                r#"[{{"number":1,"statusCheckRollup":[{}]}},{},{{"number":3,"statusCheckRollup":[]}}]"#,
                 job("verify", "verify", "COMPLETED", r#""SUCCESS""#),
                 rollup(2, "SUCCESS")
             ),
@@ -4504,15 +4514,13 @@ mod tests {
         };
         let mut listed = list_pull_requests(&run, &KnownChecks::new()).expect("both lists answer");
         judge_head_runs(&run, Ok("acme/app"), &mut listed);
-        assert_eq!(
-            checks_of(&listed.pull_requests, 1),
-            PullRequestChecks::Unknown
-        );
-        assert_eq!(
-            checks_of(&listed.pull_requests, 2),
-            PullRequestChecks::Passing,
-            "another app's check is judged without the runs"
-        );
+        for number in 1..=3 {
+            assert_eq!(
+                checks_of(&listed.pull_requests, number),
+                PullRequestChecks::Unknown,
+                "pull request {number}"
+            );
+        }
     }
 
     /// with-hide/hide-private#394, PR #1910 at `e4789df09`: the first verify

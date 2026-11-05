@@ -18,6 +18,7 @@ const pulls = JSON.parse(fs.readFileSync(${JSON.stringify(file)}, "utf8"));
 if (key === "auth status") process.exit(0);
 if (key === "api user") { console.log("example-user"); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) { console.log("[]"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) { console.log('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}'); process.exit(0); }
 if (key === "repo view") { console.log('{"nameWithOwner":"acme/memory-fixture"}'); process.exit(0); }
 if (key === "issue list") { console.log("[]"); process.exit(0); }
