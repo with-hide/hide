@@ -76,7 +76,9 @@ async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String>
     let control = Arc::clone(mobile.browser_control());
     // Held for the whole screenshot, so a phone that keeps pressing refresh
     // cannot crowd out the relays `hide browser` commands need.
-    let _relay = control.acquire_relay().map_err(|(reason, _)| reason.to_owned())?;
+    let _relay = control
+        .acquire_relay()
+        .map_err(|(reason, _)| reason.to_owned())?;
     let (core, device, checkout) = (
         Arc::clone(mobile.core()),
         view.device_id.clone(),
@@ -87,7 +89,11 @@ async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String>
     // window's gateway over HTTP.
     let found = tokio::task::spawn_blocking(move || {
         let listed = core
-            .workspace_query(&device, &checkout_caller_id(CALLER_KEY, &checkout), Query::ViewList)
+            .workspace_query(
+                &device,
+                &checkout_caller_id(CALLER_KEY, &checkout),
+                Query::ViewList,
+            )
             .map_err(|refusal| refusal.reason.to_owned())?;
         let shown = listed
             .views

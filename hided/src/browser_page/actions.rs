@@ -1579,7 +1579,10 @@ mod tests {
         // A viewport past the pixel bound is scaled down to it, and the clip
         // starts where the page is scrolled to.
         let scale = params["clip"]["scale"].as_f64().unwrap();
-        assert!((2400.0 * 1500.0 * scale * scale - STILL_PIXELS).abs() < 1.0, "{scale}");
+        assert!(
+            (2400.0 * 1500.0 * scale * scale - STILL_PIXELS).abs() < 1.0,
+            "{scale}"
+        );
         assert_eq!(params["clip"]["x"], 10.0);
         assert_eq!(params["clip"]["y"], 300.0);
 

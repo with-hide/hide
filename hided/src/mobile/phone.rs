@@ -1772,7 +1772,10 @@ mod tests {
             .await
             .err()
             .expect("no window, no picture");
-        assert!(!reason.is_empty(), "the refusal names its reason for the log");
+        assert!(
+            !reason.is_empty(),
+            "the refusal names its reason for the log"
+        );
     }
 
     #[tokio::test]
