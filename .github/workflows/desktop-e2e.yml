@@ -87,6 +87,10 @@ jobs:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+      - name: Reuse Windows fixture programs
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/fixture-shims
+        timeout-minutes: 5
       - uses: pnpm/action-setup@v6
         with:
           version: 10
