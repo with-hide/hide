@@ -96,6 +96,15 @@ impl Agent {
         self.adapter.id
     }
 
+    /// The hook dialect its tool calls are read in.
+    fn hook_dialect(&self) -> HookDialect {
+        match self.dialect {
+            PluginDialect::OpenCode => HookDialect::OpenCode,
+            PluginDialect::Pi => HookDialect::Pi,
+            PluginDialect::Omp => HookDialect::Omp,
+        }
+    }
+
     /// Whether `version` is the script this build writes. OpenCode's plugin
     /// sends none and is judged by the kit alone.
     fn current(&self, version: Option<u32>) -> bool {
@@ -362,7 +371,7 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
                 .map(|command| json!({ "command": command }))
         })?;
         Some(guardrails::payload::ToolCall {
-            action: guardrails::payload::action(tool, &args)?,
+            action: guardrails::payload::action(agent.hook_dialect(), tool, &args)?,
             cwd: input.cwd.clone(),
         })
     };
@@ -402,12 +411,7 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
             let Some(command) = input.command.as_deref() else {
                 return json!({});
             };
-            let dialect = match agent.dialect {
-                PluginDialect::OpenCode => HookDialect::OpenCode,
-                PluginDialect::Pi => HookDialect::Pi,
-                PluginDialect::Omp => HookDialect::Omp,
-            };
-            let syntax = hide_agent_hooks::pre_tool::shell_syntax(dialect, tool);
+            let syntax = hide_agent_hooks::pre_tool::shell_syntax(agent.hook_dialect(), tool);
             let refusal = hide_agent_hooks::opener_guard::pane_refusal(
                 home, runtime, &pane, command, syntax, &program, deadline,
             );

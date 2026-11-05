@@ -1,17 +1,20 @@
 //! The guardrails of a shell call: the `git` and `gh` commands each
 //! protection names, and the files protection over every word.
 //!
-//! The call is read as a shell reads it (`hide_shell::shell_line`):
-//! one simple command at a time, with quotes, heredoc bodies and comments set
-//! aside. A `cd` or `pushd` earlier in the line moves where the commands after
-//! it run, and `git -C <dir>` moves one command. A command hidden a layer
+//! The call is read as the shell that runs it reads it
+//! (`hide_shell::shell_line`, in the call's syntax): one simple command at a
+//! time, with quotes, heredoc bodies and comments set aside. A `cd` or
+//! `pushd` earlier in the line (in PowerShell also `Set-Location` and its
+//! aliases) moves where the commands after it run, and `git -C <dir>` moves
+//! one command. A PowerShell word's `\` separates names, as PowerShell reads
+//! it on every system (`.\.env`, `C:\repo`). A command hidden a layer
 //! deeper (`bash -c`, `$(...)`, a script, an alias) is not looked for (D-18).
 
 use std::path::{Path, PathBuf};
 
 use super::facts::{Checkout, Located, Place};
 use super::{Dirty, Facts, Refusal, Rule, absolute, protected};
-use hide_shell::{command_words, shell_line};
+use hide_shell::{BareFolder, Syntax, command_words, shell_line};
 
 /// The most words of one call checked against the protected paths; past it
 /// the words are left unchecked and the log says so, while every later
@@ -22,9 +25,10 @@ pub(super) fn shell(
     facts: &Facts<'_>,
     cwd: &Path,
     command: &str,
+    syntax: Syntax,
     dirty: Dirty<'_>,
 ) -> Option<Refusal> {
-    let line = shell_line(command, hide_shell::Syntax::Posix);
+    let line = shell_line(command, syntax);
     let mut dir = cwd.to_path_buf();
     let mut checked = 0usize;
     for (index, words) in line.commands.iter().enumerate() {
@@ -32,21 +36,31 @@ pub(super) fn shell(
         let Some((first, args)) = words.split_first() else {
             continue;
         };
-        let program = program(first);
-        if matches!(program.as_str(), "cd" | "pushd") {
-            // A bare `cd` goes home; `cd -` goes where this line cannot see.
-            match args.iter().find(|arg| !arg.starts_with('-') || *arg == "-") {
+        let program = syntax.program(first);
+        if let Some(bare) = syntax.changes_folder(&program) {
+            // `cd -` goes where this line cannot see; a value given as
+            // `-LiteralPath:..` is the folder.
+            let target = args.iter().find_map(|arg| {
+                (arg == "-").then_some("-").or_else(|| {
+                    syntax
+                        .path_values(arg)
+                        .into_iter()
+                        .find(|value| !value.is_empty() && !value.starts_with('-'))
+                })
+            });
+            match target {
                 Some(target) if target != "-" => {
-                    dir = absolute(&facts.home, &dir, Path::new(target));
+                    let target = syntax.path_word(target);
+                    dir = absolute(&facts.home, &dir, Path::new(target.as_ref()));
                 }
                 Some(_) => {}
-                None if program == "cd" => dir = facts.home.clone(),
+                None if bare == BareFolder::Home => dir = facts.home.clone(),
                 None => {}
             }
             continue;
         }
         let refusal = match program.as_str() {
-            "git" => git(facts, &dir, args, dirty),
+            "git" => git(facts, &dir, args, syntax, dirty),
             "gh" => gh(facts, &dir, args),
             _ => None,
         };
@@ -64,12 +78,16 @@ pub(super) fn shell(
             .map(|(at, word)| (Some(at), word, false))
             .chain(targets.map(|target| (None, target, true)))
         {
-            for candidate in path_words(word) {
+            for candidate in path_words(syntax, word) {
                 if checked >= WORD_LIMIT {
                     facts.word_limit.set(true);
                     break;
                 }
-                let path = absolute(&facts.home, &dir, Path::new(candidate));
+                let path = absolute(
+                    &facts.home,
+                    &dir,
+                    Path::new(syntax.path_word(candidate).as_ref()),
+                );
                 // A word with a space in it that is text (a commit message,
                 // a title, a pattern) is prose unless it names something
                 // that is there; anywhere else it is a path, which `cp` or
@@ -91,20 +109,6 @@ pub(super) fn shell(
         }
     }
     None
-}
-
-/// A command word's program name: its file name without `.exe`.
-fn program(word: &str) -> String {
-    let name = Path::new(word)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    // `.exe` is four ASCII bytes, so cutting them keeps a character whole.
-    if name.to_ascii_lowercase().ends_with(".exe") {
-        name[..name.len() - 4].to_owned()
-    } else {
-        name
-    }
 }
 
 /// The programs whose text options below take prose, a pattern or a script:
@@ -217,18 +221,21 @@ fn text_word(program: &str, words: &[String], at: usize, value: bool) -> bool {
     }
 }
 
-/// The parts of a word that may name a path: the word, and the value of a
-/// `--name=value` or `NAME=value` word. A word still holding an expansion
-/// (`$HOME`, `$(...)`, a backtick) is not read, since its path is unknown.
-fn path_words(word: &str) -> Vec<&str> {
+/// The parts of a word that may name a path, as the shell passes them
+/// ([`Syntax::path_values`]: a `--name=value` value, and in PowerShell a
+/// `-Name:value` value and each array item). A part still holding an
+/// expansion (`$HOME`, `$env:USERPROFILE`, `$(...)`, a backtick) is not read,
+/// since its path is unknown.
+fn path_words(syntax: Syntax, word: &str) -> Vec<&str> {
     let readable = |candidate: &&str| {
         !candidate.is_empty()
             && !candidate.contains('$')
             && !candidate.contains('`')
             && !candidate.starts_with('-')
     };
-    std::iter::once(word)
-        .chain(word.split_once('=').map(|(_, value)| value))
+    syntax
+        .path_values(word)
+        .into_iter()
         .filter(readable)
         .collect()
 }
@@ -282,14 +289,21 @@ fn place<'f>(facts: &Facts<'f>, dir: &Path) -> Where<'f> {
     }
 }
 
-fn git(facts: &Facts<'_>, dir: &Path, args: &[String], dirty: Dirty<'_>) -> Option<Refusal> {
+fn git(
+    facts: &Facts<'_>,
+    dir: &Path,
+    args: &[String],
+    syntax: Syntax,
+    dirty: Dirty<'_>,
+) -> Option<Refusal> {
     let mut dir: PathBuf = dir.to_path_buf();
     let mut at = 0;
     // Git's own options before the subcommand.
     while let Some(arg) = args.get(at) {
         match arg.as_str() {
             "-C" => {
-                dir = absolute(&facts.home, &dir, Path::new(args.get(at + 1)?));
+                let target = syntax.path_word(args.get(at + 1)?);
+                dir = absolute(&facts.home, &dir, Path::new(target.as_ref()));
                 at += 2;
             }
             "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path" | "--config-env"

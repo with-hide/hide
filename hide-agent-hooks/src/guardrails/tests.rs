@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use hide_agent_adapter::HookDialect;
+use hide_shell::Syntax;
 
 use super::payload::{self, ToolCall};
 use super::*;
@@ -99,7 +100,7 @@ impl Fixture {
     }
 
     fn shell_dirty(&self, cwd: &Path, command: &str, dirty: Option<bool>) -> Option<Rule> {
-        refused(self.decide_in(cwd, Action::Shell(command.to_owned()), dirty))
+        refused(self.decide_in(cwd, posix(command), dirty))
     }
 
     fn write(&self, cwd: &Path, path: &Path) -> Option<Rule> {
@@ -112,6 +113,28 @@ impl Fixture {
 
     fn read(&self, cwd: &Path, path: &str) -> Option<Rule> {
         refused(self.decide_in(cwd, Action::Read(vec![path.to_owned()]), Some(false)))
+    }
+}
+
+/// The shell Codex's and Cursor's shell tool runs: PowerShell on Windows,
+/// a POSIX shell elsewhere.
+fn windows_powershell() -> Syntax {
+    if cfg!(windows) {
+        Syntax::PowerShell
+    } else {
+        Syntax::Posix
+    }
+}
+
+/// A shell call read as a POSIX shell reads it.
+fn posix(command: &str) -> Action {
+    shell(command, Syntax::Posix)
+}
+
+fn shell(command: &str, syntax: Syntax) -> Action {
+    Action::Shell {
+        command: command.to_owned(),
+        syntax,
     }
 }
 
@@ -334,11 +357,7 @@ fn a_changed_base_branch_is_the_one_guarded() {
     assert_eq!(fixture.shell(&fixture.worktree, "git commit -m x"), None);
     // With no origin/HEAD and no choice, the base cannot be read: refused.
     std::fs::remove_file(origin.join("HEAD")).unwrap();
-    let outcome = fixture.decide_in(
-        &fixture.worktree,
-        Action::Shell("git commit -m x".to_owned()),
-        Some(false),
-    );
+    let outcome = fixture.decide_in(&fixture.worktree, posix("git commit -m x"), Some(false));
     let Outcome::Refuse(refusal) = outcome else {
         panic!("{outcome:?}")
     };
@@ -461,15 +480,10 @@ fn risky_git_commands_are_refused_and_their_safe_forms_run() {
     // asked about tracked changes only.
     let asked = std::cell::RefCell::new(Vec::new());
     for command in ["git reset --hard", "git restore a.txt", "git clean -f"] {
-        decide(
-            &fixture.home,
-            worktree,
-            &Action::Shell(command.into()),
-            &|_, untracked| {
-                asked.borrow_mut().push((command, untracked));
-                Some(false)
-            },
-        );
+        decide(&fixture.home, worktree, &posix(command), &|_, untracked| {
+            asked.borrow_mut().push((command, untracked));
+            Some(false)
+        });
     }
     assert_eq!(
         asked.into_inner(),
@@ -492,7 +506,7 @@ fn risky_git_commands_are_refused_and_their_safe_forms_run() {
         Some(Rule::GitCommands)
     );
     // Whether the checkout has changes could not be read: refused.
-    let outcome = fixture.decide_in(worktree, Action::Shell("git reset --hard".into()), None);
+    let outcome = fixture.decide_in(worktree, posix("git reset --hard"), None);
     assert!(matches!(
         outcome,
         Outcome::Refuse(Refusal {
@@ -590,6 +604,118 @@ fn protected_files_are_refused_to_tools_and_shell_words() {
     // A home path is protected only for an agent in a project that lists it.
     let outside = tempfile::tempdir().unwrap();
     assert_eq!(fixture.read(outside.path(), "~/.ssh/id_ed25519"), None);
+}
+
+/// with-hide/hide-private#576: a call PowerShell runs is read as PowerShell
+/// reads it, on every system: `\` separates names, a command name is found
+/// without case, and `Set-Location` moves where the commands after it run.
+/// The same text run by Git Bash is read as POSIX, as Git Bash runs it.
+#[test]
+fn a_powershell_call_is_judged_as_powershell_reads_it() {
+    let fixture = Fixture::new();
+    let mut guarded = rules(|rules| rules.files = true);
+    guarded.worktree_folder = true;
+    guarded.git_commands = true;
+    fixture.policy(guarded, Some("main"));
+    let (repo, worktree) = (&fixture.repo, &fixture.worktree);
+    let powershell = |cwd: &Path, command: &str| {
+        refused(fixture.decide_in(cwd, shell(command, Syntax::PowerShell), Some(false)))
+    };
+    for command in [
+        r"Get-Content .\.env",
+        r"gc .\.env.local",
+        r"Get-Content -Path .\server.pem",
+        r"Get-Content ~\.ssh\id_ed25519",
+        r"Set-Location src; Get-Content ..\.env",
+        r"sl src; type ..\.env",
+        r"CD src; cat ..\.env",
+        r"Copy-Item a.txt '.\my cert.pem'",
+        r"echo x > .\.env.local",
+        r"$x = Get-Content .\.env",
+        r"if (Test-Path .\.env) { echo yes }",
+        // A parameter's value after `-Name:`, and an array's items.
+        r"Get-Content -LiteralPath:.\.env",
+        r"Get-Content -Path:'.\.env'",
+        r"Get-Content a.txt,.env",
+        r"Set-Location -LiteralPath:src; Get-Content ..\.env",
+    ] {
+        assert_eq!(powershell(repo, command), Some(Rule::Files), "{command}");
+    }
+    for command in [r"Get-Content .\.env.example", r"Get-Content .\a.txt", "ls"] {
+        assert_eq!(powershell(repo, command), None, "{command}");
+    }
+    // Git Bash reads `.\.env` as `..env`, and `a.txt,.env` as one name,
+    // files that are not there.
+    assert_eq!(fixture.shell(repo, r"cat .\.env"), None);
+    assert_eq!(fixture.shell(repo, "cat a.txt,.env"), None);
+    // A comma inside quotes is read as an array's too: more is refused,
+    // never less.
+    assert_eq!(powershell(repo, "echo 'a,.env'"), Some(Rule::Files));
+    for command in [
+        r"git -C ..\repo switch topic",
+        r"GIT -C ..\repo switch topic",
+        r"Set-Location ..\repo; git switch topic",
+        r"Push-Location ..\repo; git.exe checkout -b topic",
+    ] {
+        assert_eq!(
+            powershell(worktree, command),
+            Some(Rule::WorktreeFolder),
+            "{command}"
+        );
+    }
+    assert_eq!(powershell(worktree, "git switch topic"), None);
+    for command in [
+        "Git push --force origin feature",
+        // An assignment runs the command after it.
+        "$r = git push --force origin feature",
+        "$r=git push --no-verify",
+        "$r =git push --force origin feature",
+        "[string]$r = git push --force origin feature",
+        "$a, $b = git push --force origin feature",
+        "[int] $r = git push --force origin feature",
+        "$r.x = git push --force origin feature",
+        "$h['k'] = git push --force origin feature",
+    ] {
+        assert_eq!(
+            powershell(worktree, command),
+            Some(Rule::GitCommands),
+            "{command}"
+        );
+    }
+    // A line PowerShell refuses to parse runs, as it does today.
+    assert_eq!(powershell(repo, r"Get-Content '.\.env"), None);
+}
+
+/// A Windows path as PowerShell writes it, `C:\...`, names the file.
+#[cfg(windows)]
+#[test]
+fn a_powershell_drive_path_names_the_windows_file() {
+    let fixture = Fixture::new();
+    let mut guarded = rules(|rules| rules.files = true);
+    guarded.worktree_folder = true;
+    fixture.policy(guarded, Some("main"));
+    let native = fixture.repo.to_string_lossy().into_owned();
+    let powershell = |cwd: &Path, command: &str| {
+        refused(fixture.decide_in(cwd, shell(command, Syntax::PowerShell), Some(false)))
+    };
+    assert_eq!(
+        powershell(&fixture.worktree, &format!(r"Get-Content '{native}\.env'")),
+        Some(Rule::Files)
+    );
+    assert_eq!(
+        powershell(
+            &fixture.worktree,
+            &format!("git -C '{native}' switch topic")
+        ),
+        Some(Rule::WorktreeFolder)
+    );
+    assert_eq!(
+        powershell(
+            &fixture.worktree,
+            &format!("Set-Location '{native}'; git switch topic")
+        ),
+        Some(Rule::WorktreeFolder)
+    );
 }
 
 #[test]
@@ -726,7 +852,7 @@ fn nothing_is_refused_with_every_protection_off_or_outside_a_project() {
 #[test]
 fn a_missing_corrupt_or_newer_policy_lets_the_call_run_and_says_why() {
     let fixture = Fixture::new();
-    let action = Action::Shell("git push --force".to_owned());
+    let action = posix("git push --force");
     let decide = || decide(&fixture.home, &fixture.repo, &action, &|_, _| Some(false));
     assert_eq!(decide(), Outcome::PolicyUnreadable(PolicyFailure::Missing));
     std::fs::create_dir_all(policy_path(&fixture.home).parent().unwrap()).unwrap();
@@ -740,11 +866,9 @@ fn a_missing_corrupt_or_newer_policy_lets_the_call_run_and_says_why() {
 fn the_reason_names_the_protection_and_what_to_do() {
     let fixture = Fixture::new();
     fixture.policy(rules(|rules| rules.worktree_folder = true), Some("main"));
-    let Outcome::Refuse(refusal) = fixture.decide_in(
-        &fixture.repo,
-        Action::Shell("git switch topic".into()),
-        Some(false),
-    ) else {
+    let Outcome::Refuse(refusal) =
+        fixture.decide_in(&fixture.repo, posix("git switch topic"), Some(false))
+    else {
         panic!("refused")
     };
     let reason = refusal.reason();
@@ -764,11 +888,9 @@ fn the_reason_names_the_protection_and_what_to_do() {
         ],
     );
     fixture.policy(rules(|rules| rules.base_branch = true), None);
-    let Outcome::Refuse(refusal) = fixture.decide_in(
-        &fixture.repo,
-        Action::Shell("git commit -m x".into()),
-        Some(false),
-    ) else {
+    let Outcome::Refuse(refusal) =
+        fixture.decide_in(&fixture.repo, posix("git commit -m x"), Some(false))
+    else {
         panic!("refused")
     };
     let reason = refusal.reason();
@@ -875,7 +997,7 @@ fn each_runtimes_payload_reads_as_its_action() {
             HookDialect::Codex
         )
         .map(|call| call.action),
-        Some(Action::Shell("git status".into()))
+        Some(shell("git status", windows_powershell()))
     );
     // Cursor 2026.10.14: an edit arrives as `Write`; a shell call's empty cwd
     // falls back to the workspace.
@@ -895,7 +1017,7 @@ fn each_runtimes_payload_reads_as_its_action() {
             HookDialect::Cursor
         ),
         Some(ToolCall {
-            action: Action::Shell("git status".into()),
+            action: shell("git status", windows_powershell()),
             cwd: Some("/r".into())
         })
     );
@@ -916,6 +1038,26 @@ fn each_runtimes_payload_reads_as_its_action() {
         .map(|call| call.action),
         Some(write("a.txt"))
     );
+    // Claude Code's PowerShell tool carries the `Bash` tool's fields and runs
+    // in PowerShell on every system (with-hide/hide-private#576).
+    assert_eq!(
+        call(
+            r#"{"cwd":"/r","tool_name":"PowerShell","tool_input":{"command":"Get-Content .\\.env"}}"#,
+            HookDialect::ClaudeCode
+        ),
+        Some(ToolCall {
+            action: shell(r"Get-Content .\.env", Syntax::PowerShell),
+            cwd: Some("/r".into())
+        })
+    );
+    assert_eq!(
+        call(
+            r#"{"cwd":"/r","tool_name":"Bash","tool_input":{"command":"ls"}}"#,
+            HookDialect::ClaudeCode
+        )
+        .map(|call| call.action),
+        Some(posix("ls"))
+    );
     // A tool the guardrails do not read, and a payload that is not JSON.
     assert_eq!(
         call(
@@ -929,7 +1071,8 @@ fn each_runtimes_payload_reads_as_its_action() {
 
 #[test]
 fn the_scripts_tools_read_as_their_actions() {
-    let action = |tool: &str, args: serde_json::Value| payload::action(tool, &args);
+    let action =
+        |tool: &str, args: serde_json::Value| payload::action(HookDialect::OpenCode, tool, &args);
     // OpenCode 1.18.30.
     assert_eq!(
         action(
@@ -969,7 +1112,7 @@ fn the_scripts_tools_read_as_their_actions() {
             "shell",
             serde_json::json!({"command": "git push", "workdir": "/r", "timeout": 1000})
         ),
-        Some(Action::Shell("git push".into()))
+        Some(posix("git push"))
     );
     // Pi 1.0.4 and omp 18.7.0.
     assert_eq!(
@@ -980,8 +1123,12 @@ fn the_scripts_tools_read_as_their_actions() {
         Some(Action::Write(vec!["b.txt".into()]))
     );
     assert_eq!(
-        action("bash", serde_json::json!({"command": "git push"})),
-        Some(Action::Shell("git push".into()))
+        payload::action(
+            HookDialect::Pi,
+            "bash",
+            &serde_json::json!({"command": "git push"})
+        ),
+        Some(posix("git push"))
     );
     assert_eq!(action("grep", serde_json::json!({"pattern": "x"})), None);
 }

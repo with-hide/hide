@@ -21,6 +21,11 @@
 /// single-quoted string unless doubled.
 pub const POWERSHELL_QUOTES: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
 
+/// The characters PowerShell reads as a double quote: the ASCII one and the
+/// three typographic ones (U+201C to U+201E), each of which ends a
+/// double-quoted string unless doubled or escaped with `` ` ``.
+pub const POWERSHELL_DOUBLE_QUOTES: [char; 4] = ['"', '\u{201C}', '\u{201D}', '\u{201E}'];
+
 impl crate::Syntax {
     /// `value` as one single-quoted word this shell reads back unchanged.
     /// A POSIX shell's `'` closes the string, is written escaped and opens it

@@ -289,7 +289,12 @@ pub fn write_policy(home: &Path, policy: &Policy) -> std::io::Result<()> {
 /// What a tool call does, as its runtime's payload says.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
-    Shell(String),
+    /// A shell call, with the syntax of the shell that runs it
+    /// (`pre_tool::shell_syntax`), which every guard reads it in.
+    Shell {
+        command: String,
+        syntax: hide_shell::Syntax,
+    },
     Write(Vec<String>),
     Read(Vec<String>),
     /// A file write whose target was cut off with the rest of a payload too
@@ -439,7 +444,7 @@ pub fn decide_with(
     let facts = Facts::new(policy, home);
     let cwd = absolute(home, cwd, cwd);
     let refusal = match action {
-        Action::Shell(command) => git::shell(&facts, &cwd, command, dirty),
+        Action::Shell { command, syntax } => git::shell(&facts, &cwd, command, *syntax, dirty),
         Action::Write(paths) => paths
             .iter()
             .find_map(|path| write(&facts, &cwd, &absolute(home, &cwd, Path::new(path)))),

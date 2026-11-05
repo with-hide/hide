@@ -196,10 +196,11 @@ fn opening_of(words: &[String], depth: usize, syntax: Syntax, openings: &mut Vec
     let Some((first, arguments)) = words.split_first() else {
         return;
     };
-    let name = first.rsplit(['/', '\\']).next().unwrap_or(first);
-    let lower = name.to_ascii_lowercase();
-    let windows_name = lower.strip_suffix(".exe").unwrap_or(&lower);
-    let (opener, operands): (&'static str, Option<Vec<&String>>) = match name {
+    let name = syntax.program(first);
+    // Windows finds its openers without case, in any shell.
+    let windows_name = Syntax::PowerShell.program(first);
+    let windows_name = windows_name.as_str();
+    let (opener, operands): (&'static str, Option<Vec<&String>>) = match name.as_str() {
         "open" => ("open", macos_open(arguments)),
         "xdg-open" | "sensible-browser" | "x-www-browser" | "www-browser" | "wslview"
         | "gnome-open" | "kde-open" | "kde-open5" | "exo-open" | "gvfs-open" => {
@@ -212,15 +213,17 @@ fn opening_of(words: &[String], depth: usize, syntax: Syntax, openings: &mut Vec
             "start" | "start-process" | "saps" => ("start", Some(windows_operands(arguments))),
             "invoke-item" | "ii" => ("invoke-item", Some(windows_operands(arguments))),
             "explorer" => ("explorer", explorer(arguments)),
-            "cmd" if depth < NESTING => {
-                if let Some(line) = after_switch(arguments, &["/c", "/k", "//c", "//k"]) {
-                    nested(line, depth, syntax, openings);
-                }
-                return;
-            }
-            "powershell" | "pwsh" if depth < NESTING => {
-                if let Some(line) = after_switch(arguments, &["-command", "-c", "/command", "/c"]) {
-                    nested(line, depth, Syntax::PowerShell, openings);
+            "cmd" | "powershell" | "pwsh" if depth < NESTING => {
+                let switches: &[&str] = if windows_name == "cmd" {
+                    &["/c", "/k", "//c", "//k"]
+                } else {
+                    &["-command", "-c", "/command", "/c"]
+                };
+                if let Some(line) = after_switch(arguments, switches) {
+                    // cmd's own syntax is not read: its line keeps the
+                    // syntax of the call it came in.
+                    let inner = Syntax::of_program(windows_name).unwrap_or(syntax);
+                    nested(line, depth, inner, openings);
                 }
                 return;
             }
@@ -432,7 +435,7 @@ fn powershell_word(word: &str) -> String {
         let escaped: String = word
             .chars()
             .flat_map(|c| {
-                matches!(c, '"' | '`' | '\u{201C}' | '\u{201D}' | '\u{201E}')
+                (c == '`' || hide_shell::quote::POWERSHELL_DOUBLE_QUOTES.contains(&c))
                     .then_some('`')
                     .into_iter()
                     .chain(Some(c))
@@ -896,6 +899,16 @@ mod tests {
             (
                 r"pwsh -c 'ii .\out.png'",
                 format!(r"{hide} file open .\out.png"),
+            ),
+            // with-hide/hide-private#589: a line continued before a Windows
+            // line end, and a path in typographic double quotes.
+            (
+                "Start-Process `\r\n .\\x.html",
+                format!(r"{hide} browser open .\x.html"),
+            ),
+            (
+                "ii \u{201C}C:\\a b\\x.png\u{201D}",
+                format!(r"{hide} file open 'C:\a b\x.png'"),
             ),
         ] {
             let openings = find_openings(command, Syntax::PowerShell);

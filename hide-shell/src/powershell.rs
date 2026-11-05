@@ -6,8 +6,10 @@
 //! What differs from a POSIX shell is read here and nowhere else: `` ` `` is
 //! the escape character and `\` a plain one, so `.\out.png` stays a path; a
 //! single-quoted string ends only at a quote that is not doubled, the four
-//! typographic single quotes counting as quotes; a double-quoted string
-//! doubles `"` or escapes it with `` ` ``; `&` before a command is the call
+//! typographic single quotes counting as quotes; a double-quoted string,
+//! opened and closed by `"` or a typographic double quote, doubles its quote
+//! or escapes it with `` ` ``; a `` ` `` before a line end, `\n` or `\r\n`,
+//! continues the line; `&` before a command is the call
 //! operator and after one sends it to the background; `{ }` is a script
 //! block, which may run any number of times; `<# #>` is a comment, and a
 //! here-string (`@'` ... `'@`) is one word. A line PowerShell refuses to
@@ -15,7 +17,7 @@
 //! inside, a stray closing bracket, a `<`, which PowerShell reserves) reads
 //! as no commands.
 
-use crate::quote::POWERSHELL_QUOTES;
+use crate::quote::{POWERSHELL_DOUBLE_QUOTES, POWERSHELL_QUOTES};
 use crate::{Join, ShellLine};
 
 /// The keywords that open a statement whose condition sits in parentheses
@@ -50,6 +52,62 @@ pub(crate) fn read(text: &str) -> ShellLine {
 /// PowerShell would refuse to run the line.
 struct Refused;
 
+/// The assignment operators (`about_Assignment_Operators`), the longer
+/// ones first so `+=` is not read as `=`.
+const ASSIGNMENTS: [&str; 7] = ["??=", "+=", "-=", "*=", "/=", "%=", "="];
+
+/// Takes the assignment in front of a command out of its words: what runs
+/// is the command after it, whose output the target takes. A command whose
+/// first word starts with `$` or `[` is an expression, and when an
+/// assignment operator stands outside its brackets, everything up to the
+/// first one is the target (`$r`, `[int] $r`, `$r.x`, `$h['k']`, `$a, $b`)
+/// and the rest is the command (`about_Assignment_Operators`); chained
+/// assignments are taken one by one. Without an operator the words stay as
+/// they are (`$r == 1`, `$r -eq 1`, `[IO.File]::Exists`).
+fn strip_assignments(words: &mut Vec<String>) {
+    while words
+        .first()
+        .is_some_and(|first| first.starts_with(['$', '[']))
+    {
+        let Some((word, at, operator)) = first_assignment(words) else {
+            return;
+        };
+        let value = words[word][at + operator.len()..].to_owned();
+        words.drain(..=word);
+        if !value.is_empty() {
+            words.insert(0, value);
+        }
+    }
+}
+
+/// The word, the byte offset in it and the operator of the first
+/// assignment operator outside brackets in `words`.
+fn first_assignment(words: &[String]) -> Option<(usize, usize, &'static str)> {
+    let mut depth = 0usize;
+    for (index, word) in words.iter().enumerate() {
+        for (at, c) in word.char_indices() {
+            match c {
+                '[' | '{' => depth += 1,
+                ']' | '}' => depth = depth.saturating_sub(1),
+                _ if depth == 0 => {
+                    let rest = &word[at..];
+                    if rest.starts_with("==") {
+                        return None;
+                    }
+                    if let Some(operator) = ASSIGNMENTS
+                        .iter()
+                        .find(|operator| rest.starts_with(**operator))
+                    {
+                        return Some((index, at, operator));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 struct Reader {
     chars: Vec<char>,
     at: usize,
@@ -82,8 +140,10 @@ impl Reader {
                 '`' => {
                     self.at += 1;
                     match self.peek(0) {
-                        // A backtick before a newline continues the line.
+                        // A backtick before a line end, `\n` or `\r\n`,
+                        // continues the line.
                         Some('\n') => self.at += 1,
+                        Some('\r') if self.peek(1) == Some('\n') => self.at += 2,
                         Some(escaped) => {
                             self.push(escaped);
                             self.at += 1;
@@ -92,7 +152,7 @@ impl Reader {
                     }
                 }
                 c if POWERSHELL_QUOTES.contains(&c) => self.single_quoted()?,
-                '"' => self.double_quoted()?,
+                c if POWERSHELL_DOUBLE_QUOTES.contains(&c) => self.double_quoted()?,
                 '@' if matches!(self.peek(1), Some('\'' | '"')) && self.opens_here_string() => {
                     self.here_string()?
                 }
@@ -210,7 +270,8 @@ impl Reader {
         self.end_word();
         self.target_next = false;
         let conditional = self.and_or || !self.blocks.is_empty();
-        let words = std::mem::take(&mut self.words);
+        let mut words = std::mem::take(&mut self.words);
+        strip_assignments(&mut words);
         let keyword =
             words.len() == 1 && KEYWORDS.contains(&words[0].to_ascii_lowercase().as_str());
         if !words.is_empty() && !keyword {
@@ -267,11 +328,15 @@ impl Reader {
                         self.at += 1;
                     }
                 }
-                '"' if self.peek(1) == Some('"') => {
-                    self.word.push('"');
+                c if POWERSHELL_DOUBLE_QUOTES.contains(&c)
+                    && self
+                        .peek(1)
+                        .is_some_and(|next| POWERSHELL_DOUBLE_QUOTES.contains(&next)) =>
+                {
+                    self.word.push(self.chars[self.at + 1]);
                     self.at += 2;
                 }
-                '"' => {
+                c if POWERSHELL_DOUBLE_QUOTES.contains(&c) => {
                     self.at += 1;
                     return Ok(());
                 }
