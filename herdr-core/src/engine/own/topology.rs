@@ -1066,10 +1066,15 @@ impl Topology {
         workspace.tabs[tab].layout(&workspace.id)
     }
 
-    /// The whole session, as a snapshot of Herdr's would project it, its
-    /// agents named by `catalog`'s definitions.
-    pub(super) fn state(&self, catalog: &Catalog) -> Result<ProjectionState, EngineError> {
-        let now = Instant::now();
+    /// The whole session as of `now`, as a snapshot of Herdr's would
+    /// project it, its agents named by `catalog`'s definitions. `now` decides
+    /// each start's `launch_pending`, and [`Self::next_start_change`] read at
+    /// the same `now` says when the first of those can change.
+    pub(super) fn state_at(
+        &self,
+        catalog: &Catalog,
+        now: Instant,
+    ) -> Result<ProjectionState, EngineError> {
         let mut state = ProjectionState {
             tab_focus: self.shown.last.clone(),
             tab_moves: Some(self.shown.moves.clone()),
@@ -1905,7 +1910,7 @@ mod tests {
 
     fn pane_ids(topology: &Topology) -> Vec<String> {
         topology
-            .state(&Catalog::read(Vec::new()))
+            .state_at(&Catalog::read(Vec::new()), Instant::now())
             .unwrap()
             .panes
             .into_iter()
@@ -1999,7 +2004,7 @@ mod tests {
         );
         assert!(
             topology
-                .state(&Catalog::read(Vec::new()))
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
                 .unwrap()
                 .workspaces
                 .is_empty()
@@ -2025,7 +2030,7 @@ mod tests {
         assert_eq!(pane_ids(&topology), [first.pane.clone(), beside.clone()]);
         assert_eq!(
             topology
-                .state(&Catalog::read(Vec::new()))
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
                 .unwrap()
                 .focused_pane_id
                 .as_deref(),
@@ -2035,7 +2040,7 @@ mod tests {
         assert_eq!(topology.remove_pane(&beside).unwrap(), Closed::default());
         assert_eq!(
             topology
-                .state(&Catalog::read(Vec::new()))
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
                 .unwrap()
                 .focused_pane_id
                 .as_deref(),
@@ -2263,8 +2268,11 @@ mod tests {
         let saved = serde_json::to_string(&topology.to_saved()).unwrap();
         let mut read = Topology::from_saved(serde_json::from_str(&saved).unwrap()).unwrap();
         assert_eq!(
-            read.state(&Catalog::read(Vec::new())).unwrap(),
-            topology.state(&Catalog::read(Vec::new())).unwrap()
+            read.state_at(&Catalog::read(Vec::new()), Instant::now())
+                .unwrap(),
+            topology
+                .state_at(&Catalog::read(Vec::new()), Instant::now())
+                .unwrap()
         );
         assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "h1:p4");
         assert_eq!(read.reserve_workspace().workspace, "h2");

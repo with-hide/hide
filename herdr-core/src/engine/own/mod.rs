@@ -1457,12 +1457,13 @@ impl<'g> Engine for OwnEngine<'g> {
         self.check()?;
         let catalog = self.shared.definitions.get();
         let topology = self.topology();
-        let state = topology.state(&catalog)?;
-        // The read says whether each start is pending now; the clock has the
-        // core read again when one can stop being pending on its own.
-        self.shared
-            .start_clock
-            .arm(topology.next_start_change(Instant::now()));
+        // One moment decides both whether each start is pending in this read
+        // and when the clock has the core read again: read apart, a start
+        // pending in the read could already be past its settle for the
+        // clock, which would then never wake for it.
+        let now = Instant::now();
+        let state = topology.state_at(&catalog, now)?;
+        self.shared.start_clock.arm(topology.next_start_change(now));
         Ok(state)
     }
 
@@ -4597,6 +4598,80 @@ mod tests {
             .expect("the watcher is told when the settle passes");
         assert_eq!(pending(&engine), (Some("idle".to_owned()), false));
         assert_eq!(engine.shared.start_clock.armed(), None, "nothing pending");
+    }
+
+    /// Whatever moment a read lands at around a start's settle and deadline,
+    /// a start the read has pending names a later moment for the clock, and
+    /// one it has settled names none: a read whose start is pending but
+    /// whose clock is disarmed leaves the row starting until something else
+    /// changes.
+    #[test]
+    fn a_read_that_has_a_start_pending_always_arms_a_later_moment() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "codex", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        let catalog = engine.shared.definitions.get();
+        let read = |now: Instant| {
+            let topology = engine.topology();
+            let state = topology.state_at(&catalog, now).unwrap();
+            let pending = state
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane)
+                .is_some_and(|agent| agent.launch_pending);
+            (pending, topology.next_start_change(now))
+        };
+        let tick = std::time::Duration::from_millis(1);
+        for (screen, settles) in [(ScreenState::Idle, true), (ScreenState::Working, false)] {
+            holders.say(&pane, &running("codex", screen));
+            let started = engine
+                .topology()
+                .pane(&pane)
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .live
+                .started
+                .unwrap();
+            let settle = started + agents::START_SETTLE;
+            let deadline = started + agents::START_DEADLINE;
+            for now in [
+                settle - tick,
+                settle,
+                settle + tick,
+                deadline - tick,
+                deadline,
+            ] {
+                let (pending, next) = read(now);
+                assert_eq!(
+                    pending,
+                    next.is_some(),
+                    "{screen:?} at {:?} after the start",
+                    now - started
+                );
+                if let Some(next) = next {
+                    assert!(next > now, "{screen:?}: the clock is armed later");
+                }
+            }
+            assert_eq!(read(settle - tick), (true, Some(settle)), "{screen:?}");
+            assert_eq!(
+                read(settle).0,
+                !settles,
+                "{screen:?}: a resting screen settles at the settle"
+            );
+            if !settles {
+                assert_eq!(read(settle).1, Some(deadline), "{screen:?}");
+            }
+        }
     }
 
     /// A brief typed while the agent's program still leaves the terminal
