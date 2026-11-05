@@ -1592,6 +1592,21 @@ impl Runtime {
         self.codex_daemon(device)
     }
 
+    /// Whether the Hide integration of `kind` is installed and on, on the
+    /// machine that runs `pane_id`, as its kit last said: a machine whose
+    /// kit Hide has not read, or that declined Hide's hooks, says no.
+    pub(super) fn integration_on_for_pane(&self, pane_id: &str, kind: &str) -> bool {
+        let device = crate::address::pane_device(pane_id).unwrap_or(self.node.as_str());
+        let declined = self
+            .device_kit_declined(device)
+            .is_some_and(|declined| declined.installed_nothing());
+        let kit = self.kit_state(device);
+        hide_agent_adapter::adapter(kind)
+            .and_then(|adapter| adapter.subagent_counts)
+            .and_then(|dialect| crate::agent_hooks::device_hook_status(declined, &kit, dialect))
+            .is_some_and(|status| matches!(status, hide_agent_hooks::HookStatus::Installed { .. }))
+    }
+
     pub(super) fn kit_state(&self, device_id: &str) -> KitSnapshot {
         self.kit_states.get(device_id).cloned().unwrap_or_default()
     }

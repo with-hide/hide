@@ -1642,6 +1642,7 @@ fn launch_agent(
         args,
         codex_daemon,
         wakes: false,
+        integration_on: false,
     }) {
         Ok(start) => start,
         // An unread Codex is named by its own code; the rest is a wire fault.

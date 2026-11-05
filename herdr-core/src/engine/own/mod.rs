@@ -2234,6 +2234,7 @@ impl<'g> Engine for OwnEngine<'g> {
             definition,
             &argv,
             launch.wakes,
+            launch.integration_on,
             processes.shell_name(),
             pane,
         );
@@ -3866,6 +3867,7 @@ mod tests {
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
+            integration_on: false,
         }
     }
 
@@ -3873,6 +3875,16 @@ mod tests {
     /// if it had been typed that long ago.
     fn settle_start(engine: &OwnEngine, pane: &str) {
         age_start(engine, pane, agents::START_SETTLE);
+    }
+
+    /// A wake of OpenCode into a session, on a machine whose kit has its
+    /// Hide integration on: the start that waits for its session report.
+    fn opencode_wake(pane: &str, integration_on: bool) -> AgentLaunch {
+        AgentLaunch {
+            wakes: true,
+            integration_on,
+            ..launch(pane, "worker", "opencode", &["-s", "ses_1"])
+        }
     }
 
     /// A typed start line without the run a start waiting for its report
@@ -3886,10 +3898,6 @@ mod tests {
             Some((run, line)) => (Some(run), line),
             None => (None, line),
         }
-    }
-
-    fn unrun(line: String) -> String {
-        split_run(&line).1.to_owned()
     }
 
     /// Moves the start of the agent in `pane` back by `by`.
@@ -3988,11 +3996,7 @@ mod tests {
             .prepare_start(launch(&pane, "worker", "claude", &["--model", "it's"]))
             .unwrap();
         engine.start_agent(WAIT, &start).unwrap();
-        let typed = holders.typed(&pane);
-        let (run, line) = split_run(&typed);
-        assert_eq!(line, "claude --model 'it'\\''s'\r");
-        let run = run.expect("a Claude Code start names its run").to_owned();
-        assert!(hide_agent_hooks::report::valid_run(&run), "{run}");
+        assert_eq!(holders.typed(&pane), "claude --model 'it'\\''s'\r");
         assert_eq!(
             holders.rules_given(1),
             [(pane.clone(), Some("claude-code".to_owned()))]
@@ -4021,30 +4025,10 @@ mod tests {
         let done = engine.agent_state(WAIT, "worker").unwrap();
         assert_eq!(done.status, "done", "a rest after work is done");
         assert!(done.state_change_seq > working.state_change_seq);
-        // Claude Code reports its session as it starts: its start takes
-        // input on that report, never on the rest alone
-        // (with-hide/hide-private#545).
         assert_eq!(
             engine.delivery_agent(WAIT, &pane).unwrap().readiness,
-            Readiness::Launching,
-            "at rest past the settle, but its hook has not reported"
-        );
-        // A late report of the run before, or one naming no run, records
-        // its session but is not this start's.
-        for stale in [Some("0123456789abcdef"), None] {
-            engine.hook_session(&pane, "claude", "s-0", stale).unwrap();
-            assert_eq!(
-                engine.delivery_agent(WAIT, &pane).unwrap().readiness,
-                Readiness::Launching,
-                "{stale:?}"
-            );
-        }
-        engine
-            .hook_session(&pane, "claude", "s-1", Some(&run))
-            .unwrap();
-        assert_eq!(
-            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
-            Readiness::Ready
+            Readiness::Ready,
+            "a Claude Code start keeps the settle"
         );
         let listed = engine.agents(WAIT).unwrap();
         assert_eq!(listed.len(), 1);
@@ -4615,38 +4599,43 @@ mod tests {
         );
     }
 
-    /// A start whose shell takes no run (here nushell) is typed none and
-    /// waits for no report it could not be matched by: it takes input on
-    /// the settle alone, as before.
+    /// A woken OpenCode whose shell takes no run (here nushell), or whose
+    /// machine's kit does not have its Hide integration on, is typed no run
+    /// and waits for no report it could not get or be matched by: it takes
+    /// input on the settle alone, as before.
     #[test]
-    fn a_start_into_a_shell_that_takes_no_run_waits_for_no_report() {
+    fn a_wake_with_no_run_to_name_waits_for_no_report() {
         use hide_node_link::holders::ScreenState;
-        let holders = Arc::new(Holders::default());
-        holders.idle_shell(41, "nu");
-        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
-        let (_, _, pane) = engine
-            .create_workspace(WAIT, "/w", "w", true, Env::new())
-            .unwrap();
-        let start = engine
-            .prepare_start(launch(&pane, "worker", "claude", &[]))
-            .unwrap();
-        engine.start_agent(WAIT, &start).unwrap();
-        assert_eq!(holders.typed(&pane), "claude\r");
-        settle_start(&engine, &pane);
-        holders.say(&pane, &running("claude", ScreenState::Idle));
-        assert_eq!(
-            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
-            Readiness::Ready
-        );
+        for (shell, integration_on) in [("nu", true), ("zsh", false)] {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, shell);
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let start = engine
+                .prepare_start(opencode_wake(&pane, integration_on))
+                .unwrap();
+            engine.start_agent(WAIT, &start).unwrap();
+            assert_eq!(holders.typed(&pane), "opencode -s ses_1\r", "{shell}");
+            settle_start(&engine, &pane);
+            holders.say(&pane, &running("opencode", ScreenState::Idle));
+            assert_eq!(
+                engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+                Readiness::Ready,
+                "{shell}"
+            );
+        }
     }
 
-    /// A start that waits for its session report and has none of its run by
-    /// its deadline failed: what is typed to it is refused before anything
-    /// is written, a late report of the run before changes nothing, and the
-    /// report of its own run, however late, lets it take input
-    /// (with-hide/hide-private#545).
+    /// A woken OpenCode whose integration is on waits for the session report
+    /// of its own run (with-hide/hide-private#545): a late report of the run
+    /// before, or one naming no run, records its session but settles
+    /// nothing; with none of its run by its deadline the start failed and
+    /// what is typed to it is refused before anything is written; the
+    /// report of its own run, however late, lets it take input.
     #[test]
-    fn a_start_with_no_report_of_its_run_by_its_deadline_refuses_input_until_that_report() {
+    fn a_woken_agent_takes_input_only_on_the_report_of_its_own_run() {
         use hide_node_link::holders::ScreenState;
         let holders = Arc::new(Holders::default());
         holders.idle_shell(41, "zsh");
@@ -4654,17 +4643,27 @@ mod tests {
         let (_, _, pane) = engine
             .create_workspace(WAIT, "/w", "w", true, Env::new())
             .unwrap();
-        let start = engine
-            .prepare_start(launch(&pane, "worker", "claude", &[]))
-            .unwrap();
+        let start = engine.prepare_start(opencode_wake(&pane, true)).unwrap();
         engine.start_agent(WAIT, &start).unwrap();
         let typed = holders.typed(&pane);
-        let run = split_run(&typed)
-            .0
-            .expect("the start names its run")
-            .to_owned();
+        let (run, line) = split_run(&typed);
+        assert_eq!(line, "opencode -s ses_1\r");
+        let run = run.expect("the wake names its run").to_owned();
+        settle_start(&engine, &pane);
+        holders.say(&pane, &running("opencode", ScreenState::Idle));
+        for stale in [Some("0123456789abcdef"), None] {
+            engine
+                .hook_session(&pane, "opencode", "ses_1", stale)
+                .unwrap();
+            assert_eq!(
+                engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+                Readiness::Launching,
+                "at rest past the settle, with {stale:?}"
+            );
+        }
+
         age_start(&engine, &pane, agents::START_DEADLINE);
-        holders.say(&pane, &running("claude", ScreenState::Idle));
+        holders.say(&pane, &running("opencode", ScreenState::Idle));
         engine.session(WAIT).unwrap();
         let refused = |answer: Answer<()>| match answer {
             Err(EngineError::Refused { code, .. }) => code,
@@ -4679,18 +4678,10 @@ mod tests {
             refused(engine.prompt_agent(WAIT, "worker", "hi")),
             "agent_not_ready"
         );
-        engine
-            .hook_session(&pane, "claude", "s-0", Some("0123456789abcdef"))
-            .unwrap();
-        assert_eq!(
-            refused(engine.prompt_agent(WAIT, "worker", "hi")),
-            "agent_not_ready",
-            "a late report of the run before"
-        );
         assert_eq!(holders.typed(&pane), typed, "nothing was typed");
 
         engine
-            .hook_session(&pane, "claude", "s-1", Some(&run))
+            .hook_session(&pane, "opencode", "ses_1", Some(&run))
             .unwrap();
         assert_eq!(
             engine.delivery_agent(WAIT, &pane).unwrap().readiness,
@@ -5034,11 +5025,13 @@ mod tests {
         next.restored().unwrap();
 
         assert_eq!(
-            unrun(holders.wait_typed(&claude)),
+            holders.wait_typed(&claude),
             "claude --resume s-1 || printf 'hide: %s ended with a failure after its resume; this pane is a shell now.\\n' 'Claude Code'\r"
         );
         assert!(
-            unrun(holders.wait_typed(&gemini)).starts_with("gemini --resume latest || printf"),
+            holders
+                .wait_typed(&gemini)
+                .starts_with("gemini --resume latest || printf"),
             "the last conversation of an agent whose session is not known"
         );
         assert_eq!(holders.typed(&twin), "", "one conversation, one pane");
@@ -5128,13 +5121,16 @@ mod tests {
         next.restored().unwrap();
 
         assert!(
-            unrun(holders.wait_typed(&worker))
+            holders
+                .wait_typed(&worker)
                 .starts_with("claude --resume s-1 --model opus --effort high || printf"),
             "{:?}",
             holders.typed(&worker)
         );
         assert!(
-            unrun(holders.wait_typed(&other)).starts_with("claude --resume s-2 || printf"),
+            holders
+                .wait_typed(&other)
+                .starts_with("claude --resume s-2 || printf"),
             "{:?}",
             holders.typed(&other)
         );
@@ -5209,7 +5205,7 @@ mod tests {
         next.restored().unwrap();
         for pane in [&working, &resting] {
             assert!(
-                unrun(holders.wait_typed(pane)).starts_with("claude --resume"),
+                holders.wait_typed(pane).starts_with("claude --resume"),
                 "{:?}",
                 holders.typed(pane)
             );
@@ -5282,7 +5278,9 @@ mod tests {
             .unwrap()
             .pane;
         assert!(
-            unrun(holders.wait_typed(&tab)).starts_with("claude --resume 0b6a3f1e-claude-session"),
+            holders
+                .wait_typed(&tab)
+                .starts_with("claude --resume 0b6a3f1e-claude-session"),
             "{:?}",
             holders.typed(&tab)
         );
@@ -5358,7 +5356,8 @@ mod tests {
             }),
         });
         assert!(
-            unrun(idle.wait_typed(&claude)).starts_with("claude --resume s-1 || printf"),
+            idle.wait_typed(&claude)
+                .starts_with("claude --resume s-1 || printf"),
             "{:?}",
             idle.typed(&claude)
         );

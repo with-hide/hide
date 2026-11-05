@@ -221,19 +221,21 @@ pub(super) fn new_run() -> String {
 
 /// The run a start of `definition` typed as `argv` into the shell named
 /// `shell` names, when it waits for its integration's session report
-/// ([`awaits_session_report`]) and that shell types a run
-/// ([`super::shell_line::takes_run`]). A start that would wait but whose
-/// shell takes no run keeps the settle alone, and the log says so: it waits
-/// for no report it could not be matched by, so it never fails at its
-/// deadline for want of one.
+/// ([`awaits_session_report`]), that integration is installed and on, on
+/// the pane's machine (`integration_on`, as its kit last said), and that
+/// shell types a run ([`super::shell_line::takes_run`]). A start that would
+/// wait but whose shell takes no run keeps the settle alone, and the log
+/// says so: it waits for no report it could not be matched by, so it never
+/// fails at its deadline for want of one.
 pub(super) fn start_run(
     definition: &Definition,
     argv: &[String],
     wakes: bool,
+    integration_on: bool,
     shell: Option<&str>,
     pane: &str,
 ) -> Option<String> {
-    if !awaits_session_report(definition, argv, wakes) {
+    if !integration_on || !awaits_session_report(definition, argv, wakes) {
         return None;
     }
     if super::shell_line::takes_run(shell) {

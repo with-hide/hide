@@ -301,6 +301,7 @@ fn start_dormant(
         args,
         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
         wakes: true,
+        integration_on: false,
     }) {
         Ok(start) => start,
         Err(_) => return DormantStartOutcome::NotStarted,

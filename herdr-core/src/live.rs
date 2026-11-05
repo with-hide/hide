@@ -590,6 +590,7 @@ pub(crate) fn start_agent_checked(
             args,
             codex_daemon,
             wakes: false,
+            integration_on: false,
         })
         .map_err(|detail| crate::agent_start::StartError::NotStarted {
             reason: "agent_start.failed".into(),

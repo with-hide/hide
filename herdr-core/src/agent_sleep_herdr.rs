@@ -388,6 +388,9 @@ pub(crate) struct WakeRequest {
     /// an agent that does not report it itself on resume.
     pub(crate) session_id: Option<String>,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
+    /// The agent's Hide integration is installed and on, on the pane's
+    /// machine (`AgentLaunch::integration_on`).
+    pub(crate) integration_on: bool,
 }
 
 /// Why a wake failed, as the codes the screen words (`web/src/startReason.ts`);
@@ -431,6 +434,7 @@ pub(crate) fn start_agent(
         args: request.args.clone(),
         codex_daemon: request.codex_daemon,
         wakes: true,
+        integration_on: request.integration_on,
     }) {
         Ok(start) => start,
         // A Codex whose daemon Hide has not read answers its own code
@@ -673,6 +677,7 @@ mod tests {
                         cwd: None,
                         session_id: None,
                         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+                        integration_on: false,
                     }
                 ),
                 WakeOutcome::Started,
@@ -1144,6 +1149,7 @@ mod tests {
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
+                integration_on: false,
                 pane_id: "w1:p1".into(),
                 kind: "codex".into(),
                 name: "one".into(),
@@ -1177,6 +1183,7 @@ mod tests {
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: Default::default(),
+                integration_on: false,
                 pane_id: "w1:p1".into(),
                 kind: "claude".into(),
                 name: "one".into(),
@@ -1203,6 +1210,7 @@ mod tests {
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: Default::default(),
+                integration_on: false,
                 pane_id: "w1:p1".into(),
                 kind: "codex".into(),
                 name: "wake-w1-p1".into(),

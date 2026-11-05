@@ -208,6 +208,10 @@ pub(crate) struct AgentLaunch {
     /// nothing is typed to it before it takes keys. A spawn that resumes is
     /// known by its resume at once, as its caller asked.
     pub(crate) wakes: bool,
+    /// The agent's Hide integration is installed and on, on the pane's
+    /// machine, as its kit last said, so its session report can come: only
+    /// then does a start wait for it (with-hide/hide-private#545).
+    pub(crate) integration_on: bool,
 }
 
 /// A start its engine accepted to send ([`super::Engine::prepare_start`]),

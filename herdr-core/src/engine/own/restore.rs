@@ -872,13 +872,16 @@ impl OwnEngine<'static> {
             .map_err(|error| error.to_string())?;
         let shell = Shell::of(group.shell_name(), self.shared.windows)
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
-        // A restart's resume is a wake of the agent.
+        // A restart's resume is a wake of the agent. The engine resumes it
+        // before the core has read the machine's kit, so it cannot say the
+        // agent's integration is on: the resume keeps the settle.
         let run = super::agents::definition(&self.shared.definitions.get(), &resume.kind).and_then(
             |definition| {
                 super::agents::start_run(
                     definition,
                     &resume.argv,
                     true,
+                    false,
                     group.shell_name(),
                     &resume.pane,
                 )

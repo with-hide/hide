@@ -125,6 +125,7 @@ pub(crate) fn reopen(
             cwd: request.cwd.clone(),
             session_id: Some(request.session_id.clone()),
             codex_daemon: request.codex_daemon,
+            integration_on: false,
         },
     ) {
         WakeOutcome::Started => Ok(()),
