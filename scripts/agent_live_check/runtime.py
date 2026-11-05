@@ -120,6 +120,16 @@ class ResidentOutput:
             thread.start()
             self.threads.append(thread)
 
+    def mark(self):
+        """How many bytes the resident has written so far."""
+        with self.lock:
+            return len(self.data)
+
+    def since(self, mark):
+        """What the resident wrote after `mark`, as drained so far."""
+        with self.lock:
+            return bytes(self.data[mark:])
+
     def finish(self):
         for thread in self.threads:
             thread.join(timeout=2)
@@ -237,6 +247,10 @@ class Runtime:
         output = ResidentOutput(self.owner, child, self.run / (label + ".log"))
         self.servers.append((child, output, label))
         return child
+
+    def output(self, label):
+        """The output the resident started as `label` has written so far."""
+        return next(output for _, output, name in self.servers if name == label)
 
     def start(self) -> dict:
         self.resident(self.hided, [], self.daemon_env, "hided")

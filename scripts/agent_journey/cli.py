@@ -31,6 +31,7 @@ from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_progr
 from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service
 from .controller import Controller
 from .contract import load_contract
+from .failure import FailureLogs, drop_on_pass
 from .journey import STEPS, Journey, token
 from .own_runtime import OwnRuntime
 from .routes import allow_hook_route, operator_routing
@@ -630,6 +631,7 @@ def main(argv=None):
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
                                               services, diagnostics)
         report["holders"] = runtime.start()
+        failure_logs = FailureLogs(runtime.output("hided"))
         if sandbox:
             for current in getattr(runtime, "journey_sandboxes", [sandbox]):
                 allow_hook_route(current, runtime)
@@ -676,7 +678,8 @@ def main(argv=None):
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
                                   composer_judge=composer_judge,
-                                  model=rows[key]["model_flag"] and models.get(key), brief_start=not fixture_bin)
+                                  model=rows[key]["model_flag"] and models.get(key), brief_start=not fixture_bin,
+                                  failure_logs=failure_logs)
                 for step in STEPS:
                     journey.step(step, *((card,) if step == memory.CELL else ()))
                     if watch and agent.get("private_home", {}).get("enabled") and step == "start":
@@ -843,6 +846,7 @@ def main(argv=None):
         code = 1
     report["exit_code"] = code
     save(run, report)
+    drop_on_pass(run, code)
     print("\n".join(table_lines(report)))
     print(f"{run / 'report.md'}\n{run / 'report.json'}\nexit={code}")
     return code

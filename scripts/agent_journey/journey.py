@@ -17,7 +17,7 @@ from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import WINDOWS, git, same_path
 
-from . import cells, composer, fork, kit, memory, provider_limit, stop_observer, title, usage
+from . import cells, composer, failure, fork, kit, memory, provider_limit, stop_observer, title, usage
 from .requests import model_requests
 
 SPAWN_SECONDS = 150
@@ -154,7 +154,8 @@ def at_brief(value):
 
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
-                 branch, created, sessions, route, composer_judge, model=None, brief_start=True):
+                 branch, created, sessions, route, composer_judge, model=None, brief_start=True,
+                 failure_logs=None):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
         # The real CLIs start on Hide's brief, which their own record has to
         # confirm; the stand-ins imitate only the agent's prompt argument.
@@ -186,6 +187,11 @@ class Journey:
         # what was logged before it is another step's, and never settles
         # this one's cell (provider_limit.cursor).
         self.provider_mark = None
+        # hided's output, a failed cell keeps what of it its step saw
+        # (failure.py); and the running step's times with where that output
+        # stood when it began.
+        self.failure_logs = failure_logs
+        self.running = None
         observer_path = contract_row.get("stop_observer")
         self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path) if observer_path else None)
 
@@ -209,8 +215,16 @@ class Journey:
             return None
         path = self.run / f"{self.id}-{name}-pane.txt"
         path.unlink(missing_ok=True)
-        write_private(path, text.encode())
+        write_private(path, failure.scrub(text).encode())
         return path.name
+
+    def daemon_log(self, name):
+        """What hided wrote while the running step ran, kept only for a
+        failed cell, at its failure (failure.py)."""
+        if not (self.failure_logs and self.running):
+            return None
+        step, mark = self.running
+        return self.failure_logs.keep(self.run / f"{self.id}-{name}-hided.log", mark, step, name)
 
     def settle(self, name, verdict, evidence=None, pane=None):
         """`pane` the pane the cell measured when it is not the agent's own,
@@ -228,7 +242,7 @@ class Journey:
             return False
         if status == cells.FAIL:
             screen = self.capture(name, pane)
-            evidence = ", ".join(value for value in (evidence, screen) if value) or None
+            evidence = ", ".join(value for value in (evidence, screen, self.daemon_log(name)) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 
@@ -343,6 +357,10 @@ class Journey:
         """Runs one step; a transport failure or a bound it reached fails the
         step's open cell with that reason, and cancellation stops the run."""
         self.provider_mark = self.mark_provider()
+        # The step's times, in the report whatever its cells read.
+        times = {"step": name, "started_ms": failure.now_ms()}
+        self.record.setdefault("steps", []).append(times)
+        self.running = (times, self.failure_logs.mark() if self.failure_logs else 0)
         try:
             if name in MEASURES:
                 MEASURES[name](self, *args)
@@ -355,6 +373,9 @@ class Journey:
                 if self.table[self.id][cell]["status"] == cells.PENDING:
                     self.settle(cell, (cells.FAIL, str(error)))
                     break
+        finally:
+            times["ended_ms"] = failure.now_ms()
+            self.running = None
 
     def spawn(self, name, repository, branch, path, prompt_text, brief=False):
         """`hide agent spawn` from the controller; a local request_timeout is the
