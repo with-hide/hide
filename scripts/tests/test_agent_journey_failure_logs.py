@@ -35,8 +35,8 @@ class Hided:
     def __init__(self, test, run):
         out_read, self.out = os.pipe()
         err_read, self.err = os.pipe()
-        child = SimpleNamespace(stdout=os.fdopen(out_read, "rb", buffering=0),
-                                stderr=os.fdopen(err_read, "rb", buffering=0))
+        # Buffered, as subprocess hands a resident's pipes over.
+        child = SimpleNamespace(stdout=os.fdopen(out_read, "rb"), stderr=os.fdopen(err_read, "rb"))
         self.output = ResidentOutput(SimpleNamespace(cancelled=threading.Event()), child, run / "hided.log")
         self.written = 0
         test.addCleanup(self.close)

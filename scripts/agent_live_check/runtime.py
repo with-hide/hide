@@ -106,7 +106,9 @@ class ResidentOutput:
 
         def drain(stream):
             try:
-                while data := stream.read(4096):
+                # What the pipe holds now, up to 4 KiB: `read` would wait for
+                # 4 KiB, holding back the newest lines a failed cell reads.
+                while data := stream.read1(4096):
                     with self.lock:
                         if len(self.data) + len(data) > MAX_OUTPUT:
                             self.failed = True
