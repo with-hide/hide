@@ -1567,10 +1567,7 @@ fn a_node_logs_the_answers_its_holder_refused_with_the_pane_and_keeps_the_sessio
     let home = Home::new();
     let mut burst = b"\x1b]11;?\x07".repeat(6000);
     burst.extend_from_slice(b"asked");
-    // With the node's theme: a holder answers no color question before a
-    // screen gave the colors.
-    let script = crate::support::Script::new(&home, vec![b"ready".to_vec(), burst])
-        .with_theme(crate::support::node_theme());
+    let script = crate::support::Script::new(&home, vec![b"ready".to_vec(), burst]);
     let release: OsString = home.path().join("release").into();
     let holder = script.start_with(&home, &[(crate::support::HOLD_WRITES, &release)]);
     let transport = open_holder("q1", &holder.socket, None).unwrap();

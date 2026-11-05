@@ -6,7 +6,7 @@
 //! | Question | Answered by |
 //! | --- | --- |
 //! | DSR 5n, 6n; DECRQM; DECRQSS; XTVERSION; DA1, DA2, DA3 | libghostty |
-//! | OSC 10, 11, 12 and OSC 4 colors, `CSI ? 996 n` | libghostty, from the theme the node sent ([`crate::pane`]); a foreground or background no theme gave is answered by nobody, as Herdr answers none before a client gave its colors, and OSC 12 then answers only a cursor color the theme or the program set (with-hide/hide-private#405) |
+//! | OSC 10, 11, 12 and OSC 4 colors, `CSI ? 996 n` | libghostty, from the theme the node sent ([`crate::pane`]) |
 //! | XTGETTCAP | libghostty, less what this path does not carry ([`UNSUPPORTED`]) |
 //! | XTWINOPS 18t, the text area in cells | the holder ([`Scanner`]) |
 //! | XTWINOPS 14t, 16t | nobody: the cell's pixel size is not known, and libghostty answers neither without it |

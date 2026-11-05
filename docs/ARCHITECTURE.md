@@ -1751,7 +1751,6 @@ Input moves a scrolled view back to the bottom.
 Input and the answers to the program's questions reach the PTY through one writer, in the order they came.
 
 The holder answers the program's questions whether or not a node is connected, each once, in the order asked; who answers what is fixed in a table in `hide-holder/src/answers.rs`, split between libghostty and the holder so nothing is answered twice.
-A color question about the foreground, background or cursor is answered only from colors a screen gave (the theme a node starts the pane with or sends later) or the program set, as Herdr answers none before a client gave its colors: before that it goes unanswered rather than answered with the parser's defaults, because an answer that reaches a program no longer waiting for it is read as typed keys (with-hide/hide-private#405, an Antigravity prompt editor opened by an answer's closing BEL on Windows).
 Color questions are answered from the theme the node gives at the holder's start (`--theme`, part of the pane start a node adapter makes, so the program's first question is answered before any node connects), then from each change a connection sends; a color the program set itself wins over the theme until it resets it, and a reset returns to the theme.
 A color no theme names, as in a start without one, is answered with libghostty's default, as Herdr does, so a program never waits out its own timeout for an answer.
 The kitty keyboard query (`CSI ? u`) is not answered: this path sends no kitty-encoded keys, so the program keeps to legacy keys (D-9).

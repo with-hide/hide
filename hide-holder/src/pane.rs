@@ -92,8 +92,8 @@ pub struct Observed {
 }
 
 impl Pane {
-    /// A parser of `size` that answers color questions with `theme`; a
-    /// default color the theme does not give is not answered (D-9).
+    /// A parser of `size` that answers color questions with `theme`, or
+    /// with its own defaults where the theme, or any theme, is missing.
     pub fn new(size: Size, theme: Option<&Theme>) -> Result<Self, String> {
         let mut terminal = Terminal::new(size.cols, size.rows, SCROLLBACK_BYTES)
             .map_err(|error| format!("the terminal parser: {error}"))?;
@@ -279,12 +279,8 @@ impl Pane {
     }
 
     /// Takes the node's theme: the colors questions are answered with until
-    /// the program sets its own. A foreground or background the theme does
-    /// not give, as before any screen drew the pane, is not answered, as
-    /// Herdr answers none without a client's colors: an answer a program no
-    /// longer waits for can reach it as typed keys
-    /// (with-hide/hide-private#405). Answers a change of appearance to a
-    /// program that asked to be told (mode 2031).
+    /// the program sets its own. Answers a change of appearance to a program
+    /// that asked to be told (mode 2031).
     pub fn theme(&mut self, theme: &Theme, answers: &mut Vec<u8>) -> Result<(), hide_vt::Error> {
         let rgb = |color: Option<hide_holder_protocol::Rgb>| {
             color.map(|color| RgbColor {
@@ -293,10 +289,16 @@ impl Pane {
                 b: color.b,
             })
         };
-        self.terminal
-            .set_default_color(DefaultColor::Foreground, rgb(theme.foreground))?;
-        self.terminal
-            .set_default_color(DefaultColor::Background, rgb(theme.background))?;
+        // A color the node did not give is answered with the parser's own
+        // default, never left unanswered.
+        self.terminal.set_default_color(
+            DefaultColor::Foreground,
+            rgb(theme.foreground).or(self.defaults.initial_fg),
+        )?;
+        self.terminal.set_default_color(
+            DefaultColor::Background,
+            rgb(theme.background).or(self.defaults.initial_bg),
+        )?;
         self.terminal
             .set_default_color(DefaultColor::Cursor, rgb(theme.cursor))?;
         let mut palette = hide_vt::default_palette();
@@ -745,7 +747,6 @@ mod tests {
     #[test]
     fn each_question_is_answered_once_in_the_order_asked() {
         let mut pane = pane();
-        theme(&mut pane, Appearance::Dark);
         let asked = answers(
             &mut pane,
             &[
@@ -756,7 +757,7 @@ mod tests {
         assert_eq!(
             asked,
             "\x1b[1;1R\x1b[?62;22c\x1b[>1;0;0c\x1bP!|00000000\x1b\\\x1b[8;24;80t\
-             \x1b]10;rgb:1010/2020/3030\x07\x1b]4;1;rgb:0909/0909/0909\x07\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
+             \x1b]10;rgb:ffff/ffff/ffff\x07\x1b]4;1;rgb:cccc/6666/6666\x07\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
              \x1bP1+r5463\x1b\\\x1bP>|libghostty\x1b\\\x1b[?2004;2$y"
         );
     }
@@ -790,14 +791,11 @@ mod tests {
     #[test]
     fn a_theme_answers_colors_until_the_program_sets_its_own_and_after_it_resets_them() {
         let mut pane = pane();
-        // No theme yet: no screen gave the colors, so the default colors are
-        // not answered (#405); the palette is, from the parser's own.
+        // No theme yet: the parser's own defaults answer, so a program
+        // never waits for an answer that does not come.
         assert_eq!(
-            answers(
-                &mut pane,
-                &[b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07\x1b]4;1;?\x07"]
-            ),
-            "\x1b]4;1;rgb:cccc/6666/6666\x07"
+            answers(&mut pane, &[b"\x1b]10;?\x07\x1b]11;?\x07"]),
+            "\x1b]10;rgb:ffff/ffff/ffff\x07\x1b]11;rgb:0000/0000/0000\x07"
         );
         theme(&mut pane, Appearance::Dark);
         let asked = b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]4;1;?\x07";
@@ -825,10 +823,9 @@ mod tests {
             appearance: Appearance::Light,
         };
         let mut pane = Pane::new(Size { rows: 24, cols: 80 }, Some(&theme)).unwrap();
-        // The foreground it does not give goes unanswered.
         assert_eq!(
             answers(&mut pane, &[b"\x1b]10;?\x07\x1b]11;?\x07\x1b[?996n"]),
-            "\x1b]11;rgb:0101/0202/0303\x07\x1b[?997;2n"
+            "\x1b]10;rgb:ffff/ffff/ffff\x07\x1b]11;rgb:0101/0202/0303\x07\x1b[?997;2n"
         );
     }
 
