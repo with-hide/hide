@@ -122,40 +122,54 @@ for (const [kind, executable] of [
   });
 }
 
+/**
+ * Runs `start` against a daemon over a caller fixture whose `bin` holds Pi's
+ * and omp's npm `launcher` scripts over Node, once the page shows the
+ * fixture's checkout. `start` gets the command that runs `kind` at the
+ * fixture's shell.
+ */
+async function withNpmStack(page: Page, launcher: "ps1" | "cmd", kind: "pi" | "omp", start: (fixture: CallerFixture, daemon: Daemon, command: string) => Promise<void>): Promise<void> {
+  const fixture = await startCaller();
+  let daemon: Daemon | undefined;
+  try {
+    const bin = path.join(fixture.root, "bin");
+    // Both packages remain installed so each case must retain the scope
+    // that distinguishes their identical entry-point filenames.
+    for (const [installedKind, scope] of [["pi", "@earendil-works"], ["omp", "@oh-my-pi"]] as const) {
+      const script = path.join(bin, "node_modules", scope, "pi-coding-agent", "dist", "cli.js");
+      fs.mkdirSync(path.dirname(script), { recursive: true });
+      fs.writeFileSync(script, startProgram(fixture, installedKind));
+      const psQuote = (text: string) => `'${text.replaceAll("'", "''")}'`;
+      const body = launcher === "ps1"
+        ? `& ${psQuote(process.execPath)} ${psQuote(script)} @args\r\nexit $LASTEXITCODE\r\n`
+        : `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`;
+      fs.writeFileSync(path.join(bin, `${installedKind}.${launcher}`), body);
+    }
+    daemon = await startHided(fixture, `npm-${launcher}-${kind}`);
+    // A cmd shell cannot directly execute a .ps1; PowerShell resolves it by name.
+    const command = fixture.shell === "cmd" && launcher === "ps1"
+      ? `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(bin, `${kind}.ps1`)}"`
+      : kind;
+    await openPage(page, daemon, kind);
+    await start(fixture, daemon, command);
+  } catch (error) {
+    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => fixture.stop());
+  }
+  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => fixture.stop()); }
+  fixture.stop();
+}
+
+// Each start path is its own test here too, for the same budget.
 for (const launcher of ["ps1", "cmd"] as const) {
   for (const kind of ["pi", "omp"] as const) {
-    test(`Windows npm ${launcher} detects ${kind} beside another cli.js package`, { tag: "@platform" }, async ({ page }) => {
+    test(`Windows npm ${launcher} detects ${kind} beside another cli.js package through spawn`, { tag: "@platform" }, async ({ page }) => {
       test.skip(process.platform !== "win32", "Windows npm launchers require a real Windows shell and process table");
-      const fixture = await startCaller();
-      let daemon: Daemon | undefined;
-      try {
-        const bin = path.join(fixture.root, "bin");
-        // Both packages remain installed so each case must retain the scope
-        // that distinguishes their identical entry-point filenames.
-        for (const [installedKind, scope] of [["pi", "@earendil-works"], ["omp", "@oh-my-pi"]] as const) {
-          const script = path.join(bin, "node_modules", scope, "pi-coding-agent", "dist", "cli.js");
-          fs.mkdirSync(path.dirname(script), { recursive: true });
-          fs.writeFileSync(script, startProgram(fixture, installedKind));
-          const psQuote = (text: string) => `'${text.replaceAll("'", "''")}'`;
-          const body = launcher === "ps1"
-            ? `& ${psQuote(process.execPath)} ${psQuote(script)} @args\r\nexit $LASTEXITCODE\r\n`
-            : `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`;
-          fs.writeFileSync(path.join(bin, `${installedKind}.${launcher}`), body);
-        }
-        daemon = await startHided(fixture, `npm-${launcher}-${kind}`);
-        // Herdr's ordinary fixture shell is cmd, which cannot directly
-        // execute a .ps1. The own engine's PowerShell resolves it by name.
-        const command = fixture.shell === "cmd" && launcher === "ps1"
-          ? `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(bin, `${kind}.ps1`)}"`
-          : kind;
-        await openPage(page, daemon, kind);
-        await spawnStart(page, fixture, daemon, kind);
-        await typedStart(page, fixture, daemon, kind, command);
-      } catch (error) {
-        throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => fixture.stop());
-      }
-      try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => fixture.stop()); }
-      fixture.stop();
+      await withNpmStack(page, launcher, kind, (fixture, daemon) => spawnStart(page, fixture, daemon, kind));
+    });
+
+    test(`Windows npm ${launcher} detects ${kind} beside another cli.js package from a typed command`, { tag: "@platform" }, async ({ page }) => {
+      test.skip(process.platform !== "win32", "Windows npm launchers require a real Windows shell and process table");
+      await withNpmStack(page, launcher, kind, (fixture, daemon, command) => typedStart(page, fixture, daemon, kind, command));
     });
   }
 }
