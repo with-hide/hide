@@ -152,6 +152,18 @@ fn another_installs(target: &KitTarget) -> Option<PathBuf> {
     })
 }
 
+/// Whether the junction beside the shim is this installation's own: one an
+/// earlier build of it made, leading to its command by the file or by the
+/// installation its folder names. Another installation's junction, such as
+/// one the desktop app's pass left before it wrote its shim, is not.
+fn own_junction(target: &KitTarget) -> bool {
+    std::fs::read_link(junction(target)).is_ok_and(|destination| {
+        let destination = destination.join("hide.exe");
+        same_file(&destination, &wanted(target))
+            || super::install_at(&destination).as_deref() == Some(target.install.as_str())
+    })
+}
+
 /// Whether two paths lead to one file.
 fn same_file(left: &Path, right: &Path) -> bool {
     use hide_platform::fs::identity::file_id;
@@ -268,9 +280,7 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
         Form::Junction => {
             bytes == shim(JUNCTION) && link::is_link_to(&junction(target), &target.kit_dir)
         }
-        Form::Relative(folder) => {
-            bytes == shim(folder) && std::fs::symlink_metadata(junction(target)).is_err()
-        }
+        Form::Relative(folder) => bytes == shim(folder) && !own_junction(target),
     };
     if current {
         Observed::Current
@@ -305,16 +315,14 @@ pub(crate) fn install(target: &KitTarget) -> Result<(), String> {
             atomic::write_file(&link_path(target), &shim(&folder), Access::Private)
                 .map_err(|error| format!("Hide's command shim could not be written: {error}"))?;
             // The junction an earlier build of this installation made: the
-            // shim no longer passes it.
-            match link::remove_link(&junction(target)) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(format!(
+            // shim no longer passes it. Another installation's stays.
+            if own_junction(target) {
+                link::remove_link(&junction(target)).map_err(|error| {
+                    format!(
                         "the junction an earlier build left, {}, could not be removed: {error}",
                         junction(target).display()
-                    ));
-                }
+                    )
+                })?;
             }
         }
     }
@@ -504,6 +512,13 @@ mod tests {
         assert!(matches!(observe(&app), Observed::Absent(_)));
         assert!(install(&app).is_err());
         assert!(std::fs::symlink_metadata(junction(&app)).is_err());
+
+        // The app's junction, left by a pass of the app that ended before its
+        // shim, beside the device's shim: the device's pass leaves it.
+        link::create_link(&app.kit_dir, &junction(&app)).unwrap();
+        assert!(matches!(observe(&device), Observed::Current));
+        install(&device).unwrap();
+        assert!(link::is_link_to(&junction(&app), &app.kit_dir));
     }
 
     /// A shim can name a folder only by a relative way of plain ASCII on the

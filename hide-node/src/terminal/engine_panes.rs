@@ -216,7 +216,9 @@ impl LocalPanes {
 
 /// Puts `folder` first on the `PATH` in `env`: the last one `env` names,
 /// in any case of the name as Windows reads it, else `inherited`, the one
-/// the pane would inherit. A folder `PATH` cannot hold is refused.
+/// the pane would inherit. The folder appears once, so a pane started from a
+/// shell of the same installation, whose `PATH` already holds it, does not
+/// grow. A folder `PATH` cannot hold is refused.
 fn put_first_on_path(
     env: &mut Vec<(OsString, OsString)>,
     folder: &Path,
@@ -232,8 +234,19 @@ fn put_first_on_path(
         .find(|(name, _)| is_path(name))
         .map(|(_, value)| value.clone())
         .or(inherited);
-    let folders =
-        std::iter::once(folder.to_path_buf()).chain(named.iter().flat_map(std::env::split_paths));
+    // Windows compares folder names without case.
+    let same = |other: &Path| {
+        other == folder
+            || other
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&folder.to_string_lossy())
+    };
+    let folders = std::iter::once(folder.to_path_buf()).chain(
+        named
+            .iter()
+            .flat_map(std::env::split_paths)
+            .filter(|other| !same(other)),
+    );
     let path = std::env::join_paths(folders).map_err(|error| HolderError::Refused {
         code: "invalid_path".to_owned(),
         message: format!("{} cannot go on a PATH: {error}", folder.display()),
@@ -672,5 +685,13 @@ mod tests {
         let mut env = Vec::new();
         put_first_on_path(&mut env, &folder, None).unwrap();
         assert_eq!(env, [(OsString::from("PATH"), joined(&[&folder]))]);
+
+        // A pane started inside one of this installation's panes.
+        let mut env = vec![(OsString::from("PATH"), joined(&[&first, &folder, &second]))];
+        put_first_on_path(&mut env, &folder, None).unwrap();
+        assert_eq!(
+            env,
+            [(OsString::from("PATH"), joined(&[&folder, &first, &second]))]
+        );
     }
 }

@@ -245,10 +245,25 @@ mod sys {
         }
     }
 
-    /// Removes the copies an earlier pass set aside that nothing runs now.
+    /// Removes the copies an earlier pass set aside that nothing runs now,
+    /// and the copies a pass that ended between its copy and its rename left
+    /// staged; only a pass holding the root's lock calls it.
     fn remove_set_aside(current: &Path) {
         for program in PROGRAMS {
             let _ = atomic::remove_set_aside(&current.join(program));
+        }
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if PROGRAMS
+                .iter()
+                .any(|program| name.starts_with(&format!(".{program}.staged-")))
+            {
+                let _ = fs::remove_file(entry.path());
+            }
         }
     }
 
@@ -371,6 +386,8 @@ mod tests {
         };
         assert_eq!(set_aside(), 1);
 
+        // What a pass that ended between its copy and its rename left.
+        std::fs::write(root.join(CURRENT).join(".hide.exe.staged-1-0"), b"half").unwrap();
         running.kill_tree().unwrap();
         // Windows unmaps the image a moment after the process has ended,
         // with no event to wait on; each pass tries the set-aside copy again.
