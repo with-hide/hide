@@ -1923,34 +1923,47 @@ mod tests {
         );
     }
 
+    /// A phone the Mac let in, so a request reaches its claim.
+    fn paired(mobile: &Arc<Mobile>) -> String {
+        let code = {
+            let mut inner = mobile.lock();
+            inner.settings.enabled = true;
+            inner.exposure = super::super::Exposure::Relay;
+            inner.phones.new_code(super::super::now_ms());
+            inner.phones.code().unwrap().0.to_owned()
+        };
+        mobile.pair(&code, "Phone").unwrap().0.id
+    }
+
     #[tokio::test]
     async fn the_same_answer_request_is_answered_from_its_claim_and_reaches_the_core_once() {
         let directory = tempfile::tempdir().unwrap();
         let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         mobile.missions.send_replace(Arc::new(deciding()));
+        let phone = paired(&mobile);
 
-        let first = answer_mission(&mobile, "phone-a", &mission_message("press-1", json!({"option": 1}))).await;
+        let first = answer_mission(&mobile, &phone, &mission_message("press-1", json!({"option": 1}))).await;
         assert_eq!(first["type"], "mission_result");
         assert_eq!(first["request_id"], "press-1");
         assert_eq!(first["mission"], "mission-1");
         assert_eq!(first["ok"], true, "{first}");
         assert!(
             matches!(
-                mobile.reserve_input("phone-a", "press-1"),
+                mobile.reserve_input(&phone, "press-1"),
                 Reservation::Seen(InputState::Written)
             ),
             "the press is recorded as written, so a repeat is not typed again"
         );
-        let again = answer_mission(&mobile, "phone-a", &mission_message("press-1", json!({"option": 1}))).await;
+        let again = answer_mission(&mobile, &phone, &mission_message("press-1", json!({"option": 1}))).await;
         assert_eq!(again["ok"], true, "{again}");
 
         // A press still being sent is told so, never sent a second time.
         assert!(matches!(
-            mobile.reserve_input("phone-a", "press-2"),
+            mobile.reserve_input(&phone, "press-2"),
             Reservation::Write
         ));
-        let racing = answer_mission(&mobile, "phone-a", &mission_message("press-2", json!({"option": 1}))).await;
+        let racing = answer_mission(&mobile, &phone, &mission_message("press-2", json!({"option": 1}))).await;
         assert_eq!((racing["ok"].as_bool(), reason(&racing)), (Some(false), Some("in_flight")));
     }
 
@@ -1960,16 +1973,17 @@ mod tests {
         let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         mobile.missions.send_replace(Arc::new(deciding()));
+        let phone = paired(&mobile);
 
-        let refused = answer_mission(&mobile, "phone-a", &mission_message("bad", json!({"text": "   "}))).await;
+        let refused = answer_mission(&mobile, &phone, &mission_message("bad", json!({"text": "   "}))).await;
         assert_eq!(reason(&refused), Some("invalid_request"));
         assert!(
-            matches!(mobile.reserve_input("phone-a", "bad"), Reservation::Write),
+            matches!(mobile.reserve_input(&phone, "bad"), Reservation::Write),
             "a refused answer may be sent again once it is fixed"
         );
         let mut anonymous = mission_message("x", json!({"option": 1}));
         anonymous.as_object_mut().unwrap().remove("request_id");
-        let answer = answer_mission(&mobile, "phone-a", &anonymous).await;
+        let answer = answer_mission(&mobile, &phone, &anonymous).await;
         assert_eq!((answer["ok"].as_bool(), reason(&answer)), (Some(false), Some("invalid_request")));
     }
 }
