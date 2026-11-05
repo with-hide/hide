@@ -28,4 +28,5 @@ mod stand_ins;
 #[cfg(unix)]
 mod support;
 mod system_ssh;
+mod windows_ssh_device;
 mod wsl_device;
