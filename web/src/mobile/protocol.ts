@@ -163,8 +163,23 @@ export type LookFile = { path: string; status: LookFileStatus; added: number | n
 /** The answer states of `look_result`: everything that is not content. */
 export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable";
 
-/** What a text or an image read sends first (hided/src/mobile/looks.rs `chunks`). */
-export type LookHead = { type: "look_head"; request_id: string; view_id: string; mode: "text" | "markdown" | "image"; size: number; total: number; truncated: boolean; chunks: number };
+/**
+ * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,
+ * an image of the desktop app's page now) also names the address, when it was taken (ms) and the device that took it.
+ */
+export type LookHead = {
+  type: "look_head";
+  request_id: string;
+  view_id: string;
+  mode: "text" | "markdown" | "image" | "page";
+  size: number;
+  total: number;
+  truncated: boolean;
+  chunks: number;
+  url?: string;
+  taken_at?: number;
+  taken_by?: string;
+};
 
 /** One message of an agent's conversation (hided/src/mobile/conversation.rs). */
 export type ConversationMessage = {
@@ -523,6 +538,12 @@ export function macNameOf(endpoint: string): string {
 }
 
 /** The Mac's name with the names of the devices it reaches that are connected: `MacBook Pro + Mac mini` (PRD mobile-companion-ui B8). */
+/** The name the phone shows for the device `id`: the paired Mac's own name for this Mac, the label of a connected device otherwise. */
+export function deviceNameOf(devices: readonly PhoneDevice[], id: string, macName: string): string {
+  const device = devices.find((candidate) => candidate.device_id === id);
+  return device && !device.local && device.label ? device.label : macName;
+}
+
 export function machinesName(macName: string, devices: readonly PhoneDevice[]): string {
   const names = devices.filter((device) => !device.local && device.connected && device.label).map((device) => device.label);
   return names.length > 0 ? `${macName} + ${names.join(", ")}` : macName;

@@ -104,9 +104,9 @@ export function seedPairedMac(): void {
 }
 
 /** The scenes of the 볼 것 tab and its viewers (PRD mobile-companion-ui B10-B19, B23, B26, B27), in the order the board draws them. */
-export type PhoneLookScene = "phone-looks" | "phone-look-changes" | "phone-look-doc" | "phone-look-image" | "phone-look-page" | "phone-look-other" | "phone-look-large" | "phone-look-failed" | "phone-look-closed" | "phone-look-device" | "phone-look-loading";
+export type PhoneLookScene = "phone-looks" | "phone-look-changes" | "phone-look-doc" | "phone-look-image" | "phone-look-shot" | "phone-look-shot-refreshing" | "phone-look-page" | "phone-look-other" | "phone-look-large" | "phone-look-failed" | "phone-look-closed" | "phone-look-device" | "phone-look-loading";
 
-export const PHONE_LOOK_SCENES: readonly PhoneLookScene[] = ["phone-looks", "phone-look-changes", "phone-look-doc", "phone-look-image", "phone-look-page", "phone-look-other", "phone-look-large", "phone-look-failed", "phone-look-closed", "phone-look-device", "phone-look-loading"];
+export const PHONE_LOOK_SCENES: readonly PhoneLookScene[] = ["phone-looks", "phone-look-changes", "phone-look-doc", "phone-look-image", "phone-look-shot", "phone-look-shot-refreshing", "phone-look-page", "phone-look-other", "phone-look-large", "phone-look-failed", "phone-look-closed", "phone-look-device", "phone-look-loading"];
 
 const LOOK_AGENT = "l1";
 
@@ -151,6 +151,11 @@ const CHART = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1400" viewBox="0 0 240 140"><rect width="240" height="140" fill="white"/><text x="10" y="14" font-size="8" font-family="sans-serif" fill="black">홀더 메모리 (MB) · 탭 50개 열고 닫기 10회</text><g stroke="lightgray" stroke-width=".5"><path d="M10 40H230M10 70H230M10 100H230"/></g><path d="M10 100C60 70 120 66 230 36" fill="none" stroke="orangered" stroke-width="1.5"/><path d="M10 104C80 90 150 92 230 90" fill="none" stroke="royalblue" stroke-width="1.5"/></svg>',
 )}`;
 
+/** A landing page as the desktop app showed it, drawn as an image so the viewer has pixels without a browser. */
+const PAGE_SHOT = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1500" viewBox="0 0 400 500"><rect width="400" height="500" fill="ivory"/><text x="20" y="34" font-size="16" font-weight="700" font-family="sans-serif" fill="black">hide</text><text x="380" y="34" font-size="11" text-anchor="end" font-family="sans-serif" fill="black">문서 · 다운로드</text><text x="20" y="110" font-size="26" font-weight="700" font-family="sans-serif" fill="black">에이전트 여럿을</text><text x="20" y="144" font-size="26" font-weight="700" font-family="sans-serif" fill="black">한 화면에서</text><text x="20" y="180" font-size="12" font-family="sans-serif" fill="dimgray">Claude Code, Codex, OpenCode를 나란히 돌리고,</text><text x="20" y="198" font-size="12" font-family="sans-serif" fill="dimgray">누가 나를 기다리는지 한눈에 봐요.</text><rect x="20" y="220" width="104" height="36" rx="18" fill="black"/><text x="72" y="243" font-size="12" text-anchor="middle" font-family="sans-serif" fill="white">Mac용 받기</text><rect x="20" y="290" width="360" height="170" rx="10" fill="black"/><g fill="darkslategray"><rect x="32" y="304" width="190" height="10" rx="3"/><rect x="32" y="324" width="270" height="10" rx="3"/><rect x="32" y="364" width="220" height="10" rx="3"/><rect x="32" y="384" width="170" height="10" rx="3"/></g><rect x="32" y="344" width="126" height="10" rx="3" fill="orange"/></svg>',
+)}`;
+
 export function phoneLooks(): LookRow[] {
   return [
     { id: "v1", kind: "changes", name: "경로 구분자 수정", unseen: true, at: Date.now() - 3 * MINUTE },
@@ -167,11 +172,14 @@ const FILES: LookFile[] = [
   { path: "docs/diagram.pdf", status: "untracked", added: null, removed: null, binary: true },
 ];
 
-const VIEWED: Record<Exclude<PhoneLookScene, "phone-looks">, { id: string; content: LookContent }> = {
+const PAGE_ADDRESS = "https://withhide.dev/preview";
+const VIEWED: Record<Exclude<PhoneLookScene, "phone-looks">, { id: string; content: LookContent; refreshing?: boolean }> = {
   "phone-look-changes": { id: "v1", content: { state: "changes", files: FILES, count: 4, added: 77, removed: 10 } },
   "phone-look-doc": { id: "v4", content: { state: "text", markdown: true, text: INSTALL_GUIDE, truncated: false } },
   "phone-look-image": { id: "v2", content: { state: "image", url: CHART, size: 319_488 } },
-  "phone-look-page": { id: "v3", content: { state: "page", url: "https://withhide.dev/preview" } },
+  "phone-look-shot": { id: "v3", content: { state: "shot", url: PAGE_SHOT, size: 412_160, address: PAGE_ADDRESS, takenAt: Date.now() - 20_000, takenBy: "local" } },
+  "phone-look-shot-refreshing": { id: "v3", refreshing: true, content: { state: "shot", url: PAGE_SHOT, size: 412_160, address: PAGE_ADDRESS, takenAt: Date.now() - 95_000, takenBy: "local" } },
+  "phone-look-page": { id: "v3", content: { state: "page", url: PAGE_ADDRESS } },
   "phone-look-other": { id: "v5", content: { state: "other" } },
   "phone-look-large": { id: "v6", content: { state: "too_large" } },
   "phone-look-failed": { id: "v1", content: { state: "failed" } },
@@ -191,5 +199,5 @@ export function phoneLookDetail(scene: PhoneLookScene): Detail {
   if (scene === "phone-looks") return base;
   const viewed = VIEWED[scene];
   const row = [...rows, ...extra].find((candidate) => candidate.id === viewed.id)!;
-  return { ...base, looks: { rows: [...rows, ...extra], omitted: 0 }, look: { row, requestId: `gallery-${scene}`, content: viewed.content, shown: true } };
+  return { ...base, looks: { rows: [...rows, ...extra], omitted: 0 }, look: { row, requestId: `gallery-${scene}`, content: viewed.content, shown: true, refreshing: viewed.refreshing ?? false } };
 }
