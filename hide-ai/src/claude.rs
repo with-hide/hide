@@ -250,10 +250,7 @@ impl ClaudeCliBackend {
         if !run.succeeded() {
             return Err(UsageError::Failed(format!("usage_exit_{}", run.exit())));
         }
-        let frame = match serde_json::from_str::<Value>(run.stdout.trim()) {
-            Ok(frame) if frame.get("type").and_then(Value::as_str) == Some("result") => frame,
-            _ => return Err(UsageError::NoResultFrame),
-        };
+        let frame = result_frame(&run.stdout).ok_or(UsageError::NoResultFrame)?;
         if frame.get("is_error").and_then(Value::as_bool) == Some(true) {
             return Err(UsageError::Failed("usage_is_error".to_owned()));
         }
@@ -459,18 +456,37 @@ impl AiBackend for ClaudeCliBackend {
     }
 }
 
+/// The `result` frame of one finished print-mode run, whichever shape its
+/// stdout has.
+///
+/// `--output-format json` prints the frame as one object, unless the account's
+/// global config (`~/.claude.json`, the `/config` "Verbose output" toggle) has
+/// `verbose` on: then the same flag prints every event of the run as a JSON
+/// array (`system/init`, the messages, then `result`). `--setting-sources ''`
+/// does not drop that config, and `--verbose` can only turn it on, so no
+/// argument vector pins the shape. Measured 2026-11-05 on claude 2.1.316 to
+/// 2.1.318: both shapes carry the same `result` frame, last in the array.
+/// Reading only the object made every usage read and every label of such an
+/// account end as `no_result_frame` with exit 0 (with-hide/hide#1942).
+///
+/// `None` is stdout that is not JSON, or has no `result` frame.
+fn result_frame(stdout: &str) -> Option<Value> {
+    let is_result = |frame: &Value| frame.get("type").and_then(Value::as_str) == Some("result");
+    match serde_json::from_str::<Value>(stdout.trim()).ok()? {
+        Value::Array(events) => events.into_iter().rev().find(is_result),
+        frame => is_result(&frame).then_some(frame),
+    }
+}
+
 /// Turns one finished child into the answer or the failure it reported.
 fn answer(run: &Run, mode: AnswerMode) -> Result<AiResponse, AiError> {
-    let frame = match serde_json::from_str::<Value>(run.stdout.trim()) {
-        Ok(frame) if frame.get("type").and_then(Value::as_str) == Some("result") => frame,
-        // The child ran, so the prompt was submitted, and without a result
-        // frame nothing says whether the turn completed.
-        _ => {
-            return Err(AiError::CompletionUnknown(format!(
-                "claude_no_result_frame:exit={}",
-                run.exit()
-            )));
-        }
+    // The child ran, so the prompt was submitted, and without a result frame
+    // nothing says whether the turn completed.
+    let Some(frame) = result_frame(&run.stdout) else {
+        return Err(AiError::CompletionUnknown(format!(
+            "claude_no_result_frame:exit={}",
+            run.exit()
+        )));
     };
     let failed = frame.get("is_error").and_then(Value::as_bool) == Some(true) || !run.succeeded();
     if failed {
@@ -1002,6 +1018,41 @@ mod tests {
             r#"{"type":"control_response","response":{"subtype":"success","response":{"models":[]}}}"#,
         ] {
             assert_eq!(parse_models(stdout), None, "{stdout}");
+        }
+    }
+
+    /// One object and the verbose array carry the same frame; the array's
+    /// other events are never taken for it.
+    #[test]
+    fn the_result_frame_is_read_from_an_object_and_from_a_verbose_array() {
+        let result = json!({"type": "result", "subtype": "success", "result": "x"});
+        let events = json!([
+            {"type": "system", "subtype": "init", "result": "not this"},
+            {"type": "assistant", "message": {"content": []}},
+            result,
+        ]);
+        assert_eq!(result_frame(&result.to_string()), Some(result.clone()));
+        assert_eq!(result_frame(&format!("{events}\n")), Some(result.clone()));
+        // Only the last result counts when a run printed more than one.
+        let first = json!({"type": "result", "result": "first"});
+        assert_eq!(
+            result_frame(&json!([first, result]).to_string()),
+            Some(result)
+        );
+    }
+
+    #[test]
+    fn stdout_without_a_result_frame_has_none() {
+        for stdout in [
+            "",
+            "Loading...",
+            "[]",
+            r#"{"type":"system","subtype":"init"}"#,
+            r#"[{"type":"system","subtype":"init"},{"type":"assistant"}]"#,
+            r#""result""#,
+            r#"[{"type":"result"} trailing"#,
+        ] {
+            assert_eq!(result_frame(stdout), None, "{stdout}");
         }
     }
 }
