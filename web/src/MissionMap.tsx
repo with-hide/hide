@@ -12,7 +12,7 @@ import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
 import { MissionSummary } from "./components/mission-summary";
-import { HEAD_FILL, ProgressCells, STEP_FILL, WorkPill } from "./components/mission-tone";
+import { HEAD_FILL, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -25,6 +25,7 @@ import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
 import { markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
+import { STATE_PILL } from "./missionList";
 import { planCount } from "./plans";
 import {
   attentionWords,
@@ -181,11 +182,11 @@ function useWide(root: HTMLElement | null): boolean {
 
 /** The pill's words and colour: the operator's merge waits in the decision colour, a finished mission is grey (D-02). */
 export const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
-  planning: { key: "mission.pill.planning", tone: "bg-muted text-muted-foreground" },
-  running: { key: "mission.pill.running", tone: "bg-mission-working/15 text-mission-working" },
-  merge_wait: { key: "mission.pill.mergeWait", tone: "bg-mission-hold/15 text-mission-hold" },
-  done: { key: "mission.pill.done", tone: "bg-muted text-muted-foreground" },
-  cancelled: { key: "mission.pill.cancelled", tone: "bg-muted text-mission-cancelled" },
+  planning: { key: STATE_PILL.planning, tone: STATE_PILL_TONE.planning },
+  running: { key: STATE_PILL.running, tone: STATE_PILL_TONE.running },
+  merge_wait: { key: STATE_PILL.merge_wait, tone: STATE_PILL_TONE.merge_wait },
+  done: { key: STATE_PILL.done, tone: STATE_PILL_TONE.done },
+  cancelled: { key: STATE_PILL.cancelled, tone: STATE_PILL_TONE.cancelled },
 };
 
 /**

@@ -2156,6 +2156,52 @@ fn a_decision_carries_its_reason_choices_recommendation_and_node_and_refuses_wha
     assert_eq!(answer["mission"]["question"]["options"], json!(null));
 }
 
+/// The phone's missions are read from the record the core publishes, so the
+/// field names of `MissionView` and of the phone's whitelist cannot drift
+/// apart without this failing.
+#[test]
+fn the_phone_reads_the_mission_the_core_published_with_its_decision_and_steps() {
+    use crate::agent_state::phone::{PhoneMissions, project};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let ask = json!({"op": "decide", "line": "Which base?", "why": "Two PRs touch it",
+        "options": ["main", "#1503"], "recommend": 2, "node": "fix"});
+    command(&mut runtime, "sender", ask).unwrap();
+    runtime.refresh_missions();
+    let rest = json!({
+        "navigator": {"agents": []},
+        "missions": serde_json::to_value(&runtime.snapshot.missions).unwrap(),
+    });
+    let phone = PhoneMissions::project(
+        &rest,
+        crate::node::TEST_NODE,
+        &project(&rest, crate::node::TEST_NODE),
+    );
+    assert!(!phone.failed);
+    let mission = phone.find("mission-1").expect("the mission is listed");
+    assert_eq!(mission.title, "Fix the bug");
+    assert_eq!(mission.decision.as_deref(), Some("Which base?"));
+    let question = mission.question.as_ref().expect("its question");
+    assert_eq!(
+        (question.options.clone(), question.recommend),
+        (vec!["main".to_owned(), "#1503".to_owned()], Some(2))
+    );
+    assert_eq!(
+        mission
+            .nodes
+            .iter()
+            .map(|node| node.key.as_str())
+            .collect::<Vec<_>>(),
+        runtime.snapshot.missions.items[0]
+            .nodes
+            .iter()
+            .map(|node| node.key.as_str())
+            .collect::<Vec<_>>(),
+    );
+    assert!(mission.conductor.takes_answers || !mission.conductor.present);
+}
+
 #[test]
 fn a_commit_is_a_direct_changes_and_a_verdict_a_verify_nodes() {
     let fixture = conducting();

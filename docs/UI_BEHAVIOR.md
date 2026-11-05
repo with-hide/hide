@@ -2860,6 +2860,17 @@ A notification's title is the root's row title and, with a sentence, its body is
 The sentence is the core's chosen row detail, untranslated, and may appear in lock-screen previews according to the phone's setting (operator-approved update 2026-10-13); tapping the notice opens that agent's detail.
 See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for native question and plain-text question behavior, and cached-worker compatibility.
 A revoked phone shows "이 폰의 연결이 해제됐어요. Mac에서 QR을 다시 여세요." and drops its own push subscription; a subscription it could not drop goes to the log, and the storage line appears only when browser storage failed.
+A bar at the foot of the lists has 에이전트 and 미션, each an icon, its name and, when something waits on the operator, a count: 에이전트 shows the 내 차례 rows and 미션 the missions that have anything in their 내 차례, and a count of 0 draws no badge.
+The bar is on the two lists only; a detail, an agent's or a mission's, has none, and its back arrow returns to the list it was opened from.
+미션 shows every mission this Mac holds in the Mission tool's own four groups, 내 차례, 진행 중, 머지 기다림 and 끝남, with the same counts and order; 끝남 shows its newest three and `모두 ›` opens the rest in place.
+A row has its state word, the title, one line (the question, the blocked step, the merge order or the step now running), a cell per step with `n/m`, the time it has run, and, for a mission on another device, that device's chip; a mission whose device does not answer keeps its last values dimmed and counts no time.
+With no mission the tab is one line, 진행 중인 미션이 없어요, and under it 아무 에이전트 터미널에서 /hide-mission으로 시작해요; a record Hide could not read says so in one line, as the desktop's does.
+A row opens the mission's page: ← 미션, the elapsed time, the title, the Conductor's state with how many steps are done and `대화 ›` (the Conductor's own detail), and the cells for every step.
+When the Conductor asks a decision it stands first on the page: the question, why it matters, the node it stopped, one button per choice with the recommended one marked, and a written answer at the foot of the page.
+The answer goes to the Conductor as the desktop's decision banner sends it, and the same words (`보냄 · 차례 기다림`, `Conductor가 읽는 중`, and `전달 확인 안 됨` with 다시 보내기, which types nothing a second time) say where the answer is.
+A question that changed while the phone was open, a mission with no Conductor, or a device that stopped answering shows its reason under the question in the desktop's own words and keeps what was written; pressing the same answer twice reaches the Conductor once, and a press that could not leave the phone says the Mac is out of reach.
+Away from the Mac the page keeps its last content dimmed under the unreachable line and nothing on it presses: no choice, no written answer.
+Under the decision 지금 lists the steps that wait on someone and the steps at work, each with its mark, title, pull request number, what it waits on or follows (`#2091 다음`) and its worker, and 끝남 N is folded until it is opened; a step whose worker the list holds opens that agent's detail, and its back arrow returns to the page.
 The app follows the phone's light or dark setting, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 
 Directional terminal focus stays within the keyboard owner's drawn tab and Agent area, on local and remote devices.
