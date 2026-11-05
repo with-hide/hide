@@ -442,12 +442,9 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   // split pane the full lane so opening Agent Views cannot wrap the URL.
   await zoomPane(page, paneId);
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(`${origin}/a.html`.length);
-  // Herdr frames have no wrap flag; a blank row terminates the URL even
-  // when its last character reaches the grid's right edge.
   await print(page, paneId, [
     "html src/report.HTML:2",
     `${origin}/a.html`,
-    "",
     `osc8 \u001b]8;;${pathToFileURL(html).href}#L2\u001b\\HTML source label\u001b]8;;\u001b\\`,
     "folder ./src",
     "plain MENU-END",
@@ -513,6 +510,48 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   // the button's release (with-hide/hide-private#252).
   expect(sent.get("reveal_path")).toBe(1);
   expect(sent.get("browser_open")).toBe(1);
+});
+
+// with-hide/hide-private#312: a URL exactly as wide as the pane that ends
+// with a line break stays one link when the next line starts with a word,
+// and a URL the terminal carried onto the next row is still one link. The
+// pane runs a shell, not an agent, so the holder's soft-wrap rows decide.
+test("a URL that fills its row is not joined to the next line, and one that wraps is one link", { tag: "@platform" }, async () => {
+  ({ app } = await launchShell(run.env));
+  await fitWindow(app, { width: 1024, height: 681 });
+  const page = await shellPage(app);
+  await withProbe(page);
+  await enterWorkspace(page, "fixture");
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+    writeText: async (text: string) => { (window as unknown as { copied: string }).copied = text; },
+  } }));
+  const copied = () => page.evaluate(() => (window as unknown as { copied?: string }).copied);
+  const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
+  const cols = await paneCols(page, paneId);
+  const fills = `${origin}/a.html?pad=`.padEnd(cols, "x");
+  // One full row, then the rest on the next row alone.
+  const wraps = `${`${origin}/b.html?pad=`.padEnd(cols, "y")}TAILEND`;
+  expect(fills.length).toBe(cols);
+  await print(page, paneId, [fills, "osc8 label", wraps, "WRAP-END"], "WRAP-END");
+  // The rows below are read at the width they were printed at.
+  expect(await paneCols(page, paneId)).toBe(cols);
+
+  let point = await pointOf(page, paneId, fills, { offset: 3 });
+  await hoverLink(page, paneId, point);
+  await page.mouse.click(point.x, point.y, { button: "right" });
+  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+  await expect.poll(copied).toBe(fills);
+  point = await pointOf(page, paneId, "osc8 label", { offset: 1 });
+  await page.mouse.move(point.x, point.y);
+  await quietFor(page, 500, "the word after a full-width URL is no link");
+  await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).not.toHaveClass(/xterm-cursor-pointer/);
+
+  point = await pointOf(page, paneId, "TAILEND", { offset: 2 });
+  await hoverLink(page, paneId, point);
+  await page.mouse.click(point.x, point.y, { button: "right" });
+  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+  await expect.poll(copied).toBe(wraps);
+  await screenshot(page, "terminal-url-wrap");
 });
 
 /** A current native frame of this exact candidate, without activating any app. */
