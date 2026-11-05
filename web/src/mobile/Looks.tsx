@@ -2,18 +2,18 @@
 // into not seen and seen, and one View opened full screen as a change list, a document, an image or the words that say why
 // there is nothing to draw. The phone holds no path: a row is a View id, and hided finds the file (D-16).
 
-import { FileDiffIcon, FileIcon, FileTextIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon } from "lucide-react";
+import { FileDiffIcon, FileIcon, FileTextIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { Elapsed } from "../components/elapsed";
+import { Elapsed, useElapsed } from "../components/elapsed";
 import { Button } from "../components/ui/button";
 import { RowButton } from "../components/ui/row-button";
 import { formatBytes } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { clampOffset, countState, fileTag, splitPath, zoomBy, type LookContent } from "./lookContent";
-import { openLook, retryLook } from "./connection";
+import { openLook, refreshLook, retryLook } from "./connection";
 import { renderMarkdown } from "./markdown";
-import { splitLooks, type LookFile, type LookKind, type LookRow } from "./protocol";
+import { deviceNameOf, splitLooks, type LookFile, type LookKind, type LookRow } from "./protocol";
 import { usePhone, type Looks } from "./store";
 
 const KIND_ICON: Record<LookKind, typeof FileIcon> = { changes: FileDiffIcon, doc: FileTextIcon, image: ImageIcon, page: GlobeIcon, other: FileIcon };
@@ -95,8 +95,8 @@ function Tile({ row }: { row: LookRow }) {
   );
 }
 
-/** The viewer's body for the View on screen (B14-B19, B23, B26, B27). */
-export function LookViewer({ row, content }: { row: LookRow; content: LookContent }) {
+/** The viewer's body for the View on screen (B14-B23, B26, B27); `refreshing` is a page's screen being taken again. */
+export function LookViewer({ row, content, refreshing }: { row: LookRow; content: LookContent; refreshing: boolean }) {
   const { t } = useInterfaceTranslation();
   const word = useKindWord()(row.kind);
   const connected = usePhone((s) => s.connected);
@@ -116,12 +116,20 @@ export function LookViewer({ row, content }: { row: LookRow; content: LookConten
       return <ImageBody name={row.name} content={content} />;
     case "changes":
       return <ChangesBody content={content} />;
+    case "shot":
+      return <ShotBody name={row.name} content={content} refreshing={refreshing} />;
     case "page":
+      // The address and the one sentence, with the refresh still there (B21): why it cannot be taken is the desktop's log.
       return (
-        <Centered state="page">
-          <p className="max-w-full break-all text-title text-foreground">{content.url || row.url || row.name}</p>
-          <p className="text-body text-muted-foreground">{t("mobile.look.pageUnavailable")}</p>
-        </Centered>
+        <div className="flex min-h-0 flex-1 flex-col bg-background px-lg py-md" data-phone-look-state="page">
+          <PageAddress address={content.url || row.url || row.name} refreshing={refreshing} />
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-sm text-center">
+            <GlobeIcon aria-hidden="true" className="size-(--size-icon-lg) text-muted-foreground" />
+            <p role="status" className="text-title text-foreground">
+              {t("mobile.look.pageUnavailable")}
+            </p>
+          </div>
+        </div>
       );
     case "other":
       return (
@@ -166,6 +174,50 @@ export function LookViewer({ row, content }: { row: LookRow; content: LookConten
         </Centered>
       );
   }
+}
+
+/** A page's address with the button that takes its screen again; the button waits for a connection and for the screen in flight (B20, B45). */
+function PageAddress({ address, refreshing }: { address: string; refreshing: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const connected = usePhone((s) => s.connected);
+  return (
+    <div className="flex shrink-0 items-center gap-sm pb-sm">
+      <span className="flex min-h-(--size-touch-target) min-w-0 flex-1 items-center rounded-md bg-secondary px-md" data-phone-look-address="true">
+        <span className="break-all font-mono text-body text-subtle-foreground line-clamp-2">{address}</span>
+      </span>
+      <Button
+        variant="secondary"
+        size="icon"
+        className="size-(--size-touch-target) shrink-0"
+        aria-label={t("mobile.look.refresh")}
+        aria-busy={refreshing}
+        data-phone-look-refresh="true"
+        disabled={!connected || refreshing}
+        onClick={refreshLook}
+      >
+        {refreshing ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : <RefreshCwIcon aria-hidden="true" className="size-(--size-icon)" />}
+      </Button>
+    </div>
+  );
+}
+
+/** A page's screen as the desktop app showed it, with who took it and how long ago under it (B20). */
+function ShotBody({ name, content, refreshing }: { name: string; content: Extract<LookContent, { state: "shot" }>; refreshing: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const devices = usePhone((s) => s.devices);
+  const macName = usePhone((s) => s.macName);
+  const elapsed = useElapsed(content.takenAt);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-background px-lg py-md" data-phone-look-state="shot">
+      <PageAddress address={content.address} refreshing={refreshing} />
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-md border border-border bg-card">
+        <img src={content.url} alt={name} draggable={false} className="block h-auto w-full select-none" data-phone-look-shot="true" />
+      </div>
+      <p className="shrink-0 pt-sm text-body text-muted-foreground" data-phone-look-taken={content.takenBy}>
+        {t("mobile.look.shotTaken", { device: deviceNameOf(devices, content.takenBy, macName), elapsed: elapsed ?? "" })}
+      </p>
+    </div>
+  );
 }
 
 function Centered({ state, children }: { state: string; children: ReactNode }) {

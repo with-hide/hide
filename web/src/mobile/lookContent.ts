@@ -16,6 +16,9 @@ export type LookContent =
   | { state: "text"; markdown: boolean; text: string; truncated: boolean }
   | { state: "image"; url: string; size: number }
   | { state: "changes"; files: LookFile[]; count: number; added: number; removed: number }
+  /** A page the desktop app showed, as it looked when its device took it (B20). */
+  | { state: "shot"; url: string; size: number; address: string; takenAt: number; takenBy: string }
+  /** A page whose screen cannot be taken now: its address alone, and refresh still works (B21). */
   | { state: "page"; url: string }
   /** Nothing the phone can show: a PDF, a video, another binary (B19). */
   | { state: "other" }
@@ -45,6 +48,8 @@ export type Assembly = {
   requestId: string;
   viewId: string;
   mode: LookHead["mode"];
+  /** A page's address, when it was taken and by which device; null for any other read. */
+  page: { address: string; takenAt: number; takenBy: string } | null;
   size: number;
   truncated: boolean;
   chunks: number;
@@ -61,10 +66,18 @@ function decodedLength(data: string): number {
 
 /** Starts a read from its head; null when the head claims more than its cap or contradicts itself. */
 export function beginAssembly(head: LookHead): Assembly | null {
-  const cap = head.mode === "image" ? LOOK_IMAGE_CAP : LOOK_TEXT_CAP;
+  const cap = head.mode === "image" || head.mode === "page" ? LOOK_IMAGE_CAP : LOOK_TEXT_CAP;
   const sane = Number.isSafeInteger(head.size) && head.size >= 0 && head.size <= cap && Number.isSafeInteger(head.chunks) && head.chunks >= 0 && head.chunks <= MAX_CHUNKS;
   if (!sane || (head.size === 0) !== (head.chunks === 0)) return null;
-  return { requestId: head.request_id, viewId: head.view_id, mode: head.mode, size: head.size, truncated: head.truncated, chunks: head.chunks, parts: [], bytes: 0 };
+  // A screenshot says when and by whom it was taken, or it is not one.
+  const page = head.mode === "page" ? pageFacts(head) : null;
+  if (head.mode === "page" && !page) return null;
+  return { requestId: head.request_id, viewId: head.view_id, mode: head.mode, page, size: head.size, truncated: head.truncated, chunks: head.chunks, parts: [], bytes: 0 };
+}
+
+function pageFacts(head: LookHead): Assembly["page"] {
+  const { url, taken_at: takenAt, taken_by: takenBy } = head;
+  return typeof url === "string" && Number.isSafeInteger(takenAt) && typeof takenBy === "string" ? { address: url, takenAt: takenAt as number, takenBy } : null;
 }
 
 /** Takes the next chunk; null when it is out of order or the read already holds more than its head said. */
@@ -108,10 +121,12 @@ const IMAGE_SIGNATURES: readonly { mime: string; matches: (bytes: Uint8Array) =>
  */
 export function finishAssembly(assembly: Assembly): LookContent | null {
   if (assembly.parts.length !== assembly.chunks || assembly.bytes !== assembly.size) return null;
-  if (assembly.mode === "image") {
+  if (assembly.mode === "image" || assembly.mode === "page") {
     const mime = IMAGE_SIGNATURES.find((candidate) => candidate.matches(bytesOf(assembly.parts.slice(0, 1))))?.mime;
+    if (!mime) return null;
     // 96 KiB chunks hold whole base64 groups, so the parts join into one valid text.
-    return mime ? { state: "image", url: `data:${mime};base64,${assembly.parts.join("")}`, size: assembly.size } : null;
+    const url = `data:${mime};base64,${assembly.parts.join("")}`;
+    return assembly.page ? { state: "shot", url, size: assembly.size, ...assembly.page } : { state: "image", url, size: assembly.size };
   }
   const text = new TextDecoder("utf-8").decode(bytesOf(assembly.parts));
   // The cap may cut a character in two; the half is not shown.

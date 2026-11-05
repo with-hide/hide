@@ -16,6 +16,18 @@ describe("a read put back from its chunks", () => {
     expect(beginAssembly(head({ mode: "image", size: LOOK_IMAGE_CAP, chunks: 103 }))).not.toBeNull();
   });
 
+  it("puts a page's screenshot back with its address, time and device, and refuses one that does not say them", () => {
+    const page = (over: Partial<LookHead> = {}) => head({ mode: "page", size: 4, chunks: 1, url: "http://localhost:5173/", taken_at: 1_700_000_000_000, taken_by: "local", ...over });
+    expect(beginAssembly(page({ size: LOOK_IMAGE_CAP + 1, chunks: 103 }))).toBeNull();
+    expect(beginAssembly(page({ url: undefined }))).toBeNull();
+    expect(beginAssembly(page({ taken_at: undefined }))).toBeNull();
+    expect(beginAssembly(page({ taken_by: undefined }))).toBeNull();
+    const done = finishAssembly(addChunk(beginAssembly(page())!, 0, b64([0xff, 0xd8, 0xff, 0xe0]))!);
+    expect(done).toMatchObject({ state: "shot", address: "http://localhost:5173/", takenAt: 1_700_000_000_000, takenBy: "local", size: 4 });
+    // Bytes that are no image are no screenshot.
+    expect(finishAssembly(addChunk(beginAssembly(page())!, 0, b64([1, 2, 3, 4]))!)).toBeNull();
+  });
+
   it("takes chunks in order only, and never more bytes than the head said", () => {
     const start = beginAssembly(head({ size: 6, chunks: 2 }))!;
     expect(addChunk(start, 1, utf8("abc"))).toBeNull();
