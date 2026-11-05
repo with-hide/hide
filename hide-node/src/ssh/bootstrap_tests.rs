@@ -94,7 +94,7 @@ impl Device {
             std::fs::write(&path, bytes).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        HelperPackages::new(Some(builds))
+        HelperPackages::new(Some(builds), UNPUBLISHED)
     }
 }
 

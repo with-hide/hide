@@ -143,7 +143,7 @@ impl Device {
         ] {
             std::fs::write(builds.join(format!("{name}-windows-x86_64")), bytes).unwrap();
         }
-        HelperPackages::new(Some(builds))
+        HelperPackages::new(Some(builds), UNPUBLISHED)
     }
 
     /// A batch file the steps can start in place of a program: it says what

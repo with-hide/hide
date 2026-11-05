@@ -18,10 +18,10 @@
 use super::*;
 #[path = "bootstrap.rs"]
 pub(super) mod bootstrap;
-#[path = "device_bundles.rs"]
-mod device_bundles;
 #[path = "inbound.rs"]
 pub mod inbound;
+#[path = "kit/mod.rs"]
+mod kit;
 #[path = "link_streams.rs"]
 mod link_streams;
 #[path = "wsl.rs"]
@@ -31,6 +31,7 @@ pub use hide_node_link::LinkError;
 use hide_node_link::panes::{NodeEvent, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
+pub use kit::ReleaseIdentity;
 pub use link_streams::{LinkStream, LinkWriter, OpenError, StreamCloser};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
@@ -198,151 +199,29 @@ pub(super) fn check_git(
     }
 }
 
-/// Local helpers, plus a manifest for device bundles fetched on connection.
-#[derive(Clone, Debug, Default)]
+/// The programs a device gets (`kit::select`): this build's folder, and the
+/// release this build was compiled as, whose kits a device of another
+/// platform gets.
+#[derive(Clone, Debug)]
 pub struct HelperPackages {
     directory: Option<PathBuf>,
+    release: ReleaseIdentity,
 }
 
+/// A build no release was published for: what a test of the lookup rule
+/// passes when it reaches no release.
+#[cfg(test)]
+pub(crate) const UNPUBLISHED: ReleaseIdentity = ReleaseIdentity {
+    version: "0.0.0-test",
+    commit: None,
+    order: 0,
+};
+
 impl HelperPackages {
-    pub fn new(directory: Option<PathBuf>) -> Self {
-        Self { directory }
-    }
-
-    /// The build for `os`/`arch` (Rust's names: `macos`, `aarch64`). A
-    /// `hided-<os>-<arch>` file wins; the daemon's own program (`hided`,
-    /// `hided.exe` on Windows) is accepted only for this daemon's own
-    /// platform, which is what the package and a development build carry.
-    pub fn find(&self, os: &str, arch: &str) -> Result<PathBuf, String> {
-        self.find_built_program(HELPER_NAME, os, arch).map_err(|()| {
-            format!(
-                "This Hide build does not include the device helper for {} {arch}; files and Git on this device stay unavailable until a build that packages it is installed",
-                platform_label(os)
-            )
-        })
-    }
-
-    /// What a device of `os`/`arch` gets: [`HelperPackages::payload`] with
-    /// the pane holder beside the helper, which runs the device's panes for
-    /// the core's own engine.
-    pub(super) fn payload_for(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
-        // The holder goes beside the helper; a build that does not carry
-        // the holder for the device's system connects nothing rather than a
-        // node that could run no pane.
-        let (mut payload, bundled) = self.kit(os, arch)?;
-        // A release's device kit carries the holder for a device of
-        // another system; a build's own system, or a developer's
-        // folder, has it beside the helper.
-        let holder = match bundled {
-            Some(holder) => holder,
-            None => {
-                let holder = self.find_built_program(HOLDER_NAME, os, arch).map_err(|()| {
-                    EstablishError::Unsupported(format!(
-                        "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
-                        platform_label(os)
-                    ))
-                })?;
-                read_package(&device_program(HOLDER_NAME, os), &holder)
-                    .map_err(EstablishError::Install)?
-            }
-        };
-        payload.files.push(holder);
-        // A Windows holder loads the pinned ConPTY runtime from the
-        // folder beside the node's program (`hide_kit::holders`).
-        if os == "windows" {
-            let conpty = self
-                .find_built_folder(hide_kit::holders::CONPTY_SOURCE, os, arch)
-                .map_err(|()| {
-                    EstablishError::Unsupported(format!(
-                        "This Hide build does not include the pane holder's ConPTY runtime for {} {arch}; the core's own engine cannot run this device's panes",
-                        platform_label(os)
-                    ))
-                })?;
-            payload.files.extend(
-                read_folder(hide_kit::holders::CONPTY_SOURCE, &conpty)
-                    .map_err(EstablishError::Install)?,
-            );
-        }
-        Ok(payload)
-    }
-
-    /// The programs this build puts on a device of `os`/`arch` besides the
-    /// pane holder: the helper, which the device cannot do without, and the
-    /// kit's parts, each found by the same rule as the helper. A part this
-    /// build does not carry is left out and named, and the kit on the device
-    /// reports it as missing from the build.
-    pub(super) fn payload(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
-        self.kit(os, arch).map(|(payload, _)| payload)
-    }
-
-    /// [`HelperPackages::payload`], and the pane holder when it came with a
-    /// release's device kit; a build's own files leave the holder unread
-    /// until a device asks for it.
-    fn kit(&self, os: &str, arch: &str) -> Result<(Payload, Option<Package>), EstablishError> {
-        // Existing native and developer-provided artifacts keep their lookup
-        // rule. Only a missing foreign helper goes to the release cache. This
-        // runs on the connection worker, never under the runtime mutex, and
-        // the bounded synchronous request cannot outlive that worker.
-        if self.find_built_program(HELPER_NAME, os, arch).is_err()
-            && (os != std::env::consts::OS || arch != std::env::consts::ARCH)
-            && device_bundles::supported(os, arch)
-        {
-            return device_bundles::payload(self.directory.as_deref(), os, arch)
-                .map(|(payload, holder)| (payload, Some(holder)))
-                .map_err(|reason| EstablishError::Download {
-                    os: os.to_owned(),
-                    arch: arch.to_owned(),
-                    reason,
-                });
-        }
-        let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
-        let helper = read_package(&device_program(HELPER_NAME, os), &helper)
-            .map_err(EstablishError::Install)?;
-        let mut payload = Payload {
-            files: vec![helper],
-            missing: Vec::new(),
-        };
-        for name in [CLI_NAME, HOOKS_NAME] {
-            match self.find_built_program(name, os, arch) {
-                Ok(path) => match read_package(&device_program(name, os), &path) {
-                    Ok(package) => payload.files.push(package),
-                    Err(reason) => payload.missing.push(reason),
-                },
-                Err(()) => payload.missing.push(format!(
-                    "This Hide build does not include {name} for {} {arch}",
-                    platform_label(os)
-                )),
-            }
-        }
-        Ok((payload, None))
-    }
-
-    /// The program `name` for `os`/`arch`, by the helper's rule: this build's
-    /// own copy carries its system's program name (`hided.exe` on Windows),
-    /// as the package and a development build name it.
-    fn find_built_program(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
-        self.find_named(name, &device_program(name, os), os, arch)
-    }
-
-    /// The folder `name` for `os`/`arch`, by the helper's rule: a folder has
-    /// the same name on every system (`holder-conpty`).
-    fn find_built_folder(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
-        self.find_named(name, name, os, arch)
-    }
-
-    /// A developer's `<name>-<os>-<arch>` first; for this daemon's own
-    /// platform only, then the file or folder `own` beside it.
-    fn find_named(&self, name: &str, own: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
-        let directory = self.directory.as_ref().ok_or(())?;
-        let named = directory.join(format!("{name}-{os}-{arch}"));
-        if named.exists() {
-            return Ok(named);
-        }
-        let own = directory.join(own);
-        if os == std::env::consts::OS && arch == std::env::consts::ARCH && own.exists() {
-            return Ok(own);
-        }
-        Err(())
+    /// `directory` is the folder holding this build's programs; `release`
+    /// is this build's compiled identity, which a release's kit must name.
+    pub fn new(directory: Option<PathBuf>, release: ReleaseIdentity) -> Self {
+        Self { directory, release }
     }
 }
 
@@ -481,9 +360,9 @@ fn platform_label(os: &str) -> &str {
     }
 }
 
-/// `uname -s -m` in Rust's platform names; a Windows device's PowerShell
-/// script answers `Windows` and its processor as Windows names it (`amd64`,
-/// `arm64`).
+/// `uname -s -m` in Rust's platform names, for a platform the device kit
+/// contract carries; a Windows device's PowerShell script answers `Windows`
+/// and its processor as Windows names it (`amd64`, `arm64`).
 pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
     let mut parts = uname.split_whitespace();
     let (Some(system), Some(machine)) = (parts.next(), parts.next()) else {
@@ -510,12 +389,9 @@ pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
             ));
         }
     };
-    if os == "macos" && arch == "x86_64" {
-        return Err(
-            "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only"
-                .to_owned(),
-        );
-    }
+    // A platform the release carries no kit for is refused here, before
+    // anything is installed, with the reason the device's row shows.
+    kit::contract::admit(os, arch, platform_label(os))?;
     Ok((os.to_owned(), arch.to_owned()))
 }
 
@@ -2936,9 +2812,11 @@ mod tests {
             platform_of("Windows amd64").unwrap(),
             ("windows".to_owned(), "x86_64".to_owned())
         );
+        // A Windows ARM PC is refused before anything is installed, with
+        // the reason its row shows (with-hide/hide-private#501 decision 2).
         assert_eq!(
-            platform_of("Windows arm64").unwrap(),
-            ("windows".to_owned(), "aarch64".to_owned())
+            platform_of("Windows arm64").unwrap_err(),
+            "Windows ARM devices are not supported yet; Hide's Windows programs ship for x64 PCs only"
         );
     }
 
@@ -2947,7 +2825,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let own_name = device_program(HELPER_NAME, std::env::consts::OS);
         std::fs::write(directory.path().join(&own_name), b"own").unwrap();
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let own = packages
             .find(std::env::consts::OS, std::env::consts::ARCH)
             .unwrap();
@@ -3014,7 +2892,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         own_package(directory.path());
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         assert_eq!(
             packages.find(os, arch).unwrap(),
             directory.path().join(device_program(HELPER_NAME, os))
@@ -3043,7 +2921,7 @@ mod tests {
         for name in [HELPER_NAME, HOLDER_NAME] {
             write(&directory.path().join(name), name.as_bytes(), 0o755);
         }
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let refused = packages.find("windows", "x86_64").unwrap_err();
         assert!(
             refused.contains("does not include the device helper"),
@@ -3059,7 +2937,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         own_package(directory.path());
         let root = tempfile::tempdir().unwrap();
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let installed = packages.install_here(root.path()).unwrap();
         assert_eq!(
             installed.file_name().and_then(|name| name.to_str()),
@@ -3088,7 +2966,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let bare = packages.payload(os, arch).unwrap();
         assert_eq!(bare.files[0].relative, HELPER_NAME);
         assert_eq!(bare.files.len(), 1);
@@ -3135,7 +3013,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         assert!(matches!(
             packages.payload_for(os, arch),
             Err(EstablishError::Unsupported(_))
@@ -3160,7 +3038,7 @@ mod tests {
                 0o755,
             );
         }
-        let packages = HelperPackages::new(Some(folder.to_path_buf()));
+        let packages = HelperPackages::new(Some(folder.to_path_buf()), UNPUBLISHED);
         assert!(
             matches!(
                 packages.payload_for("windows", "x86_64"),
@@ -3208,7 +3086,7 @@ mod tests {
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
         write(&directory.path().join(HOOKS_NAME), b"one", 0o644);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let first = packages.payload(os, arch).unwrap().version();
         assert_eq!(packages.payload(os, arch).unwrap().version(), first);
         write(&directory.path().join(HOOKS_NAME), b"two", 0o644);

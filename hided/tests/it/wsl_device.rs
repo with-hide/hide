@@ -179,7 +179,7 @@ fn connector(sink: Arc<Sink>) -> hide_node::ssh::Connector {
     let packages = PathBuf::from(
         std::env::var_os("HIDE_E2E_WSL_PACKAGES").expect("set HIDE_E2E_WSL_PACKAGES"),
     );
-    hide_node::ssh::Connector::new(Some(packages))
+    hide_node::ssh::Connector::new(Some(packages), hided::cli::RELEASE)
         .with_terminals(sink)
         .with_pane_events(Arc::default())
         .with_wsl(WslAccess::of_this_pc().expect("this runner has WSL"))

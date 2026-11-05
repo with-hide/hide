@@ -38,7 +38,7 @@ import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
-import { DEVICE_BUNDLE_MANIFEST, readDeviceBundles } from "./device-helpers.mjs";
+import { DEVICE_BUNDLE_MANIFEST, DEVICE_KITS, readDeviceBundles } from "./device-helpers.mjs";
 import { checkReleaseBinaries, recordReleaseBinaries, RELEASE_PROGRAMS } from "./release-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -119,27 +119,24 @@ if (phase !== "assemble") {
 // names it in HIDE_BUILD_ORDER, or is refused.
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
-// Required artifacts are checked before the native release build, or before
-// the app is assembled from compiled binaries. No release Mac or Windows app
-// may silently leave a Linux device, or a WSL distribution, without its kit:
-// they take the bundles a run's `device-bundles` job made, downloaded here,
-// as they are, so both apps ship one manifest. A local package (no
-// HIDE_VERSION) on either system carries no device manifest at all: its
-// version is a `-main.` build with no published release, which the daemon
-// refuses to download for anyway (hide-node device_bundles), and the Linux
-// helpers build only on Linux runners, so asking for them would leave a
-// source build on a Mac waiting and on Windows unable to finish
-// (with-hide/hide#2041); a device then reports that this build has no device
-// download manifest.
+// No app carries a device kit or its manifest: a core of any system fetches
+// the manifest from its own release and the kits it names
+// (with-hide/hide-private#501 decision 1, hide-node/src/ssh/kit/). Until the
+// private publisher makes the release's kits itself, a release's Mac
+// package publishes the kits this run's `device-bundles` job made, as they
+// are, beside its installers; it checks them before the native release
+// build, or before the app is assembled from compiled binaries. A local
+// package (no HIDE_VERSION) publishes nothing: its `-main.` version has no
+// release, and the Linux helpers build only on Linux runners, so asking for
+// them would leave a source build on a Mac waiting (with-hide/hide#2041).
 const deviceBundles = path.join(out, "device-bundles");
 const releasing = Boolean(process.env.HIDE_VERSION);
-const carriesDeviceKit = (platform === "darwin" || platform === "win32") && releasing && phase !== "compile";
+const publishesDeviceKits = platform === "darwin" && releasing && phase !== "compile";
 const identity = { version, commit, order };
-if (carriesDeviceKit && !fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST))) {
+if (publishesDeviceKits && !fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST))) {
   throw new Error(`the ${version} release needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
 }
-const deviceManifest = carriesDeviceKit ? readDeviceBundles(deviceBundles, identity) : null;
-if (platform !== "linux" && !releasing && phase !== "compile") console.log("device_manifest=none (a local build has no device release)");
+const deviceManifest = publishesDeviceKits ? readDeviceBundles(deviceBundles, identity) : null;
 const cargoRelease = path.join(repo, "target", "release");
 const releaseBinaries = RELEASE_PROGRAMS.map((name) => `${name}${exe}`);
 if (phase === "assemble") {
@@ -174,7 +171,6 @@ const extraResource = shipped.map(([name, source]) => {
   fs.chmodSync(target, 0o755);
   return target;
 });
-if (deviceManifest) extraResource.push(deviceManifest);
 // A Windows holder runs its pane only on the pinned ConPTY runtime, which the
 // node finds in `holder-conpty` beside its program (hide_kit::holders::
 // CONPTY_SOURCE). The fetch refuses a package or a file of any digest other than
@@ -318,20 +314,22 @@ if (platform === "darwin") {
   if (signing.mode === "developer-id") notarizeApp(bundle, signing, out);
 }
 
+// An app carries neither a device kit's manifest nor another platform's
+// programs; a device's kit is a release asset only.
+if (fs.existsSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST))) throw new Error("the device kit manifest must not ship in the app");
+for (const devicePlatform of Object.keys(DEVICE_KITS)) {
+  for (const name of releaseBinaries) {
+    if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
+  }
+}
 // The installers wrap the app as it stands; a Developer ID build's dmg is
 // signed and notarized there too.
 const installers = await buildInstallers({ app: bundle, version, out: release, signing });
 if (deviceManifest) {
-  const manifest = JSON.parse(fs.readFileSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST), "utf8"));
-  for (const [devicePlatform, { asset }] of Object.entries(manifest.platforms)) {
-    for (const name of releaseBinaries) {
-      if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
-    }
-    // The archives and their manifest are release assets once, beside the
-    // Mac app; the Windows app ships the same manifest and publishes neither.
-    if (platform === "darwin") fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
-  }
-  if (platform === "darwin") fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
+  const manifest = JSON.parse(fs.readFileSync(deviceManifest, "utf8"));
+  // The archives and their manifest are release assets once, beside the Mac app.
+  for (const { asset } of Object.values(manifest.platforms)) fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
+  fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
   console.log(`device_manifest_bytes=${fs.statSync(deviceManifest).size}`);
 }
 // What a downloader of the update gets is the zip, so Gatekeeper judges the app expanded from it.

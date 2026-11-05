@@ -167,7 +167,7 @@ fn own_package(folder: &Path) {
 /// The connector the Windows app builds over `packages`, with Windows' own
 /// `ssh.exe` and the askpass `hide.exe` it finds there by itself.
 fn connector(packages: &Path, sink: Arc<Sink>) -> hide_node::ssh::Connector {
-    hide_node::ssh::Connector::new(Some(packages.to_path_buf()))
+    hide_node::ssh::Connector::new(Some(packages.to_path_buf()), hided::cli::RELEASE)
         .with_ssh_program(Path::new(OPENSSH).join("ssh.exe"))
         .with_terminals(sink)
         .with_pane_events(Arc::default())
