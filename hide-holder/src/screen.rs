@@ -6,7 +6,7 @@
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: captures into the holder's own rows from a render state's
 // dirty rows, sharing a row that did not change, instead of filling a ratatui
-// buffer, and bounds a cell's text and link.
+// buffer, bounds a cell's text and link, and reads which rows soft-wrap.
 
 //! The screen as cells: what the parser shows, captured for a fragment.
 //!
@@ -176,6 +176,11 @@ pub struct Frame {
     pub cols: u16,
     pub rows: u16,
     pub lines: Vec<Arc<Row>>,
+    /// Whether each row soft-wraps onto the next one, the program's text
+    /// having run past its last column, as against ending with a line break.
+    /// Read for every row on every capture, since the parser can set a row's
+    /// wrap when the row after it is written.
+    pub wrapped: Vec<bool>,
     pub cursor: Cursor,
 }
 
@@ -263,6 +268,7 @@ impl Capture {
         let default_fg = palette.default_fg.unwrap_or(Color::Default);
         let default_bg = palette.default_bg.unwrap_or(Color::Default);
         let mut lines = Vec::with_capacity(usize::from(rows));
+        let mut wrapped = Vec::with_capacity(usize::from(rows));
         {
             let mut iterator = self.render.populate_row_iterator(&mut self.rows)?;
             let mut y = 0u16;
@@ -288,12 +294,14 @@ impl Capture {
                         )?)
                     }
                 };
+                wrapped.push(iterator.soft_wrapped()?);
                 iterator.set_dirty(false)?;
                 lines.push(line);
                 y += 1;
             }
             while y < rows {
                 lines.push(Arc::new(Row::blank(cols, default_fg, default_bg)));
+                wrapped.push(false);
                 y += 1;
             }
         }
@@ -322,6 +330,7 @@ impl Capture {
             cols,
             rows,
             lines,
+            wrapped,
             cursor,
         };
         self.frame = Some(frame.clone());

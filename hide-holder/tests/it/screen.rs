@@ -232,3 +232,46 @@ fn text_after_a_character_newer_than_the_receivers_table_stays_where_the_program
     assert_eq!(shown[0].lines[0], "a\u{1fae0} b marker-e");
     assert_eq!(shown[0].cursor, (13, 0));
 }
+
+/// Which rows a fragment's wrap sequence (`ESC ] 7719 ; cols ; rows ; hex
+/// ESC \`) says soft-wrap, decoded the way the web shell reads it.
+fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Vec<u16> {
+    let text = String::from_utf8_lossy(&fragment.bytes);
+    let start = text.find("\x1b]7719;").expect("a full fragment says its wraps") + 7;
+    let body = &text[start..start + text[start..].find("\x1b\\").unwrap()];
+    let mut fields = body.split(';');
+    let size = (fields.next().unwrap(), fields.next().unwrap());
+    assert_eq!(size, (fragment.size.cols.to_string().as_str(), fragment.size.rows.to_string().as_str()));
+    let mut rows = Vec::new();
+    for (digit, hex) in fields.next().unwrap().chars().enumerate() {
+        let bits = hex.to_digit(16).unwrap();
+        for bit in 0..4 {
+            if bits & (1 << bit) != 0 {
+                rows.push((digit * 4 + bit) as u16);
+            }
+        }
+    }
+    rows
+}
+
+/// with-hide/hide-private#312: a line that fills the width and ends with a
+/// line break is not a wrap, while a longer one the terminal carried onto
+/// the next row is, on every system's terminal (ConPTY on Windows).
+#[test]
+fn a_full_screen_says_which_rows_the_programs_text_ran_past() {
+    let home = Home::new();
+    // The holder starts at 80 columns.
+    let full = "u".repeat(80);
+    let long = "w".repeat(100);
+    let script = Script::new(
+        &home,
+        vec![format!("\x1b[H\x1b[2J{full}\r\nword after\r\n{long}\r\nwrap-marker").into_bytes()],
+    );
+    let holder = script.start(&home);
+    let mut connection = holder.open();
+    connection.wait_for_drawn("wrap-marker");
+    let answered = connection.redraw();
+    let full_screen = &connection.fragments[answered - 1];
+    assert_eq!(full_screen.size.cols, 80);
+    assert_eq!(wrapped_rows(full_screen), [2]);
+}
