@@ -157,6 +157,10 @@ jobs:
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
+      # The Linux saver of the binding tool on main (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
       # Install the locked binding tool outside the shell's five-minute build
       # budget. Shards also need the ABI for their phone relay fixture.
       - name: Prepare the relay WebAssembly
@@ -231,6 +235,10 @@ jobs:
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
+      # A single-shard lane builds for itself and is its system's saver on main.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: ${{ github.ref == 'refs/heads/main' && inputs.shards == 1 }}
       # Install the locked binding tool outside the shell's five-minute build
       # budget. Shards also need the ABI for their phone relay fixture.
       - name: Prepare the relay WebAssembly
