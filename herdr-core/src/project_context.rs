@@ -96,10 +96,20 @@ pub(crate) fn sort_projects(
     // its activity, so the shell can split the list into the `Pinned`
     // section and the activity list without repeating either key (D-02,
     // D-03). The device is still the first key: pins never cross devices.
+    // Inside the pinned group activity is not a key: a pinned project that
+    // moved with every agent message would never stay where it was put. The
+    // group reads by name instead, which nothing an agent does can change.
     projects.sort_by(|left, right| {
-        left.device_id
+        let order = left
+            .device_id
             .cmp(&right.device_id)
-            .then_with(|| right.pinned.cmp(&left.pinned))
+            .then_with(|| right.pinned.cmp(&left.pinned));
+        if left.pinned && right.pinned {
+            return order
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.id.cmp(&right.id));
+        }
+        order
             .then_with(|| project_activity[&right.id].cmp(&project_activity[&left.id]))
             .then_with(|| left.id.cmp(&right.id))
     });
@@ -1198,13 +1208,14 @@ mod tests {
     }
 
     /// B2, B3. A pinned project leads its device whatever its activity, pins
-    /// keep the activity order among themselves, and a remote pin still sits
-    /// after every local row because the device is the first key.
+    /// read by name among themselves so activity never moves one, and a
+    /// remote pin still sits after every local row because the device is the
+    /// first key.
     #[test]
-    fn pinned_projects_lead_their_device_in_activity_order() {
-        let mut pinned_stale = project("pinned-stale", "local", Some(1_000), &[]);
+    fn pinned_projects_lead_their_device_in_name_order_whatever_their_activity() {
+        let mut pinned_stale = project("pinned-b", "local", Some(1_000), &["pane-b"]);
         pinned_stale.pinned = true;
-        let mut pinned_busy = project("pinned-busy", "local", Some(2_000), &[]);
+        let mut pinned_busy = project("pinned-a", "local", Some(2_000), &[]);
         pinned_busy.pinned = true;
         let mut remote_pinned = project("remote-pinned", "mini", Some(9_000), &[]);
         remote_pinned.pinned = true;
@@ -1216,17 +1227,16 @@ mod tests {
             pinned_busy,
         ];
 
-        assert!(sort_projects(&mut projects, &[]));
+        // pinned-b also holds the newest agent message of all.
+        let agents = agents(json!([
+            {"pane_id": "pane-b", "state_change_seq": 1, "tokens": {"activity": "0000009900000"}},
+        ]));
+
+        assert!(sort_projects(&mut projects, &agents));
 
         assert_eq!(
             ids(&projects),
-            [
-                "pinned-busy",
-                "pinned-stale",
-                "active",
-                "remote-pinned",
-                "remote"
-            ]
+            ["pinned-a", "pinned-b", "active", "remote-pinned", "remote"]
         );
     }
 
