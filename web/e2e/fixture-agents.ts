@@ -53,13 +53,18 @@ export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pa
  * Gives the stand-in in `pane` a new session, as Claude Code reports one
  * after `/clear`, and waits until its row names it, through Hide's
  * SessionStart hook the stand-in runs from inside its pane
- * (`shims/claude-shim.c`, `session_request`).
+ * (`shims/claude-shim.c`, `session_request`), and no longer reads Starting:
+ * a fresh start stays pending until its screen rests past the engine's
+ * settle, and a row still reading Starting changes height when it settles.
  */
 export async function setAgentSession(fixture: Pick<EngineServer, "root">, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string): Promise<void> {
   await withControl(daemon, async (control) => {
     await waitForAgentInput(fixture.root, pane);
     sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
-    await control.until((rest) => agentIn(rest, pane)?.session_id === session, `${pane} on session ${session}`, 20_000);
+    await control.until((rest) => {
+      const row = agentIn(rest, pane);
+      return row?.session_id === session && row.status_code !== "starting" ? true : undefined;
+    }, `${pane} on session ${session}, started`, 20_000);
   });
 }
 
