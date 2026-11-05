@@ -31,18 +31,16 @@ fn each_extension_keeps_its_pinned_bytes() {
     );
 }
 
-/// The helper the extension starts: Node running `tests/pi-extension/helper.mjs`,
-/// which it finds from the environment the extension hands on.
-#[cfg(unix)]
-const HELPER: &str = "#!/bin/sh\nexec node \"$HIDE_EXTENSION_STAND_IN\" \"$@\"\n";
-
 #[cfg(unix)]
 pub(super) fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
     let dir = tempfile::tempdir().unwrap();
     let helper = dir.path().join("hide-agent-hooks");
     // Started once before the test, so the helper's budgets are not spent in
     // the machine's line of first-start checks (docs/TESTING.md).
-    crate::stand_ins::program(&helper, HELPER);
+    crate::stand_ins::program(
+        &helper,
+        &crate::host_helper::body("HIDE_EXTENSION_HELPER_LOG", "HIDE_EXTENSION_HELPER_ANSWERS"),
+    );
     // `.mjs`: Node reads the extension as the ES module both hosts load.
     let extension = dir.path().join("hide.mjs");
     std::fs::write(
@@ -60,10 +58,6 @@ pub(super) fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
         .env("HIDE_EXTENSION", &extension)
         .env("HIDE_EXTENSION_AGENT", agent)
         .env("HIDE_EXTENSION_HELPER", &helper)
-        .env(
-            "HIDE_EXTENSION_STAND_IN",
-            crate_dir().join("tests/pi-extension/helper.mjs"),
-        )
         .env("HIDE_EXTENSION_HELPER_LOG", dir.path().join("calls.jsonl"))
         // The guardrails policy is read from HOME, which the test writes.
         .env("HOME", dir.path())
