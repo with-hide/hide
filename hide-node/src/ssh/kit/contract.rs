@@ -1,7 +1,7 @@
 //! The device kits a release carries, as `contracts/device-kits.json` names
 //! them: the one place a device platform is named. The packaging scripts read
 //! the same file (`desktop/scripts/device-helpers.mjs`), and
-//! `scripts/check-device-kits-single-source.sh` refuses a platform name
+//! `scripts/check-device-kits-single-source.py` refuses a platform name
 //! written anywhere else in the kit code.
 
 use serde::Deserialize;
