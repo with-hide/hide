@@ -59,6 +59,53 @@ fn endpoint_kind_refuses_a_link_to_an_actual_socket_without_following_it() {
     assert!(is_endpoint(&path).unwrap());
 }
 
+/// The bytes a Unix socket address holds for its path, with the NUL that ends
+/// it: the operating system's own figure, not the implementation's.
+#[cfg(unix)]
+const SUN_PATH: usize = if cfg!(any(target_os = "linux", target_os = "android")) {
+    108
+} else {
+    104
+};
+
+/// A socket path of exactly `length` bytes in a short folder the test owns.
+#[cfg(unix)]
+fn path_of_length(length: usize) -> (TempDir, PathBuf) {
+    let folder = tempfile::Builder::new()
+        .prefix("hp")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let base = folder.path().as_os_str().len() + 1;
+    let path = folder.path().join("s".repeat(length - base));
+    assert_eq!(path.as_os_str().len(), length);
+    (folder, path)
+}
+
+/// Windows names a pipe, which has no such limit, so this contract is Unix's.
+#[cfg(unix)]
+#[test]
+fn a_path_one_byte_under_the_address_limit_binds_and_a_path_at_it_names_itself() {
+    let (_folder, fits) = path_of_length(SUN_PATH - 1);
+    let listener = LocalListener::bind(&fits).unwrap();
+    drop(listener);
+
+    let (folder, too_long) = path_of_length(SUN_PATH);
+    let error = LocalListener::bind(&too_long).err().unwrap();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    let reason = error.to_string();
+    assert!(reason.contains(&too_long.display().to_string()), "{reason}");
+    assert!(reason.contains(&SUN_PATH.to_string()), "{reason}");
+    // It failed before it made anything: no folder, lock or socket.
+    assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 0);
+    // And no connect can reach what no listener could bind.
+    let error = LocalStream::connect(&too_long).err().unwrap();
+    assert!(error.to_string().contains(&too_long.display().to_string()));
+    let error = LocalStream::connect_until(&too_long, Instant::now() + Duration::from_secs(1))
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains(&too_long.display().to_string()));
+}
+
 fn read_line(stream: &mut LocalStream) -> String {
     let mut line = Vec::new();
     let mut byte = [0_u8; 1];

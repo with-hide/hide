@@ -34,6 +34,7 @@ pub const DEVICE: &str = "remote";
 #[derive(Clone)]
 pub struct Environment {
     pub home: PathBuf,
+    root: PathBuf,
     values: BTreeMap<OsString, OsString>,
 }
 
@@ -117,7 +118,17 @@ impl Environment {
         if let Some(state_dir) = state_dir {
             values.insert("HIDE_STATE_DIR".into(), state_dir.as_os_str().to_owned());
         }
-        Ok(Self { home, values })
+        Ok(Self {
+            home,
+            root: root.to_path_buf(),
+            values,
+        })
+    }
+
+    /// The account's folder: its home, config, state and the files a pane's
+    /// commands leave.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     #[allow(clippy::disallowed_methods)] // env_clear: an SSH exec's environment, on Unix
@@ -350,7 +361,6 @@ impl Agent {
     #[allow(clippy::too_many_arguments)]
     fn start(
         daemon: &Daemon,
-        root: PathBuf,
         environment: Environment,
         device: Option<&'static str>,
         hide: PathBuf,
@@ -374,6 +384,7 @@ impl Agent {
         let pane = wait_for("the fixture agent on its session", || {
             Ok(pane_on_session(&daemon.snapshot()?, session))
         })?;
+        let environment_root = environment.root().to_path_buf();
         let mut agent = Self {
             environment,
             pane,
@@ -382,7 +393,7 @@ impl Agent {
             hooks,
             device,
             daemon: daemon.clone(),
-            root,
+            root: environment_root,
             sequence: 0,
         };
         agent.view(&agent.pane.clone())?;
@@ -591,6 +602,81 @@ fn end_holders(state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The processes in `listing` (`ps -Ao pid=,ppid=,command=`) that name one of
+/// `roots` as a whole path or a folder of it, with what they started: a
+/// holder is started with its socket under the root, and its pane's shell is
+/// the holder's child, which names nothing itself.
+fn naming(listing: &str, roots: &[&Path]) -> Vec<(u32, String)> {
+    let rows: Vec<(u32, u32, &str)> = listing
+        .lines()
+        .filter_map(|line| {
+            // `ps` pads its columns, so each field is cut off the front.
+            let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
+            let (parent, command) = rest.trim_start().split_once(char::is_whitespace)?;
+            Some((pid.parse().ok()?, parent.parse().ok()?, command.trim()))
+        })
+        .collect();
+    let names = |command: &str| {
+        command.split_whitespace().any(|word| {
+            roots.iter().any(|root| {
+                let root = root.to_string_lossy();
+                word == root
+                    || word
+                        .strip_prefix(root.as_ref())
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
+    };
+    let mut found: Vec<u32> = rows
+        .iter()
+        .filter(|(_, _, command)| names(command))
+        .map(|(pid, _, _)| *pid)
+        .collect();
+    loop {
+        let before = found.len();
+        for (pid, parent, _) in &rows {
+            if found.contains(parent) && !found.contains(pid) {
+                found.push(*pid);
+            }
+        }
+        if found.len() == before {
+            break;
+        }
+    }
+    rows.iter()
+        .filter(|(pid, _, _)| found.contains(pid))
+        .map(|(pid, _, command)| (*pid, command.chars().take(120).collect()))
+        .collect()
+}
+
+/// Fails, naming each, if a process of this machine still names one of the
+/// fixture's `roots`: a holder or shell the fixture started and left. It only
+/// reads the process table and ends nothing; the machine runs other
+/// people's holders, and only a record this fixture holds says one is its own.
+fn none_left(roots: &[&Path]) -> Result<()> {
+    let mut left = Vec::new();
+    // A process that was just ended can still be listed for a moment.
+    wait_within("no process of the fixture to be left", HOLDER_END, || {
+        let mut ps = Command::new("ps");
+        ps.args(["-Ao", "pid=,ppid=,command="]);
+        let listing = String::from_utf8_lossy(&successful(ps)?).into_owned();
+        // The tempdir is spelled as it was made; a process reports the
+        // real path of its own folders.
+        let canonical: Vec<PathBuf> = roots
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .collect();
+        let all: Vec<&Path> = roots
+            .iter()
+            .copied()
+            .chain(canonical.iter().map(PathBuf::as_path))
+            .collect();
+        left = naming(&listing, &all);
+        Ok(left.is_empty().then_some(()))
+    })
+    .map_err(|error| anyhow::anyhow!("{error}: still running {left:?}"))
+}
+
 pub struct Fixture {
     pub local: Agent,
     pub remote: Agent,
@@ -635,15 +721,22 @@ impl Fixture {
             .tempdir_in(artifacts)?
             .keep();
         let ipc = tempfile::Builder::new().prefix("rd-").tempdir_in("/tmp")?;
-        // The device's node binds its pane socket and its holders' sockets
-        // under the device's state folder, which must stay short enough for
-        // a Unix socket path; so must the daemon's own.
+        // Every socket the fixture makes sits under this short root, never
+        // under the run directory: a Unix socket path holds about a hundred
+        // bytes, and the checkout's own path can pass that. The daemon's
+        // state folder and the device node's (its bridges and logs) are
+        // here, and so is the device account: a node's holders live in the
+        // account's `.hide/device-node` (`hide_kit::layout::device_node_state`),
+        // not in its state folder.
         let device_state = ipc.path().join("d");
         hide_platform::fs::private::create_dir_all(&device_state)?;
         let state = ipc.path().join("s");
         hide_platform::fs::private::create_dir_all(&state)?;
         let mut local_env = Environment::new(&root.join("l"), None)?;
-        let remote_env = Environment::new(&root.join("r"), Some(&device_state))?;
+        // The device reports a checkout by its real path, which the journey
+        // compares with the one it made, and `/tmp` is a link on macOS.
+        let device_root = ipc.path().canonicalize()?.join("r");
+        let remote_env = Environment::new(&device_root, Some(&device_state))?;
         // The device installs shipped executables, which carry no debug
         // data. Stage this candidate's code with the same property: hashing
         // and uploading a CI debug image can exhaust helper setup's bound.
@@ -726,7 +819,6 @@ impl Fixture {
             Self::add_local_project(&screen, &local_env.home.join("project"))?;
             let local = Agent::start(
                 &screen,
-                root.join("l"),
                 local_env.clone(),
                 None,
                 cli.join("hide"),
@@ -748,7 +840,6 @@ impl Fixture {
             );
             let remote = Agent::start(
                 &screen,
-                root.join("r"),
                 remote_env.clone(),
                 Some(DEVICE),
                 remote_hide,
@@ -776,7 +867,13 @@ impl Fixture {
             }),
             Err(error) => {
                 let mut ssh = ssh;
-                let stopped = Self::end(&mut daemon, &mut ssh, &[&state, &device_state]);
+                let device_node = hide_kit::layout::device_node_state(&remote_env.home);
+                let stopped = Self::end(
+                    &mut daemon,
+                    &mut ssh,
+                    &[&state, &device_node],
+                    &[ipc.path()],
+                );
                 eprintln!("the fixture's run directory: {}", root.display());
                 Err(match stopped {
                     Ok(()) => error,
@@ -966,11 +1063,15 @@ impl Fixture {
     }
 
     /// Ends the daemon, the device's sshd and every holder either node
-    /// started, confirming each exit.
+    /// started, confirming each exit, then fails if any process still names
+    /// the fixture's short `roots`. `states` are the folders the nodes keep
+    /// their holders' records in: the daemon's state folder and the device
+    /// account's node folder.
     fn end(
         daemon: &mut Option<OwnedChild>,
         ssh: &mut super::sshd::Sshd,
         states: &[&Path],
+        roots: &[&Path],
     ) -> Result<()> {
         if let Some(mut daemon) = daemon.take() {
             daemon.kill_tree()?;
@@ -982,7 +1083,7 @@ impl Fixture {
         for state in states {
             end_holders(state)?;
         }
-        Ok(())
+        none_left(roots)
     }
 }
 
@@ -1012,15 +1113,23 @@ impl Run for Fixture {
 
     fn stop(&mut self) -> Result<()> {
         let device_state = self.ipc.path().join("d");
+        // The device node's holders keep their records and logs in the
+        // account's own node folder, not in the node's state folder.
+        let device_node = hide_kit::layout::device_node_state(&self.remote.environment.home);
         Self::end(
             &mut self.daemon,
             &mut self.ssh,
-            &[&self.state, &device_state],
+            &[&self.state, &device_node],
+            &[self.ipc.path()],
         )?;
-        // The state folders sit under /tmp for their sockets' sake; their
-        // records stay with the run, which a failed journey keeps.
-        for (state, kept) in [(&self.state, "logs-local"), (&device_state, "logs-device")] {
-            let logs = state.join("Logs");
+        // The state folders and the device account sit under /tmp for their
+        // sockets' sake; their logs stay with the run, which a failed journey
+        // keeps.
+        for (logs, kept) in [
+            (self.state.join("Logs"), "logs-local"),
+            (device_state.join("Logs"), "logs-device"),
+            (device_node.join("holders"), "logs-device-holders"),
+        ] {
             if !logs.is_dir() {
                 continue;
             }
@@ -1155,3 +1264,48 @@ int main(int argc, char **argv) {
   }
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LISTING: &str = "\
+  101     1 /tmp/rd-AbCdEf/r/home/.hide/holders/v1-x/hide-holder --socket /tmp/rd-AbCdEf/r/home/.hide/device-node/holders/h1_p1.sock --rows 24
+  102   101 /bin/zsh -l
+  103   102 sleep 600
+  201     1 /private/tmp/rd-AbCdEf/s/holders/v1-x/hide-holder --cwd /private/tmp/rd-AbCdEf/r/home/project
+  301     1 /tmp/rd-AbCdEfX/r/home/.hide/holders/v1-x/hide-holder --socket /tmp/rd-AbCdEfX/s.sock
+  401     1 /tmp/rd-ZZZZZZ/r/home/.hide/holders/v1-x/hide-holder --socket /tmp/rd-ZZZZZZ/s.sock
+  402   401 /bin/zsh -l
+  501     1 /usr/bin/ssh-agent -l
+";
+
+    fn pids(roots: &[&Path]) -> Vec<u32> {
+        naming(LISTING, roots)
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect()
+    }
+
+    /// The holder names the root, and its pane's shell and the shell's child
+    /// name nothing but are the holder's, so the fixture left them too.
+    #[test]
+    fn a_holder_naming_the_root_is_left_with_its_shell_and_the_shell_s_child() {
+        assert_eq!(pids(&[Path::new("/tmp/rd-AbCdEf")]), [101, 102, 103]);
+        let found = naming(LISTING, &[Path::new("/tmp/rd-AbCdEf")]);
+        assert!(found[0].1.starts_with("/tmp/rd-AbCdEf/r/home"), "{found:?}");
+        assert_eq!(found[1].1, "/bin/zsh -l");
+    }
+
+    /// A process reports the real path of its folders, and the other
+    /// fixture's holders and a folder only named alike are not this one's.
+    #[test]
+    fn the_real_spelling_counts_and_another_fixture_s_holder_does_not() {
+        let roots = [
+            Path::new("/tmp/rd-AbCdEf"),
+            Path::new("/private/tmp/rd-AbCdEf"),
+        ];
+        assert_eq!(pids(&roots), [101, 102, 103, 201]);
+        assert!(pids(&[Path::new("/tmp/rd-Nothing")]).is_empty());
+    }
+}
