@@ -170,37 +170,13 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     let request = json!({"pane_id":pane_id,"nonce":hex::encode(nonce),"one_shot":one_shot,
         "install":env.install});
     let install = env.install.as_deref();
+    let device_pane =
+        install.is_some_and(|install| install != hide_agent_hooks::route::APP_INSTALL);
     in_pane_order(
-        PaneOwner::of(install),
+        device_pane,
         || bootstrap_local(env, &request, install),
         || bootstrap_remote(env, &request, install),
     )
-}
-
-/// Whose answer a pane's `hide` asks for first and whose refusal it reports
-/// when no one gives it a reference: the installation the pane names owns
-/// it, and another one's refusal says nothing about the pane.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PaneOwner {
-    /// A pane another installation's node started, a device helper's: its
-    /// bridges answer first, since this account's own daemon would bind the
-    /// pane by its folder alone.
-    Node,
-    /// A pane the desktop app started: this account's daemon is its own.
-    Daemon,
-    /// A pane that names no installation, a Herdr pane or a plain terminal:
-    /// the daemon first, and the bridge's reason when both refuse.
-    Unnamed,
-}
-
-impl PaneOwner {
-    fn of(install: Option<&str>) -> Self {
-        match install {
-            None => Self::Unnamed,
-            Some(hide_agent_hooks::route::APP_INSTALL) => Self::Daemon,
-            Some(_) => Self::Node,
-        }
-    }
 }
 
 /// An answer that does not name the installation the request named: a
@@ -210,14 +186,19 @@ impl PaneOwner {
 pub const INSTALL_UNCONFIRMED: &str = "install_unconfirmed";
 
 /// Asks this account's daemon (`local`) and the device bridges (`remote`) for
-/// the pane in the order its [`PaneOwner`] calls for, and reports the
-/// owner's refusal when neither gives a reference.
+/// the pane in the order its installation calls for. A pane another
+/// installation's node started, a device helper's, is that node's: its
+/// bridges answer first, since this account's own daemon would bind the pane
+/// by its folder alone. A pane the desktop app started, or one that names no
+/// installation, asks the daemon first, and when both refuse reports the
+/// bridge's reason: a daemon in the node role opens no bootstrap socket, so
+/// its node is the one that can say why.
 fn in_pane_order(
-    owner: PaneOwner,
+    device_pane: bool,
     local: impl FnOnce() -> Result<PathBuf, String>,
     remote: impl FnOnce() -> Result<Option<PathBuf>, String>,
 ) -> Result<PathBuf, String> {
-    if owner == PaneOwner::Node {
+    if device_pane {
         return match remote() {
             Ok(Some(path)) => Ok(path),
             Ok(None) => local(),
@@ -229,7 +210,6 @@ fn in_pane_order(
         Err(local_reason) => match remote() {
             Ok(Some(path)) => Ok(path),
             Ok(None) => Err(local_reason),
-            Err(_) if owner == PaneOwner::Daemon => Err(local_reason),
             Err(remote_reason) => Err(remote_reason),
         },
     }
@@ -1741,6 +1721,33 @@ mod tests {
         assert_eq!(outcome, Err(INSTALL_UNCONFIRMED.to_owned()));
     }
 
+    /// The desktop app's daemon in the node role, attached to another
+    /// machine's core, opens no bootstrap socket, so its app pane's `hide`
+    /// finds no daemon and asks the node, whose refusal is the one the
+    /// caller can act on, not the missing daemon's `hide_unavailable`.
+    #[test]
+    fn an_app_pane_without_a_daemon_hears_its_nodes_refusal() {
+        let state = short_dir();
+        let bridges = hide_kit::layout::workspace_bridges(state.path());
+        private::create_dir_all(&bridges).unwrap();
+        let node = bridges.join("bridge-node");
+        private::create_dir(&node).unwrap();
+        let listener =
+            hide_platform::ipc::LocalListener::bind(&node.join("bootstrap.sock")).unwrap();
+        let refused = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream).read_line(&mut line).unwrap();
+            let answer = json!({"ok": false, "reason": "checkout_not_registered"});
+            writeln!(stream, "{answer}").unwrap();
+        });
+        let mut env = env_at(state.path());
+        env.install = Some(hide_agent_hooks::route::APP_INSTALL.to_owned());
+        let outcome = bootstrap(&env, true);
+        refused.join().unwrap();
+        assert_eq!(outcome, Err("checkout_not_registered".to_owned()));
+    }
+
     /// A device helper's pane reaches its own node through the bridges even
     /// while this account's daemon would answer for it; the desktop app's
     /// pane, and a pane that names no installation, reach the daemon first.
@@ -1748,39 +1755,22 @@ mod tests {
     fn a_panes_hide_reaches_the_installation_that_started_it() {
         let daemon = || Ok(PathBuf::from("daemon"));
         let bridge = || Ok(Some(PathBuf::from("bridge")));
-        assert_eq!(
-            in_pane_order(PaneOwner::Node, daemon, bridge),
-            Ok("bridge".into())
-        );
-        assert_eq!(
-            in_pane_order(PaneOwner::Daemon, daemon, bridge),
-            Ok("daemon".into())
-        );
-        assert_eq!(
-            in_pane_order(PaneOwner::Unnamed, daemon, bridge),
-            Ok("daemon".into())
-        );
+        assert_eq!(in_pane_order(true, daemon, bridge), Ok("bridge".into()));
+        assert_eq!(in_pane_order(false, daemon, bridge), Ok("daemon".into()));
         // A node that does not hold the pane leaves it to the daemon.
         assert_eq!(
-            in_pane_order(PaneOwner::Node, daemon, || Ok(None)),
+            in_pane_order(true, daemon, || Ok(None)),
             Ok("daemon".into())
         );
-        // Refused by both, a pane reports its own installation's reason: a
-        // device pane its node's, the desktop app's pane its daemon's; a pane
-        // that names none the node's, as before installations were named.
-        let refused = |owner| {
+        // Refused by both, a device pane says why its node refused.
+        assert_eq!(
             in_pane_order(
-                owner,
-                || Err("daemon_reason".to_owned()),
-                || Err("node_reason".to_owned()),
-            )
-        };
-        assert_eq!(refused(PaneOwner::Node), Err("node_reason".to_owned()));
-        assert_eq!(refused(PaneOwner::Daemon), Err("daemon_reason".to_owned()));
-        assert_eq!(refused(PaneOwner::Unnamed), Err("node_reason".to_owned()));
-        assert_eq!(PaneOwner::of(None), PaneOwner::Unnamed);
-        assert_eq!(PaneOwner::of(Some("app")), PaneOwner::Daemon);
-        assert_eq!(PaneOwner::of(Some("root:/helper")), PaneOwner::Node);
+                true,
+                || Err("hide_unavailable".to_owned()),
+                || Err("pane_unavailable".to_owned())
+            ),
+            Err("pane_unavailable".to_owned())
+        );
     }
 
     /// A node of another installation refuses the pane (`other_install`),
