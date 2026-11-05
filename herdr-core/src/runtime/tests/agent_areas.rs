@@ -697,7 +697,6 @@ fn replacement_unknown_claim_survives_refusal_and_dismissal() {
         &crate::recent_closed::capture::CloseEffectRequest {
             safety: None,
             failed_terminals: Vec::new(),
-            retain_for_reopen: true,
             key: request.key.clone(),
             connection_generation: runtime.live_generation,
             target: request.target.clone(),

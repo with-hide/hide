@@ -1938,7 +1938,6 @@ impl Runtime {
                 }
             }),
             failed_terminals: request.failed_terminals.clone(),
-            retain_for_reopen: request.retain_for_reopen,
             allow_replacement_create: operation.allow_replacement_create,
             key: request.key.clone(),
             connection_generation: request.connection_generation,

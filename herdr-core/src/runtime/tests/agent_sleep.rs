@@ -942,7 +942,6 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             &crate::recent_closed::capture::CloseEffectRequest {
                 safety: None,
                 failed_terminals: Vec::new(),
-                retain_for_reopen: false,
                 allow_replacement_create: false,
                 replacement: None,
                 key: retired_capture.key.clone(),
