@@ -1386,12 +1386,14 @@ fn conductor_settings_change_only_what_an_edit_sends() {
     assert!(runtime.dispatch_json(&event(json!({"other_vendor": false}))));
     assert!(runtime.snapshot.ui_state.conductor_settings.clean_merged);
     assert!(runtime.dispatch_json(&event(json!({"clean_merged": false}))));
+    assert!(runtime.dispatch_json(&event(json!({"map_flow": "across"}))));
     let settings = &runtime.snapshot.ui_state.conductor_settings;
     assert_eq!(settings.concurrency, 6);
     assert_eq!(settings.default_scope, crate::missions::MissionScope::Merge);
     assert_eq!(settings.default_strength, Strength::Thorough);
     assert!(!settings.other_vendor);
     assert!(!settings.clean_merged);
+    assert_eq!(settings.map_flow, crate::missions::MapFlow::Across);
 }
 
 /// A mission whose node `fix` is done with pull request 7, which GitHub
