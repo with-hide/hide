@@ -88,6 +88,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
     You cannot set it done yourself (`mission_external_invalid`).
 - Every node other than an outside one has its own finish lines in `criteria`: one to three sentences a checker can judge pass or fail (`mission_criteria_missing`, `mission_criteria_too_many`).
   Write what is true when the node is finished, never the steps to get there; a screenshot is a line only when the node needs one.
+  Name what is checked (each cell or behaviour by its name) and by which evidence (a unit test, a real CLI journey, the real app), never "some" or "part of".
+  A node that changes what a user runs has one line checked in the real app (an isolated candidate build, never the operator's); a pass in a fake environment or against a stand-in alone does not finish it.
 - Hide adds the lines it can judge itself: `check` on every change node when the plan has a `check` command, and `ci` once the node's pull request has GitHub CI.
   It adds no review and no screenshot by default.
 - A review or a verify is a checker on the node, not a node of its own: `checks` lists at most one `review` and one `verify`, each with one to five agents in `by` (worker objects) and, for several, `rule` `all` (the default) or `majority` (`mission_checkers_invalid` otherwise).
@@ -122,6 +124,7 @@ Hide enforces none of it: the gate holds only each node's own lines, the check c
   Review again at most twice, and a re-review reads only what changed since the review before.
 - `thorough`: a `review` and a `verify` on every change node; several checkers deciding by `majority` on the risky ones; review again at most three times.
 - After the last round the strength allows, a serious finding still open is fixed in the node; a minor or rare-case one goes to the report as a follow-up.
+- A minor finding that blocks nothing gets no push of its own: the worker gathers them and sends them with the next push the node needs.
 - Choose every checker from the worker candidates in Settings › Mission, as you choose workers; with no candidates, among the agents installed here.
   With the mission's `other_vendor` true, prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); with it false, any candidate.
 - A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers`) instead: follow them, or name a strength in the next plan.
@@ -140,10 +143,13 @@ Do not cut a node into "implement, test, document": that is one worker's turn or
 A review or verify of one node is a checker in its `checks`, never another node; a `verify` node is only for changes that work only together.
 A checker's brief says what to check, where (an isolated candidate app, never the operator's), its line (`review` or `verify`), and to record its result with `hide mission record`.
 A `research` node only when the plan cannot be written without its answer; a question a worker can settle in its own pane is not a node.
+A mission that changes what existing code does starts with a node that lists everything the existing implementation does, one cell per behaviour, each with the check that proves it; later nodes' finish lines name those cells.
+Put the biggest cost (a long build, a measurement, a wide fix) in an early node of its own; the last node only confirms what the earlier ones made.
 
 Every worker's brief, change or verify, says in its first line what the node is, then:
 
 - the contract and the exact scope (the behaviours or decisions by number), and what is explicitly another node's;
+- for a node that changes existing behaviour, the places in the existing implementation's source that do the same thing;
 - the node's finish lines, each with its key from `hide mission show` (`c1`…, `check`, `ci`), and how to record them: `hide mission record <node> <line> --pass|--fail --evidence <one line> --summary <one line for the operator>`, with `--commit <sha>` for the `check` line;
 - the branch and worktree the spawn made, and that commits go on that branch only;
 - the checks the diff touches, by the repository's own commands;
@@ -186,17 +192,27 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Hide refuses them on any other kind of node, and the map shows them as the node's result.
 - Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or gets a new commit, and when an outside node is in main.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
+- While a node waits on CI, start the next work that does not depend on it, as the cap allows.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
 - A node whose approach fails: change the method yourself (retry, another worker, another order, split or join nodes), count it with `--attempts`, and leave the reason in `--change`.
+  A second review FAIL in the same area is such a failure: change the design or hand the node to a fresh worker, never plug the holes one at a time.
   The same problem unsolved after two attempts goes to the operator with what you tried and what you need decided.
 - Ask at once, without attempts, when the goal, the finish line or the scope would change, or when only a person can act (a login that expired, an approval a branch rule needs, a permission refused).
   If `gh` stops being signed in, the account changes, or GitHub refuses a permission, stop all GitHub work and ask.
 - When you need the operator, ask in conversation and put the question on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered in conversation.
-  When the answer is one of a few choices, give each with `--option` (at most 5, one line each), mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`; the node stays `working` and the map shows the decision on it.
+  When the answer is one of a few choices, give each with `--option` (at most 5, one line each) saying what follows from it, what it gains and what it costs, mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`; the node stays `working` and the map shows the decision on it.
+  Ask the same way in conversation, for example: `1) fix it in this PR: it ships in 1.2.0, the merge waits about an hour` / `2) a separate issue: merge now, users meet it for a while` / `recommend 1` with its reason in one line.
   The operator can then answer on the map: the answer arrives in this conversation as their own message, `[판단 답] <your question> → <their answer>` (worded in their language), and you act on it as if they had typed it; that answer has already taken the decision off the map, so there is nothing to clear.
   Changing the question with another `decide --line` drops an answer you have not received yet, so ask again only when the question really changed.
 - An upstream node that was dropped holds everything after it; the map shows it blocked. Replan before anything after it starts.
   To give a node up, drop it with its reason in `--change`, or ask the operator with `hide mission decide --node`.
+
+### Talking to the operator
+
+- Decide a detail that can be undone yourself and tell the operator it is decided; ask only where the direction splits.
+- Speak in the language the operator writes in, results first, and keep that after the conversation is summarized.
+- Give a time estimate as the steps left and how long each takes, never as a clock time.
+- Before the operator leaves the mission running overnight, ask now what only they can settle in the morning (a decision, a skip), so the night does not stop on it.
 
 ### What Hide does by itself
 
@@ -277,7 +293,8 @@ You conduct one open mission at a time: while another is open, a done one stays 
 
 If a mission has no Conductor, the map and the mission list offer Take over (이어받기 in Korean), which first brings the gone Conductor's own conversation back, else starts a new pane and asks it to take the mission.
 A conversation brought back gets a `resumed` letter from Hide saying it conducts the mission again: read it as the start of this section.
-Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read each worker's state (`hide agent list`, its record), and go on from there.
+Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read the handover note if the last Conductor left one and each worker's state (`hide agent list`, its record), and go on from there.
+When you hand the mission over, leave a handover note in a file beside your plan file: each node's state and what it waits on, the open decisions, and your next step.
 The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, and letters already sent there stay in that inbox, so send each live worker one letter saying you conduct the mission now.
 Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`).
 When a raise that Conductor was asked first stood ten minutes and reached the operator, the operator may hand the mission to a new session from the map: that session's prompt names `--handover <token>`, the take passes once with it, and the old Conductor's commands are refused from then on.
