@@ -2747,7 +2747,7 @@ mod tests {
             "a timer must not type an uncertain answer again"
         );
         let answer = mission_answer(&bell.runtime.lock().unwrap()).unwrap();
-        assert!(answer.unconfirmed && !answer.delivered);
+        assert!(answer.unconfirmed);
     }
 
     /// A submission Herdr refused before writing (`agent_blocked`, which it
@@ -3431,8 +3431,8 @@ mod tests {
                 1 + typed,
                 "{screen:?}: one draft read, then a final guard only for a send"
             );
-            let answer = mission_answer(&bell).unwrap();
-            assert_eq!(answer.delivered, typed == 1, "{screen:?}");
+            // A typed answer takes its decision away with it.
+            assert_eq!(mission_answer(&bell).is_none(), typed == 1, "{screen:?}");
         }
     }
 
@@ -3449,11 +3449,11 @@ mod tests {
         bell.pass(&mut doorbell, start);
         assert_eq!(answers_typed(&bell), 0);
         let answer = mission_answer(&bell).unwrap();
-        assert!(!answer.delivered && !answer.unconfirmed);
+        assert!(!answer.unconfirmed);
         *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
         bell.pass(&mut doorbell, start + RETRY_FIRST_MS);
         assert_eq!(answers_typed(&bell), 1);
-        assert!(mission_answer(&bell).unwrap().delivered);
+        assert!(mission_answer(&bell).is_none());
     }
 
     fn mission_answer(bell: &Bell) -> Option<crate::missions::Answer> {

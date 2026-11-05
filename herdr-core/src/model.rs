@@ -9465,15 +9465,11 @@ mod wire_enum_tests {
             let states = [
                 AnswerState::Sending,
                 AnswerState::Waiting,
-                AnswerState::Delivered,
                 AnswerState::Unconfirmed,
             ];
             for variant in states {
                 match variant {
-                    AnswerState::Sending
-                    | AnswerState::Waiting
-                    | AnswerState::Delivered
-                    | AnswerState::Unconfirmed => {}
+                    AnswerState::Sending | AnswerState::Waiting | AnswerState::Unconfirmed => {}
                 }
             }
             assert_wire(&contract, "mission_answer_state", &states);

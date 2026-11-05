@@ -1407,7 +1407,7 @@ export type MissionQuestion = {
 };
 
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
-export type MissionAnswerState = "sending" | "waiting" | "delivered" | "unconfirmed";
+export type MissionAnswerState = "sending" | "waiting" | "unconfirmed";
 /** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
 export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
 /** Why the last answer did not reach the Conductor, or why one still waits (`session_unreadable`) (`mission_answer_failure`, B28, B39). */

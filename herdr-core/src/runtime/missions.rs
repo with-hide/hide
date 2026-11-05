@@ -109,15 +109,14 @@ pub struct MissionView {
 }
 
 /// Where the operator's answer is (B26, B28): accepted and not yet tried,
-/// waiting for the Conductor's turn, typed into its conversation, or typed
-/// without Herdr confirming it arrived, kept until the operator sends it
-/// again.
+/// waiting for the Conductor's turn, or typed without Herdr confirming it
+/// arrived, kept until the operator sends it again. A typed answer takes
+/// its decision away, so it has no state of its own.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerState {
     Sending,
     Waiting,
-    Delivered,
     Unconfirmed,
 }
 
@@ -675,6 +674,22 @@ pub(super) fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
     format!("mission:{}:{hash:016x}:{recipient}", mission.id)
 }
 
+/// A book from before a typed answer took its decision away still holds
+/// the decision with that answer marked typed: it is settled now, as typing
+/// it would settle it today (B29).
+fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
+    let now = super::memory::now_ms();
+    for mission in &mut book.missions {
+        if mission
+            .answer
+            .as_ref()
+            .is_some_and(|answer| answer.delivered)
+        {
+            super::mission_events::settle_answered(mission, now);
+        }
+    }
+}
+
 impl Runtime {
     pub(crate) fn install_mission_store(
         &mut self,
@@ -683,7 +698,10 @@ impl Runtime {
     ) {
         match restored {
             Restored::Fresh => {}
-            Restored::Read(book) => self.missions.book = book,
+            Restored::Read(mut book) => {
+                settle_typed_answers(&mut book);
+                self.missions.book = book;
+            }
             Restored::Unreadable(reason) => {
                 crate::diagnostic!(json!({
                     "component": "missions",
@@ -2528,9 +2546,7 @@ impl Runtime {
                 key: answer.key,
                 text: answer.text.clone(),
                 option: answer.option,
-                state: if answer.delivered {
-                    AnswerState::Delivered
-                } else if self.missions.answers_typing.contains(&mission.id) {
+                state: if self.missions.answers_typing.contains(&mission.id) {
                     AnswerState::Sending
                 } else if answer.unconfirmed {
                     AnswerState::Unconfirmed
@@ -2555,10 +2571,7 @@ impl Runtime {
                 .or_else(|| {
                     // An answer the doorbell holds on a session it cannot
                     // read says so, for as long as the read refuses.
-                    (mission
-                        .answer
-                        .as_ref()
-                        .is_some_and(|answer| !answer.delivered)
+                    (mission.answer.is_some()
                         && self.missions.answers_held.contains(&mission.id)
                         && self.delivery_unreadable(&mission.conductor.actor).is_some())
                     .then_some(AnswerFailure::SessionUnreadable)

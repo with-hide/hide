@@ -498,7 +498,8 @@ pub struct Question {
 
 /// The operator's answer to the question with `key`, from the banner (B26):
 /// kept until it is typed into the Conductor's conversation, so a restart
-/// neither loses nor repeats it (engineering #11).
+/// neither loses nor repeats it (engineering #11); typing it takes the
+/// decision away with it (B29).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Answer {
     pub key: u64,
@@ -507,7 +508,10 @@ pub struct Answer {
     #[serde(default)]
     pub option: Option<u8>,
     pub at_unix_ms: u64,
-    #[serde(default)]
+    /// Read only from a book written while a typed answer stayed until the
+    /// Conductor cleared its decision: reading the book settles that
+    /// decision (`settle_typed_answers`), so it is never typed again.
+    #[serde(default, skip_serializing)]
     pub delivered: bool,
     /// Typing it may have reached the conversation without Herdr saying so:
     /// it is not typed again until the operator sends it again (B26).
