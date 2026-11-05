@@ -1512,9 +1512,21 @@ impl Drop for ActingOwner {
     }
 }
 
+/// The backlog of the Unix listener that takes no connection.
+#[cfg(unix)]
+const BACKLOG: libc::c_int = 1;
+
+/// The connections the listener that takes no connection holds: a Unix
+/// queue holds its backlog and one more (Linux), or about half again
+/// (macOS); a Windows listener its queue and instances.
+#[cfg(unix)]
+const HELD: usize = BACKLOG as usize + 1;
+#[cfg(windows)]
+const HELD: usize = hide_platform::ipc::HELD_UNACCEPTED;
+
 /// A listener that takes no connection: on Unix a socket with a backlog of
-/// one, on Windows a bound listener that never
-/// accepts, whose pipe instances run out.
+/// [`BACKLOG`], on Windows a bound listener that never accepts, whose pipe
+/// instances run out.
 #[cfg(unix)]
 fn listener_taking_none(path: &Path) -> std::os::fd::OwnedFd {
     use std::os::fd::FromRawFd;
@@ -1536,9 +1548,9 @@ fn listener_taking_none(path: &Path) -> std::os::fd::OwnedFd {
         let length = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
         let bound = libc::bind(fd, (&raw const address).cast(), length);
         assert_eq!(bound, 0, "{}", std::io::Error::last_os_error());
-        // One, not zero: macOS reads a backlog of zero as its default.
+        // Not zero: macOS reads a backlog of zero as its default.
         assert_eq!(
-            libc::listen(fd, 1),
+            libc::listen(fd, BACKLOG),
             0,
             "{}",
             std::io::Error::last_os_error()
@@ -1561,8 +1573,8 @@ fn a_connect_to_a_listener_that_takes_nothing_more_ends_by_its_deadline() {
     let (_folder, path) = endpoint();
     let _listener = listener_taking_none(&path);
     let mut held = Vec::new();
-    // Windows queues 64 beside its four listening instances.
-    let refused = (0..256).find_map(|_| {
+    // Twice what the listener holds is past it on every system.
+    let refused = (0..2 * HELD).find_map(|_| {
         match LocalStream::connect_until(&path, Instant::now() + Duration::from_millis(200)) {
             Ok(stream) => {
                 held.push(stream);
