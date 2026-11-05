@@ -30,11 +30,14 @@ pub struct ReleaseIdentity {
 
 impl ReleaseIdentity {
     /// Whether a release was published for this build: a `-main.` build, a
-    /// `0.0.0-` fixture and a build with no commit never were.
+    /// `0.0.0-` fixture, a build with no commit and one no package numbered
+    /// (a plain `cargo build --release`, which carries the crate's own
+    /// version) never were.
     pub(super) fn published(&self) -> bool {
         !self.version.contains("-main.")
             && !self.version.starts_with("0.0.0-")
             && self.commit.is_some()
+            && self.order > 0
     }
 }
 

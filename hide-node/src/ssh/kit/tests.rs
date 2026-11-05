@@ -317,7 +317,8 @@ fn a_manifest_of_another_build_is_refused_before_any_archive() {
 /// A program with another platform's header, an entry the manifest does
 /// not list, a link, a folder entry, a duplicate and a changed program are
 /// each refused, and no slot or staging folder is left; the release's own
-/// archive then succeeds.
+/// archive then succeeds. A link or a folder in a program's place carries
+/// the program's listed name and size, so only the entry's type refuses it.
 #[test]
 fn a_wrong_header_or_an_unlisted_entry_is_refused_and_never_cached() {
     let windows = "windows-x86_64";
@@ -326,6 +327,7 @@ fn a_wrong_header_or_an_unlisted_entry_is_refused_and_never_cached() {
         "unlisted",
         "link",
         "folder",
+        "program folder",
         "duplicate",
         "changed",
     ] {
@@ -348,9 +350,8 @@ fn a_wrong_header_or_an_unlisted_entry_is_refused_and_never_cached() {
             "unlisted" => {
                 shipped.push(("extra".to_owned(), tar::EntryType::Regular, b"x".to_vec()))
             }
-            "link" => {
-                shipped[helper] = ("hided.exe".to_owned(), tar::EntryType::Symlink, Vec::new())
-            }
+            "link" => shipped[helper].1 = tar::EntryType::Symlink,
+            "program folder" => shipped[helper].1 = tar::EntryType::Directory,
             "folder" => shipped.insert(
                 0,
                 (
@@ -381,6 +382,9 @@ fn a_wrong_header_or_an_unlisted_entry_is_refused_and_never_cached() {
         assert!(!root.join("staging").exists(), "{defect}");
         if defect == "header" {
             assert!(reason.contains("another platform"), "{reason}");
+        }
+        if matches!(defect, "link" | "program folder") {
+            assert!(reason.contains("at \"hided.exe\""), "{defect}: {reason}");
         }
     }
     let home = tempfile::tempdir().unwrap();
@@ -514,19 +518,28 @@ fn the_cache_evicts_the_least_recently_used_kit_past_its_budget() {
 #[test]
 fn a_local_build_names_the_developer_folder_instead_of_downloading() {
     let folder = tempfile::tempdir().unwrap();
-    let packages = HelperPackages::new(Some(folder.path().to_path_buf()), UNPUBLISHED);
     let own = platform(std::env::consts::OS, std::env::consts::ARCH);
     let foreign = CONTRACT.kits.keys().find(|name| **name != own).unwrap();
     let (os, arch) = split(foreign);
-    let Err(EstablishError::Unsupported(reason)) = packages.payload_for(os, arch) else {
-        panic!("a local build reached for a release kit");
+    // A fixture, and a plain `cargo build --release` of a checkout: the
+    // crate's own version and the commit, but no package's build order.
+    let unnumbered = ReleaseIdentity {
+        version: "0.1.0",
+        order: 0,
+        ..BUILD
     };
-    assert!(reason.contains("no published release"), "{reason}");
-    assert!(
-        reason.contains(&folder.path().display().to_string()),
-        "{reason}"
-    );
-    assert!(reason.contains(&format!("<name>-{foreign}")), "{reason}");
+    for identity in [UNPUBLISHED, unnumbered] {
+        let packages = HelperPackages::new(Some(folder.path().to_path_buf()), identity);
+        let Err(EstablishError::Unsupported(reason)) = packages.payload_for(os, arch) else {
+            panic!("a local build ({identity:?}) reached for a release kit");
+        };
+        assert!(reason.contains("no published release"), "{reason}");
+        assert!(
+            reason.contains(&folder.path().display().to_string()),
+            "{reason}"
+        );
+        assert!(reason.contains(&format!("<name>-{foreign}")), "{reason}");
+    }
 }
 
 /// The Windows kit marks its files as programs exactly as a Windows core
