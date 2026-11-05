@@ -648,6 +648,9 @@ fn a_powershell_call_is_judged_as_powershell_reads_it() {
     // files that are not there.
     assert_eq!(fixture.shell(repo, r"cat .\.env"), None);
     assert_eq!(fixture.shell(repo, "cat a.txt,.env"), None);
+    // A comma inside quotes is read as an array's too: more is refused,
+    // never less.
+    assert_eq!(powershell(repo, "echo 'a,.env'"), Some(Rule::Files));
     for command in [
         r"git -C ..\repo switch topic",
         r"GIT -C ..\repo switch topic",
@@ -666,6 +669,9 @@ fn a_powershell_call_is_judged_as_powershell_reads_it() {
         // An assignment runs the command after it.
         "$r = git push --force origin feature",
         "$r=git push --no-verify",
+        "$r =git push --force origin feature",
+        "[string]$r = git push --force origin feature",
+        "$a, $b = git push --force origin feature",
     ] {
         assert_eq!(
             powershell(worktree, command),
