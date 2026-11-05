@@ -1371,7 +1371,7 @@ mod tests {
     /// as any other field the build no longer reads.
     #[test]
     fn a_store_carrying_the_retired_pet_fields_still_loads() {
-        let source = br#"{"schema_version":1,"selected_pane_id":"p1","pet_visible":false,"pet_origin":{"x":120.0,"y":640.0},"pet_shortcut":"command+option+p"}"#;
+        let source = br#"{"schema_version":1,"expanded_paths":[],"selected_pane_id":"p1","pet_visible":false,"pet_origin":{"x":120.0,"y":640.0},"pet_shortcut":"command+option+p"}"#;
         let (state, _sizes, disposition) = decode(source);
         assert_eq!(disposition, LoadDisposition::Loaded);
         assert_eq!(state.selected_pane_id.as_deref(), Some("p1"));
