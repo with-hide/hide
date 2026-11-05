@@ -2814,10 +2814,22 @@ The five-minute expiry and, on the hosted app, end-to-end encryption note sit be
 Pairing refusals use the same layout and keep their existing recovery actions.
 연결 opens the list and a one-time hint to keep hide on the Home Screen; an expired or spent code says so, a fifth phone is told the limit and to revoke one on the Mac, and a page opened with no code or credential says to scan the QR in Settings > Mobile.
 The list's header shows hide, the device name and how many other phones are connected; it has no unlabelled connection dot.
+The device name is the paired Mac's, followed by the names of the devices connected through it (`+ Mac mini`).
 On the hosted app the wrapping device name opens the shared bottom sheet: each device row shows its name, labelled connection state and counts or last-seen time, with remove and connect-another actions.
+Under the Mac being viewed the sheet lists 이 Mac을 통해 연결된 기기 with each one's state and its 내 차례 and 작업 중 counts, a device that is not connected dimmed and marked 연결 안 됨, and one line saying those agents need no pairing of their own and are mixed into the list; there is no device filter.
 A protocol mismatch uses the same device-first layout, the two version numbers with labels, and a secondary action to choose another device.
 Home-screen and notification prompts are plain rows separated by spacing, without repeated filled accent buttons or enclosing cards.
 Agents sit in 내 차례, 읽을 것, 작업 중 and 확인함, the sidebar's own section names, with their counts, each row with its status mark (the sidebar's five marks and the word that leads its line), task name, project and branch, the SSH device's chip, the elapsed time and the request or news line, and the list updates live.
+A group's title counts every top row of the group, the folded ones too.
+Inside a group the rows of this Mac and of its connected devices are mixed and ordered by the same last activity as the sidebar, newest first, so an agent that just moved on the Mac mini stands above an older row of this Mac.
+A group shows its newest rows and folds the rest under `더 보기 N`, which opens them in place: 내 차례 5, 읽을 것 3, 작업 중 5 and 확인함 3 (the first two are the sidebar's own raised caps); 다시 볼 것 does not fold.
+When the folded rows include sleeping conversations the fold reads `더 보기 N · 잠든 것 M 포함`, and sleeping rows follow the same order and fold as the others.
+A delegated child is not a row of its group.
+It hangs under its parent as an indented row behind a vertical rail, two levels deep at most, with its own status mark, title, elapsed time and request or news line, in the sidebar's child order.
+A parent shows its children's counts by state (asking, working, done) and `자식 N ⌄` or `자식 N ›`, which opens or folds the children; the rest of the parent row opens the parent's detail.
+A parent opens expanded when a descendant asks the operator for something (an error, an approval or a question) and folded otherwise, and a change made on the phone stays on that phone: the desktop sidebar's folds never move.
+A parent keeps at most five children in view and folds the rest under `더 보기 N`, which opens them in place.
+A child whose parent is not in the list is a row of its group again.
 Local sleeping conversations appear as separate rows in the core-selected group, with Wake or Check status and no conversation detail or reply bar.
 Those controls are disabled while disconnected or while one sleep request is waiting; a refused request keeps the row and asks the operator to check connection and session status before trying again.
 With no agents the list is one line, 실행 중인 에이전트가 없어요.

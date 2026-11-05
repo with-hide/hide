@@ -3007,11 +3007,21 @@ While exposed, `https://<Self.DNSName>` joins the allowed WebSocket Origins, and
 A request that arrives through `tailscale serve` (a forwarded-for or Tailscale identity header, or a Host that is not loopback) reaches only `/m`, `/m/*`, `/assets/*` and `/ws`, everything else answers 404, and its `/ws` takes only a phone handshake from the Mac's tailnet Origin while Mobile is exposed, whatever other Origin it claims, with a 64 KiB frame limit.
 Every handshake has ten seconds to send its first frame.
 
+The core decides the phone list: `herdr_core::agent_state::phone::project` returns the groups, and the phone draws them without sorting, nesting or cutting anything itself.
+It reuses the sidebar's rules instead of a second set: the tree depth is `lineage::TREE_LEVELS`, siblings are ordered by `lineage::sibling_order` (tree rank, then `turn::recent_first` on the last activity, which is also how `sort_agents` orders a group), the raised caps are `scope::RAISED_SHOWN`, and the five siblings per parent are `lineage::SIBLINGS_SHOWN`, a constant whose TypeScript twin in `web/src/sidebarTree.ts` a Rust test reads so the two cannot drift.
+`phone/tree.rs` builds each group from the rows of this Mac and of every connected device together, so one order covers them all, hangs a child under its parent (a delegated row whose parent is not listed is a root again), and folds a group to its newest 5 (working and needs_you) or 3 (done and seen); the revisit group does not fold.
+A group is `{group, count, rows, more, more_asleep}`: `count` is every top row including the folded ones, `rows` the shown ones and `more` the folded ones, each a tagged `agent` or `sleeping` row; a parent carries `children` (at most five), `more_children`, `children_open` (a descendant asks the operator) and `descendants {asking, working, done}`.
+The frame also carries `devices`, this Mac and each remote with whether it is connected and its needs-you and working counts over top rows, which the header and the device sheet read.
+The phone keeps only choices in its store (`childrenOpen` and `foldsOpen`, pruned to rows that still exist on each frame); it sends no event and moves no sidebar state.
+The wire types are the `phone` module of `herdr-core/src/agent_state/tally.rs`, `hided/src/mobile/phone.rs` puts them in the frame, `tally/phone/tree.rs` and `phone.rs` carry the tests that pin the shape, and the phone's `protocol.ts` mirrors it.
+
 The phone app is a static shell and a data channel, kept apart.
 
 `web/src/mobile/loader.tsx` is the small start page for `app.withhide.dev`; `web/src/mobile/main.tsx` is the same phone UI served directly at `/m/` and as a versioned relay bundle.
 `pnpm --dir web build:phone` writes `web/phone-dist/`: the root `index.html`, `protocols.json`, root manifest and `/sw.js`, shared icons, and `/p/<PHONE_PROTOCOL>/index.html` with its own hashed assets.
-`PHONE_PROTOCOL` is declared in `web/src/mobile/phoneVersion.ts`; deployment retains older numbered directories and lists the available numbers in `protocols.json`.
+`PHONE_PROTOCOL` is declared in `web/src/mobile/phoneVersion.ts` and, as the number the relay announces, in `hided/src/mobile/relay.rs`; the two are raised together, and a screen that needs a new frame shape rides on the same number as the others of its release.
+It is 2: the agents frame carries the list as a tree (below), which an older bundle does not read, so a phone on protocol 1 keeps its own bundle against an older Hide and a protocol 2 bundle opens only against a Hide that speaks it.
+Deployment retains older numbered directories and lists the available numbers in `protocols.json`.
 Only main's release-candidate CI deploys that site, before preparing the desktop release; a failed phone upload or production check stops the candidate and therefore the private publisher.
 [BUILD.md](BUILD.md#the-hosted-phone-release) owns retention, deployment secrets, CSP and the production check.
 The root reads only the relay's `phone_protocol` metadata and opens that exact supported bundle, never a closest or newest fallback.
