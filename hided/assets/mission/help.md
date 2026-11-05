@@ -23,15 +23,19 @@ hide mission delay (--line <text> | --clear)
 hide mission close --as done|merge_wait|cancelled [--report <text> | --report-file <path>]
 hide mission reopen
 hide mission take <id> [--handover <token>]
-hide mission show [--mission <id>]
+hide mission show [<node>] [--mission <id>] [--json]
 hide mission list
 hide mission settings
 hide agent catalog [--machine <device id>]
 ```
 
-Every command prints one JSON line: `{"ok":true,"result":…}` or `{"ok":false,"reason":…,"next_action":…}`.
+Every command prints one JSON line: `{"ok":true,"result":…}` or `{"ok":false,"reason":…,"next_action":…}`; `hide mission show` without `--json` is the one that prints text, and a refusal is still that JSON line.
 A command that names no `--mission` acts on the mission you conduct.
 Running a command again changes nothing more, so after a timeout read `hide mission show` and decide.
+
+`hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, and ⚠ on a warned node).
+`hide mission show <node>` reads that node in full: its finish lines with their evidence and verdicts, its pull requests and CI, its branch and last push, its warnings, its worker and the worker's newest letters.
+With `--json` it prints the record itself instead, `{"mission":…}`, or for one node `{"mission_id","node","letters"}` (`letters` is null when the ledger could not be read): the fields this guide names in backticks, such as a node's `criteria`, the mission's `strength` and an open question's `key`, are read there.
 
 ## 1. Before the plan
 
@@ -111,7 +115,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 
 ### Verification strength
 
-The mission's `strength` in `hide mission show` says how much checking you plan: Settings › Mission's `default_strength` when the mission was created, until a plan changes it.
+The mission's `strength` in `hide mission show --json` says how much checking you plan: Settings › Mission's `default_strength` when the mission was created, until a plan changes it.
 Propose it in the plan's `strength`: `fast`, `normal` or `thorough` (빠르게, 보통, 꼼꼼하게 in Korean); when it differs from the setting, give why in one line in `strength_why` and say it with the plan.
 When the operator asks for another strength, before or during the mission ("check this one thoroughly"), send the plan again with the new `strength` and its `strength_why`; Hide records the change as a mission event and the map's head shows it.
 Hide enforces none of it: the gate holds only each node's own lines, the check command and CI; the strength is how you choose each node's `checks` and how many review rounds you run.
@@ -127,7 +131,7 @@ Hide enforces none of it: the gate holds only each node's own lines, the check c
 - A minor finding that blocks nothing gets no push of its own: the worker gathers them and sends them with the next push the node needs.
 - Choose every checker from the worker candidates in Settings › Mission, as you choose workers; with no candidates, among the agents installed here.
   With the mission's `other_vendor` true, prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); with it false, any candidate.
-- A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers`) instead: follow them, or name a strength in the next plan.
+- A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers` in `hide mission show --json`) instead: follow them, or name a strength in the next plan.
 
 ## Cutting the mission and briefing a worker
 
@@ -150,7 +154,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 
 - the contract and the exact scope (the behaviours or decisions by number), and what is explicitly another node's;
 - for a node that changes existing behaviour, the places in the existing implementation's source that do the same thing;
-- the node's finish lines, each with its key from `hide mission show` (`c1`…, `check`, `ci`), and how to record them: `hide mission record <node> <line> --pass|--fail --evidence <one line> --summary <one line for the operator>`, with `--commit <sha>` for the `check` line;
+- the node's finish lines, each with its key from `hide mission show <node>` (`c1`…, `check`, `ci`), and how to record them: `hide mission record <node> <line> --pass|--fail --evidence <one line> --summary <one line for the operator>`, with `--commit <sha>` for the `check` line;
 - the branch and worktree the spawn made, and that commits go on that branch only;
 - the checks the diff touches, by the repository's own commands;
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
@@ -216,7 +220,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 
 ### What Hide does by itself
 
-Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a worker falling asleep or ending, a `record`, a node finishing, you leaving) and does what is certain by itself; each shows on the node as Hide's own line in `hide mission show` and in the map's history.
+Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a worker falling asleep or ending, a `record`, a node finishing, you leaving) and does what is certain by itself; each shows on the node as Hide's own line in `hide mission show <node>` and in the map's history.
 
 - A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`), and whose lines all pass, is set `done`; a `research`, `verify` or `direct` node with no pull request is set `done` when its lines all pass.
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
@@ -230,9 +234,14 @@ A raise you have not settled in ten minutes, or any raise while no Conductor hol
 The same cause is raised once.
 CI, review and merge waits call no one, and a worker waiting on them is not warned for being quiet.
 
+Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge is not quiet).
+Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing review or a new push takes it off, and a warning that stands is never sent again.
+Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
+The two thresholds are the operator's, in Settings › Mission (`warn_review_fails`, `warn_quiet_minutes` in `hide mission settings`).
+
 ### Finish lines
 
-- `hide mission show` lists each node's `criteria`: its key, state (`open`, `pass`, `fail`, `skipped`), who recorded it and the evidence.
+- `hide mission show <node>` lists the node's finish lines (`criteria` in `--json`): each one's key, state (`open`, `pass`, `fail`, `skipped`), who recorded it and the evidence.
   Workers record their own lines and the `check` line, checkers record theirs; you record a line only for a node that never had a worker, and it shows as yours.
   A `check` line passes only for the commit the checkout it was recorded from is at now, whoever works there: a new commit, a replan that changes the check command, or a checkout Hide no longer reads opens it again; once the node's pull request is merged, its merged head is that commit.
 - Hide refuses `--status done` while a line is open or failed (`mission_criteria_unmet`, which names the lines), judging the node as the command would leave it: a pull request named in the same command brings its CI, and another worker runs the check again.
@@ -240,7 +249,7 @@ CI, review and merge waits call no one, and a worker waiting on them is not warn
   Then finish the check, skip the line with its reason, or ask the operator.
 - `hide mission skip <node> <line> --reason <why>` leaves a node's own line or a checker's line skipped (⤳) with the reason, and the node goes on.
   Write the reason as one short line in the operator's language: the map shows it under the line as the skip's verdict.
-  The `check` and `ci` lines are the operator's to skip (`mission_criteria_protected`): ask with `hide mission decide --line <question> --node <key>`, and once they answered, skip with `--decision <key>`, the question's `key` in `hide mission show`; the line then reads `⤳ operator 결정`.
+  The `check` and `ci` lines are the operator's to skip (`mission_criteria_protected`): ask with `hide mission decide --line <question> --node <key>`, and once they answered, skip with `--decision <key>`, the question's `key` in `hide mission show --json`; the line then reads `⤳ operator 결정`.
   A line that would change the goal or the scope is asked the same way, never skipped on your own.
 - A failed `ci` or `check` line is rerun once, by the worker, on the same commit and only for what failed (`gh run rerun <run-id> --failed` for CI, the failed part of the check command with `--rerun`).
   A pass then reads `✓ 재실행 1회`; a failure after the rerun, however many runs follow, sends the node back to working, Hide reads no more runs on that commit, and a new commit gives one rerun again.
