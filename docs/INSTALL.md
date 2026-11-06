@@ -12,6 +12,7 @@ Each release carries a signed macOS app and unsigned Windows and Linux packages,
 - For source builds on Windows only: the Rust MSVC toolchain with the Visual Studio C++ build tools, Git for Windows, and Python 3 (it fetches the pane holder's pinned ConPTY runtime); run the build from Git Bash, so `bash` is Git's and not the WSL launcher in `System32`.
 - For source builds only: network access for the pinned Rust crates, the npm packages, the Electron runtime download, and the terminal parser's pinned inputs (the Zig compiler and its sources, [BUILD.md](BUILD.md#the-terminal-parser-and-zig)).
 - An agent CLI Hide supports (Claude Code, Codex, Grok, OpenCode, Pi, omp or Antigravity), installed and signed in, only if you want hide to launch that agent.
+- GitHub's CLI `gh` 2.72.0 or later, signed in, only if you want pull requests and GitHub issues; an older `gh` lacks fields Hide asks for, so Hide reads nothing with it and its GitHub row says to update it (`hide_node_link::gh::MINIMUM_VERSION`).
 
 Check the build tools before a source install:
 
@@ -566,7 +567,7 @@ Before anything changes, the move checks both machines and lists every check tha
 The machine taking the core needs:
 
 - the same device you connected, running this app's build of `hided` (connecting installs it);
-- `gh` signed in, because the core asks GitHub from its own machine;
+- `gh` 2.72.0 or later signed in, because the core asks GitHub from its own machine;
 - someone logged in to its desktop, since the core runs as a login item in that session (turn on automatic login if the machine restarts unattended);
 - sleep turned off on power (`sudo pmset -c sleep 0`);
 - no core and no other move in its `~/.hide/state`, Hide AI settings that are absent or the same as this Mac's, and the agent Hide AI asks signed in there.

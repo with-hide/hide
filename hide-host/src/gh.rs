@@ -561,4 +561,230 @@ esac"#,
             let _ = std::fs::remove_dir_all(&self.root);
         }
     }
+
+    /// Every command line the node runs `gh` with, as the core builds it,
+    /// against the oldest release Hide supports
+    /// ([`hide_node_link::gh::MINIMUM_VERSION`]). `gh` checks a command's
+    /// flags and `--json` fields before it asks GitHub anything, so each line
+    /// must get as far as the network, which a proxy that refuses every
+    /// connection stops there: no line reaches GitHub, and none needs a login.
+    /// Ignored by default because it needs that release: the rust lane
+    /// downloads it (`scripts/fetch-gh.sh`) and names it in
+    /// `HIDE_TEST_GH_BIN`. A new shape in `allowed` gets a line here.
+    #[test]
+    #[ignore = "needs the minimum gh release named in HIDE_TEST_GH_BIN"]
+    fn every_command_line_parses_on_the_oldest_gh_hide_supports() {
+        use hide_node_link::gh::{
+            BranchPushRead, ChecksList, GhVersion, ISSUE_DETAIL_FIELDS, MERGED_PROOF_FIELDS,
+            MERGED_PROOF_LIMIT, MINIMUM_VERSION, OPEN_CHECK_FIELDS, OUTSIDE_PR_FIELDS,
+            PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, PULL_REQUEST_FIELDS, PrMergeMethod,
+            REPOSITORY_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS,
+            SEARCH_LIMIT, SEARCH_PR_FIELDS, VERSION, VIEWER_LOGIN,
+        };
+        const REPOSITORY: &str = "acme/app";
+        const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+        let gh = PathBuf::from(
+            std::env::var_os("HIDE_TEST_GH_BIN")
+                .expect("HIDE_TEST_GH_BIN names the minimum gh release"),
+        );
+        let home = tempfile::tempdir().unwrap();
+        let run = |arguments: &[&str]| {
+            let mut command = Command::new(&gh);
+            command
+                .env("HOME", home.path())
+                .env("GH_CONFIG_DIR", home.path())
+                .env("GH_TOKEN", "not-a-token")
+                .env("HTTPS_PROXY", "http://127.0.0.1:9")
+                .env("https_proxy", "http://127.0.0.1:9");
+            for name in [
+                "GH_HOST",
+                "GH_ENTERPRISE_TOKEN",
+                "GITHUB_TOKEN",
+                "NO_PROXY",
+                "no_proxy",
+            ] {
+                command.env_remove(name);
+            }
+            run_gh_for(
+                command,
+                None,
+                Some(REPOSITORY),
+                arguments,
+                Duration::from_secs(30),
+            )
+        };
+        let version = run(&VERSION).expect("gh --version runs");
+        assert_eq!(
+            GhVersion::of_output(&version),
+            Some(MINIMUM_VERSION),
+            "HIDE_TEST_GH_BIN is not the minimum release: {version}"
+        );
+
+        let owned = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
+        let search = |kind: &str, fields: &str| {
+            let limit = SEARCH_LIMIT.to_string();
+            owned(&[
+                "search", kind, "--repo", REPOSITORY, "--limit", &limit, "--json", fields, "--",
+                "flaky",
+            ])
+        };
+        let mut lines: Vec<Vec<String>> = vec![
+            owned(&["auth", "status"]),
+            owned(&VIEWER_LOGIN),
+            owned(&[
+                "pr",
+                "list",
+                "--state",
+                "all",
+                "--limit",
+                PULL_REQUEST_LIMIT,
+                "--json",
+                PULL_REQUEST_FIELDS,
+            ]),
+            owned(&[
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--limit",
+                PULL_REQUEST_LIMIT,
+                "--json",
+                OPEN_CHECK_FIELDS,
+            ]),
+            owned(&[
+                "pr",
+                "list",
+                "--state",
+                "merged",
+                "--head",
+                "feature",
+                "--limit",
+                MERGED_PROOF_LIMIT,
+                "--json",
+                MERGED_PROOF_FIELDS,
+            ]),
+            owned(&[
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--search",
+                REVIEW_ASKED_SEARCH,
+                "--limit",
+                PULL_REQUEST_LIMIT,
+                "--json",
+                REVIEW_ASKED_FIELDS,
+            ]),
+            owned(&[
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--limit",
+                ISSUE_LIST_LIMIT,
+                "--search",
+                ISSUE_LIST_SEARCH,
+                "--json",
+                ISSUE_LIST_FIELDS,
+            ]),
+            owned(&[
+                "issue",
+                "list",
+                "--state",
+                "closed",
+                "--limit",
+                ISSUE_LIST_LIMIT,
+                "--search",
+                ISSUE_LIST_SEARCH,
+                "--json",
+                hide_node_link::gh::ISSUE_LIST_PROJECT_FIELDS,
+            ]),
+            owned(&["repo", "view", "--json", "nameWithOwner"]),
+            owned(&["repo", "view", "--json", REPOSITORY_FIELDS]),
+            owned(&["issue", "create", "--title", "T", "--body", "B"]),
+            owned(&["issue", "close", "7", "--repo", REPOSITORY]),
+            owned(&["pr", "edit", "12", "--body", "B"]),
+            owned(&["pr", "view", "12", "--json", "body"]),
+            owned(&["pr", "view", "12", "--json", PR_FEEDBACK_FIELDS]),
+            owned(&["pr", "view", "12", "--json", OUTSIDE_PR_FIELDS]),
+            owned(&["pr", "view", "12", "--json", PLAN_PR_FIELDS]),
+            owned(&[
+                "issue",
+                "view",
+                "7",
+                "--repo",
+                REPOSITORY,
+                "--json",
+                ISSUE_DETAIL_FIELDS,
+            ]),
+            owned(&["run", "view", "--job", "5", "--log-failed"]),
+            search("prs", SEARCH_PR_FIELDS),
+            search("issues", SEARCH_ISSUE_FIELDS),
+            owned(&[
+                "api",
+                "graphql",
+                "-f",
+                &hide_node_link::gh::issue_attempt_query(REPOSITORY).unwrap(),
+            ]),
+        ];
+        let built = [
+            hide_node_link::gh::issue_detail_arguments(REPOSITORY, 7, None),
+            hide_node_link::gh::issue_detail_arguments(REPOSITORY, 7, Some("Y3Vyc29y")),
+            hide_node_link::gh::pr_merge_arguments(12, None, HEAD),
+            hide_node_link::gh::pr_merge_arguments(12, Some(PrMergeMethod::Squash), HEAD),
+            hide_node_link::gh::pr_update_branch_arguments(REPOSITORY, 12, HEAD),
+            hide_node_link::gh::conditional_read_arguments(
+                &format!("repos/{REPOSITORY}/pulls?state=open&per_page=100"),
+                None,
+            ),
+            hide_node_link::gh::conditional_read_arguments(
+                &format!("repos/{REPOSITORY}/commits/{HEAD}/status"),
+                Some("\"abc\""),
+            ),
+            hide_node_link::gh::pull_digest_arguments(REPOSITORY),
+            hide_node_link::gh::checks_verdict_arguments(REPOSITORY, HEAD, ChecksList::CheckRuns),
+            hide_node_link::gh::merge_commit_arguments(REPOSITORY, 12),
+            hide_node_link::gh::compare_arguments(REPOSITORY, &"f".repeat(40), HEAD),
+            hide_node_link::gh::branch_push_arguments(
+                BranchPushRead::Protection,
+                REPOSITORY,
+                "main",
+            ),
+            hide_node_link::gh::required_approvals_arguments(REPOSITORY, "main"),
+        ];
+        for (index, line) in built.into_iter().enumerate() {
+            lines.push(line.unwrap_or_else(|| panic!("built line {index} is not a valid line")));
+        }
+
+        let refused: Vec<String> = lines
+            .iter()
+            .filter_map(|line| {
+                let words: Vec<&str> = line.iter().map(String::as_str).collect();
+                let reason = match run(&words) {
+                    Ok(output) => {
+                        return Some(format!(
+                            "{}: answered without asking GitHub: {output}",
+                            words.join(" ")
+                        ));
+                    }
+                    Err(failure) => failure.reason,
+                };
+                // `auth status` reports its token check in its own words.
+                let asked = reason.contains("proxyconnect")
+                    || (words == ["auth", "status"] && reason.contains("using token (GH_TOKEN)"));
+                (!asked).then(|| {
+                    format!(
+                        "{}: {}",
+                        words.join(" "),
+                        reason.lines().next().unwrap_or_default()
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "gh {MINIMUM_VERSION} refused before asking GitHub:\n{}",
+            refused.join("\n")
+        );
+    }
 }

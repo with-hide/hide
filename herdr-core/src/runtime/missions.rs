@@ -2062,7 +2062,22 @@ impl Runtime {
                 .any(|project| project.issues.repository_id.as_deref() == Some(id))
         });
         if !held {
-            return Err("mission_machine_no_repository".into());
+            // A GitHub read that failed says why the repository is unknown,
+            // so the agent can tell the operator what to fix rather than
+            // wait for a read that keeps failing.
+            let unread = self
+                .github_project_on(&mission.device_id, &mission.project)
+                .into_iter()
+                .chain(self.github_projects_on(machine))
+                .filter(|project| project.issues.repository_id.is_none())
+                .find_map(|project| project.status.failure_category)
+                .and_then(crate::github::unread_action);
+            return Err(match unread {
+                Some(action) => {
+                    crate::coordination::refusal("mission_machine_no_repository", &action)
+                }
+                None => "mission_machine_no_repository".into(),
+            });
         }
         Ok(())
     }

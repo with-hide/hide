@@ -716,6 +716,14 @@ Run locally with `HIDE_TEST_BUN_BIN=<absolute Bun> HIDE_TEST_OMP_PACKAGE=<absolu
 The test is ignored only because it requires an external SDK/runtime; the dedicated required CI lane installs both exact versions and runs it on every supported system.
 A passing fixture does not prove paid-service authentication or standalone support.
 
+### The oldest gh Hide supports
+
+`hide-host/src/gh.rs`'s `every_command_line_parses_on_the_oldest_gh_hide_supports` runs every command line the node may run `gh` with, built by the core's own builders and constants, against `hide_node_link::gh::MINIMUM_VERSION`, which `scripts/fetch-gh.sh` downloads against its pinned digest.
+`gh` checks a command's flags and `--json` fields before it asks GitHub anything, so each line must get as far as the network, where a proxy that refuses every connection stops it: no line reaches GitHub, and none needs a login.
+It is ignored only because it needs that release; the rust lane's `Every gh command line on the oldest gh Hide supports` step runs it whenever `hide-host` is planned, which a change to `hide-node-link` also plans.
+A new shape in `hide_node_link::gh::allowed` gets a line there, and a field or flag only a newer `gh` knows fails it until the minimum, the script's version and digest move together.
+Run it locally with `HIDE_TEST_GH_BIN=$(bash scripts/fetch-gh.sh <folder>) bash scripts/verify-cargo.sh nextest -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only`.
+
 ### How many jobs a run starts
 
 The transition retains these explicit exceptions:
