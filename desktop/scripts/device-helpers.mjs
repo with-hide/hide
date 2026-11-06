@@ -141,13 +141,15 @@ export function makeDeviceKit(platform, folder, version, output) {
   const digests = new Map([...files].map(([name, program]) => [name, digest(readKitFile(path.join(folder, ...name.split("/")), platform, program))]));
   const asset = deviceAsset(platform, version);
   fs.mkdirSync(output, { recursive: true });
-  const archive = path.join(path.resolve(output), asset);
+  const archive = path.join(output, asset);
   fs.rmSync(archive, { force: true });
   // A deliberately small USTAR vocabulary: the kit's regular files under
   // relative `/` names, no folder entries, extended attributes, links or
-  // platform-specific metadata records.
-  execFileSync("tar", ["--format", "ustar", "-czf", archive, ...[...files.keys()].sort()], {
-    cwd: folder,
+  // platform-specific metadata records. Only relative paths reach tar: the
+  // GNU tar on a Windows runner reads `D:\...` as a remote host's name.
+  const source = path.relative(path.resolve(output), path.resolve(folder)).split(path.sep).join("/") || ".";
+  execFileSync("tar", ["--format", "ustar", "-czf", asset, "-C", source, ...[...files.keys()].sort()], {
+    cwd: output,
     env: { ...process.env, COPYFILE_DISABLE: "1" },
   });
   const entry = readDeviceKit(platform, archive, version);
