@@ -259,30 +259,11 @@ pub enum InputKind {
 pub(crate) const HOOKS_NOT_CONNECTED: &str = "hooks_not_connected";
 pub(crate) const SESSION_UNREAD: &str = "session_unread";
 
-/// Why typed input whose typings are spent never reached its agent, as its
-/// sender's last notice and `input.undelivered` name it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Undelivered {
-    /// The agent recorded none of the typings.
-    NotRecorded,
-    /// Its composer still showed it after the last Enter Hide pressed.
-    LeftInComposer,
-}
-
-impl Undelivered {
-    pub(crate) const fn code(self) -> &'static str {
-        match self {
-            Self::NotRecorded => "not_recorded",
-            Self::LeftInComposer => "left_in_composer",
-        }
-    }
-}
-
 /// The notice's body: its first line says what happened and the one command
 /// to start with, since the operator reads it in the wake summary. With no
 /// source for the agent's record (`source` names why), the input is not
-/// called lost and is not typed again. Once its typings are spent
-/// (`undelivered`), typed input is told as a delivery that failed, with why.
+/// called lost and is not typed again. Once its typings are spent with no
+/// record (`undelivered`), typed input is told as a delivery that failed.
 pub(crate) fn notice_body(
     kind: InputKind,
     agent: &str,
@@ -290,7 +271,7 @@ pub(crate) fn notice_body(
     letter: Option<&str>,
     source: Result<(), &str>,
     route: SendRoute,
-    undelivered: Option<Undelivered>,
+    undelivered: bool,
 ) -> String {
     let what = match (kind, letter) {
         (InputKind::Brief, _) => "its brief".to_owned(),
@@ -310,16 +291,11 @@ pub(crate) fn notice_body(
     );
     match (source, route) {
         // Every typing is spent and the agent took none: the delivery failed.
-        (Ok(()), SendRoute::Typed) if let Some(why) = undelivered => {
-            let why = match why {
-                Undelivered::NotRecorded => "the agent recorded none of them",
-                Undelivered::LeftInComposer => {
-                    "it still sits in the agent's input box, not submitted"
-                }
-            };
+        // A try is a typing or the Enter a composer still showing it got.
+        (Ok(()), SendRoute::Typed) if undelivered => {
             format!(
-                "{agent} did not get {what}: Hide typed it {INPUT_ATTEMPTS} times and {why}, so \
-                 Hide does not type it again.\n\
+                "{agent} did not get {what}: Hide tried {INPUT_ATTEMPTS} times and the agent \
+                 recorded none of them, so Hide does not type it again.\n\
                  {read_up}; `hide agent show` names what it waits on. Once its screen shows its \
                  input box, type it there yourself with `hide pane send {pane} <text> --enter`, \
                  or stop the agent and start the work again.\n{trust}",

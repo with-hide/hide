@@ -293,23 +293,15 @@ impl Runtime {
             // Every typing spent with no record: the brief never reached
             // its agent, which its parent is told as a failure and the log
             // records once.
-            let undelivered = (input.attempts >= typed::INPUT_ATTEMPTS
+            let undelivered = input.attempts >= typed::INPUT_ATTEMPTS
                 && source.is_ok()
-                && input.route == typed::SendRoute::Typed)
-                .then(|| {
-                    if self.input_held(&spawn.id, input.attempts) {
-                        typed::Undelivered::LeftInComposer
-                    } else {
-                        typed::Undelivered::NotRecorded
-                    }
-                });
-            if let Some(why) = undelivered {
+                && input.route == typed::SendRoute::Typed;
+            if undelivered {
                 spent.push((
                     spawn.id.clone(),
                     observation.actor.pane_id.clone(),
                     spawn.kind.clone(),
                     input.attempts,
-                    why,
                 ));
             }
             let notice = typed::notice_due(input)
@@ -409,7 +401,7 @@ impl Runtime {
                         self.input_source(&letter.recipient.kind, &observation.actor.pane_id),
                         input.route,
                         // A letter's own state says when it went undelivered.
-                        None,
+                        false,
                     ),
                     attempt: input.attempts,
                     target,
@@ -430,11 +422,11 @@ impl Runtime {
         self.plans.input_reread.retain(|id, _| open.contains(id));
         self.plans.input_held.retain(|id, _| open.contains(id));
         self.plans.input_undelivered.retain(|id| open.contains(id));
-        for (id, pane, kind, attempts, why) in spent {
+        for (id, pane, kind, attempts) in spent {
             if self.plans.input_undelivered.insert(id.clone()) {
                 crate::diagnostic!(serde_json::json!({
                     "component": "delivery", "kind": "input.undelivered", "spawn": id,
-                    "pane_id": pane, "agent": kind, "attempts": attempts, "reason": why.code(),
+                    "pane_id": pane, "agent": kind, "attempts": attempts, "reason": "not_recorded",
                 }));
             }
         }
@@ -1264,14 +1256,25 @@ pub(crate) mod tests {
         child_reads(&mut runtime, "idle", None, T + 2_000);
         let (_, resubmit) = unconfirmed(&mut runtime, T + 2_000);
         assert!(!resubmit.retype, "it worked on the brief");
+
+        // Only the engine's first read of work moved after the typing, its
+        // state and the core's turn as they were: that work alone keeps it.
+        let (_root, mut runtime, _) = spawned(false, T);
+        runtime
+            .delivery_observations
+            .get_mut("child")
+            .unwrap()
+            .entered_working_at_unix_ms = T + 1_000;
+        let (_, resubmit) = unconfirmed(&mut runtime, T);
+        assert!(!resubmit.retype, "it worked on the brief");
     }
 
     /// A brief typed three times with no record of any never reached its
     /// agent: its parent's notice for the last typing says the delivery
-    /// failed and why, Hide does not type it again, and `input.undelivered`
-    /// is logged once with the reason, however many passes judge it.
+    /// failed, Hide does not type it again, and `input.undelivered` is
+    /// logged once, however many passes judge it.
     #[test]
-    fn a_brief_whose_typings_are_spent_tells_its_parent_it_failed_and_logs_why_once() {
+    fn a_brief_whose_typings_are_spent_tells_its_parent_it_failed_and_logs_it_once() {
         const T: u64 = 100_000;
         let (_root, mut runtime, spawn) = spawned(false, T);
         let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
@@ -1302,7 +1305,7 @@ pub(crate) mod tests {
         assert_eq!(notice.intent, format!("input-unconfirmed:{spawn}:3"));
         assert!(
             notice.body.starts_with(
-                "worker did not get its brief: Hide typed it 3 times and the agent recorded \
+                "worker did not get its brief: Hide tried 3 times and the agent recorded \
                  none of them, so Hide does not type it again.\nRead its screen with \
                  `hide pane read child`;"
             ),
