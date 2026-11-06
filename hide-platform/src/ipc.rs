@@ -742,9 +742,12 @@ mod sys {
     /// longer than `wait` and then ends `TimedOut`, as a Windows connect to a
     /// busy pipe does.
     ///
-    /// The bounded connect is a blocking one on a socket whose send timeout
-    /// is `wait`, which Linux's connect waits for a full backlog by and macOS
-    /// does not need (it refuses a full backlog at once). It is not
+    /// The bounded connect is a blocking one, on Linux on a socket whose
+    /// send timeout is `wait`, which Linux's connect waits for a full backlog
+    /// by. macOS refuses a full backlog at once, so it sets none: it refuses
+    /// every socket option once the peer has closed, which a listener that
+    /// answers and closes the connection at once does before the connect is
+    /// back (with-hide/hide-private#616). It is not
     /// interprocess's nonblocking connect: on Linux a full backlog answers a
     /// nonblocking connect `EAGAIN`, no connect is under way, and that
     /// connect waits for the socket to be writable, which an unconnected one
@@ -794,7 +797,10 @@ mod sys {
         if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
             return Err(io::Error::last_os_error());
         }
+        #[cfg(not(target_vendor = "apple"))]
         set_send_timeout(fd, Some(wait))?;
+        #[cfg(target_vendor = "apple")]
+        let _ = wait;
         let length = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
         // SAFETY: the address is filled within its size and outlives the call.
         if unsafe { libc::connect(fd, (&raw const address).cast(), length) } != 0 {
@@ -809,10 +815,12 @@ mod sys {
             });
         }
         // The stream's writes are bounded by its own deadline, not this one.
+        #[cfg(not(target_vendor = "apple"))]
         set_send_timeout(fd, None)?;
         Ok(socket)
     }
 
+    #[cfg(not(target_vendor = "apple"))]
     fn set_send_timeout(fd: libc::c_int, timeout: Option<Duration>) -> io::Result<()> {
         // A zero `timeval` is no timeout, so a wait under a microsecond is
         // rounded up to one.

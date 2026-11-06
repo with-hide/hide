@@ -1019,6 +1019,50 @@ fn a_process_that_has_ended_holds_no_file_it_had_open() {
     }
 }
 
+/// A process's end is one answer whichever call reads it: once `start_time`
+/// says a process has ended, `is_alive` says so too, and a file it held
+/// open, shared with no one, can be removed at once. Windows sets a
+/// process's exit code before it closes the handles the process held and
+/// signals its object; `start_time` once answered by the exit code, so a
+/// pane record read its holder as ended while the holder still held its
+/// socket (with-hide/hide-private#585). Each look asks `start_time` before
+/// `is_alive`, so an end `start_time` saw is already there for `is_alive`.
+/// A Unix zombie is ended for `is_alive` and still has a start time, so
+/// there the look ends with `is_alive`'s answer and the child is reaped.
+#[test]
+fn a_process_whose_start_time_says_it_ended_has_ended_for_is_alive_and_its_files() {
+    let _serial = serial();
+    let folder = tempfile::tempdir().unwrap();
+    for round in 0..8 {
+        let held = folder.path().join(format!("held-{round}"));
+        let mut command = role_command("hold_file");
+        command.env(READY_FILE, &held);
+        let mut child = command.spawn().unwrap();
+        let pid = ready_number(child.stdout.take().unwrap());
+        let started = start_time(pid).unwrap();
+        terminate(pid).unwrap();
+        let looking = Instant::now();
+        loop {
+            let ended = start_time(pid).map_or(true, |now| now != started);
+            let alive = is_alive(pid);
+            assert!(
+                !(ended && alive),
+                "round {round}: start_time said process {pid} ended while is_alive said it runs"
+            );
+            if ended || !alive {
+                break;
+            }
+            assert!(looking.elapsed() < HANG_LIMIT, "process {pid} never ended");
+            thread::yield_now();
+        }
+        let removed = std::fs::remove_file(&held);
+        child.wait().unwrap();
+        removed.unwrap_or_else(|error| {
+            panic!("round {round}: the file of a process that ended is held: {error}")
+        });
+    }
+}
+
 /// A capture returns only once each process of its tree has let go of what
 /// it held: a holder started after the child, while the tree ran, and one
 /// that ended on its own, by its exit code, before the owner began to end
