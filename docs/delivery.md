@@ -964,16 +964,14 @@ There is no separate lineage timer, subprocess on the input path or blocking wor
 The lineage token readers and digest contract remain unchanged; the server mark is read only by the read axis (`wire::server_mark`).
 
 People receive notifications only for an unanswered parent inactivity warning, an overdue undelivered letter and a mission node that waits on the operator with no Needs You row to lay it on ([Missions](#missions)).
-A first warning left unacknowledged, uncancelled and unreplied for 60 minutes triggers one human notification per native target and inactivity episode, shared across sibling watches and the phone Web Push and toast channels.
+A first warning left unacknowledged, uncancelled and unreplied for 60 minutes triggers one human notification per native target and inactivity episode, shared across sibling watches and sent through the phone's Web Push.
 The receipt lives on the existing warning letters and survives daemon restart and watch stop/restart; new target activity starts a new episode.
 The second agent warning introduces no second human notification schedule.
-An overdue letter's notification key is its ID plus the cause and sends once across both channels.
-A channel that cannot reach the operator is not tried, and a failed first channel falls back to the other; two failures record a diagnostic without retry.
+An overdue letter's notification key is its ID plus the cause and sends once.
+A phone that cannot be reached is not sent to, and a failed send records a diagnostic without retry.
 The phone is skipped before any send when the push key is missing (`no_vapid`), the push mode is off (`mode_off`) or is app-closed-only while a desktop or web shell is connected (`app_open`), Mobile is off (`mobile_off`) or no paired phone has a push subscription (`no_subscription`); the first that applies is the reason, and a send that fails or finds every subscription gone is `send_failed` or `subscription_gone`.
-The toast is asked of the engine of the machine the operator works at: a screen machine whose node dialed this core and is connected, through that node's link, and otherwise this machine's own (PRD core-host-node-remote-core D-18); a letter's doorbell to an agent on that screen machine goes through the same link, and while it is down the letter waits as it does for any disconnected device.
-The core's own engine shows no notification and answers so, so this channel reaches no one today and the phone is the one that can.
-The toast is skipped only when no engine answers for that machine (`no_socket`); otherwise the engine's answer decides, and the reason it gives for a notification it did not show is recorded, with `call_failed` and `answer_unreadable` when it gave no usable answer.
-When neither channel reached the operator, one `human.channels_failed` record in `Logs/core.jsonl` carries the notice (`letter_undelivered`, `observer_unconfirmed` or `mission_attention`), the letter id, `push`, `herdr` (the toast's reason) and the machine whose engine was asked (`herdr_node`); it never carries a letter's text, a phone endpoint or a key.
+The core's own engine shows no notification, so the phone is the one channel.
+When the phone was not reached, one `human.channels_failed` record in `Logs/core.jsonl` carries the notice (`letter_undelivered`, `observer_unconfirmed` or `mission_attention`), the letter id and `push` (the reason); it never carries a letter's text, a phone endpoint or a key.
 The claim stays consumed, so the same letter or warning is never announced again, and nothing is drawn on screen: an operator with phone push off learns of a held letter from that record only.
 These cases add no Inbox screen or automatic escalation chain.
 

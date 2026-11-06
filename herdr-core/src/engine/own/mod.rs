@@ -35,9 +35,9 @@ use hide_node_link::holders::{
 use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
-    Gate, Notified, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof,
-    PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong, StartedAgent,
-    Wait, Wake, Zoom,
+    Gate, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof, PaneSession,
+    PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong, StartedAgent, Wait, Wake,
+    Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -2062,11 +2062,6 @@ impl<'g> Engine for OwnEngine<'g> {
     fn paste_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.check()?;
         self.type_input(pane, PaneInput::Paste(text.as_bytes().to_vec()))
-    }
-
-    fn notify(&self, _wait: Wait, _title: &str, _body: &str) -> Answer<Notified> {
-        self.check()?;
-        Ok(Err("the core's own engine shows no notification"))
     }
 
     fn pane_processes(&self, _wait: Wait, pane: &str) -> Answer<PaneProcessGroup> {

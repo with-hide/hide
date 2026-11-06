@@ -286,6 +286,3 @@ pub struct PaneProof {
     /// from an engine that names only the pid.
     pub shell_started: Option<u64>,
 }
-
-/// Whether a notification showed: `Err` names why the engine showed none.
-pub(crate) type Notified = Result<(), &'static str>;

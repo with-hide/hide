@@ -68,9 +68,7 @@ pub struct HumanNotice {
 }
 
 /// Which of the approved human causes a notice is. A phone words it in
-/// its own language from this code; the engine's own notification has no
-/// translating screen, so it shows `english_title` and `english_body`, whose
-/// tail names the command an agent or a person runs.
+/// its own language from this code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HumanNoticeKind {
@@ -89,49 +87,6 @@ impl HumanNoticeKind {
             Self::LetterUndelivered => "letter_undelivered",
             Self::MissionAttention => "mission_attention",
         }
-    }
-}
-
-impl HumanNotice {
-    pub fn english_title(&self) -> &'static str {
-        match self.kind {
-            HumanNoticeKind::ObserverUnconfirmed => "Hide: observer has not confirmed a warning",
-            HumanNoticeKind::LetterUndelivered => "Hide: letter undelivered",
-            HumanNoticeKind::MissionAttention => "Hide: a mission needs you",
-        }
-    }
-
-    pub fn english_body(&self) -> String {
-        match self.kind {
-            HumanNoticeKind::ObserverUnconfirmed => format!(
-                "{} has not confirmed the first inactivity warning about {} for 60 minutes. Inspect it with hide request show {}.",
-                self.recipient, self.about, self.id
-            ),
-            HumanNoticeKind::LetterUndelivered => format!(
-                "{} did not receive {} within 60 minutes. Inspect it with hide request show {}.",
-                self.recipient, self.id, self.id
-            ),
-            HumanNoticeKind::MissionAttention => format!(
-                "{}: {} needs a look. Open it with hide mission show --mission {}.",
-                self.recipient, self.about, self.id
-            ),
-        }
-    }
-
-    /// Runs only after the durable receipt on a daemon request worker.
-    /// `Ok` means the engine showed it; `Err` is the stable reason code the log
-    /// records: the engine's own `reason` for a `shown: false` answer, or
-    /// `call_failed` / `answer_unreadable` when there was no usable answer.
-    pub fn notify_herdr(&self, engine: &crate::engine::EngineHandle) -> Result<(), &'static str> {
-        // This outcome is an external effect receipt, never a core input.
-        engine
-            .shared()
-            .notify(
-                crate::engine::Wait::Small(Duration::from_millis(500)),
-                self.english_title(),
-                &self.english_body(),
-            )
-            .map_err(|_| "call_failed")?
     }
 }
 
@@ -1440,39 +1395,6 @@ mod tests {
             .0,
             json!([])
         );
-    }
-
-    fn undelivered_notice() -> HumanNotice {
-        HumanNotice {
-            id: "letter-1".into(),
-            actor: Actor {
-                pane_id: "sender".into(),
-                name: "sender".into(),
-                kind: "codex".into(),
-                device_id: crate::node::TEST_NODE.into(),
-                session: None,
-            },
-            kind: HumanNoticeKind::LetterUndelivered,
-            recipient: "lead".into(),
-            about: String::new(),
-        }
-    }
-
-    #[test]
-    fn notify_herdr_reports_herdr_reason_or_a_failed_call() {
-        use crate::engine::fake::{FakeEngine, reply};
-        let fake = FakeEngine::start(|method, _| {
-            assert_eq!(method, "notify");
-            reply::<crate::engine::Notified>(Err("disabled"))
-        });
-        let notice = undelivered_notice();
-        let engine = crate::engine::EngineHandle::new(fake.engine());
-        assert_eq!(notice.notify_herdr(&engine), Err("disabled"));
-        let gone = FakeEngine::start(|_, _| {
-            Err(crate::engine::EngineError::NotRunning("gone".to_owned()))
-        });
-        let gone = crate::engine::EngineHandle::new(gone.engine());
-        assert_eq!(notice.notify_herdr(&gone), Err("call_failed"));
     }
 
     struct ActivityPeer(std::sync::atomic::AtomicU64);

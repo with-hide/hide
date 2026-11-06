@@ -1102,40 +1102,18 @@ impl Mobile {
             if *self.stopping.borrow() {
                 return;
             }
-            let push = match self.push_delivery(&notice) {
-                Ok(()) => continue,
-                Err(reason) => reason,
+            let Err(push) = self.push_delivery(&notice) else {
+                continue;
             };
             if *self.stopping.borrow() {
                 return;
             }
-            // The toast goes to the engine of the machine the operator works
-            // at: a screen machine linked to this core, through its link,
-            // and otherwise this machine's (PRD core-host-node-remote-core
-            // D-18). The engine is skipped only when that machine has no socket
-            // for it; its toast setting is not readable, so every other case
-            // is tried.
-            let machine = self
-                .config
-                .core
-                .linked_nodes()
-                .ok()
-                .and_then(|nodes| nodes.into_iter().next())
-                .unwrap_or_else(|| self.node().as_str().to_owned());
-            let herdr = match self.engine(&machine) {
-                Ok(engine) => match notice.notify_herdr(&engine) {
-                    Ok(()) => continue,
-                    Err(reason) => reason,
-                },
-                Err(_) => "no_socket",
-            };
-            // Its ledger claim remains consumed even when both channels
-            // fail. A restart never becomes an external resend. The record
-            // names the notice and the reason per channel, never its text.
+            // Its ledger claim remains consumed when the phone could not be
+            // reached. A restart never becomes an external resend. The record
+            // names the notice and the reason, never its text.
             herdr_core::diagnostic!(json!({
                 "component": "delivery", "kind": "human.channels_failed",
-                "notice": notice.kind.code(), "letter_id": notice.id,
-                "push": push, "herdr": herdr, "herdr_node": machine,
+                "notice": notice.kind.code(), "letter_id": notice.id, "push": push,
             }));
         }
     }

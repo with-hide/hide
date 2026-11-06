@@ -2594,9 +2594,8 @@ A watch thread on M looks every 2 s for a gap of more than 5 s between the wall 
 While the last failure was `unreachable` and the port has not answered since, the watch also resolves C's name and reads its SSH banner within 1 s on each look, at the host name and port `ssh -G` gave at the last dial (an alias through a proxy or a jump host, whose server M does not reach itself, is not probed and waits out its backoff), each resolved address with an even share of that second and the name resolved on a thread of its own so a resolver that hangs never holds the watch, and dials as soon as it answers; what the port said holds across the unreachable waits and dials of one outage, so a port silent in one wait and answering at the next wait's first look still wakes M, and one that answered is not probed again until the outage ends or the machine moves, so M is back within seconds of SSH answering again, whatever the backoff had reached (B9).
 `hide connect` in the node role first tells the node a window connects (`POST /core-link/connect`, with the daemon's token), which gives a core update that failed on the last connection this one's attempt, then waits up to 20 s for the first link outcome: it attaches the window to a live link, a link down, or an update under way (`updating`), and answers `other_build` for a build C refused, so the desktop host shows the failure it shows for any daemon of another build (B18), and `core_newer` or `update_failed` with C's machine name and both builds (`machine`, `core`, `app`, each the version and the commit's first seven characters, as the node's `/health` names them in `builds`), so the host's page asks for this app to be updated or says the update failed, and names both builds (B10, B11).
 
-The label generator's lock and the human notice follow the machine.
+The label generator's lock follows the machine.
 Each label worker asks the node of the machine that runs its engine for the lock (`Call::LabelLock`, see [Agent labels in the core](#agent-labels-in-the-core)), so C labeling M's panes takes the lock beside M's engine folder, held while the link lives.
-The human notice's engine toast goes to the first connected node that dialed in, the machine the operator works at, and to C's own engine when none is linked ([delivery.md](delivery.md)).
 
 | Crosses between M and C (control) | Stays on M (data) |
 | --- | --- |
@@ -3190,8 +3189,8 @@ A window asks for notices while either is on, filters each notice by its own gro
 The app icon count sums the device scopes' raised Needs You and unread Done groups, including folded rows, while each group's own switch is on; reading Done removes it from the count, and phone push settings stay independent.
 While Mobile is on with a phone paired, hided skips the ten-minute idle exit.
 The records are `mobile_transport`, `mobile_pairing`, `mobile_phone`, `mobile_push` and `mobile_store` in `Logs/core.jsonl`, and none carries a code, a credential or a subscription key.
-The operator notice for a held letter or an unanswered inactivity warning uses the same delivery: `push::notice_route` judges, from values only and under the Mobile mutex rather than `Mutex<Runtime>`, whether a phone can be reached at all (key, mode against the connected renderers, the Mobile switch, a subscription), and a phone that cannot be reached is not sent to; the engine's toast is tried next unless this Mac has no engine for it, and the core's own engine shows none, so today the phone is the channel that reaches the operator.
-Each channel's reason is a code, and when both fail the one `human.channels_failed` record names them (`docs/delivery.md`).
+The operator notice for a held letter or an unanswered inactivity warning uses the same delivery: `push::notice_route` judges, from values only and under the Mobile mutex rather than `Mutex<Runtime>`, whether a phone can be reached at all (key, mode against the connected renderers, the Mobile switch, a subscription), and a phone that cannot be reached is not sent to; the core's own engine shows no notification, so the phone is the one channel that reaches the operator.
+The phone's reason is a code, and when it was not reached the one `human.channels_failed` record names it (`docs/delivery.md`).
 
 ### Panes, tabs and the attach window in the web shell
 

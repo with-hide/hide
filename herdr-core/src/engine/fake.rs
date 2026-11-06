@@ -694,10 +694,6 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("paste_text", json!({"pane": pane, "text": text}))
     }
 
-    fn notify(&self, _wait: Wait, title: &str, body: &str) -> Answer<Notified> {
-        self.ask("notify", json!({"title": title, "body": body}))
-    }
-
     fn pane_processes(&self, _wait: Wait, pane: &str) -> Answer<PaneProcessGroup> {
         self.ask("pane_processes", json!({"pane": pane}))
     }

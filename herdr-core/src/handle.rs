@@ -1111,15 +1111,6 @@ impl Core {
         Ok((source, labels))
     }
 
-    /// The nodes that dialed this core and are connected now (PRD
-    /// core-host-node-remote-core D-18).
-    pub fn linked_nodes(&self) -> Vec<String> {
-        if !check_owner_thread(self, "linked_nodes") {
-            return Vec::new();
-        }
-        lock_recover(&self.runtime).linked_nodes()
-    }
-
     /// Takes the link a node that dialed this core brought (PRD
     /// core-host-node-remote-core D-04, D-10), registering the node on its
     /// first link; the refusal is the reason the node is told.

@@ -404,8 +404,6 @@ pub(crate) trait Engine: Send + Sync {
     /// Puts `text` into a pane as one paste, bracketed when the program in
     /// the pane asked for bracketed paste, with no Enter after it.
     fn paste_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
-    /// Shows the operator a notification.
-    fn notify(&self, wait: Wait, title: &str, body: &str) -> Answer<Notified>;
 
     // A pane's processes.
 
