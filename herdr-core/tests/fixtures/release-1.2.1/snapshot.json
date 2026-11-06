@@ -1,0 +1,92 @@
+{
+ "status": {
+  "server_discovery": {
+   "loading": true,
+   "failure": null
+  },
+  "tab_rename": {
+   "request_id": "c3-5503f485-4456-46e7-a84b-79469010438a",
+   "tab_id": "h1:t1",
+   "label": "c3 first named",
+   "phase": "succeeded"
+  },
+  "herdr": {
+   "state": "connected",
+   "socket_path": null,
+   "message": null
+  },
+  "herdr_import": null,
+  "herdr_import_devices": [],
+  "remote": [],
+  "environment": [],
+  "agent_hooks": {
+   "last_report_failure": null
+  },
+  "background_ai": {
+   "enabled": null,
+   "provider": null,
+   "device": null,
+   "chosen": null,
+   "agent_summary": null,
+   "providers": null,
+   "fallback": null,
+   "refusal": null,
+   "unavailable_reason": null,
+   "usage_limit": null
+  },
+  "ssh_hosts": {
+   "state": "idle",
+   "hosts": [],
+   "truncated": false,
+   "wsl": [],
+   "wsl_problem": null
+  },
+  "herdr_profiles": {
+   "state": "idle",
+   "error": null,
+   "profiles": [],
+   "truncated": false
+  },
+  "diagnostics": [],
+  "last_error": null,
+  "async_operations": [],
+  "pane_move_preview": null,
+  "pane_focus_request": null,
+  "browser_opens": [],
+  "stray_hand_offs": [],
+  "agent_definitions": {
+   "rejected": [],
+   "unreadable": null
+  }
+ },
+ "strip": {
+  "id": "herdr:h1:t1",
+  "kind": "herdr",
+  "source_id": "h1:t1",
+  "label": "c3 first named",
+  "preview": false,
+  "agent_identity": null
+ },
+ "pane": {
+  "device_id": "",
+  "device_pane_id": "",
+  "terminal_id": "h1:p4",
+  "id": "h1:p4",
+  "herdr_label": null,
+  "terminal_title": null,
+  "cwd": "/private/tmp/rn.oiOy/repo",
+  "status_code": "idle",
+  "requires_close_confirmation": false,
+  "requires_close_status_check": false,
+  "identity_label": "c3 restore label check",
+  "activity_at_unix_ms": 1793994360223,
+  "fork": {
+   "available": true,
+   "reason": null
+  },
+  "ports": [],
+  "servers": [],
+  "children": null,
+  "lineage_path": []
+ }
+}

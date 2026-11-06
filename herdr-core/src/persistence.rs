@@ -1986,4 +1986,24 @@ mod tests {
             assert!(state.expanded_paths.is_empty());
         }
     }
+
+    /// The store the 1.2.1 daemon wrote (an isolated run of that release),
+    /// with the hint a 1.2.1 core move's rekey adds, loads with the hint and
+    /// is saved back under the key 1.2.1 reads, `focus_from_herdr`.
+    #[test]
+    fn a_moved_store_release_1_2_1_wrote_keeps_its_focus_hint_key() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("core-state.json");
+        fs::write(
+            &path,
+            include_str!("../tests/fixtures/release-1.2.1/core-state-moved.json"),
+        )
+        .unwrap();
+        let (state, sizes, _) = load(&path);
+        assert!(state.focus_from_engine);
+        save(&path, &state, &sizes).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["focus_from_herdr"], serde_json::json!(true));
+        assert!(saved.get("focus_from_engine").is_none());
+    }
 }

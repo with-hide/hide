@@ -10334,3 +10334,110 @@ mod wire_enum_tests {
         assert_eq!(row(SshProblem::HideUpdated), "hide_updated");
     }
 }
+
+#[cfg(test)]
+mod release_1_2_1_wire_tests {
+    //! The snapshot names release 1.2.1's daemon sent, read from what it sent
+    //! in an isolated run (`tests/fixtures/release-1.2.1/snapshot.json`): a
+    //! field renamed in the code since keeps its 1.2.1 key, so a 1.2.1 shell
+    //! reads this build's snapshot as it read its own.
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn sent() -> Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/release-1.2.1/snapshot.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn every_status_key_1_2_1_sent_is_sent_under_the_same_name() {
+        let snapshot = Snapshot::initial(&CoreOptions {
+            schema_version: SCHEMA_VERSION,
+            home: None,
+            node_id: crate::node::test_node(),
+            app_state_path: String::new(),
+            host_helper_root: None,
+            host_cli_dir: None,
+            workspace_views_path: None,
+            shortcut_import_path: None,
+            local_issues_path: None,
+            effects_held: false,
+            machine_name: None,
+            account_state_folder: false,
+        });
+        let rest = RestSections::capture(&snapshot, None, 1);
+        let status = serde_json::to_value(&rest.status).unwrap();
+        let sent = sent();
+        let missing = sent["status"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|key| status.get(key.as_str()).is_none())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "1.2.1 sent, this build does not: {missing:?}"
+        );
+        assert!(status.get("engine").is_none() && status.get("machine_profiles").is_none());
+    }
+
+    #[test]
+    fn an_engine_tab_in_the_strip_is_sent_as_1_2_1_sent_it() {
+        assert_eq!(
+            serde_json::to_value(StripTabSnapshot::engine("h1:t1", "c3 first named")).unwrap(),
+            sent()["strip"]
+        );
+    }
+
+    #[test]
+    fn a_pane_is_sent_as_1_2_1_sent_it() {
+        let pane = PaneSnapshot {
+            device_id: Default::default(),
+            device_pane_id: Default::default(),
+            start_claim: None,
+            terminal_id: Some("h1:p4".into()),
+            failed_terminal_id: None,
+            id: "h1:p4".into(),
+            engine_label: None,
+            terminal_title: None,
+            cwd: "/private/tmp/rn.oiOy/repo".into(),
+            status_code: AgentStatusCode::Idle,
+            requires_close_confirmation: false,
+            requires_close_status_check: false,
+            identity_label: Some("c3 restore label check".into()),
+            activity_at_unix_ms: Some(1_793_994_360_223),
+            fork: PaneForkSnapshot {
+                available: true,
+                reason: None,
+                forked_from: None,
+            },
+            ports: Vec::new(),
+            servers: Vec::new(),
+            children: None,
+            lineage_path: Vec::new(),
+            sleep: None,
+            sleep_action: None,
+        };
+        assert_eq!(serde_json::to_value(&pane).unwrap(), sent()["pane"]);
+    }
+
+    /// 1.2.1's shell reads a named agent's name as `herdr_name`
+    /// (`web/src/snapshot.ts` at that release); the run above named none.
+    #[test]
+    fn a_named_agent_row_sends_its_name_under_the_1_2_1_key() {
+        let mut row = crate::sidebar::project_agents(
+            crate::sidebar::owned_label_fixture(json!({"agents": [
+                {"id": "h1:p4", "pane_id": "h1:p4", "agent_status": "idle", "state_change_seq": 1}
+            ]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        row.given_name = Some("reviewer".into());
+        let wire = serde_json::to_value(&row).unwrap();
+        assert_eq!(wire["herdr_name"], json!("reviewer"));
+        assert!(wire.get("given_name").is_none());
+    }
+}

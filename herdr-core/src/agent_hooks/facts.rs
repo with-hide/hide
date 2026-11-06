@@ -747,4 +747,21 @@ mod tests {
         let mut facts = HookFacts::restore(path, || unreachable!("read once"));
         assert!(lay(&mut facts, &mut payload("s-1")).contains_key("w1:p1"));
     }
+
+    /// The facts file the 1.2.1 daemon wrote for a Claude pane (an isolated
+    /// run of that release) reads, and is written back, as the same document:
+    /// the engine's session for the pane keeps its key, `herdr_session`.
+    #[test]
+    fn a_facts_file_release_1_2_1_wrote_is_written_back_as_the_same_document() {
+        let written = include_str!("../../tests/fixtures/release-1.2.1/hook-facts.json");
+        let stored: Stored = serde_json::from_str(written).unwrap();
+        assert_eq!(
+            stored.panes["h1:p4"].engine_session.as_deref(),
+            Some("c3-session-36709")
+        );
+        assert_eq!(
+            serde_json::to_value(&stored).unwrap(),
+            serde_json::from_str::<serde_json::Value>(written).unwrap()
+        );
+    }
 }

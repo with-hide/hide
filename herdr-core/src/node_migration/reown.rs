@@ -2923,4 +2923,25 @@ mod tests {
         assert_eq!(ids, [X, M, "loft"]);
         assert_eq!(core["device_registrations"][1]["label"], json!("MacBook"));
     }
+
+    /// A move's owner change in the shape 1.2.1 wrote it reads, and is
+    /// written back, as the same document: each machine's engine socket keeps
+    /// its 1.2.1 key (`old_owner_herdr_socket`, `new_owner_herdr_socket`).
+    #[test]
+    fn an_owner_change_in_the_1_2_1_shape_is_written_back_as_the_same_document() {
+        let written = include_str!("../../tests/fixtures/release-1.2.1/owner-change.json");
+        let change: OwnerChange = serde_json::from_str(written).unwrap();
+        assert_eq!(
+            change.old_owner_engine_socket,
+            "/Users/fixture/.config/herdr/herdr.sock"
+        );
+        assert_eq!(
+            change.new_owner_engine_socket,
+            "/Users/remote/.config/herdr/herdr.sock"
+        );
+        assert_eq!(
+            serde_json::to_value(&change).unwrap(),
+            serde_json::from_str::<Value>(written).unwrap()
+        );
+    }
 }
