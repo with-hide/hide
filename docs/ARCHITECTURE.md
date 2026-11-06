@@ -3011,8 +3011,17 @@ The phone app is a static shell and a data channel, kept apart.
 
 `web/src/mobile/loader.tsx` is the small start page for `app.withhide.dev`; `web/src/mobile/main.tsx` is the same phone UI served directly at `/m/` and as a versioned relay bundle.
 `pnpm --dir web build:phone` writes `web/phone-dist/`: the root `index.html`, `protocols.json`, root manifest and `/sw.js`, shared icons, and `/p/<PHONE_PROTOCOL>/index.html` with its own hashed assets.
-`PHONE_PROTOCOL` is declared in `web/src/mobile/phoneVersion.ts` and, as the number the relay announces, in `hided/src/mobile/relay.rs`; the two are raised together, and a screen that needs a new frame shape rides on the same number as the others of its release.
-It is 4: protocol 2 is the agents frame that carries the list as a tree (below), protocol 3 a page View's screenshot, and protocol 4 the `prs` frame with the pull request requests (below), which an older bundle does not read, so a phone on an older protocol keeps its own bundle against an older Hide and a protocol 4 bundle opens only against a Hide that speaks it.
+`PHONE_PROTOCOL` is declared in `web/src/mobile/phoneVersion.ts` and, as the number the relay announces, in `hided/src/mobile/relay.rs`; the two are raised together, and only for a change an older side would misread.
+It is 4: protocol 2 is the agents frame that carries the list as a tree (below), protocol 3 a page View's screenshot, and protocol 4 the `prs` frame with the pull request requests (below).
+A bundle opens only against a Hide that announces its own number, so every raise sends a phone whose Hide is a build ahead of the hosted site to the update screen until the next release candidate uploads that number's bundle; that is why an addition does not raise it.
+An addition keeps the number and works in both directions:
+
+- A new frame type is ignored by an older bundle (`applyFrame` in `web/src/mobile/store.ts` passes over a type it does not know), and a newer bundle draws the screen it feeds only once that frame has arrived, so against an older Hide that never sends it the screen stays away.
+- A new field of an existing frame is optional: an older bundle ignores it, and a newer bundle reads its absence as this Hide not offering it.
+- A new request is sent only from a screen or control drawn because of such a frame or field, so an older Hide does not receive it; one it does receive is answered `refused_request` with the request's type, and the connection stays open.
+
+The number is raised when an existing frame, field or request changes shape or meaning: a field renamed, removed or retyped, a new value in a field whose older readers have no fallback for it, or a request whose older answer would be misread.
+Each release candidate replaces its number's bundle with its own build, so the bundle under a number works against every Hide that announces that number.
 Deployment retains older numbered directories and lists the available numbers in `protocols.json`.
 Only main's release-candidate CI deploys that site, before preparing the desktop release; a failed phone upload or production check stops the candidate and therefore the private publisher.
 [BUILD.md](BUILD.md#the-hosted-phone-release) owns retention, deployment secrets, CSP and the production check.
