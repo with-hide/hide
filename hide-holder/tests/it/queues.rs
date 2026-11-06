@@ -66,11 +66,12 @@ fn ask_until_resumed(
     }
 }
 
-fn refused_logged(holder: &Holder) {
-    wait_until("the refusal in the holder's log", || {
-        holder.logged("holder.answers_refused") == 1
-    });
+/// Waits for the holder's one refusal line, taking what `connection` is
+/// sent meanwhile; a wait that ends without it shows the holder's log.
+fn refused_logged(holder: &Holder, connection: &mut Connection) {
+    holder.wait_logged("holder.answers_refused", 1, connection);
     let log = holder.log_text();
+    assert_eq!(holder.logged("holder.answers_refused"), 1, "{log}");
     assert!(log.contains("\"answer_queue_full\""), "{log}");
 }
 
@@ -125,7 +126,7 @@ fn answers_past_their_bound_are_refused_and_told_to_a_node_that_accepts_notices(
     assert_eq!(refused.count, 1, "{refused:?}");
     assert!(refused.bytes > 0, "{refused:?}");
     assert!(refused.detail.contains("65536"), "{refused:?}");
-    refused_logged(&holder);
+    refused_logged(&holder, &mut connection);
     // Refused, not waited for: the questions' end was read and drawn.
     connection.wait_for_text("asked");
 
@@ -151,7 +152,7 @@ fn a_node_that_does_not_accept_notices_is_sent_none() {
     let mut connection: Connection = holder.open();
     assert_eq!(connection.welcome.sends, vec![Capability::Screen]);
     script.go(1);
-    refused_logged(&holder);
+    refused_logged(&holder, &mut connection);
     connection.wait_for_text("asked");
     ask_until_resumed(&script, &mut connection, &release, |_| {
         holder.logged("holder.answers_resumed") == 1
