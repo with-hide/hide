@@ -40,6 +40,24 @@ pub fn syntax_on(dialect: HookDialect, tool: &str, windows: bool) -> Syntax {
     }
 }
 
+/// The name a syntax is marked with where a call travels between machines
+/// (a thread's `_meta.hide.shell`).
+pub fn name(syntax: Syntax) -> &'static str {
+    match syntax {
+        Syntax::Posix => "posix",
+        Syntax::PowerShell => "powershell",
+    }
+}
+
+/// The syntax a [`name`] marks; `None` for a name this build does not know.
+pub fn from_name(name: &str) -> Option<Syntax> {
+    match name {
+        "posix" => Some(Syntax::Posix),
+        "powershell" => Some(Syntax::PowerShell),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

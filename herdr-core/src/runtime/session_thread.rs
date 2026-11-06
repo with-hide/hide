@@ -27,7 +27,8 @@ use crate::terminal_attachments as ingress;
 use hide_node_link::protocol::Call;
 use hide_session::session_activity::{SessionActivity, SessionActivityRequest};
 use hide_session::thread::{
-    HideCall, ThreadCursor, ThreadPage, ThreadRead, ThreadRequest, hide_call, spawned_agent,
+    HideCall, ThreadCursor, ThreadPage, ThreadRead, ThreadRequest, hide_call, recorded_syntax,
+    spawned_agent,
 };
 use serde_json::Value;
 use std::sync::atomic::AtomicBool;
@@ -1105,7 +1106,11 @@ fn page_parts(
         };
         match update["sessionUpdate"].as_str() {
             Some("tool_call") if update["kind"] == "execute" => {
-                if let Some(call) = update["title"].as_str().and_then(hide_call) {
+                let call = update["title"]
+                    .as_str()
+                    .zip(recorded_syntax(update))
+                    .and_then(|(command, syntax)| hide_call(command, syntax));
+                if let Some(call) = call {
                     parts.insert(id.to_owned(), call);
                 }
             }
@@ -1817,6 +1822,45 @@ mod tests {
                     place("remote:mini:pane:w2:p1", "mini")
                 ),
                 ("desk-conductor".to_owned(), place("w1:p3", "mac")),
+            ])
+        );
+    }
+
+    /// A command is read in the shell the session's machine marked on it:
+    /// PowerShell's `&` calls the bundled `hide` and `\` separates names,
+    /// where a POSIX shell's `&` backgrounds and `\` escapes; an unmarked
+    /// call came from a reader before the mark and is read as POSIX, and a
+    /// mark this build does not know draws no part.
+    #[test]
+    fn a_hide_command_call_is_read_in_the_shell_its_call_is_marked_with() {
+        let title = r"& 'C:\Hide\hide.exe' file open .\out.png";
+        let call = |id: &str, shell: Option<&str>| {
+            let mut update = json!({"sessionUpdate": "tool_call", "toolCallId": id,
+                "kind": "execute", "title": title});
+            if let Some(shell) = shell {
+                update["_meta"] = json!({"hide": {"shell": shell}});
+            }
+            update
+        };
+        let view = |target: &str| HideCall::View {
+            view: hide_session::thread::ViewKind::File,
+            target: target.to_owned(),
+        };
+        let parts = page_parts(
+            &[
+                call("ps", Some("powershell")),
+                call("sh", Some("posix")),
+                call("old", None),
+                call("new", Some("nushell")),
+            ],
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            parts,
+            BTreeMap::from([
+                ("ps".to_owned(), view(r".\out.png")),
+                ("sh".to_owned(), view(".out.png")),
+                ("old".to_owned(), view(".out.png")),
             ])
         );
     }

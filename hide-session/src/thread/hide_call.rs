@@ -47,6 +47,17 @@ pub fn hide_call(command: &str, syntax: Syntax) -> Option<HideCall> {
         .find_map(|words| read(program_words(words, syntax)?))
 }
 
+/// The syntax a thread's command call was run in, as the reader on the
+/// session's machine marked it (`_meta.hide.shell`, `crate::call_shell`).
+/// A call with no mark came from a reader before the mark, which read every
+/// call as a POSIX shell's; a mark this build does not know is `None`.
+pub fn recorded_syntax(update: &Value) -> Option<Syntax> {
+    match update.pointer("/_meta/hide/shell") {
+        None => Some(Syntax::Posix),
+        Some(name) => name.as_str().and_then(crate::call_shell::from_name),
+    }
+}
+
 /// The agent a `hide agent spawn` call's output names: the id of the
 /// `workspace_result` it printed.
 pub fn spawned_agent(output: &str) -> Option<String> {

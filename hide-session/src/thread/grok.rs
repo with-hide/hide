@@ -8,6 +8,7 @@
 use agent_client_protocol_schema::v1::{
     ContentBlock, PlanEntryStatus, SessionUpdate, ToolCallContent, ToolCallStatus, ToolKind,
 };
+use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
 use super::Lines;
@@ -55,6 +56,9 @@ fn record(record: &Value, thread: &mut Thread) {
                 call.kind,
             )
             .title(call.title.clone());
+            if call.kind == ToolKind::Execute {
+                drawn = drawn.shell(HookDialect::Grok);
+            }
             if let Some(input) = &call.raw_input {
                 drawn = drawn.input(input);
             }
