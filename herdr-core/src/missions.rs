@@ -1345,7 +1345,12 @@ impl ConductorSettings {
     /// by `hide mission help`.
     pub(crate) fn from_stored(mut value: serde_json::Value) -> Result<Self, String> {
         if let Some(fields) = value.as_object_mut() {
-            for field in ["checkers", "warn_review_fails", "warn_quiet_minutes", "other_vendor"] {
+            for field in [
+                "checkers",
+                "warn_review_fails",
+                "warn_quiet_minutes",
+                "other_vendor",
+            ] {
                 fields.remove(field);
             }
         }
