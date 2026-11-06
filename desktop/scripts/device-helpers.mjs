@@ -309,15 +309,6 @@ function readUstar(bytes) {
  * Unpacks a release's or a CI run's kit archive into `folder` under the
  * developer names a core finds before any release (`<name>-<os>-<arch>`,
  * and `holder-conpty-<os>-<arch>/...` for the Windows runtime;
- * hide-node/src/ssh/kit/select.rs), after checking the archive and every
- * file against `manifestFile` and each program's header against the
- * contract. A local build then reaches a device of that platform without
- * cross-compiling. Answers the files written.
-
-/**
- * Unpacks a release's or a CI run's kit archive into `folder` under the
- * developer names a core finds before any release (`<name>-<os>-<arch>`,
- * and `holder-conpty-<os>-<arch>/...` for the Windows runtime;
  * hide-node/src/ssh/kit/select.rs), after checking it as a core does
  * (readDeviceKit) and, given a release's `manifestFile`, against the entry
  * there. A local build then reaches a device of that platform without
