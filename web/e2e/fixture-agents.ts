@@ -9,7 +9,7 @@
 import path from "node:path";
 import { prepareAgentInput, waitForAgentInput } from "./agent-pane";
 import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
-import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, startedAgentIn, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
+import { agentIn, closePane, focusTab, newTab, preparePaneInput, sendKeys, startAgentInCheckout, startedAgentIn, tabOfPane, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 
@@ -126,13 +126,10 @@ export async function startAgentInProject(fixture: EngineServer, daemon: Pick<Da
   const session = `project-agent-${process.pid}-${(projectAgents += 1)}`;
   writeFixtureTranscript(claudeProjects(fixture), session, label);
   return withControl(daemon, async (control) => {
-    control.send("agent_start_in_checkout", {
-      checkout_path: project.folder, provider: "claude", resume_session_id: session, request_id: `e2e-${session}`,
-    });
+    const pane = await startAgentInCheckout(control, project.folder, { resume_session_id: session }, `an agent in ${project.folder}`);
     const made = await control.until((rest) => {
-      const tab = checkoutAt(rest, project.folder)?.tabs.find((id) => id !== project.tab);
-      const pane = tab ? tabPanes(rest, tab)[0] : undefined;
-      return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
+      const tab = tabOfPane(rest, pane);
+      return tab && agentIn(rest, pane) ? { tab, pane } : undefined;
     }, `an agent in a tab of ${project.folder}`, 30_000);
     // The engine learns the pane's session from the start's resume.
     await closePane(control, project.pane);

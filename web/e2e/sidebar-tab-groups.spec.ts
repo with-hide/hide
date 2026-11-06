@@ -2,8 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
-import crypto from "node:crypto";
-import { agentIn, areaShowing, checkoutAt, closePane, tabPanes, withControl } from "./daemon-actions";
+import { agentIn, areaShowing, closePane, startAgentInCheckout, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { setAgentSession } from "./fixture-agents";
 import { startHided } from "./hided-fixture";
@@ -33,18 +32,13 @@ const folderOf = (herdr: AgentFixture) => toPage(fs.realpathSync(path.join(herdr
 async function startAgent(herdr: AgentFixture, daemon: Awaited<ReturnType<typeof startHided>>, beside?: string): Promise<{ tab: string; pane: string }> {
   const folder = folderOf(herdr);
   const started = await withControl(daemon, async (control) => {
-    const before = await control.until((rest) => checkoutAt(rest, folder)?.tabs, "the checkout's tabs");
-    const panesBefore = beside ? await control.until((rest) => tabPanes(rest, beside), `the panes of ${beside}`) : [];
     const area = beside ? await control.until((rest) => areaShowing(rest, beside), `the area showing ${beside}`) : undefined;
-    control.send("agent_start_in_checkout", {
-      checkout_path: folder, provider: "claude", request_id: `e2e-${crypto.randomUUID()}`,
-      ...(beside ? { target: { ...area, tab_id: beside, add_pane: true } } : {}),
-    });
+    const what = beside ? `a new agent beside ${beside}` : "a new agent in a tab of its own";
+    const pane = await startAgentInCheckout(control, folder, beside ? { target: { ...area, tab_id: beside, add_pane: true } } : {}, what);
     return control.until((rest) => {
-      const tab = beside ?? checkoutAt(rest, folder)?.tabs.find((id) => !before.includes(id));
-      const pane = tab ? tabPanes(rest, tab).find((id) => !panesBefore.includes(id)) : undefined;
-      return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
-    }, beside ? `a new agent beside ${beside}` : "a new agent in a tab of its own", 30_000);
+      const tab = tabOfPane(rest, pane);
+      return tab && agentIn(rest, pane) ? { tab, pane } : undefined;
+    }, what, 30_000);
   });
   // The stand-in reports its session, as Claude Code does, and its start settles, so its row leaves Starting.
   await setAgentSession(herdr, daemon, started.pane, `sidebar-${started.pane.replaceAll(":", "-")}`);

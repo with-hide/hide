@@ -4,13 +4,12 @@
 // web shell sends (`hided-control.mjs`) and reads them back from the
 // snapshot.
 
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
-import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, startedAgentIn, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
+import { agentIn, areaShowing, closePane, focusPane, openProject, splitPane, startAgentInCheckout, startedAgentIn, tabOfPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
 import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./pane-fixture";
 import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
@@ -310,13 +309,13 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
   // A family's agents run `hide` as a real agent does, from inside their panes.
   const runAs = kind === "family" ? installAgentRunner(server as AgentPaneFixture, daemon.stateDir) : undefined;
   for (const agent of FIXTURE_AGENTS) writeFixtureTranscript(claudeProjects(server), agent.session, { task: agent.task });
-  const { start, one } = await startFirstAgent(control, folder, first.tab);
+  const one = await startFirstAgent(control, folder);
   if (runAs) {
     await parentOnItsSession(control, one.pane);
     const spawned = await runAs(one.pane)(["agent", "spawn", "--parent", "here", "--beside", "--name", "agent-two", "--intent", "fixture-two", "--kind", "claude", "--repo", fs.realpathSync.native(dir), "--branch", "main", "--", "--resume", FIXTURE_AGENTS[1].session]);
     if (spawned.status !== 0) throw new Error(`the fixture's parent could not spawn its child: ${spawned.out}`);
   } else {
-    start(FIXTURE_AGENTS[1].session, { ...one.area, tab_id: one.tab, add_pane: true });
+    await startAgentInCheckout(control, folder, { resume_session_id: FIXTURE_AGENTS[1].session, target: { ...one.area, tab_id: one.tab, add_pane: true } }, "the second fixture agent");
   }
   const panes = await control.until((rest) => {
     const listed = tabPanes(rest, one.tab);
@@ -339,7 +338,7 @@ async function openCaller(control: HidedControl, server: EngineServer, daemon: O
   const first = await openProject(control, dir, "fixture");
   const runAs = installAgentRunner(server as AgentPaneFixture, daemon.stateDir);
   writeFixtureTranscript(claudeProjects(server), FIXTURE_AGENTS[0].session, { task: FIXTURE_AGENTS[0].task });
-  const { one } = await startFirstAgent(control, first.folder, first.tab);
+  const one = await startFirstAgent(control, first.folder);
   await parentOnItsSession(control, one.pane);
   // The shell Add project opened is not the fixture's: its tab goes.
   await closePane(control, first.pane);
@@ -347,20 +346,20 @@ async function openCaller(control: HidedControl, server: EngineServer, daemon: O
   return { workspace: first.workspace, checkout: first.checkout, tab: one.tab, pane: one.pane, runAs };
 }
 
-/** Starts the fixture's first agent in a tab of its own in `folder`, as the start panel does, and sizes its pane. */
-async function startFirstAgent(control: HidedControl, folder: string, projectTab: string) {
-  const start = (session: string, target?: Record<string, unknown>) => control.send("agent_start_in_checkout", {
-    checkout_path: folder, provider: "claude", resume_session_id: session, request_id: `e2e-${crypto.randomUUID()}`, ...(target ? { target } : {}),
-  });
-  start(FIXTURE_AGENTS[0].session);
+/**
+ * Starts the fixture's first agent in a tab of its own in `folder`, as the
+ * start panel does, and sizes its pane. It returns once the core has
+ * started it, so the start that follows meets a free task slot.
+ */
+async function startFirstAgent(control: HidedControl, folder: string) {
+  const pane = await startAgentInCheckout(control, folder, { resume_session_id: FIXTURE_AGENTS[0].session }, "the first fixture agent");
   const one = await control.until((rest) => {
-    const tab = checkoutAt(rest, folder)?.tabs.find((id) => id !== projectTab);
-    const pane = tab ? tabPanes(rest, tab)[0] : undefined;
+    const tab = tabOfPane(rest, pane);
     const area = tab ? areaShowing(rest, tab) : undefined;
-    return tab && pane && area && agentIn(rest, pane) ? { tab, pane, area } : undefined;
+    return tab && area && agentIn(rest, pane) ? { tab, pane, area } : undefined;
   }, "the first fixture agent in a tab of its own", 30_000);
   viewPane(control, one.pane);
-  return { start, one };
+  return one;
 }
 
 /** The parent reports its session before it can name itself as one. */
