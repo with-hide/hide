@@ -80,7 +80,8 @@ fn a_holder_runs_its_shell_and_carries_input_and_output_across_connections() {
 }
 
 /// The pane's program is told the terminal it writes to, as a Herdr pane
-/// tells it, whatever its starter's environment said.
+/// tells it, and that it shows hyperlinks, whatever its starter's
+/// environment said.
 #[cfg(unix)]
 #[test]
 fn a_pane_program_is_told_its_terminal_whatever_its_starter_said() {
@@ -99,10 +100,11 @@ fn a_pane_program_is_told_its_terminal_whatever_its_starter_said() {
     let mut connection = holder.open();
     connection
         .send(ClientMessage::Input(
-            b"printf '%s-%s-%s\\n' \"$TERM\" \"$COLORTERM\" told\r".to_vec(),
+            b"printf '%s-%s-%s-%s\\n' \"$TERM\" \"$COLORTERM\" \"$FORCE_HYPERLINK\" told\r"
+                .to_vec(),
         ))
         .unwrap();
-    connection.wait_for_text("xterm-256color-truecolor-told");
+    connection.wait_for_text("xterm-256color-truecolor-1-told");
     connection.send(ClientMessage::Terminate).unwrap();
     holder.wait_gone();
 }

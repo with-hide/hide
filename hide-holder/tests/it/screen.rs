@@ -237,8 +237,15 @@ fn text_after_a_character_newer_than_the_receivers_table_stays_where_the_program
 /// ESC \`) says soft-wrap, decoded the way the web shell reads it; None
 /// when the fragment says nothing of wraps.
 fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Option<Vec<u16>> {
+    said_rows(fragment, 7719)
+}
+
+/// The rows a private row-bits OSC (`7719` soft wraps, `7720` link ends) in
+/// `fragment` names, or None when it carries none.
+fn said_rows(fragment: &hide_holder_protocol::Fragment, osc: u16) -> Option<Vec<u16>> {
     let text = String::from_utf8_lossy(&fragment.bytes);
-    let start = text.find("\x1b]7719;")? + 7;
+    let opening = format!("\x1b]{osc};");
+    let start = text.find(&opening)? + opening.len();
     let body = &text[start..start + text[start..].find("\x1b\\").unwrap()];
     let mut fields = body.split(';');
     let size = (fields.next().unwrap(), fields.next().unwrap());
@@ -259,6 +266,37 @@ fn wrapped_rows(fragment: &hide_holder_protocol::Fragment) -> Option<Vec<u16>> {
         }
     }
     Some(rows)
+}
+
+/// with-hide/hide-private#591: a URL a program marked (OSC 8) that fills
+/// its row, followed by a word on the next line, is said to end at the
+/// row's edge, while one carried onto the next row with its mark runs on;
+/// on every system, so on Windows the mark passes through ConPTY first.
+#[test]
+fn a_marked_link_that_fills_its_row_is_said_to_end_there() {
+    let home = Home::new();
+    // The holder starts at 80 columns.
+    let full = format!("https://example.com/{}", "x".repeat(60));
+    let long = format!("https://example.com/{}", "y".repeat(90));
+    let link = |url: &str| format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\");
+    let screen = format!(
+        "\x1b[H\x1b[2J{}\r\nnextword\r\n{}\r\nlink-marker",
+        link(&full),
+        link(&long)
+    );
+    let script = Script::new(&home, vec![screen.into_bytes()]);
+    let holder = script.start(&home);
+    let mut connection = holder.open();
+    let drawn = connection.wait_for_drawn("link-marker");
+    let shown = draw(&[
+        reference(vec![Draw::Bytes(script.steps[0].clone())]),
+        fragments_after(b"", (80, 24), &connection.fragments[..drawn]),
+    ]);
+    assert_same(&shown[1], &shown[0], "marked links");
+    let answered = connection.redraw();
+    let full_screen = &connection.fragments[answered - 1];
+    assert_eq!(full_screen.size.cols, 80);
+    assert_eq!(said_rows(full_screen, 7720), Some(vec![0]));
 }
 
 /// with-hide/hide-private#312: a line that fills the width and ends with a

@@ -10,7 +10,7 @@ import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import type { Daemon } from "../../web/e2e/hided-fixture";
 import { printFileCommand } from "../../web/e2e/pane-fixture";
 
-export type Probe = { paneId: () => string | null; paneText: (id: string) => string; paneGrid: (id: string) => { cols: number; rows: number } | null; diagnostics?: () => string[] };
+export type Probe = { paneId: () => string | null; paneText: (id: string) => string; paneGrid: (id: string) => { cols: number; rows: number } | null; paneSelection: (id: string) => string | null; diagnostics?: () => string[] };
 
 /** Reloads the shell with the terminal probe, the only way to read what xterm draws through WebGL. */
 export async function withProbe(page: Page): Promise<void> {
