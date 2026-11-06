@@ -77,7 +77,10 @@ impl Remote {
             .root;
         self.upstream
             .install_build(
-                &hide_node::ssh::host::HelperPackages::new(Some(packages.to_path_buf())),
+                &hide_node::ssh::host::HelperPackages::new(
+                    Some(packages.to_path_buf()),
+                    crate::cli::RELEASE,
+                ),
                 &root,
             )
             .map_err(|error| MoveFailure::Copy {

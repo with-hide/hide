@@ -13,7 +13,7 @@ import os
 import secrets
 import time
 
-from agent_live_check.processes import ProcessError
+from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import git, same_path
 
@@ -339,7 +339,7 @@ class Journey:
             if verdict[0] == cells.PASS or time.monotonic() > end:
                 return verdict, read, observed
             if self.runtime.owner.cancelled.wait(TURN_POLL_SECONDS):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
 
     # Cells ----------------------------------------------------------------
 
@@ -361,8 +361,6 @@ class Journey:
             else:
                 getattr(self, name)(*args)
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             for cell in self.STEP_CELLS.get(name, (name,)):
                 if self.table[self.id][cell]["status"] == cells.PENDING:
                     self.settle(cell, (cells.FAIL, str(error)))
@@ -398,7 +396,7 @@ class Journey:
             if time.monotonic() > end:
                 break
             if self.runtime.owner.cancelled.wait(2):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
         return args, answer, attempts
 
     def start(self):
@@ -510,7 +508,7 @@ class Journey:
             if (found or {}).get("brief_input", {}).get("confirmed_at_unix_ms") is not None or time.monotonic() > end:
                 return found
             if self.runtime.owner.cancelled.wait(1):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
 
     def letter(self):
         """The letter's path at rest is the agent's own, as the contract
@@ -607,7 +605,7 @@ class Journey:
             if check is not None or time.monotonic() >= end:
                 return check
             if self.runtime.owner.cancelled.wait(2):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
 
     def send_now(self, intent, value, record):
         """`hide request send --now` of a letter whose second line is `value`;
@@ -651,7 +649,7 @@ class Journey:
                             self.evidence("letter_busy", record))
                 return
             if self.runtime.owner.cancelled.wait(TURN_POLL_SECONDS):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
         log = self.log_mark()
         letter = self.send_now("journey-letter-busy-" + self.id, value, record)
         if letter is None:
@@ -716,7 +714,7 @@ class Journey:
                         self.evidence("letter_menu", record))
             return
         if self.runtime.owner.cancelled.wait(PICKER_SECONDS):
-            raise ProcessError("run_cancelled")
+            raise Cancelled("run_cancelled")
         record["picker_after"] = self.controller.read_pane(self.pane, visible=True)
         self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(b"\x1b").decode()})
         turn, read, record["activities"] = self.wait_turn(since, value, lambda _events: before, seconds=LETTER_SECONDS)
@@ -758,7 +756,7 @@ class Journey:
             if done(shown):
                 break
             if self.runtime.owner.cancelled.wait(3):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
         return shown
 
     def sleep_wake(self):
@@ -784,8 +782,6 @@ class Journey:
         try:
             self.daemon.wait(asleep, SLEEP_SECONDS, "the row to read asleep")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["sleep_wait"] = str(error)
             record["errors"] = list(self.daemon.errors)
             self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], False), self.evidence("sleep-wake", record))
@@ -805,8 +801,6 @@ class Journey:
         try:
             self.daemon.wait(awake, WAKE_SECONDS, "the agent to run again")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             woke = False
             record["wake_wait"] = str(error)
         self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], woke), self.evidence("sleep-wake", record))
@@ -834,8 +828,6 @@ class Journey:
                                           (self.daemon.rest.get("navigator") or {}).get("workspaces", [])
                                           for checkout in project.get("checkouts") or []][:64]
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["sleep_wait"] = str(error)
             record["errors"] = list(self.daemon.errors)
             self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], False), self.evidence("sleep-wake", record))
@@ -890,14 +882,12 @@ class Journey:
                     # Outside the snapshot lock, without waking the controller on each poll.
                     record["registered_pane"] = self.runtime.wait(registered, max(1, end - time.monotonic()))
                 except ProcessError as error:
-                    if self.runtime.owner.cancelled.is_set() or str(error) != "scene_timeout":
+                    if str(error) != "scene_timeout":
                         raise
                     raise ProcessError(f"timeout after {WAKE_SECONDS:.0f}s waiting for Hide's registration of "
                                        f"{self.agent} to name a pane other than {old}") from error
                 woke = self.daemon.wait(running, max(1, end - time.monotonic()), "the woken session's pane")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["wake_wait"] = str(error)
             record["errors"] = list(self.daemon.errors)
             self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], False, str(error)),
@@ -967,8 +957,6 @@ class Journey:
         try:
             self.daemon.wait(controlling, ATTACH_SECONDS, "the pane's terminal to take this screen's keys")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["attach_wait"] = str(error)
             return False
         self.wait_ready()
@@ -1011,8 +999,6 @@ class Journey:
             self.runtime.wait(lambda: (agent := self.engine_agent()) and agent.get("interactive_ready", True)
                               and agent.get("agent_status") in ("idle", "done") and not agent.get("launch_pending"), 60)
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             agent = self.engine_agent() or {}
             raise ProcessError(f"agent_not_ready_for_input: engine reads {agent.get('agent_status')}, "
                                f"interactive_ready {agent.get('interactive_ready')}, "
@@ -1064,8 +1050,6 @@ class Journey:
             try:
                 code, err = self.runtime.close_pane(pane)
             except ProcessError as error:
-                if self.runtime.owner.cancelled.is_set():
-                    raise
                 code, err = 1, str(error)
             closed[pane] = "closed" if not code else err.strip()[:300] or f"exit {code}"
 

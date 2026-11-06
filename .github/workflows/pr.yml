@@ -59,7 +59,8 @@
 # and the performance lane, which no `pr.yml` run starts.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
 # checks, the whole web end-to-end, dealt out to six shards by `web-e2e.yml`,
-# and the remote mailbox lane over private SSH (`remote-mailbox`).
+# and the remote mailbox lane over private SSH (`remote-mailbox`, and on a
+# Linux ARM64 runner `remote-mailbox-arm`).
 # `nightly.yml` runs the web end-to-end's `@platform` tests on macOS, and the
 # rest of the web end-to-end is the same code on every system, so the move of
 # the web end-to-end costs no macOS coverage, only its delay. On Windows, `windows check`
@@ -207,6 +208,7 @@ jobs:
           python3 scripts/check-core-touches-no-machine.py
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
+          python3 scripts/check-device-kits-single-source.py
 
       # Reads the pull request's body, which no merge group carries, so a merge
       # group's `policy` leaves it out.
@@ -692,6 +694,25 @@ jobs:
     with:
       runner: ubuntu-latest
 
+  # The same lane on a Linux arm64 runner (with-hide/hide-private#501): a
+  # device whose kit a core of another platform takes from its release
+  # (`contracts/device-kits.json`) is often an arm64 Linux machine, and the
+  # core's own build connects to it here over the system ssh and runs its
+  # panes in its holders. Nothing on this runner's processor is cached, so it
+  # builds cold. It is planned for the device link's own crates, its device
+  # test and the contract (`ARM_DEVICE_CRATES` in scripts/ci-plan.py).
+  remote-mailbox-arm:
+    name: remote mailbox arm64
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'remote-mailbox-arm')
+    uses: ./.github/workflows/remote-mailbox.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+    permissions:
+      contents: read
+    with:
+      runner: ubuntu-24.04-arm
+
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
   # change to what differs by system.
   os-contract:
@@ -954,7 +975,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package, merge-rust, merge-web]
+    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

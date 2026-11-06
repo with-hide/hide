@@ -64,8 +64,6 @@ def measure(journey):
     try:
         journey.daemon.wait(titled, TITLE_SECONDS, "the row to show a task title")
     except ProcessError as error:
-        if journey.runtime.owner.cancelled.is_set():
-            raise
         record["wait"] = str(error)
     row = journey.daemon.row(journey.pane)
     record["row"] = {key: (row or {}).get(key) for key in ("identity_label", "message", "detail", "request")}

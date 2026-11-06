@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_live_check.processes import COMMAND_SECONDS, OwnedProcesses, ProcessError, ProcessSafetyError
+from agent_live_check.processes import COMMAND_SECONDS, Cancelled, OwnedProcesses, ProcessError, ProcessSafetyError
 from agent_live_check.timing import Deadline
 
 
@@ -75,13 +75,18 @@ class Teardown(unittest.TestCase):
         with OwnedProcesses(run_seconds=0) as owner:
             owner.cancelled.set()
             stop = [sys.executable, "-c", "print('stopped')"]
-            with self.assertRaisesRegex(ProcessError, "run_cancelled_or_timed_out"):
+            with self.assertRaises(Cancelled):
                 owner.run(stop, env=dict(os.environ))
             with owner.teardown():
                 self.assertEqual(owner.run(stop, env=dict(os.environ))[:2], (0, "stopped\n"))
             self.assertTrue(owner.cancelled.is_set())
-            with self.assertRaisesRegex(ProcessError, "run_cancelled_or_timed_out"):
+            with self.assertRaises(Cancelled):
                 owner.run(stop, env=dict(os.environ))
+
+    def test_a_run_past_its_deadline_without_a_cancel_is_a_timeout_not_a_cancel(self):
+        with OwnedProcesses(run_seconds=0) as owner:
+            with self.assertRaisesRegex(ProcessError, "run_timed_out"):
+                owner.run([sys.executable, "-c", "print('late')"], env=dict(os.environ))
 
 
 if __name__ == "__main__":

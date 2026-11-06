@@ -31,6 +31,9 @@ class PackageTypecheck(unittest.TestCase):
             shutil.copyfile(ROOT / f"desktop/scripts/{name}.mjs", scripts / f"{name}.mjs")
         (self.repo / "scripts").mkdir()
         shutil.copyfile(ROOT / "scripts/check-release-assets.mjs", self.repo / "scripts/check-release-assets.mjs")
+        # device-helpers.mjs reads every device kit from the contract.
+        (self.repo / "contracts").mkdir()
+        shutil.copyfile(ROOT / "contracts/device-kits.json", self.repo / "contracts/device-kits.json")
         (self.repo / "web").mkdir()
         shutil.copyfile(ROOT / "web/package.json", self.repo / "web/package.json")
         (self.repo / "web/source.ts").write_text("const value: number = 1;\n")

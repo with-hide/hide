@@ -264,6 +264,15 @@ pub const COMMIT: Option<&str> = match env!("HIDE_BUILD_COMMIT").as_bytes() {
     _ => Some(env!("HIDE_BUILD_COMMIT")),
 };
 
+/// This build as its release names it: what the release's device kit
+/// manifest must name before a kit of it is fetched
+/// (with-hide/hide-private#501 decision 1).
+pub const RELEASE: hide_node::ssh::host::ReleaseIdentity = hide_node::ssh::host::ReleaseIdentity {
+    version: VERSION,
+    commit: COMMIT,
+    order: ORDER,
+};
+
 pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
     // `hide plan` is what `hide task` was called: a session started under
     // the old `hide-plan` skill still types it, so it is read as `hide task`
@@ -2076,7 +2085,10 @@ fn update_started_core(
         .map_err(failed)?;
     let packages = daemon_binary()
         .map(|hided| {
-            hide_node::ssh::host::HelperPackages::new(hided.parent().map(Path::to_path_buf))
+            hide_node::ssh::host::HelperPackages::new(
+                hided.parent().map(Path::to_path_buf),
+                RELEASE,
+            )
         })
         .map_err(failed)?;
     let new = packages.install_here(&root).map_err(failed)?;

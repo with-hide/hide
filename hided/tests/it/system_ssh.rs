@@ -115,10 +115,11 @@ mod unix {
             row: Arc<Row>,
         ) -> Result<hide_node_link::device::Established, EstablishError> {
             std::fs::write(self.local.join(".ssh/config"), config).unwrap();
-            let transport = hide_node::ssh::Connector::new(Some(self.packages.clone()))
-                .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
-                .transport(&self.local, "system-ssh", alias)
-                .unwrap();
+            let transport =
+                hide_node::ssh::Connector::new(Some(self.packages.clone()), hided::cli::RELEASE)
+                    .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
+                    .transport(&self.local, "system-ssh", alias)
+                    .unwrap();
             transport.establish(
                 &HostConsent {
                     contract: HOST_CONSENT_CONTRACT,
@@ -586,7 +587,7 @@ for last; do :; done
             }
         };
 
-        let transport = hide_node::ssh::Connector::new(Some(packages))
+        let transport = hide_node::ssh::Connector::new(Some(packages), hided::cli::RELEASE)
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_ssh_program(ssh.clone())
             .transport(&local, "system-ssh", "device")

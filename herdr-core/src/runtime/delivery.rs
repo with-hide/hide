@@ -73,6 +73,12 @@ pub(crate) struct Observation {
     /// leaves the composer known empty, the moment an agent version's
     /// composer declaration is checked (`composer_check_due`).
     pub hook_submit_at_unix_ms: u64,
+    /// The last moment Hide itself typed into the pane: a bell, a mission
+    /// answer, a brief typed again or its Enter, a 마무리 맡기기's words
+    /// (`Runtime::note_hide_typing`). It is no person's draft, so it holds no
+    /// bell, but the composer shows it until the agent takes it, so a hook
+    /// moment before it is no known-empty moment (`composer_check_due`).
+    pub hide_typed_at_unix_ms: u64,
     pub session: Option<hide_session::session_activity::SessionActivityRequest>,
     /// The session a thread of this pane reads, for every agent with a
     /// thread reader, OpenCode's database included.
@@ -370,6 +376,7 @@ impl Runtime {
                     now
                 },
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
+                hide_typed_at_unix_ms: previous.map_or(0, |old| old.hide_typed_at_unix_ms),
                 session,
                 thread: super::session_thread::ThreadReference::of(agent),
                 host_scope: host_scope
@@ -903,6 +910,22 @@ impl Runtime {
         }
     }
 
+    /// Hide is about to type into `pane_id` (a bell, a mission answer, a
+    /// brief's retyping or Enter, a 마무리 맡기기): noted under the lock before
+    /// the off-lock typing, so no composer read after it takes the pane's
+    /// last hook moment for a known-empty composer while the agent has not
+    /// taken the input yet (`composer_check_due`). Only that input's own
+    /// prompt hook, at a later moment, marks the composer empty again.
+    /// Typing into a pane that has had no prompt hook yet needs no note,
+    /// since its every hook moment comes after it: a spawn's brief, a task
+    /// start's first prompt, and agy's `/fork` and the composer clearing
+    /// before it in the fork's new pane.
+    pub(crate) fn note_hide_typing(&mut self, pane_id: &str) {
+        if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
+            observation.hide_typed_at_unix_ms = unix_milliseconds();
+        }
+    }
+
     /// The input generation of `pane` a writer reads before its off-lock
     /// write, or `None` for a pane Hide observes no agent in.
     pub(crate) fn input_fence(&self, pane_id: &str) -> Option<u64> {
@@ -1180,8 +1203,9 @@ impl Runtime {
     /// A pane whose composer is known empty and whose agent version is due a
     /// check: never checked, or not yet read empty and past the wait its
     /// misses earned. The pane's known-empty moment: the turn a prompt hook
-    /// of its own session started has ended, no key came since, and it has
-    /// rested for the quiet period (docs/delivery.md, Catching an agent's
+    /// of its own session started has ended, neither a key nor Hide's own
+    /// typing came since, and it has rested for the quiet period
+    /// (docs/delivery.md, Catching an agent's
     /// screen change). One at a time; `attempted` holds the moments already
     /// tried, by pane and hook time, so a pane's moment is read once.
     pub(crate) fn composer_check_due(
@@ -1196,6 +1220,7 @@ impl Runtime {
             let hook = observation.hook_submit_at_unix_ms;
             let known_empty = hook > 0
                 && observation.last_input_at_unix_ms <= hook
+                && observation.hide_typed_at_unix_ms <= hook
                 && observation.entered_working_at_unix_ms >= hook
                 && observation.status_changed_at_unix_ms >= observation.entered_working_at_unix_ms
                 && !observation.unsent_draft()

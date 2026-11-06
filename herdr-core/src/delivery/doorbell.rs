@@ -1053,6 +1053,10 @@ fn resubmit_brief(
             "brief_attempts_spent" => "attempts_spent",
             _ => "reservation_failed",
         })?;
+    owner
+        .lock()
+        .map_err(|_| "pane_unavailable")?
+        .note_hide_typing(&observed.actor.pane_id);
     // The reservation saved the route as `lost`; the outcome corrects it. A
     // correction that is not saved leaves it `lost`, so nothing is sent
     // again on a failed save (engineering principle 11).
@@ -1377,10 +1381,13 @@ fn deliver(
     // never the operator's request (PRD session-record-goal-flow D-19): the
     // label reads it as a letter from `sender` by this record, as it reads
     // an operator's message by a submit.
-    owner
-        .lock()
-        .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
-        .record_bell(&observed.actor.pane_id, line, (sender, kind));
+    {
+        let mut guard = owner
+            .lock()
+            .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?;
+        guard.record_bell(&observed.actor.pane_id, line, (sender, kind));
+        guard.note_hide_typing(&observed.actor.pane_id);
+    }
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears
     // it, even where the agent's own way in took the line.
     sent(super::ladder::deliver(engine, &target, line))
@@ -1425,6 +1432,7 @@ fn type_answer(
         }
         // From here the answer may reach the conversation.
         guard.mission_answer_typing(&work.mission, work.key);
+        guard.note_hide_typing(&observed.actor.pane_id);
     }
     // The operator's own words: typed, as the operator types them, down the
     // same rung every other typed input takes.
@@ -1477,6 +1485,7 @@ mod tests {
             answered_at_unix_ms: 0,
             observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
+            hide_typed_at_unix_ms: 0,
             session: None,
             thread: None,
             host_scope: None,
@@ -1770,6 +1779,9 @@ mod tests {
         letter: String,
         /// What the pane's visible screen shows when the engine reads it.
         screen: Arc<Mutex<String>>,
+        /// What the screen shows once the next input is typed, as the agent
+        /// draws it in its composer before it takes the input.
+        typed_screen: Arc<Mutex<Option<String>>>,
         /// How the engine answers a read of that screen.
         read_answer: Arc<Mutex<ReadAnswer>>,
         /// A key that reaches the pane, at this time, while the engine answers
@@ -1793,6 +1805,9 @@ mod tests {
             let answer = Arc::clone(&flags);
             let screen = Arc::new(Mutex::new(CODEX_EMPTY.to_owned()));
             let shown = Arc::clone(&screen);
+            let typed_screen = Arc::new(Mutex::new(None::<String>));
+            let drawn = Arc::clone(&typed_screen);
+            let drawn_on = Arc::clone(&screen);
             let read_answer = Arc::new(Mutex::new(ReadAnswer::Screen));
             let answered = Arc::clone(&read_answer);
             let key_during_read = Arc::new(Mutex::new(None::<u64>));
@@ -1831,7 +1846,12 @@ mod tests {
                     "prompt_agent" => match submission_error {
                         Some("timeout") => unanswered("submission timed out"),
                         Some(code) => refused(code, "submission refused"),
-                        None => reply(()),
+                        None => {
+                            if let Some(typed) = drawn.lock().unwrap().take() {
+                                *drawn_on.lock().unwrap() = typed;
+                            }
+                            reply(())
+                        }
                     },
                     "delivery_agent" => {
                         let mut agent = json!({
@@ -1893,6 +1913,7 @@ mod tests {
                 fake,
                 flags,
                 screen,
+                typed_screen,
                 read_answer,
                 key_during_read,
                 letter: sent["id"].as_str().unwrap().to_owned(),
@@ -3557,6 +3578,9 @@ mod tests {
         ] {
             let bell = Bell::start(json!({}));
             bell.know_version(None);
+            // No bell is typed at the moment: one Hide typed would stand in
+            // the composer (`a_bell_hide_typed_is_never_read_as_a_known_empty_composer`).
+            bell.ack(&bell.letter);
             *bell.screen.lock().unwrap() = screen.into();
             let start = now();
             crate::runtime::delivery::tests::observe_turn_ended(
@@ -3598,6 +3622,7 @@ mod tests {
             );
             // A draft after the check is read only when the version passed.
             *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            bell.send_another("after the check", false);
             bell.runtime
                 .lock()
                 .unwrap()
@@ -3690,6 +3715,65 @@ mod tests {
                 .count();
             assert_eq!(count, checked, "key during work: {key_during_work}");
         }
+    }
+
+    /// with-hide/hide-private#600: a bell Hide types into a resting Codex
+    /// stands in its composer, drawn as Codex draws typed text, until Codex
+    /// takes it. The turn before it ended with no key since, but Hide's own
+    /// typing came after that moment, so the moment is no known-empty one:
+    /// no pass reads the version there, where it would read `not_empty`
+    /// and wait a minute. Codex taking the bell starts a turn whose end is
+    /// the next known-empty moment, where the empty composer passes it.
+    #[test]
+    fn a_bell_hide_typed_is_never_read_as_a_known_empty_composer() {
+        use crate::runtime::delivery::tests::observe_turn_ended;
+        const EMPTY: &str =
+            include_str!("../../../hide-agent-adapter/tests/fixtures/composer/codex-0-empty.ansi");
+        const TYPED: &str =
+            include_str!("../../../hide-agent-adapter/tests/fixtures/composer/codex-1-typed.ansi");
+        let checks = |logged: &[Value]| -> Vec<Value> {
+            logged
+                .iter()
+                .filter(|record| record["kind"] == "composer.version_checked")
+                .cloned()
+                .collect()
+        };
+        let bell = Bell::start(json!({}));
+        bell.know_version(None);
+        *bell.screen.lock().unwrap() = EMPTY.into();
+        *bell.typed_screen.lock().unwrap() = Some(TYPED.into());
+        let start = now();
+        observe_turn_ended(
+            &mut bell.runtime.lock().unwrap(),
+            "recipient",
+            start - 60_000,
+        );
+        let mut doorbell = Doorbell::default();
+        let rung = pass_logged(&bell, &mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1, "{rung:?}");
+        assert!(checks(&rung).is_empty(), "{rung:?}");
+        let reads = bell.reads();
+        // Every later pass before Codex takes it reads the same screen.
+        for later in 1..=3 {
+            let logged = pass_logged(
+                &bell,
+                &mut doorbell,
+                start + later * super::super::composer::CHECK_EVERY_MS,
+            );
+            assert!(checks(&logged).is_empty(), "{logged:?}");
+        }
+        assert_eq!(bell.reads(), reads, "the typed composer was never read");
+        // Codex takes the bell: its prompt hook starts a turn, which ends
+        // with the composer empty.
+        bell.ack(&bell.letter);
+        *bell.screen.lock().unwrap() = EMPTY.into();
+        let hook = now();
+        observe_turn_ended(&mut bell.runtime.lock().unwrap(), "recipient", hook);
+        let checked = checks(&pass_logged(&bell, &mut doorbell, hook + 60_000));
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0]["verdict"], "empty");
+        assert!(checked[0]["retry_after_ms"].is_null());
+        assert_eq!(bell.typed().len(), 1);
     }
 
     /// A key that reaches the pane after the screen was read but before the

@@ -21,7 +21,7 @@ import traceback
 
 from agent_live_check.credential_snapshot import CredentialSnapshotUnavailable
 from agent_live_check.overlay import prepare as prepare_overlay
-from agent_live_check.processes import OwnedProcesses, ProcessError
+from agent_live_check.processes import Cancelled, OwnedProcesses
 from agent_live_check.protection import (ConfigGuard, ProtectionError, beneath, private_directory,
                                          write_private)
 from agent_live_check.runtime import clean_env
@@ -728,13 +728,14 @@ def main(argv=None):
                     # run's cap while the next agents run.
                     launch, environment, port = services[key]
                     try:
-                        agent["opencode_service"] = opencode_service.stop(launch, environment, port,
-                                                                          str(runtime.home), runtime.owner)
+                        with owner.teardown():
+                            agent["opencode_service"] = opencode_service.stop(launch, environment, port,
+                                                                              str(runtime.home), runtime.owner)
                     except Exception as error:
                         agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
     except Exception as error:
         # A stop the operator asked for is not a failure; the cells say "interrupted".
-        if not (owner.cancelled.is_set() and isinstance(error, ProcessError) and "cancelled" in str(error)):
+        if not isinstance(error, Cancelled):
             report["failures"].insert(0, {"type": type(error).__name__, "reason": str(error),
                                           "at": [f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
                                                  for frame in traceback.extract_tb(error.__traceback__)[-4:]],

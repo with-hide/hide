@@ -1146,7 +1146,10 @@ fn update_core(
         Ok(build) => build.root,
         Err(reason) => return failed(reason),
     };
-    let packages = hide_node::ssh::host::HelperPackages::new(Some(updates.packages.clone()));
+    let packages = hide_node::ssh::host::HelperPackages::new(
+        Some(updates.packages.clone()),
+        crate::cli::RELEASE,
+    );
     let program = match upstream.install_build(&packages, &root) {
         Ok(program) => program,
         // A dial that stopped on a sign-in or a server key waits for the

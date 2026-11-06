@@ -592,6 +592,7 @@ pub(in crate::runtime) fn asleep_observation(actor: Actor) -> Observation {
         answered_at_unix_ms: 0,
         observed_at_unix_ms: 0,
         hook_submit_at_unix_ms: 0,
+        hide_typed_at_unix_ms: 0,
         session: None,
         thread: None,
         host_scope: None,
