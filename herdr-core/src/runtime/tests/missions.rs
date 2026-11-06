@@ -5828,7 +5828,7 @@ fn a_merge_with_a_line_unmet_is_raised_to_the_conductor_once() {
         (
             AttentionReason::MergedUnproven,
             Some(7),
-            crate::runtime::missions::AttentionTo::Conductor
+            crate::missions::AttentionTo::Conductor
         )
     );
     let raised = |runtime: &Runtime| {
@@ -5896,7 +5896,7 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
         node_view(&runtime, "fix")
             .attention
             .map(|attention| attention.to),
-        Some(crate::runtime::missions::AttentionTo::Operator)
+        Some(crate::missions::AttentionTo::Operator)
     );
     assert!(runtime.claim_mission_notices().is_empty());
 
@@ -7188,7 +7188,7 @@ fn warnings_of(runtime: &Runtime) -> (Vec<crate::missions::WarningKind>, Vec<Str
 /// merge, and a decision that stopped it before any of those.
 #[test]
 fn a_node_waits_on_what_the_core_decides_from_its_lines_and_its_decision() {
-    use crate::runtime::missions::WaitingOn;
+    use crate::missions::WaitingOn;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(

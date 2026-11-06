@@ -36,6 +36,7 @@ import { ConductorTab } from "../settings/ConductorTab";
 import type { AgentRow, Device, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
+import { withCoreWaits } from "./missionWaits";
 
 /** The Conductor's pane, as its agent row and the mission name it. */
 const CONDUCTOR_PANE = "w1:p1";
@@ -288,7 +289,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       }
     }
   }
-  const mission: Mission = {
+  const mission: Mission = withCoreWaits({
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
     scope: "pr", cap: 4, exempt: shown === "exempt", strength: "normal", other_vendor: true,
@@ -312,7 +313,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     running: state === "decision" ? 1 : state === "running" || state === "wide" ? 4 : 0,
     // A device that disconnected leaves its last values, dimmed (B20).
     stale: state === "stale", github_stale: state === "stale", github_read_at_unix_ms: state === "stale" ? now - 25 * MINUTE : now,
-  };
+  });
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },
     mission_events: { mission: mission.id, events: history(mission, now), dropped: 0 },

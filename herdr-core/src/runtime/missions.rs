@@ -19,10 +19,10 @@ use crate::delivery::Actor;
 use crate::mission_criteria::{CheckKind, Criterion, CriterionKind, CriterionState};
 use crate::mission_events::History;
 use crate::missions::{
-    AnswerFailure, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
+    AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
     ConductorSettings, Delivery, External, MISSION_LIMIT, Mission, MissionBook, MissionCommand,
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
-    PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, WarningKind, Worker,
+    PendingWake, PrSeen, Question, Restored, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -233,37 +233,6 @@ pub struct NodeView {
     pub waiting_on: Option<WaitingOn>,
 }
 
-/// Who or what a mission node waits on now, decided once here so `hide
-/// mission show`'s list and its node read the same answer.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum WaitingOn {
-    /// Its raise, on whom it reached and why.
-    Attention {
-        to: AttentionTo,
-        reason: crate::missions::AttentionReason,
-    },
-    /// The operator's answer to the decision that stopped it.
-    Decision,
-    /// A node it depends on was dropped.
-    Blocked,
-    /// The nodes it depends on that are not done, in its order.
-    Nodes {
-        keys: Vec<String>,
-    },
-    /// Nothing before it: it waits to be started.
-    Start,
-    /// Its worker: a line failed, or its first open line is the worker's.
-    Worker,
-    Review,
-    Verify,
-    Ci,
-    /// The merge of its pull request.
-    Merge,
-    /// Every line is met and nothing waits on GitHub: the Conductor's move.
-    Conductor,
-}
-
 /// What `view`, a node of `mission`, waits on (`WaitingOn`): its raise
 /// first, then the decision that stopped it, then by its status what it has
 /// not met. A planned node waits on the nodes before it, a working one on
@@ -360,14 +329,6 @@ pub struct NodePrView {
     pub number: u32,
     pub state: Option<PrState>,
     pub url: Option<String>,
-}
-
-/// Who a node waits on (D-02, D-05).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AttentionTo {
-    Conductor,
-    Operator,
 }
 
 /// The `!` a node's card carries and the line its hover says.

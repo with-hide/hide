@@ -1520,7 +1520,17 @@ export type MissionNode = {
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
   warnings?: MissionNodeWarning[];
+  /** A push is asked of it (`MissionNode::asks_push`): a change at work delivered by pull request. */
+  asks_push?: boolean;
+  /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
+  waiting_on?: MissionWaitingOn | null;
 };
+
+/** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
+export type MissionWaitingOn =
+  | { kind: "attention"; to: MissionAttentionTo; reason: MissionAttentionReason }
+  | { kind: "nodes"; keys: string[] }
+  | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
 /** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
 export type MissionWarningKind = "review_fails" | "no_push";

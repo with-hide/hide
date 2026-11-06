@@ -377,11 +377,13 @@ describe("picking a card and the edges back (PRD mission-map-git-criteria B21, B
 
 describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
   it("says what a working node has left, what a planned one waits for, and what an outside one watches", () => {
-    const m = mission("m", { nodes: [node("core", { status: "working", pr: 1703 }), node("ui", { depends_on: ["core"] })] });
+    const m = mission("m", { nodes: [node("core", { status: "working", pr: 1703 }), node("ui", { depends_on: ["core"], waiting_on: { kind: "nodes", keys: ["core"] } })] });
     const working = node("w", { status: "working", criteria: [line("c1", "own", { state: "pass" }), line("review", "review"), line("ci", "ci", { state: "fail" })] });
     expect(cardLine(m, working, null, t)).toEqual({ text: "left: review, CI", attention: false });
     expect(cardLine(m, { ...working, line: "replay 19/31" }, null, t)?.text).toBe("replay 19/31");
     expect(cardLine(m, m.nodes[1]!, null, t)).toEqual({ text: "waiting for #1703", attention: false });
+    // The nodes it names are the core's `waiting_on`, never worked out again from `depends_on`.
+    expect(cardLine(m, { ...m.nodes[1]!, waiting_on: { kind: "start" } }, null, t)).toBeNull();
     const outside = node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status: "planned" });
     expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
     expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");

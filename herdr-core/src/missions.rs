@@ -194,6 +194,46 @@ pub enum Blocked {
     UpstreamDropped,
 }
 
+/// Who a node waits on (D-02, D-05).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionTo {
+    Conductor,
+    Operator,
+}
+
+/// Who or what a mission node waits on now, decided once by the
+/// mission's view (`runtime::missions`) so `hide mission show`'s list, its
+/// node and the map's card read the same answer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaitingOn {
+    /// Its raise, on whom it reached and why.
+    Attention {
+        to: AttentionTo,
+        reason: AttentionReason,
+    },
+    /// The operator's answer to the decision that stopped it.
+    Decision,
+    /// A node it depends on was dropped.
+    Blocked,
+    /// The nodes it depends on that are not done, in its order.
+    Nodes {
+        keys: Vec<String>,
+    },
+    /// Nothing before it: it waits to be started.
+    Start,
+    /// Its worker: a line failed, or its first open line is the worker's.
+    Worker,
+    Review,
+    Verify,
+    Ci,
+    /// The merge of its pull request.
+    Merge,
+    /// Every line is met and nothing waits on GitHub: the Conductor's move.
+    Conductor,
+}
+
 /// Why a node waits on someone to look (PRD mission-node-simple D-04): the
 /// one `!` its card carries, and the line its hover and the operator's
 /// item say.
