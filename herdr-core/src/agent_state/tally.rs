@@ -296,6 +296,35 @@ pub mod phone {
     /// The groups in the order the phone draws them.
     pub const GROUP_ORDER: [&str; 5] = ["needs_you", "done", "revisit", "working", "seen"];
 
+    /// The most bytes one application message to a phone may hold: the
+    /// relay's `noise::MAX_MESSAGE`, which refuses a longer one and closes the
+    /// session. hided asserts the two equal at compile time, since this crate
+    /// does not link the relay's.
+    pub const FRAME_LIMIT: usize = 256 * 1024;
+    /// The bytes a list (the `agents` groups, the `missions` items) may take
+    /// in its frame: the limit less room for the frame's own fields, so a long
+    /// list leaves rows out, counted in `omitted`, instead of the relay
+    /// refusing the frame and the phone reconnecting into it again
+    /// (engineering #15).
+    pub const LIST_BUDGET: usize = FRAME_LIMIT - 4 * 1024;
+
+    /// The bytes `value` takes as the JSON a frame carries.
+    fn wire_len<T: Serialize + ?Sized>(value: &T) -> usize {
+        struct Count(usize);
+        impl std::io::Write for Count {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 += bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut count = Count(0);
+        serde_json::to_writer(&mut count, value).expect("a phone value has only string keys");
+        count.0
+    }
+
     #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
     pub struct Line {
         pub text: String,
@@ -451,6 +480,16 @@ pub mod phone {
             }
         }
 
+        /// This agent and every descendant hung under it.
+        fn agents(&self) -> usize {
+            1 + self
+                .children
+                .iter()
+                .chain(&self.more_children)
+                .map(Self::agents)
+                .sum::<usize>()
+        }
+
         pub fn root_key(&self) -> AgentKey {
             AgentKey {
                 device_id: self.device_id.clone(),
@@ -520,6 +559,15 @@ pub mod phone {
             match self {
                 Self::Agent(agent) => Cow::Borrowed(&agent.activity),
                 Self::Sleeping(session) => Cow::Owned(format!("{:013}", session.since_unix_ms)),
+            }
+        }
+
+        /// The agents the row stands for: an agent and its tree, or one
+        /// sleeping conversation.
+        fn agents(&self) -> usize {
+            match self {
+                Self::Agent(agent) => agent.agents(),
+                Self::Sleeping(_) => 1,
             }
         }
 
@@ -618,6 +666,103 @@ pub mod phone {
 
     fn is_zero_usize(value: &usize) -> bool {
         *value == 0
+    }
+
+    /// The groups one `agents` frame carries and how many agents it left out.
+    #[derive(Debug)]
+    pub struct WireGroups<'a> {
+        pub groups: Cow<'a, [Group]>,
+        pub omitted: usize,
+    }
+
+    impl Projection {
+        /// The groups as one `agents` frame carries them, within the frame's
+        /// list budget beside its devices. The projection itself stays whole,
+        /// for the notices and the lookups; only the frame's copy leaves rows
+        /// out. A group's `count` stays the true total.
+        pub fn wire(&self) -> WireGroups<'_> {
+            let beside = wire_len(&self.devices)
+                + wire_len(&self.interface_language)
+                + wire_len(&self.color_theme);
+            fit_groups(&self.groups, LIST_BUDGET.saturating_sub(beside))
+        }
+    }
+
+    /// Keeps `groups` within `room` bytes of JSON. Every other group loses
+    /// its rows before 내 차례 loses one, since a row there waits on the
+    /// operator; inside each part, what the phone shows last goes first:
+    /// folded top rows, then the children of the rows left, then shown top
+    /// rows, each the oldest first and group by group from the end of the
+    /// drawing order.
+    fn fit_groups(groups: &[Group], room: usize) -> WireGroups<'_> {
+        let total = wire_len(groups);
+        if total <= room {
+            return WireGroups {
+                groups: Cow::Borrowed(groups),
+                omitted: 0,
+            };
+        }
+        let mut groups = groups.to_vec();
+        let mut over = total - room;
+        let mut omitted = 0;
+        for asking in [false, true] {
+            let part = groups
+                .iter_mut()
+                .rev()
+                .filter(|group| (group.group == "needs_you") == asking);
+            shed_groups(part, &mut over, &mut omitted);
+        }
+        for group in &mut groups {
+            group.more_asleep = group.more.iter().filter(|row| row.asleep()).count();
+        }
+        WireGroups {
+            groups: Cow::Owned(groups),
+            omitted,
+        }
+    }
+
+    /// The three passes of `fit_groups` over one part of the groups, given
+    /// from the end of the drawing order.
+    fn shed_groups<'a>(
+        groups: impl Iterator<Item = &'a mut Group>,
+        over: &mut usize,
+        omitted: &mut usize,
+    ) {
+        let mut groups: Vec<&mut Group> = groups.collect();
+        for group in &mut groups {
+            shed(&mut group.more, over, omitted, GroupRow::agents);
+        }
+        for group in &mut groups {
+            for row in group.rows.iter_mut().chain(&mut group.more).rev() {
+                if let GroupRow::Agent(agent) = row {
+                    shed(&mut agent.more_children, over, omitted, PhoneAgent::agents);
+                    shed(&mut agent.children, over, omitted, PhoneAgent::agents);
+                }
+            }
+        }
+        for group in &mut groups {
+            shed(&mut group.rows, over, omitted, GroupRow::agents);
+        }
+    }
+
+    /// Drops the last items of `list` until `over` bytes are paid, counting
+    /// each one's agents in `omitted`. An item takes its comma with it while
+    /// others stay; the last one leaves an empty list, or none at all for a
+    /// list that is not sent empty, so the count never falls short.
+    fn shed<T: Serialize>(
+        list: &mut Vec<T>,
+        over: &mut usize,
+        omitted: &mut usize,
+        agents: fn(&T) -> usize,
+    ) {
+        while *over > 0 {
+            let Some(item) = list.pop() else {
+                return;
+            };
+            let comma = usize::from(!list.is_empty());
+            *over = over.saturating_sub(wire_len(&item) + comma);
+            *omitted += agents(&item);
+        }
     }
 
     /// A line's `subject` or a row's `ask_subject`, as the core wrote it.
@@ -1025,6 +1170,182 @@ pub mod phone {
             devices: machines,
             interface_language,
             color_theme,
+        }
+    }
+
+    #[cfg(test)]
+    mod wire_tests {
+        use serde_json::{Value, json};
+
+        use super::*;
+
+        /// The most sleeping conversations the core keeps (`MAX_DORMANT_RECORDS`).
+        const SLEEPING: usize = 256;
+
+        fn agent(pane: &str, group: &str, activity: u64, extra: Value) -> Value {
+            let long = "가".repeat(200);
+            let mut value = json!({
+                "pane_id": pane, "group": group, "mark": "going", "identity_label": format!("{pane} {long}"),
+                "agent_kind": "claude", "status_code": "idle", "demand": "none",
+                "last_activity": format!("{activity:013}"), "changed_at_unix_ms": activity,
+                "state": {"tree_rank": 2, "line": {"text": long, "mode": "sentence", "tone": "subtle"}},
+            });
+            for (key, field) in extra.as_object().unwrap() {
+                value[key] = field.clone();
+            }
+            value
+        }
+
+        /// 40 asking roots, a root with 60 delegated children, 140 more
+        /// working, 160 seen, and the most sleeping conversations the core keeps.
+        fn crowded() -> Value {
+            let mut agents = Vec::new();
+            for at in 0..40 {
+                agents.push(agent(
+                    &format!("w1:n{at}"),
+                    "needs_you",
+                    9_000 + at,
+                    json!({}),
+                ));
+            }
+            let kids: Vec<String> = (0..60).map(|at| format!("w1:k{at}")).collect();
+            agents.push(agent(
+                "w1:root",
+                "working",
+                8_999,
+                json!({"lineage_child_pane_ids": kids}),
+            ));
+            for (at, kid) in kids.iter().enumerate() {
+                agents.push(agent(kid, "working", 8_000 + at as u64, json!({"delegated": true, "lineage_parent_pane_id": "w1:root", "lineage_child_pane_ids": []})));
+            }
+            for at in 0..140 {
+                agents.push(agent(
+                    &format!("w1:w{at}"),
+                    "working",
+                    5_000 + at,
+                    json!({}),
+                ));
+            }
+            for at in 0..160 {
+                agents.push(agent(&format!("w1:s{at}"), "seen", 1_000 + at, json!({})));
+            }
+            let sleeping: Vec<Value> = (0..SLEEPING as u64)
+                .map(|at| json!({
+                    "sleep_id": format!("sleep-{at:x}-1"), "node_id": "local", "kind": "pi",
+                    "identity_label": "가".repeat(200), "group": "seen", "phase": "sleeping",
+                    "since_unix_ms": at, "wake_available": true, "checking": false, "reason": null,
+                }))
+                .collect();
+            json!({"navigator": {"agents": agents, "sleeping_sessions": sleeping}})
+        }
+
+        fn rows_of(groups: &[Group]) -> usize {
+            groups
+                .iter()
+                .flat_map(|group| group.rows.iter().chain(&group.more))
+                .map(GroupRow::agents)
+                .sum()
+        }
+
+        #[test]
+        fn a_crowded_list_fits_one_relay_message_and_counts_every_agent_it_leaves_out() {
+            let projection = project(&crowded(), "local");
+            let total = rows_of(&projection.groups);
+            assert_eq!(total, 40 + 61 + 140 + 160 + SLEEPING);
+            assert!(
+                wire_len(&projection.groups) > FRAME_LIMIT,
+                "the fixture must overflow"
+            );
+            let wire = projection.wire();
+            let frame = json!({
+                "type": "agents", "groups": wire.groups, "omitted": wire.omitted,
+                "devices": projection.devices, "interface_language": projection.interface_language,
+                "color_theme": projection.color_theme,
+            });
+            let bytes = frame.to_string().len();
+            assert!(bytes <= FRAME_LIMIT, "{bytes} bytes");
+            assert!(wire.omitted > 0);
+            assert_eq!(rows_of(&wire.groups) + wire.omitted, total);
+            let asking = |groups: &[Group]| {
+                groups
+                    .iter()
+                    .find(|group| group.group == "needs_you")
+                    .map(|group| (group.count, group.rows.len() + group.more.len()))
+            };
+            assert_eq!(
+                asking(&wire.groups),
+                asking(&projection.groups),
+                "내 차례 loses no row"
+            );
+            for (sent, whole) in wire.groups.iter().zip(&projection.groups) {
+                assert_eq!(
+                    sent.count, whole.count,
+                    "a group's count stays the true total"
+                );
+                assert_eq!(
+                    sent.more_asleep,
+                    sent.more.iter().filter(|row| row.asleep()).count()
+                );
+            }
+            assert_eq!(
+                rows_of(&projection.groups),
+                total,
+                "the projection itself stays whole"
+            );
+        }
+
+        #[test]
+        fn every_other_row_goes_before_a_folded_row_that_waits_on_the_operator() {
+            // 300 asking roots, short enough to fit alone, and one working
+            // root whose 200 resting children push the list over.
+            let mut agents: Vec<Value> = (0..300)
+                .map(|at| {
+                    let mut row = agent(&format!("w1:n{at}"), "needs_you", 9_000 + at, json!({}));
+                    row["identity_label"] = json!(format!("ask {at}"));
+                    row["state"]["line"]["text"] = json!("?");
+                    row
+                })
+                .collect();
+            let kids: Vec<String> = (0..200).map(|at| format!("w1:k{at}")).collect();
+            agents.push(agent(
+                "w1:root",
+                "working",
+                8_999,
+                json!({"lineage_child_pane_ids": kids}),
+            ));
+            for (at, kid) in kids.iter().enumerate() {
+                agents.push(agent(kid, "seen", 1_000 + at as u64, json!({"delegated": true, "lineage_parent_pane_id": "w1:root", "lineage_child_pane_ids": []})));
+            }
+            let projection = project(&json!({"navigator": {"agents": agents}}), "local");
+            assert!(
+                wire_len(&projection.groups) > LIST_BUDGET,
+                "the fixture must overflow"
+            );
+            let wire = projection.wire();
+            let frame = json!({"type": "agents", "groups": wire.groups, "omitted": wire.omitted, "devices": projection.devices});
+            assert!(frame.to_string().len() <= FRAME_LIMIT);
+            assert!(wire.omitted > 0);
+            let asking = wire
+                .groups
+                .iter()
+                .find(|group| group.group == "needs_you")
+                .unwrap();
+            assert_eq!(
+                asking.rows.len() + asking.more.len(),
+                300,
+                "no row waiting on the operator is left out"
+            );
+        }
+
+        #[test]
+        fn a_list_within_the_budget_is_sent_as_it_is() {
+            let projection = project(
+                &json!({"navigator": {"agents": [agent("w1:p1", "working", 1, json!({}))]}}),
+                "local",
+            );
+            let wire = projection.wire();
+            assert!(matches!(wire.groups, Cow::Borrowed(_)));
+            assert_eq!(wire.omitted, 0);
         }
     }
 }

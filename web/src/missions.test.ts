@@ -602,18 +602,18 @@ describe("nodeSteps", () => {
 
   it("is the Conductor's steps, all only planned, until a worker's plan exists", () => {
     expect(nodeSteps(node("a"))).toBeNull();
-    expect(nodeSteps(node("a", { steps: ["One", "Two"] }))).toEqual({ source: "plan", now: null, steps: [{ title: "One", tone: "plan", changed: false }, { title: "Two", tone: "plan", changed: false }] });
+    expect(nodeSteps(node("a", { steps: ["One", "Two"] }))).toEqual({ source: "plan", now: null, steps: [{ title: "One", tone: "plan" }, { title: "Two", tone: "plan" }] });
   });
 
-  it("is the worker's plan once it exists, a dropped step left out, and marks only a step the Conductor did not plan", () => {
+  it("is the worker's plan once it exists, a dropped step left out", () => {
     const worker = plan([step("a", "One", "done"), step("b", "Two, changed", "working"), step("c", "Gone", "dropped"), step("d", "Three", "planned")], "b");
     expect(nodeSteps(node("a", { steps: ["One", "Two", "Three"], plan: worker }))).toEqual({
       source: "worker",
       now: "Two, changed",
-      steps: [{ title: "One", tone: "done", changed: false }, { title: "Two, changed", tone: "working", changed: true }, { title: "Three", tone: "plan", changed: false }],
+      steps: [{ title: "One", tone: "done" }, { title: "Two, changed", tone: "working" }, { title: "Three", tone: "plan" }],
     });
-    // Nothing was planned to change from, and a finished plan has no current step.
+    // A finished plan has no current step.
     const finished = nodeSteps(node("a", { plan: plan([step("a", "One", "done")], null, true) }));
-    expect(finished).toMatchObject({ now: null, steps: [{ title: "One", tone: "done", changed: false }] });
+    expect(finished).toMatchObject({ now: null, steps: [{ title: "One", tone: "done" }] });
   });
 });

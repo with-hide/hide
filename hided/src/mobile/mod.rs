@@ -1978,14 +1978,19 @@ impl Mobile {
                         if **current == missions {
                             return false;
                         }
-                        // Recorded when the record first goes over the cap, not on every
-                        // change while it stays over (the count is in the frame).
-                        if missions.omitted > 0 && current.omitted == 0 {
+                        // Recorded when the record first goes over a cap (the counts or
+                        // the frame's bytes), not on every change while it stays over
+                        // (the counts are in the frame).
+                        let left_out =
+                            |missions: &PhoneMissions| missions.omitted + missions.nodes_omitted();
+                        if left_out(&missions) > 0 && left_out(current) == 0 {
                             herdr_core::diagnostic!(json!({
                                 "component": "mobile_phone", "kind": "missions.capped",
                                 "omitted": missions.omitted,
+                                "steps_omitted": missions.nodes_omitted(),
                                 "open_cap": herdr_core::agent_state::phone::MAX_OPEN,
                                 "closed_cap": herdr_core::agent_state::phone::MAX_CLOSED,
+                                "budget": herdr_core::agent_state::phone::LIST_BUDGET,
                             }));
                         }
                         *current = Arc::new(missions);

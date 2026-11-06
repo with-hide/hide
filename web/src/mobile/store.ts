@@ -128,6 +128,8 @@ type PhoneState = {
   groups: AgentGroup[] | null;
   /** The paired Mac and the devices it reaches, as the last list carried them. */
   devices: PhoneDevice[];
+  /** The agents the last list left out to fit one relay message, shown as a line under the list. */
+  agentsOmitted: number;
   /**
    * What this phone's operator chose on the list, which the desktop's sidebar never sees (PRD mobile-companion-ui D-03): a parent's
    * children opened or closed against what the core opened by default, keyed by `device|pane`; and the folds that were opened, keyed
@@ -143,6 +145,8 @@ type PhoneState = {
   missions: PhoneMission[] | null;
   /** The record could not be read on the Mac. */
   missionsFailed: boolean;
+  /** The missions the last frame left out (its caps), shown as a line under the list. */
+  missionsOmitted: number;
   /** The folds this phone opened on the missions tab: `closed` for 끝남's `모두`, `done:<mission>` for a page's 끝남; only missions the record still has. */
   missionFolds: Record<string, true>;
   /** What was typed for each mission's decision, kept until its answer is accepted (B35). */
@@ -194,6 +198,7 @@ const initial: PhoneState = {
   vapidKey: null,
   groups: null,
   devices: [],
+  agentsOmitted: 0,
   childrenOpen: {},
   foldsOpen: {},
   detail: null,
@@ -201,6 +206,7 @@ const initial: PhoneState = {
   missionOpen: null,
   missions: null,
   missionsFailed: false,
+  missionsOmitted: 0,
   missionFolds: {},
   missionDrafts: {},
   missionAnswer: null,
@@ -253,6 +259,7 @@ export function applyFrame(frame: ServerFrame): void {
       patch({
         groups: frame.groups,
         devices: frame.devices,
+        agentsOmitted: frame.omitted ?? 0,
         ...keptChoices(state, frame.groups),
         interfaceLanguage: frame.interface_language,
         colorTheme: frame.color_theme,
@@ -263,6 +270,7 @@ export function applyFrame(frame: ServerFrame): void {
       patch({
         missions: frame.items,
         missionsFailed: frame.failed,
+        missionsOmitted: frame.omitted ?? 0,
         // A mission that left the record takes its page and its draft with it.
         missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
         missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),

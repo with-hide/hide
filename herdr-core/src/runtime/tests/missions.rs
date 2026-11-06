@@ -946,6 +946,93 @@ fn a_ci_letter_waits_for_every_workflow_on_the_head_to_end() {
     );
 }
 
+/// One rule decides a head's CI end for the finish line and the letter
+/// alike: a failed check while another still runs leaves the ci line open,
+/// spends no rerun and sends no letter; the end closes both together.
+#[test]
+fn a_failure_beside_a_running_check_keeps_the_ci_line_open_like_the_letter() {
+    use crate::mission_criteria::{CriterionKind, CriterionState};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    let ci = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        let fix = mission.nodes.iter().find(|node| node.key == "fix").unwrap();
+        let line = fix
+            .criteria
+            .iter()
+            .find(|line| line.kind == CriterionKind::Ci)
+            .unwrap()
+            .clone();
+        (line.state, line.reruns)
+    };
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    assert!(
+        runtime
+            .note_mission_pulls(node, &failed_running("b2", true, &["static-design"]))
+            .is_empty()
+    );
+    assert_eq!(ci(&runtime), (CriterionState::Open, 0), "verify still runs");
+    assert_eq!(
+        runtime
+            .note_mission_pulls(node, &failed_running("b2", false, &["static-design"]))
+            .len(),
+        1
+    );
+    assert_eq!(ci(&runtime), (CriterionState::Fail, 0));
+}
+
+/// A CI letter the Conductor's full queue refuses is not told: the next
+/// read after the queue has room tells it, once.
+#[test]
+fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
+    use crate::missions::{PENDING_WAKE_LIMIT, PendingWake, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.wakes = (0..PENDING_WAKE_LIMIT)
+        .map(|at| PendingWake {
+            seq: at as u64 + 1,
+            node: "docs".into(),
+            pr: None,
+            event: WakeEvent::NewHead,
+            head: None,
+            to: None,
+            reason: None,
+            why: None,
+            action: None,
+            warning: None,
+            ci: None,
+            key: Some(format!("filler:{at}")),
+        })
+        .collect();
+    let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
+    assert!(
+        runtime.note_mission_pulls(node, &failed).is_empty(),
+        "the queue is full"
+    );
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .wakes
+        .clear();
+    assert_eq!(
+        runtime.note_mission_pulls(node, &failed),
+        vec!["mission:mission-1:ci:fix:7:b2:failed:sender"],
+        "told once there is room"
+    );
+    assert!(
+        runtime.note_mission_pulls(node, &failed).is_empty(),
+        "told once"
+    );
+}
+
 /// A pull request whose CI already ended when Hide first reads it, as when
 /// it was named before the list held it, is told: only a merge or a review
 /// starts from the first answer (with-hide/hide#2089 review 2).

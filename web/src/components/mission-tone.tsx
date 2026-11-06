@@ -47,13 +47,29 @@ export const TONE_TEXT: Record<CellTone, string> = {
   cancelled: "text-mission-cancelled",
 };
 
+/**
+ * A state pill's colours, the one table every pill reads: work going on, a
+ * turn that waits on the operator (a merge, a decision, a plan's review), a
+ * check at work, a pass, a rejection, a state that asks nothing (planning,
+ * finished), and a cancelled one.
+ */
+export const PILL_TONE = {
+  working: "bg-mission-working/15 text-mission-working",
+  hold: "bg-mission-hold/15 text-mission-hold",
+  review: "bg-mission-review/15 text-mission-review",
+  done: "bg-mission-done/15 text-mission-done",
+  failed: "bg-mission-failed/15 text-mission-failed",
+  quiet: "bg-muted text-muted-foreground",
+  cancelled: "bg-muted text-mission-cancelled",
+} as const;
+
 /** A mission state's pill colours, the same on the map's head and in both lists. */
 export const STATE_PILL_TONE: Record<MissionStatus, string> = {
-  planning: "bg-muted text-muted-foreground",
-  running: "bg-mission-working/15 text-mission-working",
-  merge_wait: "bg-mission-hold/15 text-mission-hold",
-  done: "bg-muted text-muted-foreground",
-  cancelled: "bg-muted text-mission-cancelled",
+  planning: PILL_TONE.quiet,
+  running: PILL_TONE.working,
+  merge_wait: PILL_TONE.hold,
+  done: PILL_TONE.quiet,
+  cancelled: PILL_TONE.cancelled,
 };
 
 /** Past this many, a bar draws each run of one state as one stretch instead of a cell per item. */

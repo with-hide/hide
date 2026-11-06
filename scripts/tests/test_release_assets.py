@@ -163,9 +163,9 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertNotEqual(self.check().returncode, 0)
 
     def test_a_release_short_of_a_contract_kit_fails_and_says_why(self):
-        # Until the release producers make every kit (with-hide/hide-private#501
-        # N3), a release carries the Linux kits only; a core refuses that
-        # manifest, so the release fails here instead of shipping it.
+        # A core refuses a manifest short of a contract kit, so a release
+        # that lacks one (such as the Mac kit only the private publisher
+        # makes) fails here instead of shipping it.
         manifest_file = self.directory / "device-bundles.json"
         manifest = json.loads(manifest_file.read_text())
         short = [platform for platform in CONTRACT["kits"] if not platform.startswith("linux-")]
@@ -175,7 +175,7 @@ class ReleaseAssetsTest(unittest.TestCase):
         manifest_file.write_text(json.dumps(manifest))
         result = self.check()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("release-kits", result.stderr)
+        self.assertIn("private publisher", result.stderr)
         for platform in short:
             self.assertIn(kit_asset(platform, "1.2.3"), result.stderr)
 
