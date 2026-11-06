@@ -186,6 +186,10 @@ jobs:
           tool-bin-dir: ${{ runner.temp }}/candidate-uv-bin
       - name: Require Python with standard TOML support
         run: python3 -c 'import sys, tomllib; assert sys.version_info >= (3, 11)'
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         timeout-minutes: 5
         run: |
