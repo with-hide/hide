@@ -3,9 +3,12 @@
 // manifest's format come from contracts/device-kits.json, which the core
 // reads too (hide-node/src/ssh/kit/); this file names none of them. No app
 // carries the manifest: a core fetches it from its own release
-// (with-hide/hide-private#501 decision 1). The public run builds the kits
-// whose producer is `device-helpers` (`build`, then `bundle` once); the
-// others are made where the contract's producer says.
+// (with-hide/hide-private#501 decision 1). A release candidate makes every
+// kit whose producer is not the private publisher (`build` on each Linux
+// runner, then `bundle` once, from those helpers and `compile (windows)`'s
+// binaries) and writes no manifest; the publisher makes the Mac kit from the
+// signed programs with `makeDeviceKit` and writes the release's manifest
+// over all four with `writeDeviceManifest`.
 // Inputs live in this checkout, never in a shared build directory.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -13,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { checkReleaseBinaries } from "./release-binaries.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const contract = JSON.parse(fs.readFileSync(path.join(repo, "contracts/device-kits.json"), "utf8"));
@@ -117,67 +121,162 @@ export function deviceHelperDigests(directory, identity) {
     Object.fromEntries(DEVICE_PROGRAMS.map((name) => [name, digest(fs.readFileSync(resources.get(`${name}-${platform}`)))]))]));
 }
 
-/** Prepare the kits this run builds as release assets, with their manifest, outside every app. */
-export function prepareDeviceBundles(directory, identity, output) {
-  const helpers = new Map(deviceHelperResources(directory, identity));
-  fs.rmSync(output, { recursive: true, force: true });
-  fs.mkdirSync(output, { recursive: true });
-  const platforms = {};
-  for (const platform of Object.keys(DEVICE_PLATFORMS)) {
-    const stage = path.join(output, platform);
-    fs.mkdirSync(stage);
-    const files = {};
-    for (const name of DEVICE_PROGRAMS) {
-      const source = helpers.get(`${name}-${platform}`);
-      readProgram(source, platform);
-      const target = path.join(stage, name);
-      fs.copyFileSync(source, target);
-      fs.chmodSync(target, 0o755);
-      const bytes = readProgram(target, platform);
-      files[name] = { sha256: digest(bytes), size: bytes.length };
-    }
-    const asset = deviceAsset(platform, identity.version);
-    const archive = path.join(output, asset);
-    // A deliberately small USTAR vocabulary: four regular files, no paths,
-    // extended attributes, links or platform-specific metadata records.
-    execFileSync("tar", ["--format", "ustar", "-czf", asset, "-C", platform, ...DEVICE_PROGRAMS], {
-      cwd: output,
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
-    });
-    const bytes = fs.readFileSync(archive);
-    const size = Object.values(files).reduce((sum, file) => sum + file.size, 0);
-    if (size > MAX_KIT || bytes.length > MAX_KIT) throw new Error(`${platform} device bundle exceeds 256 MiB`);
-    platforms[platform] = { asset, sha256: digest(bytes), size: bytes.length, files };
-    fs.rmSync(stage, { recursive: true });
-  }
-  const manifest = path.join(output, DEVICE_BUNDLE_MANIFEST);
-  fs.writeFileSync(manifest, `${JSON.stringify({ format: DEVICE_BUNDLE_FORMAT, ...identity, platforms }, null, 2)}\n`);
-  return manifest;
+/** A kit file's bytes, refused when it is a link, empty or above the kit cap; a program must have its platform's header. */
+function readKitFile(file, platform, program) {
+  if (program) return readProgram(file, platform);
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.size === 0 || stat.size > MAX_KIT) throw new Error(`invalid device kit file: ${file}`);
+  return fs.readFileSync(file);
 }
 
 /**
- * The bundles one run already made in `output`, checked before the Mac
- * package publishes them beside its installers: made for this source,
- * version and order, for every kit this run builds, each archive there with
- * the size and digest the manifest names. Answers the manifest's path;
- * refuses anything else.
+ * Archives one kit from `folder`, which holds exactly the kit's files under
+ * their kit names (deviceKitFiles), as `output/<asset>`, and answers its
+ * manifest entry read back from the archive: `{ asset, sha256, size, files }`
+ * with each file's sha256 and size. The bytes are taken as they are; a Mac
+ * kit is the signed programs the Mac app ships, never signed again.
  */
-export function readDeviceBundles(output, identity) {
+export function makeDeviceKit(platform, folder, version, output) {
+  const files = deviceKitFiles(platform);
+  const digests = new Map([...files].map(([name, program]) => [name, digest(readKitFile(path.join(folder, ...name.split("/")), platform, program))]));
+  const asset = deviceAsset(platform, version);
+  fs.mkdirSync(output, { recursive: true });
+  const archive = path.join(path.resolve(output), asset);
+  fs.rmSync(archive, { force: true });
+  // A deliberately small USTAR vocabulary: the kit's regular files under
+  // relative `/` names, no folder entries, extended attributes, links or
+  // platform-specific metadata records.
+  execFileSync("tar", ["--format", "ustar", "-czf", archive, ...[...files.keys()].sort()], {
+    cwd: folder,
+    env: { ...process.env, COPYFILE_DISABLE: "1" },
+  });
+  const entry = readDeviceKit(platform, archive, version);
+  for (const [name, sha256] of digests) {
+    if (entry.files[name].sha256 !== sha256) throw new Error(`device file ${name} changed while ${asset} was made`);
+  }
+  return entry;
+}
+
+/**
+ * The manifest entry of one kit's archive, computed from its bytes after the
+ * core's checks (hide-node/src/ssh/kit/archive.rs): the release's name for
+ * the platform, at most 256 MiB packed and unpacked, exactly the kit's files
+ * as regular entries and every program with its platform's header.
+ */
+export function readDeviceKit(platform, archive, version) {
+  const kit = contract.kits[platform];
+  if (!kit) throw new Error(`no device kit contract for ${platform}`);
+  const asset = deviceAsset(platform, version);
+  if (path.basename(archive) !== asset) throw new Error(`${archive} is not the ${platform} kit of ${version} (${asset})`);
+  const stat = fs.lstatSync(archive);
+  if (!stat.isFile() || stat.size === 0 || stat.size > MAX_KIT) throw new Error(`${asset} is not an archive of at most 256 MiB`);
+  const bytes = fs.readFileSync(archive);
+  const entries = readUstar(gunzipSync(bytes, { maxOutputLength: MAX_KIT + 64 * 1024 }));
+  const expected = deviceKitFiles(platform);
+  if (JSON.stringify([...entries.keys()].sort()) !== JSON.stringify([...expected.keys()].sort())) {
+    throw new Error(`${asset} does not hold exactly the ${platform} kit's files`);
+  }
+  let total = 0;
+  const files = {};
+  for (const name of [...expected.keys()].sort()) {
+    const content = entries.get(name);
+    if (content.length === 0) throw new Error(`device file ${name} in ${asset} is empty`);
+    if (expected.get(name)) assertDeviceExecutable(content, platform);
+    total += content.length;
+    files[name] = { sha256: digest(content), size: content.length };
+  }
+  if (total > MAX_KIT) throw new Error(`${platform} device kit exceeds 256 MiB`);
+  return { asset, sha256: digest(bytes), size: bytes.length, files };
+}
+
+/**
+ * Writes `output/device-bundles.json` over `entries`, one per platform of the
+ * contract, each the entry of an archive already in `output` with that size
+ * and digest; answers its path. The private publisher writes a release's
+ * manifest with it, over the candidate's kits and its own Mac kit.
+ */
+export function writeDeviceManifest(output, identity, entries) {
   assertIdentity(identity);
+  if (JSON.stringify(Object.keys(entries).sort()) !== JSON.stringify(Object.keys(contract.kits).sort())) {
+    throw new Error(`a device manifest names every kit of contracts/device-kits.json, not [${Object.keys(entries).join(", ")}]`);
+  }
+  const platforms = {};
+  for (const platform of Object.keys(contract.kits).sort()) {
+    const entry = entries[platform];
+    if (entry.asset !== deviceAsset(platform, identity.version)) throw new Error(`unexpected device bundle name for ${platform}: ${entry.asset}`);
+    const archive = path.join(output, entry.asset);
+    const stat = fs.lstatSync(archive, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size !== entry.size || digest(fs.readFileSync(archive)) !== entry.sha256) {
+      throw new Error(`device bundle ${entry.asset} is missing or differs from its entry`);
+    }
+    platforms[platform] = { asset: entry.asset, sha256: entry.sha256, size: entry.size, files: entry.files };
+  }
   const file = path.join(output, DEVICE_BUNDLE_MANIFEST);
-  const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (manifest.format !== DEVICE_BUNDLE_FORMAT || manifest.commit !== identity.commit || manifest.version !== identity.version || manifest.order !== identity.order) {
-    throw new Error("device bundle identity mismatch: make the bundles for this source, version and order");
-  }
-  if (Object.keys(manifest.platforms).sort().join(",") !== Object.keys(DEVICE_PLATFORMS).sort().join(",")) throw new Error("device bundles do not cover every kit this run builds");
-  for (const [platform, bundle] of Object.entries(manifest.platforms)) {
-    if (bundle.asset !== deviceAsset(platform, identity.version)) throw new Error(`unexpected device bundle name for ${platform}: ${bundle.asset}`);
-    const archive = path.join(output, bundle.asset);
-    const stat = fs.lstatSync(archive);
-    if (!stat.isFile() || stat.size !== bundle.size) throw new Error(`device bundle ${bundle.asset} is missing or another size`);
-    if (digest(fs.readFileSync(archive)) !== bundle.sha256) throw new Error(`device bundle digest mismatch: ${bundle.asset}`);
-  }
+  fs.writeFileSync(file, `${JSON.stringify({ format: DEVICE_BUNDLE_FORMAT, ...identity, platforms }, null, 2)}\n`);
   return file;
+}
+
+/** The kits a release candidate makes: every contract kit whose producer is not the private publisher. */
+export const CANDIDATE_KITS = Object.keys(contract.kits).filter((platform) => contract.kits[platform].producer !== "publisher");
+
+/**
+ * Each producer's checked output in this checkout, as the contract's
+ * `producer` names it: a kit's files by kit name, mapped to the file that
+ * holds its bytes. `device-helpers` is a Linux helper artifact
+ * (`<out>/device-helpers/<platform>/`), checked against its manifest;
+ * `windows-compile` is `compile (windows)`'s artifact in
+ * `<out>/windows-compile/`, the release binaries the Windows app ships
+ * (`target/release/`) checked against their record
+ * (`desktop/out/release-binaries.json`), with the pinned ConPTY runtime
+ * `scripts/fetch-conpty.py --out <out>/windows-compile/holder-conpty` wrote.
+ */
+const PRODUCERS = {
+  "device-helpers": (platform, identity, out) => {
+    const helpers = new Map(deviceHelperResources(path.join(out, "device-helpers"), identity));
+    return new Map(DEVICE_PROGRAMS.map((name) => [name, helpers.get(`${name}-${platform}`)]));
+  },
+  "windows-compile": (platform, identity, out) => {
+    const input = path.join(out, "windows-compile");
+    const { suffix, runtime } = contract.kits[platform];
+    const binaries = path.join(input, "target", "release");
+    const names = DEVICE_PROGRAMS.map((name) => `${name}${suffix}`);
+    checkReleaseBinaries(path.join(input, "desktop", "out", "release-binaries.json"), binaries, names, identity);
+    return new Map([
+      ...names.map((name) => [name, path.join(binaries, name)]),
+      ...Object.keys(runtime).map((name) => [name, path.join(input, ...name.split("/"))]),
+    ]);
+  },
+};
+
+/** One candidate kit's files by kit name, from its producer's checked output under `out`. */
+export function candidateKitSources(platform, identity, out) {
+  assertIdentity(identity);
+  const producer = PRODUCERS[contract.kits[platform]?.producer];
+  if (!producer || !CANDIDATE_KITS.includes(platform)) throw new Error(`a release candidate makes no ${platform} kit`);
+  return producer(platform, identity, out);
+}
+
+/**
+ * Makes every kit a release candidate produces into `output`, from the
+ * producers' output under `out`, and answers their entries by platform. It
+ * writes no manifest: the publisher writes the release's over these archives
+ * as they are, beside its own Mac kit.
+ */
+export function makeCandidateKits(out, identity, output) {
+  fs.rmSync(output, { recursive: true, force: true });
+  fs.mkdirSync(output, { recursive: true });
+  const entries = {};
+  for (const platform of CANDIDATE_KITS) {
+    const stage = path.join(output, `${platform}.stage`);
+    for (const [name, source] of candidateKitSources(platform, identity, out)) {
+      const target = path.join(stage, ...name.split("/"));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+    }
+    entries[platform] = makeDeviceKit(platform, stage, identity.version, output);
+    fs.rmSync(stage, { recursive: true });
+  }
+  return entries;
 }
 
 /**
@@ -214,31 +313,37 @@ function readUstar(bytes) {
  * file against `manifestFile` and each program's header against the
  * contract. A local build then reaches a device of that platform without
  * cross-compiling. Answers the files written.
+
+/**
+ * Unpacks a release's or a CI run's kit archive into `folder` under the
+ * developer names a core finds before any release (`<name>-<os>-<arch>`,
+ * and `holder-conpty-<os>-<arch>/...` for the Windows runtime;
+ * hide-node/src/ssh/kit/select.rs), after checking it as a core does
+ * (readDeviceKit) and, given a release's `manifestFile`, against the entry
+ * there. A local build then reaches a device of that platform without
+ * cross-compiling. Answers the files written.
  */
 export function stageDeviceKit(manifestFile, archiveFile, folder) {
   const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
   if (manifest.format !== DEVICE_BUNDLE_FORMAT) throw new Error(`device manifest format ${manifest.format} is not ${DEVICE_BUNDLE_FORMAT}`);
-  const entry = Object.entries(manifest.platforms ?? {}).find(([, bundle]) => bundle.asset === path.basename(archiveFile));
-  if (!entry) throw new Error(`${manifestFile} names no kit ${path.basename(archiveFile)}`);
-  const [platform, bundle] = entry;
-  const kit = contract.kits[platform];
-  const expected = [...deviceKitFiles(platform).keys()].sort();
+  const found = Object.entries(manifest.platforms ?? {}).find(([, bundle]) => bundle.asset === path.basename(archiveFile));
+  if (!found) throw new Error(`${manifestFile} names no kit ${path.basename(archiveFile)}`);
+  const [platform, bundle] = found;
   const stat = fs.lstatSync(archiveFile);
-  if (!stat.isFile() || stat.size !== bundle.size || stat.size > MAX_KIT) throw new Error(`${archiveFile} is not the ${bundle.size}-byte archive the manifest names`);
-  const archive = fs.readFileSync(archiveFile);
-  if (digest(archive) !== bundle.sha256) throw new Error(`device archive digest mismatch: ${archiveFile}`);
-  const files = readUstar(gunzipSync(archive, { maxOutputLength: MAX_KIT + 64 * 1024 }));
-  const programs = new Map(DEVICE_PROGRAMS.map((name) => [`${name}${kit.suffix}`, name]));
-  if (JSON.stringify([...files.keys()].sort()) !== JSON.stringify(expected)
-    || JSON.stringify(Object.keys(bundle.files).sort()) !== JSON.stringify(expected)) {
-    throw new Error(`${archiveFile} does not hold exactly the ${platform} kit's files`);
+  if (!stat.isFile() || stat.size !== bundle.size || digest(fs.readFileSync(archiveFile)) !== bundle.sha256) {
+    throw new Error(`device archive digest mismatch: ${archiveFile}`);
   }
+  const entry = readDeviceKit(platform, archiveFile, manifest.version);
+  if (JSON.stringify(entry.files) !== JSON.stringify(Object.fromEntries(Object.keys(bundle.files ?? {}).sort().map((name) => [name, { sha256: bundle.files[name].sha256, size: bundle.files[name].size }])))) {
+    throw new Error(`${archiveFile} does not hold exactly the ${platform} kit's files the manifest names`);
+  }
+  const kit = contract.kits[platform];
+  const programs = new Map(DEVICE_PROGRAMS.map((name) => [`${name}${kit.suffix}`, name]));
+  const files = readUstar(gunzipSync(fs.readFileSync(archiveFile), { maxOutputLength: MAX_KIT + 64 * 1024 }));
   const written = [];
   fs.mkdirSync(folder, { recursive: true });
   for (const [name, bytes] of files) {
-    const listed = bundle.files[name];
-    if (bytes.length !== listed.size || digest(bytes) !== listed.sha256) throw new Error(`device file ${name} differs from the manifest`);
-    if (programs.has(name)) assertDeviceExecutable(bytes, platform);
+    if (digest(bytes) !== entry.files[name].sha256) throw new Error(`device file ${name} differs from the manifest`);
     const [first, ...rest] = name.split("/");
     const developer = programs.has(name) ? `${programs.get(name)}-${platform}` : [`${first}-${platform}`, ...rest].join("/");
     const target = path.join(folder, ...developer.split("/"));
@@ -283,11 +388,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const [platform, version, commit, order] = rest;
     build(platform, { version: version.replace(/^v/, ""), commit, order });
   } else if (action === "bundle" && rest.length === 3) {
-    // Once per run, from both platforms' helpers in desktop/out/device-helpers.
+    // Once per run, from every candidate producer's output under desktop/out.
     const [version, commit, order] = rest;
     const out = path.join(repo, "desktop/out");
-    const manifest = prepareDeviceBundles(path.join(out, "device-helpers"), { version: version.replace(/^v/, ""), commit, order }, path.join(out, "device-bundles"));
-    console.log(`device_manifest=${manifest}`);
+    const entries = makeCandidateKits(out, { version: version.replace(/^v/, ""), commit, order }, path.join(out, "device-bundles"));
+    for (const [platform, entry] of Object.entries(entries)) console.log(`device_kit ${platform} ${entry.asset} ${entry.sha256} ${entry.size}`);
   } else if (action === "stage" && rest.length === 3) {
     const [manifest, archive, folder] = rest;
     for (const name of stageDeviceKit(manifest, archive, folder)) console.log(path.join(folder, name));

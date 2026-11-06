@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { awaitStartedVerification, candidateReceipt, VERIFY_START_LIMIT_MS, withDeviceHelpers, withMacosBinaries } from "../release-candidate.mjs";
+import { awaitStartedVerification, candidateReceipt, VERIFY_START_LIMIT_MS, withDeviceKits, withMacosBinaries } from "../release-candidate.mjs";
+import { DEVICE_KITS, makeCandidateKits } from "../../desktop/scripts/device-helpers.mjs";
 import { recordReleaseBinaries, RELEASE_PROGRAMS } from "../../desktop/scripts/release-binaries.mjs";
 
 // The producer/consumer contract: public dispatch inputs, one receipt,
@@ -22,7 +23,7 @@ const verification = {
   status: "completed", conclusion: "success", pull_requests: [],
 };
 const receipt = {
-  schema: 4, repository: "with-hide/hide", public_sha: publicSha, tag: "v1.2.3-rc.1",
+  schema: 5, repository: "with-hide/hide", public_sha: publicSha, tag: "v1.2.3-rc.1",
   build_order: "501", verification_run_id: "71", workflow_sha: workflowSha, run_id: "81", run_attempt: 2,
   live_agents: false,
 };
@@ -112,55 +113,91 @@ test("ambiguous sources, versions and build orders fail before packaging", () =>
   }
 });
 
-// Both helper artifacts as device-helpers.yml uploads them; a minimal
-// executable header stands in for each Linux program.
 const runs = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../agents/runs/release-candidate-tests");
-function helperArtifacts(t, identity) {
-  fs.mkdirSync(runs, { recursive: true });
-  const root = fs.mkdtempSync(path.join(runs, "helpers-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const digests = {};
-  for (const [platform, machine] of [["linux-x86_64", 62], ["linux-aarch64", 183]]) {
-    fs.mkdirSync(path.join(root, platform));
-    const files = {};
-    for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder"]) {
-      const bytes = Buffer.alloc(64);
-      bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
-      bytes.writeUInt16LE(3, 16);
-      bytes.writeUInt16LE(machine, 18);
-      bytes.write(name, 32);
-      fs.writeFileSync(path.join(root, platform, name), bytes);
-      files[name] = createHash("sha256").update(bytes).digest("hex");
-    }
-    fs.writeFileSync(path.join(root, platform, "manifest.json"), JSON.stringify({ platform, ...identity, files }));
-    digests[platform] = files;
-  }
-  return { root, digests };
-}
 const helperIdentity = { commit: publicSha, version: "1.2.3-rc.1", order: "501" };
 
-test("the receipt records the digests of both device helpers built for its source, version and order", (t) => {
-  const { root, digests } = helperArtifacts(t, helperIdentity);
-  assert.deepEqual(withDeviceHelpers(receipt, root), { ...receipt, device_helpers: digests });
-});
-
-test("helpers of another source, version or order, or a changed helper, complete no receipt", (t) => {
-  for (const patch of [{ commit: workflowSha }, { version: "1.2.3" }, { order: "500" }]) {
-    const { root } = helperArtifacts(t, { ...helperIdentity, ...patch });
-    assert.throws(() => withDeviceHelpers(receipt, root), /identity mismatch/);
+/** A program's first bytes for a contract header, then `tail`. */
+function program(header, tail) {
+  const bytes = Buffer.alloc(128);
+  if (header.kind === "elf") {
+    bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
+    bytes.writeUInt16LE(3, 16);
+    bytes.writeUInt16LE(header.machine, 18);
+  } else {
+    bytes.write("MZ", 0, "latin1");
+    bytes.writeUInt32LE(0x40, 0x3c);
+    bytes.write("PE\0\0", 0x40, "latin1");
+    bytes.writeUInt16LE(header.machine, 0x44);
   }
-  const { root } = helperArtifacts(t, helperIdentity);
-  fs.appendFileSync(path.join(root, "linux-aarch64", "hided"), "changed");
-  assert.throws(() => withDeviceHelpers(receipt, root), /digest mismatch/);
-  fs.rmSync(path.join(root, "linux-aarch64"), { recursive: true });
-  assert.throws(() => withDeviceHelpers(receipt, root));
+  return Buffer.concat([bytes, Buffer.from(tail)]);
+}
+
+/** `compile (windows)`'s artifact with the ConPTY runtime beside it, as `device bundles` and the receipt read it. */
+function windowsCompile(root, tail = "") {
+  const kit = DEVICE_KITS["windows-x86_64"];
+  const input = path.join(root, "windows-compile");
+  fs.rmSync(input, { recursive: true, force: true });
+  const binaries = path.join(input, "target", "release");
+  fs.mkdirSync(binaries, { recursive: true });
+  fs.mkdirSync(path.join(input, "desktop", "out"), { recursive: true });
+  const names = RELEASE_PROGRAMS.map((name) => `${name}${kit.suffix}`);
+  for (const name of names) fs.writeFileSync(path.join(binaries, name), program(kit.header, name + tail));
+  recordReleaseBinaries(path.join(input, "desktop", "out", "release-binaries.json"), binaries, names, helperIdentity);
+  for (const name of Object.keys(kit.runtime)) {
+    fs.mkdirSync(path.dirname(path.join(input, name)), { recursive: true });
+    fs.writeFileSync(path.join(input, name), `runtime ${name}`);
+  }
+}
+
+/**
+ * The receipt's kit inputs as release-candidate.yml downloads them: both
+ * Linux helper artifacts, the Windows compile artifact and the kits `device
+ * bundles` made from them.
+ */
+function kitArtifacts(t) {
+  fs.mkdirSync(runs, { recursive: true });
+  const root = fs.mkdtempSync(path.join(runs, "kits-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const platform of ["linux-x86_64", "linux-aarch64"]) {
+    const folder = path.join(root, "device-helpers", platform);
+    fs.mkdirSync(folder, { recursive: true });
+    const files = {};
+    for (const name of RELEASE_PROGRAMS) {
+      const bytes = program(DEVICE_KITS[platform].header, name);
+      fs.writeFileSync(path.join(folder, name), bytes);
+      files[name] = createHash("sha256").update(bytes).digest("hex");
+    }
+    fs.writeFileSync(path.join(folder, "manifest.json"), JSON.stringify({ platform, ...helperIdentity, files }));
+  }
+  windowsCompile(root);
+  const entries = makeCandidateKits(root, helperIdentity, path.join(root, "device-bundles"));
+  return { root, entries };
+}
+
+test("the receipt records the manifest entry of every kit the candidate made, Windows beside both Linux kits", (t) => {
+  const { root, entries } = kitArtifacts(t);
+  const complete = withDeviceKits(receipt, root);
+  assert.deepEqual(complete, { ...receipt, device_kits: entries });
+  assert.deepEqual(Object.keys(complete.device_kits).sort(), ["linux-aarch64", "linux-x86_64", "windows-x86_64"]);
+  assert.equal(complete.device_kits["windows-x86_64"].asset, "hide-device-windows-x86_64-1.2.3-rc.1.tar.gz");
 });
 
-test("device helpers complete only a fresh schema 4 receipt", (t) => {
-  const { root } = helperArtifacts(t, helperIdentity);
-  const complete = withDeviceHelpers(receipt, root);
-  assert.throws(() => withDeviceHelpers(complete, root), /once/);
-  assert.throws(() => withDeviceHelpers({ ...receipt, schema: 3 }, root), /once/);
+test("kits of another version, an extra archive, or a kit whose program is not the recorded build complete no receipt", (t) => {
+  const { root } = kitArtifacts(t);
+  assert.throws(() => withDeviceKits({ ...receipt, tag: "v1.2.3" }, root), /must hold exactly/);
+  fs.writeFileSync(path.join(root, "device-bundles", "extra.tar.gz"), "x");
+  assert.throws(() => withDeviceKits(receipt, root), /must hold exactly/);
+  fs.rmSync(path.join(root, "device-bundles", "extra.tar.gz"));
+  // Another Windows build of the same identity than the one the kit holds.
+  windowsCompile(root, " rebuilt");
+  assert.throws(() => withDeviceKits(receipt, root), /windows-x86_64 kit's hided.exe differs/);
+});
+
+test("device kits complete only a fresh schema 5 receipt", (t) => {
+  const { root } = kitArtifacts(t);
+  const complete = withDeviceKits(receipt, root);
+  assert.throws(() => withDeviceKits(complete, root), /once/);
+  assert.throws(() => withDeviceKits({ ...receipt, schema: 4 }, root), /once/);
 });
 
 // The compile artifact as release-candidate.yml uploads it, recorded by the
@@ -202,11 +239,11 @@ test("Mac binaries of another source, version or order, or a changed, missing or
   assert.throws(() => withMacosBinaries(receipt, path.join(linked.root, "nothing")));
 });
 
-test("Mac binaries complete only a fresh schema 4 receipt, beside its device helpers", (t) => {
+test("Mac binaries complete only a fresh schema 5 receipt, beside its device kits", (t) => {
   const { root, digests } = macosArtifact(t, helperIdentity);
-  const helpers = helperArtifacts(t, helperIdentity);
-  const complete = withMacosBinaries(withDeviceHelpers(receipt, helpers.root), root);
-  assert.deepEqual(complete, { ...receipt, device_helpers: helpers.digests, macos_binaries: digests });
+  const kits = kitArtifacts(t);
+  const complete = withMacosBinaries(withDeviceKits(receipt, kits.root), root);
+  assert.deepEqual(complete, { ...receipt, device_kits: kits.entries, macos_binaries: digests });
   assert.throws(() => withMacosBinaries(complete, root), /once/);
-  assert.throws(() => withMacosBinaries({ ...receipt, schema: 3 }, root), /once/);
+  assert.throws(() => withMacosBinaries({ ...receipt, schema: 4 }, root), /once/);
 });

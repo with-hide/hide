@@ -32,16 +32,17 @@
 # tag can use (docs/BUILD.md). Pull requests and the nightly keep the ad-hoc
 # signature and reach no secret.
 #
-# Every call also builds the two Linux device helpers (`device-helpers.yml`),
-# which a release candidate hands the private publisher (docs/BUILD.md), and
-# makes the Linux device bundles from them once (`device-bundles`), which a
-# release's Mac package publishes beside its installers. No app carries a
-# device kit or its manifest: a core of any system fetches them from its own
-# release (hide-node/src/ssh/kit/). The native builds do not wait for the
-# helpers: `compile (macos)` and `compile (windows)` build the web shell and
-# the release binaries while the helpers build; `package (macos)` needs its
-# compile and the bundles, so a failed helper fails the Mac package, and
-# `package (windows)` needs only its compile.
+# Every call also builds the two Linux device helpers (`device-helpers.yml`)
+# and makes, once, every device kit a release candidate produces
+# (`device-bundles`): both Linux kits from those helpers and the Windows kit
+# from `compile (windows)`'s binaries with the pinned ConPTY runtime, the
+# bytes the Windows app ships. A release candidate hands them to the private
+# publisher, which adds the Mac kit and the manifest (docs/BUILD.md). No app
+# carries or publishes a device kit: a core of any system fetches them from
+# its own release (hide-node/src/ssh/kit/). The native builds do not wait for
+# the helpers: `compile (macos)` and `compile (windows)` build the web shell
+# and the release binaries while the helpers build, and each package needs
+# only its compile.
 name: package
 
 on:
@@ -142,7 +143,13 @@ jobs:
 
   device-bundles:
     name: device bundles
-    needs: [helper-identity, device-helpers]
+    # Every kit a candidate makes, once per run, from the bytes that ship: the
+    # two Linux helpers and `compile (windows)`'s binaries, which the Windows
+    # app packages as they are, with the pinned ConPTY runtime beside them
+    # (docs/BUILD.md, Device helper release bundles). No manifest: the
+    # private publisher writes the release's over these archives and its Mac
+    # kit.
+    needs: [helper-identity, device-helpers, windows-compile]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -157,21 +164,30 @@ jobs:
         with:
           name: hide-device-helper-linux-x86_64
           path: desktop/out/device-helpers/linux-x86_64
+          digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
           name: hide-device-helper-linux-aarch64
           path: desktop/out/device-helpers/linux-aarch64
-      - name: Make the Linux device bundles and their manifest
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-windows-release-binaries
+          path: desktop/out/windows-compile
+          digest-mismatch: error
+      - name: Fetch the pinned ConPTY runtime the Windows app ships
+        run: python3 scripts/fetch-conpty.py --out desktop/out/windows-compile/holder-conpty
+      - name: Make the device kits this candidate produces
         env:
           VERSION: ${{ needs.helper-identity.outputs.version }}
           SOURCE_SHA: ${{ needs.helper-identity.outputs.source-sha }}
           BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
-        run: node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER"
-      - name: Keep the bundles for the packages that carry their manifest
+        run: node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the kits for the private publisher
         uses: actions/upload-artifact@v7
         with:
           name: hide-device-bundles
-          path: desktop/out/device-bundles/*
+          path: desktop/out/device-bundles/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -655,7 +671,7 @@ jobs:
 
   macos-package:
     name: package (macos)
-    needs: [helper-identity, device-bundles, macos-compile]
+    needs: [helper-identity, macos-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     if: ${{ inputs.include-macos }}
@@ -704,11 +720,6 @@ jobs:
         with:
           name: hide-macos-release-binaries
           path: ${{ github.workspace }}
-          digest-mismatch: error
-      - uses: actions/download-artifact@v8
-        with:
-          name: hide-device-bundles
-          path: desktop/out/device-bundles
           digest-mismatch: error
       - name: Install the Developer ID certificate and the notary key
         # The certificate goes into a keychain of this job's own, put on the
