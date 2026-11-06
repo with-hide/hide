@@ -561,6 +561,7 @@ Its source guard does not establish that the repository setting is on; verify it
 The compiler comes from the root `rust-toolchain.toml`; the script installs that toolchain's WASM standard library and the exact `wasm-bindgen-cli` version matching `Cargo.lock`, with `--locked` CLI dependencies.
 Compiler output, binding tools and their build output all stay inside this worktree's `target/`.
 In CI the installed tool, `target/relay-tools`, comes from `.github/actions/relay-tools`, keyed by that `wasm-bindgen` version and the system and saved on main by one job per system, so a web job skips the minute the install compiles for.
+`scripts/tests/test_relay_tools_cache.py` reads every workflow: a job that builds the web shell, compiles the desktop package or calls `build-relay-wasm.sh` (or a script that does) must restore the tool before its first such step, and only the two `web-e2e.yml` jobs save it.
 The crate retains `rlib` and `cdylib` outputs to use one standard Cargo build path for native and WASM; native verification also links the small cdylib, while consumers link the rlib.
 Generated browser bindings and `relay_bg.wasm` land in ignored `hide-relay-protocol/pkg/`; no compiled binary or third-party CDN script is committed.
 The library is excluded from hakari's native workspace feature union because the union includes operating-system dependencies that cannot compile for WASM; its own direct dependencies and target features remain locked.

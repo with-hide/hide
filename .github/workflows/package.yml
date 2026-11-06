@@ -218,6 +218,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -304,6 +308,10 @@ jobs:
               *) git fetch --quiet --unshallow origin +refs/heads/main:refs/remotes/origin/main ;;
             esac
           fi
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - run: bash scripts/verify-web.sh install
       - name: Package the unsigned app, its installers and update files
         # The packager builds the web shell and the release binaries and
@@ -636,6 +644,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install

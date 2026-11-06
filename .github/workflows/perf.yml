@@ -70,6 +70,10 @@ jobs:
           echo "dir=$GITHUB_WORKSPACE/agents/runs/perf-nightly/$day-own-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           # The own engine's artifacts keep the `-own` names its series began with.
           echo "suffix=-own" >> "$GITHUB_OUTPUT"
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
