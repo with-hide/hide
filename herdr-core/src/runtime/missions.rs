@@ -59,11 +59,9 @@ pub struct MissionView {
     /// Made before node criteria: its nodes show their sentence only and
     /// nothing is gated (PRD mission-map-git-criteria B23).
     pub exempt: bool,
-    /// How strongly the Conductor has the nodes checked, and whether a
-    /// checker comes from another company than the node's worker; none for
-    /// a mission from before verification strength.
+    /// How strongly the Conductor has the nodes checked; none for a mission
+    /// from before verification strength.
     pub strength: Option<crate::missions::Strength>,
-    pub other_vendor: Option<bool>,
     /// What a mission from before verification strength recorded instead,
     /// as it was written; absent for every other.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1300,7 +1298,6 @@ impl Runtime {
                     cap,
                     candidates: settings.candidates.clone(),
                     strength: Some(settings.default_strength),
-                    other_vendor: Some(settings.other_vendor),
                     checkers: None,
                     exempt: false,
                     decided: Vec::new(),
@@ -2813,7 +2810,6 @@ impl Runtime {
             cap: mission.cap,
             exempt: mission.exempt,
             strength: mission.strength,
-            other_vendor: mission.other_vendor,
             checkers: mission.checkers.clone(),
             conductor: ConductorView {
                 pane_id: mission.conductor.actor.pane_id.clone(),

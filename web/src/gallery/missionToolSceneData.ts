@@ -12,7 +12,7 @@ function node(key: string, title: string, extra: Partial<MissionNode> = {}): Mis
 }
 
 function mission(id: string, title: string, workspace: string, path: string, extra: Partial<Mission>): Mission {
-  return { id, title, workspace_id: workspace, project: path, checkout_path: path, device_id: "local", status: "running", scope: "pr", cap: 3, exempt: false, strength: "normal", other_vendor: true, conductor: { pane_id: "w1:p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 0, started_at_unix_ms: null, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title, workspace_id: workspace, project: path, checkout_path: path, device_id: "local", status: "running", scope: "pr", cap: 3, exempt: false, strength: "normal", conductor: { pane_id: "w1:p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 0, started_at_unix_ms: null, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const claude = { agent: "claude", model: "Opus", effort: "high" };
@@ -65,7 +65,6 @@ export const MISSION_TOOL_DEFAULTS: ConductorSettings = {
   concurrency: 3,
   default_scope: "pr",
   default_strength: "normal",
-  other_vendor: true,
   clean_merged: true,
   candidates: [
     { agent: "claude", model: "opus", effort: "high", purpose: "Conductor" },

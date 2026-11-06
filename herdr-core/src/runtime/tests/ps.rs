@@ -270,7 +270,6 @@ fn mission(
         cap: 2,
         exempt: false,
         strength: None,
-        other_vendor: None,
         checkers: None,
         conductor: ConductorView {
             pane_id: conductor.into(),

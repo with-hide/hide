@@ -1470,7 +1470,6 @@ fn conductor_settings_change_only_what_an_edit_sends() {
     assert!(runtime.dispatch_json(&event(json!({"concurrency": 6}))));
     assert!(runtime.dispatch_json(&event(json!({"default_scope": "merge"}))));
     assert!(runtime.dispatch_json(&event(json!({"default_strength": "thorough"}))));
-    assert!(runtime.dispatch_json(&event(json!({"other_vendor": false}))));
     assert!(runtime.snapshot.ui_state.conductor_settings.clean_merged);
     assert!(runtime.dispatch_json(&event(json!({"clean_merged": false}))));
     assert!(runtime.dispatch_json(&event(json!({"map_flow": "across"}))));
@@ -1478,7 +1477,6 @@ fn conductor_settings_change_only_what_an_edit_sends() {
     assert_eq!(settings.concurrency, 6);
     assert_eq!(settings.default_scope, crate::missions::MissionScope::Merge);
     assert_eq!(settings.default_strength, Strength::Thorough);
-    assert!(!settings.other_vendor);
     assert!(!settings.clean_merged);
     assert_eq!(settings.map_flow, crate::missions::MapFlow::Across);
 }
@@ -1592,17 +1590,16 @@ fn a_kept_worktree_is_tried_again_only_when_what_keeps_it_may_leave() {
     }
 }
 
-/// A mission takes Settings › Mission's verification strength and choice
-/// of another company when it is created; its plan changes the strength
-/// before or during the mission, each change one event with its reason, and
-/// a plan that names none, or a later settings edit, keeps it.
+/// A mission takes Settings › Mission's verification strength when it is
+/// created; its plan changes the strength before or during the mission, each
+/// change one event with its reason, and a plan that names none, or a later
+/// settings edit, keeps it.
 #[test]
 fn a_mission_keeps_the_strength_it_was_created_with_until_its_plan_changes_it() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let settings = &mut runtime.snapshot.ui_state.conductor_settings;
     settings.default_strength = Strength::Fast;
-    settings.other_vendor = false;
     let (created, _) = command(
         &mut runtime,
         "sender",
@@ -1610,7 +1607,6 @@ fn a_mission_keeps_the_strength_it_was_created_with_until_its_plan_changes_it() 
     )
     .unwrap();
     assert_eq!(created["mission"]["strength"], "fast");
-    assert_eq!(created["mission"]["other_vendor"], false);
     let settings = &mut runtime.snapshot.ui_state.conductor_settings;
     settings.default_strength = Strength::Normal;
     let mut proposed = plan();
@@ -1624,7 +1620,6 @@ fn a_mission_keeps_the_strength_it_was_created_with_until_its_plan_changes_it() 
     command(&mut runtime, "sender", lighter.clone()).unwrap();
     let (shown, _) = command(&mut runtime, "sender", lighter).unwrap();
     assert_eq!(shown["mission"]["strength"], "normal");
-    assert_eq!(shown["mission"]["other_vendor"], false);
     assert_eq!(kinds(&runtime), ["planned", "strength", "strength"]);
     let log = &runtime.missions.events["mission-1"];
     assert_eq!(

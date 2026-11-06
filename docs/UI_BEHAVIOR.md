@@ -976,7 +976,7 @@ A mission belongs to the front project when it was made in that project's Worksp
 With no mission in the project the tool is the start guide: a moving picture of a mission (the Conductor, three workers side by side, one decision, a check beside each part as it finishes, purple then green, two checking the demo, then main), `한 번 말하면, 여럿이 나눠서 끝까지`, three dots (나란히 일하고, 다른 모델이 검증, 판단만 나에게), the `/hide-mission` and `$hide-mission` calls, `아무 에이전트 터미널에서 부르면 여기에 미션이 생겨요`, and under it the defaults in three lines (동시에, 어디까지, 검증) with `바꾸기 ›`; there is no field and no example prompt (B3).
 The picture loops in about ten seconds and runs only while it is on screen in a window that shows; with reduced motion it is one finished frame; its colours are the mission tokens in both themes (B4).
 `+` unfolds the same guide above the list; `+` again or its `✕` folds it (B8).
-⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Mission's own controls and values (how many at once, how far, the check strength, the cross-check, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Mission's words in place (B9).
+⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Mission's own controls and values (how many at once, how far, the check strength, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Mission's words in place (B9).
 A mission record that cannot be read is one line, `미션 기록을 읽지 못했어요`, and the reason goes to the diagnostic log (B10).
 
 ## Terminal image attachment boundary
@@ -2707,11 +2707,12 @@ On, a done node whose pull request GitHub reports merged has that branch's workt
 Off, missions delete nothing. Unlike the values below, the switch applies to every mission at once, a running or closed one included.
 `작업자 후보` lists the agents a Conductor chooses workers from, at most 16: each row's agent, its model from the start panel's list (disabled with why when that list cannot be read), its effort automatic or fixed, and what it is for; an agent this machine has not installed is dimmed with `설치 안 됨`.
 With no candidates the Conductor chooses among the installed agents; with some, Hide refuses a worker that is none of them (`mission_candidate_refused`, [delivery.md: Missions](delivery.md#missions)).
-`검증` holds two controls, and the checkers come from the candidates above.
-`검증 강도` is a new mission's verification strength, `빠르게`, `보통` (the default) or `꼼꼼하게`, one segmented choice with what it has the Conductor do, how often a node is reviewed again and the work it suits under it, as `hide mission help` states the rules; `검증은 만든 에이전트와 다른 종류로 (Claude면 Codex)` (on by default) has the Conductor prefer a checker of a different kind of agent than the node's worker, shown on the mission tool's defaults as `교차 검증`.
+`검증` holds one control, and the checkers come from the candidates above.
+`검증 강도` is a new mission's verification strength, `빠르게`, `보통` (the default) or `꼼꼼하게`, one segmented choice with what it has the Conductor do, how often a node is reviewed again and the work it suits under it, as `hide mission help` states the rules.
+The page has no switch for which kind of agent checks: the Conductor always prefers a checker of a different kind of agent than the node's worker when the candidates have one, by `hide mission help`; a setting kept with the switch that once chose it reads without it.
 It is only the default: the Conductor proposes each mission's strength in its plan and changes it when the operator says so, before or during the mission, and the map's head shows it ([A mission's map](#tasks-the-보기-slot-and-the-pr-list)).
-A setting kept before strength (the review and verify defaults) reads as `보통`, with the switch off only where the operator had turned the cross-check off.
-Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope, candidates, strength and switch it was created with.
+A setting kept before strength (the review and verify defaults) reads as `보통`.
+Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope, candidates and strength it was created with.
 
 ### Hide AI
 

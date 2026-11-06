@@ -514,7 +514,7 @@ mod tests {
             "id": id, "title": format!("mission {id}"), "workspace_id": "w1",
             "project": "/private/never-send/repo", "checkout_path": "/private/never-send/repo-wt",
             "device_id": "local", "status": status, "scope": "merge", "cap": 3, "exempt": false,
-            "strength": "normal", "other_vendor": null,
+            "strength": "normal",
             "conductor": {"pane_id": "w1:p1", "name": "Conductor", "agent_kind": "claude",
                           "session": {"device_id": "local", "session_id": "private-session"},
                           "present": true, "takes_answers": true},

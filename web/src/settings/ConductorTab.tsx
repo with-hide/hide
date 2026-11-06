@@ -2,7 +2,7 @@ import type { Actions } from "../actions";
 import { Group, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { MissionStrength } from "../snapshot";
-import { CandidateAdd, CandidateRows, CapControl, CleanMergedControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
+import { CandidateAdd, CandidateRows, CapControl, CleanMergedControl, ConductorError, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
 
 // Settings › Mission (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
@@ -47,9 +47,6 @@ export function ConductorTab({ actions }: { actions: Actions }) {
       <Group title={t("conductor.verification")} note={t("conductor.verification.footer")} data-conductor-verification={settings.default_strength}>
         <Row label={t("conductor.strength")} detail={<StrengthTerms strength={settings.default_strength} />}>
           <StrengthControl settings={settings} send={send} />
-        </Row>
-        <Row label={t("conductor.otherVendor")}>
-          <OtherVendorControl settings={settings} send={send} />
         </Row>
       </Group>
     </div>

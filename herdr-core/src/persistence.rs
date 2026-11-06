@@ -1870,8 +1870,7 @@ mod tests {
     }
 
     /// Settings › Mission kept before verification strength reads as
-    /// `normal`, its toggle off only where the operator had turned another
-    /// company off for the review or the verify default.
+    /// `normal`, whatever its review and verify defaults said.
     #[test]
     fn conductor_settings_from_before_verification_strength_read_as_normal() {
         let check = |other_vendor: bool| {
@@ -1879,16 +1878,9 @@ mod tests {
                 r#"{{"mode":"many","rule":"majority","count":3,"agent":"codex","model":null,"effort":"high","other_vendor":{other_vendor}}}"#
             )
         };
-        for (checkers, other_vendor) in [
-            (
-                format!(r#"{{"review":{},"verify":{}}}"#, check(true), check(true)),
-                true,
-            ),
-            (
-                format!(r#"{{"review":{},"verify":{}}}"#, check(true), check(false)),
-                false,
-            ),
-            ("{}".to_owned(), true),
+        for checkers in [
+            format!(r#"{{"review":{},"verify":{}}}"#, check(true), check(false)),
+            "{}".to_owned(),
         ] {
             let stored = format!(
                 r#"{{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
@@ -1902,8 +1894,8 @@ mod tests {
                 (3, crate::missions::MissionScope::Merge)
             );
             assert_eq!(
-                (settings.default_strength, settings.other_vendor),
-                (crate::missions::Strength::Normal, other_vendor),
+                settings.default_strength,
+                crate::missions::Strength::Normal,
                 "{checkers}"
             );
         }
@@ -1911,6 +1903,8 @@ mod tests {
 
     /// Settings › Mission kept before the cleanup switch, in either stored
     /// shape, reads with the switch on, and the switch off survives a save.
+    /// The first shape still carries the switch for a checker of another
+    /// kind, which is left behind on load and not written again.
     #[test]
     fn mission_settings_from_before_the_cleanup_switch_read_it_on() {
         for settings in [
@@ -1932,7 +1926,9 @@ mod tests {
         state.conductor_settings.clean_merged = false;
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the settings");
         // The map's default direction is not written, so a build from before it reads this file.
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("map_flow"));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("map_flow"));
+        assert!(!written.contains("other_vendor"));
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
         assert!(!restored.conductor_settings.clean_merged);

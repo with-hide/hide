@@ -1017,11 +1017,6 @@ pub struct Mission {
     /// names. None for a mission from before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<Strength>,
-    /// Settings › Mission's choice of a checker from another company when
-    /// the mission was created; none for a mission from before it, whose
-    /// `checkers` say it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub other_vendor: Option<bool>,
     /// The review and verify defaults a mission created before verification
     /// strength recorded (PRD mission-map-git-criteria D-22), kept as
     /// written for its Conductor to read; no mission records them now.
@@ -1212,9 +1207,6 @@ pub struct ConductorSettings {
     /// How strongly a new mission's nodes are checked.
     #[serde(default)]
     pub default_strength: Strength,
-    /// Prefer a checker of another company than the node's worker.
-    #[serde(default = "default_other_vendor")]
-    pub other_vendor: bool,
     /// Remove a done node's worktree once its pull request merged, when the
     /// tree is clean and nothing runs in it (`runtime/mission_cleanup.rs`).
     /// Read live by every mission; a value kept before it reads as on.
@@ -1259,7 +1251,6 @@ impl Default for ConductorSettings {
             default_scope: MissionScope::Pr,
             candidates: Vec::new(),
             default_strength: Strength::Normal,
-            other_vendor: default_other_vendor(),
             clean_merged: default_clean_merged(),
             warn_review_fails: default_warn_review_fails(),
             warn_quiet_minutes: default_warn_quiet_minutes(),
@@ -1278,35 +1269,6 @@ pub enum Strength {
     #[default]
     Normal,
     Thorough,
-}
-
-/// The review and verify defaults Settings › Mission kept before
-/// verification strength, read only for the operator's choice of another
-/// company; every other field of theirs is left behind.
-#[derive(Deserialize)]
-struct StoredCheckers {
-    #[serde(default)]
-    review: StoredCheck,
-    #[serde(default)]
-    verify: StoredCheck,
-}
-
-#[derive(Deserialize)]
-struct StoredCheck {
-    #[serde(default = "default_other_vendor")]
-    other_vendor: bool,
-}
-
-impl Default for StoredCheck {
-    fn default() -> Self {
-        Self {
-            other_vendor: default_other_vendor(),
-        }
-    }
-}
-
-fn default_other_vendor() -> bool {
-    true
 }
 
 fn default_clean_merged() -> bool {
@@ -1399,22 +1361,18 @@ impl ConductorSettings {
         }
     }
 
-    /// Reads the value `core-state.json` keeps. One kept before verification
-    /// strength has `checkers` instead: it reads as `normal`, with the
-    /// toggle off when the operator had turned another company off for the
-    /// review or the verify default, the only way either was ever off.
+    /// Reads the value `core-state.json` keeps. Two fields a value kept by
+    /// an earlier build may carry are left behind: `checkers`, the review
+    /// and verify defaults from before verification strength (such a value
+    /// reads as `normal`), and `other_vendor`, the switch Settings › Mission
+    /// had for a checker of another kind than the worker, which the
+    /// Conductor now always prefers by `hide mission help`.
     pub(crate) fn from_stored(mut value: serde_json::Value) -> Result<Self, String> {
-        let stored = value
-            .as_object_mut()
-            .and_then(|fields| fields.remove("checkers"));
-        let mut settings: Self =
-            serde_json::from_value(value).map_err(|error| error.to_string())?;
-        if let Some(stored) = stored {
-            let checkers: StoredCheckers =
-                serde_json::from_value(stored).map_err(|error| error.to_string())?;
-            settings.other_vendor = checkers.review.other_vendor && checkers.verify.other_vendor;
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("checkers");
+            fields.remove("other_vendor");
         }
-        Ok(settings)
+        serde_json::from_value(value).map_err(|error| error.to_string())
     }
 }
 
@@ -2958,7 +2916,6 @@ pub(crate) mod tests {
             cap: 4,
             candidates: Vec::new(),
             strength: None,
-            other_vendor: None,
             checkers: None,
             exempt: false,
             decided: Vec::new(),
@@ -3660,7 +3617,7 @@ pub(crate) mod tests {
         let mut stored = serde_json::to_value(mission()).unwrap();
         stored["checkers"] = recorded.clone();
         let read: Mission = serde_json::from_value(stored.clone()).unwrap();
-        assert_eq!((read.strength, read.other_vendor), (None, None));
+        assert_eq!(read.strength, None);
         assert_eq!(serde_json::to_value(&read).unwrap(), stored);
         let mut input = plan(Vec::new());
         input.strength = Some(Strength::Thorough);
