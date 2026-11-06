@@ -2,7 +2,7 @@
 //!
 //! One thread for the whole core takes jobs in arrival order and runs them
 //! one at a time through a `hide-ai` router built from the operator's
-//! current provider and model choice. Each Herdr server's worker hands in at
+//! current provider and model choice. Each engine's worker hands in at
 //! most one job at a time, so arrival order is a round robin between servers
 //! and a busy server cannot starve another. The router's own one-in-flight
 //! budget is therefore never exceeded, which would otherwise park a second

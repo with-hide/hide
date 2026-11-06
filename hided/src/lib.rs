@@ -580,7 +580,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     node_panes.serve(app.clone());
     // Seeded before the server accepts a client with the registrations the
     // core loaded in `CoreHandle::spawn`. A checkout the core learns later,
-    // from Herdr's first sync, reaches a client's snapshot and these roots on
+    // from the engine's first sync, reaches a client's snapshot and these roots on
     // separate reads; a refused event catches them up (`server::admit_event`).
     if let Err(error) = app.roots.catch_up() {
         roots_failed(&error);

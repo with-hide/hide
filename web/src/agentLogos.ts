@@ -25,7 +25,7 @@ export function agentLogo(id: string): string | null {
 }
 
 /**
- * The agent a Herdr kind names, with its logo, for the mark on a pane, tab or
+ * The agent an engine kind names, with its logo, for the mark on a pane, tab or
  * row; `logo` is null for an agent with no bundled mark, which draws the
  * monogram of `label` (design 10). Null for a plain shell and for a kind Hide
  * does not support, which draw the neutral mark: a retained history logo

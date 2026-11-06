@@ -18,7 +18,7 @@ import { ANSWER_LIMIT, PRESSED_MS, answerView, pressedShown, reasonKey, writtenA
 // choices with its recommendation, a short written answer, and the way to
 // the conversation. The core keeps the answer and types it into the
 // Conductor's conversation as the operator's own input; this draws where
-// that answer is. One typed without Herdr confirming it is typed again only
+// that answer is. One typed without the engine confirming it is typed again only
 // when the operator sends it again, so a question is answered once (B26).
 
 export function DecisionBanner({ mission, device, actions, onNode }: { mission: Mission; device: string | null; actions: Actions; onNode: (key: string) => void }) {

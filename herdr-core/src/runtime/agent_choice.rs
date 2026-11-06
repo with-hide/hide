@@ -120,7 +120,7 @@ pub(crate) fn choice_arguments(
 pub(crate) const PANE_LAUNCH_LIMIT: usize = 1024;
 
 /// Whether `launch` describes `agent`: the same kind, and the name Hide
-/// started it under, or, for an agent that came back from a Herdr restart
+/// started it under, or, for an agent that came back from an engine restart
 /// without a name, the conversation that named agent last reported.
 fn describes(launch: &crate::model::PaneLaunch, agent: &SidebarAgentSnapshot) -> bool {
     launch_describes(

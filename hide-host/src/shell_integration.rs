@@ -20,11 +20,11 @@
 //!   `shopt login_shell` stays off.
 //! - fish runs its `-C` command after its configuration: the mark.
 //! - Windows PowerShell runs its `-Command` after the user's profile: the
-//!   prompt wrapper Herdr gives its own PowerShell panes, then the mark. It
-//!   is passed inline as Herdr passes its own, because a script file would
+//!   prompt wrapper Herdr gave its own PowerShell panes, then the mark. It
+//!   is passed inline as Herdr passed its own, because a script file would
 //!   need an execution policy that allows scripts.
 //!
-//! A shell starts as Herdr starts its own by default (Herdr's `auto` mode):
+//! A shell starts as Herdr started its own by default (Herdr's `auto` mode):
 //! a login shell on macOS and not on Linux. Other Unix shells, and an
 //! integration that cannot be installed, get an explicit ordinary launch
 //! with Plain readiness (`herdr-core`'s `agent_start`). On macOS the same
@@ -95,7 +95,7 @@ pub struct UserShell {
 
 impl UserShell {
     /// The node's own process environment, the closest it knows to the one
-    /// Herdr gives a pane.
+    /// the engine gives a pane.
     pub fn of_process() -> Self {
         Self {
             shell: std::env::var("SHELL").ok(),
@@ -196,7 +196,7 @@ fn plain(shell: &str, executor: Option<&Path>) -> io::Result<ShellLaunch> {
     })
 }
 
-/// Windows keeps Herdr's existing PowerShell launch and prompt contract.
+/// Windows keeps the PowerShell launch and prompt contract Herdr had.
 #[cfg(windows)]
 pub fn prepare(
     home: Option<&Path>,
@@ -258,7 +258,7 @@ pub fn install(home: &Path, user: &UserShell) -> io::Result<Option<ShellLaunch>>
 }
 
 /// Herdr's own shell for a Windows pane, Windows PowerShell, with the
-/// prompt wrapper Herdr gives it and the mark.
+/// prompt wrapper Herdr gave it and the mark.
 #[cfg(windows)]
 pub fn install(_home: &Path, _user: &UserShell) -> io::Result<Option<ShellLaunch>> {
     Ok(Some(ShellLaunch {

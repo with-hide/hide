@@ -6,9 +6,9 @@ journey).
 
 The Windows forms follow what the repository already does there: the e2e
 fixtures' home and tool PATH (`web/e2e/platform-fixture.ts`) and their pane
-shell, cmd.exe named as Herdr's default shell with its prompt from PROMPT,
-and its commands (`web/e2e/herdr-fixture.ts`). The panes Hide makes for an
-agent run the shell its own integration names, whatever Herdr's default.
+shell, cmd.exe named as the engine's default shell with its prompt from PROMPT,
+and its commands (`web/e2e/engine-fixture.ts`). The panes Hide makes for an
+agent run the shell its own integration names, whatever the engine's default.
 """
 
 import os
@@ -230,7 +230,7 @@ def launcher(path, argv, *, environment=(), unset=()):
 
 
 def same_path(spelled, path):
-    """Whether `spelled`, a path as Hide or Herdr answers it (`/` between
+    """Whether `spelled`, a path as Hide or the engine answers it (`/` between
     names on every system), names `path`: on Windows either slash and either
     case name the same folder, so a string comparison with `str(path)` never
     matches there."""

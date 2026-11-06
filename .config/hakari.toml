@@ -20,9 +20,9 @@ platforms = [
 # Cargo.lock decides the version either way, and a range leaves this crate
 # unchanged by the patch and minor bumps Dependabot proposes each week.
 
-# The operating-system layer and the Herdr client stay off the shared feature
-# set: the OS contract lanes build and test exactly these two crates, which
-# would otherwise compile tokio, hyper and schemars for nothing. The terminal
+# The operating-system layer stays off the shared feature set: the OS
+# contract lanes build and test exactly that crate, which would otherwise
+# compile tokio, hyper and schemars for nothing. The terminal
 # parser stays off it for the same reason: the vt lane builds it alone. The
 # pane holder that links it, and the protocol it speaks, stay off it too: a
 # holder runs for as long as its pane and carries its few dependencies only,

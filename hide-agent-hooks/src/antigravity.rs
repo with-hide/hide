@@ -305,7 +305,7 @@ mod tests {
             ],
         );
         // A subagent the subagent started counts under the pane's own
-        // conversation, the one Herdr reports for the pane.
+        // conversation, the one the pane's agent reports.
         let grandchild = "c0c0c0c0-0000-4000-8000-000000000003";
         write_transcript(home.path(), grandchild, &[started_by(CHILD)]);
         let now = Instant::now();

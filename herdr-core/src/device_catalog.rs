@@ -1,6 +1,6 @@
 //! A device's projects (PRD S5.5 B1-B4, D-03).
 //!
-//! The session projection (`session_sync/replica.rs`) turns each Herdr
+//! The session projection (`session_sync/projection.rs`) turns each engine
 //! workspace on a device into one row with one checkout. This module groups
 //! those rows the way this machine's catalog groups its own (`workspace.rs`):
 //! a project is a repository, identified by its main worktree on that device,
@@ -8,20 +8,20 @@
 //! device's helper (`Call::Project`), never from this machine's filesystem: a
 //! path on another machine means nothing here.
 //!
-//! A directory the helper has not answered for keeps its Herdr workspace as a
+//! A directory the helper has not answered for keeps its engine workspace as a
 //! row of its own and the catalog says why (`DeviceCatalogSnapshot`), so an
 //! unconfirmed grouping is never presented as a confirmed one. A directory
 //! the helper answered it cannot read, such as a worktree whose folder was
 //! removed, is placed by the device's Git worktree list or by the repository
-//! Herdr recorded for the checkout (`recorded_place`), as on this machine;
+//! the engine recorded for the checkout (`recorded_place`), as on this machine;
 //! only a folder none of them places is a row of its own.
 //!
 //! Ids stay scoped to the device. A project is
 //! `remote:<device>:project:<sha256(device, root)>`, so the same path or the
 //! same repository on two devices is two projects. A checkout is keyed by its
 //! folder like this machine's (`remote:<device>:checkout:<hash of its root>`,
-//! PRD checkout-workspace-binding D-10): every Herdr workspace whose tabs sit
-//! in one folder is one row, and the id names no Herdr workspace. What a
+//! PRD checkout-workspace-binding D-10): every engine workspace whose tabs sit
+//! in one folder is one row, and the id names no engine workspace. What a
 //! command needs from the host is carried beside it instead: the checkout's
 //! owner workspace (`checkout_owner`), and each tab's own id.
 
@@ -128,7 +128,7 @@ pub(crate) fn project_id(target: &str, root: &Path) -> String {
     crate::address::scoped_project_id(target, &hide_project::project_id(target, root))
 }
 
-/// The id of the checkout at `path` on `target`: its folder, never a Herdr
+/// The id of the checkout at `path` on `target`: its folder, never an engine
 /// workspace, so it survives every workspace that opens or closes there.
 pub(crate) fn checkout_id(target: &str, path: &str) -> String {
     crate::address::scoped_id(
@@ -141,8 +141,8 @@ pub(crate) fn checkout_id(target: &str, path: &str) -> String {
     )
 }
 
-/// The Herdr workspace behind `raw` that owns the checkout at `root`: a
-/// worktree workspace Herdr binds to that folder, or a workspace carrying
+/// The engine workspace behind `raw` that owns the checkout at `root`: a
+/// worktree workspace the engine binds to that folder, or a workspace carrying
 /// Hide's mark for it.
 fn raw_owner(
     target: &str,
@@ -160,7 +160,7 @@ fn raw_owner(
     git.or(folder).map(str::to_owned)
 }
 
-/// One checkout's part from one Herdr workspace, folded into the row its
+/// One checkout's part from one engine workspace, folded into the row its
 /// folder already has in `project`, or added as that row.
 fn merge_checkout(project: &mut WorkspaceSnapshot, part: CheckoutSnapshot) {
     let Some(row) = project
@@ -184,7 +184,7 @@ fn merge_checkout(project: &mut WorkspaceSnapshot, part: CheckoutSnapshot) {
 
 /// Where a checkout the helper answered it cannot read belongs: the deepest
 /// worktree of the device's Git worktree list holding it, else the
-/// repository Herdr recorded for it, by the helper's answer for that
+/// repository the engine recorded for it, by the helper's answer for that
 /// repository when it has one. A folder the helper has not answered for yet
 /// is not placed, so nothing is grouped before the device has spoken.
 fn recorded_place(
@@ -239,7 +239,7 @@ pub(crate) fn group(
 ) -> RemoteSessionSnapshot {
     let mut projects: Vec<WorkspaceSnapshot> = Vec::new();
     // Each checkout's candidates for the tab it brings forward: the active
-    // tab of every Herdr workspace with a tab there, by that workspace.
+    // tab of every engine workspace with a tab there, by that workspace.
     let mut actives: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     let mut grouped_ids = BTreeMap::new();
     for raw_workspace in &raw.workspaces {
@@ -359,7 +359,7 @@ pub(crate) fn group(
                     .or_default()
                     .push((herdr_workspace.clone(), tab.clone()));
             }
-            // The Herdr entries of this checkout's tabs; the runtime adds the
+            // The engine entries of this checkout's tabs; the runtime adds the
             // file tabs (`place_device_strips`).
             let strip = raw_checkout
                 .strip
@@ -384,7 +384,7 @@ pub(crate) fn group(
                 branch: facts.branch.clone(),
                 is_worktree: facts.linked_worktree,
                 is_primary: !facts.linked_worktree && facts.kind == ProjectKind::Git,
-                // A checkout only the worktree list or Herdr placed is one
+                // A checkout only the worktree list or the engine placed is one
                 // the helper could not read.
                 exists: index != 0 || recorded.is_none(),
                 has_panes: !tabs.is_empty(),
@@ -441,7 +441,7 @@ pub(crate) fn group(
         }
     }
     // The tab a merged checkout brings forward when the runtime remembers
-    // none for it (`bring_recent_device_tabs`, D-13): Herdr's focused tab
+    // none for it (`bring_recent_device_tabs`, D-13): the engine's focused tab
     // when it is there, else its owner's active tab, else the first
     // workspace's.
     let mut active_tab_ids = BTreeMap::new();
@@ -537,7 +537,7 @@ pub(crate) fn group(
 /// registration's `<project>#registered`), each mapped to the folder-keyed id
 /// that now names the same checkout, so a fold saved under the old id
 /// survives the change (PRD checkout-workspace-binding B11). An
-/// old id names a Herdr workspace, so it maps only while that workspace is
+/// old id names an engine workspace, so it maps only while that workspace is
 /// in the device's session; the second form carries the folder's hash.
 pub(crate) fn legacy_checkout_ids<'a>(
     target: &str,
@@ -600,9 +600,9 @@ pub(crate) fn legacy_checkout_ids<'a>(
 
 /// A device's registrations carried onto its grouped session (B3, B23-B25).
 ///
-/// A registered project keeps its row while Herdr has no workspace in it: its
+/// A registered project keeps its row while the engine has no workspace in it: its
 /// main checkout is listed without tabs under its folder's checkout id, the
-/// same id the row keeps once a Herdr workspace opens there (D-10). A
+/// same id the row keeps once an engine workspace opens there (D-10). A
 /// registered row carries its pin, and every row what `Remove project…`
 /// would close, counted from the device's own session: a row without a
 /// registration offers the removal too (PRD sidebar-context-menus D-14).

@@ -278,7 +278,7 @@ pub(crate) enum CoordinatorMessage {
     Stop,
     /// The label worker has a read or an analysis result to take.
     Labels,
-    /// The runtime drew something ahead of Herdr, or took it back, and the
+    /// The runtime drew something ahead of the engine, or took it back, and the
     /// session has to be read again with it (`RepublishWaker`).
     Republish,
     /// Read the session again after a multi-step topology transaction.
@@ -308,7 +308,7 @@ impl RepublishFlags {
 
 /// Wakes the local coordinator to publish its session again at once. The
 /// engine wakes it when its session changed; the core when it has drawn a
-/// created tab or a predicted pane geometry ahead of Herdr, or taken one
+/// created tab or a predicted pane geometry ahead of the engine, or taken one
 /// back, and the overlay rides the next ingest (PRD instant-pane-topology
 /// D-05, D-07), or when anything else it lays on a publish moved. Wakes that
 /// arrive before the coordinator takes the first are one publish, so a burst

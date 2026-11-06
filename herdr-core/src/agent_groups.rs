@@ -1,5 +1,5 @@
 //! Checkout-owned named collections. Every collection reuses the Agent area
-//! tree; moving between them never changes a Herdr tab or its processes.
+//! tree; moving between them never changes an engine tab or its processes.
 use crate::agent_layout::{Layout, Tab};
 use crate::split_tree::LayoutError;
 use crate::workspace_views::WorkspaceView;
@@ -27,7 +27,7 @@ pub struct Groups {
     pub items: Vec<Group>,
     #[serde(default)]
     pub selected: Option<String>,
-    /// These are Hide identities, never Herdr topology identities.
+    /// These are Hide identities, never the engine topology identities.
     #[serde(default)]
     pub drafts: BTreeSet<String>,
     #[serde(skip)]

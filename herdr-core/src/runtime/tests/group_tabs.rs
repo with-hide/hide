@@ -1187,7 +1187,7 @@ fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group
     assert_eq!(tabs(&runtime, Some(&target)), std::slice::from_ref(&draft));
     let elsewhere = create(&mut runtime, "elsewhere", "Elsewhere");
     assert!(!runtime.group_start_should_focus(82));
-    // Herdr's authoritative topology may precede the effect's own answer.
+    // The engine's authoritative topology may precede the effect's own answer.
     ingest(&mut runtime, &[TABS[0], TABS[1], TABS[2], "w-order:t4"]);
     runtime.complete_group_start(82, Some("w-order:t4"), "w-order:t4:p", false);
     runtime.sync_workspace_view();

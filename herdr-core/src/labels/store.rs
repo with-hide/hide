@@ -5,7 +5,7 @@
 //!
 //! The file is `labels.json` beside `core-state.json`, written whole through
 //! a temporary file and a rename, mode 0600, never under the runtime mutex
-//! and never on the thread that applies Herdr's events: a save hands the
+//! and never on the thread that applies the engine's events: a save hands the
 //! write to the store's own thread, and dropping the store waits for it.
 //! Labels are the provider's short summaries, positions are byte offsets and
 //! file identities, turns are hashes; the only conversation text is each
@@ -36,7 +36,7 @@ pub(crate) const LABELS_FILE: &str = "labels.json";
 /// before it (PRD pane-last-request D-09). An older one is dropped.
 pub(crate) const RECENT_TURNS: usize = 3;
 const SCHEMA_VERSION: u32 = 1;
-/// The store key of the test core's own Herdr server: its node id.
+/// The store key of the test core's own engine: its node id.
 #[cfg(test)]
 pub(crate) const LOCAL_TARGET: &str = "test-node";
 
@@ -57,7 +57,7 @@ pub(crate) struct PaneRecord {
     /// The native-file reader's resolved path, re-proved before any effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_source_path: Option<String>,
-    /// The Herdr reference under which `owner` was last proven. A path
+    /// The engine reference under which `owner` was last proven. A path
     /// reference names the same session as its id only once a read has
     /// shown it; an id reference proves itself.
     #[serde(default)]
@@ -110,16 +110,16 @@ pub(crate) struct PaneRecord {
     /// an agent whose session read reports its turns (`hide_session::turns`).
     #[serde(default)]
     pub(crate) turns: Option<TurnTracker>,
-    /// Herdr's `state_change_seq` the last complete read was asked under.
+    /// The engine's `state_change_seq` the last complete read was asked under.
     /// What `turns` says the agent waits for is known for that state only
     /// (PRD codex-plan-approval-hold D-06); `None` while a read is partial.
     #[serde(default)]
     pub(crate) turns_seq: Option<u64>,
-    /// The Herdr state of a turn that just ended whose session read has not
+    /// The engine state of a turn that just ended whose session read has not
     /// landed, for an agent whose read reports background tasks: until it
     /// does, nothing says whether a task will wake the agent, so the row is
     /// not a stop (#902). Not saved: a daemon that restarts reads each
-    /// session again and shows its rows as Herdr reports them meanwhile.
+    /// session again and shows its rows as the engine reports them meanwhile.
     #[serde(skip)]
     pub(crate) turn_end_owed: Option<u64>,
     /// The stopped lifecycle state whose final analysis must land before
@@ -131,7 +131,7 @@ pub(crate) struct PaneRecord {
     pub(crate) notice_finalized: Option<u64>,
     #[serde(skip)]
     pub(crate) provider_waiting: bool,
-    /// Herdr's per-pane state counter and when the core saw it move, which
+    /// The engine's per-pane state counter and when the core saw it move, which
     /// is the pane's elapsed time and recency whichever session it runs.
     #[serde(default)]
     pub(crate) state_change_seq: u64,
@@ -353,7 +353,7 @@ impl PaneRecord {
         self.turns_seq = None;
     }
 
-    /// What the last complete read says the agent waits for, with the Herdr
+    /// What the last complete read says the agent waits for, with the engine
     /// state it was read under; the wait is `None` when the records read do
     /// not settle it.
     pub(crate) fn turn_read(&self) -> Option<(u64, Option<Waiting>)> {
@@ -361,7 +361,7 @@ impl PaneRecord {
     }
 
     /// When each background task the session proves alive expires on its own,
-    /// with the Herdr state the read was made under.
+    /// with the engine state the read was made under.
     pub(crate) fn wake_read(&self) -> Option<(u64, WakeRead)> {
         let turns = self.turns.as_ref()?;
         Some((
@@ -373,14 +373,14 @@ impl PaneRecord {
         ))
     }
 
-    /// How the session's last turn ended, with the Herdr state it was read
+    /// How the session's last turn ended, with the engine state it was read
     /// under; `None` while it runs or the read does not settle it.
     pub(crate) fn turn_ended(&self) -> Option<(u64, hide_session::turns::TurnEnded)> {
         Some((self.turns_seq?, self.turns.as_ref()?.ended()?))
     }
 
     /// The keys of the session's last tool calls that have a result, with
-    /// the Herdr state they were read under.
+    /// the engine state they were read under.
     pub(crate) fn answered_calls(&self) -> Option<(u64, Vec<String>)> {
         Some((self.turns_seq?, self.turns.as_ref()?.answered_calls()))
     }
@@ -557,11 +557,11 @@ struct LabelsFile {
     moved: BTreeMap<String, BTreeMap<String, PaneRecord>>,
 }
 
-/// The daemon's one `labels.json`, shared by the worker of every Herdr
+/// The daemon's one `labels.json`, shared by the worker of every engine
 /// server it follows. Each worker owns its target's entry.
 pub(crate) struct LabelStore {
     path: Option<PathBuf>,
-    /// The store key of the core's own Herdr server: its node id. Only this
+    /// The store key of the core's own engine: its node id. Only this
     /// target reaches disk.
     node: String,
     file: Arc<Mutex<LabelsFile>>,
@@ -570,7 +570,7 @@ pub(crate) struct LabelStore {
     writing: Arc<Mutex<()>>,
     /// The thread that writes this machine's records, started by the first
     /// save: a write ends in an fsync, and the workers save from the
-    /// coordinator thread that applies Herdr's events (PRD
+    /// coordinator thread that applies the engine's events (PRD
     /// instant-pane-topology D-13). It ends, after its last write, when the
     /// store is dropped.
     saver: Mutex<Option<Saver>>,
@@ -745,7 +745,7 @@ impl LabelStore {
         }
     }
 
-    /// The store key of the core's own Herdr server.
+    /// The store key of the core's own engine.
     pub(crate) fn node(&self) -> &str {
         &self.node
     }

@@ -288,7 +288,7 @@ fn candidates(projects: &[String], skipped: &mut Vec<HomeSkip>) -> HostResult<BT
             continue;
         }
         // A control character would be written into AGENTS.md as a line of
-        // its own, and Herdr cannot pass it to the agent as a root.
+        // its own, and a launch cannot pass it to the agent as a root.
         if project.chars().any(char::is_control) {
             skipped.push(HomeSkip {
                 target: to_wire_lossy(path),

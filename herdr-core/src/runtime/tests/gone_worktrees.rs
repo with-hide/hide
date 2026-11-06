@@ -1,5 +1,5 @@
 //! A linked worktree removed outside Hide (`runtime/gone_worktrees.rs`):
-//! the Herdr workspace left open in its folder is closed by the core when
+//! the engine workspace left open in its folder is closed by the core when
 //! its node confirms the folder gone and nothing in it is the operator's.
 use super::*;
 use hide_node_link::catalog::{PathFact, PathFacts, RepositoryPlace};
@@ -24,7 +24,7 @@ fn gone() -> String {
     at("repo.worktrees/topic")
 }
 
-/// Herdr's session: workspace w1, which Herdr opened on the linked worktree
+/// The engine's session: workspace w1, which the engine opened on the linked worktree
 /// `gone()` of `repo()`, with one tab labelled `label` holding pane w1:p1 in
 /// that folder, an agent in it when `agent` names its status. Without
 /// `pane` the workspace has closed with its last pane.
@@ -114,7 +114,7 @@ fn ingest(runtime: &mut Runtime, session: serde_json::Value, paths: workspace::P
 }
 
 /// The checkouts a close starts for after `session`, read off a runtime with
-/// no live Herdr, which decides nothing on its own.
+/// no live engine, which decides nothing on its own.
 fn closes_after(
     runtime: &mut Runtime,
     session: serde_json::Value,

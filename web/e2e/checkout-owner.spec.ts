@@ -12,11 +12,10 @@ import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
 
 // PRD checkout-workspace-binding B1, B2, B13: a tab Hide creates goes to the
-// checkout's owner Herdr workspace, never to the workspace its other tabs sit
+// checkout's owner workspace, never to the workspace its other tabs sit
 // in. Two quick terminal requests each
 // reuse one owner. These sequential starts do not exercise concurrent owner creation.
-// The owner is Herdr's: the four tests that read it are Herdr only, and the two
-// on the engine fixture say what the operator sees of the same new tabs on either engine.
+// The tests say what the operator sees of the new tabs.
 
 /** The tabs `dir`'s checkout holds in the navigator, whichever workspace row lists it. */
 function checkoutTabs(rest: Rest, dir: string): string[] | undefined {

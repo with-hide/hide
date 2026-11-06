@@ -18,8 +18,7 @@ use crate::missions::{
     NodeStatus,
 };
 use crate::model::{
-    CheckoutSnapshot, GithubProjectSnapshot, PullRequestBadge, PullRequestChecks,
-    PullRequestSnapshot,
+    CheckoutSnapshot, CiEnd, GithubProjectSnapshot, PullRequestBadge, PullRequestSnapshot,
 };
 
 /// Whether `pull` is merged, so its head is the work that reached main.
@@ -32,7 +31,7 @@ impl Runtime {
     /// read that was not stale has it.
     pub(super) fn mission_pulls(&self, mission: &Mission) -> Option<&GithubProjectSnapshot> {
         self.github_project_on(&mission.device_id, &mission.project)
-            .filter(|project| !project.status.stale && project.pull_requests_read)
+            .filter(|project| project.pulls_current())
     }
 
     /// The commit the node's work folder is on now (B7, D-16): the head the
@@ -112,9 +111,9 @@ impl Runtime {
             && !has_ci
         {
             let known = pull_in(pulls, number).is_some_and(|pull| {
-                pull.checks == PullRequestChecks::None
+                pull.ci_end() == CiEnd::NoChecks
                     // A merged pull request's checks are no longer read.
-                    || (merged(pull) && pull.checks == PullRequestChecks::Unknown)
+                    || (merged(pull) && pull.ci_end() == CiEnd::Unread)
             });
             if !known {
                 out.push("ci".into());
@@ -755,15 +754,15 @@ fn read_node_ci(
         .criteria
         .iter()
         .position(|line| line.kind == CriterionKind::Ci);
-    match (pull.checks, line, pull.head_oid.as_deref()) {
-        (PullRequestChecks::None, Some(line), _) => {
+    match (pull.ci_end(), line, pull.head_oid.as_deref()) {
+        (CiEnd::NoChecks, Some(line), _) => {
             node.criteria.remove(line);
             out.changed = true;
         }
         // Checks not known add no line, but a line read on another head
         // opens again on this one (D-15).
-        (PullRequestChecks::None | PullRequestChecks::Unknown, None, _) | (_, _, None) => {}
-        (checks, line, Some(head)) => {
+        (CiEnd::NoChecks | CiEnd::Unread, None, _) | (_, _, None) => {}
+        (end, line, Some(head)) => {
             let line = match line {
                 Some(line) => line,
                 None => {
@@ -789,7 +788,7 @@ fn read_node_ci(
                     place
                 }
             };
-            let effect = node.criteria[line].read_ci(head, checks, now);
+            let effect = node.criteria[line].read_ci(head, end, now);
             out.changed |= effect.changed;
             out.spent = effect.spent;
         }

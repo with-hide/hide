@@ -3,7 +3,7 @@
 //! names, and this daemon keeps one link to it. It dials the core's machine
 //! over SSH, runs the attach role there, trades the handshake, and answers
 //! the core's calls on that channel exactly as a device the core dialed
-//! answers them, with its own Herdr reached through the link.
+//! answers them.
 //!
 //! While the core cannot be reached the node waits and tries again, two
 //! seconds after the first failure and doubling to a minute; a link that
@@ -1146,7 +1146,10 @@ fn update_core(
         Ok(build) => build.root,
         Err(reason) => return failed(reason),
     };
-    let packages = hide_node::ssh::host::HelperPackages::new(Some(updates.packages.clone()));
+    let packages = hide_node::ssh::host::HelperPackages::new(
+        Some(updates.packages.clone()),
+        crate::cli::RELEASE,
+    );
     let program = match upstream.install_build(&packages, &root) {
         Ok(program) => program,
         // A dial that stopped on a sign-in or a server key waits for the

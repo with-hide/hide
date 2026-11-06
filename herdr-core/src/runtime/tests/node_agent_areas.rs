@@ -188,7 +188,7 @@ fn authoritative_final_node_tab_close_keeps_its_page_and_drops_its_bookmark() {
 }
 
 /// `origin`'s device with one Workspace of tabs `t1` and `t2` in front, its
-/// Herdr's keyboard on `t1`, and its requests recorded.
+/// the engine's keyboard on `t1`, and its requests recorded.
 fn device_in_front(
     origin: crate::model::LinkOrigin,
     path: &str,
@@ -230,7 +230,7 @@ fn device_in_front(
     (runtime, requests, views)
 }
 
-/// The node's Herdr reporting tabs `tabs` at `path` with its keyboard on
+/// The node's engine reporting tabs `tabs` at `path` with its keyboard on
 /// `focused`.
 fn focused_on(path: &str, tabs: &[&str], focused: &str) -> RemoteSessionSnapshot {
     let tabs = tabs.iter().map(|tab| (*tab, path)).collect::<Vec<_>>();
@@ -289,7 +289,7 @@ fn collect(
     }
 }
 
-/// A split on a node's Workspace shows both tabs, asks the node's Herdr for
+/// A split on a node's Workspace shows both tabs, asks the node's engine for
 /// the tab the new area holds, and attaches the panes of both; the node's
 /// stale keyboard focus does not replace the explicitly selected area.
 #[test]
@@ -338,7 +338,7 @@ fn a_node_that_dialed_in_splits_its_tabs_into_agent_areas_and_its_herdr_shows_th
     );
 }
 
-/// A tab the node's Herdr opens joins the area in use without replacing
+/// A tab the node's engine opens joins the area in use without replacing
 /// what it shows, and closing the final tab in an area collapses it.
 #[test]
 fn a_node_s_own_tabs_join_and_leave_its_agent_areas() {

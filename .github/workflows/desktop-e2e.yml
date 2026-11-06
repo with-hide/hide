@@ -111,6 +111,10 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 5
         run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install

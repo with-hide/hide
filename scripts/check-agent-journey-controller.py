@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the compiled journey controller's actual process boundary, without Herdr.
+"""Check the compiled journey controller's actual process boundary, without the engine.
 
 The caller builds the shared shim once and supplies it; this entrypoint never
 builds Rust, starts a desktop, uses credentials or contacts a model.

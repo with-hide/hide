@@ -7,7 +7,7 @@
 // closed unmerged in the operator's turn), decision-sent (its answer waiting
 // for the Conductor's turn), decision-unreadable (its answer waiting on a
 // Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
-// Herdr confirming it), stack (the merge order), no-conductor, stale, failed
+// the engine confirming it), stack (the merge order), no-conductor, stale, failed
 // (the record unreadable), wide (a row wider than the slot, shrunk to fit),
 // done, cancelled, no-pr (a finished mission with no pull request), exempt
 // (a finished mission from before finish lines, its old sentence on each

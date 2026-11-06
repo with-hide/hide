@@ -10,8 +10,8 @@ use crate::model::{
 use crate::pane_reopen::ReopenFailure;
 use hide_agent_hooks::{AgentRuntime, HookStatus};
 
-/// One Herdr session with one pane per `(pane id, agent, hook reported)`;
-/// whether the pane's hook reported is the core's record, not Herdr's
+/// One engine session with one pane per `(pane id, agent, hook reported)`;
+/// whether the pane's hook reported is the core's record, not the engine's
 /// ([`feed`]).
 fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
     let agents = panes
@@ -56,7 +56,7 @@ fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
     })
 }
 
-/// The hook in `pane` reported to the core for `agent` (Herdr's agent name)
+/// The hook in `pane` reported to the core for `agent` (the engine's agent name)
 /// and its `session`, with `counts` when it counts subagents.
 pub(super) fn hook_reported(
     runtime: &mut Runtime,
@@ -410,7 +410,7 @@ fn a_reopen_that_ended_the_agent_and_could_not_start_it_is_still_published() {
     feed(&mut runtime, &[("w1:p1", "claude", false)]);
     assert!(reopen(&mut runtime, "w1:p1"));
 
-    // Herdr ended the agent: the pane is still there with no agent row.
+    // The engine ended the agent: the pane is still there with no agent row.
     let mut ended = session(&[("w1:p1", "claude", false)]);
     ended["agents"] = serde_json::json!([]);
     runtime.ingest_session(Ok(
@@ -463,7 +463,7 @@ fn a_reopen_that_ended_the_agent_and_could_not_start_it_is_still_published() {
 }
 
 /// A refusal known under the lock is published at once and starts no worker;
-/// each one is a code, never Herdr's words.
+/// each one is a code, never the engine's words.
 #[test]
 fn reopen_refuses_what_it_cannot_do_with_a_code_and_never_for_a_missing_hook() {
     let mut runtime = runtime();
@@ -499,7 +499,7 @@ fn reopen_refuses_what_it_cannot_do_with_a_code_and_never_for_a_missing_hook() {
         })
     );
 
-    // Before Herdr reports a native session there is no warning or recovery
+    // Before the engine reports a native session there is no warning or recovery
     // control; even a stale request must not start a reopen.
     let mut anonymous = session(&[("w1:p3", "claude", false)]);
     anonymous["agents"][0]
@@ -849,9 +849,9 @@ fn a_machine_with_no_kit_or_no_such_device_refuses_the_request_with_an_error() {
 }
 
 /// B29 end to end through the runtime and its worker: the agent's process
-/// ends, Herdr still holds its name for two answers, and the reopen settles
+/// ends, the engine still holds its name for two answers, and the reopen settles
 /// as done, with nothing left published and the calls in the order that
-/// never mutates before Herdr has confirmed.
+/// never mutates before the engine has confirmed.
 #[test]
 fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     use hide_platform::process;
@@ -1100,7 +1100,7 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
 
 /// B10, from the report to the row: a permission wait the hook reports asks
 /// the coordinator to publish again, the next session lays it on the agent,
-/// and the row reads an approval while Herdr still reads the agent working;
+/// and the row reads an approval while the engine still reads the agent working;
 /// the tool call after the answer reports it working and takes the approval
 /// back.
 #[test]
@@ -1220,7 +1220,7 @@ fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
     assert_eq!(row(&runtime), ("none".into(), "stopped".into()));
 }
 
-/// An agent exited and started again in the same pane: Herdr dropped the
+/// An agent exited and started again in the same pane: the engine dropped the
 /// agent, then lists it again under the session that ended, and the new
 /// session's hook, proven to run in the pane, decides the row.
 #[test]
@@ -1263,13 +1263,13 @@ fn an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_sessi
     };
     report(&mut runtime, "session-old", Some(HookTurn::Done));
     listed(&mut runtime, "idle");
-    // The agent exits: Herdr lists no agent, and its facts go.
+    // The agent exits: the engine lists no agent, and its facts go.
     let mut gone = session(&[("w1:p1", "claude", false)]);
     gone["agents"] = serde_json::json!([]);
     runtime.ingest_session(Ok(
         crate::sidebar::owned_label_fixture(gone).expect("session payload")
     ));
-    // Started again: the new session reports, Herdr names the old one and
+    // Started again: the new session reports, the engine names the old one and
     // reads it idle.
     report(&mut runtime, "session-new", None);
     report(&mut runtime, "session-new", Some(HookTurn::Working));

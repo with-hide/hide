@@ -1017,7 +1017,7 @@ impl LinkStore {
 
     /// Which session `hide agent spawn` started for which (D-27), and the
     /// name the record gives each child: a fact can name a session by the
-    /// file Herdr reported for it, the record by its reader's name.
+    /// file the engine reported for it, the record by its reader's name.
     pub fn apply_parents(
         &mut self,
         parents: &[ParentFact],
@@ -2783,7 +2783,7 @@ struct Parent {
 /// What the record calls the session a fact names by `reference`.
 ///
 /// The record calls a session what its reader calls it: the id in the
-/// session's own records. Herdr reports a Pi or omp session as its file, so a
+/// session's own records. The engine reports a Pi or omp session as its file, so a
 /// fact can name a session by a path; once the reader has read that file, its
 /// cursor holds the reader's name for it. A reference no read file answers
 /// is kept as it is: either it is already that name, or it is a file not read

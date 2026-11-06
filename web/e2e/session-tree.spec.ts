@@ -1,4 +1,4 @@
-// The sidebar 태스크 list's tree past one level on a real isolated Herdr and
+// The sidebar 태스크 list's tree past one level on a real isolated engine and
 // daemon: every opened row opens its children, the indent stops at the third
 // level, a child in another checkout than its parent names that branch, and
 // the row of the focused pane is selected (PRD sidebar-task-lens B10, B11, B13).
@@ -44,7 +44,7 @@ test("the 태스크 list opens a five-level tree, stops the indent at three and 
       const session = `tree-${name}`;
       writeFixtureTranscript(claudeProjects(fixture), session, { task, progress: `${task} 진행 중` });
       const pane = await spawnChild(fixture, daemon, chain.at(-1)?.pane ?? root, { name, repo, branch, session });
-      // No page shows the spawned tab yet, and Herdr attaches only a tab that was shown.
+      // No page shows the spawned tab yet, and the node attaches only a tab that was shown.
       await withControl(daemon, async (control) => {
         viewPane(control, pane);
         await showTabOf(control, pane);

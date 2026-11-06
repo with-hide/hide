@@ -8,7 +8,7 @@
 # a cell that cannot run fails, and the lane fails unless all seven passed.
 #
 # It shares the journey's pinned installs and fake model and nothing else:
-# no Herdr, no hided, no kit; on Windows the pinned ConPTY runtime a holder
+# no hided, no kit; on Windows the pinned ConPTY runtime a holder
 # runs its pane on is fetched from its NuGet pin (contracts/conpty.json) into
 # the binaries' folder. `pr.yml` runs
 # it for a change to the holder, the node's holder code, the pins or this

@@ -2,8 +2,8 @@
 //! macOS and Linux, a named pipe on Windows, behind one type.
 //!
 //! The address is a filesystem path on every system, because that is how
-//! Herdr names its socket. On Windows the path is also the pipe's name (the
-//! pipe is `\\.\pipe\<path>`, which is how Herdr's own client reaches its
+//! Herdr named its socket. On Windows the path is also the pipe's name (the
+//! pipe is `\\.\pipe\<path>`, which is how Herdr's own client reached its
 //! server) and a small marker file is kept at the path while the listener
 //! lives, so "does the path exist" means the same as it does for a socket
 //! file.
@@ -101,7 +101,7 @@ fn endpoint_name(path: &Path) -> io::Result<Name<'_>> {
     path.to_fs_name::<GenericFilePath>()
 }
 
-/// The pipe a path names: `\\.\pipe\<path>`, as Herdr's client reaches its
+/// The pipe a path names: `\\.\pipe\<path>`, as Herdr's client reached its
 /// server.
 #[cfg(windows)]
 fn pipe_name(path: &Path) -> String {
@@ -1183,7 +1183,7 @@ mod sys {
 
     /// Connects with a bounded wait, `CONNECT_BOUND` or `wait` if that is
     /// shorter: the default of `connect` waits for ever for a pipe whose
-    /// instances are all busy, which is how Herdr's own probe avoids it too.
+    /// instances are all busy, which is how Herdr's own probe avoided it too.
     pub(super) fn connect(path: &Path, wait: Option<Duration>) -> io::Result<RawStream> {
         use interprocess::ConnectWaitMode;
         use interprocess::os::windows::named_pipe::{DuplexPipeStream, pipe_mode::Bytes};

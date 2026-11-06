@@ -2,7 +2,7 @@
 //! (PRD link-graph D-27, D-45).
 //!
 //! Facts leave the lock as owned copies, and only when a cheap fingerprint
-//! of them moved: this runs inside `apply_pull_requests`, which every Herdr
+//! of them moved: this runs inside `apply_pull_requests`, which every engine
 //! session ingest reaches. Answers come back under a short lock and change
 //! the snapshot only when they differ, each on its own delta revision.
 
@@ -51,7 +51,7 @@ pub(super) struct PreCheck {
     /// The pane the start made, once the start's answer named it.
     pub(super) pane_id: Option<String>,
     /// Whether the session list has shown that pane: the start can name it
-    /// before Herdr's next update lists it, and only a pane that was listed
+    /// before the engine's next update lists it, and only a pane that was listed
     /// can have closed.
     pub(super) pane_seen: bool,
     pub(super) asked_at: std::time::Instant,

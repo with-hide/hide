@@ -1,4 +1,4 @@
-//! The line the doorbell submits through Herdr's `agent.prompt`: who wrote, what kind
+//! The line the doorbell submits through the engine's `agent.prompt`: who wrote, what kind
 //! of letter it is and the letter's first line, so the operator watching the
 //! pane can tell what arrived (`docs/delivery.md`, The bell line). Its words
 //! are in the operator's interface language; a letter's turn is matched by

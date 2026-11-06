@@ -35,10 +35,10 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 /// A read of a few pids' start times.
 const PROCESS_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Where a worktree task runs: the Herdr that creates or closes the
+/// Where a worktree task runs: the engine that creates or closes the
 /// checkout's panes and the file host that answers its Git checks and runs
 /// its removal, both of the device that holds the repository (PRD S5.5
-/// B27-B29). This machine is the in-process host and its own Herdr.
+/// B27-B29). This machine is the in-process host and its own engine.
 #[derive(Clone)]
 pub struct WorktreeTarget {
     engine: SharedEngine,
@@ -46,7 +46,7 @@ pub struct WorktreeTarget {
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
     /// This machine: a purpose is mirrored into the branch description, and
-    /// a provider missing from this PATH is refused before Herdr is asked.
+    /// a provider missing from this PATH is refused before the engine is asked.
     local: bool,
 }
 
@@ -78,7 +78,7 @@ impl WorktreeTarget {
     }
 }
 
-/// The Herdr a new tab and the agent started in it go to: this machine's or
+/// The engine a new tab and the agent started in it go to: this machine's or
 /// a device's. A tab needs no file helper, so a device whose helper is not
 /// ready can still take one (PRD home-device-rail D-22).
 #[derive(Clone)]
@@ -87,8 +87,8 @@ pub struct TabTarget {
     connection_generation: Option<u64>,
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
-    /// The node whose PATH must hold the chosen agent, asked before Herdr
-    /// is; none for a device, whose own Herdr answers for its PATH.
+    /// The node whose PATH must hold the chosen agent, asked before the engine
+    /// is; none for a device, whose own engine answers for its PATH.
     agent_node: Option<Arc<dyn crate::node_access::NodeLink>>,
 }
 
@@ -428,7 +428,7 @@ fn host_directory(
 }
 
 /// `Remove project…`: closes every pane in the project's checkouts and waits
-/// for Herdr to confirm, the same handshake a worktree deletion uses, then
+/// for the engine to confirm, the same handshake a worktree deletion uses, then
 /// hands the answer to the runtime, which alone removes the registration.
 pub fn spawn_workspace_close(
     context: WorktreeTarget,
@@ -819,7 +819,7 @@ impl PurposeMirror {
                         .is_some_and(|unconfirmed| unconfirmed == purpose)
                 }) {
                     // Do not remember the suppressed value as mirrored. Once
-                    // Herdr confirms a clear or replacement, the next sync
+                    // the engine confirms a clear or replacement, the next sync
                     // must treat that visible value as new work.
                     self.observed.remove(&key);
                     continue;
@@ -892,7 +892,7 @@ pub fn spawn_worktree_create(
 /// local `base` holds nothing it lacks, so a worktree never starts from a
 /// main that was fetched but not pulled; else `base` as given. `None`
 /// stands for the branch the repository's own folder has out, which is what
-/// Herdr starts from without a base. The comparison is read on the
+/// the engine starts from without a base. The comparison is read on the
 /// repository's machine from what the background fetch last brought; nothing
 /// is fetched. The commit, not the remote name, is handed on, so the new
 /// branch does not take `origin/<base>` as its upstream.
@@ -909,7 +909,7 @@ fn newest_start(
     repository_root: &str,
     base: Option<String>,
 ) -> Option<String> {
-    // A detached folder has no branch to compare; Herdr starts from its HEAD.
+    // A detached folder has no branch to compare; the engine starts from its HEAD.
     let branch = match &base {
         Some(base) => base.clone(),
         None => match git.run(repository_root, GitCommand::CurrentBranch) {
@@ -966,7 +966,7 @@ fn newest_start(
 }
 
 /// A worktree on a branch that already exists, a pull request's (PRD
-/// overview-lenses-prs D-46): Herdr checks out an existing local branch, and
+/// overview-lenses-prs D-46): the engine checks out an existing local branch, and
 /// a branch only `origin` has is fetched first and made from its
 /// remote-tracking ref, which git sets as the new branch's upstream. No other
 /// branch name is ever made. The checks run on the repository's own machine
@@ -1136,7 +1136,7 @@ pub(crate) struct GhPlace {
 
 /// A checkout's issue link: the branch's `issue` note and its Workspace
 /// token, written on the checkout's own machine (`target`: this machine's
-/// Herdr and node, or a node's), never another's git. A GitHub link reads
+/// the engine and node, or a node's), never another's git. A GitHub link reads
 /// its issue first (`read`); a Local one names an issue already in the
 /// core's store, so nothing is read.
 pub(crate) fn spawn_issue_write(
@@ -1207,7 +1207,7 @@ pub fn spawn_remote_purpose_write(
 }
 
 /// `New agent here`: one new tab whose cwd is the checkout, in the checkout's
-/// owner Herdr workspace, opened first when none is open (PRD
+/// owner the engine workspace, opened first when none is open (PRD
 /// checkout-workspace-binding D-07). The result lands in the same task
 /// operation slot the worktree sheet uses, and the shell starts the provider
 /// in the returned pane exactly as it does there.
@@ -1219,7 +1219,7 @@ pub struct CheckoutTabRequest {
     pub checkout_path: String,
     pub label: String,
     pub host: crate::checkout_owner::TabHost,
-    /// Whether Herdr focuses the tab it makes; false for a start that stays
+    /// Whether the engine focuses the tab it makes; false for a start that stays
     /// behind the operator's screen.
     pub focus: bool,
     pub resume_scope: Option<hide_session::SessionReadScope>,
@@ -1263,16 +1263,16 @@ pub struct PendingAgentStart {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskAgentOutcome {
     Started,
-    /// Herdr refused, or the agent is not installed; nothing started.
+    /// The engine refused, or the agent is not installed; nothing started.
     Failed(AgentFailure),
-    /// Herdr did not answer; the agent may be running. The pane says which.
+    /// The engine did not answer; the agent may be running. The pane says which.
     Unknown(AgentFailure),
 }
 
 /// Why a task's agent did not start, as the snapshot carries it: `reason` is
 /// the code every start surface words in the window's language (`agent_start.*`,
 /// or a session check's own code such as `session_route_unconfirmed`);
-/// `detail` is the sentence the diagnostic log keeps (Herdr's answer, a link
+/// `detail` is the sentence the diagnostic log keeps (the engine's answer, a link
 /// error), which no screen draws; `line` is the last line of the pane's
 /// screen when its shell had not finished starting, which the screen quotes
 /// and the log never keeps, because it is the operator's terminal content.
@@ -1416,9 +1416,9 @@ fn start_task_agent(
 /// The prompt goes as the CLI's declared argument (`--prompt` for OpenCode,
 /// positional after `--` for the other launch dialects), held through startup questions (folder trust, sign-in)
 /// and send it once those are answered. Nothing is ever typed into the pane,
-/// because Herdr reports an agent on such a question as idle and ready, and a
+/// because the engine reports an agent on such a question as idle and ready, and a
 /// typed prompt would answer the question. A prompt that cannot be passed,
-/// or a start Herdr refuses, fails the start with the reason; the surface
+/// or a start the engine refuses, fails the start with the reason; the surface
 /// that sent it keeps the text.
 #[cfg(test)]
 fn launch_with_prompt(
@@ -1460,7 +1460,7 @@ fn launch_with_prompt_checked(
         made_worktree,
     } = start;
     // The trust is written by the machine that runs the pane: `agent_node`
-    // is none for a device, whose own Herdr answers for its PATH, and a
+    // is none for a device, whose own engine answers for its PATH, and a
     // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
         && let Err(refusal) = crate::agent_start::trust_worktree(pane_node, &kind, path)
@@ -1594,7 +1594,7 @@ fn launch_agent(
     }
     // The engine would type the command into the pane's shell and wait for
     // an agent that can never appear; say so before asking it. A device's
-    // PATH is not this machine's, so there its Herdr answers for it. Asked
+    // PATH is not this machine's, so there its engine answers for it. Asked
     // before every start: how the node starts the program now is what the
     // start names and whether its first input can ride it.
     let mut form = None;
@@ -1687,7 +1687,7 @@ fn launch_agent(
             detail: None,
             line,
         }),
-        // Hide's own check refused in Herdr's place, before Herdr was asked.
+        // Hide's own check refused in the engine's place, before the engine was asked.
         Err(StartError::Herdr(EngineError::Refused { code, message }))
             if message == crate::live::SESSION_CHANGED =>
         {
@@ -1706,7 +1706,7 @@ fn launch_agent(
 /// Types a started agent's first prompt once its screen takes input, the
 /// typed rung's one typing (`ladder::deliver`). A task start has no retype
 /// and no notice: the operator is looking at the tab they opened. An agent
-/// that never takes input, a typing Herdr refused, and one whose answer was
+/// that never takes input, a typing the engine refused, and one whose answer was
 /// lost and may have landed are told alike on the task's surface, which asks
 /// the operator to look before typing it, with nothing started again, since
 /// the agent runs (`agent_start.prompt_not_typed`).
@@ -2190,7 +2190,7 @@ fn create_checkout_tab(
             command,
         ),
     }?;
-    // A tab that does not run the launch (Herdr's own shell, or no launch
+    // A tab that does not run the launch (the engine's own shell, or no launch
     // for this shell) gives no mark.
     let shell = crate::agent_start::ShellStart::of_tab(tab.launched, launch);
     Ok(WorktreeTaskOutcome {
@@ -2323,7 +2323,7 @@ fn create_worktree_observing_purpose(
                 id: request.id,
                 checkout_id: String::new(),
                 repository_root: request.repository_root.clone(),
-                // A device's purpose lives in its Herdr metadata only; the
+                // A device's purpose lives in its engine metadata only; the
                 // branch description mirror is this machine's (B30).
                 branch: local.then(|| request.branch.clone()),
                 session_workspace_id: Some(created.workspace_id.clone()),
@@ -2430,7 +2430,7 @@ impl GitCommands for NodeGit<'_> {
     }
 }
 
-/// A device checkout keeps its purpose in Herdr's metadata only; the branch
+/// A device checkout keeps its purpose in the engine's metadata only; the branch
 /// description mirror is this machine's (B30), so a device write never asks
 /// for git.
 struct HerdrOnly;
@@ -2633,7 +2633,7 @@ fn trace(_path: &str, pane_ids: &[String], stage: &str, error: Option<&str>) {
 pub(crate) enum ProcessWait {
     /// Until every shell and foreground process the panes held has ended.
     ForEnd,
-    /// Herdr's own confirmation is enough.
+    /// The engine's own confirmation is enough.
     Skip,
 }
 
@@ -2678,8 +2678,8 @@ fn process_starts(
     Ok(starts)
 }
 
-/// The processes of `pane_id`: the shell and foreground processes Herdr
-/// reports, and every process under the shell, all read on `node`. Herdr
+/// The processes of `pane_id`: the shell and foreground processes the engine
+/// reports, and every process under the shell, all read on `node`. The engine
 /// reports no process between the two, and one can work in the same folder:
 /// on Windows a pane's `cmd.exe` runs the agent through `powershell.exe`,
 /// which outlived both reported processes in CI and held the worktree folder
@@ -2779,10 +2779,10 @@ fn wait_for_processes_to_end(
     }
 }
 
-/// Closes `pane_ids` and waits until Herdr's snapshot lists none of them and
+/// Closes `pane_ids` and waits until the engine's snapshot lists none of them and
 /// no pane at any of `paths`, and, when `wait` says so, until the processes the
 /// panes held have ended, so the caller's next step cannot run beside a pane
-/// that is still there. Herdr confirms a pane closed before its shell or agent
+/// that is still there. The engine confirms a pane closed before its shell or agent
 /// has exited, and on Windows a process that is still ending holds its working
 /// folder, so the folder cannot be moved or deleted until it is gone. A worktree
 /// deletion and a reviewed cleanup share this one pane-closing path.
@@ -2836,7 +2836,7 @@ pub(crate) fn close_checkout_panes_for_removal(
 }
 
 /// Recheck the execution on both sides of the actual close connection.
-/// Herdr answers one request per connection; every other close rule stays shared.
+/// The engine closes one pane per call, so the check runs before each; every other close rule stays shared.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 pub(crate) fn close_checkout_panes_checked(
     engine: &dyn Engine,
@@ -2903,7 +2903,7 @@ fn close_checkout_panes_detailed(
                 .map_err(|error| error.within("session.snapshot close confirmation failed"))?;
             let (present, pane_at_checkout) = confirmation_state(&panes, paths);
             if pane_ids.iter().all(|id| !present.contains(id)) && !pane_at_checkout {
-                // Herdr has nothing more to say; only the processes remain.
+                // The engine has nothing more to say; only the processes remain.
                 return wait_for_processes_to_end(node, &mut held, deadline, thread::sleep);
             }
             thread::sleep(CONFIRM_POLL.min(deadline.saturating_duration_since(Instant::now())));
@@ -3785,9 +3785,9 @@ mod tests {
         assert!(held.is_empty());
     }
 
-    /// A shell with a child of its own that Herdr does not report, and that
+    /// A shell with a child of its own that engine does not report, and that
     /// child's pid. On Windows a pane's `cmd.exe` runs the agent through
-    /// `powershell.exe`, and Herdr reports only the shell and the agent.
+    /// `powershell.exe`, and the engine reports only the shell and the agent.
     #[cfg(unix)]
     struct ShellWithChild {
         shell: std::process::Child,
@@ -3826,7 +3826,7 @@ mod tests {
     #[test]
     fn a_process_the_shell_started_holds_the_wait_after_the_shell_has_ended() {
         let mut tree = ShellWithChild::start();
-        // Herdr names the shell alone, as its foreground process too.
+        // The engine names the shell alone, as its foreground process too.
         let server = server(vec![process_info("w1:p1", tree.shell.id())]);
         let node = hide_node::Local::of_process();
         let mut held = pane_processes(&*server, &node, "w1:p1").unwrap();
@@ -4128,7 +4128,7 @@ mod tests {
     /// running the account's shell with Hide's integration, so the start is
     /// typed only after that shell marked its first prompt, never into a
     /// question its startup files ask (with-hide/hide-private#57). A worktree
-    /// with no agent keeps the tab Herdr made.
+    /// with no agent keeps the tab the engine made.
     #[test]
     fn a_new_worktree_an_agent_starts_in_runs_the_integrated_shell() {
         struct Integrated;
@@ -4668,7 +4668,7 @@ mod tests {
             shell: crate::agent_start::ShellStart::Plain,
             made_worktree: Some(wire.clone()),
         };
-        // A device start: no agent node (its Herdr answers for its PATH), a
+        // A device start: no agent node (its engine answers for its PATH), a
         // pane node that is the device's.
         let server = server(vec![shell_ready(), started()]);
         let outcome =
@@ -4682,7 +4682,7 @@ mod tests {
             written["projects"][key.as_str()]["hasTrustDialogAccepted"],
             true
         );
-        // With no pane node the start refuses before Herdr is asked.
+        // With no pane node the start refuses before the engine is asked.
         let server = self::server(vec![]);
         let TaskAgentOutcome::Failed(reason) =
             launch_with_prompt_checked(&*server, None, None, false, 7, make(), &|| Ok(()))
@@ -4720,7 +4720,7 @@ mod tests {
     }
 
     /// The chosen agent is looked up on the node that would run it, and one
-    /// it lacks fails the start before Herdr types anything into the pane.
+    /// it lacks fails the start before the engine types anything into the pane.
     #[test]
     fn an_agent_missing_from_its_node_fails_before_contacting_herdr() {
         struct Missing(Mutex<Vec<hide_node_link::protocol::Call>>);
@@ -4834,7 +4834,7 @@ mod tests {
     }
 
     /// B31: a prompt with a character that cannot be passed fails the start
-    /// with the reason, and Herdr is not asked at all.
+    /// with the reason, and the engine is not asked at all.
     #[test]
     fn a_prompt_with_another_control_character_fails_the_start_before_herdr() {
         let server = server(vec![]);
@@ -4865,7 +4865,7 @@ mod tests {
         assert!(requests_of(&server).is_empty());
     }
 
-    /// A prompt over the cap fails the start before Herdr is asked, rather
+    /// A prompt over the cap fails the start before the engine is asked, rather
     /// than failing inside the pane's shell where no one reads it.
     #[test]
     fn a_prompt_over_the_cap_fails_the_start_before_herdr() {
@@ -4899,7 +4899,7 @@ mod tests {
         assert!(requests_of(&server).is_empty());
     }
 
-    /// B31: a start Herdr refuses is a failed start with Herdr's reason; the
+    /// B31: a start the engine refuses is a failed start with the engine's reason; the
     /// agent is not started again without its prompt.
     #[test]
     fn a_refused_start_is_reported_and_not_retried_without_the_prompt() {
@@ -4961,7 +4961,7 @@ mod tests {
         }
     }
 
-    /// What Herdr answers after a start whose first prompt is typed: the
+    /// What the engine answers after a start whose first prompt is typed: the
     /// agent ready for input under the name the task gave it, then the
     /// typing taken.
     fn typed_replies(kind: &str) -> [Reply; 2] {
@@ -5006,12 +5006,12 @@ mod tests {
                 "prompt_agent"
             ]
         );
-        // The start carries no argument, so Herdr is sent none.
+        // The start carries no argument, so the engine is sent none.
         assert_eq!(requests[1]["params"]["args"], json!([]));
         assert_eq!(requests[3]["params"]["text"], prompt);
     }
 
-    /// A first prompt Herdr refused, one whose typing lost its answer and may
+    /// A first prompt the engine refused, one whose typing lost its answer and may
     /// have landed, and one whose agent could not be read are the start's
     /// failure on the task's surface alike, settled rather than offered
     /// again: the agent runs, and a Retry would start a second one.

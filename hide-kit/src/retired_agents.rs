@@ -1,6 +1,6 @@
 //! The fifteen agents Hide stopped supporting (PRD settings-cleanup D-06,
 //! and Gemini CLI once Hide's support list became the agents the pinned
-//! Herdr ships an integration for): the one-time pass that takes out what an
+//! Herdr shipped an integration for): the one-time pass that takes out what an
 //! earlier build put on a machine for them.
 //!
 //! An earlier kit wrote a skill stub and, for seven of them, a SessionStart

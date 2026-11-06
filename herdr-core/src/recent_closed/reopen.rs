@@ -157,7 +157,7 @@ fn restore_tab_position(
 ) -> crate::recent_closed::ClosedLayout {
     // The position is an index among the tabs of the workspace it was closed
     // from; a tab that reopened in the checkout's owner elsewhere keeps the
-    // place Herdr gave it. That is the usual case for a tab closed outside
+    // place the engine gave it. That is the usual case for a tab closed outside
     // the owner, and for a plain folder whose owner closed with its last tab.
     if layout.workspace_id != context.workspace_id {
         return layout;
@@ -982,7 +982,7 @@ fn start_or_degrade_agent(
     Some(started(None))
 }
 
-/// Herdr can reuse the just-closed pane id while its old PTY is still alive.
+/// The engine can reuse the just-closed pane id while its old PTY is still alive.
 /// A layout-only restore then surfaces that old process in the new tab before
 /// `agent.start` can apply the explicit resume arguments. Closing the process
 /// here returns the restored pane to its shell prompt; the start waits for
@@ -1207,7 +1207,7 @@ mod tests {
                         "second":{"type":"pane", "pane_id":"inner-right", "cwd":"/tmp", "env":{}}}}
             }}))),
             "apply_layout" => {
-                // The tab keeps its own label: Herdr would keep any label
+                // The tab keeps its own label: the engine would keep any label
                 // sent as the tab's name.
                 assert!(params["tab_label"].is_null());
                 let root = &params["root"];

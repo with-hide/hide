@@ -259,7 +259,7 @@ fn outside_asks(
     project: &str,
     listed: Option<&GithubProjectSnapshot>,
 ) -> (Vec<(Ask, Found)>, Vec<Ask>) {
-    let listed = listed.filter(|listed| listed.pull_requests_read && !listed.status.stale);
+    let listed = listed.filter(|listed| listed.pulls_current());
     let mut found = Vec::new();
     let mut asks = Vec::new();
     for mission in &book.missions {

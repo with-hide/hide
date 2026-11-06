@@ -3,7 +3,7 @@
 //!
 //! The existing `lsof` and `git status` readers run their subprocess inline on
 //! the session-sync coordinator thread, which is also the thread that applies
-//! every Herdr topology event. That is affordable at tens of milliseconds and
+//! every engine topology event. That is affordable at tens of milliseconds and
 //! ruinous at seconds: `du` over a `target/` tree takes ten, `gh pr list`
 //! takes one to three, and every pane event behind them would land that late.
 //!

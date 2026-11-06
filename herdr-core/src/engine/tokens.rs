@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// The pane metadata token by which whoever created a pane declares the pane
-/// it was spawned from. It is the only lineage there is: Herdr records none,
+/// it was spawned from. It is the only lineage there is: the engine records none,
 /// so an agent is a child exactly when its spawner said so.
 ///
 /// hcoord is the sole writer, including for a child created by Hide's Fork.
@@ -51,9 +51,9 @@ pub(crate) const FORK_SESSION_TOKEN: &str = "fork_session";
 pub(crate) const FORK_SOURCE_SESSION_TOKEN: &str = "fork_source_session";
 
 /// Hide's mark on a pane whose saved read state it vouches for, written by
-/// the lineage writer (`crate::coordination::lineage`). Herdr keeps a pane
-/// token only for as long as the server that took it, so a pane that still
-/// carries the mark a saved state names is on the server that state was read
+/// the lineage writer (`crate::coordination::lineage`). The engine keeps a pane
+/// token only for as long as the run that took it, so a pane that still
+/// carries the mark a saved state names is on the engine run that state was read
 /// from, and its `state_change_seq` can be compared with the saved one
 /// (`crate::agent_state::apply_read_state`).
 pub(crate) const SERVER_MARK_TOKEN: &str = "hide_server";
@@ -99,9 +99,8 @@ pub(crate) fn fork_declaration(
 }
 
 /// How a session is written into a token: the lowercase hex SHA-256 of the
-/// value Herdr reports in `agent_session.value`. Herdr cuts a token value at
-/// 80 characters and a session can be a path, so a digest is the one form
-/// that keeps two sessions apart whatever they look like; hcoord writes the
+/// value the engine reports in `agent_session.value`. A session can be a
+/// path, so a digest is the one form that keeps two sessions apart whatever they look like; hcoord writes the
 /// same function. A blank value names no session.
 pub(crate) fn session_digest(value: &str) -> Option<String> {
     if value.trim().is_empty() {
@@ -116,7 +115,7 @@ pub(crate) fn session_digest(value: &str) -> Option<String> {
 }
 
 /// Whether a pane still hosts the session a relationship was written for.
-/// A missing side proves nothing, so it does not hold: a pane Herdr reports
+/// A missing side proves nothing, so it does not hold: a pane the engine reports
 /// without a session (Codex before its first turn) cannot confirm a match, and
 /// a token written before sessions were recorded has nothing to compare.
 pub(crate) fn session_holds(declared: Option<&str>, current: Option<&str>) -> bool {
@@ -129,7 +128,7 @@ pub(crate) fn session_holds(declared: Option<&str>, current: Option<&str>) -> bo
 pub(crate) const PARENT_MACHINE_TOKEN: &str = "parent_machine";
 
 /// The parent a spawner declared. An empty value is no declaration, because
-/// Herdr clears a token by setting it empty.
+/// a token is cleared by setting it empty.
 pub(crate) fn lineage_parent(declared: Option<&str>) -> Option<String> {
     declared
         .map(str::trim)

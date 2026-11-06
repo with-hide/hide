@@ -1,4 +1,4 @@
-// The sidebar's shell and the window's top row on an isolated pinned Herdr and
+// The sidebar's shell and the window's top row on an isolated engine and
 // hided (PRD sidebar-shell B3-B5, sidebar-titlebar-refresh B11-B14, B17-B21,
 // D-07): the top row names the device over the rail and the sidebar and
 // carries a Workspace's path and icons; under it the Search row opens the ⌘K

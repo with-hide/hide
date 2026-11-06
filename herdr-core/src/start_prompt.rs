@@ -157,15 +157,15 @@ pub(crate) fn carried(kind: &str, native: &[String], prompt: &str) -> Result<Vec
 }
 
 /// The longest first prompt, in bytes once encoded, that a start carries.
-/// Herdr types the command into the pane's shell, and the slowest shell
-/// measured bounds it: through the pinned Herdr, macOS bash took 27 s to take
+/// The engine types the command into the pane's shell, and the slowest shell
+/// measured bounds it: through Herdr's `agent.start`, macOS bash took 27 s to take
 /// a 76 KB command and did not finish 300 KB within 60 s, where zsh took 5 s;
 /// 64 KB stays well inside the 120 s start wait on either.
 pub(crate) const MAX_PROMPT_BYTES: usize = 64 * 1024;
 
-/// The first prompt as one argument Herdr can type into the pane's shell,
+/// The first prompt as one argument the engine can type into the pane's shell,
 /// which refuses a line break or a tab in an argument. Each line break becomes
-/// U+2028 (LINE SEPARATOR), which Herdr passes through and the model reads as
+/// U+2028 (LINE SEPARATOR), which the engine passes through and the model reads as
 /// a line break, and a tab four spaces; any other control character is refused
 /// rather than dropped, and so is a prompt over [`MAX_PROMPT_BYTES`]. Every
 /// start event checks its prompt with this before anything is created, so a

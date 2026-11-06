@@ -1,4 +1,4 @@
-// Settings > Mobile on an isolated pinned Herdr and a debug hided (PRD
+// Settings > Mobile on an isolated engine and a debug hided (PRD
 // settings-cleanup B57, B58, B59): the Tailscale checks fold into one line when
 // they all pass, opening the tab makes no pairing code and Show QR makes one,
 // and the push mode is one dropdown that describes only the mode it shows. The

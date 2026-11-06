@@ -16,7 +16,7 @@ pub struct TreeLimits {
 
 pub trait AreaItem: Clone {
     const LIMITS: TreeLimits;
-    /// Domain-owned identities (Herdr tabs) must never be reminted by repair.
+    /// Domain-owned identities (the engine tabs) must never be reminted by repair.
     const MINTED_IDENTITY: bool;
     fn id(&self) -> &str;
     fn id_mut(&mut self) -> &mut String;

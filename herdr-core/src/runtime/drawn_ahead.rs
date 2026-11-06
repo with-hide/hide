@@ -1,12 +1,12 @@
-//! What the core draws ahead of Herdr (PRD instant-pane-topology D-05, D-07,
-//! D-08): a created tab from the moment Herdr names it, and each tab's pane
-//! geometry line (`operations.rs`) as it will stand once Herdr applies it.
+//! What the core draws ahead of the engine (PRD instant-pane-topology D-05, D-07,
+//! D-08): a created tab from the moment the engine names it, and each tab's pane
+//! geometry line (`operations.rs`) as it will stand once the engine applies it.
 //!
 //! Both are laid over the session as it is ingested, after the session's
-//! confirmations have read Herdr's own layout, so every reader of the session
+//! confirmations have read the engine's own layout, so every reader of the session
 //! sees one layout and nothing drawn here can confirm what it predicts. The
 //! core asks the coordinator for a republish whenever what is drawn changes
-//! (`request_republish`), and Herdr's own layout replaces each drawing when
+//! (`request_republish`), and the engine's own layout replaces each drawing when
 //! it arrives.
 
 use super::*;
@@ -14,11 +14,11 @@ use super::*;
 /// How many created tabs can wait for their layout at once; the oldest is
 /// dropped past it and logged (engineering 15).
 const PROVISIONAL_TAB_LIMIT: usize = 8;
-/// How long a created tab is drawn without Herdr's layout before it is taken
+/// How long a created tab is drawn without the engine's layout before it is taken
 /// back; the same bound as every operation stage.
 const PROVISIONAL_TAB_TIMEOUT_MS: u64 = CLOSE_STAGE_TIMEOUT_MS;
 
-/// A tab Herdr acknowledged creating, pending until its ordered layout
+/// A tab the engine acknowledged creating, pending until its ordered layout
 /// arrives. When its workspace is already known, draw it as one pane (D-05).
 #[derive(Clone, Debug)]
 pub(super) struct ProvisionalTab {
@@ -35,14 +35,14 @@ pub(super) struct ProvisionalTab {
 }
 
 impl Runtime {
-    /// Lays everything drawn ahead of Herdr over a session about to be
+    /// Lays everything drawn ahead of the engine over a session about to be
     /// ingested.
     pub(super) fn overlay_drawn_ahead(&mut self, payload: &mut SessionSnapshotPayload) {
         self.overlay_created_tabs(payload);
         self.overlay_geometry(payload);
     }
 
-    /// Holds the acknowledged creation until Herdr lays it out. A known
+    /// Holds the acknowledged creation until the engine lays it out. A known
     /// workspace can draw it already; opening an owner waits for that identity.
     pub(super) fn draw_created_tab(&mut self, tab: ProvisionalTab) {
         if self
@@ -75,7 +75,7 @@ impl Runtime {
             .is_some_and(|(made_in, _)| made_in == checkout)
     }
 
-    /// Where a pane Hide made sits before Herdr's layout lists it, as the
+    /// Where a pane Hide made sits before the engine's layout lists it, as the
     /// checkout it was made in, by path, and its tab: a created tab's own, or
     /// for a drawn split, its target's, which a fork's split shares with its
     /// source.
@@ -111,7 +111,7 @@ impl Runtime {
             })
     }
 
-    /// Takes back a created tab whose pane its worker closed before Herdr
+    /// Takes back a created tab whose pane its worker closed before the engine
     /// laid it out.
     pub(super) fn take_back_created_tab(&mut self, tab_id: &str) {
         let Some(index) = self
@@ -131,7 +131,7 @@ impl Runtime {
         self.request_republish();
     }
 
-    /// The Herdr workspace that holds the checkout at `path`, as the session
+    /// The engine workspace that holds the checkout at `path`, as the session
     /// last reported it.
     pub(super) fn owner_workspace_of_path(&self, path: &str) -> Option<String> {
         self.snapshot
@@ -143,7 +143,7 @@ impl Runtime {
             .and_then(|checkout| checkout.owner_workspace_id.clone())
     }
 
-    /// Takes back a created tab Herdr's layout has not shown within its
+    /// Takes back a created tab the engine's layout has not shown within its
     /// bound, and says whether one went.
     pub(super) fn expire_provisional_tabs(&mut self, now_unix_ms: u64) -> bool {
         let before = self.provisional_tabs.len();
@@ -170,7 +170,7 @@ impl Runtime {
     /// A created tab with no layout in the session yet gets its tab row, a
     /// one-pane layout the size of its workspace's other tabs, and a pane row
     /// with the folder it was created in. A tab the session already lays out
-    /// is Herdr's from now on.
+    /// is the engine's from now on.
     fn overlay_created_tabs(&mut self, payload: &mut SessionSnapshotPayload) {
         if self.provisional_tabs.is_empty() {
             return;
@@ -247,12 +247,12 @@ impl Runtime {
 
     /// Lays every tab's line over a session about to be ingested (D-07): a
     /// tab with predictions gets its predicted layout, and a split's new
-    /// pane gets a pane row with its target's cwd and nothing Herdr has not
+    /// pane gets a pane row with its target's cwd and nothing the engine has not
     /// said. A terminal's grid follows the drawn rectangle at once (PRD
     /// grid-ahead-of-herdr D-03): the PTY size is the controller's to set,
-    /// never Herdr's layout's, so nothing here holds a resize.
+    /// never the engine's layout's, so nothing here holds a resize.
     ///
-    /// The caller runs it after the session's confirmations have read Herdr's
+    /// The caller runs it after the session's confirmations have read the engine's
     /// own layout, so nothing Hide drew can confirm an operation.
     fn overlay_geometry(&mut self, payload: &mut SessionSnapshotPayload) {
         let mut scopes = self
@@ -276,7 +276,7 @@ impl Runtime {
         let mut confirmed = HashMap::new();
         for scope_id in scopes {
             // A closing pane leaves the canvas only (`draw_closes`): its row,
-            // its session and its read state stay until Herdr confirms, so
+            // its session and its read state stay until the engine confirms, so
             // the close can still record it and a refusal finds it intact.
             let (closes, predictions): (Vec<_>, Vec<_>) = self
                 .geometry_predictions(&scope_id)
@@ -291,7 +291,7 @@ impl Runtime {
             else {
                 continue;
             };
-            // What Herdr confirmed, which the next request is predicted on.
+            // What the engine confirmed, which the next request is predicted on.
             if let Ok(layout) = crate::live::project_layout(&payload.layouts[index]) {
                 confirmed.insert(scope_id.clone(), layout);
             }

@@ -1,18 +1,18 @@
-//! What a tab's layout will be once Herdr applies the geometry changes Hide
+//! What a tab's layout will be once the engine applies the geometry changes Hide
 //! has asked for (PRD instant-pane-topology D-07).
 //!
-//! Each prediction is absolute: it names the state Herdr will reach, not a
+//! Each prediction is absolute: it names the state the engine will reach, not a
 //! step from wherever the tree is. Folding one over a layout that already
 //! shows it changes nothing, so a prediction can stay applied until its
-//! operation settles without counting twice once Herdr's layout carries it.
+//! operation settles without counting twice once the engine's layout carries it.
 //!
-//! The rules follow what the pinned Herdr does (0.9.1, measured on a private
+//! The rules follow what Herdr does (v0.9.1, measured on a private
 //! server): a split puts the new pane second at ratio 0.5 and focuses it; a
 //! close collapses the parent split into the sibling, focuses the sibling and
 //! ends a zoom on the closed pane; a zoom focuses its pane; a resize moves the
 //! nearest enclosing split of its axis by the amount, clamped to 0.1..0.9.
-//! Where the prediction and Herdr still differ (a focus Herdr places
-//! elsewhere), Herdr's layout replaces it when it arrives.
+//! Where the prediction and the engine still differ (a focus the engine places
+//! elsewhere), the engine's layout replaces it when it arrives.
 //!
 //! The tree rules themselves live in `engine::own::layout`, the ones the
 //! core's own engine applies (PRD engine-bundle-3-core-owns D-4): a drawing
@@ -60,7 +60,7 @@ pub(super) fn predict(
 /// The resize prediction for moving `pane`'s divider by `amount` toward
 /// `direction`, read off `layout` as it will stand once the earlier
 /// predictions land. None when no split of that axis encloses the pane, which
-/// is what Herdr answers as a resize that changed nothing.
+/// is what the engine answers as a resize that changed nothing.
 pub(super) fn resize_prediction(
     layout: &PaneLayoutSnapshot,
     pane: &str,
@@ -75,7 +75,7 @@ pub(super) fn resize_prediction(
     })
 }
 
-/// `raw`, a tab's layout as Herdr sent it, with `predictions` applied, in the
+/// `raw`, a tab's layout as the engine sent it, with `predictions` applied, in the
 /// rect form a session carries.
 ///
 /// The rects are laid out with the same arithmetic the projection reads them
@@ -83,7 +83,7 @@ pub(super) fn resize_prediction(
 /// predicted tree, and every reader of the session (the tab's pane rows, the
 /// terminal projection, the attaches) sees one consistent layout. None when
 /// the predictions change nothing, or when the layout cannot be read or a
-/// predicted split has no room; the tab is then drawn as Herdr confirmed it.
+/// predicted split has no room; the tab is then drawn as the engine confirmed it.
 pub(super) fn overlay_session_layout(
     raw: &SessionLayoutPayload,
     predictions: &[Prediction],
@@ -119,7 +119,7 @@ fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
             }
             split_leaf(&mut layout.root, target, *direction, created);
             layout.focused_pane_id = created.clone();
-            // Herdr shows the new pane, so a zoom does not survive the split.
+            // The engine shows the new pane, so a zoom does not survive the split.
             layout.zoomed = false;
         }
         Prediction::Close { pane } => {
@@ -194,7 +194,7 @@ mod tests {
         }
     }
 
-    /// Two panes side by side, as Herdr sends them: rects with a border
+    /// Two panes side by side, as the engine sends them: rects with a border
     /// column the projection does not need to reproduce.
     fn raw_two_panes() -> SessionLayoutPayload {
         SessionLayoutPayload {
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(overlaid.area, raw.area);
     }
 
-    /// A prediction Herdr's layout already shows leaves the tab as sent.
+    /// A prediction the engine's layout already shows leaves the tab as sent.
     #[test]
     fn a_prediction_the_layout_already_shows_overlays_nothing() {
         let raw = raw_two_panes();
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(overlay_session_layout(&raw, &predictions), None);
     }
 
-    /// A split with no room to divide is not drawn ahead of Herdr.
+    /// A split with no room to divide is not drawn ahead of the engine.
     #[test]
     fn a_split_with_no_room_overlays_nothing() {
         let mut raw = raw_two_panes();

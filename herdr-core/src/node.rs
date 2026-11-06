@@ -108,11 +108,21 @@ pub(crate) fn test_node() -> NodeId {
     NodeId::parse(TEST_NODE).unwrap()
 }
 
+/// A build no release was published for, which a test core's device
+/// transport names: it reaches no release kit.
+#[cfg(test)]
+pub(crate) const TEST_RELEASE: hide_node::ssh::host::ReleaseIdentity =
+    hide_node::ssh::host::ReleaseIdentity {
+        version: "0.0.0-test",
+        commit: None,
+        order: 0,
+    };
+
 /// The SSH transport a test core reaches devices with; it carries no device
 /// packages, so a device's node stays `unsupported`.
 #[cfg(test)]
 pub(crate) fn test_devices() -> std::sync::Arc<dyn crate::remote::DeviceConnector> {
-    std::sync::Arc::new(hide_node::ssh::Connector::new(None))
+    std::sync::Arc::new(hide_node::ssh::Connector::new(None, TEST_RELEASE))
 }
 
 /// Terminal routes for a test core: no node takes anything, and nothing

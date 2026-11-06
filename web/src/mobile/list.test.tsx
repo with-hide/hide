@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { PhoneAgent } from "./protocol";
-import { patch, usePhone } from "./store";
+import { applyFrame, patch, usePhone } from "./store";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 const initial = usePhone.getState();
@@ -33,6 +33,24 @@ it("dims an unknown row on the phone's list and leaves a sleeping one bright", a
     expect(item("unknown").className).toContain("opacity-(--opacity-dimmed)");
     expect(item("asleep").className).not.toContain("opacity-(--opacity-dimmed)");
     expect(item("idle").className).not.toContain("opacity-(--opacity-dimmed)");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+// A list hided cut to fit one relay message says how many agents it left out, in the PR list's line.
+it("says under the list how many agents the Mac left out of the frame", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const rows = [{ kind: "agent" as const, ...agent("idle", {}) }];
+  patch({ screen: "app", interfaceLanguage: "en" });
+  applyFrame({ type: "agents", groups: [{ group: "seen", count: 40, rows }], omitted: 39, devices: [], interface_language: "en", color_theme: null });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<App />));
+  try {
+    expect(container.querySelector("[data-phone-agents-omitted]")!.textContent).toBe("39 more agents are not shown here · see them on the desktop");
+    await act(async () => applyFrame({ type: "agents", groups: [{ group: "seen", count: 1, rows }], devices: [], interface_language: "en", color_theme: null }));
+    expect(container.querySelector("[data-phone-agents-omitted]")).toBeNull();
   } finally {
     await act(async () => root.unmount());
   }

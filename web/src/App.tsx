@@ -385,10 +385,10 @@ function CenterScreen({ actions }: { actions: Actions }) {
       useUiStore.getState().setScreen({ kind: first });
       return undefined;
     }
-    // A connected Herdr's saved choice is still being restored, rather than
+    // A connected engine's saved choice is still being restored, rather than
     // an unanswered connection. Its catalog/View decides when it settles.
     if (restoring) return undefined;
-    // A Herdr or a device that never answers must not hold the page on a
+    // An engine or a device that never answers must not hold the page on a
     // blank screen; a device gets longer, since it is reached over SSH.
     const timer = window.setTimeout(() => {
       if (useUiStore.getState().screen === null) useUiStore.getState().setScreen({ kind: "main" });

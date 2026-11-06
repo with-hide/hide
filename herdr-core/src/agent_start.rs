@@ -1,8 +1,8 @@
-//! Starting an agent in a pane, the one way every Hide start reaches Herdr.
+//! Starting an agent in a pane, the one way every Hide start reaches the engine.
 //!
-//! The pinned Herdr's `agent.start` types the agent's command into the pane
+//! The engine's `agent.start` types the agent's command into the pane
 //! only while the pane's shell alone holds the terminal: the foreground
-//! process group is the shell's own and has no other member (v0.9.1
+//! process group is the shell's own and has no other member (as in Herdr v0.9.1,
 //! `available_pane_shell_from_job`). It does not wait for that state, it
 //! refuses with `agent_pane_busy`, and no event announces the moment the
 //! state is reached. A pane Hide has just made, a new worktree's, a fork's
@@ -24,7 +24,7 @@
 //!
 //! A start that puts an agent back under the name of the one just ended in
 //! the same pane (a wake, a Reopen) also meets `agent_name_taken` until
-//! Herdr has forgotten the ended agent; [`start_at_shell_reusing_name`] sends
+//! the engine has forgotten the ended agent; [`start_at_shell_reusing_name`] sends
 //! that start again on exactly that refusal, inside a bounded wait. The other
 //! starts take that refusal as the answer, since their name is someone else's.
 //!
@@ -34,7 +34,7 @@
 //! too, and a start typed then answers the question with the command's first
 //! letter and runs the rest. A pane Hide makes for a start therefore runs
 //! the account's shell from Hide's own command (`hide_host::shell_integration`,
-//! through Herdr's `layout.apply`), which marks the shell's first prompt on
+//! through the engine's `layout.apply`), which marks the shell's first prompt on
 //! the pane once the user's own startup files are done, and a start in such
 //! a pane ([`ShellStart::Integrated`]) waits for that mark too. A shell that
 //! never shows it within the bound, stopped at a question, is a start that
@@ -56,10 +56,10 @@ use hide_node_link::protocol::{Call, ShellLaunch};
 use crate::engine::{Engine, EngineError, PaneProcessGroup, PreparedStart, StartedAgent, Wait};
 use crate::node_access::NodeLink;
 
-/// How long a pane's shell gets to reach its prompt: the pinned Herdr's own
-/// default wait for an agent's readiness.
+/// How long a pane's shell gets to reach its prompt: Herdr's own
+/// default wait for an agent's readiness, which the engine keeps.
 pub(crate) const SHELL_WAIT: Duration = Duration::from_secs(30);
-/// How long Herdr waits for the agent of a start it typed (`timeout_ms`), and
+/// How long the engine waits for the agent of a start it typed (`timeout_ms`), and
 /// so how long it holds the start's name while no agent shows. Long, because
 /// typing a long first prompt into a slow shell takes most of it.
 pub(crate) const AGENT_START_DEADLINE: Duration = Duration::from_secs(120);
@@ -67,9 +67,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A typed start is not proof that its program exists. Keep the fork's node
-/// holder until Herdr observes this named agent ready in the created pane.
+/// holder until the engine observes this named agent ready in the created pane.
 /// This determines only input release, never whether the fork succeeded.
-/// Reads also settle Herdr's pending start (#3853); nothing is typed again.
+/// Reads also settle the engine's pending start; nothing is typed again.
 /// Runs on the existing fork worker, with no Runtime lock or new timer.
 #[allow(clippy::disallowed_methods)] // bounded production polling, not a test sleep
 pub(crate) fn confirm_fork_started(
@@ -129,7 +129,7 @@ const AGENT_NOT_FOUND: &str = "agent_not_found";
 /// and a Windows console cuts nothing). A start line shorter than this
 /// reaches the shell whole once the shell holds the terminal.
 const SHORTEST_LINE_LIMIT: usize = 1024;
-/// How long Herdr gets to let go of the name of an agent that was just
+/// How long the engine gets to let go of the name of an agent that was just
 /// ended: it forgets the agent a moment after its process is gone, and
 /// refuses `agent.start` under that name until it has.
 pub(crate) const NAME_RELEASE_WAIT: Duration = Duration::from_secs(10);
@@ -216,7 +216,7 @@ fn program_name(shell: &str) -> String {
     }
 }
 
-/// Why a start did not settle with Herdr's answer to `agent.start`.
+/// Why a start did not settle with the engine's answer to `agent.start`.
 #[derive(Debug)]
 pub(crate) enum StartError {
     /// Nothing was typed into the pane: its shell never held the terminal in
@@ -228,7 +228,7 @@ pub(crate) enum StartError {
     /// not marked its first prompt within the wait, stopped in its startup
     /// files (a question waiting for a key). Carries the screen's last line.
     ShellStarting(Option<String>),
-    /// Herdr's own answer to `agent.start`: a refusal, no answer at all, or
+    /// The engine's own answer to `agent.start`: a refusal, no answer at all, or
     /// an answer in a shape the start does not promise (`Answer`).
     Herdr(EngineError),
 }
@@ -391,7 +391,7 @@ pub(crate) fn start_at_shell_checked(
 
 /// A start for an agent that goes back under the name of the one
 /// just ended in this pane: `agent_name_taken` is answered by sending the
-/// start again until Herdr has released the name, within [`NAME_RELEASE_WAIT`].
+/// start again until the engine has released the name, within [`NAME_RELEASE_WAIT`].
 /// `check` is the action proof [`start_at_shell_checked`] repeats before every
 /// attempt.
 #[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
@@ -448,16 +448,16 @@ fn start_within(
         shell.wait(started, deadline)?;
         check().map_err(StartError::refused)?;
         match engine.start_agent(Wait::Each(answer_timeout), start) {
-            // Herdr refused before typing anything: something besides the
+            // The engine refused before typing anything: something besides the
             // shell runs in the pane. A prompt hook can take the terminal
-            // between the read and the start, and on Windows Herdr refuses a
+            // between the read and the start, and on Windows the engine refuses a
             // shell with any child process while `pane.process_info` names
             // the shell alone unless the child is an agent, so the read above
-            // cannot see this state end. Herdr's next answer is the only
+            // cannot see this state end. The engine's next answer is the only
             // reading of it: the same start is asked again one poll later,
             // inside the same deadline, never at once (Windows CI,
             // 2026-10-22: 5,613 refusals in 30 s held the spawn lock and
-            // slowed every other Herdr call).
+            // slowed every other engine call).
             Err(EngineError::Refused { code, message }) if code == PANE_BUSY => {
                 busy += 1;
                 let now = Instant::now();
@@ -474,7 +474,7 @@ fn start_within(
                 }
                 thread::sleep(POLL_INTERVAL.min(deadline - now));
             }
-            // Herdr has not yet forgotten the agent this start replaces. It
+            // The engine has not yet forgotten the agent this start replaces. It
             // refused before typing anything, so the same start is sent again
             // until it has, inside the name wait.
             Err(EngineError::Refused { code, .. })
@@ -482,7 +482,7 @@ fn start_within(
             {
                 thread::sleep(POLL_INTERVAL);
             }
-            // Herdr may still hold the name for an earlier start whose agent
+            // The engine may still hold the name for an earlier start whose agent
             // never showed and whose deadline has passed, which it settles
             // only when the name is read: read it once, and send the start
             // again when that let it go.
@@ -694,13 +694,13 @@ impl Shell<'_> {
         )
     }
 
-    /// Whether Herdr lets go of the start's name once asked about it.
-    /// Herdr holds a name from its `agent.start` until that agent shows or
+    /// Whether the engine lets go of the start's name once asked about it.
+    /// The engine holds a name from its `agent.start` until that agent shows or
     /// the start's own deadline passes, but a server with no screen settles
     /// a passed deadline only when the agent is next read: `agent.get` is that
     /// read, and an answer that the name names no agent any more means the
     /// start can be sent again. A name still held is an agent's, or a start
-    /// that may still show one, and Herdr's refusal is the answer.
+    /// that may still show one, and the engine's refusal is the answer.
     fn settle_name(&self, name: &str) -> bool {
         let read = self.engine.delivery_agent(Wait::Each(READ_TIMEOUT), name);
         let released =
@@ -1043,10 +1043,10 @@ mod tests {
         );
     }
 
-    /// On Windows Herdr refuses a shell with any child process, while
+    /// On Windows the engine refuses a shell with any child process, while
     /// `pane.process_info` names the shell alone unless that child is an
-    /// agent: the read keeps saying ready and only Herdr's answer can change.
-    /// The start asks once a poll until its deadline, then gives Herdr's
+    /// agent: the read keeps saying ready and only the engine's answer can change.
+    /// The start asks once a poll until its deadline, then gives the engine's
     /// refusal, and never asks in a burst.
     #[test]
     fn a_pane_herdr_keeps_refusing_as_busy_is_asked_once_a_poll_until_the_deadline() {
@@ -1154,7 +1154,7 @@ mod tests {
         );
     }
 
-    /// Herdr forgets an ended agent a moment after its process is gone, so a
+    /// The engine forgets an ended agent a moment after its process is gone, so a
     /// start under the same name is refused until then and must be sent
     /// again, once the refusal is gone, and not before.
     #[test]
@@ -1187,10 +1187,10 @@ mod tests {
         )
     }
 
-    /// Herdr holds a name for a start whose agent never showed (its line
+    /// The engine holds a name for a start whose agent never showed (its line
     /// was cut, or its program exited at once) until that start's deadline,
     /// and a server with no screen lets go only when the name is read. A
-    /// start refused under it reads the name once and, when Herdr let go,
+    /// start refused under it reads the name once and, when the engine let go,
     /// starts rather than being refused for good.
     #[test]
     fn a_name_herdr_lets_go_when_read_is_started_again() {
@@ -1215,7 +1215,7 @@ mod tests {
         assert_eq!(starts.load(Ordering::SeqCst), 2);
     }
 
-    /// A name Herdr still holds after the read is an agent's, or a start
+    /// A name the engine still holds after the read is an agent's, or a start
     /// that may still show one: the refusal is the answer.
     #[test]
     fn a_name_still_held_after_the_read_is_herdrs_refusal() {
@@ -1315,7 +1315,7 @@ mod tests {
         })
     }
 
-    /// A first prompt of `bytes` bytes, the argument Herdr types last.
+    /// A first prompt of `bytes` bytes, the argument the engine types last.
     fn start_with_prompt(
         herdr: &Fake,
         node: Option<&dyn NodeLink>,
@@ -1449,7 +1449,7 @@ mod tests {
     }
 
     /// A startup question holds the terminal with the shell alone in the
-    /// foreground, which Herdr reads as a shell ready for the command; the
+    /// foreground, which the engine reads as a shell ready for the command; the
     /// first prompt's mark is what says the startup files are done.
     #[test]
     fn an_integrated_shell_is_typed_into_only_after_its_first_prompt_is_marked() {
@@ -1544,7 +1544,7 @@ mod tests {
         assert_eq!(line.chars().count(), SCREEN_LINE_CHARS);
     }
 
-    /// Herdr names a Windows shell by its full path: the launched Windows
+    /// The engine names a Windows shell by its full path: the launched Windows
     /// PowerShell is still the shell whose mark is waited for.
     #[test]
     fn a_windows_shell_named_by_its_full_path_is_the_launched_one() {

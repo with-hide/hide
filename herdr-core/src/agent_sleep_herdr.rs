@@ -1,14 +1,14 @@
-//! The one place agent sleep relies on Herdr and on the operating system
+//! The one place agent sleep relies on the engine and on the operating system
 //! (PRD agent-sleep D-20).
 //!
-//! Herdr has no hibernate: the pinned release ends nothing on request and
+//! The engine has no hibernate: it ends nothing on request and
 //! forgets an agent whose process ended. So sleeping is Hide ending the
 //! agent, which returns the pane to its shell: first with the agent's own
 //! quit key, then, for an agent still running, by the pane's node ending
 //! its foreground job (SIGTERM to its process group on Unix, the agent's
-//! process tree at once on Windows). Waking is Herdr's own `agent.start` in
+//! process tree at once on Windows). Waking is the engine's own `agent.start` in
 //! that same pane with the provider's resume arguments.
-//! When Herdr offers a hibernate or an
+//! When the engine offers a hibernate or an
 //! exit mark of its own, this file is what changes; the decision, the
 //! records and the screens in `agent_sleep.rs` and the runtime stay.
 //!
@@ -76,7 +76,7 @@ impl std::fmt::Display for EndError {
     }
 }
 
-/// Ends the agent in `pane_id` and returns the state change sequence Herdr
+/// Ends the agent in `pane_id` and returns the state change sequence the engine
 /// reported for it just before, which is how a later listing of the same
 /// agent is told from a new one.
 ///
@@ -84,18 +84,17 @@ impl std::fmt::Display for EndError {
 /// up to a second old and a parent's prompt may have set it working since.
 /// The end reaches the pane's foreground job only, and only when that job is
 /// not the shell's: the agent and what it started (MCP servers, tool
-/// processes; its group on Unix, its process tree on Windows, where Herdr
+/// processes; its group on Unix, its process tree on Windows, where the engine
 /// names the agent's process as the group) end, the shell and every other
 /// pane stay (B7).
 ///
 /// The agent is first asked to quit with its own key, as the operator quits
-/// it, so it puts back the terminal modes it set: Herdr wraps the wake's
+/// it, so it puts back the terminal modes it set: the engine wraps the wake's
 /// start line in bracketed paste while the pane's terminal says the mode is
 /// on, and a PowerShell prompt reads that wrapping as keys, so an agent ended
 /// without its own quit left a Windows pane whose next start never ran
-/// (herdrdev/herdr#5371; the Windows reason goes once it is closed and the
-/// pin moves past it), and an agent ended by a signal leaves its keyboard
-/// protocol, alternate screen and mouse reports on for the shell
+/// (Herdr's behavior, herdrdev/herdr#5371, which the engine follows), and an
+/// agent ended by a signal leaves its keyboard protocol, alternate screen and mouse reports on for the shell
 /// (`quit_on_key`). Only an agent still running after `EXIT_GRACE` is
 /// ended by the node.
 pub(crate) fn end_agent(
@@ -153,7 +152,7 @@ pub(crate) fn end_agent(
             }
         }
     }
-    // The job Herdr reported as the pane's foreground ends. One that ended on
+    // The job the engine reported as the pane's foreground ends. One that ended on
     // its own since is gone, and the shell is waited for all the same.
     let ended = call_as::<GroupEnd>(
         node,
@@ -222,7 +221,7 @@ impl Quit {
     /// `ESC[99;5u` in zsh's line as `9;5u` in three runs of four
     /// (with-hide/hide-private#37). An agent that shows neither, a quit in
     /// progress included, is given until `EXIT_GRACE` to hand the terminal
-    /// back. A read or a press Herdr refuses is an unanswered quit, which the
+    /// back. A read or a press the engine refuses is an unanswered quit, which the
     /// node's end follows.
     #[allow(clippy::disallowed_methods)] // a production wait, not test code
     fn run(&self, engine: &dyn Engine, pane_id: &str, shell: u32) -> Result<Quitting, EndError> {
@@ -342,7 +341,7 @@ fn process_group(engine: &dyn Engine, pane_id: &str) -> Result<PaneProcessGroup,
         .map_err(failed("pane.process_info"))
 }
 
-/// A resumed agent whose CLI runs no session hook on resume leaves Herdr with
+/// A resumed agent whose CLI runs no session hook on resume leaves the engine with
 /// no session for the woken pane, so the wake could never be told from
 /// another conversation. The core chose the id the pane resumed, and says so
 /// the way the agent's own integration would have. Nothing is sent for an
@@ -384,14 +383,14 @@ pub(crate) struct WakeRequest {
     pub(crate) mode: WakeMode,
     pub(crate) args: Vec<String>,
     pub(crate) cwd: Option<String>,
-    /// The conversation a resume opens, which the core reports to Herdr for
+    /// The conversation a resume opens, which the core reports to the engine for
     /// an agent that does not report it itself on resume.
     pub(crate) session_id: Option<String>,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
 }
 
 /// Why a wake failed, as the codes the screen words (`web/src/startReason.ts`);
-/// the folder, Herdr's answer and the rest stay in the wake's `detail`.
+/// the folder, the engine's answer and the rest stay in the wake's `detail`.
 pub(crate) const WAKE_FOLDER_MISSING: &str = "agent_wake.folder_missing";
 pub(crate) const WAKE_NOT_RESUMED: &str = "agent_wake.not_resumed";
 pub(crate) const WAKE_NOT_STARTED: &str = "agent_wake.not_started";
@@ -399,7 +398,7 @@ pub(crate) const WAKE_NOT_READY: &str = "agent_wake.not_ready";
 pub(crate) const WAKE_LAUNCH_CHOICE: &str = "agent_wake.launch_choice_refused";
 
 /// How a wake ended. `reason` is the code the pane words (B14); `detail` is
-/// what only the diagnostic carries, Herdr's own code and message among it
+/// what only the diagnostic carries, the engine's own code and message among it
 /// (B19).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WakeOutcome {
@@ -407,10 +406,9 @@ pub(crate) enum WakeOutcome {
     Failed { reason: String, detail: String },
 }
 
-/// Starts the agent again in the same pane, through Herdr's `agent.start`
-/// once the pane's shell holds its terminal (`agent_start`); Herdr answers
-/// when it has taken the start, and the session sync settles the start once
-/// the agent rests (`session_sync/launch_settle.rs`, herdrdev/herdr#3853).
+/// Starts the agent again in the same pane, through the engine's `agent.start`
+/// once the pane's shell holds its terminal (`agent_start`); the engine answers
+/// when it has taken the start.
 pub(crate) fn start_agent(
     engine: &dyn Engine,
     node: &dyn NodeLink,
@@ -458,7 +456,7 @@ pub(crate) fn start_agent(
                 && let Err(error) =
                     report_resumed_session(engine, &request.pane_id, &request.kind, session)
             {
-                // The agent runs its conversation; Herdr learns it at the
+                // The agent runs its conversation; the engine learns it at the
                 // next prompt instead, as it would have without Hide.
                 crate::diagnostic!(serde_json::json!({
                     "component": "agent_sleep",
@@ -501,14 +499,14 @@ fn refused_reason(mode: WakeMode) -> &'static str {
 }
 
 /// The machine a sleep or a wake runs on, gathered under the lock: the core's
-/// own Herdr and node, or those of a node that dials the core (PRD
+/// own engine and node, or those of a node that dials the core (PRD
 /// core-host-node-remote-core B13).
 pub(crate) struct SleepTarget {
     pub(crate) engine: SharedEngine,
     pub(crate) node: Arc<dyn NodeLink>,
     pub(crate) runtime: Weak<Mutex<Runtime>>,
     pub(crate) notifier: ChangeNotifier,
-    /// The pane as the machine's Herdr names it; a node's pane is kept in
+    /// The pane as the machine's engine names it; a node's pane is kept in
     /// the core under its `remote:` scope.
     pub(crate) herdr_pane_id: String,
     /// Closed to the pane before the end began; the end waits for the writes
@@ -769,7 +767,7 @@ mod tests {
     }
 
     /// A write stalled past the drain bound is not waited out and not ended
-    /// under: nothing reaches Herdr, so the agent stays awake and the late
+    /// under: nothing reaches the engine, so the agent stays awake and the late
     /// write lands in it; the sleep fails with a reason the runtime takes as
     /// any refused end (it reopens the pane and backs off).
     #[test]
@@ -977,7 +975,7 @@ mod tests {
     }
 
     /// Sleep ends the pane's foreground job on every system when the agent
-    /// does not quit on its keys: Herdr names the agent's process as the
+    /// does not quit on its keys: the engine names the agent's process as the
     /// pane's foreground group (on Windows, which keeps no group, the job's
     /// first process stands in for it), the agent and the tool it started
     /// end, and the end waits for the shell to hold the terminal again. On

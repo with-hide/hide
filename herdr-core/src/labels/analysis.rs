@@ -132,7 +132,7 @@ pub(crate) enum GoalUpdate {
 
 /// How the turn stands by the agent's last word (D-08). Only a question, a
 /// block, an unfinished turn and a wait on something other than a pull
-/// request move a row's verb; the rest come from Herdr and GitHub.
+/// request move a row's verb; the rest come from the engine and GitHub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LabelEnd {
@@ -141,7 +141,7 @@ pub enum LabelEnd {
     Question,
     /// It stopped before the request was done and named the cause (a full
     /// disk, a login that lapsed, a failing tool). This is the label's word;
-    /// Herdr's `blocked` lifecycle is an approval prompt and is another thing.
+    /// the engine's `blocked` lifecycle is an approval prompt and is another thing.
     Blocked,
     /// The agent reported the request finished.
     Done,

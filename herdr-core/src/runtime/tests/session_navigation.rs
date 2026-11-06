@@ -24,7 +24,7 @@ fn eligible_agent_panes_open_on_the_terminal_and_keep_the_conversation_they_aske
                 serde_json::json!({"pane_id": pane_id, "cwd": "/private/tmp/hide-conversation-default"})
             })
             .collect();
-        // One tab per pane: a shared tab would need Herdr's split tree.
+        // One tab per pane: a shared tab would need the engine's split tree.
         let tabs: Vec<_> = pane_ids
             .iter()
             .enumerate()
@@ -162,7 +162,7 @@ fn a_refused_relocation_keeps_its_stamp() {
     );
 }
 
-// Herdr acknowledges `pane.move` before the layout that shows the child in
+// The engine acknowledges `pane.move` before the layout that shows the child in
 // its own tab reaches Hide. Dropping the stamp on the acknowledgement let the
 // session update in between move the child a second time, from its new tab
 // into another (issue 231, a loaded CI runner).
@@ -469,7 +469,7 @@ fn focusing_checkout_selects_only_the_target_checkout_pane() {
 /// Every tab in the session ships its own layout, keyed by its tab id.
 /// Before this the snapshot carried one layout, so a tab the operator was
 /// not looking at had no geometry to draw and switching to it had to wait
-/// for Herdr to send one.
+/// for the engine to send one.
 #[test]
 fn tab_layouts_carry_every_tab_in_the_session() {
     let checkout_path = "/private/tmp/hide-tab-layouts-all";
@@ -507,7 +507,7 @@ fn tab_layouts_carry_every_tab_in_the_session() {
 
 /// Switching tabs empties nothing. The tab being selected already has its
 /// geometry, so the canvas draws it on the same dispatch instead of
-/// showing an empty canvas until Herdr confirms the focus.
+/// showing an empty canvas until the engine confirms the focus.
 #[test]
 fn tab_layouts_survive_a_tab_switch_with_no_empty_canvas() {
     let checkout_path = "/private/tmp/hide-tab-layouts-switch";
@@ -580,7 +580,7 @@ pub(super) fn finish_running_pane_focus(runtime: &mut Runtime, result: Result<()
 
 /// PRD B24. A relationship Open is completed only by the outcome carrying
 /// its request id. An unrelated app-wide error and the already projected
-/// layout cannot answer it while Herdr still reports the prior focus.
+/// layout cannot answer it while the engine still reports the prior focus.
 #[test]
 fn pane_focus_request_waits_for_its_matching_authoritative_confirmation() {
     let checkout_path = "/private/tmp/hide-pane-focus-request";
@@ -924,7 +924,7 @@ fn pane_focus_refusal_and_target_retirement_end_the_matching_request() {
 
 /// AC1, SC1. The strip's active mark and the canvas are the same field, so
 /// asking for a tab moves both on the dispatch that asked, without waiting
-/// for Herdr to answer.
+/// for the engine to answer.
 #[test]
 fn view_authority_a_tab_switch_moves_the_strip_and_the_canvas_in_one_snapshot() {
     let checkout_path = "/private/tmp/hide-view-authority-switch";
@@ -955,7 +955,7 @@ fn view_authority_a_tab_switch_moves_the_strip_and_the_canvas_in_one_snapshot() 
     );
 }
 
-/// AC1, SC1. Herdr's next session update still names the tab the operator
+/// AC1, SC1. The engine's next session update still names the tab the operator
 /// left, because the notification has not landed. That is the answer to a
 /// question already asked, not a new focus, so it must not pull the canvas
 /// back.
@@ -991,9 +991,9 @@ fn view_authority_a_stale_herdr_tab_does_not_undo_an_unconfirmed_switch() {
 }
 
 /// Issue #413. The operator drops a tab into a new area (t2) and clicks back
-/// into the first area (t1) before Herdr has answered the drop. Herdr's
+/// into the first area (t1) before the engine has answered the drop. The engine's
 /// session still names t1 from before the drop, which looks like the answer
-/// to the click, and only then does Herdr's answer to the drop arrive. That
+/// to the click, and only then does the engine's answer to the drop arrive. That
 /// late t2 is Hide's own superseded request, not an outside focus: following
 /// it moved the keyboard to t2's pane in the middle of typing into t1.
 #[test]
@@ -1008,7 +1008,7 @@ fn view_authority_a_late_answer_to_a_superseded_switch_is_not_followed() {
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
 
     // The session from before the drop, then each request's answer, with the
-    // lane sending t1 once Herdr has answered t2.
+    // lane sending t1 once the engine has answered t2.
     for (step, answer) in ["w-order:t1", "w-order:t2", "w-order:t1"]
         .into_iter()
         .enumerate()
@@ -1030,7 +1030,7 @@ fn view_authority_a_late_answer_to_a_superseded_switch_is_not_followed() {
                 3,
             );
         }
-        // The first session is from before the drop: Herdr has moved nowhere.
+        // The first session is from before the drop: the engine has moved nowhere.
         let moved: &[&str] = if step == 0 { &[] } else { &[answer] };
         runtime.ingest_session(Ok(herdr.after(moved, herdr_on(answer))));
         assert_eq!(
@@ -1046,7 +1046,7 @@ fn view_authority_a_late_answer_to_a_superseded_switch_is_not_followed() {
     }
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 
-    // Once Herdr has answered both, a move it makes on its own is followed.
+    // Once the engine has answered both, a move it makes on its own is followed.
     runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -1056,7 +1056,7 @@ fn view_authority_a_late_answer_to_a_superseded_switch_is_not_followed() {
 }
 
 /// Issue #594. Each Agent cycle commit is one pane focus, and a pane in
-/// another tab moves Herdr's tab too. Herdr answers the focus at once, but
+/// another tab moves the engine's tab too. The engine answers the focus at once, but
 /// its session stream reports the tab moves afterwards, in order. Those are
 /// the answers to Hide's own requests, not outside focus: following them
 /// replayed every tab the operator passed through and left the screen on an
@@ -1092,7 +1092,7 @@ fn view_authority_a_pane_focus_s_late_tab_move_is_its_answer_not_an_outside_focu
         "Herdr arriving answers every move"
     );
 
-    // Once Herdr has answered, a tab it focuses on its own is followed.
+    // Once the engine has answered, a tab it focuses on its own is followed.
     runtime.ingest_session(Ok(herdr.after(&["w-order:t3"], herdr_on("w-order:t3"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -1101,11 +1101,11 @@ fn view_authority_a_pane_focus_s_late_tab_move_is_its_answer_not_an_outside_focu
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 1);
 }
 
-/// Issue #629. Two tab clicks and an Agent cycle commit meet a slow Herdr:
+/// Issue #629. Two tab clicks and an Agent cycle commit meet a slow engine:
 /// t2 is on the wire, t1 waits on the lane behind it, and the commit's pane
 /// focus replaces t1's wait with its own. A session from before the clicks,
 /// still on t3, settles that wait, and t1 leaves anyway, because a pane
-/// focus does not take a tab focus off the lane. Herdr's answer to t1 is
+/// focus does not take a tab focus off the lane. The engine's answer to t1 is
 /// Hide's own: following it put the screen back on t1 and the shell
 /// recorded t1's pane as a visit, so the next cycle started from it.
 #[test]
@@ -1150,7 +1150,7 @@ fn view_authority_a_tab_focus_that_leaves_after_its_wait_was_replaced_is_superse
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
     assert!(sent_tab_moves(&runtime).is_empty());
 
-    // Each answer was consumed, so a tab Herdr focuses on its own is followed.
+    // Each answer was consumed, so a tab the engine focuses on its own is followed.
     runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -1160,9 +1160,9 @@ fn view_authority_a_tab_focus_that_leaves_after_its_wait_was_replaced_is_superse
 }
 
 /// A pane focus still waiting on the lane is not confirmed by a session
-/// from before it, even one whose layout already names its pane: Herdr is
+/// from before it, even one whose layout already names its pane: the engine is
 /// about to move away for the tab focuses ahead of it, so the focus has to
-/// leave. Taking that session as its answer left Herdr on t1 while Hide
+/// leave. Taking that session as its answer left the engine on t1 while Hide
 /// showed t3 (#629).
 #[test]
 fn view_authority_a_pane_focus_that_has_not_left_is_not_confirmed_by_an_earlier_session() {
@@ -1197,9 +1197,9 @@ fn view_authority_a_pane_focus_that_has_not_left_is_not_confirmed_by_an_earlier_
     );
 }
 
-/// A tab focus waiting on the lane is not confirmed by Herdr moving there on
+/// A tab focus waiting on the lane is not confirmed by the engine moving there on
 /// its own. Confirmed early, the request still left, and once it left it
-/// was remembered as superseded, so Herdr's next move to that tab within
+/// was remembered as superseded, so the engine's next move to that tab within
 /// the deadline was consumed as its answer instead of followed.
 #[test]
 fn view_authority_a_tab_focus_that_has_not_left_is_not_confirmed_by_herdr_s_own_move() {
@@ -1221,7 +1221,7 @@ fn view_authority_a_tab_focus_that_has_not_left_is_not_confirmed_by_herdr_s_own_
 
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t3")));
-    // Herdr applies t2, then moves to t3 on its own while t3 still waits.
+    // The engine applies t2, then moves to t3 on its own while t3 still waits.
     runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
     runtime.ingest_session(Ok(herdr.after(&["w-order:t3"], herdr_on("w-order:t3"))));
     runtime.complete_lane_tab(focus("w-order:t2"), acknowledged(), 3);
@@ -1238,9 +1238,9 @@ fn view_authority_a_tab_focus_that_has_not_left_is_not_confirmed_by_herdr_s_own_
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 2);
 }
 
-/// Herdr publishes no event for focusing the tab it already shows, so a tab
-/// focus that lands there is confirmed by Herdr's answer. Waiting for an
-/// event held every move Herdr made on its own until the deadline.
+/// The engine publishes no event for focusing the tab it already shows, so a tab
+/// focus that lands there is confirmed by the engine's answer. Waiting for an
+/// event held every move the engine made on its own until the deadline.
 #[test]
 fn view_authority_a_tab_focus_on_the_tab_herdr_shows_is_confirmed_by_its_answer() {
     let checkout_path = "/private/tmp/hide-view-authority-shown-tab";
@@ -1249,7 +1249,7 @@ fn view_authority_a_tab_focus_on_the_tab_herdr_shows_is_confirmed_by_its_answer(
     let herdr_on = |tab: &str| Ok(tab_order_payload(checkout_path, &tabs, &tabs, tab));
     runtime.ingest_session(herdr_on("w-order:t1"));
 
-    // t2 is refused, so Herdr stays on t1, where t1 then lands.
+    // t2 is refused, so the engine stays on t1, where t1 then lands.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
     runtime.complete_lane_tab(
@@ -1278,12 +1278,12 @@ fn view_authority_a_tab_focus_on_the_tab_herdr_shows_is_confirmed_by_its_answer(
     );
 }
 
-/// Issue #653. Quick clicks t2, t1, t2, t1, t2 meet Herdr events that trail
+/// Issue #653. Quick clicks t2, t1, t2, t1, t2 meet engine events that trail
 /// its answers. After t2 leaves, Hide still holds a session from before t1
-/// was applied, which shows t2 from the first click; that is Herdr from
+/// was applied, which shows t2 from the first click; that is the engine from
 /// before both requests, not the answer to the second t2. Read as one, it
 /// let the late t2 and t1 of the third and fourth clicks be followed as
-/// Herdr's own moves, and the screen ended on t1 while the last click was
+/// the engine's own moves, and the screen ended on t1 while the last click was
 /// t2. At every step the screen is on the tab of the last click.
 #[test]
 fn view_authority_a_session_from_before_an_earlier_request_does_not_answer_a_later_one() {
@@ -1343,18 +1343,18 @@ fn view_authority_a_session_from_before_an_earlier_request_does_not_answer_a_lat
     }
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 
-    // Every request is answered, so a move Herdr makes on its own is followed.
+    // Every request is answered, so a move the engine makes on its own is followed.
     runtime.ingest_session(Ok(herdr.after(&["w-order:t3"], herdr_on("w-order:t3"))));
     assert_eq!(on_screen(&runtime).as_deref(), Some("w-order:t3"));
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 1);
 }
 
-/// The orders Herdr's answers and moves can arrive in, one row each. Herdr
+/// The orders the engine's answers and moves can arrive in, one row each. The engine
 /// applies Hide's tab focuses in the order they were sent and reports each
 /// move in that order, so however its sessions fold or split the moves, the
 /// screen is on the tab of the last request sent; once each is answered (by
 /// its move, by an answer that moves nothing, by a refusal, or by the
-/// deadline) a move Herdr makes on its own is followed.
+/// deadline) a move the engine makes on its own is followed.
 #[test]
 fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answers_in() {
     #[derive(Debug)]
@@ -1362,7 +1362,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
         Click(&'static str),
         Answer(&'static str),
         Refuse(&'static str),
-        /// A session published after Herdr made these moves, showing the
+        /// A session published after the engine made these moves, showing the
         /// last of them.
         Herdr(&'static [&'static str]),
         Deadline,
@@ -1427,7 +1427,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
             ],
         ),
         // #660: an Agent drop (t2), a click back into the first area (t1), then
-        // a click into the second (t2), each answered before Herdr reports the
+        // a click into the second (t2), each answered before the engine reports the
         // move before it. Following the late t1 moved the keyboard out of the
         // second area in the middle of typing there.
         (
@@ -1556,8 +1556,8 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
     }
 }
 
-/// Herdr's moves between two sessions can be more than the replica keeps,
-/// or come before a new replica after a reconnect. Then the tabs newly
+/// The engine's moves between two sessions can be more than the engine keeps,
+/// or come before a new engine after a reconnect. Then the tabs newly
 /// active since the last session stand in for them, and the gap is
 /// recorded; consuming only the moves kept would leave the dropped
 /// requests waiting out the deadline. With no request waiting there is
@@ -1584,7 +1584,7 @@ fn view_authority_dropped_moves_fall_back_to_the_tabs_newly_active() {
     let mut herdr = HerdrMoves::new();
     runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
 
-    // t2's move is the oldest of more than the replica keeps.
+    // t2's move is the oldest of more than the engine keeps.
     for tab in ["w-order:t2", "w-order:t3"] {
         assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, tab)));
         answer(&mut runtime, tab);
@@ -1605,7 +1605,7 @@ fn view_authority_dropped_moves_fall_back_to_the_tabs_newly_active() {
     assert_eq!(on_screen(&runtime).as_deref(), Some("w-order:t3"));
     assert_eq!(gaps(&records), 1, "{records:?}");
 
-    // A new replica counts its moves from its own snapshot.
+    // A new engine counts its moves from its own snapshot.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     answer(&mut runtime, "w-order:t2");
     let mut herdr = herdr.reconnected();
@@ -1629,7 +1629,7 @@ fn view_authority_dropped_moves_fall_back_to_the_tabs_newly_active() {
 }
 
 /// A snapshot read outside the event stream (a close's or a creation's
-/// fresh projection, the editor's status answer) has no place in Herdr's
+/// fresh projection, the editor's status answer) has no place in the engine's
 /// order and carries no moves: one that already shows the tab Hide asked
 /// for answers nothing, and the stream's next session, carrying the move,
 /// does.
@@ -1676,10 +1676,10 @@ fn view_authority_a_snapshot_read_outside_the_stream_answers_no_request() {
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 }
 
-/// The tab wait a pane focus arms always ends: Herdr refusing the focus
-/// moves no tab, a focus in the tab Herdr already shows arms nothing, and a
-/// tab move Herdr never reports runs out with a tab focus's deadline. After
-/// each, a tab Herdr focuses on its own is followed.
+/// The tab wait a pane focus arms always ends: the engine refusing the focus
+/// moves no tab, a focus in the tab the engine already shows arms nothing, and a
+/// tab move the engine never reports runs out with a tab focus's deadline. After
+/// each, a tab the engine focuses on its own is followed.
 #[test]
 fn view_authority_a_pane_focus_tab_wait_ends_when_no_tab_move_will_arrive() {
     let checkout_path = "/private/tmp/hide-view-authority-pane-tab-ends";
@@ -1692,7 +1692,7 @@ fn view_authority_a_pane_focus_tab_wait_ends_when_no_tab_move_will_arrive() {
         "w-order:t1",
     )));
 
-    // Refused: Herdr stays on t1, so nothing of this focus will arrive.
+    // Refused: the engine stays on t1, so nothing of this focus will arrive.
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t2:p")));
     assert_eq!(
         sent_tab_moves(&runtime),
@@ -1702,7 +1702,7 @@ fn view_authority_a_pane_focus_tab_wait_ends_when_no_tab_move_will_arrive() {
     finish_running_pane_focus(&mut runtime, Err("pane focus refused"));
     assert!(sent_tab_moves(&runtime).is_empty());
 
-    // Herdr already shows t1, so the answer to focusing its pane is all of it.
+    // The engine already shows t1, so the answer to focusing its pane is all of it.
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
     finish_running_pane_focus(&mut runtime, Ok(()));
     assert!(sent_tab_moves(&runtime).is_empty());
@@ -1737,8 +1737,8 @@ fn view_authority_a_pane_focus_tab_wait_ends_when_no_tab_move_will_arrive() {
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 2);
 }
 
-/// The sent tab moves are bounded in count and in time, and one Herdr
-/// refused is not waited on; each of those ends the claim, so Herdr then
+/// The sent tab moves are bounded in count and in time, and one the engine
+/// refused is not waited on; each of those ends the claim, so the engine then
 /// focusing that tab is followed. A request whose result was lost may have
 /// been applied, so it keeps its claim.
 #[test]
@@ -1801,7 +1801,7 @@ fn view_authority_sent_tab_moves_stop_claiming_their_tab_when_capped_expired_or_
     runtime.expire_pending_view_focus(requested_at + VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS);
     assert!(sent_tab_moves(&runtime).is_empty());
 
-    // With every claim gone, Herdr focusing t2 is an outside move again.
+    // With every claim gone, the engine focusing t2 is an outside move again.
     runtime.ingest_session(Ok(tab_order_payload(
         checkout_path,
         &tabs,
@@ -1814,7 +1814,7 @@ fn view_authority_sent_tab_moves_stop_claiming_their_tab_when_capped_expired_or_
     );
 }
 
-/// AC1, R1. With nothing in flight, a Herdr session naming another tab is
+/// AC1, R1. With nothing in flight, an engine session naming another tab is
 /// somebody focusing that tab outside Hide. Hide follows it and says so.
 #[test]
 fn view_authority_an_external_tab_focus_is_followed_and_reported() {
@@ -1855,7 +1855,7 @@ fn view_authority_an_external_tab_focus_is_followed_and_reported() {
 
 /// AC1, SC1. Registering a device rebuilds the catalog from scratch, and a
 /// freshly built checkout names no active tab. The visible tab is Hide's,
-/// so it survives a rebuild Herdr had no part in.
+/// so it survives a rebuild the engine had no part in.
 #[test]
 fn view_authority_a_catalog_rebuild_keeps_the_visible_tab() {
     let checkout_path = "/private/tmp/hide-view-authority-rebuild";
@@ -1885,7 +1885,7 @@ fn view_authority_a_catalog_rebuild_keeps_the_visible_tab() {
     // which is what makes this the interesting moment: the tab the
     // operator chose has to survive the gap. It survives because a
     // rebuild is not a reconcile - the catalog says nothing about which
-    // tab is visible, so nothing on this path may read it as Herdr
+    // tab is visible, so nothing on this path may read it as the engine
     // naming another one.
     runtime.ingest_session(Ok(tab_order_payload(
         checkout_path,
@@ -1907,7 +1907,7 @@ fn view_authority_a_catalog_rebuild_keeps_the_visible_tab() {
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 }
 
-/// AC2, R1. Herdr refusing the notification does not move the operator's
+/// AC2, R1. The engine refusing the notification does not move the operator's
 /// screen. The tab stays where they put it and the refusal is reported.
 #[test]
 fn view_authority_a_refused_tab_focus_keeps_the_tab_and_reports_it() {
@@ -1942,7 +1942,7 @@ fn view_authority_a_refused_tab_focus_keeps_the_tab_and_reports_it() {
     // A refusal that arrives after its request's deadline is still the
     // answer to the last thing asked, so it is reported too.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
-    // This fixture's lane is moved on by hand, as Herdr's answer would.
+    // This fixture's lane is moved on by hand, as the engine's answer would.
     let _ = runtime.advance_lane();
     let deadline = newest_sent_at(&runtime) + VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS;
     runtime.expire_pending_view_focus(deadline);
@@ -1957,7 +1957,7 @@ fn view_authority_a_refused_tab_focus_keeps_the_tab_and_reports_it() {
     assert_eq!(diagnostic_count(&runtime, "tab.focus.refused"), 2);
 }
 
-/// AC2, R1. A notification Herdr never answers stops being pending, the
+/// AC2, R1. A notification the engine never answers stops being pending, the
 /// value Hide chose is kept, and the silence is reported rather than
 /// waited on forever.
 #[test]
@@ -1987,10 +1987,10 @@ fn view_authority_an_unanswered_notification_times_out_and_keeps_its_value() {
     assert_eq!(diagnostic_count(&runtime, "view_focus.timed_out"), 1);
 }
 
-/// Two Herdr workspaces at one path share one checkout, and the second
+/// Two engine workspaces at one path share one checkout, and the second
 /// one in payload order names a different active tab. A tab focus on the
-/// first workspace is answered by Herdr's move to that tab, whichever
-/// workspace the session says holds Herdr's keyboard.
+/// first workspace is answered by the engine's move to that tab, whichever
+/// workspace the session says holds the engine's keyboard.
 #[test]
 fn split_checkout_a_tab_focus_is_confirmed_by_the_workspace_that_owns_the_tab() {
     let checkout_path = "/private/tmp/hide-split-checkout-confirm";
@@ -2021,7 +2021,7 @@ fn split_checkout_a_tab_focus_is_confirmed_by_the_workspace_that_owns_the_tab() 
         Some("wa:t2:p")
     );
 
-    // Herdr shows the tab in its workspace; its keyboard stays in wb.
+    // The engine shows the tab in its workspace; its keyboard stays in wb.
     let confirmed: [(&str, &[&str], &str); 2] = [
         ("wa", &["wa:t1", "wa:t2"], "wa:t2"),
         ("wb", &["wb:t1"], "wb:t1"),
@@ -2051,9 +2051,9 @@ fn split_checkout_a_tab_focus_is_confirmed_by_the_workspace_that_owns_the_tab() 
     );
 }
 
-/// The active tab of a workspace Herdr's keyboard is not in is that
+/// The active tab of a workspace the engine's keyboard is not in is that
 /// workspace's memory, not a focus. It never moves the canvas; a move of
-/// Herdr's keyboard into that workspace does.
+/// the engine's keyboard into that workspace does.
 #[test]
 fn split_checkout_another_workspaces_active_tab_is_not_followed_until_herdr_focuses_it() {
     let checkout_path = "/private/tmp/hide-split-checkout-follow";
@@ -2068,7 +2068,7 @@ fn split_checkout_another_workspaces_active_tab_is_not_followed_until_herdr_focu
         Some("wa:t1")
     );
 
-    // wb remembers another tab; Herdr's keyboard is still in wa.
+    // wb remembers another tab; the engine's keyboard is still in wa.
     let wb_moved: [(&str, &[&str], &str); 2] = [
         ("wa", &["wa:t1"], "wa:t1"),
         ("wb", &["wb:t1", "wb:t2"], "wb:t2"),
@@ -2081,7 +2081,7 @@ fn split_checkout_another_workspaces_active_tab_is_not_followed_until_herdr_focu
     );
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 
-    // Herdr's keyboard moves into wb: that is a focus, and it is followed.
+    // The engine's keyboard moves into wb: that is a focus, and it is followed.
     assert!(runtime.ingest_session(Ok(split_checkout_payload(checkout_path, &wb_moved, "wb"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -2096,7 +2096,7 @@ fn split_checkout_another_workspaces_active_tab_is_not_followed_until_herdr_focu
 }
 
 /// A restore keeps the persisted pane and draws the tab that holds it,
-/// not the tab Herdr's last workspace happens to name. The canvas drawn
+/// not the tab the engine's last workspace happens to name. The canvas drawn
 /// is the canvas attached.
 #[test]
 fn split_checkout_a_restore_draws_the_tab_holding_the_persisted_pane() {
@@ -2132,7 +2132,7 @@ fn split_checkout_a_restore_draws_the_tab_holding_the_persisted_pane() {
 }
 
 /// A timed-out notification keeps Hide's tab through the reconcile that
-/// follows it: Herdr's focus has not moved, so there is nothing to
+/// follows it: the engine's focus has not moved, so there is nothing to
 /// follow.
 #[test]
 fn split_checkout_an_expired_notification_keeps_its_tab_through_the_next_reconcile() {
@@ -2148,7 +2148,7 @@ fn split_checkout_an_expired_notification_keeps_its_tab_through_the_next_reconci
     assert!(runtime.expire_pending_view_focus(requested_at + VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS));
     assert!(sent_tab_moves(&runtime).is_empty());
 
-    // Herdr never answered; its focus is where it was.
+    // The engine never answered; its focus is where it was.
     runtime.ingest_session(Ok(split_checkout_payload(checkout_path, &session, "wa")));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -2159,7 +2159,7 @@ fn split_checkout_an_expired_notification_keeps_its_tab_through_the_next_reconci
     assert_eq!(diagnostic_count(&runtime, "view_focus.timed_out"), 1);
 }
 
-/// A created tab is the visible tab from Herdr's acknowledgment, and the
+/// A created tab is the visible tab from the engine's acknowledgment, and the
 /// `tab_focused` that follows confirms it rather than being followed.
 #[test]
 fn split_checkout_a_created_tab_is_visible_on_the_acknowledgment() {
@@ -2255,7 +2255,7 @@ fn split_checkout_a_pane_focus_in_a_hidden_tab_brings_the_tab_forward() {
     );
 }
 
-/// Closing the visible tab lands on the tab Herdr moved to. Three tabs;
+/// Closing the visible tab lands on the tab the engine moved to. Three tabs;
 /// the operator is on the third and closes it. The snapshot that follows
 /// names the second tab active and no focused pane yet, and the keyboard
 /// goes to that tab's pane, not to the checkout's first.
@@ -2319,7 +2319,7 @@ fn view_authority_a_pane_click_moves_focus_and_a_stale_layout_does_not_undo_it()
         Some("w1:p3")
     );
 
-    // Herdr's in-flight frame still names the pane the tab came forward
+    // The engine's in-flight frame still names the pane the tab came forward
     // with. Its geometry is taken; its focus is not.
     runtime.ingest_session(Ok(finished_tab_payload(&panes, "w1:p1")));
 
@@ -2475,7 +2475,7 @@ fn pane_focus_rejects_a_stale_stream_after_confirmation_and_follows_a_verified_e
     let stale = finished_tab_payload(&panes, "w1:p1");
     let (_, identity) = runtime.ingest_session_awaiting_focus_readback(Ok(stale.clone()), None);
     let identity = identity.unwrap();
-    // The update is ingested at once and Herdr's differing focus waits.
+    // The update is ingested at once and the engine's differing focus waits.
     assert_eq!(runtime.snapshot().focused.pane_id.as_deref(), Some("w1:p2"));
     let (_, next) = runtime.finish_pane_focus_readback(identity, FocusReadback::Elsewhere);
     assert!(next.is_none());
@@ -2488,7 +2488,7 @@ fn pane_focus_rejects_a_stale_stream_after_confirmation_and_follows_a_verified_e
     assert!(runtime.pending_pane_focus.is_none());
     assert!(runtime.pane_focus_readback.is_none());
 
-    // The same proposed move becomes external authority when Herdr's fresh
+    // The same proposed move becomes external authority when the engine's fresh
     // layout and active tab really agree, without any new operator request.
     let (_, identity) = runtime.ingest_session_awaiting_focus_readback(Ok(stale), None);
     runtime.finish_pane_focus_readback(identity.unwrap(), FocusReadback::Confirmed);
@@ -2501,11 +2501,11 @@ fn pane_focus_rejects_a_stale_stream_after_confirmation_and_follows_a_verified_e
 }
 
 /// Every `pane.focus.stream_readback_failed` line an installed build wrote
-/// on 2026-10-14 had one shape: Herdr answered a readback of the stream's
+/// on 2026-10-14 had one shape: the engine answered a readback of the stream's
 /// older focus with the pane the operator had just focused. That is the
-/// readback refuting a stale layout, not a failure. Only a readback Herdr
+/// readback refuting a stale layout, not a failure. Only a readback the engine
 /// could not answer while it was still the latest is one, logged with
-/// Herdr's reason; one a newer focus overtook ends quietly.
+/// the engine's reason; one a newer focus overtook ends quietly.
 #[test]
 fn only_the_latest_readback_herdr_could_not_answer_is_a_failure_line() {
     let failures = |records: &[serde_json::Value]| {
@@ -2522,7 +2522,7 @@ fn only_the_latest_readback_herdr_could_not_answer_is_a_failure_line() {
     finish_running_pane_focus(&mut runtime, Ok(()));
     let stale = finished_tab_payload(&panes, "w1:p1");
 
-    // Herdr already shows the operator's own pane.
+    // The engine already shows the operator's own pane.
     let (_, identity) = runtime.ingest_session_awaiting_focus_readback(Ok(stale.clone()), None);
     let ((_, next), records) = crate::diagnostics::capture(|| {
         runtime.finish_pane_focus_readback(identity.unwrap(), FocusReadback::Elsewhere)
@@ -2530,7 +2530,7 @@ fn only_the_latest_readback_herdr_could_not_answer_is_a_failure_line() {
     assert!(next.is_none());
     assert_eq!(failures(&records), Vec::<serde_json::Value>::new());
 
-    // The operator focused another pane before Herdr answered at all.
+    // The operator focused another pane before the engine answered at all.
     let (_, identity) = runtime.ingest_session_awaiting_focus_readback(Ok(stale.clone()), None);
     runtime.dispatch_json(&operator_focus_event("w1:p3"));
     finish_running_pane_focus(&mut runtime, Ok(()));
@@ -2585,7 +2585,7 @@ fn pane_focus_readback_cannot_outlive_a_new_selection_or_connection() {
         };
 
         // The old answer moves nothing. A read handed on instead is for the
-        // current selection and connection, and Herdr's answer to that one
+        // current selection and connection, and the engine's answer to that one
         // is the one that counts.
         let (_, next) =
             runtime.finish_pane_focus_readback(identity.clone(), FocusReadback::Confirmed);
@@ -2637,7 +2637,7 @@ fn two_tab_focus_payload(t1_focused: &str) -> SessionSnapshotPayload {
 fn a_pane_focus_readback_for_another_tab_cannot_pull_focus_back() {
     let mut runtime = live_runtime();
     runtime.ingest_session(Ok(two_tab_focus_payload("w1:p1")));
-    // Herdr's stream moves tab t1's focus while Hide has p1 selected.
+    // The engine's stream moves tab t1's focus while Hide has p1 selected.
     let (_, identity) =
         runtime.ingest_session_awaiting_focus_readback(Ok(two_tab_focus_payload("w1:p2")), None);
     let identity = identity.unwrap();
@@ -2676,7 +2676,7 @@ fn only_one_pane_focus_readback_is_outstanding_and_a_superseded_one_hands_on() {
         .ingest_session_awaiting_focus_readback(Ok(finished_tab_payload(&panes, "w1:p2")), None);
     let first = first.unwrap();
     assert_eq!(first.target_id, "w1:p2");
-    // Herdr moved again while the first read is out: no second read starts.
+    // The engine moved again while the first read is out: no second read starts.
     let (_, second) = runtime
         .ingest_session_awaiting_focus_readback(Ok(finished_tab_payload(&panes, "w1:p3")), None);
     assert!(second.is_none());
@@ -2703,7 +2703,7 @@ fn a_move_that_arrives_during_an_unconfirmed_readback_is_read_again() {
     let (_, stale) = runtime
         .ingest_session_awaiting_focus_readback(Ok(finished_tab_payload(&panes, "w1:p2")), None);
     let stale = stale.unwrap();
-    // Herdr really moves to p2 while that read is out: the layout looks the
+    // The engine really moves to p2 while that read is out: the layout looks the
     // same, and the one slot is taken.
     let (_, moved) = runtime
         .ingest_session_awaiting_focus_readback(Ok(finished_tab_payload(&panes, "w1:p2")), None);
@@ -2880,7 +2880,7 @@ fn latest_pane_focus_is_not_released_by_a_layout_while_an_older_request_is_runni
     assert_eq!(diagnostic_count(&runtime, "pane.focus.followed"), 0);
 }
 
-/// AC1, AC8, R1. With nothing in flight, a Herdr layout naming another
+/// AC1, AC8, R1. With nothing in flight, an engine layout naming another
 /// pane is a focus made outside Hide. Hide follows it and reports the
 /// panes and where the change came from.
 #[test]
@@ -2913,7 +2913,7 @@ fn view_authority_a_refused_pane_focus_keeps_the_pane_and_reports_it() {
 }
 
 /// Rule 11. Reaching for the pane that already has the keyboard converges
-/// on the state it is already in and sends Herdr nothing a second time.
+/// on the state it is already in and sends the engine nothing a second time.
 /// The look itself still counts, because clicking the pane you are on is
 /// still looking at it.
 #[test]
@@ -2943,7 +2943,7 @@ fn view_authority_repeating_a_focus_sends_no_second_notification() {
 fn tab_order_follows_herdr_and_not_layout_arrival() {
     let checkout_path = "/private/tmp/hide-tab-order-arrival";
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
-    // Herdr reports t1, t2, t3; the layouts arrive in the order the tabs
+    // The engine reports t1, t2, t3; the layouts arrive in the order the tabs
     // were first drawn, which is the order the navigator used to take.
     let payload = tab_order_payload(
         checkout_path,
@@ -2974,7 +2974,7 @@ fn tab_order_follows_a_move_and_ignores_a_layout_redraw() {
         "w-order:t1"
     ))));
 
-    // Herdr moved the second tab in front of the first.
+    // The engine moved the second tab in front of the first.
     let moved = ["w-order:t2", "w-order:t1", "w-order:t3"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
         checkout_path,
@@ -3035,7 +3035,7 @@ fn herdr_active_tab_unresolved_is_reported_not_replaced() {
     ))));
 
     // Hide owns the visible tab, so a checkout that has tabs shows one of
-    // them. What Herdr named is still reported, because a name that
+    // them. What the engine named is still reported, because a name that
     // matches no tab in the session is worth knowing about.
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -3075,7 +3075,7 @@ fn herdr_active_tab_unresolved_is_reported_not_replaced() {
 
 #[test]
 fn tab_strip_reorder_index_counts_positions_before_the_tab_leaves_the_list() {
-    // Herdr inserts into the list it still holds and then takes the moved
+    // The engine inserts into the list it still holds and then takes the moved
     // tab out of its old place, so the index is where the tab that ends up
     // behind the moved one sits now. These three cases are the ones a live
     // 0.8.2 server was observed answering with exactly these orders.
@@ -3092,7 +3092,7 @@ fn tab_strip_reorder_index_counts_positions_before_the_tab_leaves_the_list() {
         herdr_insert_index(&current, &["t3", "t1", "t2"].map(str::to_owned), "t3"),
         Some(0)
     );
-    // A file tab is not one of Herdr's, so there is no Herdr move to make.
+    // A file tab is not one of the engine's, so there is no engine move to make.
     assert_eq!(
         herdr_insert_index(
             &current,
@@ -3103,7 +3103,7 @@ fn tab_strip_reorder_index_counts_positions_before_the_tab_leaves_the_list() {
     );
 
     // A workspace split across two checkouts. The strip the operator drags
-    // holds t1, t2 and t3; t5 is a sibling checkout's tab that Herdr still
+    // holds t1, t2 and t3; t5 is a sibling checkout's tab that the engine still
     // counts. Dropping t1 at the end of that strip means "after t3", which
     // is one past the workspace's last position when t5 leads and t5's own
     // position when t5 trails. Reading the index off the strip alone gives
@@ -3144,9 +3144,9 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
     let herdr = FakeEngine::start(|_, _| tab_list(&["w-order:t2", "w-order:t1"]));
     runtime.live = Some(herdr.live());
 
-    // Move the first Herdr tab behind the second. The file tab does not
-    // move, so the arrangement differs from Herdr's only in Herdr's own
-    // order, which is Herdr's to grant.
+    // Move the first engine tab behind the second. The file tab does not
+    // move, so the arrangement differs from the engine's only in the engine's own
+    // order, which is the engine's to grant.
     assert!(reorder_tab(
         &mut runtime,
         &checkout_id,
@@ -3168,7 +3168,7 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
         vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()]
     );
 
-    // Herdr reports the new order; the arrangement lands with it.
+    // The engine reports the new order; the arrangement lands with it.
     let moved = ["w-order:t2", "w-order:t1"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
         &checkout_path,
@@ -3194,7 +3194,7 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
     let (mut runtime, checkout_id, repository, worktree) = split_workspace_checkouts("index-scope");
     let repository_path = repository.to_string_lossy().into_owned();
     let worktree_path = worktree.to_string_lossy().into_owned();
-    // Herdr's list leads with the worktree's tab, so this checkout's tabs
+    // The engine's list leads with the worktree's tab, so this checkout's tabs
     // do not start at the workspace's first position.
     let order = [
         ("w-order:t5", worktree_path.as_str()),
@@ -3219,7 +3219,7 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
     runtime.live = Some(herdr.live());
 
     // Drag the first tab to the end of this checkout's strip. In the
-    // checkout's own coordinates that reads as index 3, which Herdr would
+    // checkout's own coordinates that reads as index 3, which the engine would
     // apply to its four-tab list and land the tab between t2 and t3.
     assert!(reorder_tab(
         &mut runtime,
@@ -3239,7 +3239,7 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
         "a move Herdr can make is not an error"
     );
 
-    // Herdr reports the order the request asked for, so the arrangement
+    // The engine reports the order the request asked for, so the arrangement
     // lands and the sibling checkout's tab is untouched.
     let moved = [
         ("w-order:t5", worktree_path.as_str()),
@@ -3318,10 +3318,10 @@ fn tab_strip_reorder_keeps_herdrs_order_and_reports_when_a_move_is_refused() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// AC12, SC6 recovery. A refused move leaves the strip where Herdr last
+/// AC12, SC6 recovery. A refused move leaves the strip where the engine last
 /// put it and says so, and the operator's answer to that is to drag again.
 /// The retry has to be an ordinary drag: the same request goes out, and
-/// the order lands when Herdr reports it, with nothing left over from the
+/// the order lands when the engine reports it, with nothing left over from the
 /// refusal to hold it back.
 #[test]
 fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
@@ -3401,7 +3401,7 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
         vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()]
     );
 
-    // Herdr grants it this time, and the strip lands.
+    // The engine grants it this time, and the strip lands.
     let moved = ["w-order:t2", "w-order:t1"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
         &checkout_path,
@@ -3515,7 +3515,7 @@ fn tab_label_names_the_next_tab_after_the_lowest_free_herdr_number() {
     // The gap is taken before the end, so closing tab 1 and adding one
     // gives Tab 1 back rather than climbing forever.
     assert_eq!(next(&["2", "3"]), "Tab 1");
-    // A named tab holds no number. A tab Herdr stores the display way
+    // A named tab holds no number. A tab the engine stores the display way
     // holds its number too: the shell hands `Tab N` to `tab.create`
     // verbatim, and counting only bare numbers made every new tab
     // `Tab 2` beside the last one.
@@ -3570,7 +3570,7 @@ fn a_plain_terminal_pane_cwd_is_reconciled_into_its_checkout() {
     assert_eq!(runtime.snapshot.navigator.workspaces.len(), 1);
     assert_eq!(runtime.snapshot.navigator.workspaces[0].checkouts.len(), 1);
     assert!(runtime.ingest_session(Ok(payload)));
-    // Once Herdr has a workspace in that directory the registration's
+    // Once the engine has a workspace in that directory the registration's
     // row carries it, not a second entry beside it.
     assert_eq!(runtime.snapshot().navigator.workspaces.len(), 1);
     assert_eq!(
@@ -3596,7 +3596,7 @@ fn a_plain_terminal_pane_cwd_is_reconciled_into_its_checkout() {
         "plain pane layout should create one checkout tab"
     );
     assert_eq!(checkout.tabs[0].panes[0].id, "plain:p1");
-    // Herdr's bare tab number reads as a label only after the display
+    // The engine's bare tab number reads as a label only after the display
     // rule turns it into a name.
     assert_eq!(checkout.tabs[0].label.as_deref(), Some("Tab 2"));
     assert_eq!(checkout.tabs[0].panes[0].cwd, checkout_path);
@@ -3853,7 +3853,7 @@ fn a_missing_selected_pane_reports_without_falling_back_to_a_same_cwd_pane() {
 
 /// A selection saved while another core ran this machine names that core's
 /// device, and that core saved no pane of this machine at all when it held
-/// this machine as a device; the window opens where this machine's Herdr has
+/// this machine as a device; the window opens where this machine's engine has
 /// the keyboard, which is where the last core left it, not on the catalog's
 /// first row.
 #[test]
@@ -4053,7 +4053,7 @@ fn restored_selection_opens_on_herdrs_focus(
     assert!(!runtime.snapshot.ui_state.focus_from_herdr, "taken once");
 }
 
-/// Herdr's keyboard on a pane no catalog checkout holds is no place to open:
+/// The engine's keyboard on a pane no catalog checkout holds is no place to open:
 /// a restore that missed starts on the catalog's first checkout, with no
 /// selected pane outside it.
 #[test]
@@ -4074,7 +4074,7 @@ fn a_missed_restore_with_herdrs_focus_outside_every_checkout_opens_catalog_first
         ],
         "w-order:t1",
     );
-    // A layout Herdr reports for a tab it lists in no workspace, so no
+    // A layout the engine reports for a tab it lists in no workspace, so no
     // checkout holds its pane.
     let mut outside = payload.layouts[0].clone();
     outside.workspace_id = "w-loose".to_owned();
@@ -4156,7 +4156,7 @@ fn a_start_with_nothing_saved_skips_a_checkout_whose_folder_is_gone() {
 fn a_restored_pane_the_session_no_longer_has_retargets_without_reporting() {
     let mut runtime = runtime();
     // What launch produces: ids read from disk that name the session that
-    // ended, against a Herdr session that has since been restarted.
+    // ended, against an engine session that has since been restarted.
     runtime.snapshot.ui_state.selected_pane_id = Some("wW:p3".to_owned());
     runtime.snapshot.terminal.pane_id = Some("wW:p3".to_owned());
     runtime.snapshot.ui_state.focused_checkout_id = Some("checkout:gone".to_owned());
@@ -4196,10 +4196,10 @@ fn a_restored_pane_the_session_no_longer_has_retargets_without_reporting() {
     assert!(runtime.snapshot().active_pane_layout().is_some());
 }
 
-/// AC11, R9, SC6. A checkout whose tabs come from two Herdr workspaces
+/// AC11, R9, SC6. A checkout whose tabs come from two engine workspaces
 /// refused every drag, because ownership was decided for the checkout
 /// rather than for the drag. A drag that only steps over the other
-/// workspace's tabs changes nothing Herdr can see, so it lands locally.
+/// workspace's tabs changes nothing the engine can see, so it lands locally.
 #[test]
 fn tab_strip_reorder_a_drag_past_another_workspaces_tabs_needs_no_herdr_move() {
     let (mut runtime, checkout_id, directory) = strip_checkout("split-local");
@@ -4219,7 +4219,7 @@ fn tab_strip_reorder_a_drag_past_another_workspaces_tabs_needs_no_herdr_move() {
         "the split checkout holds both workspaces: {before:?}"
     );
 
-    // There is no live connection here, so any request to Herdr would fail
+    // There is no live connection here, so any request to the engine would fail
     // loudly. Landing silently is the assertion.
     let moved = before[0].clone();
     assert!(reorder_tab(&mut runtime, &checkout_id, &moved, 1));
@@ -4241,7 +4241,7 @@ fn tab_strip_reorder_a_drag_past_another_workspaces_tabs_needs_no_herdr_move() {
 }
 
 /// AC11, R9. A drag that does change the moved tab's own workspace order
-/// still asks Herdr, and asks with an index counted in that workspace, not
+/// still asks the engine, and asks with an index counted in that workspace, not
 /// in the mixed strip the operator sees.
 #[test]
 fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
@@ -4283,9 +4283,9 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
     // Nothing lands on the operator's word alone.
     assert_eq!(strip_ids(&runtime, &checkout_id), before);
 
-    // Herdr reports the new order for the workspace it moved a tab in.
+    // The engine reports the new order for the workspace it moved a tab in.
     // The held arrangement has to land here: the checkout holds two
-    // workspaces' tabs, so what Herdr reports for one of them is never the
+    // workspaces' tabs, so what the engine reports for one of them is never the
     // whole checkout's list, and a hold that waited for the whole list
     // would never be released.
     assert!(runtime.ingest_session(Ok(split_checkout_payload(
@@ -4317,7 +4317,7 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
 
 /// AC11, R9, SC6. A drag can both reorder the moved tab inside its own
 /// workspace and carry it past another workspace's tabs. The operator's
-/// arrangement is then an interleaving Herdr never reports, because Herdr
+/// arrangement is then an interleaving the engine never reports, because the engine
 /// only ever states one workspace's order. Holding the checkout's mixed
 /// order and waiting for it to come back left the drag pending forever and
 /// the strip snapped back to where the tab started.
@@ -4365,7 +4365,7 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
         "the index was not counted in the moved tab's own workspace"
     );
 
-    // Herdr states the right workspace's new order. The checkout still
+    // The engine states the right workspace's new order. The checkout still
     // lists its tabs workspace by workspace, so what comes back is
     // `w-left:t1, w-right:t2, w-right:t1` - never the operator's
     // interleaving.
@@ -4797,7 +4797,7 @@ fn tab_rename_keeps_the_committed_name_on_failure_and_ignores_old_receipts() {
         runtime.snapshot.navigator.workspaces[0].checkouts[0].strip[0].label,
         "작업 제목"
     );
-    // A stale projection cannot undo an acknowledged clear; once Herdr
+    // A stale projection cannot undo an acknowledged clear; once the engine
     // confirms it, a subsequent external rename becomes authoritative.
     let mut incoming = runtime.snapshot.tab.clone();
     incoming.naming.raw = "Saved".into();

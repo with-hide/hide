@@ -1,7 +1,7 @@
 // S2 flows on an isolated engine (PRD web-shell-pivot-s2 B16): two
 // checkouts, three tabs, two splits, one registration, one refusal, plus
 // the shortcut sheet, zoom, a pane close and a divider drag. Every command
-// runs against a private engine; the operator's Herdr is never touched.
+// runs against a private engine; the operator's engine is never touched.
 // Each test is one contract and starts from `startFlow`'s own stack, so a
 // failure in one never takes another contract's assertions down with it.
 
@@ -21,7 +21,7 @@ import { chord, mod, SYSTEM } from "./chords";
 
 /**
  * Waits until the shell has drawn `paneId` as the focused pane and kept it
- * for a second. Herdr confirms a focus later than the core moves it, and
+ * for a second. The engine confirms a focus later than the core moves it, and
  * on a slow runner the confirmation of one request can reach the core after
  * the next request went out, naming the earlier pane for a moment; keys
  * typed in that moment follow it.
@@ -191,7 +191,7 @@ async function splitShell(page: Page, flow: Flow): Promise<string> {
   return shellPaneId;
 }
 
-// @platform: The checkout rows and tabs a platform's Herdr creates, owned by the core's wire path (a Windows drive path included), and the Overview round trip.
+// @platform: The checkout rows and tabs a platform's engine creates, owned by the core's wire path (a Windows drive path included), and the Overview round trip.
 test("switching checkouts is one focus_checkout, and a plain folder is a row of the Overview over its Workspace", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
@@ -222,7 +222,7 @@ test("switching checkouts is one focus_checkout, and a plain folder is a row of 
   }
 });
 
-// @platform: ⌥T and ⌥` are chords the platform's browser keeps or moves, the new tab's label is the process name Herdr reads on that platform, and a tab closes through its Herdr.
+// @platform: ⌥T and ⌥` are chords the platform's browser keeps or moves, the new tab's label is the process name the engine reads on that platform, and a tab closes through its engine.
 test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recent agents, reorder and close still work", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
@@ -267,7 +267,7 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", herdr.tab);
     await expect.poll(() => sent.get("focus_pane")).toBe(paneFocusEvents + 1);
 
-    // Agent areas own local order (B7/D19): one move changes the strip without a Herdr reorder.
+    // Agent areas own local order (B7/D19): one move changes the strip without an engine reorder.
     const secondTab = page.locator(`[data-tab="${tabs[1]}"]`);
     const firstTab = page.locator(`[data-tab="${herdr.tab}"]`);
     const from = (await secondTab.boundingBox())!;
@@ -297,7 +297,7 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
   }
 });
 
-// @platform: Wheel and click input over a real PTY through the platform's Herdr and its shell: the bytes its shim reads, and the SGR report is the only thing it gets.
+// @platform: Wheel and click input over a real PTY through the platform's engine and its shell: the bytes its shim reads, and the SGR report is the only thing it gets.
 test("a wheel over a shell pane is one terminal_scroll per batch, and a click is one terminal_click answered by the SGR report", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
@@ -321,7 +321,7 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     await expect.poll(() => sent.get("terminal_scroll")).toBe(2);
     expect(lastSent.get("terminal_scroll")).toMatchObject({ direction: "down" });
     await expect.poll(() => screen(page), { timeout: 10_000 }).toMatch(bottom);
-    // ⌥ + wheel is the browser's, not Herdr's.
+    // ⌥ + wheel is the browser's, not the engine's.
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, -120);
     await page.keyboard.up("Alt");
@@ -359,10 +359,10 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     await expect.poll(() => sent.get("terminal_click")).toBe(1);
     expect(lastSent.get("terminal_click")).toEqual({ pane_id: agentPane, column: cell.column, row: cell.row, modifiers: 0 });
     await expect.poll(() => sent.get("focus_pane")).toBe(focusBefore + 1);
-    // Herdr confirms a focus later than the core moves it, and a confirmation
+    // The engine confirms a focus later than the core moves it, and a confirmation
     // still in flight when the next focus_pane goes out is followed as a
-    // move of Herdr's own (ARCHITECTURE.md), which would flip keyboard focus
-    // back mid-typing on a slow runner; each focus waits for Herdr's word.
+    // move of the engine's own (ARCHITECTURE.md), which would flip keyboard focus
+    // back mid-typing on a slow runner; each focus waits for the engine's word.
     await focusConfirmed(flow, agentPane);
     await settledFocus(page, agentPane);
     const report = `\x1b[<0;${cell.column + 1};${cell.row + 1}M\x1b[<0;${cell.column + 1};${cell.row + 1}m`;
@@ -410,7 +410,7 @@ test("a wheel over an alternate-screen program is one terminal_scroll and no key
     expect(sent.get("key") ?? 0).toBe(keysBeforeWheel);
     await page.keyboard.press("q");
     await expect.poll(() => sent.get("key")).toBe(keysBeforeWheel + 1);
-    // Herdr answers a wheel batch over an alternate screen without mouse
+    // The pane holder answers a wheel batch over an alternate screen without mouse
     // tracking with one cursor key (down, then up), whatever the batch's
     // lines; q is the one key event the page sent. These are the only bytes
     // the PTY got, in this order.
@@ -512,7 +512,7 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     expect(sent.get("key") ?? 0).toBe(keysBeforeSheet);
 
     // ⌘F is intercepted from Chrome. The focused pane is an agent with its
-    // own find and no history in Herdr, so the core is asked where the search
+    // own find and no history in the engine, so the core is asked where the search
     // goes and the agent's search takes it; no find bar opens.
     await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("claude");
     await page.locator('[data-pane-view][data-focused="true"] .xterm-helper-textarea').focus();
@@ -596,7 +596,7 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
 
     // Two full cycles through the six tabs in strip order: each visit keeps
     // the last five shown, an evicted tab comes back with its text from
-    // Herdr's frame, and every revisited pane takes new ordered input.
+    // the engine's frame, and every revisited pane takes new ordered input.
     for (const cycle of [1, 2]) {
       for (const tab of order) {
         await visit(tab);
@@ -659,7 +659,7 @@ test("switching to another checkout and back keeps the first checkout's retained
   }
 });
 
-// @platform: Typed echo through the platform's PTY, a terminal parked across a tab switch, and a dropped socket that comes back to the platform's hided and Herdr.
+// @platform: Typed echo through the platform's PTY, a terminal parked across a tab switch, and a dropped socket that comes back to the platform's hided and engine.
 test("typed text echoes and parks across a tab switch, and a dropped socket comes back with the tab bar and splits", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {

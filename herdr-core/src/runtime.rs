@@ -174,7 +174,7 @@ fn conversation_agent_kind(kind: &str) -> bool {
         .is_some_and(|agent| agent.format().adapter().conversation.is_some())
 }
 
-/// Which Herdr workspace each tab belongs to, from each workspace's tab order.
+/// Which engine workspace each tab belongs to, from each workspace's tab order.
 pub(super) fn tab_owners(order: &BTreeMap<String, Vec<String>>) -> BTreeMap<String, String> {
     order
         .iter()
@@ -186,9 +186,9 @@ pub(super) fn tab_owners(order: &BTreeMap<String, Vec<String>>) -> BTreeMap<Stri
         .collect()
 }
 
-/// A device's Herdr workspaces' tab orders, keyed by Herdr's own workspace id
+/// A device's engine workspaces' tab orders, keyed by the engine's own workspace id
 /// and naming each tab by its device-scoped id, as the device's strips do.
-/// The raw session carries one checkout per Herdr workspace, in Herdr's order.
+/// The raw session carries one checkout per engine workspace, in the engine's order.
 pub(super) fn device_workspace_tab_order(
     raw: &RemoteSessionSnapshot,
 ) -> BTreeMap<String, Vec<String>> {
@@ -207,12 +207,12 @@ pub(super) fn device_workspace_tab_order(
         .collect()
 }
 
-/// Places one checkout's strip from its Herdr and editor tabs, settling a
-/// held reorder once Herdr reports the order it asked for.
+/// Places one checkout's strip from its engine and editor tabs, settling a
+/// held reorder once the engine reports the order it asked for.
 ///
-/// A held reorder lands the moment Herdr reports the order it asked for,
-/// whichever path carried it: the `tab_moved` event, a move Herdr had already
-/// made, or a move made from the TUI. A held reorder whose tabs are no longer
+/// A held reorder lands the moment the engine reports the order it asked for,
+/// whichever path carried it: the move this reorder asked for, a move the
+/// engine had already made, or a move another client made. A held reorder whose tabs are no longer
 /// the checkout's tabs can never be reported, so it is dropped rather than
 /// kept waiting for an order that cannot arrive.
 fn place_checkout_strip(
@@ -255,11 +255,11 @@ fn place_checkout_strip(
 /// Places one checkout's tab strip.
 ///
 /// The strip is a sequence of slots. A slot an entry already held it keeps, so
-/// a file tab the operator dropped between two Herdr tabs stays where it was
-/// put. The Herdr slots are then filled from Herdr's own tab order, because
-/// Herdr owns where its tabs sit and a tab it moved has to move here too. A
+/// a file tab the operator dropped between two engine tabs stays where it was
+/// put. The engine slots are then filled from the engine's own tab order, because
+/// the engine owns where its tabs sit and a tab it moved has to move here too. A
 /// tab that is new to the strip takes a slot at the end, which is where both a
-/// newly opened file and a newly created Herdr tab belong.
+/// newly opened file and a newly created engine tab belong.
 fn ordered_strip(
     stored: &[String],
     herdr: &[StripTabSnapshot],
@@ -271,7 +271,7 @@ fn ordered_strip(
         by_id.insert(entry.id.as_str(), entry.clone());
     }
     // A stored order that names the same tab twice holds one slot, not two, so
-    // the Herdr slot count stays equal to the Herdr tab count below.
+    // the engine slot count stays equal to the engine tab count below.
     let mut placed = Vec::with_capacity(herdr.len() + files.len());
     let mut held = BTreeSet::new();
     for id in stored {
@@ -289,11 +289,11 @@ fn ordered_strip(
             .filter(|entry| !held.contains(&entry.id))
             .cloned(),
     );
-    // Herdr orders its own workspace's tabs; it has no order that spans two of
-    // them. So each Herdr slot is filled from the queue of the workspace that
+    // The engine orders its own workspace's tabs; it has no order that spans two of
+    // them. So each engine slot is filled from the queue of the workspace that
     // slot already belongs to, which leaves Hide owning how the workspaces and
     // the file tabs interleave. Refilling from one flat queue is what undid
-    // every drag in a checkout two Herdr workspaces share.
+    // every drag in a checkout two engine workspaces share.
     let mut queues: BTreeMap<&str, VecDeque<&StripTabSnapshot>> = BTreeMap::new();
     let owner = |entry: &StripTabSnapshot| {
         workspace_of
@@ -315,12 +315,12 @@ fn ordered_strip(
     placed
 }
 
-/// One reorder the operator asked for that Herdr has not reported back yet.
+/// One reorder the operator asked for that the engine has not reported back yet.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PendingTabMove {
     /// The whole strip order the entry was dropped into, as strip entry ids.
     desired: Vec<String>,
-    /// The Herdr workspace the move was asked of. A checkout can hold tabs
+    /// The engine workspace the move was asked of. A checkout can hold tabs
     /// from several workspaces, and `tab.move` is indexed inside one of them,
     /// so this is the workspace whose reported order settles the move.
     workspace_id: String,
@@ -339,21 +339,21 @@ struct PendingTabMove {
     retryable: bool,
 }
 
-/// The Herdr that carries a tab move: this machine's, or the device whose
+/// The engine that carries a tab move: this machine's, or the device whose
 /// checkout the moved tab is in.
 enum TabMoveCarrier {
     Local,
     Device(RemoteControlContext),
 }
 
-/// Translates a wanted Herdr tab order into the index `tab.move` takes.
+/// Translates a wanted engine tab order into the index `tab.move` takes.
 ///
-/// Herdr counts the insertion point in the list it still holds, before the
+/// The engine counts the insertion point in the list it still holds, before the
 /// moved tab is taken out of it, so the index is the current position of
 /// whichever tab is to end up behind the moved one.
 ///
-/// `workspace_order` is the whole Herdr workspace's tab list, because that is
-/// the list Herdr indexes. `desired` is the order the operator asked for in
+/// `workspace_order` is the whole engine workspace's tab list, because that is
+/// the list the engine indexes. `desired` is the order the operator asked for in
 /// one checkout's strip, which is a subset of it: a workspace's tabs are split
 /// across a repository and its worktrees whenever their panes are. Reading the
 /// index off the subset instead lands the tab elsewhere as soon as the
@@ -363,8 +363,8 @@ enum TabMoveCarrier {
 /// it goes in front of whichever workspace tab currently follows the checkout's
 /// last tab, and at the end of the workspace when nothing follows.
 ///
-/// `None` means the move cannot be expressed as a Herdr move: the named tab is
-/// not one of Herdr's, or an anchor it needs is not in the workspace's list.
+/// `None` means the move cannot be expressed as an engine move: the named tab is
+/// not one of the engine's, or an anchor it needs is not in the workspace's list.
 fn herdr_insert_index(
     workspace_order: &[String],
     desired: &[String],
@@ -379,7 +379,7 @@ fn herdr_insert_index(
         .checked_sub(1)
         .and_then(|before| desired.get(before))
     else {
-        // The checkout has one Herdr tab, so there is nothing to move it past.
+        // The checkout has one engine tab, so there is nothing to move it past.
         // Its own position is the index that leaves the workspace unchanged.
         return index_of(moved);
     };
@@ -544,37 +544,37 @@ fn reveal_expansion_paths(checkout_path: &str, path: &str, is_directory: bool) -
     expanded
 }
 
-/// The absolute lifetime of one stage of a Herdr-owned mutation: restore
+/// The absolute lifetime of one stage of an engine-owned mutation: restore
 /// capture, the request itself, and the topology wait each get this long
 /// before the operation becomes a caller-visible unknown result (PRD D-08).
 const CLOSE_STAGE_TIMEOUT_MS: u64 = 5_000;
 
 /// How long a view-state notification may stay unconfirmed before Hide stops
-/// treating Herdr's answer as pending.
+/// treating the engine's answer as pending.
 ///
 /// The round trip measured on this machine is roughly 130 ms for the request
 /// and 170 ms more for the confirming event, so three seconds never trips on
-/// a healthy server while still releasing a value quickly when Herdr has
+/// a healthy engine while still releasing a value quickly when the engine has
 /// stopped answering. The value is kept when the wait expires; only the
 /// waiting stops.
 const VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS: u64 = 3_000;
 
 // How many sent, unanswered tab moves Hide remembers at once, the same
-// number of Herdr's moves the replica keeps. Each lives at most
+// number of the engine's moves the engine keeps. Each lives at most
 // `VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS`; a burst of tab switches faster than
 // that evicts the oldest and reports it.
 use crate::sidebar::TAB_FOCUS_LIMIT;
 
-/// A pane focus Hide has already made and told Herdr about.
+/// A pane focus Hide has already made and told the engine about.
 ///
 /// Hide owns the focused pane, so the value in the snapshot is not a
 /// prediction to be undone. This records only that a notification is in
-/// flight, which is what tells a Herdr layout naming an older pane apart
+/// flight, which is what tells an engine layout naming an older pane apart
 /// from an operator focusing something outside Hide. The tab moves a pane
 /// focus makes are kept with the tab focuses (`tab_focus.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingViewFocus {
-    /// The pane id Hide asked Herdr to focus.
+    /// The pane id Hide asked the engine to focus.
     target_id: String,
     /// Present only for an explicit relationship Open/Return request. The
     /// core owns the outcome; the shell supplies this opaque correlation id
@@ -582,7 +582,7 @@ struct PendingViewFocus {
     request_id: Option<String>,
     /// Local pane controls settle by operation identity, never by target alone.
     pane_control_serial: Option<u64>,
-    /// Whether the request has left for Herdr. A request still waiting its
+    /// Whether the request has left for the engine. A request still waiting its
     /// turn on the control lane cannot be answered yet, and its wait does
     /// not run out.
     sent: bool,
@@ -646,26 +646,26 @@ pub(crate) const ATTACHED_TAB_LIMIT: usize = 5;
 ///
 /// A failed move is retried on the next ingest that finds the child still
 /// split, and a delegated child changes state often enough that one arrives.
-/// The window keeps a persistently refusing Herdr from being asked once per
+/// The window keeps a persistently refusing engine from being asked once per
 /// event without adding a timer of its own (PRD B36).
-/// A move Herdr acknowledged holds its stamp too, until the published layout
+/// A move the engine acknowledged holds its stamp too, until the published layout
 /// shows the child in its own tab; its events arrive after the answer.
 const RELOCATION_RETRY_INTERVAL_MS: u64 = 5_000;
 
-/// What Herdr says about its tabs, kept per Herdr workspace.
+/// What the engine says about its tabs, kept per engine workspace.
 ///
-/// A checkout is keyed by path, so several Herdr workspaces can share one
+/// A checkout is keyed by path, so several engine workspaces can share one
 /// checkout, and each of them names an active tab. Only the focused
-/// workspace's active tab is a tab Herdr has focused; the others are each
+/// workspace's active tab is a tab the engine has focused; the others are each
 /// workspace's memory of where it was last, and following one of those moved
 /// the canvas away from the tab the operator had just chosen.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct HerdrTabView {
-    /// Herdr's active tab in each Herdr workspace.
+    /// The engine's active tab in each engine workspace.
     active_tab_by_workspace: BTreeMap<String, String>,
-    /// The Herdr workspace that owns each tab.
+    /// The engine workspace that owns each tab.
     workspace_by_tab: BTreeMap<String, String>,
-    /// The active tab of Herdr's focused workspace.
+    /// The active tab of the engine's focused workspace.
     focused_tab_id: Option<String>,
     focus_event: Option<crate::sidebar::SessionTabFocus>,
 }
@@ -729,8 +729,8 @@ impl HerdrTabView {
         }
     }
 
-    /// Whether Herdr shows this tab in the workspace that owns it. That is
-    /// what confirms a tab focus Hide asked for: which workspace Herdr's
+    /// Whether the engine shows this tab in the workspace that owns it. That is
+    /// what confirms a tab focus Hide asked for: which workspace the engine's
     /// keyboard is in does not decide it. Older snapshots omit the active
     /// tab for a workspace that has only one tab; that shape is unambiguous.
     /// A multi-tab workspace without an active-tab verdict stays unknown so
@@ -945,7 +945,7 @@ fn sync_pane_status(
     changed
 }
 
-/// Titles each Herdr strip entry after the one agent its tab holds.
+/// Titles each engine strip entry after the one agent its tab holds.
 ///
 /// Runs on the same passes as the pane status, so the entry's mark and
 /// emphasis follow the read axis, and again whenever a strip is rebuilt, so
@@ -1018,7 +1018,7 @@ fn prune_pane_text_scales(
 
 /// Every pane `session` lists, and the panes on screen: while its machine
 /// is in front, exactly the tabs its selected group shows. Without a core
-/// layout, the legacy Herdr-focused tab supplies the initial canvas.
+/// layout, the legacy engine-focused tab supplies the initial canvas.
 fn remote_terminal_pane_sets(
     session: &RemoteSessionSnapshot,
     target_is_active: bool,
@@ -1169,9 +1169,9 @@ pub struct Runtime {
     composer_checks_store: Option<crate::composer_checks::ComposerChecks>,
     delivery_overflow: HashSet<String>,
     delivery_connected: HashSet<String>,
-    /// Each host's Herdr panes as its in-sync replica last published them.
+    /// Each host's engine panes as the session sync last published them.
     delivery_panes: HashMap<String, crate::coordination::PaneRead>,
-    /// Live registrations whose panes Herdr no longer has, for the delivery
+    /// Live registrations whose panes the engine no longer has, for the delivery
     /// store to end; an entry leaves once the published ledger shows it
     /// ended.
     registrations_gone: std::collections::BTreeMap<String, crate::coordination::PaneGone>,
@@ -1271,11 +1271,11 @@ pub struct Runtime {
     changes_published_key: Option<crate::changes::ChangesKey>,
     checkout_header: checkout_git::State,
     fetch: fetch::State,
-    /// Each device's session as its Herdr reported it, before its projects
+    /// Each device's session as its engine reported it, before its projects
     /// are grouped from the helper's facts (`device_catalog`).
     device_raw_sessions: HashMap<String, RemoteSessionSnapshot>,
     device_facts: HashMap<String, crate::device_catalog::DeviceFacts>,
-    /// Each device checkout's last tab the device's Herdr had in focus, by
+    /// Each device checkout's last tab the device's engine had in focus, by
     /// device then checkout id: what opening the row brings forward (PRD
     /// checkout-workspace-binding B5, D-13), as `visible_tab_ids` is here.
     /// Pruned to the checkouts the device's session lists.
@@ -1363,15 +1363,15 @@ pub struct Runtime {
     /// Observed panes with a `pane.scroll` request in flight, and the lines
     /// that arrived meanwhile, which go out as one request when it lands.
     viewport_scrolls: HashMap<String, i32>,
-    /// Observed panes whose last wheel Herdr did not move: another client
+    /// Observed panes whose last wheel the engine did not move: another client
     /// holds their scrolling (`TerminalPaneSnapshot::scroll_held_elsewhere`).
     panes_scroll_held: HashSet<String>,
     /// The tabs that have been on screen, most recent first. An attach lives
     /// for as long as its tab is in this window; every other pane's session is
-    /// released. Herdr renders a pane for every attached client, so an attach
-    /// nobody is looking at costs a child process here and a render there for
-    /// the life of the process.
-    /// Delegated child panes Hide has asked Herdr to move out of their
+    /// released. A pane's holder serves one attach at a time, so an attach
+    /// nobody is looking at would hold its holder connection for the life of
+    /// the process.
+    /// Delegated child panes Hide has asked the engine to move out of their
     /// parent's tab, and when it asked. A move that fails is retried quietly
     /// on a later ingest; it never reaches the pane header, because the
     /// operator did not ask for the move and cannot act on its failure
@@ -1470,8 +1470,8 @@ pub struct Runtime {
     usage_pause_announced: bool,
     recent_visible_tabs: Vec<String>,
     pending_tab_rename: Option<rename::PendingRename>,
-    /// Panes Hide has asked Herdr to close. Herdr closes the PTY first, so the
-    /// attach child ends before the `pane_closed` event arrives and the pane
+    /// Panes Hide has asked the engine to close. The pane's PTY closes first, so the
+    /// attach ends before the engine's session drops the pane and the pane
     /// is still on screen when its transport reports the close. Projecting
     /// that as a failure is what put "terminal attach ended" on screen for one
     /// frame every time the operator closed a pane.
@@ -1506,7 +1506,7 @@ pub struct Runtime {
     /// fingerprint: those rows follow the list only when it changes.
     unowned_dormant_listing: Option<u64>,
     pane_operations: HashMap<String, PendingPaneOperation>,
-    /// The last complete raw layout Herdr confirmed for each tab. Mutation
+    /// The last complete raw layout the engine confirmed for each tab. Mutation
     /// operations compare fresh geometry with this value, because a model
     /// layout has pane ids and split ratios but no PTY rectangle to confirm a
     /// resize against.
@@ -1514,7 +1514,7 @@ pub struct Runtime {
     /// Stage times of each Hide-started tab creation and pane operation
     /// (PRD instant-pane-topology D-14).
     op_timings: op_timing::OpTimings,
-    /// The creation requests keys are sent against before Herdr names their
+    /// The creation requests keys are sent against before the engine names their
     /// pane (PRD instant-pane-topology D-11); the node holds the keys.
     input_requests: terminal_input::InputRequests,
     /// A pane close that waited in its tab's line, by close key: the place
@@ -1526,16 +1526,16 @@ pub struct Runtime {
     ingesting_session: bool,
     /// A tab's line is being pumped; see `pump_geometry_queue`.
     pumping_geometry: bool,
-    /// Herdr's confirmed layout of each tab with a drawn prediction, as the
+    /// The engine's confirmed layout of each tab with a drawn prediction, as the
     /// last session showed it; a new request is predicted on it rather than
     /// on the drawing.
     confirmed_layouts: HashMap<String, crate::model::PaneLayoutSnapshot>,
-    /// Per tab, the closes drawn on the canvas ahead of Herdr; set with every
+    /// Per tab, the closes drawn on the canvas ahead of the engine; set with every
     /// session overlay and read by the layout writers.
     drawn_closes: HashMap<String, Vec<pane_prediction::Prediction>>,
-    /// Created tabs drawn until Herdr's layout for them arrives (D-05).
+    /// Created tabs drawn until the engine's layout for them arrives (D-05).
     provisional_tabs: Vec<drawn_ahead::ProvisionalTab>,
-    /// Panes a read of Herdr's own showed before its event stream did; their
+    /// Panes a read of the engine's own showed before its event stream did; their
     /// absence from the stream retires nothing until it lays them out.
     read_ahead: read_ahead::ReadAhead,
     recent_closed_sequence: u64,
@@ -1545,17 +1545,17 @@ pub struct Runtime {
     /// other outcome or by a newer close.
     reopen_after_close: Option<String>,
     /// Advances on every `set_live`, so a worker started against an earlier
-    /// local Herdr connection cannot settle an operation on the current one.
+    /// local engine connection cannot settle an operation on the current one.
     live_generation: u64,
     /// The checkout each tab Hide created was created for, keyed by the tab
-    /// id Herdr acknowledged; it decides the tab's checkout instead of the
+    /// id the engine acknowledged; it decides the tab's checkout instead of the
     /// pane cwd (`session.rs`, `CreatedTabCheckout`).
     created_tab_checkouts: BTreeMap<String, session::CreatedTabCheckout>,
     /// The same record for tabs created on a device, by target and the tab id
-    /// that device's Herdr gave it.
+    /// that device's engine gave it.
     created_device_tabs: BTreeMap<(String, String), session::CreatedTabCheckout>,
     /// Wakes the local coordinator to read the session again now, when the
-    /// core draws something ahead of Herdr or takes it back (PRD
+    /// core draws something ahead of the engine or takes it back (PRD
     /// instant-pane-topology D-05, D-07). None until the coordinator starts,
     /// and in tests, which ingest the session themselves.
     republish_waker: Option<session_sync::RepublishWaker>,
@@ -1571,7 +1571,7 @@ pub struct Runtime {
     /// `hide <path>` requests by id, each waiting on or settled by the
     /// registration it started (`project_open`).
     project_opens: project_open::ProjectOpens,
-    /// Rows Herdr shows without a registration whose machine is judging
+    /// Rows the engine shows without a registration whose machine is judging
     /// their folder for a pin or a closing last pane, by row id
     /// (`projects::RowPending`).
     row_registrations: HashMap<String, projects::RowPending>,
@@ -1610,8 +1610,8 @@ pub struct Runtime {
     /// The pane the operator chose to look at, and the only pane whose read
     /// record may be raised.
     ///
-    /// Herdr's focus is not the operator's attention. A tab carries the pane
-    /// it last had focused, so bringing a tab forward makes Herdr report a
+    /// The engine's focus is not the operator's attention. A tab carries the pane
+    /// it last had focused, so bringing a tab forward makes the engine report a
     /// focus nobody asked for; a spawned pane takes focus on its own; and a
     /// relaunch inherits whatever focus the arriving session snapshot names.
     /// Counting any of those as a look cleared rows the operator never saw
@@ -1620,7 +1620,7 @@ pub struct Runtime {
     /// operator's behalf arms this, and it is memory only: a launch starts
     /// with the operator having looked at nothing.
     operator_focused_pane_id: Option<String>,
-    /// The read axis's view of the current connection to the local Herdr
+    /// The read axis's view of the current connection to the local engine
     /// server and to each device's: the mark that names the server and the
     /// panes settled on it so far (`agent_state::ReadConnection`). Memory
     /// only; every connection starts a new one.
@@ -1633,34 +1633,34 @@ pub struct Runtime {
     read_marks_made: u64,
     /// The tab Hide is showing in each checkout it has been asked about.
     ///
-    /// Hide owns the visible tab. The navigator is rebuilt from Herdr's
+    /// Hide owns the visible tab. The navigator is rebuilt from the engine's
     /// session on every update, so the choice has to live outside it or every
-    /// tick would hand the decision back to Herdr.
+    /// tick would hand the decision back to the engine.
     visible_tab_ids: BTreeMap<String, String>,
-    /// The tab moves that have left for Herdr and not been answered, in the
+    /// The tab moves that have left for the engine and not been answered, in the
     /// order they left: tab focuses, the tab moves of pane focuses, and tabs
-    /// created with focus. Which Herdr move is Hide's own answer, and when a
-    /// move Herdr makes is followed, are read from it (`tab_focus.rs`).
+    /// created with focus. Which engine move is Hide's own answer, and when a
+    /// move the engine makes is followed, are read from it (`tab_focus.rs`).
     tab_focus_requests: Vec<tab_focus::TabFocusRequest>,
-    /// How many of the replica's tab moves have been read, and of which
-    /// replica, so the next session says which moves are new.
+    /// How many of the engine's tab moves have been read, and of which
+    /// engine count, so the next session says which moves are new.
     herdr_tab_moves_read: Option<(u64, u64)>,
-    /// The tabs active in their Herdr workspaces at the last replica session.
+    /// The tabs active in their engine workspaces at the last session.
     /// When moves were dropped, the difference from it stands in for them.
     herdr_active_tabs_seen: BTreeSet<String>,
-    /// The tab Herdr had focused at the last session update. A follow needs
-    /// Herdr's focus to have moved; a focused tab that merely differs from
-    /// Hide's, as it does after a notification Herdr never answered, is not
+    /// The tab the engine had focused at the last session update. A follow needs
+    /// the engine's focus to have moved; a focused tab that merely differs from
+    /// Hide's, as it does after a notification the engine never answered, is not
     /// an operator action and is not followed.
     herdr_focused_tab_seen: Option<String>,
     herdr_tab_focus_seen: Option<crate::sidebar::SessionTabFocus>,
-    /// The pane focus Hide has told Herdr about and is still waiting to see
+    /// The pane focus Hide has told the engine about and is still waiting to see
     /// confirmed.
     pending_pane_focus: Option<PendingViewFocus>,
     pane_focus_in_flight: Option<PendingPaneFocusControl>,
-    /// The one read of Herdr's own focus that decides whether an external
+    /// The one read of the engine's own focus that decides whether an external
     /// move in the session stream is followed. It runs off the lock while
-    /// the session itself is already ingested, so a slow Herdr delays only
+    /// the session itself is already ingested, so a slow engine delays only
     /// the focus, never the topology that arrived with it.
     pane_focus_readback: Option<PendingPaneFocusControl>,
     /// A session update called for a readback while the one slot was taken.
@@ -1673,7 +1673,7 @@ pub struct Runtime {
     /// The lane serial of the newest focus the operator asked for. A tab Hide
     /// creates takes the screen only when no focus was asked for after it.
     last_view_intent_serial: u64,
-    /// The tabs Herdr most recently reported active in their own workspaces.
+    /// The tabs the engine most recently reported active in their own workspaces.
     /// A pane layout remembers a focused pane even while its tab is hidden,
     /// so the layout alone cannot confirm a pane-focus request.
     /// True until the first live session snapshot has been ingested. The pane
@@ -1683,7 +1683,7 @@ pub struct Runtime {
     /// user makes against a live session is authoritative, and its
     /// disappearance stays a reported error.
     restore_hint_pending: bool,
-    /// The Herdr workspaces the last session snapshot reported. A catalog
+    /// The engine workspaces the last session snapshot reported. A catalog
     /// rebuild triggered by a registration change is not a session update, so
     /// it reuses these rather than briefly emptying the navigator.
     last_session_spaces: Vec<workspace::SessionSpace>,
@@ -1725,7 +1725,7 @@ pub struct Runtime {
     issue_candidates: BTreeMap<String, crate::issues::IssueCandidate>,
     issue_write_pending: Option<issues::IssueWritePending>,
     unconfirmed_issue_tokens: BTreeMap<String, issues::UnconfirmedIssueToken>,
-    /// The same, for each node that dials this core, by its Herdr's
+    /// The same, for each node that dials this core, by its engine's
     /// workspace ids; kept while the node's session is.
     unconfirmed_node_issue_tokens:
         BTreeMap<String, BTreeMap<String, issues::UnconfirmedIssueToken>>,
@@ -1758,7 +1758,7 @@ pub struct Runtime {
     /// on the wire after the surface that sent it.
     task_agent_launch: Option<TaskAgentLaunch>,
     /// The panes whose agent a task started with the operator's first
-    /// prompt, kept until Herdr reports that agent (`lay_start_prompts`).
+    /// prompt, kept until the engine reports that agent (`lay_start_prompts`).
     start_prompts: BTreeSet<String>,
     group_start: Option<group_starts::ActiveStart>,
     task_start_focus: Option<group_starts::TaskStartFocus>,
@@ -1782,29 +1782,29 @@ pub struct Runtime {
     /// session applied without a catalog reads the last paths it brought.
     catalog_from_coordinator: bool,
     /// The strip order each local checkout has, as strip entry ids. It is
-    /// memory only by decision: Herdr persists its own tab order and file tabs
+    /// memory only by decision: the engine persists its own tab order and file tabs
     /// do not survive a restart, so there is nothing here worth writing to
-    /// disk. Without it a Herdr tab created next to open file tabs would land
+    /// disk. Without it an engine tab created next to open file tabs would land
     /// in front of them instead of at the end of the strip.
     checkout_tab_order: BTreeMap<String, Vec<String>>,
-    /// Every Herdr workspace's whole tab list, in Herdr's order, keyed by the
-    /// Herdr workspace id. A checkout holds only the tabs whose panes sit in
+    /// Every engine workspace's whole tab list, in the engine's order, keyed by the
+    /// engine workspace id. A checkout holds only the tabs whose panes sit in
     /// its own directory, so one workspace's tabs can be split across a
     /// repository and its worktrees. `tab.move` counts its insertion index in
     /// the workspace's list, not in a checkout's part of it, so the index has
     /// to be read off this list or the tab lands somewhere else.
     herdr_workspace_tab_order: BTreeMap<String, Vec<String>>,
     herdr_worktrees: BTreeMap<String, crate::domain::WorktreeProjection>,
-    /// The arrangement a reorder asked for and Herdr has not reported yet,
-    /// per checkout. Herdr owns where its own tabs sit, so a drag that moves
+    /// The arrangement a reorder asked for and the engine has not reported yet,
+    /// per checkout. The engine owns where its own tabs sit, so a drag that moves
     /// one of them is held here rather than written into the strip: an
     /// arrangement written early would show the file slots moved and the
-    /// Herdr slots not, and a refusal would have nothing to revert to.
+    /// engine slots not, and a refusal would have nothing to revert to.
     pending_tab_move: BTreeMap<String, PendingTabMove>,
     /// Numbers each reorder request so a result that a later drag has already
     /// superseded cannot cancel the newer one.
     next_tab_move_generation: u64,
-    /// Workspace/active-tab pairs Herdr named that the navigator could not
+    /// Workspace/active-tab pairs the engine named that the navigator could not
     /// place, as `<workspace id>/<tab id>`. Session sync reconciles once a
     /// second, so the diagnostic is emitted when the set changes rather than
     /// on every tick.
@@ -1822,11 +1822,11 @@ pub struct Runtime {
     /// core-host-node-remote-core B13); one entry per registered node.
     node_sleep_next_decision_unix_ms: HashMap<String, u64>,
     /// The tabs each such node's screen showed at its last session, so a
-    /// tab its Herdr brings forward is a visit (B12).
+    /// tab its engine brings forward is a visit (B12).
     node_sleep_shown_tabs: HashMap<String, Vec<String>>,
     /// Panes whose agent would not end, and until when they are left alone (B8).
     agent_sleep_backoff: HashMap<String, agent_sleep::Backoff>,
-    /// When Herdr took each wake's start, for the panes still waking: one
+    /// When the engine took each wake's start, for the panes still waking: one
     /// whose agent has not appeared by the start's deadline failed.
     agent_wake_started: HashMap<String, u64>,
     /// The wakes letters to sleeping agents ask for, and the letters a
@@ -1850,7 +1850,7 @@ pub struct Runtime {
     /// session-sync coordinator. Held here rather than in the snapshot because
     /// what the shell renders is the per-pane attribution, not the raw list.
     listening_ports: crate::model::ListeningPortsSnapshot,
-    /// Every open repository's worktrees, refreshed by repository and Herdr
+    /// Every open repository's worktrees, refreshed by repository and the engine
     /// topology changes on the session-sync coordinator. Held here rather than
     /// in the snapshot because the shell renders the checkout rows these
     /// produce, not the raw list.
@@ -1949,7 +1949,7 @@ pub struct Runtime {
     /// `REVIEW_PROOF_LIMIT` per project.
     pub(super) review_merge_proofs: BTreeMap<(Option<String>, String, String), BTreeSet<String>>,
     /// Bumped when the worktree list itself is known to have changed through a
-    /// manual refresh, a refused removal, or an observed Herdr worktree event.
+    /// manual refresh, a refused removal, or an observed engine worktree event.
     worktree_generation: u64,
     /// Local worktree removals settled so far. A catalog read carries the
     /// count it started under, so the core can tell a read that began before
@@ -1959,7 +1959,7 @@ pub struct Runtime {
     /// that dropped them. A read that started earlier still lists them; a
     /// read that started later retires the entry.
     removed_worktrees: Vec<(u64, String)>,
-    /// Identifies one delete handshake across core, Herdr and the shell.
+    /// Identifies one delete handshake across core, the engine and the shell.
     /// A repeated callback for an older request cannot authorize a newer one.
     next_worktree_removal_id: u64,
     /// The removal, by id, of a linked worktree whose folder is gone and that
@@ -1968,7 +1968,7 @@ pub struct Runtime {
     unlisted_worktree_removal: Option<u64>,
     /// Registered projects whose panes a `Remove project…` is closing on a
     /// worker thread. The registration is only removed once the worker
-    /// reports Herdr's confirmation, so a repeat for the same project while
+    /// reports the engine's confirmation, so a repeat for the same project while
     /// that runs is a quiet no-op rather than a second round of closes.
     workspace_removals_in_flight: HashSet<String>,
     /// Gone linked worktrees of this machine whose panes a close was started
@@ -1986,7 +1986,7 @@ pub struct Runtime {
     /// development switch is off, which reads none (`agent_definitions`).
     agent_definitions: Option<agent_definitions::AgentDefinitions>,
     /// Set when the devices this core dials run on its own engine, the
-    /// development switch on (`own_devices`); `None` runs them on Herdr.
+    /// development switch on (`own_devices`).
     own_devices: Option<own_devices::OwnDevices>,
     herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
     /// Where each ssh config Host the first-run step listed leads, as
@@ -2000,7 +2000,7 @@ pub struct Runtime {
     /// `status.remote[].session`, not the local navigator, so the operation
     /// carries this target separately from its shell-facing receipt.
     purpose_operation_target: Option<PurposeOperationTarget>,
-    /// Creation purpose writes registered after Herdr confirms the checkout
+    /// Creation purpose writes registered after the engine confirms the checkout
     /// but before the token request starts. This closes the event-ordering
     /// window where the mirror could observe the token before the task worker
     /// reports whether Git accepted it.
@@ -2781,7 +2781,7 @@ impl Runtime {
             .insert(target_id.into(), transport);
     }
 
-    /// Reports the workspaces whose Herdr-named active tab the navigator
+    /// Reports the workspaces whose engine-named active tab the navigator
     /// could not place. Reconcile runs once a second, so only a change in the
     /// set is worth a diagnostic; repeating it every tick would grow the
     /// status section without saying anything new.
@@ -3066,10 +3066,10 @@ fn find_workspace_for_context<'a>(
     }
     let root = paths.root(raw_path);
     let normalized = root.clone();
-    // A navigator project records the Herdr workspaces occupying it. One
-    // Herdr workspace can span two repositories and so two projects, so the
+    // A navigator project records the engine workspaces occupying it. One
+    // engine workspace can span two repositories and so two projects, so the
     // pane's directory picks between them. The path comparisons below are the
-    // fallback for a registration Herdr has no workspace for, and for a
+    // fallback for a registration the engine has no workspace for, and for a
     // catalog precomputed from a slightly older session.
     let carrying = workspaces
         .iter()

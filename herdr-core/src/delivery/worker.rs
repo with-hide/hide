@@ -68,7 +68,7 @@ pub struct HumanNotice {
 }
 
 /// Which of the approved human causes a notice is. A phone words it in
-/// its own language from this code; Herdr's own notification has no
+/// its own language from this code; the engine's own notification has no
 /// translating screen, so it shows `english_title` and `english_body`, whose
 /// tail names the command an agent or a person runs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -119,8 +119,8 @@ impl HumanNotice {
     }
 
     /// Runs only after the durable receipt on a daemon request worker.
-    /// `Ok` means Herdr showed it; `Err` is the stable reason code the log
-    /// records: Herdr's own `reason` for a `shown: false` answer, or
+    /// `Ok` means the engine showed it; `Err` is the stable reason code the log
+    /// records: the engine's own `reason` for a `shown: false` answer, or
     /// `call_failed` / `answer_unreadable` when there was no usable answer.
     pub fn notify_herdr(&self, engine: &crate::engine::EngineHandle) -> Result<(), &'static str> {
         // This outcome is an external effect receipt, never a core input.
@@ -378,7 +378,7 @@ pub(crate) struct WatchWork {
     pub inactivity_ms: Option<u64>,
     /// The target's own row says it stopped on a question.
     pub asking: bool,
-    /// The target's own row says Herdr holds it at a blocked prompt.
+    /// The target's own row says the engine holds it at a blocked prompt.
     pub blocked: bool,
     /// The target is a mission worker waiting on its pull request's CI,
     /// review or merge (PRD mission-node-simple D-06): it reads as active
@@ -891,7 +891,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
         } => {
             let observed = target.as_ref().ok_or("agent_pane_required")?;
             // The core's turn says whether and since when it works; a turn
-            // not yet laid for Herdr's current state hands nothing over.
+            // not yet laid for the engine's current state hands nothing over.
             let working_since = observed
                 .projected_turn()
                 .filter(|projected| {
@@ -1540,6 +1540,7 @@ mod tests {
             answered_at_unix_ms: 0,
             observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
+            hide_typed_at_unix_ms: 0,
             session: Some(hide_session::session_activity::SessionActivityRequest {
                 agent: hide_session::Agent::Codex,
                 reference_kind: "id".into(),
@@ -1760,7 +1761,7 @@ mod tests {
     }
 
     /// docs/delivery.md, Watch activity and completion: the watch reads the
-    /// child's own row, so a child stopped on a question, or one Herdr holds
+    /// child's own row, so a child stopped on a question, or one engine holds
     /// at a blocked prompt with or without a question, tells its parent one
     /// tick later with its own first line; one stopped without a question,
     /// one working on an async question, and one whose row shows only Hide's

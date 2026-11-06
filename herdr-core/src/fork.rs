@@ -1,6 +1,6 @@
 //! Forking an agent pane into a new execution of the parent conversation.
 //!
-//! A fork asks Herdr to create a pane and start the new agent, then
+//! A fork asks the engine to create a pane and start the new agent, then
 //! registers both exact executions in Hide and publishes lineage. This
 //! module decides which panes can be forked and spells each agent's resume
 //! arguments; running the calls is [`worker`]'s job.
@@ -70,7 +70,7 @@ impl ForkableAgent {
 
     /// The agent's own arguments for resuming a session as a new one. They
     /// are handed to `agent.start` as the agent's arguments, so they are the
-    /// agent's vocabulary rather than Herdr's.
+    /// agent's vocabulary rather than the engine's.
     pub fn resume_arguments(self, session_id: &str) -> Vec<String> {
         match self {
             // Grok 1.0.46 `--fork-session`: a new id from the resumed history.
@@ -129,8 +129,8 @@ pub struct ForkRequest {
     pub session_id: String,
     pub(crate) source_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
     pub cwd: Option<String>,
-    /// The agent name Herdr will list the fork under, unique per fork and
-    /// already inside Herdr's name rule (`fork_name`).
+    /// The agent name the engine will list the fork under, unique per fork and
+    /// already inside the engine's name rule (`fork_name`).
     pub name: String,
     /// The label `Fork agent`'s tab is made with: its checkout's next
     /// automatic tab label, which the strip replaces with the agent's title.
@@ -144,7 +144,7 @@ pub struct ForkRequest {
     pub(crate) permission: crate::agent_permission::AgentPermission,
 }
 
-/// Herdr's own rule for an agent name, quoted from the error it answers with:
+/// The engine's own rule for an agent name, quoted from the error it answers with:
 /// it must start with a lowercase letter and carry only lowercase letters,
 /// digits, `-` or `_`, in 1 to 32 characters.
 const MAX_NAME_CHARACTERS: usize = 32;
@@ -157,17 +157,17 @@ pub(crate) fn valid_agent_name(name: &str) -> bool {
         })
 }
 
-/// A name no other pane's fork can collide with, that Herdr will accept.
+/// A name no other pane's fork can collide with, that engine will accept.
 ///
 /// `agent.start` takes the name as required, and two forks of the same parent
 /// are the expected case, so the parent's id alone is not enough to keep them
 /// apart.
 ///
-/// Herdr rejects a name that carries a capital or runs past 32 characters, and
+/// The engine rejects a name that carries a capital or runs past 32 characters, and
 /// a pane id is not required to be lowercase or short: `w2X:p2F` is an
-/// ordinary id, and it produced `fork-w2X-p2F-2-1788624371518`, which Herdr
+/// ordinary id, and it produced `fork-w2X-p2F-2-1788624371518`, which the engine
 /// refused with `invalid_agent_name`. The case is folded rather than replaced
-/// so the id stays readable in Herdr's agent list, and a name that would run
+/// so the id stays readable in the engine's agent list, and a name that would run
 /// long keeps a readable head and a digest of the whole name, which is what
 /// keeps two forks of different panes apart after the truncation.
 pub fn fork_name(parent_pane_id: &str, nonce: &str) -> String {
@@ -179,13 +179,13 @@ pub fn fork_name(parent_pane_id: &str, nonce: &str) -> String {
 }
 
 /// The name a woken agent gets when it had none of its own: one per pane,
-/// inside Herdr's rule by the same folding and truncation a fork name uses.
+/// inside the engine's rule by the same folding and truncation a fork name uses.
 pub fn wake_name(pane_id: &str) -> String {
     bounded_name(format!("wake-{}", sanitize(pane_id)))
 }
 
 /// The name of an agent a task starts in the pane it made (an issue's Start,
-/// a pull request's 맡기기, New agent): Herdr refuses a name another agent
+/// a pull request's 맡기기, New agent): the engine refuses a name another agent
 /// already holds, so it is the pane's, like a wake's, and two tasks running
 /// the same provider never collide.
 pub fn task_agent_name(kind: &str, pane_id: &str) -> String {
@@ -288,7 +288,7 @@ pub fn is_forkable(agent_kind: Option<&str>, session_id: Option<&str>) -> bool {
 mod tests {
     use super::*;
 
-    /// A row Herdr lists running `kind` with `session`.
+    /// A row the engine lists running `kind` with `session`.
     fn listed(kind: &str, session: Option<&str>) -> crate::model::SidebarAgentSnapshot {
         let agent = serde_json::json!({
             "id": "w1:p2", "pane_id": "w1:p2", "agent": kind, "agent_status": "idle", "state_change_seq": 1,
@@ -469,7 +469,7 @@ mod tests {
         assert!(herdr_accepts(&first) && herdr_accepts(&second));
     }
 
-    /// Herdr's own rule, from the error it answers an unacceptable name with:
+    /// The engine's own rule, from the error it answers an unacceptable name with:
     /// `agent name must start with a lowercase letter and contain only
     /// lowercase letters, digits, '-' or '_' (1-32 characters)`.
     fn herdr_accepts(name: &str) -> bool {
@@ -485,7 +485,7 @@ mod tests {
     }
 
     /// R12. A pane id is not required to be lowercase. `w2X:p2F` is an
-    /// ordinary one, and the name it used to produce was refused by Herdr with
+    /// ordinary one, and the name it used to produce was refused by the engine with
     /// `invalid_agent_name`, so the fork made no pane and the operator saw
     /// only the failure. Every fork in the run that shipped this happened to
     /// be from a lowercase pane id, which is why none of them hit it.

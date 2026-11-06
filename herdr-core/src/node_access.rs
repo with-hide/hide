@@ -250,7 +250,7 @@ mod tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PaneUnconfirmed {
     /// Nothing can ever confirm it: the engine refused the pane, or the
-    /// node has no Herdr server to name any pane's shell.
+    /// node has no engine to name any pane's shell.
     Certain,
     /// The answer did not come; a later look may still confirm it.
     Uncertain,

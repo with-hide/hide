@@ -8,7 +8,7 @@
 //!
 //! Like the worktree reader, the subprocess runs on a worker thread: `gh pr
 //! list` reaches the network and routinely takes a second or more, which would
-//! otherwise be a second of coordinator latency for every Herdr pane event.
+//! otherwise be a second of coordinator latency for every engine pane event.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

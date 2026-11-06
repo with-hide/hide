@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Installs the pinned cargo-nextest release binary into $CARGO_HOME/bin on a
-# CI runner, with no compile: the Rust lanes run `scripts/verify-cargo.sh
+# CI runner, with no compile (Linux's x86_64 or arm64 build by the runner's
+# processor): the Rust lanes run `scripts/verify-cargo.sh
 # nextest` (.config/nextest.toml, docs/TESTING.md "Flaky tests"). The version
 # lives here only, so a bump is one line. It is at least 0.9.145: before that,
 # on macOS a test spawned beside another inherited the other's output pipe and
@@ -9,9 +10,10 @@
 set -euo pipefail
 
 version=0.9.146
-case "$(uname -s)" in
-    Linux) platform=linux ;;
-    Darwin) platform=mac ;;
+case "$(uname -s)/$(uname -m)" in
+    Linux/aarch64|Linux/arm64) platform=linux-arm ;;
+    Linux/*) platform=linux ;;
+    Darwin/*) platform=mac ;;
     MINGW*|MSYS*|CYGWIN*) platform=windows-tar ;;
     *) printf 'no cargo-nextest release for %s\n' "$(uname -s)" >&2; exit 1 ;;
 esac

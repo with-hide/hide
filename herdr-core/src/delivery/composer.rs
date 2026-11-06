@@ -5,14 +5,14 @@
 //! Hide routes every key to a pane but cannot see the composer, so any key
 //! not followed by a submission holds the bell as a draft, and typing then
 //! erasing held letters for up to the hour. Once input is quiet, the
-//! doorbell asks Herdr once for its visible screen with styling and judges it
+//! doorbell asks the engine once for its visible screen with styling and judges it
 //! by the agent's composer declaration (`hide_agent_adapter::composer`). Only
 //! a positive "empty" releases the draft; anything else keeps the hold as
 //! before and is logged without the screen's text.
 //!
 //! The read runs on the doorbell's thread, off the runtime lock, at most
 //! once per observed draft and state generation and within
-//! the doorbell's per-pass budget of Herdr calls. The same read checks each
+//! the doorbell's per-pass budget of the engine calls. The same read checks each
 //! agent version at moments its composer is known empty, and only a version
 //! seen read empty there is released, so a screen that changed under the
 //! declaration keeps holding rather than ringing over the operator's words.
@@ -32,7 +32,7 @@ use crate::runtime::{Runtime, delivery::Observation};
 
 use super::Actor;
 
-/// A visible screen is one frame of at most a few hundred rows; Herdr
+/// A visible screen is one frame of at most a few hundred rows; the engine
 /// answers it from memory, so a read slower than this is a failed read.
 const READ_TIMEOUT: Duration = Duration::from_secs(1);
 /// How often the doorbell looks for a version to check. Each look walks the
@@ -74,7 +74,7 @@ impl Reader {
 
     /// Reads the composer of `recipient`, a letter's or an answer's, held
     /// on a possible draft, once per draft episode, and releases the draft
-    /// when the screen shows the composer empty. Returns whether a Herdr call was made, which counts
+    /// when the screen shows the composer empty. Returns whether an engine call was made, which counts
     /// against the doorbell's per-pass budget.
     pub(crate) fn release(&mut self, owner: &Mutex<Runtime>, recipient: &Actor, now: u64) -> bool {
         let Some((episode, read)) = owner
@@ -119,7 +119,7 @@ impl Reader {
     /// Checks one agent version's composer declaration, at most every
     /// `CHECK_EVERY_MS`, at a moment the composer is known empty: a screen
     /// read empty passes the version, and any other is a miss that waits
-    /// longer before the version's next check. Returns whether a Herdr call
+    /// longer before the version's next check. Returns whether an engine call
     /// was made.
     pub(crate) fn check(&mut self, owner: &Mutex<Runtime>, now: u64) -> bool {
         if now < self.next_check_at {

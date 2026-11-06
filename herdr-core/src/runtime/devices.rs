@@ -4,8 +4,8 @@
 //!
 //! Settings holds only a label and an SSH alias for a device. Everything else
 //! is asked of the host: the alias resolves through `~/.ssh/config`, and the
-//! Herdr socket is whatever `herdr status server --json` reports there, so no
-//! path of another machine is ever written down here.
+//! device's engine rides the node's link, so no path of another machine is
+//! ever written down here.
 
 use std::sync::Arc;
 
@@ -655,7 +655,7 @@ impl Runtime {
             }
             let status = statuses.iter().find(|status| status.target_id == device.id);
             let host = self.device_hosts.get(&device.id);
-            // The device's Herdr rides its node link, so a link that could
+            // The device's engine rides its node link, so a link that could
             // not start is why the session is away, in the words the attempt
             // ended with, also while the next attempt runs (PRD
             // system-ssh-device-link B13, B18, B19).

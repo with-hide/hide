@@ -2,7 +2,7 @@ import { scopeOccurrences, scopeRows, type AgentScope } from "./agentScope";
 // All projects and Project Overview (PRD S6 D-02, B1-B3, B21): every registered
 // Project on every device, and one Project's Workspaces and agents, read from
 // the snapshot the core already publishes - the navigator for this machine,
-// each device's projected Herdr session, the registrations for a device that
+// each device's projected engine session, the registrations for a device that
 // has no session to show. Nothing here is counted that the snapshot does not
 // carry, and a device that cannot answer says so instead of showing zeros.
 
@@ -120,7 +120,7 @@ function deviceLabel(devices: Device[] | undefined, targetId: string): string {
  * (PRD sidebar-readability B5): `project › checkout`, or the project alone for
  * a plain folder, which is one row in Projects. A pane is placed by the
  * checkout that holds it, on its own device: this machine's projects for a
- * local row, a connected device's Herdr workspaces for its rows. A pane no
+ * local row, a connected device's engine workspaces for its rows. A pane no
  * checkout holds has no place, and none is made up.
  */
 export function agentPlaces(
@@ -163,8 +163,8 @@ export function liveDescendantCounts(scope: AgentScope): Map<string, number> {
 }
 
 /**
- * This machine's Projects count agents only while its Herdr answers: an
- * unreachable Herdr has no agents to list, and "No agents" would be a zero
+ * This machine's Projects count agents only while its engine answers: an
+ * unreachable engine has no agents to list, and "No agents" would be a zero
  * nobody measured (B3). The core reconnects on its own and has no event that
  * reconnects sooner, so there is no Retry.
  */
@@ -172,7 +172,7 @@ function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
   const herdr = rest?.status?.herdr;
   if (!herdr?.state || herdr.state === "connected") return { state: "ready" };
   if (herdr.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
-  // The state is worded here; Herdr's own sentence, with its socket path, is the About tab's and the log's.
+  // The state is worded here; the engine's own sentence, with its socket path, is the About tab's and the log's.
   return { state: "unavailable", text: translate("coreError.herdr.countsLater", { reason: herdrStateText(herdr.state, translate) }), retry: null };
 }
 
@@ -237,7 +237,7 @@ export function mainSections(rest: SnapshotRest | null, localAgents: AgentRow[],
   const local = devices.find((device) => device.kind !== "remote");
   if (local) {
     const availability = localAvailability(rest);
-    // The checkouts are this machine's own facts; only the agents need Herdr.
+    // The checkouts are this machine's own facts; only the agents need the engine.
     const projects = projectsOf(rest?.navigator?.workspaces ?? []).map((workspace) => entryOf(workspace, localAgents, availability.state === "ready", true));
     sections.push({ device: local, local: true, availability, projects: [...projects].sort(byPinThenLabel) });
   }
@@ -339,13 +339,13 @@ export function overviewProject(rest: SnapshotRest | null, localAgents: AgentRow
   return null;
 }
 
-/** Herdr states in which a catalog will not change on its own soon. */
+/** Engine states in which a catalog will not change on its own soon. */
 const SETTLED_HERDR = new Set(["connected", "unconfigured", "socket_missing", "unreachable", "stale", "incompatible"]);
 const FAILED_HERDR = new Set([...SETTLED_HERDR].filter(state => state !== "connected"));
 
 /** Whether the local saved choice is pending, rather than failed or restored. */
 export function waitingForSavedWorkspace(rest: SnapshotRest | null): boolean {
-  // Herdr can connect before the asynchronous catalog and persisted View
+  // The engine can connect before the asynchronous catalog and persisted View
   // arrive. The core retains a saved choice until its path facts settle;
   // absence during that restore must not choose Main permanently.
   return Boolean(rest && !focusedRemoteDevice(rest) && !FAILED_HERDR.has(rest.status?.herdr?.state ?? "") && rest.ui_state?.focused_checkout_id && !rest.workspace_view);
@@ -357,7 +357,7 @@ export function waitingForSavedWorkspace(rest: SnapshotRest | null): boolean {
  * All projects when it is not (a first run, or a last Workspace that is gone) or when the device in front
  * has settled without one, and null while that device is still being
  * reached. The device in front decides: a device Workspace is known only
- * once that device's session arrives, and this machine's Herdr settling
+ * once that device's session arrives, and this machine's engine settling
  * first says nothing about it.
  */
 export function startupScreen(rest: SnapshotRest | null, hasFront: boolean): "workspace" | "main" | null {
@@ -405,7 +405,7 @@ export function openingLanded(rest: SnapshotRest | null, target: OpenTarget): bo
   }
   if (target.expanded !== undefined && !(rest?.ui_state?.session_collapsed_checkout_ids ?? []).includes(target.checkoutId) !== target.expanded) return false;
   if (front.id === target.checkoutId) return true;
-  // A device project with no Herdr workspace yet gets one at its folder, under a new id.
+  // A device project with no engine workspace yet gets one at its folder, under a new id.
   return target.path !== null && front.path === target.path && (rest?.navigator?.focused_device_id ?? localDeviceId(rest)) === target.deviceId;
 }
 

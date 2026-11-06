@@ -1,4 +1,4 @@
-// The Overview's disk cleanup sheet on an isolated pinned Herdr and hided (PRD
+// The Overview's disk cleanup sheet on an isolated engine and hided (PRD
 // disk-layers): a private repository with a merged worktree and one that is
 // not, each holding the same ignored folders a build leaves (`target/` with a
 // CACHEDIR.TAG, `node_modules/`, `dist/` beside a package.json, and an

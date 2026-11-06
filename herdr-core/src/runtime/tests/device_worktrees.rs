@@ -428,7 +428,7 @@ fn a_dirty_device_worktree_is_deleted_only_once_the_operator_accepts_the_loss() 
 
 /// B28: a new worktree's branch is checked by the device's helper, so a
 /// branch that exists there and no worktree holds is refused with Git's own
-/// answer before Herdr is asked for anything.
+/// answer before the engine is asked for anything.
 #[test]
 fn a_device_worktree_for_a_branch_that_exists_there_is_refused_by_its_helper() {
     let repo = repo();
@@ -957,7 +957,7 @@ fn removal(path: &str) -> crate::worktree_command::WorktreeRemove {
 }
 
 /// The command a mission's lead runs after a merge closes the finished
-/// agent's pane in Herdr before Git removes the folder, so no workspace is
+/// agent's pane in the engine before Git removes the folder, so no workspace is
 /// left behind with a missing directory, and the merged branch goes too.
 #[test]
 fn the_remove_command_closes_the_worktrees_herdr_panes_then_removes_it() {

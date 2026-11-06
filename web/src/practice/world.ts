@@ -1,6 +1,6 @@
 // What a practice chapter plays in: a world the real shell draws, and the core
 // events it answers, applied here the way the core would apply them. Nothing
-// leaves the page: no daemon, no Herdr, no agent.
+// leaves the page: no daemon, no engine, no agent.
 
 import type { NodeUsage } from "../generated/hided-ws";
 import type { AgentRow, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";

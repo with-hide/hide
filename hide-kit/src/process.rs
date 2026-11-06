@@ -2,8 +2,8 @@
 //! own tree, with a deadline, and killed with its whole tree when the deadline passes or
 //! the caller stops waiting (engineering rule 14; practice `process.md`).
 //!
-//! Every child the kit starts (`herdr plugin uninstall`, `node --version`,
-//! `herdr plugin uninstall`) is short-lived, so none outlives the call that
+//! Every child the kit starts (`node --version`, for one) is short-lived, so
+//! none outlives the call that
 //! started it, and a raised stop flag ends it at once, so the daemon that owns
 //! the kit can quit without waiting out a deadline. The waiting, the output cap
 //! and the tree's end are `hide_platform::process::run_to_end`'s; this module
@@ -22,8 +22,9 @@ use hide_platform::process::{RunFailure, restrict_to_login_environment, run_to_e
 /// until `stop` is raised.
 ///
 /// The environment is built rather than inherited: a daemon launched from a
-/// Herdr pane carries that pane's `HERDR_*` identity, and a child that
-/// inherited it would act on the operator's Herdr instead of the target's.
+/// pane carries that pane's identity (`HIDE_*`, and `HERDR_*` from an earlier
+/// Herdr pane), and a child that inherited it would act on the operator's
+/// pane instead of the target's.
 /// It is built from the login variables rather than from nothing, because a
 /// Windows program needs `SystemRoot` and the rest of them to start.
 pub fn run(

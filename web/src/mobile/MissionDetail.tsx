@@ -25,7 +25,7 @@ import { answerMission, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress } from "./missionModel";
 import { noticeText, type PhoneMission, type PhoneMissionNode } from "./protocol";
-import { answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
+import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
 export function MissionDetail() {
   const mission = usePhone((s) => missionOf(s.missions, s.missionOpen));
@@ -44,8 +44,10 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
   const foldKey = `done:${mission.id}`;
   const doneOpen = usePhone((s) => s.missionFolds[foldKey] === true);
   const stateWord = open ? (mission.conductor.present ? t("mobile.mission.conductor") : t("mission.noConductor")) : t(STATE_PILL[mission.status]);
-  const conductor = mission.conductor.agent;
+  const conductor = usePhone((s) => (mission.conductor.agent && agentOf(s.groups, mission.conductor.agent) ? mission.conductor.agent : null));
   const asking = open && mission.decision !== null;
+  // A finished mission whose steps stayed on the Mac has no progress to count.
+  const stepsOmitted = mission.nodes_omitted ?? 0;
   return (
     <main className="flex h-full flex-col" data-phone-mission-page={mission.id}>
       <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
@@ -60,7 +62,7 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
         <div className="mt-xs flex min-w-0 items-center justify-between gap-md">
           <p className="flex min-w-0 items-center gap-xs text-subhead text-subtle-foreground" data-phone-mission-conductor={mission.conductor.present ? "present" : "none"}>
             {open && mission.conductor.present ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-working" /> : null}
-            <span className="min-w-0 break-keep wrap-anywhere">{stateWord} · {t("mobile.mission.progress", { done, total })}</span>
+            <span className="min-w-0 break-keep wrap-anywhere">{stepsOmitted > 0 ? stateWord : `${stateWord} · ${t("mobile.mission.progress", { done, total })}`}</span>
           </p>
           {conductor ? (
             <Button variant="text" size="inline" className="min-h-(--size-touch-target) shrink-0 gap-0 text-subhead" data-phone-mission-chat="true" onClick={() => openDetail(conductor)}>
@@ -79,6 +81,9 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
       ) : null}
       <div className={cn("min-h-0 flex-1 overflow-auto overscroll-contain px-lg pb-lg", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
         {asking ? <DecisionCard mission={mission} connected={connected} /> : null}
+        {stepsOmitted > 0 ? (
+          <p className="pt-lg text-body text-muted-foreground" data-phone-mission-steps-omitted={stepsOmitted}>{t("mobile.mission.stepsOmitted", { count: stepsOmitted })}</p>
+        ) : null}
         {steps.hold.length + steps.working.length > 0 ? (
           <section className="pt-lg" data-phone-mission-now="true">
             <h2 className="flex items-baseline justify-between gap-md pb-xs text-body text-muted-foreground">
@@ -258,6 +263,8 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
   const mark = kind === "hold" ? "turn" : nodeMark(node, null);
   const detail = stepLine(mission, node, kind, t);
   const worker = node.worker_agent ? agentProductName(node.worker_agent) : null;
+  // A row hided left out of a long list is not one the phone can open.
+  const agent = usePhone((s) => (node.agent && agentOf(s.groups, node.agent) ? node.agent : null));
   const body: ReactNode = (
     <>
       <span className="flex w-full min-w-0 items-start gap-sm">
@@ -270,11 +277,10 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
             {worker ? <span className="shrink-0">· {worker}</span> : null}
           </span>
         </span>
-        {node.agent ? <ChevronRightIcon aria-hidden="true" className="mt-md size-(--size-icon) shrink-0 text-muted-foreground" /> : null}
+        {agent ? <ChevronRightIcon aria-hidden="true" className="mt-md size-(--size-icon) shrink-0 text-muted-foreground" /> : null}
       </span>
     </>
   );
-  const agent = node.agent;
   return (
     <li data-phone-step={node.key} data-phone-step-kind={kind}>
       {agent ? (

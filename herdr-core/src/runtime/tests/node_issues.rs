@@ -193,7 +193,7 @@ fn node_runtime(
     node_runtime_with(repo, node, own, store, connector, workspaces)
 }
 
-/// `node_runtime` with the node's Herdr (`connector`) and the workspaces its
+/// `node_runtime` with the node's engine (`connector`) and the workspaces its
 /// session holds given.
 fn node_runtime_with(
     repo: &Repo,
@@ -1750,9 +1750,9 @@ fn the_overview_in_front_of_a_node_checkout_reads_the_node_s_project() {
 
 /// A node's project is cleaned up on the node, as one of this machine's is
 /// here: the review lists its worktrees through the node's link and its
-/// Herdr, a worktree merged into main is removed there, and one that picked
+/// the engine, a worktree merged into main is removed there, and one that picked
 /// up a change after the review is refused by the node's recheck. Neither
-/// worktree has a pane open, so neither has a Herdr workspace: each is a row
+/// worktree has a pane open, so neither has an engine workspace: each is a row
 /// of the project only because the node lists it. This machine's node,
 /// which has none of these folders, is asked nothing. The operator confirms
 /// the moment the review's answer is announced, the earliest a press can
@@ -2008,7 +2008,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
 
 /// Starting an issue of a node's project makes its worktree on the node and
 /// links it there as Start links one of this machine's: the branch note in
-/// the node's repository and the Workspace token in the node's Herdr.
+/// the node's repository and the Workspace token in the node's engine.
 #[test]
 fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
     let repo = repo(None, "feature");
@@ -2532,7 +2532,7 @@ fn a_node_checkout_links_the_issue_its_delegated_child_names() {
 }
 
 /// A node write that may have left its token behind keeps that value from
-/// reading as a direct link until the node's Herdr shows how it settled, as
+/// reading as a direct link until the node's engine shows how it settled, as
 /// this machine's failed write does; a later value is a link again.
 #[test]
 fn a_failed_node_write_s_token_is_not_drawn_as_a_direct_link() {
@@ -2574,7 +2574,7 @@ fn a_failed_node_write_s_token_is_not_drawn_as_a_direct_link() {
         assert_eq!(linked.owner_workspace_id.as_deref(), Some("w2"));
         linked.id.clone()
     };
-    // The node's Herdr cannot be reached, so the token write and its
+    // The node's engine cannot be reached, so the token write and its
     // rollback both fail and the token may have landed.
     dispatch(
         &shared,

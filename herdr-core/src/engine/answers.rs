@@ -2,7 +2,7 @@
 //! [`super::Engine`] returns that no other module already names.
 
 /// What `worktree.open` answered: the bound workspace, its active tab and
-/// pane, and whether Herdr had it open before this request.
+/// pane, and whether the engine had it open before this request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OpenedWorktree {
     pub(crate) tab_label: String,
@@ -57,7 +57,7 @@ pub(crate) struct CreatedWorktree {
     pub branch: Option<String>,
 }
 
-/// One agent as Herdr reports it right now, for the check agent sleep makes
+/// One agent as the engine reports it right now, for the check agent sleep makes
 /// just before it ends the agent's process.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentState {
@@ -77,7 +77,7 @@ pub(crate) struct DeliveryAgent {
     pub readiness: Readiness,
 }
 
-/// What Herdr says about whether an agent takes typed input. Herdr reports
+/// What the engine says about whether an agent takes typed input. It reports
 /// readiness only for an agent it started itself (`agent.start`): it sends
 /// `launch_pending: true` while that start settles or is blocked, and
 /// `interactive_ready: true` once it is active, and omits either flag when it
@@ -118,7 +118,7 @@ pub(crate) struct PaneProcessGroup {
 }
 
 impl PaneProcessGroup {
-    /// Herdr's condition for `agent.start`: the foreground group is the
+    /// The engine's condition for `agent.start`: the foreground group is the
     /// shell's own and holds nothing but the shell.
     pub(crate) fn shell_holds_terminal(&self) -> bool {
         match self.shell_pid {
@@ -157,7 +157,7 @@ pub enum PaneSessionKind {
     Path,
 }
 
-/// The session Herdr reports for a pane's agent.
+/// The session the engine reports for a pane's agent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaneSession {
     pub agent: String,
@@ -181,13 +181,14 @@ pub struct PaneText {
     pub truncated: bool,
 }
 
-/// What a Herdr server says of itself when pinged.
+/// What an engine says of itself when pinged.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerPong {
     pub version: String,
     pub protocol: u32,
-    /// Whether it can hand its panes to another Herdr program
-    /// (`server.live_handoff`); Herdr does so on Unix only.
+    /// Whether it can hand its panes to another engine program
+    /// (`server.live_handoff`); Herdr did so on Unix only, and the own engine
+    /// does not.
     pub live_handoff: bool,
 }
 
@@ -282,7 +283,7 @@ pub struct PaneProof {
     /// When the engine recorded the shell starting, as the system's process
     /// start time reads: the core's own engine keeps it in the pane's record,
     /// so a shell pid the system gave another process is refused. `None`
-    /// from Herdr, which names only the pid.
+    /// from an engine that names only the pid.
     pub shell_started: Option<u64>,
 }
 

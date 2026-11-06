@@ -1,5 +1,5 @@
 //! An explicit creation descriptor, separate from every human pane title.
-//! Herdr receives it in the same layout mutation that creates the terminal.
+//! The engine receives it in the same layout mutation that creates the terminal.
 
 use hide_node_link::panes::PaneIdentity;
 use serde::{Deserialize, Serialize};

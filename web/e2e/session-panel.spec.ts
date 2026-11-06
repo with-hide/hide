@@ -30,7 +30,7 @@ async function agentInWorktree(fixture: AgentFixture, daemon: Daemon, name: stri
   git(path.join(fixture.root, "fixture"), ["worktree", "add", "-b", `prd/${name}`, dir]);
   return withControl(daemon, async (control) => {
     const agent = await startAgentInProject(fixture, daemon, await openWorktree(control, dir), label);
-    // The stand-in reads only once it runs, and on Herdr a pane no view has sized takes no keys. Showing its tab would
+    // The stand-in reads only once it runs, and a pane no view has sized takes no keys. Showing its tab would
     // mark what it says as seen, which is not the point of the tasks that wait for the operator.
     viewPane(control, agent.pane);
     await agentReading(fixture, agent.pane);

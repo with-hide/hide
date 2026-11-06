@@ -18,10 +18,10 @@
 use super::*;
 #[path = "bootstrap.rs"]
 pub(super) mod bootstrap;
-#[path = "device_bundles.rs"]
-mod device_bundles;
 #[path = "inbound.rs"]
 pub mod inbound;
+#[path = "kit/mod.rs"]
+mod kit;
 #[path = "link_streams.rs"]
 mod link_streams;
 #[path = "wsl.rs"]
@@ -31,6 +31,7 @@ pub use hide_node_link::LinkError;
 use hide_node_link::panes::{NodeEvent, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
+pub use kit::ReleaseIdentity;
 pub use link_streams::{LinkStream, LinkWriter, OpenError, StreamCloser};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
@@ -198,151 +199,29 @@ pub(super) fn check_git(
     }
 }
 
-/// Local helpers, plus a manifest for device bundles fetched on connection.
-#[derive(Clone, Debug, Default)]
+/// The programs a device gets (`kit::select`): this build's folder, and the
+/// release this build was compiled as, whose kits a device of another
+/// platform gets.
+#[derive(Clone, Debug)]
 pub struct HelperPackages {
     directory: Option<PathBuf>,
+    release: ReleaseIdentity,
 }
 
+/// A build no release was published for: what a test of the lookup rule
+/// passes when it reaches no release.
+#[cfg(test)]
+pub(crate) const UNPUBLISHED: ReleaseIdentity = ReleaseIdentity {
+    version: "0.0.0-test",
+    commit: None,
+    order: 0,
+};
+
 impl HelperPackages {
-    pub fn new(directory: Option<PathBuf>) -> Self {
-        Self { directory }
-    }
-
-    /// The build for `os`/`arch` (Rust's names: `macos`, `aarch64`). A
-    /// `hided-<os>-<arch>` file wins; the daemon's own program (`hided`,
-    /// `hided.exe` on Windows) is accepted only for this daemon's own
-    /// platform, which is what the package and a development build carry.
-    pub fn find(&self, os: &str, arch: &str) -> Result<PathBuf, String> {
-        self.find_built_program(HELPER_NAME, os, arch).map_err(|()| {
-            format!(
-                "This Hide build does not include the device helper for {} {arch}; files and Git on this device stay unavailable until a build that packages it is installed",
-                platform_label(os)
-            )
-        })
-    }
-
-    /// What a device of `os`/`arch` gets: [`HelperPackages::payload`] with
-    /// the pane holder beside the helper, which runs the device's panes for
-    /// the core's own engine.
-    pub(super) fn payload_for(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
-        // The holder goes beside the helper; a build that does not carry
-        // the holder for the device's system connects nothing rather than a
-        // node that could run no pane.
-        let (mut payload, bundled) = self.kit(os, arch)?;
-        // A release's device kit carries the holder for a device of
-        // another system; a build's own system, or a developer's
-        // folder, has it beside the helper.
-        let holder = match bundled {
-            Some(holder) => holder,
-            None => {
-                let holder = self.find_built_program(HOLDER_NAME, os, arch).map_err(|()| {
-                    EstablishError::Unsupported(format!(
-                        "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
-                        platform_label(os)
-                    ))
-                })?;
-                read_package(&device_program(HOLDER_NAME, os), &holder)
-                    .map_err(EstablishError::Install)?
-            }
-        };
-        payload.files.push(holder);
-        // A Windows holder loads the pinned ConPTY runtime from the
-        // folder beside the node's program (`hide_kit::holders`).
-        if os == "windows" {
-            let conpty = self
-                .find_built_folder(hide_kit::holders::CONPTY_SOURCE, os, arch)
-                .map_err(|()| {
-                    EstablishError::Unsupported(format!(
-                        "This Hide build does not include the pane holder's ConPTY runtime for {} {arch}; the core's own engine cannot run this device's panes",
-                        platform_label(os)
-                    ))
-                })?;
-            payload.files.extend(
-                read_folder(hide_kit::holders::CONPTY_SOURCE, &conpty)
-                    .map_err(EstablishError::Install)?,
-            );
-        }
-        Ok(payload)
-    }
-
-    /// The programs this build puts on a device of `os`/`arch` besides the
-    /// pane holder: the helper, which the device cannot do without, and the
-    /// kit's parts, each found by the same rule as the helper. A part this
-    /// build does not carry is left out and named, and the kit on the device
-    /// reports it as missing from the build.
-    pub(super) fn payload(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
-        self.kit(os, arch).map(|(payload, _)| payload)
-    }
-
-    /// [`HelperPackages::payload`], and the pane holder when it came with a
-    /// release's device kit; a build's own files leave the holder unread
-    /// until a device asks for it.
-    fn kit(&self, os: &str, arch: &str) -> Result<(Payload, Option<Package>), EstablishError> {
-        // Existing native and developer-provided artifacts keep their lookup
-        // rule. Only a missing foreign helper goes to the release cache. This
-        // runs on the connection worker, never under the runtime mutex, and
-        // the bounded synchronous request cannot outlive that worker.
-        if self.find_built_program(HELPER_NAME, os, arch).is_err()
-            && (os != std::env::consts::OS || arch != std::env::consts::ARCH)
-            && device_bundles::supported(os, arch)
-        {
-            return device_bundles::payload(self.directory.as_deref(), os, arch)
-                .map(|(payload, holder)| (payload, Some(holder)))
-                .map_err(|reason| EstablishError::Download {
-                    os: os.to_owned(),
-                    arch: arch.to_owned(),
-                    reason,
-                });
-        }
-        let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
-        let helper = read_package(&device_program(HELPER_NAME, os), &helper)
-            .map_err(EstablishError::Install)?;
-        let mut payload = Payload {
-            files: vec![helper],
-            missing: Vec::new(),
-        };
-        for name in [CLI_NAME, HOOKS_NAME] {
-            match self.find_built_program(name, os, arch) {
-                Ok(path) => match read_package(&device_program(name, os), &path) {
-                    Ok(package) => payload.files.push(package),
-                    Err(reason) => payload.missing.push(reason),
-                },
-                Err(()) => payload.missing.push(format!(
-                    "This Hide build does not include {name} for {} {arch}",
-                    platform_label(os)
-                )),
-            }
-        }
-        Ok((payload, None))
-    }
-
-    /// The program `name` for `os`/`arch`, by the helper's rule: this build's
-    /// own copy carries its system's program name (`hided.exe` on Windows),
-    /// as the package and a development build name it.
-    fn find_built_program(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
-        self.find_named(name, &device_program(name, os), os, arch)
-    }
-
-    /// The folder `name` for `os`/`arch`, by the helper's rule: a folder has
-    /// the same name on every system (`holder-conpty`).
-    fn find_built_folder(&self, name: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
-        self.find_named(name, name, os, arch)
-    }
-
-    /// A developer's `<name>-<os>-<arch>` first; for this daemon's own
-    /// platform only, then the file or folder `own` beside it.
-    fn find_named(&self, name: &str, own: &str, os: &str, arch: &str) -> Result<PathBuf, ()> {
-        let directory = self.directory.as_ref().ok_or(())?;
-        let named = directory.join(format!("{name}-{os}-{arch}"));
-        if named.exists() {
-            return Ok(named);
-        }
-        let own = directory.join(own);
-        if os == std::env::consts::OS && arch == std::env::consts::ARCH && own.exists() {
-            return Ok(own);
-        }
-        Err(())
+    /// `directory` is the folder holding this build's programs; `release`
+    /// is this build's compiled identity, which a release's kit must name.
+    pub fn new(directory: Option<PathBuf>, release: ReleaseIdentity) -> Self {
+        Self { directory, release }
     }
 }
 
@@ -384,12 +263,12 @@ impl Payload {
     }
 }
 
-/// A package keeps the mode bits it has here, which the device's copy gets.
-/// A system without mode bits (Windows, which carries the Linux device kit
-/// for its WSL distributions) has nothing to give it: there a package is
-/// executable exactly when it is one of the kit's programs, by the kit's
-/// contract, never by a guess from the file.
-fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
+/// A package for a device of `os`/`arch` keeps the mode bits it has here,
+/// which the device's copy gets. A system without mode bits (Windows, which
+/// carries the Linux device kit for its WSL distributions) has nothing to
+/// give it: there a package is executable exactly when that device's kit
+/// contract names it a program, never by a guess from the file.
+fn read_package(relative: &str, path: &Path, os: &str, arch: &str) -> Result<Package, String> {
     use std::io::Read;
     let unreadable = |error: std::io::Error| {
         format!("The package {} could not be read: {error}", path.display())
@@ -403,7 +282,7 @@ fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
         .unix_mode()
     {
         Some(mode) => mode & 0o111 != 0,
-        None => program_by_contract(relative).ok_or_else(|| {
+        None => program_by_contract(os, arch, relative).ok_or_else(|| {
             format!(
                 "The package {} has no file mode on this system to install it with",
                 path.display()
@@ -420,56 +299,16 @@ fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
     })
 }
 
-/// Whether the kit part at `relative` is a program, for a system whose
-/// files carry no mode; `None` for a name the kit does not define. A Windows
-/// device's programs carry their `.exe`, and the ConPTY runtime's programs
-/// are its `.exe` files.
-fn program_by_contract(relative: &str) -> Option<bool> {
-    if let Some(runtime) = relative
-        .strip_prefix(hide_kit::holders::CONPTY_SOURCE)
-        .and_then(|rest| rest.strip_prefix('/'))
-    {
-        return Some(runtime.ends_with(".exe"));
-    }
-    match relative.strip_suffix(".exe").unwrap_or(relative) {
-        HELPER_NAME | CLI_NAME | HOOKS_NAME | HOLDER_NAME => Some(true),
-        _ => None,
-    }
-}
-
-/// Every file under the folder `dir`, as packages under `relative`, in name
-/// order; anything but a file or a folder in it is refused.
-fn read_folder(relative: &str, dir: &Path) -> Result<Vec<Package>, String> {
-    let unreadable =
-        |error: std::io::Error| format!("The package {} could not be read: {error}", dir.display());
-    let mut entries = std::fs::read_dir(dir)
-        .map_err(unreadable)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(unreadable)?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    let mut packages = Vec::new();
-    for entry in entries {
-        let name = entry.file_name();
-        let name = name.to_str().ok_or_else(|| {
-            format!(
-                "The package {} names a file that is not UTF-8",
-                dir.display()
-            )
-        })?;
-        let child = format!("{relative}/{name}");
-        let kind = entry.file_type().map_err(unreadable)?;
-        if kind.is_dir() {
-            packages.extend(read_folder(&child, &entry.path())?);
-        } else if kind.is_file() {
-            packages.push(read_package(&child, &entry.path())?);
-        } else {
-            return Err(format!(
-                "The package {} is not a file or a folder",
-                entry.path().display()
-            ));
-        }
-    }
-    Ok(packages)
+/// Whether the file at `relative` in the kit for `os`/`arch` is a program,
+/// as `contracts/device-kits.json` names it, for a system whose files carry
+/// no mode; `None` for a file that kit does not name.
+fn program_by_contract(os: &str, arch: &str, relative: &str) -> Option<bool> {
+    let contract = &*kit::contract::CONTRACT;
+    contract
+        .kit(os, arch)?
+        .files(&contract.programs)
+        .get(relative)
+        .copied()
 }
 
 fn platform_label(os: &str) -> &str {
@@ -481,9 +320,9 @@ fn platform_label(os: &str) -> &str {
     }
 }
 
-/// `uname -s -m` in Rust's platform names; a Windows device's PowerShell
-/// script answers `Windows` and its processor as Windows names it (`amd64`,
-/// `arm64`).
+/// `uname -s -m` in Rust's platform names, for a platform the device kit
+/// contract carries; a Windows device's PowerShell script answers `Windows`
+/// and its processor as Windows names it (`amd64`, `arm64`).
 pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
     let mut parts = uname.split_whitespace();
     let (Some(system), Some(machine)) = (parts.next(), parts.next()) else {
@@ -510,12 +349,9 @@ pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
             ));
         }
     };
-    if os == "macos" && arch == "x86_64" {
-        return Err(
-            "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only"
-                .to_owned(),
-        );
-    }
+    // A platform the release carries no kit for is refused here, before
+    // anything is installed, with the reason the device's row shows.
+    kit::contract::admit(os, arch, platform_label(os))?;
     Ok((os.to_owned(), arch.to_owned()))
 }
 
@@ -711,7 +547,7 @@ struct Inner {
     readers: std::sync::OnceLock<hide_node_link::sessions::ReaderFeatures>,
     /// The protocol the node's Hello named.
     protocol: std::sync::OnceLock<u32>,
-    /// The streams to the node's own Herdr and its daemon's browser relay
+    /// The streams to the node's browser relay and loopback servers
     /// open on this link, for a node that dialed its core (`link_streams`).
     streams: link_streams::LinkStreams,
     /// The link runs over the attach role's local stream: a node that dialed
@@ -2936,9 +2772,11 @@ mod tests {
             platform_of("Windows amd64").unwrap(),
             ("windows".to_owned(), "x86_64".to_owned())
         );
+        // A Windows ARM PC is refused before anything is installed, with
+        // the reason its row shows (with-hide/hide-private#501 decision 2).
         assert_eq!(
-            platform_of("Windows arm64").unwrap(),
-            ("windows".to_owned(), "aarch64".to_owned())
+            platform_of("Windows arm64").unwrap_err(),
+            "Windows ARM devices are not supported yet; Hide's Windows programs ship for x64 PCs only"
         );
     }
 
@@ -2947,7 +2785,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let own_name = device_program(HELPER_NAME, std::env::consts::OS);
         std::fs::write(directory.path().join(&own_name), b"own").unwrap();
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let own = packages
             .find(std::env::consts::OS, std::env::consts::ARCH)
             .unwrap();
@@ -2989,8 +2827,9 @@ mod tests {
     /// A folder laid out as this system's package lays out its resources
     /// (`desktop/scripts/package.mjs`, and the Windows runtime copy made from
     /// it): each program under its system's name, `hided.exe` on Windows, and
-    /// on Windows the holder's ConPTY runtime in the folder `holder-conpty`.
-    fn own_package(folder: &Path) {
+    /// on Windows the holder's ConPTY runtime in the folder `holder-conpty`,
+    /// whose files it answers.
+    fn own_package(folder: &Path) -> Vec<(String, bool)> {
         for name in [HELPER_NAME, CLI_NAME, HOOKS_NAME, HOLDER_NAME] {
             write(
                 &folder.join(device_program(name, std::env::consts::OS)),
@@ -2999,10 +2838,30 @@ mod tests {
             );
         }
         if cfg!(windows) {
-            let conpty = folder.join(hide_kit::holders::CONPTY_SOURCE);
-            write(&conpty.join("conpty.dll"), b"dll", 0o644);
-            write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
+            conpty_runtime(&folder.join(hide_kit::holders::CONPTY_SOURCE))
+        } else {
+            Vec::new()
         }
+    }
+
+    /// The holder's ConPTY runtime folder `conpty` as `scripts/fetch-conpty.py`
+    /// writes it, with every file the Windows kit names, which it answers as
+    /// a payload lists them.
+    fn conpty_runtime(conpty: &Path) -> Vec<(String, bool)> {
+        let prefix = format!("{}/", hide_kit::holders::CONPTY_SOURCE);
+        let kit = kit::contract::CONTRACT.kit("windows", "x86_64").unwrap();
+        kit.runtime
+            .iter()
+            .map(|(path, &program)| {
+                let mode = if program { 0o755 } else { 0o644 };
+                write(
+                    &conpty.join(path.strip_prefix(&prefix).unwrap()),
+                    path.as_bytes(),
+                    mode,
+                );
+                (path.clone(), program)
+            })
+            .collect()
     }
 
     /// A core gives a device of its own system the programs its own package
@@ -3012,9 +2871,9 @@ mod tests {
     #[test]
     fn a_core_finds_its_own_programs_by_their_exe_name_and_its_conpty_folder_bare() {
         let directory = tempfile::tempdir().unwrap();
-        own_package(directory.path());
+        let runtime = own_package(directory.path());
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         assert_eq!(
             packages.find(os, arch).unwrap(),
             directory.path().join(device_program(HELPER_NAME, os))
@@ -3024,12 +2883,7 @@ mod tests {
         let mut expected = [HELPER_NAME, CLI_NAME, HOOKS_NAME, HOLDER_NAME]
             .map(|name| (device_program(name, os), true))
             .to_vec();
-        if cfg!(windows) {
-            expected.extend([
-                ("holder-conpty/conpty.dll".to_owned(), false),
-                ("holder-conpty/x64/OpenConsole.exe".to_owned(), true),
-            ]);
-        }
+        expected.extend(runtime);
         expected.sort();
         assert_eq!(relative(&payload), expected);
     }
@@ -3043,7 +2897,7 @@ mod tests {
         for name in [HELPER_NAME, HOLDER_NAME] {
             write(&directory.path().join(name), name.as_bytes(), 0o755);
         }
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let refused = packages.find("windows", "x86_64").unwrap_err();
         assert!(
             refused.contains("does not include the device helper"),
@@ -3059,7 +2913,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         own_package(directory.path());
         let root = tempfile::tempdir().unwrap();
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let installed = packages.install_here(root.path()).unwrap();
         assert_eq!(
             installed.file_name().and_then(|name| name.to_str()),
@@ -3088,7 +2942,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let bare = packages.payload(os, arch).unwrap();
         assert_eq!(bare.files[0].relative, HELPER_NAME);
         assert_eq!(bare.files.len(), 1);
@@ -3135,7 +2989,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         assert!(matches!(
             packages.payload_for(os, arch),
             Err(EstablishError::Unsupported(_))
@@ -3147,7 +3001,9 @@ mod tests {
     }
 
     /// A Windows device gets its programs under their `.exe` names, the
-    /// holder and the ConPTY runtime the holder loads.
+    /// holder and each file of the ConPTY runtime the holder loads as the
+    /// kit contract names them, the same files its release kit carries, and
+    /// nothing else in the runtime folder.
     #[cfg(unix)]
     #[test]
     fn a_windows_device_gets_its_programs_and_the_conpty_runtime() {
@@ -3160,7 +3016,7 @@ mod tests {
                 0o755,
             );
         }
-        let packages = HelperPackages::new(Some(folder.to_path_buf()));
+        let packages = HelperPackages::new(Some(folder.to_path_buf()), UNPUBLISHED);
         assert!(
             matches!(
                 packages.payload_for("windows", "x86_64"),
@@ -3173,30 +3029,30 @@ mod tests {
             "{}-windows-x86_64",
             hide_kit::holders::CONPTY_SOURCE
         ));
-        std::fs::create_dir_all(conpty.join("x64")).unwrap();
-        write(&conpty.join("conpty.dll"), b"dll", 0o644);
-        write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
+        let runtime = conpty_runtime(&conpty);
+        write(&conpty.join("notes.txt"), b"not the runtime's", 0o644);
         let own = packages.payload_for("windows", "x86_64").unwrap();
-        assert_eq!(
-            own.files
-                .iter()
-                .map(|file| (file.relative.as_str(), file.executable))
-                .collect::<Vec<_>>(),
-            [
-                ("hided.exe", true),
-                ("hide.exe", true),
-                ("hide-agent-hooks.exe", true),
-                ("hide-holder.exe", true),
-                ("holder-conpty/conpty.dll", false),
-                ("holder-conpty/x64/OpenConsole.exe", true),
-            ]
-        );
-        assert_eq!(program_by_contract("hide-holder.exe"), Some(true));
-        assert_eq!(program_by_contract("holder-conpty/conpty.dll"), Some(false));
-        assert_eq!(
-            program_by_contract("holder-conpty/x64/OpenConsole.exe"),
-            Some(true)
-        );
+        let mut expected = [
+            "hided.exe",
+            "hide.exe",
+            "hide-agent-hooks.exe",
+            "hide-holder.exe",
+        ]
+        .map(|name| (name.to_owned(), true))
+        .to_vec();
+        expected.extend(runtime.iter().cloned());
+        expected.sort();
+        assert_eq!(relative(&own), expected);
+
+        // A runtime short of one of its files runs no pane either, and the
+        // refusal names the file.
+        let (gone, _) = &runtime[0];
+        std::fs::remove_file(conpty.join(gone.split_once('/').unwrap().1)).unwrap();
+        let Err(EstablishError::Unsupported(reason)) = packages.payload_for("windows", "x86_64")
+        else {
+            panic!("a ConPTY runtime short of {gone} was sent");
+        };
+        assert!(reason.contains(gone.as_str()), "{reason}");
     }
 
     /// Any change to any part is a new version folder on the device, so a
@@ -3208,7 +3064,7 @@ mod tests {
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
         write(&directory.path().join(HOOKS_NAME), b"one", 0o644);
-        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         let first = packages.payload(os, arch).unwrap().version();
         assert_eq!(packages.payload(os, arch).unwrap().version(), first);
         write(&directory.path().join(HOOKS_NAME), b"two", 0o644);

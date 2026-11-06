@@ -5,7 +5,7 @@
 //!
 //! The record only says a link held, with its source and its first and last
 //! time; what a pull request, CI, a worktree or a pane is now is read from
-//! GitHub, Git and Herdr as before, and wins over the record (D-27).
+//! GitHub, Git and the engine as before, and wins over the record (D-27).
 //!
 //! `store` owns the SQLite file (`links.sqlite3`), `worker` the one thread
 //! that writes it, and `runtime/links.rs` what the runtime hands the worker
@@ -223,7 +223,7 @@ pub struct PaneFact {
 /// A session `hide agent spawn` started for a parent session (D-27).
 ///
 /// Each side names its session as the core knows it: a live agent by its
-/// reader's id, a registration by the value Herdr reported, which for Pi and
+/// reader's id, a registration by the value the engine reported, which for Pi and
 /// omp is the session's file. The store names both as its reader does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParentFact {

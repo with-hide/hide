@@ -1,5 +1,5 @@
 //! The one letter an agent gets when its turn was cut off under it (PRD
-//! engine-bundle-4-herdr-removal D-22, B9): the move of Hide's Herdr into
+//! engine-bundle-4-herdr-removal D-22, B9): the move of Hide's Herdr state into
 //! the core's own engine, or the machine going down under the engine, ended
 //! a turn its hook last said was running or waiting on the operator. The
 //! engine's restore resumes the conversation and says which resumes were cut

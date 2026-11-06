@@ -126,7 +126,7 @@ export type AgentRow = {
   /** Conversation display provenance, independent of lifecycle and hook health. */
   record_connection?: "checking" | "confirmed" | "unconfirmed";
   record_summary?: string;
-  /** The name Herdr knows the agent by (`agent start --name`, `agent rename`); absent when it was given none. */
+  /** The name the engine knows the agent by (`hide agent spawn --name`); absent when it was given none. */
   herdr_name?: string;
   agent_kind: string;
   /** The checkout that physically owns this pane. */
@@ -152,7 +152,7 @@ export type AgentRow = {
   changed_at_unix_ms: number | null;
   /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
   last_prompt_at_unix_ms?: number | null;
-  /** The core's ordering key: `changed_at_unix_ms` as thirteen digits, else Herdr's state sequence zero-padded, so it sorts as text. */
+  /** The core's ordering key: `changed_at_unix_ms` as thirteen digits, else the engine's state sequence zero-padded, so it sorts as text. */
   last_activity?: string;
   emphasized: boolean;
   unread: boolean;
@@ -186,7 +186,7 @@ export type AgentRow = {
   lineage_worktree_badge?: string | null;
   /** Present only while Hide holds this agent asleep (PRD agent-sleep); absent when awake. */
   sleep?: AgentSleep;
-  /** The conversation id Herdr recorded for this agent; absent when it recorded none. */
+  /** The conversation id the engine recorded for this agent; absent when it recorded none. */
   session_id?: string | null;
   /** The agent searches its own conversation, so ⌘F asks the core where the search goes (`pane_find_open`). */
   own_find?: boolean;
@@ -1012,7 +1012,7 @@ export type DiskCleanup = {
   phase: DiskCleanupPhase;
   main_head: string | null;
   message: string | null;
-  /** Set when in-use could not be read (no Herdr connection, a failed process read): nothing is selectable. */
+  /** Set when in-use could not be read (no engine connection, a failed process read): nothing is selectable. */
   usage_error: string | null;
   /** The in-use reads are in: cache cells may be ticked while worktree checks still run (phase `loading`). */
   usage_ready: boolean;
@@ -1094,7 +1094,7 @@ export type TerminalPane = {
   transport_message: string | null;
   /** Core transport identity; absent in older snapshots and fixtures. */
   transport_generation?: number;
-  /** This client only observes the pane and Herdr did not move it for the last wheel; absent while false. */
+  /** This client only observes the pane and the engine did not move it for the last wheel; absent while false. */
   scroll_held_elsewhere?: boolean;
 };
 
@@ -1659,7 +1659,7 @@ export type DetailSlot = { items: DetailItem[]; shown: boolean };
 /** Which sessions the Overview map lights (`contracts/snapshot-wire-enums.json`: `overview_graph_focus`). */
 export type OverviewGraphFocus = "all" | "turn" | "working" | "results";
 export type GraphProjectKey = { device_id: string; workspace_id: string };
-/** A session by machine, Herdr pane and session digest (or native id), so a reused pane is never taken for it. */
+/** A session by machine, engine pane and session digest (or native id), so a reused pane is never taken for it. */
 export type GraphSessionKey = { device_id: string; pane_id: string; session: string | null };
 /** One device's map of every project, or one project's own map (PRD overview-graph-remembered D-07). */
 export type GraphScope = { kind: "all"; device_id: string } | { kind: "project"; device_id: string; workspace_id: string };
@@ -1725,7 +1725,7 @@ export type ViewDisplaySnapshot = {
 /** An agent that opened a View (`ViewOpenerSnapshot`). */
 export type ViewOpener = {
   name: string;
-  /** The agent's Herdr kind, for its logo and product name. */
+  /** The agent's kind as the engine reports it, for its logo and product name. */
   provider: string;
   device_id: string;
   /** The pane the agent is in now; absent while it is closed (B6). */
@@ -1914,7 +1914,7 @@ export type Device = {
   ssh_alias: string | null;
   /** The WSL distribution of this PC the device is (PRD wsl-device D-20); absent from an older daemon. */
   wsl_distro?: string | null;
-  /** The Herdr socket the registration names on the device; null reads its default server. */
+  /** The engine socket the registration names on the device; null reads its default server. */
   herdr_socket_path?: string | null;
   agent_count: number;
   test: { state: string; checked_at_unix_ms: number | null; stages: DeviceTestStage[] } | null;
@@ -2109,7 +2109,7 @@ export type Kit = {
 /** One pane's rectangle in a remote tab, as fractions of the tab's area (`RemotePaneLayoutFrame`). */
 export type RemotePaneFrame = { pane_id: string; x: number; y: number; width: number; height: number };
 
-/** A remote tab's geometry: Herdr reports rectangles, not the local split tree (`RemotePaneLayoutSnapshot`). */
+/** A remote tab's geometry: the device's engine reports rectangles, not the local split tree (`RemotePaneLayoutSnapshot`). */
 export type RemotePaneLayout = {
   workspace_id: string;
   tab_id: string;
@@ -2119,10 +2119,10 @@ export type RemotePaneLayout = {
 };
 
 /**
- * What the core projected from one SSH device's Herdr (`RemoteSessionSnapshot`).
+ * What the core projected from one SSH device's engine (`RemoteSessionSnapshot`).
  * Every id is scoped to the target (`remote:<target>:workspace:…`, `…:tab:…`,
  * `…:pane:…`), so a remote id can never name a local pane, and the focus
- * fields are that Herdr's own.
+ * fields are that engine's own.
  */
 export type RemoteSession = {
   workspaces: Workspace[];
@@ -2151,7 +2151,7 @@ export type RemoteStatus = {
 /**
  * `resolving`: the helper is being asked; `ready`: every directory is
  * confirmed; `unavailable`: the helper cannot be asked now (why is in the log).
- * An unconfirmed directory is listed as its Herdr workspace alone.
+ * An unconfirmed directory is listed as its engine workspace alone.
  */
 export type DeviceCatalog = {
   state: "resolving" | "ready" | "unavailable";
@@ -2714,7 +2714,7 @@ export type ProjectSuggestions = {
   global?: { path: string; unusable: GlobalInstructionUnusable | null } | null;
 };
 
-/** An agent Desk talks to over ACP, by its Herdr name (PRD Desk 1차, D-79); `contracts/snapshot-wire-enums.json` `desk_agent`. */
+/** An agent Desk talks to over ACP, by its kind name (PRD Desk 1차, D-79); `contracts/snapshot-wire-enums.json` `desk_agent`. */
 export type DeskAgentId = "claude" | "codex" | "grok" | "opencode" | "pi" | "omp" | "agy";
 /** `desk_agent_state`; `off` is a chosen agent Settings › Agents has since switched off. */
 export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "no_ask_mode" | "off";
@@ -3343,7 +3343,7 @@ export function focusedCheckout(rest: SnapshotRest | null): Checkout | null {
 
 /**
  * Every project the core's catalog carries: this machine's and registered ones
- * in the navigator, then each device's Herdr session. The core looks a
+ * in the navigator, then each device's engine session. The core looks a
  * checkout up in the same two places (`catalog_checkout`); device ids are
  * scoped, so one id never names checkouts on two machines.
  */
@@ -3371,7 +3371,7 @@ export function deviceOfCheckout(rest: SnapshotRest | null, id: string): string 
 
 /**
  * The checkout the operator is looking at: this machine's focus while it is
- * the selected device, otherwise that device's own Herdr focus, which the core
+ * the selected device, otherwise that device's own engine focus, which the core
  * follows (`front_checkout`).
  */
 export function frontCheckout(rest: SnapshotRest | null): Checkout | null {

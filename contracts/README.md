@@ -14,7 +14,7 @@ List an enum here, with a Rust-side pin and a reading-side check for it, in the 
 
 # Agent adapters
 
-`agent-adapters.json` is the web projection of `hide-agent-adapter`'s static declarations: support order, canonical ids and aliases, labels, Herdr kinds, Docs and Install links, logo ids and start/resume eligibility.
+`agent-adapters.json` is the web projection of `hide-agent-adapter`'s static declarations: support order, canonical ids and aliases, labels, `herdr_kind` names, Docs and Install links, logo ids and start/resume eligibility.
 `web/src/agentAdapters.ts` is the shell's normalized reader; Settings, onboarding, desktop and phone pickers, resume requests and logo lookup derive their answers from it.
 The Rust contract test compares the committed file with the current projection and checks its source links, logo manifest entries and support fixtures.
 Do not maintain another web support table or edit this generated file by hand.
@@ -27,7 +27,7 @@ target/debug/examples/export_web_contract > contracts/agent-adapters.json
 
 # Agent journey
 
-`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its Herdr kind, its own folder in its HOME (`home_folder`, which the kit reads as the agent being set up), the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares (`composer` for an agent whose adapter declares a composer, which the journey reads with `journey_composer`), how a letter reaches it (`letter`: `bell` wakes the pane, `next_prompt` rides the next prompt's hook, `tool` waits until the agent reads its inbox), how it wakes from sleep (`wake`: `pane` wakes the pane it sleeps in, `sleeping_session` reopens a closed session in a new pane), where the native title its `title` cell reads comes from (`title`: `automatic` when the agent titles its session itself, `{"named": "/name"}` when only the name the operator gives it with that command is one, as Pi's), the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start, four for Grok, whose CLI makes four for every turn), and the oldest CLI version Hide puts its hook, plugin or extension in place for (`minimum_version`, [agent-hooks.md](../docs/agent-hooks.md#the-oldest-version-of-each-agent)), which every pin in `agent-clis.json` must meet (`scripts/tests/test_agent_journey_contract.py`).
+`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its `herdr_kind`, its own folder in its HOME (`home_folder`, which the kit reads as the agent being set up), the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares (`composer` for an agent whose adapter declares a composer, which the journey reads with `journey_composer`), how a letter reaches it (`letter`: `bell` wakes the pane, `next_prompt` rides the next prompt's hook, `tool` waits until the agent reads its inbox), how it wakes from sleep (`wake`: `pane` wakes the pane it sleeps in, `sleeping_session` reopens a closed session in a new pane), where the native title its `title` cell reads comes from (`title`: `automatic` when the agent titles its session itself, `{"named": "/name"}` when only the name the operator gives it with that command is one, as Pi's), the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start, four for Grok, whose CLI makes four for every turn), and the oldest CLI version Hide puts its hook, plugin or extension in place for (`minimum_version`, [agent-hooks.md](../docs/agent-hooks.md#the-oldest-version-of-each-agent)), which every pin in `agent-clis.json` must meet (`scripts/tests/test_agent_journey_contract.py`).
 `scripts/agent_journey` reads only this file for what an agent supports, so a cell an adapter does not declare reads N/A rather than a failure.
 The `fake_home` declaration also carries a private-HOME API-key route and auto-update disable policy with its source evidence, or a named exception.
 These policies are for the keyless journey only and never authorize changing HOME for a real login.
@@ -40,7 +40,7 @@ target/debug/examples/export_journey_contract > contracts/agent-journey.json
 
 # Agent CLI pins
 
-`agent-clis.json` is the one place a CI agent CLI version is written: for each agent, by its Herdr kind, the version every CI lane installs, the installer (`npm` with its package, the vendor's own installer for Grok, or the release files of omp and agy), for an npm package whose program is not its `.bin` shim the program's path in the package, and for an npm package that needs its install scripts why (`install_scripts`; every other package installs with `--ignore-scripts`).
+`agent-clis.json` is the one place a CI agent CLI version is written: for each agent, by its `herdr_kind`, the version every CI lane installs, the installer (`npm` with its package, the vendor's own installer for Grok, or the release files of omp and agy), for an npm package whose program is not its `.bin` shim the program's path in the package, and for an npm package that needs its install scripts why (`install_scripts`; every other package installs with `--ignore-scripts`).
 `scripts/install-agent-clis.py` reads it to install each CLI on a runner and fails when a CLI answers another version, and the agent journey reads it to say in its report whether the CLI it measured answered that version, which fails its lane otherwise.
 omp's binary is checked against its release's `SHA256SUMS.txt`, and Grok's vendor installer publishes no checksum, so only the version it answers is checked.
 agy's installer serves only its latest release, so agy's row also records, for each system CI installs it on (`darwin-arm64`, `linux-x64`, `windows-x64`), the `url` and `sha512` of that release's file from agy's manifest, and the install downloads that file and checks it; a test refuses a row without both for each system.
@@ -57,3 +57,11 @@ Regenerate it after a change to those commands, and review the diff as the chang
 ```sh
 target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json
 ```
+
+# Device kits
+
+`device-kits.json` names every platform a device kit is made for, and is the only place those platforms are named ([docs/BUILD.md](../docs/BUILD.md#device-helper-release-bundles)).
+It gives the release manifest's format and name, the archive name, the four programs every kit carries, and for each platform its Rust target, the job that produces it, its program suffix, the executable header its programs must have and any runtime files beside them (`true` for an executable one); `refused` gives the reason a device of a platform Hide does not ship for is turned away.
+It is written by hand, and its readers are the core, which compiles it in (`hide-node/src/ssh/kit/contract.rs`), and the packaging scripts (`desktop/scripts/device-helpers.mjs`), each with its own tests over it.
+`scripts/check-device-kits-single-source.py` fails when a platform name appears anywhere else in that code.
+A new platform is one entry here, a runner that builds it, and its row in [docs/INSTALL.md](../docs/INSTALL.md#what-each-system-supports); raising `format` makes every core of an earlier build refuse the new manifest by its number.

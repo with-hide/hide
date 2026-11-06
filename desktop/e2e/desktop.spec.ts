@@ -72,9 +72,8 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
   // B11: no Node API in the page; the bridge is the host kind and OS, the menu
   // channel, the pane-chord report, the file manager reveal, Add a project's folder
   // picker, the browser displays' views (issue 155), the Factory's and the
-  // agents' system notifications with their click back and withdrawal, and
-  // macOS's notification permission with its settings page, the restart of
-  // the operator's older Herdr server (PRD herdr-takeover B12), and the window
+  // agents' system notifications with their click back and withdrawal,
+  // macOS's notification permission with its settings page, and the window
   // coming forward after `hide <path>`.
   expect(
     await page.evaluate(() => ({

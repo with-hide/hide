@@ -627,16 +627,15 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
 /** A step's state on the map: finished, being worked, or only planned (the worker has not reached it). */
 export type StepTone = "done" | "working" | "plan";
 
-/** A step of a node as the card's bar and the panel's list draw it; `changed` once the worker's plan differs from the Conductor's. */
-export type NodeStep = { title: string; tone: StepTone; changed: boolean };
+/** A step of a node as the card's bar draws it. */
+export type NodeStep = { title: string; tone: StepTone };
 
 /**
  * How a node's work goes, from the one source that is true now: the worker's
  * own plan once it exists (`worker`), else the steps the Conductor planned
- * (`plan`), never both as two lists. A worker step whose title is not one of
- * the Conductor's steps is `changed`; with no planned steps nothing is, since
- * there was nothing to change. `now` is the worker's current step. Null when
- * the node has neither.
+ * (`plan`), never both as two lists. `now` is the worker's current step.
+ * Null when the node has neither. Which worker step differs from the
+ * Conductor's is the checklist's to mark (`PlanChecklist`'s `planned`).
  */
 export function nodeSteps(node: MissionNode): { source: "worker" | "plan"; steps: NodeStep[]; now: string | null } | null {
   const plan = node.plan;
@@ -647,12 +646,11 @@ export function nodeSteps(node: MissionNode): { source: "worker" | "plan"; steps
     const steps = rows.map(({ step }, index): NodeStep => ({
       title: step.title,
       tone: cells[index] === "done" ? "done" : cells[index] === "working" || cells[index] === "hold" ? "working" : "plan",
-      changed: node.steps.length > 0 && !node.steps.includes(step.title),
     }));
     if (steps.length > 0) return { source: "worker", steps, now: plan.progress.finished ? null : (stepOf(plan, plan.progress.current)?.title ?? null) };
   }
   if (node.steps.length === 0) return null;
-  return { source: "plan", steps: node.steps.map((title) => ({ title, tone: "plan", changed: false })), now: null };
+  return { source: "plan", steps: node.steps.map((title) => ({ title, tone: "plan" })), now: null };
 }
 
 /** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */

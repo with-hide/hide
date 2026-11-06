@@ -4,7 +4,7 @@ use hide_node_link::terminal::{
 
 use super::*;
 
-/// A wheel carries the pointer's cell and modifiers because Herdr uses them
+/// A wheel carries the pointer's cell and modifiers because the engine uses them
 /// when the application tracks the mouse. Coordinates are zero-based.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ScrollRequest {
@@ -82,7 +82,7 @@ impl Runtime {
         }
         self.pane_focus_in_flight = None;
         let current_connection = control.live_generation == self.live_generation;
-        // The answer settles the tab move this focus makes when Herdr was
+        // The answer settles the tab move this focus makes when the engine was
         // already on its tab. A refusal moved nothing; a lost answer may
         // still land, so its move waits out the deadline.
         if current_connection {
@@ -123,7 +123,7 @@ impl Runtime {
         }));
         if unknown {
             let error = result.expect_err("ambiguous focus result");
-            // A read deadline ends our wait, not Herdr's external effect.
+            // A read deadline ends our wait, not the engine's external effect.
             // Abort this entire automatic burst instead of running a successor
             // that the unknown older mutation might later overwrite.
             if let Some(pending) = self.pending_pane_focus.take() {
@@ -260,7 +260,7 @@ impl Runtime {
     /// Removes every piece of terminal state for panes that no longer exist,
     /// and tells their node to forget them. Keeping this list in one place
     /// prevents a newly added pane-keyed cache from surviving retirement and
-    /// being inherited if Herdr reuses an id.
+    /// being inherited if the engine reuses an id.
     pub(super) fn retain_terminal_pane_state(&mut self, keep: impl Fn(&str) -> bool) -> bool {
         let before = self.terminal_state_len();
         self.retain_terminal_session_state(&keep);
@@ -278,7 +278,7 @@ impl Runtime {
     /// itself, and so its sizes, stays known: its node forgets the pane.
     pub(super) fn retain_terminal_session_state(&mut self, keep: impl Fn(&str) -> bool) -> bool {
         let before = self.terminal_state_len();
-        // A pane Herdr named for typed keys is not gone before its layout
+        // A pane the engine named for typed keys is not gone before its layout
         // first carries it (D-11, B9).
         let gone = self
             .terminal_states
@@ -510,14 +510,6 @@ impl Runtime {
             self.refresh_pane_headers();
         }
     }
-    /// Applies a background pane-control result to the owner-thread snapshot.
-    /// The child process is never waited on while the caller holds the
-    /// runtime lock; completion arrives through the normal change callback.
-    /// Records the outcome of a fork worker.
-    ///
-    /// `herdr agent new` creates the pane and starts the agent in one atomic
-    /// call, so a failure leaves nothing behind and there is no half-made pane
-    /// to clean up. The reason it failed is reported rather than swallowed.
     /// Records the machine's listeners and re-attributes every pane to them.
     ///
     /// Panes are re-walked here because ports arrive on their own window rather
@@ -597,7 +589,7 @@ impl Runtime {
 
     /// Stores what a pane search found and moves the viewport to the match.
     ///
-    /// The scroll goes through the same router the wheel uses, because Herdr
+    /// The scroll goes through the same router the wheel uses, because the engine
     /// owns the pane's history and answers a viewport move with a fresh frame
     /// whichever way this client reaches it.
     pub fn ingest_pane_find(
@@ -641,7 +633,7 @@ impl Runtime {
     }
     /// ⌘F on a pane whose agent has its own find: a worker opens the
     /// agent's search, or answers that Hide's find bar should open because
-    /// Herdr holds the pane's history (`crate::find::pane::spawn_agent_find`).
+    /// the engine holds the pane's history (`crate::find::pane::spawn_agent_find`).
     pub(super) fn open_pane_find(&mut self, pane_id: String, request_id: String) -> bool {
         let find = self
             .agent_row(&pane_id)
@@ -651,7 +643,7 @@ impl Runtime {
         let Some(find) = find else {
             return self.ingest_agent_find(&pane_id, request_id, Ok(PaneFindRoute::Bar));
         };
-        // A device's pane opens through that device's Herdr; one that cannot
+        // A device's pane opens through that device's engine; one that cannot
         // be reached says why in the bar.
         let route = match self.pane_api_route(&pane_id) {
             Ok(route) => route,
@@ -668,7 +660,7 @@ impl Runtime {
         false
     }
     /// Records where a `pane_find_open` sent the search. A failure opens the
-    /// bar with the reason, where the operator can search what Herdr holds.
+    /// bar with the reason, where the operator can search what the engine holds.
     pub fn ingest_agent_find(
         &mut self,
         pane_id: &str,
@@ -698,11 +690,11 @@ impl Runtime {
     }
     /// Records that the operator submitted to an agent pane, for who sent
     /// the message it writes next (PRD overview-request-view D-19). Only the
-    /// moment is kept. An Enter at a prompt Herdr reports (`blocked`) answers
+    /// moment is kept. An Enter at a prompt the engine reports (`blocked`) answers
     /// that prompt, not the conversation, and is not one. An Enter at a plan
-    /// waiting for approval is, whatever Herdr reads its menu as: approving
+    /// waiting for approval is, whatever the engine reads its menu as: approving
     /// writes the operator's next message (Codex's "Implement the plan.").
-    /// Herdr's own status is the delivery observation's; a pane with none is
+    /// The engine's own status is the delivery observation's; a pane with none is
     /// judged from its row, where only a resting agent's wait is the plan's.
     pub(super) fn record_operator_submit(&self, pane_id: &str) {
         let Some(services) = self.label_services.as_ref() else {
@@ -754,12 +746,12 @@ impl Runtime {
     /// Moves a pane's view by a wheel's signed lines (positive shows older
     /// lines), and whether that changed the snapshot.
     ///
-    /// Herdr gives terminal control to one client per pane. The controlling
-    /// session writes `terminal.scroll`, which Herdr routes to the program's
+    /// The engine gives terminal control to one client per pane. The controlling
+    /// session writes `terminal.scroll`, which the engine routes to the program's
     /// mouse handling or the history; the node writes it. A pane another
-    /// client controls (another Herdr client on the same server, say) is
-    /// observed, and an observer has no writer, so its wheel moves Herdr's
-    /// viewport with `pane.scroll` instead; Herdr keeps one viewport per pane,
+    /// client controls (another client of the same engine, say) is
+    /// observed, and an observer has no writer, so its wheel moves the engine's
+    /// viewport with `pane.scroll` instead; the engine keeps one viewport per pane,
     /// so both clients see the move. A pane with no session yet keeps the
     /// lines for its first frame. Every scroll producer comes through here,
     /// so none of them drops a wheel.
@@ -828,7 +820,7 @@ impl Runtime {
         if lines == 0 {
             return false;
         }
-        // A pane whose Herdr cannot be reached says so through its own
+        // A pane whose engine cannot be reached says so through its own
         // transport state (a device's `disconnected`); the wheel is logged,
         // never read as another client holding the scroll.
         let route = match self.pane_api_route(pane_id) {
@@ -849,7 +841,7 @@ impl Runtime {
         }
         false
     }
-    /// Applies a landed `pane.scroll`: the marker follows whether Herdr moved
+    /// Applies a landed `pane.scroll`: the marker follows whether the engine moved
     /// anything, and the lines that arrived meanwhile go out as one request.
     pub fn ingest_viewport_scroll(
         &mut self,
@@ -866,7 +858,7 @@ impl Runtime {
             Ok(Some(scroll)) if scroll.max_offset_from_bottom > 0 => {
                 self.release_scroll_hold(pane_id)
             }
-            // An alternate-screen program has no history in Herdr's viewport;
+            // An alternate-screen program has no history in the engine's viewport;
             // only the controlling client's wheel reaches the program itself.
             Ok(_) => self.hold_scroll_elsewhere(
                 pane_id,
@@ -910,8 +902,8 @@ impl Runtime {
         self.sync_transport_projection(pane_id);
         true
     }
-    /// Where a pane's socket requests go: this machine's Herdr, or the
-    /// device's Herdr under the id that Herdr knows the pane by. The error is
+    /// Where a pane's socket requests go: this machine's engine, or the
+    /// device's engine under the id that the engine knows the pane by. The error is
     /// the reason, worded for the operator.
     pub(super) fn pane_api_route(
         &self,
@@ -1195,7 +1187,7 @@ impl Runtime {
             (PaneControlAction::Focus { pane_id }, Err(error)) => {
                 let message = error.message().to_owned();
                 // Hide keeps the pane it focused. The refusal is reported and
-                // the wait ends, so the next Herdr event naming another pane
+                // the wait ends, so the next engine event naming another pane
                 // is read as the authority it is rather than as a late answer.
                 self.clear_refused_pane_focus(&pane_id, &message);
                 self.set_error("pane.focus_failed", message, true);
@@ -1278,7 +1270,7 @@ impl Runtime {
         self.snapshot.terminal.exit_code = None;
     }
     /// Points the terminal projection at another pane without discarding
-    /// anything Herdr has said.
+    /// anything the engine has said.
     ///
     /// Zoom is re-read from that pane's own layout rather than carried over,
     /// so leaving a zoomed tab does not leak its zoom into the next one.
@@ -1319,7 +1311,7 @@ impl Runtime {
     /// while this machine's selection stays in `ui_state.selected_pane_id`.
     /// Coming back to this machine hands the keyboard back to that pane, or to
     /// the focused pane of the tab being drawn, so a split, a zoom or a find
-    /// never names a pane this machine's Herdr does not have. The next local
+    /// never names a pane this machine's engine does not have. The next local
     /// session ingest would repair it too, but an idle session sends nothing.
     pub(super) fn return_keyboard_to_local_pane(&mut self) {
         if !self
@@ -1388,7 +1380,7 @@ impl Runtime {
             .iter()
             .map(|layout| layout.tab_id.clone())
             .collect::<HashSet<_>>();
-        // A tab Herdr no longer reports cannot come back, so holding its slot
+        // A tab the engine no longer reports cannot come back, so holding its slot
         // would shrink the window for the tabs that can.
         self.recent_visible_tabs
             .retain(|tab_id| known_tabs.contains(tab_id));
@@ -1409,7 +1401,7 @@ impl Runtime {
     /// sidebar and the pane header read their state from there and a missing
     /// entry would read as a failure rather than as a pane nobody is watching.
     /// The shell drops the canvas and the buffered bytes on that state, so the
-    /// tab redraws from Herdr's own frame when it is next shown.
+    /// tab redraws from the engine's own frame when it is next shown.
     pub(super) fn release_sessions_outside_attach_window(&mut self) -> bool {
         let window = self
             .recent_visible_tabs
@@ -1632,7 +1624,7 @@ impl Runtime {
     }
 
     /// Tells the nodes where the keyboard is when it moved since they were
-    /// last told, by a key or not: a Herdr focus move, a close focusing a
+    /// last told, by a key or not: an engine focus move, a close focusing a
     /// neighbour, the editor taking the keyboard. A node then reads the next
     /// key into another pane as moving the keyboard back (B1), however long
     /// the operator kept typing there.
@@ -1661,7 +1653,7 @@ impl Runtime {
         match report {
             TerminalReport::InputPermit { .. } => false,
             TerminalReport::State { pane, state } => {
-                // A pane Herdr no longer lists is not brought back by a late
+                // A pane the engine no longer lists is not brought back by a late
                 // report from its node. The answer to an attach this core
                 // asked for is kept even before a layout holds the pane: the
                 // core's own engine can make a pane's session ready before

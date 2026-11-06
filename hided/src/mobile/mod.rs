@@ -130,9 +130,9 @@ impl Inner {
 pub enum InputState {
     /// Being written now; a repeat must not write it again.
     InFlight,
-    /// Herdr took it.
+    /// The engine took it.
     Written,
-    /// Herdr did not answer in time: it may or may not have landed, so a
+    /// The engine did not answer in time: it may or may not have landed, so a
     /// repeat of this id is never written again.
     Uncertain,
 }
@@ -1109,10 +1109,10 @@ impl Mobile {
             if *self.stopping.borrow() {
                 return;
             }
-            // The toast goes to the Herdr of the machine the operator works
+            // The toast goes to the engine of the machine the operator works
             // at: a screen machine linked to this core, through its link,
             // and otherwise this machine's (PRD core-host-node-remote-core
-            // D-18). Herdr is skipped only when that machine has no socket
+            // D-18). The engine is skipped only when that machine has no socket
             // for it; its toast setting is not readable, so every other case
             // is tried.
             let machine = self
@@ -1822,7 +1822,7 @@ impl Mobile {
 
     /// Tells the core a phone write to `pane_id` is about to be made, so the
     /// doorbell treats the pane as typed into. Sent before the write: one
-    /// Herdr then refuses still holds the pane until a prompt hook or a turn
+    /// the engine then refuses still holds the pane until a prompt hook or a turn
     /// clears it, which is safer than a window where the write lands unseen.
     pub fn note_input(&self, pane_id: &str) {
         let event = json!({
@@ -1978,14 +1978,19 @@ impl Mobile {
                         if **current == missions {
                             return false;
                         }
-                        // Recorded when the record first goes over the cap, not on every
-                        // change while it stays over (the count is in the frame).
-                        if missions.omitted > 0 && current.omitted == 0 {
+                        // Recorded when the record first goes over a cap (the counts or
+                        // the frame's bytes), not on every change while it stays over
+                        // (the counts are in the frame).
+                        let left_out =
+                            |missions: &PhoneMissions| missions.omitted + missions.nodes_omitted();
+                        if left_out(&missions) > 0 && left_out(current) == 0 {
                             herdr_core::diagnostic!(json!({
                                 "component": "mobile_phone", "kind": "missions.capped",
                                 "omitted": missions.omitted,
+                                "steps_omitted": missions.nodes_omitted(),
                                 "open_cap": herdr_core::agent_state::phone::MAX_OPEN,
                                 "closed_cap": herdr_core::agent_state::phone::MAX_CLOSED,
+                                "budget": herdr_core::agent_state::phone::LIST_BUDGET,
                             }));
                         }
                         *current = Arc::new(missions);

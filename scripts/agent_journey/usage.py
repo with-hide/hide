@@ -76,8 +76,6 @@ def measure(journey):
                                                               journey.kind))[0] == cells.PASS,
                             USAGE_SECONDS, "Hide's usage to read the run's model calls")
     except ProcessError as error:
-        if journey.runtime.owner.cancelled.is_set():
-            raise
         record["wait"] = str(error)
     finally:
         observing(journey.daemon, False)

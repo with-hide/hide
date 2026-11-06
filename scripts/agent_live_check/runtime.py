@@ -14,7 +14,7 @@ import threading
 import time
 import urllib.request
 
-from .processes import COMMAND_SECONDS, GUARDIAN_FAILURES, MAX_FAILURE_REASON, MAX_OUTPUT, OwnedProcesses, ProcessError
+from .processes import COMMAND_SECONDS, GUARDIAN_FAILURES, MAX_FAILURE_REASON, MAX_OUTPUT, Cancelled, OwnedProcesses, ProcessError
 from .protection import ProtectionError, beneath, private_directory, validate_isolation, write_private
 from .system import PaneShell, exe, git, home_env, remove_pane_files, remove_tree, temp_env, tool_path
 from .timing import Deadline, ObservationTimeout
@@ -239,7 +239,7 @@ class Runtime:
         end = min(self.owner.deadline, time.monotonic() + seconds)
         while time.monotonic() < end:
             if self.owner.cancelled.is_set():
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
             if value := predicate():
                 return value
             self.owner.cancelled.wait(0.15)
@@ -353,8 +353,6 @@ class Runtime:
                     answer = result.answer()
                     deadline.remaining()
                 except ProcessError as error:
-                    if self.owner.cancelled.is_set():
-                        raise ProcessError("run_cancelled") from error
                     if not isinstance(error, ObservationTimeout) and str(error) != "command_timeout":
                         last_reason = str(error)
                     if isinstance(error, ObservationTimeout) or deadline.expired():
@@ -363,7 +361,7 @@ class Runtime:
                     if str(error) not in BOOTSTRAP_PENDING:
                         raise ProcessError(f"private_checkout_not_registered: {error}") from error
                     if self.owner.cancelled.wait(min(0.15, max(0, deadline.end - time.monotonic()))):
-                        raise ProcessError("run_cancelled")
+                        raise Cancelled("run_cancelled")
                     continue
                 raw_reference = answer.get("reference")
                 if not isinstance(raw_reference, str) or not raw_reference:
@@ -489,7 +487,7 @@ class Runtime:
             self.send(pane, self.shell.program(argv, output, error, status), deadline=deadline)
             while True:
                 if self.owner.cancelled.is_set():
-                    raise ProcessError("run_cancelled")
+                    raise Cancelled("run_cancelled")
                 deadline.remaining()
                 for path in (output, error):
                     if path.stat().st_size > MAX_OUTPUT:

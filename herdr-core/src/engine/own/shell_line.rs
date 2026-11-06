@@ -169,9 +169,13 @@ fn powershell_args(args: &[String]) -> String {
         .join(" ")
 }
 
-/// Whether `argv` may be typed as a resume: a plain command name first, no
-/// control character and no apostrophe, within Herdr's bounds; the rules a
-/// definition's words are read with (`hide_agent_adapter::definition`).
+/// Whether `argv`, a definition's resume, may be typed as a resume: a plain
+/// command name first, no control character and no apostrophe, within
+/// Herdr's bounds; the rules a definition's words are read with
+/// (`hide_agent_adapter::definition`). The file the pane's node starts that
+/// command from takes its place only after this check (`restore.rs`,
+/// `resume_agent`): it is the node's answer, typed quoted as a start types
+/// it, and no definition's word.
 pub(super) fn check_resume(argv: &[String]) -> Result<(), String> {
     use hide_agent_adapter::definition::{
         LINE_BYTES, LINE_WORDS, is_plain_command, is_typable_word,

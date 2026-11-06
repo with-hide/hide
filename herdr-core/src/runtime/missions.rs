@@ -24,7 +24,7 @@ use crate::missions::{
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, WarningKind, Worker,
 };
-use crate::model::{DetailItem, PrState, PullRequestBadge, PullRequestChecks, ReviewDecision};
+use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
 
 /// The role Hide wakes a mission's Conductor as (D-39). Like the memory
@@ -109,7 +109,7 @@ pub struct MissionView {
 }
 
 /// Where the operator's answer is (B26, B28): accepted and not yet tried,
-/// waiting for the Conductor's turn, or typed without Herdr confirming it
+/// waiting for the Conductor's turn, or typed without the engine confirming it
 /// arrived, kept until the operator sends it again. A typed answer takes
 /// its decision away, so it has no state of its own.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -399,7 +399,7 @@ struct ViewsMadeFrom {
     made: bool,
 }
 
-pub(super) fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
+fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
     PrSeen {
         number: pull.number,
         head: pull.head_oid.clone(),
@@ -410,20 +410,17 @@ pub(super) fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
     }
 }
 
-/// What an open `pull`'s CI ended as on its head, by the checks the list
-/// judged (`github::runs`); none while anything on the head still runs
-/// (a failure ranks first, so `Failed` alone is not the end), while it has
-/// no checks, or while they cannot be read.
+/// What an open `pull`'s CI ended as on its head, by the rule its ci line
+/// reads too (`PullRequestSnapshot::ci_end`); none while anything on the
+/// head still runs, while it has no checks, or while they cannot be read.
 fn ci_of(pull: &crate::model::PullRequestSnapshot) -> Option<CiResult> {
     pull.head_oid.as_ref()?;
-    if pull.badge.is_settled() || pull.checks_unfinished() {
+    if pull.badge.is_settled() {
         return None;
     }
-    match pull.checks {
-        PullRequestChecks::Passing => Some(CiResult::Passed),
-        PullRequestChecks::Failed if pull.work.checks_cancelled => Some(CiResult::Cancelled),
-        PullRequestChecks::Failed => Some(CiResult::Failed),
-        PullRequestChecks::Pending | PullRequestChecks::Unknown | PullRequestChecks::None => None,
+    match pull.ci_end() {
+        crate::model::CiEnd::Ended(result) => Some(result),
+        _ => None,
     }
 }
 
@@ -462,6 +459,22 @@ fn ci_news(pull: &crate::model::PullRequestSnapshot, result: CiResult) -> CiNews
         result,
         failed: names,
         more,
+    }
+}
+
+/// Notes on `node`'s record of pull request `number` that its CI `result`
+/// was told on the head it holds, once its letter is recorded.
+fn tell_ci(mission: &mut Mission, node: &str, number: u32, result: CiResult) {
+    let Some(seen) = mission
+        .nodes
+        .iter_mut()
+        .find(|held| held.key == node)
+        .and_then(|node| node.pr_seen.iter_mut().find(|seen| seen.number == number))
+    else {
+        return;
+    };
+    if !seen.ci_told.contains(&result) {
+        seen.ci_told.push(result);
     }
 }
 
@@ -751,11 +764,13 @@ fn wake_about(
     }
 }
 
-/// Numbers `wake` as the mission's next and records it (`push_wake`).
+/// Numbers `wake` as the mission's next and records it (`push_wake`); a
+/// refused wake takes no number.
 fn record(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
+    wake.seq = mission.wake_seq + 1;
+    let intent = push_wake(mission, wake)?;
     mission.wake_seq += 1;
-    wake.seq = mission.wake_seq;
-    push_wake(mission, wake)
+    Some(intent)
 }
 
 /// Records `wake` for its recipient and returns its letter's intent. With
@@ -1456,8 +1471,7 @@ impl Runtime {
                 // says of it now, so its first change after this one wakes.
                 for number in next.prs.clone() {
                     if !current.nodes[index].prs.contains(&number)
-                        && let Some(seen) =
-                            self.pull_seen(&current.device_id, &current.project, number)
+                        && let Some(seen) = self.pull_seen(current, number)
                     {
                         note_seen(&mut next, seen, now);
                     }
@@ -1870,25 +1884,14 @@ impl Runtime {
         }
     }
 
-    /// What GitHub last said of pull request `number` of `project` on
-    /// `device`, as a node remembers it; none before a read holds it.
-    /// `mission`'s project as GitHub last answered for its device, stale
-    /// or not.
-    pub(super) fn mission_project_pulls(
-        &self,
-        mission: &Mission,
-    ) -> Option<&crate::model::GithubProjectSnapshot> {
-        self.github_project_on(&mission.device_id, &mission.project)
-    }
-
-    fn pull_seen(&self, device: &str, project: &str, number: u32) -> Option<PrSeen> {
-        let pull = self
-            .github_project_on(device, project)
-            .filter(|project| !project.status.stale)?
+    /// What GitHub says now of pull request `number` in `mission`'s
+    /// project, as a node remembers it; none before a current read holds it.
+    pub(super) fn pull_seen(&self, mission: &Mission, number: u32) -> Option<PrSeen> {
+        self.mission_pulls(mission)?
             .pull_requests
             .iter()
-            .find(|pull| pull.number == number)?;
-        Some(seen_of(pull))
+            .find(|pull| pull.number == number)
+            .map(seen_of)
     }
 
     pub(crate) fn conductor_present(&self, actor: &Actor) -> bool {
@@ -2148,7 +2151,7 @@ impl Runtime {
             let Some(project) = github.project(&mission.project) else {
                 continue;
             };
-            if project.status.stale || !project.pull_requests_read {
+            if !project.pulls_current() {
                 continue;
             }
             // `pr_seen` is the record every landing reads (`mission_landing`),
@@ -2253,11 +2256,11 @@ impl Runtime {
                     }
                     // An open pull request's CI result not yet told on its
                     // head is told, the first answer's too; a new head is
-                    // told by its result, which names its commit.
+                    // told by its result, which names its commit. It counts
+                    // as told once its letter is recorded (`tell_ci`).
                     if let Some(result) = ci_of(pull)
                         && !now_seen.ci_told.contains(&result)
                     {
-                        now_seen.ci_told.push(result);
                         let mut wake = wake_about(
                             node.key.clone(),
                             Some(number),
@@ -2338,7 +2341,19 @@ impl Runtime {
                 reopened.push(mission.id.clone());
             }
             for wake in events {
-                recorded.extend(record(mission, wake));
+                let told = wake
+                    .ci
+                    .as_ref()
+                    .map(|ci| (wake.node.clone(), wake.pr, ci.result));
+                // A letter the full queue refused is not told, so the next
+                // answer with room records it (engineering #15).
+                let Some(intent) = record(mission, wake) else {
+                    continue;
+                };
+                recorded.push(intent);
+                if let Some((node, Some(number), result)) = told {
+                    tell_ci(mission, &node, number, result);
+                }
             }
         }
         for (id, events) in ended {

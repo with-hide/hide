@@ -26,7 +26,7 @@ GitHub에 붙여넣은 이미지는 user-attachments로 인라인 렌더링됩�
 <!-- 리뷰어의 시간을 어디에 쓸지 정하는 섹션입니다. 테스트가 증명한 것은 다시 판단하지 않고, 판단할 것이 없는 줄은 지웁니다. -->
 
 - **판단해 주세요**: <!-- 제품 해석, 문구, 트레이드오프, 되돌리기 어려운 결정. 각각 한 줄. 화면 변경이면 대표 이미지에서 사람이 정할 시각 판단 하나를 분명히 -->
-- **조심해서 볼 파일**: <!-- `path` - 왜. 이유는 이 저장소가 데인 자리에서 고릅니다: runtime mutex 안의 일, snapshot wire 채널, Herdr/core ownership, Herdr contract 밖의 호출, failure path, high-frequency path -->
+- **조심해서 볼 파일**: <!-- `path` - 왜. 이유는 이 저장소가 데인 자리에서 고릅니다: runtime mutex 안의 일, snapshot wire 채널, engine/core ownership, engine contract 밖의 호출, failure path, high-frequency path -->
 - **비용 검토**: <!-- 상시 작업·고빈도 경로 변경이면 입력/틱당 추가 작업, 알림 fan-out, 대기 상한과 없는 cap, 소유자와 종료 정리. docs/PERFORMANCE_TESTING.md#resident-work-cost-review를 따릅니다. -->
 - **질문**: <!-- 실제로 답이 필요한 것만, 구체적으로. 없으면 만들지 말고 이 줄을 지우세요 -->
 

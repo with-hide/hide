@@ -73,7 +73,7 @@ pub enum ThreadOlder {
 #[serde(rename_all = "snake_case")]
 pub enum ThreadInputState {
     Sending,
-    /// Herdr took the words and the Enter for the pane.
+    /// The engine took the words and the Enter for the pane.
     Sent,
     /// Nothing was typed into the pane; `reason` says why.
     Refused,

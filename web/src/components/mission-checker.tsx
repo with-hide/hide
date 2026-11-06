@@ -10,6 +10,7 @@ import { allAgents, agentsByPane } from "../paneAgents";
 import { sessionOfAgent } from "../sessionWork";
 import type { Mission, MissionChecker } from "../snapshot";
 import { useShellStore } from "../store";
+import { PILL_TONE } from "./mission-tone";
 import { Button } from "./ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Hint } from "./ui/tooltip";
@@ -108,8 +109,8 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
 
 /** A verdict's chip: rejected in the failed colour, passed green, at work in the review colour, not started muted. */
 export const VERDICT_TONE: Record<ReturnType<typeof checkerState>, string> = {
-  fail: "bg-mission-failed/15 text-mission-failed",
-  pass: "bg-mission-done/15 text-mission-done",
-  running: "bg-mission-review/15 text-mission-review",
-  waiting: "bg-muted text-muted-foreground",
+  fail: PILL_TONE.failed,
+  pass: PILL_TONE.done,
+  running: PILL_TONE.review,
+  waiting: PILL_TONE.quiet,
 };

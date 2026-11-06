@@ -4,7 +4,7 @@
 //! a pane whose node ended with its link runs on under its holder, so the
 //! next link's node finds it with the same process. A caller in one of its
 //! panes is proved by that pane's holder record, as a caller in a Herdr
-//! pane is by its Herdr (D-9), so `hide` works there with no Herdr.
+//! pane was by its Herdr (D-9), so `hide` works there with no Herdr.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -130,7 +130,7 @@ impl Device {
         let events = Arc::new(Events::default());
         let slot: hide_node::ssh::PaneEventsSlot = Arc::default();
         let _ = slot.set(Arc::clone(&events) as Arc<dyn hide_node::ssh::PaneEvents>);
-        let transport = hide_node::ssh::Connector::new(Some(packages))
+        let transport = hide_node::ssh::Connector::new(Some(packages), hided::cli::RELEASE)
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_terminals(Arc::new(Unseen))
             .with_pane_events(slot)

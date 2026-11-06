@@ -13,9 +13,9 @@ use crate::live::{CONTROL_WAIT, LiveContext, RemoteControlContext, failed};
 use crate::model::PaneFindRoute;
 use crate::runtime::Runtime;
 
-/// How many lines of history a pane search asks Herdr for.
+/// How many lines of history a pane search asks the engine for.
 ///
-/// Herdr caps what it keeps; this is the ceiling on what is searched, and it
+/// The engine caps what it keeps; this is the ceiling on what is searched, and it
 /// is reported alongside the count so a truncated buffer is visible rather
 /// than quietly reported as the whole thing.
 const PANE_FIND_LINE_LIMIT: u32 = 10_000;
@@ -47,8 +47,8 @@ pub struct PaneFindOutcome {
     pub scroll: Option<(String, u16)>,
 }
 
-/// Where one pane's socket requests go: this machine's Herdr, or a device's,
-/// with the id that Herdr knows the pane by beside the id the core projects.
+/// Where one pane's requests go: this machine's engine, or a device's,
+/// with the id that engine knows the pane by beside the id the core projects.
 #[derive(Clone)]
 pub struct PaneApiRoute {
     pub(crate) pane_id: String,
@@ -125,7 +125,7 @@ pub fn spawn_pane_find(route: PaneApiRoute, request: PaneFindRequest) -> Result<
     )
 }
 
-/// Opens an agent's own search in its pane, unless Herdr holds the pane's
+/// Opens an agent's own search in its pane, unless the engine holds the pane's
 /// history, which Hide's find bar searches instead (`agent_find.rs`).
 ///
 /// The requests run on this thread, never under the runtime mutex.
@@ -152,7 +152,7 @@ fn open_agent_find(
     gate: &Arc<crate::input_gate::PaneInputGate>,
     core_pane_id: &str,
 ) -> Result<PaneFindRoute, String> {
-    // An agent that draws inline leaves its conversation in Herdr's history,
+    // An agent that draws inline leaves its conversation in the engine's history,
     // where the find bar reaches all of it; its own search may not exist in
     // that mode (Claude Code's default renderer has none).
     let scroll = engine
@@ -176,7 +176,7 @@ fn open_agent_find(
     Ok(PaneFindRoute::Agent)
 }
 
-/// Herdr's scroll position for one pane, in lines above the bottom.
+/// The engine's scroll position for one pane, in lines above the bottom.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PaneScroll {
     pub offset_from_bottom: u64,
@@ -187,7 +187,7 @@ pub struct PaneScroll {
 ///
 /// `pane.scroll` takes an absolute offset and any socket client may send it,
 /// which is what an observer without a terminal writer has; the offset comes
-/// from the metrics `pane.get` reports, and Herdr clamps an overshoot at the
+/// from the metrics `pane.get` reports, and the engine clamps an overshoot at the
 /// top. Two requests off the runtime mutex; the core keeps one in flight per
 /// pane and sums the wheels that arrive meanwhile.
 pub fn spawn_viewport_scroll(route: PaneApiRoute, lines: i32) -> Result<(), String> {
@@ -201,10 +201,10 @@ pub fn spawn_viewport_scroll(route: PaneApiRoute, lines: i32) -> Result<(), Stri
 /// Why an observed pane's viewport did not move.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ViewportScrollError {
-    /// Herdr answered and refused the request (an older device Herdr without
+    /// The engine answered and refused the request (an older device the engine without
     /// `pane.scroll`, say): this client cannot scroll the pane.
     Refused(String),
-    /// Herdr was not reached or answered something unreadable; nothing is
+    /// The engine was not reached or answered something unreadable; nothing is
     /// known about the pane's scrolling.
     Unreachable(String),
 }

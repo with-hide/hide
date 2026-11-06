@@ -1553,7 +1553,7 @@ impl Runtime {
 
     /// Another registration that reaches the same account on the same
     /// machine (`HostIdentity::same_account`), as two registrations for two
-    /// Herdr servers there do, including one whose consent was carried to a
+    /// aliases of one machine do, including one whose consent was carried to a
     /// machine id beside one still from before contract 4. The hooks, the
     /// `hide` link and the helper root belong to that account, not to one
     /// registration, so removing one of them leaves those for the other.

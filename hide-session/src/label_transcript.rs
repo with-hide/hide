@@ -6,7 +6,7 @@
 //! and for a device (`hided node serve`), so the two cannot drift in what
 //! they read, prove or refuse. It holds no state: the caller keeps the
 //! checkpoint and hands it back on the next read. A read locates the session
-//! Herdr's reference names (a Claude Code or Codex file, an OpenCode
+//! the engine's reference names (a Claude Code or Codex file, an OpenCode
 //! database row), proves the provider's native owner before and after the
 //! read, and returns conversation events without injected scaffolding.
 //! Pi additionally returns its resolved source as an internal effect expectation;
@@ -34,7 +34,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LabelTranscriptRequest {
     pub agent: Agent,
-    /// Herdr's `agent_session.kind`: `id` or `path`.
+    /// The engine's `agent_session.kind`: `id` or `path`.
     pub reference_kind: String,
     pub reference_value: String,
     #[serde(default)]

@@ -105,7 +105,7 @@ impl UninstrumentedReason {
 /// pane on a device is observed the same way, against that device's hooks.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PaneObservation {
-    /// The hook dialect of the agent Herdr detected in this pane, when Hide
+    /// The hook dialect of the agent the engine detected in this pane, when Hide
     /// instruments it (Claude Code's and Codex's hooks, OpenCode's plugin).
     /// `None` is an agent Hide cannot instrument.
     pub dialect: Option<hide_agent_adapter::HookDialect>,
@@ -260,7 +260,7 @@ impl RuntimeDiagnosis {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Diagnosis {
     pub runtimes: Vec<RuntimeDiagnosis>,
-    /// The last hook report that did not reach Herdr, if the most recent
+    /// The last hook report that did not reach the core, if the most recent
     /// one failed. An installed hook whose reports are refused looks exactly
     /// like a session that predates the install, and this is what tells the
     /// two apart.

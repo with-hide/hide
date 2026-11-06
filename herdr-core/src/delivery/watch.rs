@@ -185,9 +185,9 @@ pub struct Reading {
     /// A caller-selected window that replaces [`inactivity_window`].
     pub inactivity_ms: Option<u64>,
     /// The target's own row says it stopped on a question, neither working
-    /// nor held by a Herdr-blocked prompt.
+    /// nor held by an engine-blocked prompt.
     pub asking: bool,
-    /// The target's own row says Herdr holds it at a blocked prompt, such as
+    /// The target's own row says the engine holds it at a blocked prompt, such as
     /// a permission menu.
     pub blocked: bool,
 }
@@ -458,7 +458,7 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
 /// window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Early {
-    /// Herdr holds the target at a blocked prompt, which the target cannot
+    /// The engine holds the target at a blocked prompt, which the target cannot
     /// leave on its own and which its native runtime may time out.
     Blocked,
     /// The target stopped on a question asked only in its own pane.
@@ -691,7 +691,7 @@ mod tests {
         assert_eq!(summaries(&ledger).len(), 3);
     }
 
-    /// docs/delivery.md, Watch activity and completion: a child Herdr holds
+    /// docs/delivery.md, Watch activity and completion: a child the engine holds
     /// at a blocked prompt is told to its parent one tick later, whatever
     /// letters wait, because the prompt rang no doorbell and its runtime may
     /// time it out.

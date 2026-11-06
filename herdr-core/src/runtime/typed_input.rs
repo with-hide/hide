@@ -112,7 +112,7 @@ impl Runtime {
     /// took. When that is the brief a spawn typed there and is still waiting
     /// for, the brief is confirmed. It is judged before the caller's native
     /// identity is required, because Codex reports its session on that very
-    /// turn and Herdr may not show it yet. Queued, never waited for: this
+    /// turn and the engine may not show it yet. Queued, never waited for: this
     /// runs under the runtime lock.
     pub(super) fn confirm_brief_by_hook(&self, pane_id: &str, digest: &str) {
         let Ok(ledger) = self.delivery_ledger.as_ref() else {
@@ -746,7 +746,7 @@ impl Runtime {
 }
 
 /// Whether the agent took the brief's latest typing by starting a turn: its
-/// own hook reports the core's turn working (Herdr's reading alone never
+/// own hook reports the core's turn working (the engine's reading alone never
 /// counts) since after that typing, and nothing else could have started it,
 /// since no input reached the pane after the typing (the brief's own
 /// `agent.prompt` is no noted input) and no letter's bell was typed there
@@ -1241,8 +1241,8 @@ pub(crate) mod tests {
         child_reads(&mut runtime, "working", None, T - 1);
         assert!(runtime.typed_input_work(T + 600_000).is_empty());
 
-        // The core's turn decides, not Herdr's status: omp's hook starting
-        // a turn after the typing takes the brief while Herdr still reads
+        // The core's turn decides, not the engine's status: omp's hook starting
+        // a turn after the typing takes the brief while the engine still reads
         // the pane idle.
         let (_root, mut runtime, _) = spawned_as("omp", false, T);
         child_reads(&mut runtime, "idle", Some(HookTurn::Working), T + 6_000);
@@ -1258,7 +1258,7 @@ pub(crate) mod tests {
         assert!(runtime.typed_input_work(T + 600_000).is_empty());
     }
 
-    /// The child's pane as one pass lays it: Herdr reporting `herdr` since
+    /// The child's pane as one pass lays it: the engine reporting `herdr` since
     /// `at`, the hook of its session having reported `hook`, and the core's
     /// turn decided from both at `at`.
     fn child_reads(runtime: &mut Runtime, herdr: &str, hook: Option<HookTurn>, at: u64) {
@@ -1272,7 +1272,7 @@ pub(crate) mod tests {
         child.projected.as_mut().unwrap().changed_at_unix_ms = Some(at);
     }
 
-    /// The hook says the child works on its brief while Herdr reads its
+    /// The hook says the child works on its brief while the engine reads its
     /// pane idle: the core's turn, the one the row and the doorbell read,
     /// says it works, so no record is owed. Its parent is not told, the row
     /// shows nothing, and an answered screen does not have the brief typed
@@ -1290,7 +1290,7 @@ pub(crate) mod tests {
         assert!(runtime.take_session_rereads().is_empty());
     }
 
-    /// The hook says the child's turn ended while Herdr still reads it
+    /// The hook says the child's turn ended while the engine still reads it
     /// working: the child rests by the core's turn, so after the record wait
     /// its parent hears, and once someone answered its screen the brief is
     /// typed again, as for any child at rest.
@@ -1344,7 +1344,7 @@ pub(crate) mod tests {
         assert_eq!(shown_phase(&runtime, &spawn), serde_json::Value::Null);
     }
 
-    /// A turn that only Herdr reads, or one something else could have
+    /// A turn that only the engine reads, or one something else could have
     /// started (a key, a letter's bell after the typing), is no record: the
     /// brief is judged by its record alone, and its parent hears once it
     /// rests unconfirmed.
@@ -1466,7 +1466,7 @@ pub(crate) mod tests {
         assert_eq!(runtime.input_asks(later + 1), asked);
         assert_eq!(shown_phase(&runtime, &spawn), "unconfirmed");
 
-        // A pane Herdr no longer lists takes its input with it.
+        // A pane the engine no longer lists takes its input with it.
         runtime.delivery_observations.remove("child");
         assert!(runtime.typed_input_work(later + 2).is_empty());
         assert!(runtime.input_asks(later + 2).is_empty());

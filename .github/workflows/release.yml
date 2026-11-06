@@ -73,6 +73,10 @@ jobs:
       - uses: ./.github/actions/vt-cache
         with:
           save: false
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install the web, desktop and holder test packages
         # The pane holder's screen tests draw on an xterm from this install.
         run: bash scripts/verify-web.sh install

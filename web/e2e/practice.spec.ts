@@ -1,5 +1,5 @@
-// The practice window (UI_BEHAVIOR.md, Practice window) on an isolated pinned
-// Herdr and hided: opened from the shell's Help menu, every chapter played to
+// The practice window (UI_BEHAVIOR.md, Practice window) on an isolated
+// engine and hided: opened from the shell's Help menu, every chapter played to
 // its end with Enter alone, and again by the guide's button, without a call to
 // the system clipboard, and the chapter list then reads every chapter as seen
 // from the progress the core kept. The chapters run the shell's own

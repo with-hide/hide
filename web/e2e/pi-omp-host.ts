@@ -1,10 +1,9 @@
 // A stand-in for Pi and omp (PRD pi-omp-extension D-11): a small program run as
-// `pi` or `omp` in a pane of the private Herdr that loads the extension Hide's
+// `pi` or `omp` in a pane of the private engine that loads the extension Hide's
 // kit wrote, the way both hosts load a file from their extensions folder, and
 // emits its events with the shapes captured from Pi 1.0.4 and omp 18.7.0
-// (`hide-agent-hooks/tests/fixtures/pi-extension/`). It tells Herdr what it is
-// the way Herdr's own integration does (`pane report-agent` with the session
-// file path), so Herdr lists the pane as a Pi or omp agent.
+// (`hide-agent-hooks/tests/fixtures/pi-extension/`). Hide's extension is what
+// reports the session, so the pane is listed as a Pi or omp agent.
 //
 // The spec drives it through numbered command files in the pane's folder and
 // reads each answer from the file of the same number; a command runs in the

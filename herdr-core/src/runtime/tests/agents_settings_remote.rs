@@ -1593,7 +1593,7 @@ fn a_broken_sync_update_keeps_the_last_valid_agents_and_says_it_is_disconnected(
 }
 
 /// AC2, AC4, SC3. An operator focus writes the pane's read record to the
-/// store, and a pane Herdr stops reporting is gone from the file on the
+/// store, and a pane the engine stops reporting is gone from the file on the
 /// next save, so the record cannot grow without bound.
 #[test]
 fn read_record_is_written_for_the_operator_focused_pane_and_evicted_when_it_disappears() {
@@ -1678,9 +1678,9 @@ fn restored_pane_keeps_its_read_record_through_delayed_agent_detection() {
     );
 }
 
-/// A device's Herdr server restarts the way this machine's does, and its
+/// A device's engine restarts the way this machine's does, and its
 /// panes are judged the same way: a pane the operator read there stays read
-/// through the restored server's steps, the mark Hide wants on it names the
+/// through the restored engine's steps, the mark Hide wants on it names the
 /// device's own pane id, and work after the restore is news again.
 #[test]
 fn a_device_pane_read_before_its_server_restarts_stays_read() {
@@ -1768,7 +1768,7 @@ fn a_device_pane_read_before_its_server_restarts_stays_read() {
 
 /// AC2, AC7, SC1. The defect the PRD was written against, from the other
 /// side: one click on a Done row clears that row and nothing else, even
-/// though Herdr reports the whole tab seen and names its own focused pane.
+/// though the engine reports the whole tab seen and names its own focused pane.
 #[test]
 fn read_record_follows_the_row_the_operator_clicked_and_no_other() {
     let mut runtime = live_runtime();
@@ -1788,7 +1788,7 @@ fn read_record_follows_the_row_the_operator_clicked_and_no_other() {
     );
 }
 
-/// AC2, SC1. Bringing a tab forward makes Herdr report the pane that tab
+/// AC2, SC1. Bringing a tab forward makes the engine report the pane that tab
 /// last had focused. Nobody chose that pane in this session, so no record
 /// moves and the rows stay where they are.
 #[test]
@@ -1805,7 +1805,7 @@ fn read_record_ignores_the_focus_a_tab_carries_when_it_comes_forward() {
     assert_eq!(unread_panes(&runtime), vec!["w1:p1", "w1:p2", "w1:p3"]);
 }
 
-/// AC4, SC3. A launch inherits Herdr's focus and puts the terminal back on
+/// AC4, SC3. A launch inherits the engine's focus and puts the terminal back on
 /// the pane the last session ended on. Neither is the operator looking at
 /// anything, so an item that was unread before the quit is still unread.
 #[test]
@@ -1840,7 +1840,7 @@ fn read_record_keeps_up_with_the_pane_the_operator_is_watching() {
     );
 }
 
-/// AC2, R2. Once Herdr moves focus off the pane the operator chose, that
+/// AC2, R2. Once the engine moves focus off the pane the operator chose, that
 /// pane stops counting as watched, so its next change comes back unread.
 #[test]
 fn read_record_stops_following_a_pane_herdr_moved_focus_away_from() {

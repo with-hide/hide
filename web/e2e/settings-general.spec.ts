@@ -1,9 +1,8 @@
 // Settings' list and its General, GitHub and About pages on an isolated
-// pinned Herdr and hided (PRD settings-cleanup B1-B6, B23, B24;
+// engine and hided (PRD settings-cleanup B1-B6, B23, B24;
 // settings-left-nav B2-B5, B8, B9, B12, B13): the list in its groups, General's
-// Appearance, separate Privacy, the GitHub row, About with its closed Details, the real
-// Herdr version and protocol of a healthy connection, and the settings that
-// moved into Agents and Hide AI.
+// Appearance, separate Privacy, the GitHub row, About with its closed Details, and the
+// settings that moved into Agents and Hide AI.
 
 import { expect, test } from "@playwright/test";
 import { startFixture } from "./engine-fixture";

@@ -1230,7 +1230,7 @@ mod tests {
         }
     }
 
-    /// A runtime attached to Herdr whose pane is on screen before its
+    /// A runtime attached to the engine whose pane is on screen before its
     /// terminal session, the order the web shows a new pane in.
     fn live_pane() -> (Runtime, Arc<RecordedTerminals>) {
         let mut runtime = crate::runtime::tests::live_runtime();

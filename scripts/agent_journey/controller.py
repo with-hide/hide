@@ -1,13 +1,13 @@
 """The journey's controller: the registered agent pane every spawn is made from.
 
 `hide agent spawn` takes its caller from the pane's process tree, so the hide
-commands run as descendants of an agent Herdr knows. The controller is the
+commands run as descendants of an agent the engine knows. The controller is the
 desktop e2e's spawn provider (`web/e2e/shims/spawn-provider.c`, built here):
 started as a Claude kind in its own private pane, it reports a synthetic
-native session to Herdr through `session_report.py` and, each time it reads `!`, runs the command
+native session to the core through the `session_report.py` it writes and, each time it reads `!`, runs the command
 `command.json` holds through `controller_command.py`, writing the command's
 exit status to a completion file. Its process outcomes are part of the
-measurement boundary, checked independently of Herdr and the agent CLIs.
+measurement boundary, checked independently of the engine and the agent CLIs.
 """
 
 import json
@@ -15,7 +15,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from agent_live_check.processes import ProcessError
+from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import private_directory, write_private
 from agent_live_check.runtime import clean_env
 from agent_live_check.system import WINDOWS, exe, home_env, remove_pane_files, temp_env
@@ -178,9 +178,11 @@ class Controller:
         wait_error, status = None, None
         try:
             status = runtime.wait(lambda: self.completed.is_file() and self.completed.read_text().strip(), seconds)
-        except ProcessError as error:
+        except (ProcessError, Cancelled) as error:
             wait_error = str(error)
             self.unsettled = True
+            if isinstance(error, Cancelled):
+                raise
         def output(path):
             if not path.is_file():
                 return b""

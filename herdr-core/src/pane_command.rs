@@ -1,11 +1,11 @@
-//! The commands an agent uses instead of Herdr's own (PRD engine-bundle-1
+//! The commands an agent uses instead of the engine's own (PRD engine-bundle-1
 //! D-5, D-13): `hide pane read`, `hide agent read`, `hide pane send`,
 //! `hide pane open --beside` and `hide workspace purpose`.
 //!
 //! The daemon admits the caller through its pane proof, the runtime resolves
 //! the pane and the engine under its lock (`Runtime::prepare_pane_command`),
 //! and [`Prepared::run`] makes the engine calls on the caller's task, off the
-//! lock. They reach every pane of the machine they name, as Herdr's commands
+//! lock. They reach every pane of the machine they name, as the engine's commands
 //! did; a bare pane id is a pane of the caller's own machine.
 
 use std::thread;
@@ -635,7 +635,7 @@ impl Send<'_> {
         }
     }
 
-    /// Notes a write that Herdr took, or whose reply was lost and so may
+    /// Notes a write that engine took, or whose reply was lost and so may
     /// have landed, as input the sender wrote after `fence`; a refused one
     /// is none. The answer is the next write's fence, `Moved` once someone
     /// else's input came during this one.

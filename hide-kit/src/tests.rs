@@ -119,7 +119,7 @@ impl Fixture {
             .prefix("hk")
             .tempdir_in("/tmp")
             .unwrap();
-        // Resolved, so paths compare equal to what the fake Herdr records.
+        // Resolved, so paths compare equal to what the stand-in programs record.
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let home = root.join("home");
         let kit = root.join("kit");

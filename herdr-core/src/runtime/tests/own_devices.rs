@@ -203,7 +203,7 @@ fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
     drop(unused);
 }
 
-/// With the switch off a dialed device's panes stay on its Herdr.
+/// With the switch off a dialed device's panes stay on its engine.
 #[test]
 fn a_core_on_herdr_opens_no_device_engine() {
     let shared = super::device_kit::with_consent(None);

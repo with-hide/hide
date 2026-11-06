@@ -53,7 +53,7 @@ it.each(["future-agent", "gemini-cli", "cursor", "", null, undefined])("keeps %s
   expect(markup).not.toContain("<img");
 });
 
-// A row without a logo names its agent by product, never by the raw Herdr kind (PRD agent-mark-quiet B6, B7).
+// A row without a logo names its agent by product, never by the raw engine kind (PRD agent-mark-quiet B6, B7).
 it.each([["claude", "Claude Code"], [" CLAUDE-CODE ", "Claude Code"], ["codex", "Codex"], ["future-agent", "future-agent"]])("names %s as %s", (kind, name) => {
   expect(agentProductName(kind)).toBe(name);
 });

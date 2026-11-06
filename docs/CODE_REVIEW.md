@@ -73,5 +73,5 @@ When one piece of work lands as a series, such as a mission's nodes or a stack, 
 ## Where reviews start from
 
 - `AGENTS.md` routes every reviewer here.
-- The file list a pull request's `Review` section names (runtime mutex, snapshot wire, ownership, Herdr contract, failure path, high-frequency path) is where a reviewer spends the most time; the perspectives above apply to the whole diff.
+- The file list a pull request's `Review` section names (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path) is where a reviewer spends the most time; the perspectives above apply to the whole diff.
 - `docs/TESTING.md`, `docs/VERIFICATION.md` and `docs/PERFORMANCE_TESTING.md` own the detail behind perspectives 5 and 6.

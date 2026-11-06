@@ -40,8 +40,8 @@ export async function startEngine(): Promise<EngineServer> {
  * The own engine's side of the fixture: no server, since the daemon's node
  * starts each pane's holder itself, only the private root, whose `home` the
  * daemon runs in, and the pane shell's environment, which the daemon hands
- * its panes. The shell is the one the Herdr fixture names, with the same
- * fixed prompt.
+ * its panes. The shell is the one the removed Herdr fixture named, with the
+ * same fixed prompt.
  */
 function startOwnEngine(): EngineServer {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-e2e-own-")));
@@ -302,7 +302,7 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
     // running shells, including to a spec that restarts the daemon at once.
     // Waiting must not select a checkout before the spec opens its page.
     for (const pane of [first.pane, second]) await waitForPaneInput(control, pane);
-    // Match the agent fixture and the original Herdr fixture: a command
+    // Match the agent fixture and the removed Herdr fixture: a command
     // from the first pane is a command from the operator's current pane.
     await focusPane(control, first.pane);
     return { workspace: first.workspace, checkout: first.checkout, tab: first.tab, panes: [first.pane, second] };

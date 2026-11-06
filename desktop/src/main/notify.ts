@@ -3,7 +3,7 @@
  * a root agent that newly
  * needs the operator or finished; the host shows them while the app runs.
  * Clicking one brings the window forward and hands its id back to the shell,
- * which opens what it names. Herdr's own notification cannot carry where a
+ * which opens what it names. Herdr's own notification could not carry where a
  * click goes, which is why the host shows these and the daemon does not.
  * The app icon's badge counts the agents that need the operator, which the
  * shell reports.

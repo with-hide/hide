@@ -6,7 +6,8 @@ import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { releaseKind } from "./check-release-assets.mjs";
-import { deviceHelperDigests } from "../desktop/scripts/device-helpers.mjs";
+import { createHash } from "node:crypto";
+import { CANDIDATE_KITS, candidateKitSources, deviceAsset, deviceKitFiles, readDeviceKit } from "../desktop/scripts/device-helpers.mjs";
 import { checkReleaseBinaries, RELEASE_PROGRAMS } from "../desktop/scripts/release-binaries.mjs";
 
 const REPOSITORY = "with-hide/hide";
@@ -79,7 +80,7 @@ export function candidateReceipt(inputs, context, verification) {
       + "dispatch while it is pending, runs or after it passed, never after it failed or a later main run replaced it");
   }
   return {
-    schema: 4, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
+    schema: 5, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
     build_order: inputs.build_order, verification_run_id: inputs.verification_run_id,
     workflow_sha: context.workflowSha, run_id: context.runId, run_attempt: Number(context.runAttempt),
     // No candidate calls a signed-in provider since 2026-10-27 (docs/BUILD.md,
@@ -90,10 +91,37 @@ export function candidateReceipt(inputs, context, verification) {
 
 const identityOf = (receipt) => ({ commit: receipt.public_sha, version: receipt.tag.replace(/^v/, ""), order: receipt.build_order });
 
-/** The receipt with the digests of both device helpers this run built, checked against its identity. */
-export function withDeviceHelpers(receipt, directory) {
-  if (receipt.schema !== 4 || "device_helpers" in receipt) throw new Error("device helpers complete a schema 4 receipt once");
-  return { ...receipt, device_helpers: deviceHelperDigests(directory, identityOf(receipt)) };
+/**
+ * The receipt with the manifest entry of every kit this candidate made
+ * (`device_kits`), read from the archives of `directory/device-bundles`
+ * after the core's checks, each program required to be the byte-identical
+ * build its producer recorded for the receipt's source, version and order:
+ * a Linux helper's manifest, `compile (windows)`'s record. `directory` holds
+ * the artifacts as `device bundles` read them (desktop/scripts/device-helpers.mjs,
+ * candidateKitSources). The publisher copies these entries into the release's
+ * manifest beside its Mac kit's.
+ */
+export function withDeviceKits(receipt, directory) {
+  if (receipt.schema !== 5 || "device_kits" in receipt) throw new Error("device kits complete a schema 5 receipt once");
+  const identity = identityOf(receipt);
+  const bundles = path.join(directory, "device-bundles");
+  const archives = CANDIDATE_KITS.map((platform) => deviceAsset(platform, identity.version)).sort();
+  if (JSON.stringify(fs.readdirSync(bundles).sort()) !== JSON.stringify(archives)) {
+    throw new Error(`the device bundles artifact must hold exactly ${archives.join(", ")}`);
+  }
+  const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  const device_kits = {};
+  for (const platform of CANDIDATE_KITS) {
+    const entry = readDeviceKit(platform, path.join(bundles, deviceAsset(platform, identity.version)), identity.version);
+    const sources = candidateKitSources(platform, identity, directory);
+    for (const [name, program] of deviceKitFiles(platform)) {
+      if (program && entry.files[name].sha256 !== digest(sources.get(name))) {
+        throw new Error(`the ${platform} kit's ${name} differs from the build recorded for this candidate`);
+      }
+    }
+    device_kits[platform] = entry;
+  }
+  return { ...receipt, device_kits };
 }
 
 /**
@@ -103,7 +131,7 @@ export function withDeviceHelpers(receipt, directory) {
  * under target/release and their record under desktop/out.
  */
 export function withMacosBinaries(receipt, directory) {
-  if (receipt.schema !== 4 || "macos_binaries" in receipt) throw new Error("the Mac binaries complete a schema 4 receipt once");
+  if (receipt.schema !== 5 || "macos_binaries" in receipt) throw new Error("the Mac binaries complete a schema 5 receipt once");
   const record = path.join(directory, "desktop", "out", "release-binaries.json");
   checkReleaseBinaries(record, path.join(directory, "target", "release"), RELEASE_PROGRAMS, identityOf(receipt));
   return { ...receipt, macos_binaries: JSON.parse(fs.readFileSync(record, "utf8")).files };
@@ -133,9 +161,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
         runAttempt: process.env.GITHUB_RUN_ATTEMPT,
       }, verification);
     } else if (action === "builds" && files.length === 3) {
-      receipt = withMacosBinaries(withDeviceHelpers(JSON.parse(fs.readFileSync(files[0], "utf8")), files[1]), files[2]);
+      receipt = withMacosBinaries(withDeviceKits(JSON.parse(fs.readFileSync(files[0], "utf8")), files[1]), files[2]);
     } else {
-      throw new Error("usage: node scripts/release-candidate.mjs source | builds receipt.json device-helpers-folder macos-binaries-folder");
+      throw new Error("usage: node scripts/release-candidate.mjs source | builds receipt.json device-kit-artifacts-folder macos-binaries-folder");
     }
     console.log(JSON.stringify(receipt));
   } catch (error) {

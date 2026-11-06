@@ -59,6 +59,12 @@ class ProcessError(RuntimeError):
     pass
 
 
+class Cancelled(RuntimeError):
+    """The run's owner was cancelled (Ctrl-C or a stop). Not a `ProcessError`:
+    a catch of one never concludes a cell from the other, so a wait that sees
+    the cancel raises this and every catcher lets it end the run."""
+
+
 class ProcessSafetyError(ProcessError):
     """A guardian or cleanup failure that must end the measurement."""
 
@@ -274,8 +280,10 @@ class OwnedProcesses:
 
         def admit():
             now = time.monotonic()
-            if self.cancelled.is_set() or now >= self.deadline:
-                raise ProcessError("run_cancelled_or_timed_out")
+            if self.cancelled.is_set():
+                raise Cancelled("run_cancelled")
+            if now >= self.deadline:
+                raise ProcessError("run_timed_out")
             if now >= launch_deadline:
                 raise ProcessError("command_timeout")
 
@@ -409,7 +417,7 @@ class OwnedProcesses:
             if over.is_set():
                 raise ProcessError("command_output_over_budget")
             if self.cancelled.is_set():
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
             if time.monotonic() >= end:
                 raise ProcessError("command_timeout")
         if over.is_set():
@@ -435,7 +443,7 @@ class OwnedProcesses:
                         selector.register(stream, selectors.EVENT_READ, index)
                     while selector.get_map():
                         if self.cancelled.is_set():
-                            raise ProcessError("run_cancelled")
+                            raise Cancelled("run_cancelled")
                         if time.monotonic() >= end:
                             raise ProcessError("command_timeout")
                         for key, _ in selector.select(POLL_SECONDS):
@@ -880,7 +888,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
             exit_watch.wait(POLL_SECONDS, cancelled)
     except BaseException as error:
         if (child is None and launch_deadline is not None and time.monotonic() >= launch_deadline
-                and isinstance(error, ProcessError) and str(error) in ("command_timeout", "run_cancelled_or_timed_out")):
+                and isinstance(error, ProcessError) and str(error) == "command_timeout"):
             # Nothing launched; this is the controller's expired operation,
             # not a failed resource guardian. The empty cleanup is receipted.
             launch_timed_out = True

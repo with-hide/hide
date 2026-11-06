@@ -106,7 +106,8 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(set(receipt["needs"]), {"validate", "phone", "packages", "macos-binaries"})
         self.assertNotIn("if", receipt)  # default success(), never always()
         taken = {"hide-release-candidate", "hide-package-linux", "hide-package-windows", "hide-device-helper-linux-x86_64",
-                 "hide-device-helper-linux-aarch64", "hide-macos-release-binaries", "hide-device-bundles"}
+                 "hide-device-helper-linux-aarch64", "hide-windows-release-binaries", "hide-macos-release-binaries",
+                 "hide-device-bundles"}
         journey = yaml.safe_load((WORKFLOWS / "agent-journey.yml").read_text())["jobs"]
         uploads = [step["with"]["name"] for job in journey.values() for step in job.get("steps", [])
                    if step.get("uses", "").startswith("actions/upload-artifact@")]
@@ -130,27 +131,38 @@ class ReleaseCandidate(unittest.TestCase):
                     if step.get("uses", "").startswith("actions/checkout@"):
                         self.assertEqual(step["with"]["ref"], "${{ inputs.source-sha || github.sha }}")
 
-    def test_no_receipt_or_mac_app_exists_without_both_device_helpers(self):
-        # A failed helper must skip what needs it: the bundles both apps ship
-        # the manifest of, so the Mac app's assembly, the Windows app's and,
-        # through `packages`, the candidate's receipt. The Mac compile alone
-        # starts beside the helpers.
+    def test_no_receipt_exists_without_every_candidate_device_kit(self):
+        # `device bundles` makes both Linux kits and the Windows kit from the
+        # Windows app's own compile, so it waits for both helpers and that
+        # compile; a failure there skips, through `packages`, the candidate's
+        # receipt. No app carries a device kit, so each package waits only for
+        # its compile, and the Linux package for nothing.
         jobs = yaml.safe_load((WORKFLOWS / "package.yml").read_text())["jobs"]
         self.assertNotIn("if", jobs["device-helpers"])
         self.assertNotIn("if", jobs["helper-identity"])
         self.assertNotIn("if", jobs["device-bundles"])
-        self.assertEqual(set(jobs["device-bundles"]["needs"]), {"helper-identity", "device-helpers"})
+        self.assertEqual(set(jobs["device-bundles"]["needs"]), {"helper-identity", "device-helpers", "windows-compile"})
+        bundles = jobs["device-bundles"]["steps"]
+        downloads = [step["with"] for step in bundles if step.get("uses", "").startswith("actions/download-artifact@")]
+        self.assertEqual([(d["name"], d["path"]) for d in downloads], [
+            ("hide-device-helper-linux-x86_64", "desktop/out/device-helpers/linux-x86_64"),
+            ("hide-device-helper-linux-aarch64", "desktop/out/device-helpers/linux-aarch64"),
+            ("hide-windows-release-binaries", "desktop/out/windows-compile"),
+        ])
+        self.assertTrue(any(step.get("run", "").startswith("python3 scripts/fetch-conpty.py --out desktop/out/windows-compile/holder-conpty")
+                            for step in bundles))
+        upload = next(step for step in bundles if step.get("uses", "").startswith("actions/upload-artifact@"))
+        self.assertEqual((upload["with"]["name"], upload["with"]["path"]), ("hide-device-bundles", "desktop/out/device-bundles/*.tar.gz"))
         self.assertEqual(jobs["macos-compile"]["needs"], "helper-identity")
-        self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "device-bundles", "macos-compile"})
-        self.assertEqual(set(jobs["windows-package"]["needs"]), {"helper-identity", "device-bundles", "windows-compile"})
-        # The Linux app carries no device kit, so its package waits for nothing.
+        self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "macos-compile"})
+        self.assertEqual(set(jobs["windows-package"]["needs"]), {"helper-identity", "windows-compile"})
         self.assertNotIn("needs", jobs["package"])
         for name in ("macos-compile", "macos-package"):
             self.assertEqual(jobs[name]["if"], "${{ inputs.include-macos }}")
         receipt = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["receipt"]
         downloads = [step["with"]["name"] for step in receipt["steps"] if step.get("uses", "").startswith("actions/download-artifact@")]
-        self.assertEqual(downloads, ["hide-device-helper-linux-x86_64", "hide-device-helper-linux-aarch64",
-                                     "hide-macos-release-binaries"])
+        self.assertEqual(downloads, ["hide-device-bundles", "hide-device-helper-linux-x86_64", "hide-device-helper-linux-aarch64",
+                                     "hide-windows-release-binaries", "hide-macos-release-binaries"])
 
     def test_the_mac_binaries_compile_on_the_mini_or_on_github_from_the_verified_source(self):
         workflow = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())

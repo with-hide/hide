@@ -11,7 +11,7 @@ use super::Runtime;
 impl Runtime {
     /// Admits `command` for the pane-bound `caller` on `device` whose
     /// checkout is `expected`, and resolves what it acts on. A bare pane id
-    /// is a pane of the caller's own machine, as Herdr numbered it there.
+    /// is a pane of the caller's own machine, as the engine numbered it there.
     pub(crate) fn prepare_pane_command(
         &self,
         device: &str,
@@ -153,7 +153,7 @@ impl Runtime {
     }
 
     /// The live agent `key` names for a caller on `device`, as a letter's
-    /// target is named: its registered name or id, the name Herdr gave it,
+    /// target is named: its registered name or id, the name the engine gave it,
     /// or its pane.
     fn agent_named(
         &self,

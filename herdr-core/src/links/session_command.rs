@@ -133,7 +133,7 @@ pub struct DeviceFacts {
     pub local: bool,
     /// Since when it has not answered; none while it is connected.
     pub unreachable_since_unix_ms: Option<u64>,
-    /// Connected, but Hide has not yet read every checkout its Herdr shows,
+    /// Connected, but Hide has not yet read every checkout its engine shows,
     /// so the repository of a Project there may still be unknown and the
     /// Project left out of the scope until it is read.
     pub reading: bool,

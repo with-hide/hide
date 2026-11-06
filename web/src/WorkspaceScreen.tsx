@@ -30,7 +30,7 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // A Workspace (PRD S6 D-01..D-05; S7 B12, B13; PRD right-lane D-01..D-07;
 // PRD lane-two-columns D-01, D-02, D-09): one checkout's path in the
 // window's top row (PRD sidebar-titlebar-refresh D-15, `WorkspaceTitle`),
-// and in the body Agent Views (its Herdr tabs and their panes), the right
+// and in the body Agent Views (its engine tabs and their panes), the right
 // lane's two columns (the documents or the window's 보기 slot at the agents'
 // side, and a tool, Memory, PRs, Explorer or Changes, beside the rail) and,
 // at the right edge, the tool rail. Which columns show, the tool, the pin

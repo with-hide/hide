@@ -8,7 +8,7 @@
 // disposed only when the core reports the pane released or no longer lists
 // it (`retainTerminals`), never on a tab switch.
 //
-// The wheel is Herdr's too (PRD S2 B19): the pane has no local scrollback,
+// The wheel is the engine's too (PRD S2 B19): the pane has no local scrollback,
 // so a wheel batch becomes one `terminal_scroll` per animation frame and the
 // core answers with the viewport it now shows.
 //
@@ -53,7 +53,7 @@ export type TerminalActions = TerminalLinkActions & {
 };
 
 type Instance = {
-  /** Mutable routing address; Herdr may rekey it while retaining the terminal. */
+  /** Mutable routing address; the engine may rekey it while retaining the terminal. */
   paneId: string;
   identity: string | null;
   term: Terminal;
@@ -373,7 +373,7 @@ export function terminalFor(paneId: string | null): Terminal | null {
 /**
  * True while `focusTerminal` moves DOM focus to follow the snapshot, so the
  * textarea's focus listener does not report the core's own move back to it
- * as an operator action; that echo, met by Herdr's later confirmation of the
+ * as an operator action; that echo, met by the engine's later confirmation of the
  * previous move, kept two panes trading focus on a slow runner.
  */
 let followingSnapshot = false;
@@ -436,9 +436,9 @@ function disposeInstance(paneId: string, instance: Instance) {
 /**
  * Fits the terminal to its host and sends the grid out when it changed. The
  * grid follows the rectangle drawn for the pane the moment it is drawn,
- * whether or not Herdr has confirmed the layout behind it (PRD
+ * whether or not the engine has confirmed the layout behind it (PRD
  * grid-ahead-of-herdr D-03): the PTY size is this controller's to set, so a
- * layout Herdr draws differently only moves the host once more and the
+ * layout the engine draws differently only moves the host once more and the
  * observer sends that fit too.
  */
 function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChanged = false) {
@@ -490,7 +490,7 @@ function screenRows(term: Terminal): string[] {
 }
 
 /**
- * The pane has no local scrollback: Herdr redraws its viewport in place, so
+ * The pane has no local scrollback: the holder redraws its viewport in place, so
  * xterm keeps the selection on the same screen cells while the text under it
  * moves. A wheel remembers what the selection covers, and the frame that
  * answers it moves the selection to where that text went, or to the part
@@ -629,7 +629,7 @@ function flushWheel(paneId: string, instance: Instance) {
     payload: {
       pane_id: paneId,
       // A DOM deltaY grows downward while AppKit's scrollingDeltaY grows
-      // upward, so this ternary reads the DOM sign, not AppKit's; Herdr's
+      // upward, so this ternary reads the DOM sign, not AppKit's; the engine's
       // `up` shows older lines. The core's line count is
       // a u16, so a scripted burst is clamped rather than refused.
       direction: rows > 0 ? "down" : "up",
@@ -645,9 +645,9 @@ function onWheel(paneId: string, instance: Instance, event: WheelEvent) {
   // The wheel has one owner. Left to xterm, a buffer without scrollback
   // (ours always, and any alternate-screen program) turns the same event
   // into cursor-key bytes on the PTY, and a mouse-tracking program gets
-  // xterm's own wheel report; Herdr decides both from terminal_scroll.
+  // xterm's own wheel report; the engine decides both from terminal_scroll.
   event.stopImmediatePropagation();
-  // ⌥ + wheel stays with the browser: nothing to Herdr and nothing to
+  // ⌥ + wheel stays with the browser: nothing to the engine and nothing to
   // the PTY.
   if (event.altKey) return;
   event.preventDefault();
@@ -859,7 +859,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
     fontFamily: font.family(),
     fontSize: fontSizeAt(scale),
     theme: terminalTheme(),
-    // Herdr owns the history; the pane shows the viewport the core sends.
+    // The pane holder owns the history; the pane shows the viewport the core sends.
     scrollback: 0,
     allowProposedApi: true,
     // A program's own links open like the ones found in the text, never
@@ -871,8 +871,8 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  // Herdr lays its frames out with current Unicode widths; xterm's default
-  // Unicode 6 tables give many emoji one cell where Herdr gave two.
+  // The pane holder lays its frames out with current Unicode widths; xterm's default
+  // Unicode 6 tables give many emoji one cell where the holder gave two.
   term.loadAddon(new Unicode11Addon());
   term.unicode.activeVersion = "11";
   followWraps(term);
@@ -967,7 +967,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
   const copy = (event: ClipboardEvent) => onCopy(instance, event);
   element.addEventListener("wheel", wheel, { capture: true, passive: false });
   // The press and release are read on the way down and left to xterm, whose
-  // selection needs them. Its own mouse reports never fire: Herdr's frames
+  // selection needs them. Its own mouse reports never fire: the holder's frames
   // carry no mouse mode (`selection.ts` on what they carry), so the program
   // hears about a click only through the core's terminal_click route.
   element.addEventListener("mousedown", down, { capture: true });
@@ -988,7 +988,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
 /**
  * Shows the pane's terminal inside `host`, creating it on first sight, and
  * returns the function that parks it again. The host's size is watched, so a
- * grid change from Herdr's new geometry reaches the core as one
+ * grid change from the engine's new geometry reaches the core as one
  * `terminal_resize` per pane (PRD S2 B6).
  */
 export function attachTerminal(

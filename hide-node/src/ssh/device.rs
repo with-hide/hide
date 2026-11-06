@@ -13,7 +13,9 @@
 
 use super::gate::Gate;
 use super::host::bootstrap;
-use super::host::{ATTEMPT_ENDED as ENDED, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook};
+use super::host::{
+    ATTEMPT_ENDED as ENDED, HelperPackages, PaneEventsSlot, PaneHook, ReleaseIdentity, TerminalHook,
+};
 use super::hosts::{Resolve, ssh_g};
 use super::openssh::{SshProgram, Version};
 use super::session::{self, Dial};
@@ -123,13 +125,15 @@ pub(super) fn resolve_device_home(
 impl Connector {
     /// `helper_dir` is the folder holding the builds devices run and the
     /// `hide` that answers ssh's questions; `None` leaves every device's
-    /// node `unsupported` with that reason.
-    pub fn new(helper_dir: Option<PathBuf>) -> Self {
+    /// node `unsupported` with that reason. `release` is this build's
+    /// compiled identity, whose release kits a device of another platform
+    /// gets.
+    pub fn new(helper_dir: Option<PathBuf>, release: ReleaseIdentity) -> Self {
         let askpass = helper_dir
             .as_ref()
             .map(|dir| dir.join(format!("hide{}", std::env::consts::EXE_SUFFIX)));
         Self {
-            packages: HelperPackages::new(helper_dir),
+            packages: HelperPackages::new(helper_dir, release),
             ssh: PathBuf::from("ssh"),
             askpass,
             resolve: ssh_g(PathBuf::from("ssh")),

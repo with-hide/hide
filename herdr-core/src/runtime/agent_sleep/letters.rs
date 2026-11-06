@@ -390,7 +390,7 @@ impl Runtime {
         // Read before the wake, which may take the record with it.
         let letters = self.route_letters(ledger, &route);
         let changed = match &route {
-            // No connection to wake it on, or a terminal Herdr could not
+            // No connection to wake it on, or a terminal the engine could not
             // restore: no wake is tried, so its letters wait rather than
             // fail with an earlier wake's reason.
             Route::Pane(pane)
@@ -592,6 +592,7 @@ pub(in crate::runtime) fn asleep_observation(actor: Actor) -> Observation {
         answered_at_unix_ms: 0,
         observed_at_unix_ms: 0,
         hook_submit_at_unix_ms: 0,
+        hide_typed_at_unix_ms: 0,
         session: None,
         thread: None,
         host_scope: None,
