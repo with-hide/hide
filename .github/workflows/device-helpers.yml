@@ -63,6 +63,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         run: bash scripts/verify-web.sh install
       - name: Install the target in the pinned toolchain

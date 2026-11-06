@@ -5,7 +5,8 @@
 job that builds the relay WebAssembly. That is any job that builds or checks the
 web shell (the `web` package's build, bundle, typecheck, test, build:phone and
 e2e all run `prepare:relay` first), compiles the desktop package (which builds
-the shell), or runs the build script or a script that calls it. This test reads
+the shell), runs a bare `verify-web.sh`, or runs the build script or a script
+that calls it (`WRAPPERS`, which the test checks against the scripts). This test reads
 every workflow for those jobs instead of keeping a list of them, so a new job
 cannot miss the action.
 
@@ -42,17 +43,37 @@ UNRESTORED = {
 
 # What a `run` step calls to reach the relay WebAssembly build. `package
 # assemble` assembles the app from binaries `package compile` built, and
-# `e2e-list` only lists tests, so neither builds the shell.
-SCRIPTS_CALLING_THE_BUILD = sorted(
-    path.name for path in (ROOT / 'scripts').glob('*.sh')
-    if path.name != 'build-relay-wasm.sh' and 'build-relay-wasm.sh' in path.read_text()
-)
-BUILDS = re.compile(
+# `e2e-list` only lists tests, so neither builds the shell. A bare
+# `verify-web.sh` runs the web build and the phone build.
+# Arguments are split by spaces in a shell line and by `", "` in a Node argv.
+SPLIT = r'''[\s"',]+'''
+DIRECT = (
     r'build-relay-wasm\.sh'
-    + ''.join(f'|{re.escape(name)}' for name in SCRIPTS_CALLING_THE_BUILD)
-    + r'|verify-web\.sh web (?:build:phone|build|bundle|typecheck|test|e2e)(?![-\w:])'
-    + r'|verify-web\.sh desktop package(?!\s+assemble)'
+    rf'|verify-web\.sh{SPLIT}web{SPLIT}(?:build:phone|build|bundle|typecheck|test|e2e)(?![-\w:])'
+    rf'|verify-web\.sh{SPLIT}desktop{SPLIT}package(?!{SPLIT}assemble)'
+    r'|verify-web\.sh\s*(?:$|\|)'
 )
+
+
+def code_lines(path):
+    return [line for line in path.read_text().splitlines() if not re.match(r'\s*(#|//|\*|/\*)', line)]
+
+
+# The scripts whose code reaches DIRECT, read from the repository, and how a
+# workflow step calls each of them so that the call builds. A script that
+# calls one of these in turn is not followed: `package.mjs` builds the shell
+# with pnpm and is reached through `verify-web.sh desktop package`.
+WRAPPERS = {
+    'check-relay-protocol.sh': r'check-relay-protocol\.sh',
+    'device-helpers.mjs': rf'device-helpers\.mjs{SPLIT}build',
+}
+DIRECT_PATTERN = re.compile(DIRECT, re.M)
+CALLERS = sorted(
+    path.name for pattern in ('scripts/*.sh', 'desktop/scripts/*.mjs') for path in sorted(ROOT.glob(pattern))
+    if not path.name.endswith('.test.mjs') and path.name not in ('verify-web.sh', 'build-relay-wasm.sh')
+    and DIRECT_PATTERN.search('\n'.join(code_lines(path)))
+)
+BUILDS = re.compile(DIRECT + ''.join(f'|{call}' for call in WRAPPERS.values()), re.M)
 
 
 def jobs_with_steps():
@@ -69,11 +90,15 @@ def first_index(steps, wanted):
 class RelayToolsCache(unittest.TestCase):
     def test_the_scan_finds_the_jobs_it_should(self):
         # A scan that matched nothing would pass every other test.
-        self.assertIn('check-relay-protocol.sh', SCRIPTS_CALLING_THE_BUILD)
+        # A script that builds the relay and is not in WRAPPERS would be missed by the scan.
+        self.assertEqual(CALLERS, sorted(WRAPPERS))
         builders = {(workflow, job) for workflow, job, steps in jobs_with_steps()
                     if first_index(steps, lambda step: BUILDS.search(step.get('run') or '')) is not None}
         self.assertTrue(set(SAVERS) <= builders)
         self.assertIn(('pr.yml', 'checks'), builders)
+        # A bare `verify-web.sh` and a script that calls the build.
+        self.assertIn(('release.yml', 'test'), builders)
+        self.assertIn(('device-helpers.yml', 'build'), builders)
         self.assertNotIn(('package.yml', 'macos-package'), builders)
 
     def test_every_job_that_builds_the_relay_restores_the_tool_first(self):
