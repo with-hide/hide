@@ -270,19 +270,21 @@ fn said_rows(fragment: &hide_holder_protocol::Fragment, osc: u16) -> Option<Vec<
 
 /// with-hide/hide-private#591: a URL a program marked (OSC 8) that fills
 /// its row, followed by a word on the next line, is said to end at the
-/// row's edge, while one carried onto the next row with its mark runs on;
-/// on every system, so on Windows the mark passes through ConPTY first.
+/// row's edge, while one an agent broke across rows itself, each piece
+/// marked with the whole address as Claude Code marks it, runs on; on every
+/// system, so on Windows the marks pass through ConPTY first.
 #[test]
 fn a_marked_link_that_fills_its_row_is_said_to_end_there() {
     let home = Home::new();
     // The holder starts at 80 columns.
     let full = format!("https://example.com/{}", "x".repeat(60));
-    let long = format!("https://example.com/{}", "y".repeat(90));
-    let link = |url: &str| format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\");
+    let broken = format!("https://example.com/{}", "y".repeat(90));
+    let link = |url: &str, text: &str| format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\");
     let screen = format!(
-        "\x1b[H\x1b[2J{}\r\nnextword\r\n{}\r\nlink-marker",
-        link(&full),
-        link(&long)
+        "\x1b[H\x1b[2J{}\r\nnextword\r\n{}\r\n{}\r\nlink-marker",
+        link(&full, &full),
+        link(&broken, &broken[..80]),
+        link(&broken, &broken[80..])
     );
     let script = Script::new(&home, vec![screen.into_bytes()]);
     let holder = script.start(&home);
