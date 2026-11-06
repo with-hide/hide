@@ -292,6 +292,8 @@ impl std::fmt::Display for CloseError {
 pub enum ForgetRefusal {
     NotEnded(Phase),
     HolderRuns(Identity),
+    /// The holder is gone but processes of its pane still run.
+    ProcessesRun(Vec<u32>),
     RecordUnreadable(Unreadable),
     Failed(String),
 }
@@ -301,6 +303,7 @@ impl std::fmt::Display for ForgetRefusal {
         match self {
             Self::NotEnded(phase) => write!(f, "the pane is {phase:?}, not ended"),
             Self::HolderRuns(holder) => write!(f, "its holder {} still runs", holder.pid),
+            Self::ProcessesRun(pids) => write!(f, "processes of the pane still run: {pids:?}"),
             Self::RecordUnreadable(why) => write!(f, "{why}"),
             Self::Failed(why) => write!(f, "{why}"),
         }
@@ -1002,6 +1005,12 @@ impl Panes {
         {
             return Err(ForgetRefusal::HolderRuns(holder));
         }
+        // A record goes only once nothing it names runs: a replacement that
+        // finds its record gone starts afresh (`reserve`).
+        let left = self.still_running(&current);
+        if !left.is_empty() {
+            return Err(ForgetRefusal::ProcessesRun(left));
+        }
         self.remove_pane_files(pane);
         std::fs::remove_file(&path).map_err(|error| ForgetRefusal::Failed(error.to_string()))
     }
@@ -1052,7 +1061,7 @@ impl Panes {
                     ended.push((
                         record.end.as_ref().map_or(0, |end| end.at_unix_ms),
                         pane.clone(),
-                        record.holder,
+                        record,
                     ))
                 }
                 _ => live += 1,
@@ -1060,12 +1069,23 @@ impl Panes {
         }
         if ended.len() > ENDED_KEPT {
             ended.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
-            for (_, pane, holder) in &ended[..ended.len() - ENDED_KEPT] {
+            for (_, pane, record) in &ended[..ended.len() - ENDED_KEPT] {
                 // A holder still exiting keeps its record until it is gone.
-                if let Some(holder) = holder.filter(|holder| holder.runs()) {
+                if let Some(holder) = record.holder.filter(|holder| holder.runs()) {
                     self.emit(
                         "pane_holder.ended_kept",
                         json!({ "pane": pane, "holder": holder.pid, "reason": "holder_runs" }),
+                    );
+                    continue;
+                }
+                // So does one whose pane left processes running: a record goes
+                // only once nothing it names runs, which lets a replacement
+                // that finds its record gone start afresh (`reserve`).
+                let left = self.still_running(record);
+                if !left.is_empty() {
+                    self.emit(
+                        "pane_holder.ended_kept",
+                        json!({ "pane": pane, "left": left, "reason": "processes_run" }),
                     );
                     continue;
                 }
@@ -1998,6 +2018,50 @@ mod tests {
         assert_eq!(kept.owner, panes.owner(), "the record is this folder's now");
         assert_eq!(kept.phase, Phase::Ended);
         assert!(holder.runs(), "a process of this boot is not the record's");
+    }
+
+    /// A replacement that finds its record gone starts afresh, so a record
+    /// whose holder is gone but whose pane left processes running is never
+    /// dropped by the ended-record cap nor forgotten: dropping it would let
+    /// a restart run a second shell beside them.
+    #[test]
+    fn an_ended_record_whose_pane_left_processes_running_is_neither_dropped_nor_forgotten() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let stand_in = StandIn::start();
+        let survivor = stand_in.identity().pid;
+        let write = |pane: &str, at: u64, left: Vec<u32>| {
+            let mut ended = reserved(&panes, None, Phase::Ended);
+            ended.pane = pane.to_owned();
+            let mut end = End::new(EndReason::HolderFailed, "test");
+            end.at_unix_ms = at;
+            end.left = left;
+            ended.end = Some(end);
+            record::write(&layout::pane_record(&panes.state_dir, pane), &ended).unwrap();
+        };
+        write("left", 1, vec![survivor]);
+        for n in 0..ENDED_KEPT {
+            write(&format!("e{n}"), 2 + n as u64, Vec::new());
+        }
+
+        let scan = panes.scan().unwrap();
+        assert_eq!(panes.count_live_for(&owner, &scan), 0);
+        assert!(
+            panes.record("left").unwrap().is_some(),
+            "dropped over a survivor"
+        );
+        assert!(
+            panes.record("e0").unwrap().is_some(),
+            "kept past the cap, as a running holder's record is"
+        );
+        assert!(matches!(
+            panes.forget(&owner, "left"),
+            Err(ForgetRefusal::ProcessesRun(pids)) if pids == vec![survivor]
+        ));
+        drop(stand_in);
+        panes.forget(&owner, "left").unwrap();
+        assert!(panes.record("left").unwrap().is_none());
     }
 
     #[test]

@@ -74,11 +74,13 @@ impl Panes {
                 return Err(StartRefusal::EarlierRuns(left));
             }
         } else if let Some(previous) = previous {
-            // A record goes only once nothing it names runs, so a replaced
-            // incarnation whose record is gone (the ended-record cap dropped
-            // it, or a person deleted it) holds nothing: the pane starts
-            // afresh under a new incarnation. Refusing it left a rebooted
-            // pane closed for good once its record was dropped.
+            // The ended-record cap and `forget` remove a record only once
+            // nothing it names runs (its holder, its program's session, the
+            // pids its end left), so a replaced incarnation whose record is
+            // gone holds nothing: the pane starts afresh under a new
+            // incarnation. Refusing it left a rebooted pane closed for good
+            // once the cap dropped its record. A record a person deleted by
+            // hand is the one exception, as for any start (ARCHITECTURE.md).
             self.emit(
                 "pane_holder.replaced_record_missing",
                 serde_json::json!({ "pane": pane, "incarnation": previous }),
