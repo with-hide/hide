@@ -3410,11 +3410,11 @@ pub(crate) mod tests {
             .iter_mut()
             .find(|line| line.key == "ci")
             .expect("the ci line");
-        line.read_ci(&head, crate::model::PullRequestChecks::Passing, 1);
-        line.read_ci(&head, crate::model::PullRequestChecks::Pending, 2);
+        line.read_ci(&head, crate::model::CiEnd::Ended(CiResult::Passed), 1);
+        line.read_ci(&head, crate::model::CiEnd::Running, 2);
         assert!(
             !line
-                .read_ci(&head, crate::model::PullRequestChecks::Failed, 3)
+                .read_ci(&head, crate::model::CiEnd::Ended(CiResult::Failed), 3)
                 .spent
         );
     }

@@ -92,10 +92,7 @@ impl Runtime {
             if self.mission_stale(mission) {
                 continue;
             }
-            let Some(github) = self
-                .mission_project_pulls(mission)
-                .filter(|project| !project.status.stale && project.pull_requests_read)
-            else {
+            let Some(github) = self.mission_pulls(mission) else {
                 continue;
             };
             let open: HashSet<&str> = github

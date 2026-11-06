@@ -6153,6 +6153,37 @@ impl PullRequestSnapshot {
     pub(crate) fn checks_unfinished(&self) -> bool {
         self.checks == PullRequestChecks::Pending || self.work.checks_running
     }
+
+    /// Where its head's CI stands, by the one rule a mission's ci line and
+    /// its Conductor's CI letter both read: it has ended only when nothing
+    /// on the head still runs (`checks_unfinished`), so a failure beside a
+    /// running workflow is not the end yet.
+    pub(crate) fn ci_end(&self) -> CiEnd {
+        use crate::missions::CiResult;
+        match self.checks {
+            PullRequestChecks::None => CiEnd::NoChecks,
+            PullRequestChecks::Unknown => CiEnd::Unread,
+            _ if self.checks_unfinished() => CiEnd::Running,
+            PullRequestChecks::Passing => CiEnd::Ended(CiResult::Passed),
+            PullRequestChecks::Failed if self.work.checks_cancelled => {
+                CiEnd::Ended(CiResult::Cancelled)
+            }
+            PullRequestChecks::Failed => CiEnd::Ended(CiResult::Failed),
+            PullRequestChecks::Pending => CiEnd::Running,
+        }
+    }
+}
+
+/// Where a pull request head's CI stands ([`PullRequestSnapshot::ci_end`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CiEnd {
+    /// GitHub reports no checks on the head.
+    NoChecks,
+    /// Its checks could not be read.
+    Unread,
+    /// Something on the head is queued or still runs.
+    Running,
+    Ended(crate::missions::CiResult),
 }
 
 impl Serialize for PullRequestSnapshot {
@@ -6259,6 +6290,12 @@ impl GithubReadOutcome {
 }
 
 impl GithubProjectSnapshot {
+    /// Its pull request list answers for now: the last read listed them and
+    /// is not stale.
+    pub(crate) fn pulls_current(&self) -> bool {
+        !self.status.stale && self.pull_requests_read
+    }
+
     pub fn read_outcome(&self) -> GithubReadOutcome {
         if self.status.failure_category == Some(GithubFailureCategory::NoGithubRemote) {
             GithubReadOutcome::NoRemote
