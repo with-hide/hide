@@ -135,12 +135,12 @@ export type OnboardingSceneParams = {
 
 /** `update=<state>` in the query: the states About's update row draws (PRD auto-update D-20). */
 const SCENE_UPDATES: Record<string, UpdateStatus> = {
-  idle: { phase: { kind: "idle", checkedAt: Date.now() - 12 * 60_000 }, prerelease: false, installOnQuit: true },
-  downloading: { phase: { kind: "downloading", version: "0.5.0", percent: 42 }, prerelease: false, installOnQuit: true },
-  ready: { phase: { kind: "ready", version: "0.5.0" }, prerelease: false, installOnQuit: true },
-  "ready-linux": { phase: { kind: "ready", version: "0.5.0" }, prerelease: true, installOnQuit: false },
-  failed: { phase: { kind: "failed", stage: "download" }, prerelease: false, installOnQuit: true },
-  location: { phase: { kind: "off", reason: "location" }, prerelease: false, installOnQuit: true },
+  idle: { phase: { kind: "idle", checkedAt: Date.now() - 12 * 60_000 }, prerelease: false, installOnQuit: true, dismissed: null },
+  downloading: { phase: { kind: "downloading", version: "0.5.0", percent: 42 }, prerelease: false, installOnQuit: true, dismissed: null },
+  ready: { phase: { kind: "ready", version: "0.5.0" }, prerelease: false, installOnQuit: true, dismissed: null },
+  "ready-linux": { phase: { kind: "ready", version: "0.5.0" }, prerelease: true, installOnQuit: false, dismissed: null },
+  failed: { phase: { kind: "failed", stage: "download" }, prerelease: false, installOnQuit: true, dismissed: null },
+  location: { phase: { kind: "off", reason: "location" }, prerelease: false, installOnQuit: true, dismissed: null },
 };
 
 export function onboardingSceneParams(params: URLSearchParams): OnboardingSceneParams {
@@ -264,6 +264,7 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
       check: () => undefined,
       restart: () => undefined,
       setPrerelease: () => undefined,
+      dismiss: () => undefined,
     },
   };
 }

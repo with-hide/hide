@@ -2150,13 +2150,23 @@ The core keeps one value of each hint, so with several pages open the last page 
 
 ## Help menu
 
-Web owner: `web/src/components/help-menu.tsx`, `diagnosticsInputOf` in `web/src/settings.ts`, `web/src/updates.ts` (PRD sidebar-titlebar-refresh D-11, D-12; PRD auto-update D-03, D-21).
+Web owner: `web/src/components/help-menu.tsx`, `web/src/components/update-ready.tsx`, `diagnosticsInputOf` in `web/src/settings.ts`, `web/src/updates.ts`; host owner of the card's close `desktop/src/main/updater.ts` (PRD sidebar-titlebar-refresh D-11, D-12; PRD auto-update D-03, D-21; the update card is the operator's 2026-11-06 decision).
 
 The footer's `?` opens the Help menu above it: `Keyboard shortcuts` with its chord, which opens the shortcut sheet; `Practice Hide`, which opens the [Practice window](#practice-window) or brings the open one forward; `Copy diagnostics`, which puts About's diagnostics text on the clipboard and says `Copied` in place, or the failure when the clipboard refuses, keeping the menu open either way; `Report an issue`, which opens the repository's new-issue page in the default browser; then, under a separator, the `hide <version>` line in mono, which takes no press.
 The version is the release the app was built as, such as `0.4.0`, and a development build's own version, such as `0.4.0-main.<commit>`.
-When the desktop app has an update ready ([INSTALL.md](INSTALL.md#update)), a dot in the primary color sits on the `?`, whose name and tooltip become `Help · Update ready`, and the last line becomes a menu item, `hide <new version> ready` with `Restart` at its end, which installs the update and reopens the app.
-Nothing else of an update reaches the footer or this menu: looking, downloading and a failure show only in Settings > About.
-A browser tab and the phone have no dot and no update line.
+When the desktop app has an update ready ([INSTALL.md](INSTALL.md#update)), it shows in three places, since macOS and Windows install it only when the app quits and an operator who keeps the app open would otherwise not learn of it:
+
+- **The ↑ button.** A primary ↑ button heads the View, Help and Settings group, above them at the rail's foot or left of them in the sidebar footer while the rail is hidden, and stays until the restart, with no close; its name and tooltip are `hide <new version> ready` (`hide <버전> 준비됨`). When it appears a primary ring spreads out from it three times and stops, and a faint ring stays; with reduced motion only the faint ring shows.
+- **The card.** The first time a version is ready, its card opens by itself beside the button (to its right from the rail, above it in the footer): `Update ready` (`업데이트 준비됨`) with a close ✕, `Downloaded hide <new version>.` (`hide <버전> 받아 놨어요.`), `Restarting keeps your agents and panes running.` (`재시작해도 에이전트와 터미널은 그대로예요.`), then `Restart now` (`지금 재시작`), `Later` (`나중에`) and `What's new` (`바뀐 점`), which opens that version's release page on GitHub in the default browser.
+  Opened by itself it takes no keyboard focus and stays through Escape and clicks elsewhere, so it never takes a key meant for a pane; ✕ or Later folds it into the button.
+  The close is kept per version in the desktop profile, so the card does not open by itself again for that version, after a relaunch either, and opens once more when a newer version is ready; pressing the button opens it again as an ordinary popover, which Escape or a click elsewhere closes.
+- **Help.** A dot in the primary color sits on the `?`, whose name and tooltip become `Help · Update ready`, and the menu opens with the update: `hide <new version> is ready` (`hide <버전> 준비됐어요`), `Agents and panes keep running · What's new` and `Restart now`, above the usual items; the last line stays this app's own `hide <version>`.
+
+Every `Restart now` installs the update and reopens the app.
+The restart sentence holds because the reopened app only replaces the daemon: each pane's holder outlives it and the new daemon adopts it, as long as a new build still speaks to the holders already running (`OLDEST_HOLDER_VERSION` in `hide-holder-protocol`; [ARCHITECTURE.md](ARCHITECTURE.md#the-pane-holder)), and the package lane's update test checks the panes and their processes across a real Restart (`desktop/e2e/packaged-update.spec.ts`).
+Nothing else of an update reaches the sidebar or this menu: looking, downloading and a failure show only in Settings > About.
+With the sidebar hidden none of the three shows, as Help does not.
+A browser tab and the phone have no button, card, dot or update line.
 
 ## Moving a Herdr session into Hide
 
@@ -2549,7 +2559,7 @@ In the desktop app, an Updates row and a preview switch sit under the `hide` ver
 | Failed | `Couldn't check for updates` or `Couldn't update`, with the reason in the app's log | `Check again` |
 | Off | `Updates are off in development builds`, or on macOS `Move hide to Applications to get updates` for an app on the disk image or in a folder it cannot write | none |
 
-A ready update stays ready while a later check looks; a newer release that check finds is downloaded in its place, so the row shows that download and the dot and Help's line return with the newer version once it is ready, since the updater keeps one pending update.
+A ready update stays ready while a later check looks; a newer release that check finds is downloaded in its place, so the row shows that download, the ↑ button, the dot and Help's update leave meanwhile, and they return with the newer version once it is ready, with its card opening once, since the updater keeps one pending update.
 `Get preview versions (rc)`, with a note that turning it off never goes back to a lower version, is off at first, kept in the desktop profile, and cannot be turned while updates are off.
 `Check for updates…` in the app menu (macOS) or the Help menu (Windows, Linux) opens About and looks at once.
 A browser tab and the phone show neither row.

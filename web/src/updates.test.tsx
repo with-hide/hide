@@ -7,12 +7,12 @@ import { HelpMenu } from "./components/help-menu";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { UpdatePhase, UpdateStatus } from "./host";
 import { AboutTab } from "./settings/AboutTab";
-import { checkedAgo } from "./updates";
+import { cardVersion, checkedAgo, releaseNotesUrl } from "./updates";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 afterEach(() => { document.body.innerHTML = ""; });
 
-const status = (phase: UpdatePhase, more: Partial<UpdateStatus> = {}): UpdateStatus => ({ phase, prerelease: false, installOnQuit: true, ...more });
+const status = (phase: UpdatePhase, more: Partial<UpdateStatus> = {}): UpdateStatus => ({ phase, prerelease: false, installOnQuit: true, dismissed: null, ...more });
 const actions = createActions(() => true);
 const updateRow = () => document.querySelector<HTMLElement>("[data-settings-update]");
 const action = () => document.querySelector<HTMLButtonElement>("[data-update-action]");
@@ -41,7 +41,7 @@ it("shows the update only in the desktop app: the Help dot when ready, and every
     await act(async () => root.unmount());
 
     let deliver: (next: UpdateStatus) => void = () => undefined;
-    const bridge = { onStatus: vi.fn((listener: (next: UpdateStatus) => void) => { deliver = listener; listener(status({ kind: "idle", checkedAt: null })); return () => undefined; }), check: vi.fn(), restart: vi.fn(), setPrerelease: vi.fn() };
+    const bridge = { onStatus: vi.fn((listener: (next: UpdateStatus) => void) => { deliver = listener; listener(status({ kind: "idle", checkedAt: null })); return () => undefined; }), check: vi.fn(), restart: vi.fn(), setPrerelease: vi.fn(), dismiss: vi.fn() };
     window.hideHost = { kind: "electron", platform: "darwin", updates: bridge } as never;
     const app = createRoot(document.body.appendChild(document.createElement("div")));
     await act(async () => app.render(<Screen />));
@@ -99,6 +99,22 @@ it("shows the update only in the desktop app: the Help dot when ready, and every
     vi.useRealTimers();
     delete window.hideHost;
   }
+});
+
+it("offers the ready version on the card until its card is closed, and a newer ready version again", () => {
+  expect(cardVersion(null)).toBeNull();
+  for (const phase of [{ kind: "idle", checkedAt: null }, { kind: "checking" }, { kind: "downloading", version: "0.5.1", percent: 10 }, { kind: "failed", stage: "download" }, { kind: "off", reason: "development" }] as UpdatePhase[]) {
+    expect(cardVersion(status(phase))).toBeNull();
+  }
+  expect(cardVersion(status({ kind: "ready", version: "0.5.0" }))).toBe("0.5.0");
+  expect(cardVersion(status({ kind: "ready", version: "0.5.0" }, { dismissed: "0.5.0" }))).toBeNull();
+  expect(cardVersion(status({ kind: "ready", version: "0.5.1" }, { dismissed: "0.5.0" }))).toBe("0.5.1");
+  expect(cardVersion(status({ kind: "ready", version: "1.2.2-rc.1" }, { dismissed: "1.2.2-rc.1" }))).toBeNull();
+});
+
+it("links a version's release notes on with-hide/hide", () => {
+  expect(releaseNotesUrl("1.2.2")).toBe("https://github.com/with-hide/hide/releases/tag/v1.2.2");
+  expect(releaseNotesUrl("1.3.0-rc.2")).toBe("https://github.com/with-hide/hide/releases/tag/v1.3.0-rc.2");
 });
 
 it("says how long ago a check finished in the page's language", () => {

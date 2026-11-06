@@ -1,7 +1,8 @@
 // This app's own updates (PRD auto-update): when it looks, which release it
 // takes, the download, and the install on quit or on Restart. It owns nothing
 // else and shows nothing itself; the shell draws what `status()` says (the
-// dot on Help, Help's last line, Settings > About) and the host relays it.
+// ↑ button and its card beside Help, the dot on Help and the update at its
+// head, Settings > About) and the host relays it.
 //
 //   checks       at launch and every six hours, and when asked (D-17)
 //   chooses      the highest release of with-hide/hide whose update file and
@@ -135,14 +136,23 @@ export function macosLocation(bundle: string, canWrite: (folder: string) => bool
   return canWrite(path.dirname(bundle)) ? "ok" : "read_only";
 }
 
-/** The rc choice, kept in the desktop profile (D-22). */
+/** The operator's update choices, kept in the desktop profile. */
 export function updatesFile(userData: string): string {
   return path.join(userData, "updates.json");
 }
 
-export function readPrerelease(file: string): boolean {
+/**
+ * What the operator chose about updates: preview releases (D-22), and the
+ * ready version whose card they closed, so it stays closed across launches
+ * until a newer version is ready. A file that cannot be read is no choice.
+ */
+export type UpdateChoices = { prerelease: boolean; dismissed: string | null };
+
+export function readUpdateChoices(file: string): UpdateChoices {
   const stored = readJsonFile(file);
-  return Boolean(stored && typeof stored === "object" && (stored as Record<string, unknown>).prerelease === true);
+  const record = stored && typeof stored === "object" ? (stored as Record<string, unknown>) : {};
+  const dismissed = typeof record.dismissed === "string" && parseVersion(record.dismissed) ? record.dismissed : null;
+  return { prerelease: record.prerelease === true, dismissed };
 }
 
 /** The slice of electron-updater this module drives, so tests can stand in for it. */
@@ -158,7 +168,7 @@ export type UpdatesIo = {
   now: () => number;
   /** Schedules `run` after `ms`; the answer cancels it. */
   later: (run: () => void, ms: number) => () => void;
-  savePrerelease: (on: boolean) => void;
+  saveChoices: (choices: UpdateChoices) => void;
 };
 
 /**
@@ -171,6 +181,7 @@ export type UpdatesIo = {
 export class AppUpdates {
   private phase: UpdatePhase;
   private prerelease: boolean;
+  private dismissed: string | null;
   private running: Promise<void> | null = null;
   private cancelTimer: (() => void) | null = null;
   private installing = false;
@@ -184,9 +195,10 @@ export class AppUpdates {
     private readonly updater: UpdaterLike | null,
     private readonly io: UpdatesIo,
     private readonly log: HostLog,
-    options: { prerelease: boolean; feedOverride: string | null },
+    options: UpdateChoices & { feedOverride: string | null },
   ) {
     this.prerelease = options.prerelease;
+    this.dismissed = options.dismissed;
     this.feedOverride = options.feedOverride;
     this.phase = typeof system === "string" ? { kind: "idle", checkedAt: null } : { kind: "off", reason: system.off };
     if (updater) {
@@ -207,7 +219,7 @@ export class AppUpdates {
   }
 
   status(): UpdateStatus {
-    return { phase: this.phase, prerelease: this.prerelease, installOnQuit: this.system !== "deb" && this.system !== "rpm" };
+    return { phase: this.phase, prerelease: this.prerelease, installOnQuit: this.system !== "deb" && this.system !== "rpm", dismissed: this.dismissed };
   }
 
   onChange(listener: (status: UpdateStatus) => void): () => void {
@@ -254,13 +266,31 @@ export class AppUpdates {
   setPrerelease(on: boolean): void {
     if (on === this.prerelease) return;
     this.prerelease = on;
-    try {
-      this.io.savePrerelease(on);
-    } catch (error) {
-      this.log.event("update.prerelease_save_failed", { detail: errorDetail(error) });
-    }
+    this.saveChoices();
     this.log.event("update.prerelease", { on });
     this.emit();
+  }
+
+  /**
+   * Closes the ready card for `version`; Help's dot and line and About stay.
+   * Only the version that is ready now can be closed, so a newer one shows
+   * the card again, and a close that lost a race with a newer download changes nothing.
+   */
+  dismiss(version: string): void {
+    if (this.phase.kind !== "ready" || this.phase.version !== version || this.dismissed === version) return;
+    this.dismissed = version;
+    this.saveChoices();
+    this.log.event("update.card_dismissed", { version });
+    this.emit();
+  }
+
+  /** A choice that cannot be saved still holds for this launch; the log says so. */
+  private saveChoices(): void {
+    try {
+      this.io.saveChoices({ prerelease: this.prerelease, dismissed: this.dismissed });
+    } catch (error) {
+      this.log.event("update.choices_save_failed", { detail: errorDetail(error) });
+    }
   }
 
   private schedule(ms: number): void {
@@ -372,6 +402,6 @@ export function readPackageType(resources: string): string | null {
   }
 }
 
-export function savePrerelease(file: string, on: boolean): void {
-  writeJsonFile(file, { prerelease: on });
+export function saveUpdateChoices(file: string, choices: UpdateChoices): void {
+  writeJsonFile(file, choices);
 }
