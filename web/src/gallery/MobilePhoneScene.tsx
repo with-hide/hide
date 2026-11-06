@@ -1,4 +1,4 @@
-// The phone's list, device sheet, missions tab, mission page, PR tab, pull
+// The phone's list, device sheet, settings sheet, missions tab, mission page, PR tab, pull
 // request page with its merge and hand-over sheets, and the 볼 것 tab with its
 // viewers from production parts with invented rows (PRD mobile-companion-ui
 // B1-B9, B10-B19, B28, B31-B44, doop final board F1, F2, F8, F9, F10 and
@@ -20,7 +20,7 @@ import { RELEASE_MISSION, phoneMissions } from "./mobilePhoneMissionsData";
 import { AGENT_PR, FAILED_PR, READY_PR, phoneFeedback, phonePrs } from "./mobilePhonePrsData";
 import { PHONE_LOOK_SCENES, PHONE_MAC, PHONE_ROOM, phoneDevices, phoneGroups, phoneLookDetail, phoneLookGroups, seedPairedMac, type PhoneLookScene } from "./mobilePhoneSceneData";
 
-export type PhoneSceneState = "phone-list" | "phone-devices" | "phone-missions" | "phone-mission" | PhonePrScene | PhoneLookScene;
+export type PhoneSceneState = "phone-list" | "phone-devices" | "phone-settings" | "phone-missions" | "phone-mission" | PhonePrScene | PhoneLookScene;
 
 /** The pull request tab's own scenes: the list, a page, the merge confirmation and the hand-over sheet. */
 const PHONE_PR_SCENES = ["phone-prs", "phone-pr", "phone-pr-agent", "phone-pr-merge", "phone-pr-delegate"] as const;
@@ -38,7 +38,7 @@ const CATALOG = {
 };
 
 /** The scene names this component draws: the list, the device sheet, the missions tab and a mission, the PR tab and the 볼 것 tab with its viewers. */
-export const PHONE_SCENES: readonly string[] = ["phone-list", "phone-devices", "phone-missions", "phone-mission", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
+export const PHONE_SCENES: readonly string[] = ["phone-list", "phone-devices", "phone-settings", "phone-missions", "phone-mission", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
 
 const noop = () => {};
 
@@ -84,7 +84,7 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
           <div className="h-screen">
             <Detail onBack={noop} />
           </div>
-        ) : state === "phone-missions" ? <MissionsScreen /> : state === "phone-mission" ? <MissionDetail /> : state === "phone-prs" ? <PrsScreen /> : state in PR_PAGE ? <PrDetail /> : <ListScreen hosted picker={{ room: PHONE_ROOM, open: devicesOpen }} />}
+        ) : state === "phone-missions" ? <MissionsScreen /> : state === "phone-mission" ? <MissionDetail /> : state === "phone-prs" ? <PrsScreen /> : state in PR_PAGE ? <PrDetail /> : <ListScreen hosted picker={{ room: PHONE_ROOM, open: devicesOpen }} settingsOpen={state === "phone-settings"} />}
       </div>
     </TooltipProvider>
   );
