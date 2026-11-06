@@ -2907,7 +2907,15 @@ A press repeated, from a slow connection or a second tap, reaches GitHub once; t
 Away from the Mac the page keeps its last content dimmed under the unreachable line, and `머지`, `맡기기` and `다시 확인` are off.
 Left out on purpose: a `초록 N개 머지` chip on the list and the `머지 순서` line on a page, since merging many pull requests in order is the lead's and the desktop's job (D-12).
 
-The app follows the phone's light or dark setting, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
+The list's header carries a gear beside 에이전트 시작; it opens a bottom sheet, 설정, with two choices that belong to that phone alone.
+언어 offers Mac 따라가기, 한국어, English, 简体中文 and 日本語, each language named in itself; 화면 offers 시스템 따라가기, 밝게 and 어둡게.
+Both start on the follow choice: Mac 따라가기 keeps the rule the phone already had (the core's language from the last agents frame, else the phone's own language), and 시스템 따라가기 keeps the phone's light or dark setting.
+A choice applies as soon as it is tapped, with no reload, and the sheet says `이 폰에만 저장돼요`.
+It is kept in that browser's storage (one key, `hide.phone.settings`), so it survives a reload, and the start page that lists the paired devices reads the same key, so its first paint is already in the chosen language and theme.
+Nothing is sent to the Mac: the desktop's language and mode, the phone protocol and the core are unchanged, and a different Mac's phone settings never move this phone's choice.
+When the browser refuses the write, or its storage cannot be read, the page still works: a read failure shows the follow choices, a refused write keeps the choice for this visit and the sheet says `이 폰에 저장하지 못했어요. 앱을 닫으면 원래대로 돌아가요.`
+The notification words follow the language in effect, so an explicit language also changes the words of the next notification.
+The app follows the phone's light or dark choice, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 
 Directional terminal focus stays within the keyboard owner's drawn tab and Agent area, on local and remote devices.
 It selects the pane sharing the requested edge, preferring the greatest shared edge, then the closest perpendicular centre, then layout order.
