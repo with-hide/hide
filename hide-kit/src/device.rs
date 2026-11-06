@@ -2,18 +2,14 @@
 //!
 //! The core uploads each build's parts into `<root>/<version>/` beside the
 //! helper, and the helper points `<root>/current` at its own version before
-//! it applies the kit, so the hooks, the `hide` link name
-//! a path that survives the next build (B16).
+//! it applies the kit (`crate::current`), so the hooks and the `hide`
+//! command name a path that survives the next build (B16).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::KitTarget;
-
-/// The name of the link under the helper root that leads to the running
-/// build's folder.
-pub const CURRENT: &str = "current";
+use crate::{CURRENT, KitTarget};
 
 /// The kit target for a device whose helper root is `root`. `cli_dir`
 /// comes from the device's consent.
