@@ -611,7 +611,10 @@ impl Runtime {
             self.begin_device_connect(device_id);
         }
         let Some(context) = self.worker_context.clone() else {
-            self.fail_device_connect_install(device_id);
+            self.fail_device_connect_before_link(
+                device_id,
+                crate::product_analytics::DeviceFailure::WorkerUnavailable,
+            );
             self.set_host_phase(
                 device_id,
                 HostPhase::Unavailable("The helper worker is unavailable".to_owned()),
@@ -741,7 +744,10 @@ impl Runtime {
                 }
             });
         if let Err(error) = spawned {
-            self.fail_device_connect_install(device_id);
+            self.fail_device_connect_before_link(
+                device_id,
+                crate::product_analytics::DeviceFailure::WorkerUnavailable,
+            );
             self.set_host_phase(
                 device_id,
                 HostPhase::Unavailable(format!("The helper worker could not start: {error}")),
@@ -1290,7 +1296,10 @@ impl Runtime {
         if host.generation != generation || !matches!(host.phase, HostPhase::Ready { .. }) {
             return false;
         }
-        self.fail_device_connect_install(device_id);
+        self.fail_device_connect_before_link(
+            device_id,
+            crate::product_analytics::DeviceFailure::HelperLost,
+        );
         self.set_host_phase(
             device_id,
             HostPhase::Unavailable(format!("The device helper disconnected: {reason}")),

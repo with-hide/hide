@@ -1067,7 +1067,10 @@ impl Runtime {
             return;
         }
         if !self.spawn_device_kit_worker(device_id) {
-            self.fail_device_connect_install(device_id);
+            self.fail_device_connect_before_link(
+                device_id,
+                crate::product_analytics::DeviceFailure::WorkerUnavailable,
+            );
             self.clear_kit_busy(device_id);
         }
     }
