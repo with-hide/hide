@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum GithubFailureCategory {
     NotInstalled,
+    /// `gh` is older than [`MINIMUM_VERSION`], so the commands below are
+    /// ones it may refuse.
+    Outdated,
     NotLoggedIn,
     NoGithubRemote,
     NetworkOrRateLimit,
@@ -21,6 +24,7 @@ impl GithubFailureCategory {
     pub fn english(self) -> &'static str {
         match self {
             Self::NotInstalled => "not installed",
+            Self::Outdated => "too old",
             Self::NotLoggedIn => "not logged in",
             Self::NoGithubRemote => "no GitHub remote",
             Self::NetworkOrRateLimit => "network or rate limit",
@@ -263,6 +267,53 @@ fn is_issue_attempt_query(value: &str) -> bool {
 /// the branch landed.
 pub const MERGED_PROOF_LIMIT: &str = "100";
 pub const MERGED_PROOF_FIELDS: &str = "headRefOid,baseRefName";
+
+/// The oldest `gh` whose `--json` fields and flags cover every command line
+/// [`allowed`] names: 2.72.0 is the first that knows `closingIssuesReferences`
+/// in `gh pr list`, which 2.71.0 refuses as an unknown JSON field, and that
+/// refusal failed every pull request read of a machine with gh 2.58.0. The
+/// rust lane runs every shape against this release
+/// (`hide-host/tests/it/gh_floor.rs`), so a field or flag a newer release
+/// added fails there until this moves with it.
+pub const MINIMUM_VERSION: GhVersion = GhVersion(2, 72, 0);
+
+/// `gh --version`, asked once per pass before `auth status`, so a `gh` older
+/// than [`MINIMUM_VERSION`] is named as that rather than as the first field
+/// it refuses.
+pub const VERSION: [&str; 1] = ["--version"];
+
+/// A `gh` release, compared part by part.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct GhVersion(pub u32, pub u32, pub u32);
+
+impl GhVersion {
+    /// The release `gh --version` names on its first line, `gh version 2.76.2
+    /// (2025-07-30)`; a build from source adds a suffix after the patch
+    /// (`2.76.2-12-gabcdef`), which is ignored. `None` for anything else,
+    /// such as the `DEV` an unversioned build prints.
+    pub fn of_output(output: &str) -> Option<Self> {
+        let version = output
+            .lines()
+            .next()?
+            .strip_prefix("gh version ")?
+            .split_whitespace()
+            .next()?;
+        let mut parts = version.splitn(3, '.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?;
+        let digits = patch
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(patch.len());
+        Some(Self(major, minor, patch[..digits].parse().ok()?))
+    }
+}
+
+impl std::fmt::Display for GhVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.0, self.1, self.2)
+    }
+}
 
 /// The signed-in account's login, read once per pass beside `auth status`:
 /// it tells the Work tab which pull requests are the operator's own and which
@@ -542,8 +593,12 @@ pub fn answered_output(arguments: &[&str], mut stdout: String) -> String {
 /// rename keeps, and whether it is public (`공개`, PRD overview-device-tasks D-35).
 pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,visibility,defaultBranchRef";
 
+/// Whether the node may run `gh` with `arguments`. Every shape named here has
+/// a line in `hide-host/tests/it/gh_floor.rs`, which runs it against the
+/// [`MINIMUM_VERSION`] release.
 pub fn allowed(arguments: &[&str]) -> bool {
     arguments == ["auth", "status"]
+        || arguments == VERSION
         || is_job_log_read(arguments)
         || is_conditional_read(arguments)
         || is_pull_digest_read(arguments)
@@ -1118,6 +1173,29 @@ pub enum GhAnswer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_version_is_read_from_the_first_line_gh_prints_and_compared_by_parts() {
+        let read = |output: &str| GhVersion::of_output(output);
+        assert_eq!(
+            read(
+                "gh version 2.58.0 (2024-10-01)\nhttps://github.com/cli/cli/releases/tag/v2.58.0\n"
+            ),
+            Some(GhVersion(2, 58, 0))
+        );
+        assert_eq!(
+            read("gh version 2.76.2-12-gabcdef (2025-07-30)"),
+            Some(GhVersion(2, 76, 2))
+        );
+        assert_eq!(read("gh version DEV"), None);
+        assert_eq!(read("gh version 2.72"), None);
+        assert_eq!(read(""), None);
+        assert!(GhVersion(2, 58, 0) < MINIMUM_VERSION);
+        assert!(GhVersion(2, 100, 0) > MINIMUM_VERSION);
+        assert!(GhVersion(3, 0, 0) > MINIMUM_VERSION);
+        assert_eq!(MINIMUM_VERSION.to_string(), "2.72.0");
+        assert!(allowed(&VERSION));
+    }
+
     use super::*;
 
     #[test]

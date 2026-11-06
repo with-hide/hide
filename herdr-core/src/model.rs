@@ -4897,7 +4897,7 @@ pub enum BacklogPhase {
     Failed,
 }
 
-/// The reason line a failed item shows: the four GitHub categories, a queue
+/// The reason line a failed item shows: the five GitHub categories, a queue
 /// past its bound, an answer Hide could not confirm, a repository the item
 /// may no longer go to, Hide's own record that could not be read just now
 /// (worth trying again), and a refusal (final).
@@ -4905,6 +4905,7 @@ pub enum BacklogPhase {
 #[serde(rename_all = "snake_case")]
 pub enum BacklogFailure {
     NotInstalled,
+    Outdated,
     NotLoggedIn,
     NoGithubRemote,
     NetworkOrRateLimit,
@@ -4924,6 +4925,7 @@ impl From<hide_node_link::gh::GithubFailureCategory> for BacklogFailure {
         use hide_node_link::gh::GithubFailureCategory as Category;
         match category {
             Category::NotInstalled => Self::NotInstalled,
+            Category::Outdated => Self::Outdated,
             Category::NotLoggedIn => Self::NotLoggedIn,
             Category::NoGithubRemote => Self::NoGithubRemote,
             Category::NetworkOrRateLimit => Self::NetworkOrRateLimit,
@@ -9071,6 +9073,7 @@ mod wire_enum_tests {
         checked.insert("backlog_phase");
         let backlog_failures = [
             BacklogFailure::NotInstalled,
+            BacklogFailure::Outdated,
             BacklogFailure::NotLoggedIn,
             BacklogFailure::NoGithubRemote,
             BacklogFailure::NetworkOrRateLimit,
@@ -9083,6 +9086,7 @@ mod wire_enum_tests {
         for variant in backlog_failures {
             match variant {
                 BacklogFailure::NotInstalled
+                | BacklogFailure::Outdated
                 | BacklogFailure::NotLoggedIn
                 | BacklogFailure::NoGithubRemote
                 | BacklogFailure::NetworkOrRateLimit

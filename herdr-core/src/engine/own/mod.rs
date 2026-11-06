@@ -3383,6 +3383,61 @@ mod tests {
         }
     }
 
+    /// 2026-11-06: a restart that failed took the pane's agent with it, so
+    /// the next start opened that pane as a bare shell and its conversation
+    /// was not resumed. The agent stays the pane's until a start runs it.
+    #[test]
+    fn a_pane_whose_restart_failed_resumes_its_agent_at_the_next_start() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, pane) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        first
+            .report_agent_session(WAIT, &pane, "claude-code", "s-1", 1)
+            .unwrap();
+        drop(first);
+
+        // After the reboot the pane's holder refuses to start.
+        let refusing = Arc::new(Holders::default());
+        *refusing.refuse_pane.lock().unwrap() = Some(pane.clone());
+        let failed =
+            OwnEngine::open(Arc::clone(&refusing) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        refusing.hand(HolderRecovery {
+            owner: 1,
+            ended: vec![pane.clone()],
+            ..HolderRecovery::default()
+        });
+        failed.restored().unwrap();
+        assert_eq!(refusing.typed(&pane), "", "nothing ran in the pane");
+        drop(failed);
+
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 2,
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+        assert_eq!(
+            holders.wait_typed(&pane),
+            "claude --resume s-1 || printf 'hide: %s ended with a failure after its resume; this pane is a shell now.\\n' 'Claude Code'\r"
+        );
+    }
+
     fn moves(engine: &OwnEngine<'_>) -> (Vec<String>, Option<(String, bool)>) {
         let session = engine.session(WAIT).unwrap();
         (

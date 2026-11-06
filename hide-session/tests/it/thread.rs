@@ -481,6 +481,31 @@ fn every_call_and_finished_result_carries_when_it_was_written() {
     }
 }
 
+/// Every command call carries the shell that ran it, so the core, which may
+/// sit on another machine, reads its `hide` command as that shell did
+/// (docs/agent-hooks.md, Which shell reads a call).
+#[test]
+fn every_command_call_carries_the_shell_that_ran_it() {
+    for sample in SAMPLES {
+        let name = format!("{:?}", sample.format);
+        let commands = Placed::new(sample)
+            .read_all()
+            .into_iter()
+            .filter(|update| update["sessionUpdate"] == "tool_call" && update["kind"] == "execute")
+            .collect::<Vec<_>>();
+        for update in &commands {
+            let shell = update["_meta"]["hide"]["shell"].as_str();
+            assert!(
+                shell
+                    .and_then(hide_session::call_shell::from_name)
+                    .is_some(),
+                "{name}: {} carries {shell:?}",
+                update["title"]
+            );
+        }
+    }
+}
+
 #[test]
 fn every_declaration_matches_its_converter_and_has_a_sample() {
     let sampled = SAMPLES

@@ -481,6 +481,12 @@ impl OwnEngine<'static> {
             for (pane, why) in &failures {
                 if let Ok(found) = topology.pane_mut(pane) {
                     found.failed = Some(why.clone());
+                    // The agent never ran again, so it is still the pane's:
+                    // the next restore resumes it as this one would have.
+                    found.agent = restarts
+                        .iter()
+                        .find(|restart| restart.pane == *pane)
+                        .and_then(|restart| restart.agent.clone());
                 }
             }
             if !orphans.is_empty() {

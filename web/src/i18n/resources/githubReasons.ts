@@ -9,6 +9,7 @@ import type { Catalogs } from "../schema";
 
 export const githubReasonsEnglish = {
   "githubReason.not_installed": "gh isn't installed",
+  "githubReason.outdated": "gh is too old",
   "githubReason.not_logged_in": "Not signed in to gh",
   "githubReason.network_or_rate_limit": "GitHub didn't answer",
   "githubReason.other": "GitHub couldn't be read",
@@ -20,6 +21,7 @@ export const githubReasonsEnglish = {
 
 const ko = {
   "githubReason.not_installed": "gh가 설치되지 않았어요",
+  "githubReason.outdated": "gh 버전이 오래됐어요",
   "githubReason.not_logged_in": "gh에 로그인하지 않았어요",
   "githubReason.network_or_rate_limit": "GitHub가 응답하지 않았어요",
   "githubReason.other": "GitHub를 읽지 못했어요",
@@ -31,6 +33,7 @@ const ko = {
 
 const zhCN = {
   "githubReason.not_installed": "未安装 gh",
+  "githubReason.outdated": "gh 版本过旧",
   "githubReason.not_logged_in": "未登录 gh",
   "githubReason.network_or_rate_limit": "GitHub 没有响应",
   "githubReason.other": "无法读取 GitHub",
@@ -42,6 +45,7 @@ const zhCN = {
 
 const ja = {
   "githubReason.not_installed": "gh がインストールされていません",
+  "githubReason.outdated": "gh が古すぎます",
   "githubReason.not_logged_in": "gh にログインしていません",
   "githubReason.network_or_rate_limit": "GitHub が応答しませんでした",
   "githubReason.other": "GitHub を読み込めませんでした",

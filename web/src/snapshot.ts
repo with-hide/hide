@@ -454,7 +454,7 @@ export type PrWrite = {
 };
 
 /** Why a `gh` lookup failed, as the core names it; the catalogs word each (issueSettings.gh*). */
-export type GithubFailureCategory = "not_installed" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit";
+export type GithubFailureCategory = "not_installed" | "outdated" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit";
 
 /** How a repository's `gh` lookup is doing, apart from what it found (`GithubStatusSnapshot`). */
 export type GithubStatus = {
@@ -621,7 +621,7 @@ export type IssueWork = {
 };
 
 /** Why a backlog item was not made or not undone (`BacklogFailure`). */
-export type BacklogFailure = "not_installed" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit" | "queue_full" | "unconfirmed" | "repository_changed" | "unavailable" | "refused";
+export type BacklogFailure = "not_installed" | "outdated" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit" | "queue_full" | "unconfirmed" | "repository_changed" | "unavailable" | "refused";
 
 /** One item the backlog add made or is making (`BacklogItemSnapshot`). */
 export type BacklogItem = {

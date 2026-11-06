@@ -403,7 +403,7 @@ fn every_usage_cell_has_an_independent_declaration_and_unshipped_absences() {
         for (name, cell) in row.usage.cells() {
             let actual = match cell {
                 Support::Supported(source) => match source {
-                    UsageSource::Limit(LimitSource::ClaudeUsageText) => "claude_usage_text".into(),
+                    UsageSource::Limit(LimitSource::ClaudeUsage) => "claude_usage".into(),
                     UsageSource::Limit(LimitSource::CodexUsage) => "codex_usage".into(),
                     UsageSource::Limit(LimitSource::AntigravityUsage) => "antigravity_usage".into(),
                     UsageSource::Tokens(source) => serde_json::to_value(source)

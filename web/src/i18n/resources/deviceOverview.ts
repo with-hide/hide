@@ -39,6 +39,7 @@ const words = {
   "backlog.empty": ["Nothing in the backlog", "백로그 비어 있음", "バックログは空です", "待办为空"],
   "backlog.noMatch": ["No matching item", "맞는 항목 없음", "一致する項目なし", "没有匹配的项目"],
   "backlog.failure.not_installed": ["gh is not installed", "gh가 설치되어 있지 않음", "ghがインストールされていません", "未安装 gh"],
+  "backlog.failure.outdated": ["gh is too old", "gh가 오래됨", "ghが古すぎます", "gh 版本过旧"],
   "backlog.failure.not_logged_in": ["Not logged in to GitHub", "GitHub에 로그인 안 됨", "GitHubにログインしていません", "未登录 GitHub"],
   "backlog.failure.no_github_remote": ["No GitHub remote", "GitHub 원격 없음", "GitHubリモートがありません", "没有 GitHub 远程仓库"],
   "backlog.failure.network_or_rate_limit": ["Network or rate limit", "네트워크 또는 사용량 제한", "ネットワークまたはレート制限", "网络或速率限制"],

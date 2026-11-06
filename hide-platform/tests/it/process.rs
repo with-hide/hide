@@ -18,8 +18,8 @@ use hide_platform::fs::identity::{canonical, file_id};
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
-    RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cwd_of, descendants, descends_from, detach,
-    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, observed_cwd_of,
+    RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cpu_time, cwd_of, descendants, descends_from,
+    detach, group_members, image_of, is_alive, kill_tree, measure_tree, name_of, observed_cwd_of,
     parent_of, restrict_to_login_environment, run_to_end, run_to_end_tied, running,
     set_output_aside, start_time, terminate, terminate_group,
 };
@@ -32,6 +32,8 @@ const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
 /// (`a_running_child_cannot_extend_the_capture_deadline`, the uncooperative
 /// launch) states its own short one.
 const HANG_LIMIT: Duration = Duration::from_secs(30);
+/// The processor time the `spin` role works for.
+const SPIN_WORK: Duration = Duration::from_millis(300);
 // Test-only handoff: arm recovery before the short-lived parent exits.
 const PIPE_OWNER: &str = "HIDE_PLATFORM_PROC_PIPE_OWNER";
 /// Where the `sleep` role writes its pid once it runs, for a test that cannot
@@ -246,6 +248,17 @@ fn child_role() {
                 spawning,
                 "the spawner ended before its first holder held a file"
             );
+        }
+        // Works until it has used `SPIN_WORK` of processor time, then waits.
+        "spin" => {
+            let mut sum = 0_u64;
+            while cpu_time(std::process::id()).unwrap() < SPIN_WORK {
+                for value in 0..100_000_u64 {
+                    sum = std::hint::black_box(sum.wrapping_add(value));
+                }
+            }
+            println!("READY {}", std::process::id());
+            thread::sleep(Duration::from_secs(60));
         }
         "sleep" => {
             println!("READY {}", std::process::id());
@@ -992,6 +1005,30 @@ impl Drop for FixtureProcess {
 /// it (with-hide/hide-private#327). Each round ends the holder from outside,
 /// as an owner's end does, and removes the file the moment it no longer
 /// counts.
+/// A process's processor time counts what it worked and nothing of what it
+/// waited: a child that worked `SPIN_WORK` reads at least that, and a child
+/// that only sleeps gains none of it while the other works. Nothing bounds
+/// the count by the time the child ran: Windows counts in its clock's ticks,
+/// and a child that ran 307 ms read 312.5 ms.
+#[test]
+fn processor_time_counts_a_process_s_work_and_not_its_wait() {
+    let mut sleeper = OwnedChild::spawn(&mut role_command("sleep")).unwrap();
+    let sleeping = ready_number(sleeper.take_stdout().unwrap());
+    let slept_before = cpu_time(sleeping).unwrap();
+
+    let mut spinner = OwnedChild::spawn(&mut role_command("spin")).unwrap();
+    let spinning = ready_number(spinner.take_stdout().unwrap());
+    let worked = cpu_time(spinning).unwrap();
+    assert!(worked >= SPIN_WORK, "worked {worked:?}");
+
+    let slept = cpu_time(sleeping).unwrap() - slept_before;
+    assert!(
+        slept < SPIN_WORK / 3,
+        "a sleeping child gained {slept:?} while the other worked {worked:?}"
+    );
+    assert!(sleeper.kill_tree().unwrap() && spinner.kill_tree().unwrap());
+}
+
 #[test]
 fn a_process_that_has_ended_holds_no_file_it_had_open() {
     let _serial = serial();
@@ -1013,6 +1050,50 @@ fn a_process_that_has_ended_holds_no_file_it_had_open() {
         let removed = std::fs::remove_file(&held);
         child.wait().unwrap();
         drop(process);
+        removed.unwrap_or_else(|error| {
+            panic!("round {round}: the file of a process that ended is held: {error}")
+        });
+    }
+}
+
+/// A process's end is one answer whichever call reads it: once `start_time`
+/// says a process has ended, `is_alive` says so too, and a file it held
+/// open, shared with no one, can be removed at once. Windows sets a
+/// process's exit code before it closes the handles the process held and
+/// signals its object; `start_time` once answered by the exit code, so a
+/// pane record read its holder as ended while the holder still held its
+/// socket (with-hide/hide-private#585). Each look asks `start_time` before
+/// `is_alive`, so an end `start_time` saw is already there for `is_alive`.
+/// A Unix zombie is ended for `is_alive` and still has a start time, so
+/// there the look ends with `is_alive`'s answer and the child is reaped.
+#[test]
+fn a_process_whose_start_time_says_it_ended_has_ended_for_is_alive_and_its_files() {
+    let _serial = serial();
+    let folder = tempfile::tempdir().unwrap();
+    for round in 0..8 {
+        let held = folder.path().join(format!("held-{round}"));
+        let mut command = role_command("hold_file");
+        command.env(READY_FILE, &held);
+        let mut child = command.spawn().unwrap();
+        let pid = ready_number(child.stdout.take().unwrap());
+        let started = start_time(pid).unwrap();
+        terminate(pid).unwrap();
+        let looking = Instant::now();
+        loop {
+            let ended = start_time(pid).map_or(true, |now| now != started);
+            let alive = is_alive(pid);
+            assert!(
+                !(ended && alive),
+                "round {round}: start_time said process {pid} ended while is_alive said it runs"
+            );
+            if ended || !alive {
+                break;
+            }
+            assert!(looking.elapsed() < HANG_LIMIT, "process {pid} never ended");
+            thread::yield_now();
+        }
+        let removed = std::fs::remove_file(&held);
+        child.wait().unwrap();
         removed.unwrap_or_else(|error| {
             panic!("round {round}: the file of a process that ended is held: {error}")
         });

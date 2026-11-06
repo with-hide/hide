@@ -24,9 +24,9 @@
       "titles"
     ],
     "usage": {
-      "five_hour": "claude_usage_text",
-      "weekly": "claude_usage_text",
-      "scoped": "claude_usage_text",
+      "five_hour": "claude_usage",
+      "weekly": "claude_usage",
+      "scoped": "claude_usage",
       "monthly": "no_such_data",
       "tokens": "claude_transcript",
       "cost": "public_table",

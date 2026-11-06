@@ -6896,6 +6896,16 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
         refused(&runtime, "mission-1:fix"),
         "mission_machine_no_repository"
     );
+    // A read that failed names what to fix, here a gh too old for Hide.
+    runtime.github.projects[0].status.failure_category =
+        Some(hide_node_link::gh::GithubFailureCategory::Outdated);
+    assert_eq!(
+        crate::coordination::split_refusal(&refused(&runtime, "mission-1:fix")),
+        (
+            "mission_machine_no_repository",
+            Some("GitHub is not read: gh on the core's machine is older than 2.72.0; update it")
+        )
+    );
     // The project's own machine runs every node's worker as before.
     assert_eq!(admit(&runtime, None, "mission-1:land").unwrap(), mission);
 }

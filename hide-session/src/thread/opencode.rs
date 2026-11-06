@@ -9,6 +9,7 @@
 //! cap; its cursor is the index of its first message in the session.
 
 use agent_client_protocol_schema::v1::{PlanEntryStatus, ToolKind};
+use hide_agent_adapter::HookDialect;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
@@ -361,7 +362,9 @@ fn tool(piece: &Value, thread: &mut Thread) {
             thread.plan(todos(input));
             return;
         }
-        "shell" | "bash" => Call::new(id, name, ToolKind::Execute).title(text("command")),
+        "shell" | "bash" => Call::new(id, name, ToolKind::Execute)
+            .title(text("command"))
+            .shell(HookDialect::OpenCode),
         "read" => {
             Call::new(id, name, ToolKind::Read).title(format!("Read {}", path.unwrap_or_default()))
         }

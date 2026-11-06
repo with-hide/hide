@@ -411,7 +411,7 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
             let Some(command) = input.command.as_deref() else {
                 return json!({});
             };
-            let syntax = hide_agent_hooks::pre_tool::shell_syntax(agent.hook_dialect(), tool);
+            let syntax = hide_session::call_shell::syntax(agent.hook_dialect(), tool);
             let refusal = hide_agent_hooks::opener_guard::pane_refusal(
                 home, runtime, &pane, command, syntax, &program, deadline,
             );

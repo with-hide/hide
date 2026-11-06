@@ -7,6 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hide_agent_adapter::HookDialect;
+use hide_shell::Syntax;
+
 use agent_client_protocol_schema::v1::{
     Content, ContentBlock, ContentChunk, Diff, ImageContent, Meta, Plan, PlanEntry,
     PlanEntryPriority, PlanEntryStatus, ResourceLink, SessionUpdate, TextContent, ToolCall,
@@ -75,6 +78,10 @@ pub(crate) struct Call {
     /// Calls whose status the record states at once, such as a call that
     /// carries its own result.
     pub status: ToolCallStatus,
+    /// The syntax of the shell that ran a command call, marked on it as
+    /// `_meta.hide.shell` so whoever reads its title reads it as that shell
+    /// did (`crate::call_shell`); `None` for any other call.
+    pub shell: Option<Syntax>,
 }
 
 impl Call {
@@ -89,7 +96,14 @@ impl Call {
             paths: Vec::new(),
             diffs: Vec::new(),
             status: ToolCallStatus::Pending,
+            shell: None,
         }
+    }
+
+    /// A command call `dialect`'s tool ran, in that tool's shell.
+    pub fn shell(mut self, dialect: HookDialect) -> Self {
+        self.shell = Some(crate::call_shell::syntax(dialect, &self.name));
+        self
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
@@ -179,6 +193,17 @@ impl Thread {
 
     fn at_meta(&self) -> Option<Meta> {
         self.at_ms.map(|at| hide_meta([("at_ms", json!(at))]))
+    }
+
+    /// A call's marks: when it started, and the shell a command ran in.
+    fn call_meta(&self, shell: Option<Syntax>) -> Option<Meta> {
+        let marks = self
+            .at_ms
+            .map(|at| ("at_ms", json!(at)))
+            .into_iter()
+            .chain(shell.map(|shell| ("shell", json!(crate::call_shell::name(shell)))))
+            .collect::<Vec<_>>();
+        (!marks.is_empty()).then(|| hide_meta(marks))
     }
 
     pub fn skip(&mut self, reason: &'static str) {
@@ -298,7 +323,7 @@ impl Thread {
                 .locations(locations)
                 .content(content)
                 .raw_input(call.input)
-                .meta(self.at_meta()),
+                .meta(self.call_meta(call.shell)),
         ));
     }
 

@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 
 pub mod antigravity;
 pub mod bell_line;
+pub mod call_shell;
 pub mod calls;
 mod catalog;
 mod claude_attachment;

@@ -11,6 +11,7 @@ import { ChevronRightIcon, Loader2Icon } from "lucide-react";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
+import { GH_REFUSAL_KEY } from "../githubFailure";
 import { PR_LOOK } from "../prMark";
 import { ReasonLine } from "../prReason";
 import { ApprovalCount } from "../PrReviewers";
@@ -57,7 +58,7 @@ export function PrsScreen() {
       ) : null}
       <div className={cn("flex-1", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
         {blocked ? (
-          <p className="px-xl py-lg text-body text-muted-foreground" data-phone-prs-state="blocked" data-phone-prs-gh={blocked}>{t(blocked === "not_installed" ? "issueSettings.ghNotInstalled" : "issueSettings.ghNotLoggedIn")}</p>
+          <p className="px-xl py-lg text-body text-muted-foreground" data-phone-prs-state="blocked" data-phone-prs-gh={blocked}>{t(GH_REFUSAL_KEY[blocked])}</p>
         ) : prs === null || (count === 0 && reading?.state === "reading") ? (
           <p role="status" className="px-xl py-lg text-body text-muted-foreground" data-phone-prs-state="reading">{t("work.reading")}</p>
         ) : count === 0 ? (
