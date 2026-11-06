@@ -851,9 +851,6 @@ fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Agen
 /// What a caller does about each refusal `hide agent sleep` gives.
 pub fn sleep_next_action(code: &str) -> &'static str {
     match code {
-        "agent_sleep_device" => {
-            "Agents on a device Hide connects to cannot sleep; leave it, or end it with hide agent end"
-        }
         "agent_sleep_unsupported" => {
             "This kind of agent cannot sleep; leave it, or end its registration with hide agent end"
         }

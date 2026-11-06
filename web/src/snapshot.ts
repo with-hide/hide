@@ -287,7 +287,7 @@ export type ForkSource = { pane_id?: string | null; label?: string | null };
  * forkable agent cannot fork yet, and `forked_from` is present on a fork.
  */
 /** Why Sleep agent or Fork is disabled now, as a code (`AgentActionRefusal`); the web words it by `agentActionRefusal.<code>`. */
-export type AgentActionRefusal = "device" | "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
+export type AgentActionRefusal = "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
 
 export type PaneFork = { available: boolean; reason?: AgentActionRefusal | null; forked_from?: ForkSource | null };
 

@@ -197,9 +197,10 @@ impl Runtime {
     }
 }
 
-/// The link of a node that dials this core, as its machine's readers ask it:
-/// each call takes the device's live link under a brief runtime lock and
-/// runs outside it, so a link the node brings again is the one asked next
+/// The link of another machine, as its readers and agent sleep ask it: a
+/// node that dials this core or a device it dials (`Runtime::node_link`).
+/// Each call takes the device's live link under a brief runtime lock and
+/// runs outside it, so a link the machine brings again is the one asked next
 /// (PRD core-host-node-remote-core B13).
 pub(crate) struct InboundLink {
     device_id: String,

@@ -6,7 +6,6 @@
 import type { Catalogs } from "../schema";
 
 export const agentActionReasonsEnglish = {
-  "agentActionRefusal.device": "Agents on another device cannot sleep",
   "agentActionRefusal.unsupported": "This agent cannot sleep",
   "agentActionRefusal.core_machine_only": "This agent sleeps only on the device Hide's core runs on",
   "agentActionRefusal.asleep": "This agent is already asleep",
@@ -17,7 +16,6 @@ export const agentActionReasonsEnglish = {
 } as const;
 
 const ko = {
-  "agentActionRefusal.device": "다른 기기의 에이전트는 재울 수 없어요",
   "agentActionRefusal.unsupported": "이 에이전트는 재울 수 없어요",
   "agentActionRefusal.core_machine_only": "이 에이전트는 core가 실행되는 기기에서만 재울 수 있어요",
   "agentActionRefusal.asleep": "이미 자고 있어요",
@@ -28,7 +26,6 @@ const ko = {
 } satisfies Record<keyof typeof agentActionReasonsEnglish, string>;
 
 const zhCN = {
-  "agentActionRefusal.device": "其他设备上的智能体无法休眠",
   "agentActionRefusal.unsupported": "此智能体无法休眠",
   "agentActionRefusal.core_machine_only": "此智能体只能在运行 Hide core 的设备上休眠",
   "agentActionRefusal.asleep": "此智能体已在休眠",
@@ -39,7 +36,6 @@ const zhCN = {
 } satisfies Record<keyof typeof agentActionReasonsEnglish, string>;
 
 const ja = {
-  "agentActionRefusal.device": "別のデバイスのエージェントは休止できません",
   "agentActionRefusal.unsupported": "このエージェントは休止できません",
   "agentActionRefusal.core_machine_only": "このエージェントは Hide の core が動くデバイスでのみ休止できます",
   "agentActionRefusal.asleep": "すでに休止中です",

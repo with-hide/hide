@@ -147,7 +147,6 @@ fn refusal_code(refused: SleepRefused) -> &'static str {
         SleepRefused::NoAgent => "agent_unavailable",
         SleepRefused::Unreachable => "agent_sleep_unreachable",
         SleepRefused::Agent(refusal) => match refusal {
-            AgentActionRefusal::Device => "agent_sleep_device",
             AgentActionRefusal::Unsupported => "agent_sleep_unsupported",
             AgentActionRefusal::CoreMachineOnly => "agent_sleep_core_machine_only",
             // Never reached: an asleep agent is answered before the check.
