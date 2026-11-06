@@ -1006,24 +1006,20 @@ impl Drop for FixtureProcess {
 /// as an owner's end does, and removes the file the moment it no longer
 /// counts.
 /// A process's processor time counts what it worked and nothing of what it
-/// waited: a child that worked `SPIN_WORK` reads at least that, and no more
-/// than the time it has run, and a child that only sleeps gains none of it
-/// while the other works.
+/// waited: a child that worked `SPIN_WORK` reads at least that, and a child
+/// that only sleeps gains none of it while the other works. Nothing bounds
+/// the count by the time the child ran: Windows counts in its clock's ticks,
+/// and a child that ran 307 ms read 312.5 ms.
 #[test]
 fn processor_time_counts_a_process_s_work_and_not_its_wait() {
     let mut sleeper = OwnedChild::spawn(&mut role_command("sleep")).unwrap();
     let sleeping = ready_number(sleeper.take_stdout().unwrap());
     let slept_before = cpu_time(sleeping).unwrap();
 
-    let started = Instant::now();
     let mut spinner = OwnedChild::spawn(&mut role_command("spin")).unwrap();
     let spinning = ready_number(spinner.take_stdout().unwrap());
     let worked = cpu_time(spinning).unwrap();
-    let ran = started.elapsed();
-    assert!(
-        worked >= SPIN_WORK && worked <= ran,
-        "worked {worked:?} in {ran:?}"
-    );
+    assert!(worked >= SPIN_WORK, "worked {worked:?}");
 
     let slept = cpu_time(sleeping).unwrap() - slept_before;
     assert!(
