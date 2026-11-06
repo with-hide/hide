@@ -1,6 +1,6 @@
 // The phone list's rows (PRD mobile-companion-ui B1-B7): a group's top rows,
 // a parent's children under it with a rail, and the folds. hided decides the
-// tree, the order and what is folded (`herdr-core` `phone/tree.rs`); this
+// tree, the order and what is folded (`hide-core` `phone/tree.rs`); this
 // draws it and keeps only which parents and folds this phone opened.
 
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";

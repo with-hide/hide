@@ -13,7 +13,7 @@
     { "tool": "write", "cwd": "repo", "text": "~/.hide/state/global-instruction.md", "refused": true, "named": true },
     { "tool": "read", "cwd": "repo", "text": "{state}/global-instruction.md", "refused": false, "named": true },
     { "tool": "write", "cwd": "repo", "text": "docs/global-instruction.md", "refused": false, "named": true },
-    { "tool": "shell", "cwd": "repo", "text": "rg -n global-instruction.md herdr-core", "refused": false, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "rg -n global-instruction.md hide-core", "refused": false, "named": true },
     { "tool": "shell", "cwd": "repo", "text": "cargo test", "refused": false, "named": false },
     { "tool": "write", "cwd": "repo", "text": "docs/instructions.md", "refused": false, "named": false }
   ]

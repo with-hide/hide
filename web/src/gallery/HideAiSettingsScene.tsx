@@ -1,7 +1,7 @@
 // Settings › Hide AI over invented wire values: Runs on on an agent of a
 // connected device, connected (`device`) or away (`device_away`), for review
 // captures (PRD wsl-device B11, B13). Which rows exist and when one cannot
-// answer is the core's and is tested in herdr-core.
+// answer is the core's and is tested in hide-core.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";

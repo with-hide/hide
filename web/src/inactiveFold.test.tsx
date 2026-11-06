@@ -24,7 +24,7 @@ afterAll(() => browserCanvas.restore());
 // The Inactive fold's click reaches the core as one `inactive_checkouts_toggle` naming the project, and the fold
 // draws whatever `expanded` the core says back. What the core does with the event is owned by
 // `inactive_fold_events_toggle_project_path_and_device_state_independently` in
-// `herdr-core/src/runtime/tests/projects.rs`; the e2e flows no longer click this fold.
+// `hide-core/src/runtime/tests/projects.rs`; the e2e flows no longer click this fold.
 it("sends the project's path when the Inactive fold is clicked and draws the fold the core says is open", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });

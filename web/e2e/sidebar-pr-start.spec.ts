@@ -13,7 +13,7 @@
 // to the checkout on that commit from the saved answer alone. The repositories
 // are tiny, so the worktree reader answers within milliseconds and this flow
 // proves the end state; that the row does not wait for the reader is owned by
-// the unit test in `herdr-core/src/runtime/tests/github_reads.rs`.
+// the unit test in `hide-core/src/runtime/tests/github_reads.rs`.
 
 import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
@@ -151,7 +151,7 @@ test("the sidebar draws every project's pull request with no screen asking, and 
      * seeded open in the state the first start reads, not clicked open: a click is a toggle sent from a page that
      * has read `aria-expanded` and waits for the core to answer, which says nothing about the pull request glyph
      * this flow proves. That the click sends the toggle is owned by `web/src/inactiveFold.test.tsx`, and what the
-     * core does with it by the core test in `herdr-core/src/runtime/tests/projects.rs`.
+     * core does with it by the core test in `hide-core/src/runtime/tests/projects.rs`.
      */
     const mergedGlyph = async () => {
       await expect(page.locator('[data-inactive-checkouts$="/charlie"]')).toHaveAttribute("aria-expanded", "true", { timeout: 30_000 });

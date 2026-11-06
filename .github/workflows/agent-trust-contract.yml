@@ -8,7 +8,7 @@
 # once Hide took the trust out (`hide-agent-hooks/tests/it/codex_binary.rs`),
 # and Claude Code in a pane of the core's own engine starts at its prompt in
 # the worktree Hide trusted and asks its question in another
-# (`herdr-core/src/agent_start/real_agent_trust_tests.rs`), in a pane holder
+# (`hide-core/src/agent_start/real_agent_trust_tests.rs`), in a pane holder
 # started from the `hide-holder` built here. The format,
 # preservation and removal tests run on every pull request in `rust` and
 # `windows check`; this registry install runs only in `nightly.yml`, so a
@@ -49,7 +49,7 @@ jobs:
     env:
       # One package and target list for every step, so cargo resolves features
       # once and builds the test binaries once.
-      TEST_TARGETS: -p hide-agent-hooks -p herdr-core --lib --test it
+      TEST_TARGETS: -p hide-agent-hooks -p hide-core --lib --test it
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false

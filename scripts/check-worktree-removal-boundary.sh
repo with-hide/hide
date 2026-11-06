@@ -12,7 +12,7 @@ cd "$root"
 # branch is unmerged and ticked it, or explicitly discarded their task.
 # Completed tasks keep their branch. The Overview cleanup never forces.
 executor=hide-host/src/worktrees.rs
-cleanup=herdr-core/src/worktree_cleanup.rs
+cleanup=hide-core/src/worktree_cleanup.rs
 fail() {
     echo "$1" >&2
     exit 1

@@ -5,7 +5,7 @@
 # Source this before the first cargo call, do not execute it:
 #
 #     . "$(dirname "$0")/toolchain-env.sh"
-#     cargo test --manifest-path herdr-core/Cargo.toml
+#     cargo test --manifest-path hide-core/Cargo.toml
 #
 # rustup resolves its toolchain from RUSTUP_HOME, which defaults to
 # `$HOME/.rustup`. A verification runner gets its own HOME, so that default

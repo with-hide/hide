@@ -47,7 +47,7 @@ const askedProjects = new Set<string>();
 
 const GITHUB_ROW_ID = "github-search";
 
-/** The longest query the core searches GitHub for (`SEARCH_QUERY_LIMIT` in herdr-core/src/github.rs). */
+/** The longest query the core searches GitHub for (`SEARCH_QUERY_LIMIT` in hide-core/src/github.rs). */
 const SEARCH_QUERY_LIMIT = 200;
 
 const TONE_CLASS: Record<Tone, string> = {

@@ -235,7 +235,7 @@ def record_verdict(read, brief, token):
     return PASS, f"the agent recorded the brief once and exactly, {len(brief.encode())} bytes"
 
 
-# The core's log lines for a rung of the input ladder (herdr-core/src/delivery/ladder.rs).
+# The core's log lines for a rung of the input ladder (hide-core/src/delivery/ladder.rs).
 RUNG_KINDS = ("input.rung", "input.rung_unavailable", "input.rung_lost")
 
 

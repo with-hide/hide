@@ -62,7 +62,7 @@ PICKER_COMMAND = "/model"
 # How long the menu cell waits for Hide to have checked the agent's composer
 # before it opens the picker: the core checks a version once the pane has
 # rested `INPUT_QUIET_MS` (30 s) after a turn its prompt hook saw, on a pass
-# at most every 5 s (herdr-core/src/delivery/composer.rs). Without that
+# at most every 5 s (hide-core/src/delivery/composer.rs). Without that
 # check a letter held on the closed picker has nothing to release it until
 # the next turn.
 COMPOSER_CHECK_SECONDS = 60
@@ -111,7 +111,7 @@ def brief(value):
     return f"# Journey brief\n\n## Notes\n{BRIEF_NOTES}\n\n## Request\n{prompt(value)}\n"
 
 
-# A brief's cap in bytes (herdr-core `delivery::BODY_LIMIT`, `invalid_brief`).
+# A brief's cap in bytes (hide-core `delivery::BODY_LIMIT`, `invalid_brief`).
 BRIEF_CAP = 16 * 1024
 
 

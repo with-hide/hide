@@ -97,7 +97,7 @@ FULL_LANES = tuple(lane for lane in PATH_LANES if lane not in ("package", "agent
 # layer, the install kit and hooks, and the daemon and
 # core that `windows check` and the OS contract run on each system.
 OS_CRATES = {
-    "herdr-core",
+    "hide-core",
     "hided",
     "hide-agent-hooks",
     "hide-host",
@@ -119,7 +119,7 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # change to any crate they link (the device link's `hide-node` and
 # `hide-node-link` reach it through `hided`), or to the tests, can change its
 # result, and nothing else can. Web code and web specs do not reach it.
-MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
+MAILBOX_CRATES = {"hide-core", "hided", "hide-agent-hooks", "hide-host"}
 # The same lane on a Linux arm64 runner (with-hide/hide-private#501): an
 # arm64 Linux machine is a device whose kit a core of another platform takes
 # from its release, and here the core's own build connects to one. It is planned
@@ -207,13 +207,13 @@ SHARED_WEB_LANES = ("windows-e2e", "windows-desktop")
 # is a folder. Keep this beside the test that reads the file. A path no other
 # rule claims plans its readers here and nothing else.
 READERS = (
-    # herdr-core/src/runtime/tests/snapshot_delta.rs asserts the agent notes.
-    ("AGENTS.md", {"rust"}, {"herdr-core"}),
-    ("CLAUDE.md", {"rust"}, {"herdr-core"}),
-    # herdr-core's structure tests scan the shell (runtime/tests.rs, sidebar.rs)
+    # hide-core/src/runtime/tests/snapshot_delta.rs asserts the agent notes.
+    ("AGENTS.md", {"rust"}, {"hide-core"}),
+    ("CLAUDE.md", {"rust"}, {"hide-core"}),
+    # hide-core's structure tests scan the shell (runtime/tests.rs, sidebar.rs)
     # and the daemon (runtime/tests/snapshot_delta.rs).
-    ("web/src/", {"rust"}, {"herdr-core"}),
-    ("hided/src/", {"rust"}, {"herdr-core"}),
+    ("web/src/", {"rust"}, {"hide-core"}),
+    ("hided/src/", {"rust"}, {"hide-core"}),
     # web/e2e/s2, s3 and s7 import the wire path conversion.
     ("desktop/src/main/wirePath.ts", {"checks", "web-e2e", "windows-e2e"}, set()),
     # web/e2e/markdown-html.spec.ts opens the repository README with its logo
@@ -231,12 +231,12 @@ READERS = (
     ("docs/AI_PROVIDERS.md", {"rust"}, {"hide-agent-adapter"}),
     ("web/src/assets/agents/manifest.json", {"rust"}, {"hide-agent-adapter"}),
     # The contracts a test holds the code to; the code does not read them.
-    # herdr-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
+    # hide-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
     # by hand (`gen:types`) and committed, so no web lane reads it.
-    ("contracts/hided-ws.schema.json", {"rust"}, {"herdr-core"}),
-    # herdr-core's `model::wire_enum_tests`, and web/src/userTurn.test.ts,
+    ("contracts/hided-ws.schema.json", {"rust"}, {"hide-core"}),
+    # hide-core's `model::wire_enum_tests`, and web/src/userTurn.test.ts,
     # prMark.test.ts.
-    ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"herdr-core"}),
+    ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"hide-core"}),
     # hide-agent-adapter's contract test; web/src/agentAdapters.ts imports it
     # into the shell, which plans what a web shell file plans.
     ("contracts/agent-adapters.json", {"rust", "checks", "web-e2e"}, {"hide-agent-adapter"}),

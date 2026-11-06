@@ -1,7 +1,7 @@
 import type { AgentScope } from "./agentScope";
 import type { ProjectSettings, ProjectSettingsWrite } from "./projectSettings";
 // The parts of the core's `rest` section the web shell reads, typed as the
-// core serializes them (herdr-core/src/model.rs), plus the pure selectors that
+// core serializes them (hide-core/src/model.rs), plus the pure selectors that
 // resolve the operator's focused checkout, its visible tab and that tab's
 // layout. Every selector is a lookup: the snapshot carries every tab's layout,
 // so a tab switch never draws a waiting state (PRD S2 B3).
@@ -22,7 +22,7 @@ export type LineMode = "request" | "news" | "waiting" | "kept" | "quiet" | "vani
 
 export type StatusTone = { kind: "warning" | "working" | "success" | "subtle" | "news"; read: boolean };
 
-/** Agent decisions are projected by herdr-core::agent_state, never reconstructed by the shell. */
+/** Agent decisions are projected by hide-core::agent_state, never reconstructed by the shell. */
 export type AgentState = {
   session: { group: SessionGroup; line: string | null; unfinished: boolean };
   attention: boolean; needs_you: boolean; root: boolean;
@@ -1502,7 +1502,7 @@ export type MissionNode = {
   finished_at_unix_ms: number | null;
   /** A direct change's commit on main, as the Conductor recorded it (B33): its shown result, never proof it is there. */
   commit: string | null;
-  /** Where its work is on its way to main, as the core decides it (`herdr-core/src/runtime/mission_landing.rs`). */
+  /** Where its work is on its way to main, as the core decides it (`hide-core/src/runtime/mission_landing.rs`). */
   landing: MissionLanding | null;
   verdict: MissionVerdict | null;
   checks: { passed: number; total: number } | null;
@@ -3416,7 +3416,7 @@ export function editorTabFor(editor: EditorSnapshot | null, tabId: string | null
 
 const NO_PATHS: string[] = [];
 
-/** One agent's 권한 on one machine (`herdr-core/src/agent_permission.rs`). */
+/** One agent's 권한 on one machine (`hide-core/src/agent_permission.rs`). */
 export type AgentPermission = { mode: "full" } | { mode: "ask" } | { mode: "custom"; text: string; options: string[] };
 
 const FULL_ACCESS: AgentPermission = { mode: "full" };

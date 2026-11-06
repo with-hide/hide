@@ -7,7 +7,7 @@ import { cn } from "./lib/utils";
 // A pull request's reason words (PRD work-tab-pr-lens D-16, B24): the second
 // line of a list row and the reason box of the card say the same thing in
 // the same colour. The core decides the kind and the values
-// (`herdr-core/src/agent_state/work/board.rs`); this only words them, with
+// (`hide-core/src/agent_state/work/board.rs`); this only words them, with
 // the times counted on the window's one clock.
 
 /** The tone a group's reason is drawn in; the leading word stays in the text colour. */

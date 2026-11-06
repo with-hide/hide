@@ -54,7 +54,7 @@ function node(key: string, title: string, extra: Partial<MissionNode>): MissionN
   return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
-/** Where a node is on its way to main, as the core would publish it (`herdr-core/src/runtime/mission_landing.rs`). */
+/** Where a node is on its way to main, as the core would publish it (`hide-core/src/runtime/mission_landing.rs`). */
 const MERGE_LEFT: MissionLanding = { state: "left", action: "merge" };
 const MERGED: MissionLanding = { state: "landed", proof: { by: "merged" } };
 const OUTSIDE_LANDED: MissionLanding = { state: "landed", proof: { by: "outside" } };
