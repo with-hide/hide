@@ -574,9 +574,7 @@ impl Runtime {
             if self.mission_stale(mission) {
                 continue;
             }
-            let pulls = self
-                .mission_project_pulls(mission)
-                .filter(|project| !project.status.stale && project.pull_requests_read);
+            let pulls = self.mission_pulls(mission);
             let acts = warn_acts(mission, pulls, now, rule);
             let untold = mission
                 .nodes
@@ -665,9 +663,7 @@ impl Runtime {
         ledger: Option<&crate::delivery::ledger::Ledger>,
         sleeping: &crate::coordination::Sleeping,
     ) -> Facts<'a> {
-        let pulls = self
-            .mission_project_pulls(mission)
-            .filter(|project| !project.status.stale && project.pull_requests_read);
+        let pulls = self.mission_pulls(mission);
         let nodes = mission
             .nodes
             .iter()
@@ -826,7 +822,7 @@ impl Runtime {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
-        let seen = self.pull_seen_of(mission, pr);
+        let seen = self.pull_seen(mission, pr);
         let Some(mission) = self.missions.book.get_mut(id) else {
             return false;
         };
@@ -1188,15 +1184,6 @@ impl Runtime {
         true
     }
 
-    /// What GitHub says now of `number` in `mission`'s project.
-    fn pull_seen_of(&self, mission: &Mission, number: u32) -> Option<crate::missions::PrSeen> {
-        self.mission_project_pulls(mission)?
-            .pull_requests
-            .iter()
-            .find(|pull| pull.number == number)
-            .map(super::missions::seen_of)
-    }
-
     /// The operator's answer to what waits on a node (B15, B16): one event,
     /// applied at once, its Conductor told what was settled (B17).
     pub(super) fn mission_attention_event(&mut self, payload: MissionAttentionPayload) -> bool {
@@ -1300,7 +1287,7 @@ impl Runtime {
                     .and_then(|attention| attention.pr)
                     .ok_or("mission_attention_moved")?;
                 next.attach_pr(pr);
-                if let Some(seen) = self.pull_seen_of(mission, pr) {
+                if let Some(seen) = self.pull_seen(mission, pr) {
                     super::missions::note_seen(&mut next, seen, now);
                 }
             }
@@ -1540,10 +1527,7 @@ impl Runtime {
             .iter()
             .filter(|mission| mission.status.open())
             .any(|mission| {
-                let Some(pulls) = self
-                    .mission_project_pulls(mission)
-                    .filter(|project| !project.status.stale)
-                else {
+                let Some(pulls) = self.mission_pulls(mission) else {
                     return false;
                 };
                 mission.nodes.iter().any(|node| {
