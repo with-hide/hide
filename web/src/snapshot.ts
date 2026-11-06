@@ -287,7 +287,7 @@ export type ForkSource = { pane_id?: string | null; label?: string | null };
  * forkable agent cannot fork yet, and `forked_from` is present on a fork.
  */
 /** Why Sleep agent or Fork is disabled now, as a code (`AgentActionRefusal`); the web words it by `agentActionRefusal.<code>`. */
-export type AgentActionRefusal = "device" | "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
+export type AgentActionRefusal = "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
 
 export type PaneFork = { available: boolean; reason?: AgentActionRefusal | null; forked_from?: ForkSource | null };
 
@@ -454,7 +454,7 @@ export type PrWrite = {
 };
 
 /** Why a `gh` lookup failed, as the core names it; the catalogs word each (issueSettings.gh*). */
-export type GithubFailureCategory = "not_installed" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit";
+export type GithubFailureCategory = "not_installed" | "outdated" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit";
 
 /** How a repository's `gh` lookup is doing, apart from what it found (`GithubStatusSnapshot`). */
 export type GithubStatus = {
@@ -621,7 +621,7 @@ export type IssueWork = {
 };
 
 /** Why a backlog item was not made or not undone (`BacklogFailure`). */
-export type BacklogFailure = "not_installed" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit" | "queue_full" | "unconfirmed" | "repository_changed" | "unavailable" | "refused";
+export type BacklogFailure = "not_installed" | "outdated" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit" | "queue_full" | "unconfirmed" | "repository_changed" | "unavailable" | "refused";
 
 /** One item the backlog add made or is making (`BacklogItemSnapshot`). */
 export type BacklogItem = {
@@ -1518,7 +1518,17 @@ export type MissionNode = {
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
   warnings?: MissionNodeWarning[];
+  /** A push is asked of it (`MissionNode::asks_push`): a change at work delivered by pull request. */
+  asks_push?: boolean;
+  /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
+  waiting_on?: MissionWaitingOn | null;
 };
+
+/** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
+export type MissionWaitingOn =
+  | { kind: "attention"; to: MissionAttentionTo; reason: MissionAttentionReason }
+  | { kind: "nodes"; keys: string[] }
+  | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
 /** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
 export type MissionWarningKind = "review_fails" | "no_push";
@@ -1540,8 +1550,6 @@ export type Mission = {
   exempt: boolean;
   /** Settings › Mission's default when the mission was created, then what its plan names; null for one from before verification strength. */
   strength: MissionStrength | null;
-  /** Whether a checker comes from another company than the node's worker, as Settings › Mission said when the mission was created; null for one from before. */
-  other_vendor: boolean | null;
   /** `takes_answers`: its agent takes an answer typed from the banner, which the doorbell types only into the agents it rings (B26). */
   conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
   nodes: MissionNode[];
@@ -1649,7 +1657,7 @@ export type PlansSnapshot = { items: PlanView[] };
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
 /** Which way every mission's map runs: what a node waits on above it, or to its left. */
 export type MissionMapFlow = "down" | "across";
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number; map_flow?: MissionMapFlow };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };

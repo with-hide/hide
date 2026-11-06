@@ -432,6 +432,8 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
    Choose a known one-shot invocation: `hided --help` starts a daemon, whereas `hided node --version` exits without opening daemon state.
    A system program pays the same on Windows: Windows PowerShell's first start in a CI job, beside the other tests starting theirs, took from 2 s to past a 15 s run's hang guard (issue 1497), so a test that bounds a run through it starts it once first with `ready_with_args` (`agy_shell` in `hide-agent-hooks/tests/it/windows_hook_command.rs`).
    A command that calls a cmdlet would pay more: Windows PowerShell loads a cmdlet's module on first use and, on a fresh runner, first builds its cache of every installed module, which took four tests paying it together 38 to 48 s (issues 198 and 199); Hide's installed commands call none (with-hide/hide-private#318), so `exit 0` readies them, and a test whose command calls a cmdlet runs that cmdlet in its first start.
+That build is skipped only while the module analysis cache PowerShell reads is usable; on a runner without it a first `Write-Output` took 12 to 38 s and said nothing meanwhile, so the device start script's wrapper turns auto-loading off and imports its one module by name, which costs under a second (with-hide/hide-private#580).
+A first start that misses its deadline says what it was doing: its pid, the processor time it used against the time it ran, and the `PSModuleAnalysisCachePath` it was given (`stalled` in `hide-platform/tests/it/stand_ins.rs`, `Device::stalled` in `hide-node/src/ssh/bootstrap_windows_tests.rs`, both over `hide_platform::process::cpu_time`).
    Node pays the same: the first `node.exe` a Windows job starts took from 2.5 s to past a 30 s hang guard and the next 0.1 s (issue 202), so `hide-kit`'s Windows process test starts Node once first with the script its guarded run runs, not `--version`, which answers before Node starts its engine and crypto: after a `--version` start the guarded run still passed 30 s (with-hide/hide-private#329).
    Python pays the same: the first `python` a Windows job starts, through `hide-ai`'s `fake-claude.cmd`, took 21 to 30 s where later reads take about a second (issue 230), so the `/usage` tests ready the fake (`stand_ins::ready_with_args`) while they hold `FAKE_ENV`.
    A new debug build pays it too: a Windows job's first starts of `hided` took 6 to 18 s before its seat answered, against `hide connect`'s 10 s (issues 264, 265 and 212), so `connect_stop` readies the `hided` beside `hide` with `hided node --version`, and the e2e entry points do the same for theirs (above).
@@ -717,6 +719,14 @@ The fixture owns the synthetic home and server, and checks model listing without
 Run locally with `HIDE_TEST_BUN_BIN=<absolute Bun> HIDE_TEST_OMP_PACKAGE=<absolute npm package directory> bash scripts/verify-cargo.sh test-scoped -p hide-ai --test it omp_sdk -- --ignored --nocapture`.
 The test is ignored only because it requires an external SDK/runtime; the dedicated required CI lane installs both exact versions and runs it on every supported system.
 A passing fixture does not prove paid-service authentication or standalone support.
+
+### The oldest gh Hide supports
+
+`hide-host/src/gh.rs`'s `every_command_line_parses_on_the_oldest_gh_hide_supports` runs every command line the node may run `gh` with, built by the core's own builders and constants, against `hide_node_link::gh::MINIMUM_VERSION`, which `scripts/fetch-gh.sh` downloads against its pinned digest.
+`gh` checks a command's flags and `--json` fields before it asks GitHub anything, so each line must get as far as the network, where a proxy that refuses every connection stops it: no line reaches GitHub, and none needs a login.
+It is ignored only because it needs that release; the rust lane's `Every gh command line on the oldest gh Hide supports` step runs it whenever `hide-host` is planned, which a change to `hide-node-link` also plans.
+A new shape in `hide_node_link::gh::allowed` gets a line there, and a field or flag only a newer `gh` knows fails it until the minimum, the script's version and digest move together.
+Run it locally with `HIDE_TEST_GH_BIN=$(bash scripts/fetch-gh.sh <folder>) bash scripts/verify-cargo.sh nextest -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only`.
 
 ### How many jobs a run starts
 

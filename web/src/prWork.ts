@@ -6,6 +6,7 @@
 
 import { scopeOccurrences, type PrBoard, type PrGroupId, type PrReason } from "./agentScope";
 import { readsHere } from "./devices";
+import { isGhRefusal, type GhRefusal } from "./githubFailure";
 import type { TFunction } from "i18next";
 import type { AgentRow, Device, ExtraQuery, GithubStatus, PullRequest, Workspace } from "./snapshot";
 
@@ -34,8 +35,8 @@ export type PrGroupView = {
 
 /** How GitHub reads stand for the projects a list gathers (B39, B42, B43). */
 export type PrReading =
-  /** `gh` could not be used at all: not installed or not signed in. */
-  | { state: "blocked"; category: "not_installed" | "not_logged_in" }
+  /** `gh` could not be used at all: not installed, too old or not signed in. */
+  | { state: "blocked"; category: GhRefusal }
   /** No project of the scope has been answered yet. */
   | { state: "reading" }
   /** The last read failed; the list keeps the last values, `minutes` old, and `unread` names the extra questions that were also unanswered. */
@@ -93,8 +94,8 @@ export function prReading(projects: readonly Workspace[], now: number): PrReadin
 /** The same reading over GitHub statuses a caller already holds, as the phone gets them per project. */
 export function readingOfStatuses(statuses: readonly GithubStatus[], now: number): PrReading {
   const answered = statuses.filter((status) => status.last_success_at_unix_ms != null);
-  const refusal = statuses.find((status) => status.failure_category === "not_installed" || status.failure_category === "not_logged_in");
-  if (refusal && answered.length === 0) return { state: "blocked", category: refusal.failure_category as "not_installed" | "not_logged_in" };
+  const refusal = statuses.map((status) => status.failure_category).find(isGhRefusal);
+  if (refusal && answered.length === 0) return { state: "blocked", category: refusal };
   if (answered.length === 0) return { state: "reading" };
   const failed = answered.some((status) => status.stale === true || (status.failure_category != null && !status.available));
   const unread = EXTRA_QUERIES.filter((query) => answered.some((status) => status.unread_queries?.includes(query)));

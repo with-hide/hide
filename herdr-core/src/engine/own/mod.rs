@@ -36,7 +36,7 @@ use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
     Gate, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof, PaneSession,
-    PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong, StartedAgent, Wait, Wake,
+    PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake,
     Zoom,
 };
 use crate::model::PaneLayoutDirection;
@@ -1316,10 +1316,7 @@ fn delivery_of(
             .and_then(crate::engine::tokens::session_digest),
         status: agent.live.status.as_str().to_owned(),
         state_change_seq: agent.live.seq,
-        readiness: Readiness::of(
-            Some(agent.interactive()),
-            Some(agent.launch_pending(std::time::Instant::now())),
-        ),
+        readiness: agent.readiness(std::time::Instant::now()),
     }
 }
 
@@ -1924,7 +1921,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .agent
             .as_ref()
             .filter(|agent| agent.listed(now))
-            .filter(|agent| agent.interactive() && !agent.launch_pending(now))
+            .filter(|agent| agent.takes_input(now))
             .map_or(agents::Status::Unknown, |agent| agent.live.status)
             .as_str()
             .to_owned())
@@ -2259,7 +2256,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.interactive() || agent.launch_pending(std::time::Instant::now()) {
+            if !agent.takes_input(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),
@@ -2358,6 +2355,7 @@ mod tests {
     use crate::sidebar::SessionSnapshotPayload;
 
     use super::*;
+    use crate::engine::Readiness;
 
     type TerminateHold = (
         String,
@@ -3386,6 +3384,13 @@ mod tests {
         first
             .report_agent_session(WAIT, &pane, "claude-code", "s-1", 1)
             .unwrap();
+        // Each turn was running when the machine went down, so each resumes.
+        hook_said(
+            &place,
+            &pane,
+            "s-1",
+            hide_agent_hooks::report::HookTurn::Working,
+        );
         drop(first);
 
         // After the reboot the pane's holder refuses to start.
@@ -3895,8 +3900,9 @@ mod tests {
     fn age_start(engine: &OwnEngine, pane: &str, by: std::time::Duration) {
         let mut topology = engine.topology();
         let agent = topology.pane_mut(pane).unwrap().agent.as_mut().unwrap();
-        let started = agent.live.started.as_mut().unwrap();
-        *started -= by;
+        let started = agent.live.started.unwrap() - by;
+        agent.live.started = Some(started);
+        agent.live.settles_from = Some(started);
     }
 
     fn running(program: &str, screen: hide_node_link::holders::ScreenState) -> PaneFacts {
@@ -3935,6 +3941,28 @@ mod tests {
     }
 
     /// What was typed into `pane`, in order.
+    /// Writes what `pane`'s agent's hook said last: its turn in `session`.
+    fn hook_said(
+        place: &Place,
+        pane: &str,
+        session: &str,
+        turn: hide_agent_hooks::report::HookTurn,
+    ) {
+        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
+        apply(
+            &home(place),
+            pane,
+            Change::None,
+            Reporter {
+                agent: Some("claude"),
+                session: Some(session),
+            },
+            Said::Turn(turn),
+            None,
+        )
+        .unwrap();
+    }
+
     fn typed_into(typed: &[(String, Vec<u8>)], pane: &str) -> String {
         typed
             .iter()
@@ -4883,6 +4911,19 @@ mod tests {
             .prepare_start(launch(&gemini, "reader", "gemini", &[]))
             .unwrap();
         first.start_agent(WAIT, &start).unwrap();
+        // Each turn was running when the machine went down, so each resumes.
+        hook_said(
+            &place,
+            &claude,
+            "s-1",
+            hide_agent_hooks::report::HookTurn::Working,
+        );
+        hook_said(
+            &place,
+            &twin,
+            "s-1",
+            hide_agent_hooks::report::HookTurn::Working,
+        );
         drop(first);
 
         let holders = Arc::new(Holders::default());
@@ -4961,6 +5002,13 @@ mod tests {
             first
                 .report_agent_session(WAIT, pane, "claude", session, 1)
                 .unwrap();
+            // Its turn was running when the machine went down, so it resumes.
+            hook_said(
+                &place,
+                pane,
+                session,
+                hide_agent_hooks::report::HookTurn::Working,
+            );
         }
         drop(first);
 
@@ -5010,10 +5058,11 @@ mod tests {
 
     /// PRD engine-bundle-4-herdr-removal D-22, B9: an agent whose hook last
     /// said its turn was running when the machine went down is resumed and,
-    /// once its hook names its session, said to be owed its letter, once; an
-    /// agent that had finished its turn is owed none.
+    /// once its hook names its session, said to be owed its letter, once. An
+    /// agent that had finished its turn is not started again: a machine that
+    /// ran dozens would start them all at once, and none was waited on.
     #[test]
-    fn a_resumed_agent_whose_turn_was_cut_off_is_owed_one_letter_and_a_resting_one_none() {
+    fn a_reboot_resumes_the_agent_whose_turn_was_cut_off_and_leaves_a_resting_one_to_sleep() {
         use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
         use hide_agent_hooks::report::HookTurn;
         let root = tempfile::tempdir().unwrap();
@@ -5075,20 +5124,38 @@ mod tests {
             ..HolderRecovery::default()
         });
         next.restored().unwrap();
-        for pane in [&working, &resting] {
-            assert!(
-                holders.wait_typed(pane).starts_with("claude --resume"),
-                "{:?}",
-                holders.typed(pane)
-            );
-        }
+        assert!(
+            holders
+                .wait_typed(&working)
+                .starts_with("claude --resume s-1"),
+            "{:?}",
+            holders.typed(&working)
+        );
+        // The agent that had finished its turn is not started again: its
+        // pane is a shell, and the session names it resting until the core
+        // says it keeps it, as a sleeping agent a visit wakes.
+        settles("the resting agent is named", || {
+            !next.session(WAIT).unwrap().resting.is_empty()
+        });
+        let rested = next.session(WAIT).unwrap().resting;
+        assert_eq!(rested.len(), 1, "{rested:?}");
+        assert_eq!(rested[0].pane_id, resting);
+        assert_eq!(rested[0].agent.as_deref(), Some("claude"));
+        assert_eq!(rested[0].agent_status.as_deref(), Some("idle"));
+        assert_eq!(
+            rested[0]
+                .agent_session
+                .as_ref()
+                .map(|session| session.value.as_str()),
+            Some("s-2")
+        );
+        assert_eq!(holders.typed(&resting), "", "nothing is typed into it");
 
         assert!(next.hook_session(&working, "claude", "s-1").unwrap());
         assert!(
             !next.hook_session(&working, "claude", "s-1").unwrap(),
             "owed once"
         );
-        assert!(!next.hook_session(&resting, "claude", "s-2").unwrap());
     }
 
     /// D-8, B15: a conversation an import gave back once its Herdr stopped,
@@ -5191,6 +5258,13 @@ mod tests {
         first
             .report_agent_session(WAIT, &claude, "claude", "s-1", 1)
             .unwrap();
+        // Each turn was running when the machine went down, so each resumes.
+        hook_said(
+            &place,
+            &claude,
+            "s-1",
+            hide_agent_hooks::report::HookTurn::Working,
+        );
         drop(first);
         let reopen = |processes: HolderProcesses| {
             let holders = Arc::new(Holders::default());

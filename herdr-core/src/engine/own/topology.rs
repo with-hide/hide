@@ -121,6 +121,14 @@ pub(super) struct Pane {
     pub(super) env: BTreeMap<String, String>,
     /// The agent the pane runs and its session, saved for a restore.
     pub(super) agent: Option<PaneAgent>,
+    /// The agent a restore found resting in this pane and did not start
+    /// again: the pane is a shell, and the core keeps the agent as a
+    /// sleeping one that a visit wakes. Projected
+    /// (`ProjectionState::resting`) and saved as the pane's agent, so a
+    /// daemon that ends before the core's record is on disk, or the next
+    /// reboot, finds it again; it goes when an agent shows in the pane, by a
+    /// start, its hook or its foreground, and with the pane.
+    pub(super) resting: Option<PaneAgent>,
     /// The latest hook report that arrived before foreground detection.
     /// Never saved; a pane owns at most one and drops it when it ends.
     pending_session: Option<(String, String)>,
@@ -145,6 +153,9 @@ pub(super) struct AgentStart {
     claim: Arc<()>,
     agent: Option<PaneAgent>,
     pending_session: Option<(String, String)>,
+    /// The agent left resting in the pane, which a start that is refused
+    /// gives back with the rest.
+    resting: Option<PaneAgent>,
 }
 
 impl Pane {
@@ -1085,6 +1096,7 @@ impl Topology {
             panes: Vec::new(),
             layouts: Vec::new(),
             agents: Vec::new(),
+            resting: Vec::new(),
             settles_at: self.next_start_change(now),
         };
         for workspace in &self.workspaces {
@@ -1152,6 +1164,21 @@ impl Topology {
                             catalog,
                             now,
                         ));
+                    } else if let Some(agent) =
+                        pane.resting.as_ref().filter(|_| pane.agent.is_none())
+                    {
+                        state.resting.push(ProjectedAgent {
+                            agent_status: Some(Status::Idle.as_str().to_owned()),
+                            ..projected_agent(
+                                &workspace.id,
+                                &tab.id,
+                                &pane_id,
+                                pane,
+                                agent,
+                                catalog,
+                                now,
+                            )
+                        });
                     }
                 }
                 state.layouts.push(tab.layout(&workspace.id)?);
@@ -1200,11 +1227,15 @@ impl Topology {
                                     cwd: pane.cwd.clone(),
                                     label: pane.label.clone(),
                                     tokens: pane.tokens.clone(),
-                                    agent: pane.agent.as_ref().map(|agent| SavedAgent {
-                                        kind: agent.kind.clone(),
-                                        name: agent.name.clone(),
-                                        session: agent.session.clone(),
-                                    }),
+                                    // A resting agent is saved as the pane's
+                                    // agent, in the form every build reads.
+                                    agent: pane.agent.as_ref().or(pane.resting.as_ref()).map(
+                                        |agent| SavedAgent {
+                                            kind: agent.kind.clone(),
+                                            name: agent.name.clone(),
+                                            session: agent.session.clone(),
+                                        },
+                                    ),
                                 })
                                 .collect(),
                         })
@@ -1682,6 +1713,7 @@ fn projected_agent(
         state_change_seq: agent.live.seq,
         completion_seq: agent.live.completion,
         launch_pending: agent.launch_pending(now),
+        start_unshown: agent.starting(now),
         tokens: pane.tokens.clone(),
     }
 }
@@ -1714,7 +1746,12 @@ impl Topology {
             &mut held.live,
             facts,
             &mut seq,
+            Instant::now(),
         );
+        // An agent the pane's foreground shows is the pane's agent now.
+        if held.agent.is_some() {
+            held.resting = None;
+        }
         if let Some(agent) = held.agent.as_mut()
             && let Some((kind, session)) = held.pending_session.take()
             && agent.kind == kind
@@ -1762,6 +1799,18 @@ impl Topology {
         })
     }
 
+    /// Keeps `agent` as the one resting in `pane`, a shell with no agent;
+    /// answers whether the pane is there to keep it.
+    pub(super) fn rest(&mut self, pane: &str, agent: PaneAgent) -> bool {
+        match self.pane_mut(pane) {
+            Ok(held) if held.agent.is_none() => {
+                held.resting = Some(agent);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Reserves the metadata of a start while its input is being delivered.
     pub(super) fn start_agent(
         &mut self,
@@ -1787,6 +1836,10 @@ impl Topology {
                 .take()
                 .filter(|agent| agent.live.shown || agent.live.started.is_none()),
             pending_session: held.pending_session.take(),
+            // Whatever starts in the pane is its agent from now; one the
+            // restore left resting there comes back only if this start is
+            // refused.
+            resting: held.resting.take(),
         };
         agent.live.start_previous_name = previous
             .agent
@@ -1829,6 +1882,7 @@ impl Topology {
         }
         held.agent = start.agent;
         held.pending_session = start.pending_session;
+        held.resting = start.resting;
         true
     }
 
@@ -1862,6 +1916,8 @@ impl Topology {
     ) -> Result<bool, EngineError> {
         let held = self.pane_mut(pane)?;
         held.pending_session = None;
+        // A hook that names a session speaks for the agent the pane runs.
+        held.resting = None;
         match held.agent.as_mut() {
             Some(agent) if agent.kind == kind => {
                 agent.live.start_claim = None;
@@ -2247,6 +2303,54 @@ mod tests {
             Err(EngineError::Refused { code, .. }) if code == "tab_not_found"
         ));
         assert_eq!(topology.active_tab(&first.workspace).unwrap(), "h1:t2");
+    }
+
+    /// A restore leaves an agent that rested resting in its pane. It is
+    /// saved as the pane's agent, so a daemon that ends before the core's
+    /// sleep record is on disk finds it again; a start whose input is
+    /// refused gives it back; an agent that shows in the pane ends it.
+    #[test]
+    fn a_resting_agent_is_saved_given_back_by_a_refused_start_and_gone_once_one_shows() {
+        let mut topology = Topology::default();
+        let pane = workspace(&mut topology).pane;
+        let catalog = Catalog::read(Vec::new());
+        let named = |topology: &Topology| {
+            topology
+                .state_at(&catalog, Instant::now())
+                .unwrap()
+                .resting
+                .into_iter()
+                .map(|agent| agent.agent_session.map(|session| session.value))
+                .collect::<Vec<_>>()
+        };
+        let resting = PaneAgent {
+            kind: "claude".to_owned(),
+            session: Some("s-2".to_owned()),
+            ..PaneAgent::default()
+        };
+        assert!(topology.rest(&pane, resting));
+        assert_eq!(named(&topology), vec![Some("s-2".to_owned())]);
+        let saved = topology.to_saved();
+        let saved_agent = saved.workspaces[0].tabs[0].panes[0].agent.as_ref().unwrap();
+        assert_eq!(saved_agent.session.as_deref(), Some("s-2"));
+
+        let start = topology
+            .start_agent(&pane, PaneAgent::started("codex", None, None))
+            .unwrap();
+        assert!(named(&topology).is_empty(), "the start is the pane's agent");
+        assert!(topology.finish_agent_start(&pane, start, true));
+        assert_eq!(
+            named(&topology),
+            vec![Some("s-2".to_owned())],
+            "a refused start gives it back"
+        );
+
+        topology.set_agent_session(&pane, "claude", "s-3").unwrap();
+        topology.pane_mut(&pane).unwrap().agent = None;
+        assert!(
+            named(&topology).is_empty(),
+            "an agent showed in the pane, and it is not named again once that one ends"
+        );
     }
 
     #[test]

@@ -18,8 +18,8 @@ use hide_platform::fs::identity::{canonical, file_id};
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
-    RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cwd_of, descendants, descends_from, detach,
-    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, observed_cwd_of,
+    RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cpu_time, cwd_of, descendants, descends_from,
+    detach, group_members, image_of, is_alive, kill_tree, measure_tree, name_of, observed_cwd_of,
     parent_of, restrict_to_login_environment, run_to_end, run_to_end_tied, running,
     set_output_aside, start_time, terminate, terminate_group,
 };
@@ -32,6 +32,8 @@ const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
 /// (`a_running_child_cannot_extend_the_capture_deadline`, the uncooperative
 /// launch) states its own short one.
 const HANG_LIMIT: Duration = Duration::from_secs(30);
+/// The processor time the `spin` role works for.
+const SPIN_WORK: Duration = Duration::from_millis(300);
 // Test-only handoff: arm recovery before the short-lived parent exits.
 const PIPE_OWNER: &str = "HIDE_PLATFORM_PROC_PIPE_OWNER";
 /// Where the `sleep` role writes its pid once it runs, for a test that cannot
@@ -246,6 +248,17 @@ fn child_role() {
                 spawning,
                 "the spawner ended before its first holder held a file"
             );
+        }
+        // Works until it has used `SPIN_WORK` of processor time, then waits.
+        "spin" => {
+            let mut sum = 0_u64;
+            while cpu_time(std::process::id()).unwrap() < SPIN_WORK {
+                for value in 0..100_000_u64 {
+                    sum = std::hint::black_box(sum.wrapping_add(value));
+                }
+            }
+            println!("READY {}", std::process::id());
+            thread::sleep(Duration::from_secs(60));
         }
         "sleep" => {
             println!("READY {}", std::process::id());
@@ -992,6 +1005,30 @@ impl Drop for FixtureProcess {
 /// it (with-hide/hide-private#327). Each round ends the holder from outside,
 /// as an owner's end does, and removes the file the moment it no longer
 /// counts.
+/// A process's processor time counts what it worked and nothing of what it
+/// waited: a child that worked `SPIN_WORK` reads at least that, and a child
+/// that only sleeps gains none of it while the other works. Nothing bounds
+/// the count by the time the child ran: Windows counts in its clock's ticks,
+/// and a child that ran 307 ms read 312.5 ms.
+#[test]
+fn processor_time_counts_a_process_s_work_and_not_its_wait() {
+    let mut sleeper = OwnedChild::spawn(&mut role_command("sleep")).unwrap();
+    let sleeping = ready_number(sleeper.take_stdout().unwrap());
+    let slept_before = cpu_time(sleeping).unwrap();
+
+    let mut spinner = OwnedChild::spawn(&mut role_command("spin")).unwrap();
+    let spinning = ready_number(spinner.take_stdout().unwrap());
+    let worked = cpu_time(spinning).unwrap();
+    assert!(worked >= SPIN_WORK, "worked {worked:?}");
+
+    let slept = cpu_time(sleeping).unwrap() - slept_before;
+    assert!(
+        slept < SPIN_WORK / 3,
+        "a sleeping child gained {slept:?} while the other worked {worked:?}"
+    );
+    assert!(sleeper.kill_tree().unwrap() && spinner.kill_tree().unwrap());
+}
+
 #[test]
 fn a_process_that_has_ended_holds_no_file_it_had_open() {
     let _serial = serial();

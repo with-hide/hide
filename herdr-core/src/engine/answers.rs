@@ -77,32 +77,24 @@ pub(crate) struct DeliveryAgent {
     pub readiness: Readiness,
 }
 
-/// What the engine says about whether an agent takes typed input. It reports
-/// readiness only for an agent it started itself (`agent.start`): it sends
-/// `launch_pending: true` while that start settles or is blocked, and
-/// `interactive_ready: true` once it is active, and omits either flag when it
-/// is false. An agent the operator started by typing its program in a shell
-/// carries neither flag, so its readiness is unreported, not refused.
+/// What the engine says about whether an agent takes typed input at the
+/// moment it is asked, for every agent it lists, started by the engine or
+/// typed into a shell (the own engine's `PaneAgent::readiness`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Readiness {
+    /// What is typed reaches the program.
     Ready,
-    Unreported,
+    /// The program does not read keys, or the screen it drew since it took
+    /// them or since its question was answered is still settling.
     NotReady,
+    /// A start the engine typed has not settled, nor reached its deadline,
+    /// or its screen asks a question.
     Launching,
 }
 
 impl Readiness {
     pub(crate) fn accepts_input(self) -> bool {
-        matches!(self, Self::Ready | Self::Unreported)
-    }
-
-    pub(crate) fn of(interactive_ready: Option<bool>, launch_pending: Option<bool>) -> Self {
-        match (interactive_ready, launch_pending) {
-            (_, Some(true)) => Self::Launching,
-            (Some(false), _) => Self::NotReady,
-            (Some(true), _) => Self::Ready,
-            (None, _) => Self::Unreported,
-        }
+        self == Self::Ready
     }
 }
 

@@ -42,8 +42,9 @@ const GH_CALL_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(crate) use hide_node_link::gh::PULL_REQUEST_LIMIT;
 use hide_node_link::gh::{
-    ISSUE_LIST_FIELDS, ISSUE_LIST_LIMIT, ISSUE_LIST_PROJECT_FIELDS, ISSUE_LIST_SEARCH,
-    MERGED_PROOF_FIELDS, MERGED_PROOF_LIMIT, OPEN_CHECK_FIELDS, PULL_REQUEST_FIELDS,
+    GhVersion, ISSUE_LIST_FIELDS, ISSUE_LIST_LIMIT, ISSUE_LIST_PROJECT_FIELDS, ISSUE_LIST_SEARCH,
+    MERGED_PROOF_FIELDS, MERGED_PROOF_LIMIT, MINIMUM_VERSION, OPEN_CHECK_FIELDS,
+    PULL_REQUEST_FIELDS, VERSION,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -318,12 +319,13 @@ fn read_root(
 }
 
 /// Authentication is read-only and uses the same bounded subprocess as PR
-/// listing. `gh auth status` failing is the machine's refusal and fails every
-/// read. The signed-in account's login, read once per pass, only tells the
-/// operator's own pull requests from others' (PRD work-tab-pr-lens D-25), so
-/// failing to read it is `Ok(None)`: the read goes on with "mine" unknown
-/// (issue #1189).
+/// listing. A `gh` older than the commands need, or `gh auth status`
+/// failing, is the machine's refusal and fails every read. The signed-in
+/// account's login, read once per pass, only tells the operator's own pull
+/// requests from others' (PRD work-tab-pr-lens D-25), so failing to read it
+/// is `Ok(None)`: the read goes on with "mine" unknown (issue #1189).
 fn authentication(node: &dyn NodeLink) -> Result<Option<String>, GhFailure> {
+    supported_version(gh(node, None, &VERSION))?;
     gh(node, None, &["auth", "status"])?;
     let login = match gh(node, None, &VIEWER_LOGIN) {
         Ok(login) => login,
@@ -338,6 +340,66 @@ fn authentication(node: &dyn NodeLink) -> Result<Option<String>, GhFailure> {
         return Ok(None);
     }
     Ok(Some(login.to_owned()))
+}
+
+/// Refuses a `gh` older than [`MINIMUM_VERSION`]: it would refuse one of the
+/// commands a read sends as an unknown field or flag, and that failure named
+/// the field rather than the release to install. Only a version this reads
+/// refuses: a `--version` that failed is followed by `auth status`, which
+/// names a missing `gh` or a lapsed login as it did before, and a version
+/// line this cannot read (an unversioned build prints `DEV`) goes on with a
+/// diagnostic, since the commands themselves still fail if it is too old.
+fn supported_version(answer: Result<String, GhFailure>) -> Result<(), GhFailure> {
+    let output = match answer {
+        Ok(output) => output,
+        Err(failure) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "github",
+                "kind": "gh.version_unread",
+                "message": failure.reason,
+            }));
+            return Ok(());
+        }
+    };
+    match GhVersion::of_output(&output) {
+        Some(version) if version >= MINIMUM_VERSION => Ok(()),
+        Some(version) => Err(GhFailure {
+            category: GithubFailureCategory::Outdated,
+            reason: format!(
+                "gh {version} is older than {MINIMUM_VERSION}, the oldest release Hide reads GitHub with"
+            ),
+        }),
+        None => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "github",
+                "kind": "gh.version_unread",
+                "message": output.lines().next().unwrap_or_default(),
+            }));
+            Ok(())
+        }
+    }
+}
+
+/// What the operator does about a GitHub read that failed for `category`,
+/// for a refusal that rests on that read; `None` for a repository with no
+/// GitHub remote, which nothing fixes. `gh`'s own words stay in the log.
+pub(crate) fn unread_action(category: GithubFailureCategory) -> Option<String> {
+    Some(match category {
+        GithubFailureCategory::NotInstalled => {
+            "GitHub is not read: gh is not installed on the core's machine".to_owned()
+        }
+        GithubFailureCategory::Outdated => format!(
+            "GitHub is not read: gh on the core's machine is older than {MINIMUM_VERSION}; update it"
+        ),
+        GithubFailureCategory::NotLoggedIn => {
+            "GitHub is not read: gh is not signed in on the core's machine; run gh auth login there"
+                .to_owned()
+        }
+        GithubFailureCategory::NetworkOrRateLimit => {
+            "GitHub's last read failed (network or rate limit); retry in a minute".to_owned()
+        }
+        GithubFailureCategory::NoGithubRemote => return None,
+    })
 }
 
 /// States that an extra question went unanswered, with the reason, for the
@@ -385,9 +447,20 @@ fn read_project(
         Err(reason) if reason.category == GithubFailureCategory::NoGithubRemote => {
             return no_github_remote(root_path);
         }
+        // The issues and the repository's identity were read beside the
+        // list and stand on their own: a mission admits a worker on another
+        // machine by that identity, and a list `gh` refused once took it
+        // away with every issue. The previous pull requests are kept as
+        // stale (`keep_previous_reads`).
         Err(reason) => {
+            let (issues, issues_read) = match issues {
+                Ok((issues, _)) => (issues, true),
+                Err(_) => (Default::default(), false),
+            };
             return GithubProjectSnapshot {
                 root_path,
+                issues,
+                issues_read,
                 status: failed(reason),
                 ..GithubProjectSnapshot::default()
             };
@@ -3451,6 +3524,125 @@ mod tests {
         assert!(unresolved.is_empty(), "a link nothing holds is let go");
         read_issues(&node, &root, std::slice::from_ref(&gone), &mut unresolved).unwrap();
         assert_eq!(asked(), 2, "linked again, it is asked again");
+    }
+
+    /// A repository whose `gh` prints `version` and refuses the list of every
+    /// pull request when `list_fails`; it records every command asked.
+    struct Repository {
+        version: &'static str,
+        list_fails: bool,
+        asked: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl Repository {
+        fn new(version: &'static str, list_fails: bool) -> Self {
+            Self {
+                version,
+                list_fails,
+                asked: Mutex::default(),
+            }
+        }
+
+        fn read(&self) -> GithubProjectSnapshot {
+            let request = GithubProjectRequest {
+                links: Vec::new(),
+                root: PathBuf::from("/repo"),
+                repository: Some("acme/project".to_owned()),
+                generation: 1,
+                remotes: None,
+            };
+            read_root(
+                self,
+                &std::cell::OnceCell::new(),
+                &request,
+                &KnownChecks::default(),
+                &mut UnresolvedLinks::new(),
+            )
+        }
+
+        fn asked_for_pull_requests(&self) -> bool {
+            self.asked
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|args| args.starts_with(&["pr".to_owned(), "list".to_owned()]))
+        }
+    }
+
+    impl NodeLink for Repository {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            let Call::Gh { args, .. } = call else {
+                panic!("only gh is asked");
+            };
+            self.asked.lock().unwrap().push(args.clone());
+            let words: Vec<&str> = args.iter().map(String::as_str).collect();
+            let output = |stdout: &str| GhAnswer::Output {
+                stdout: stdout.to_owned(),
+            };
+            let answer = match words.as_slice() {
+                ["--version"] => output(self.version),
+                ["auth", "status"] | ["issue", ..] | ["pr", "list", "--state", "open", ..] => {
+                    output("[]")
+                }
+                ["api", "user", ..] => output("example-user"),
+                ["repo", ..] => output(
+                    r#"{"nameWithOwner":"acme/project","id":"R1","visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}"#,
+                ),
+                ["pr", "list", "--state", "all", ..] if self.list_fails => GhAnswer::Failed {
+                    category: GithubFailureCategory::NetworkOrRateLimit,
+                    reason: "Unknown JSON field: \"closingIssuesReferences\"".to_owned(),
+                },
+                ["pr", "list", ..] => output("[]"),
+                _ => output(r#"{"data":{}}"#),
+            };
+            Ok(serde_json::to_value(answer).unwrap().into())
+        }
+    }
+
+    #[test]
+    fn a_gh_older_than_the_commands_need_is_named_before_any_of_them_is_sent() {
+        let old = Repository::new("gh version 2.58.0 (2024-10-01)\n", false);
+        let project = old.read();
+        assert_eq!(
+            project.status.failure_category,
+            Some(GithubFailureCategory::Outdated)
+        );
+        assert_eq!(
+            project.status.unavailable_reason.as_deref(),
+            Some("gh 2.58.0 is older than 2.72.0, the oldest release Hide reads GitHub with")
+        );
+        assert!(!old.asked_for_pull_requests());
+
+        let current = Repository::new("gh version 2.72.0 (2025-04-30)\n", false);
+        let project = current.read();
+        assert_eq!(project.status.failure_category, None);
+        assert!(project.pull_requests_read && project.issues_read);
+    }
+
+    #[test]
+    fn a_version_gh_does_not_say_leaves_the_refusal_to_auth_status() {
+        for version in ["gh version DEV\n", ""] {
+            let project = Repository::new(version, false).read();
+            assert_eq!(project.status.failure_category, None, "{version:?}");
+            assert!(project.pull_requests_read, "{version:?}");
+        }
+    }
+
+    #[test]
+    fn a_failed_pull_request_list_keeps_the_issues_and_the_repository_read_beside_it() {
+        let project = Repository::new("gh version 2.76.2 (2025-07-30)\n", true).read();
+        assert!(!project.pull_requests_read);
+        assert_eq!(
+            project.read_outcome(),
+            crate::model::GithubReadOutcome::Failed
+        );
+        assert!(project.status.unavailable_reason.is_some());
+        assert!(project.issues_read);
+        assert_eq!(project.issues.repository_id.as_deref(), Some("R1"));
     }
 
     #[test]

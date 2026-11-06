@@ -255,6 +255,33 @@ html[data-view-drag="row-resize"] * {
 }
 
 /*
+ * The ready-update ↑ beside Help (`components/update-ready.tsx`): a faint
+ * primary ring while it stands, and when it appears the ring spreads out
+ * three times and stops, so it is noticed once and then stays still.
+ * `prefers-reduced-motion` keeps the still ring alone. The ring is a box
+ * shadow, as the focus ring is, so it steps aside while the button has focus.
+ */
+.update-ready-ring:not(:focus-visible) {
+  box-shadow: 0 0 0 var(--size-update-ring) color-mix(in oklab, var(--primary) 20%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .update-ready-ring:not(:focus-visible) {
+    animation: update-ready-pulse calc(var(--motion-update-pulse) * 1s) ease-out 3;
+  }
+}
+@keyframes update-ready-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 60%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 calc(var(--size-update-ring) * 3) transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 var(--size-update-ring) color-mix(in oklab, var(--primary) 20%, transparent);
+  }
+}
+
+/*
  * The window's top row is where the desktop app's window is dragged from
  * (PRD sidebar-titlebar-refresh B19): the row is a drag region and every
  * control inside it is not, so a press on the path, an icon or the device

@@ -235,6 +235,8 @@ export type UpdateStatus = {
   prerelease: boolean;
   /** Whether a ready update installs when the app quits; Linux asks for the system password, so only on Restart (D-18). */
   installOnQuit: boolean;
+  /** The ready version whose card the operator closed, kept across launches; a newer ready version shows the card again. */
+  dismissed: string | null;
 };
 
 export type UpdatesBridge = {
@@ -246,6 +248,8 @@ export type UpdatesBridge = {
   restart(): void;
   /** Takes preview releases from the next check on, or stops taking them; never installs a lower version (D-22). */
   setPrerelease(on: boolean): void;
+  /** Closes the ready card for `version`; Help's dot and line and About keep the update. */
+  dismiss(version: string): void;
 };
 
 /**

@@ -163,8 +163,10 @@ impl HostAttempt {
 
 /// A connection attempt that reached the device's node.
 pub(super) enum HostReady {
-    Dialed(Established),
-    Arrived(NodeReady),
+    /// Both boxed: the two carry records of very different sizes, and the
+    /// value only moves between the worker and the runtime.
+    Dialed(Box<Established>),
+    Arrived(Box<NodeReady>),
 }
 
 impl HostReady {
@@ -609,7 +611,10 @@ impl Runtime {
             self.begin_device_connect(device_id);
         }
         let Some(context) = self.worker_context.clone() else {
-            self.fail_device_connect_install(device_id);
+            self.fail_device_connect_before_link(
+                device_id,
+                crate::product_analytics::DeviceFailure::WorkerUnavailable,
+            );
             self.set_host_phase(
                 device_id,
                 HostPhase::Unavailable("The helper worker is unavailable".to_owned()),
@@ -710,12 +715,12 @@ impl Runtime {
                         } else {
                             client
                                 .establish(&consent, &retirement_projects, attempt)
-                                .map(HostReady::Dialed)
+                                .map(|established| HostReady::Dialed(Box::new(established)))
                         };
                         (result, None)
                     }
                     HostStart::Arrived { node, hear_close } => {
-                        (Ok(HostReady::Arrived(node)), Some((hear_close, on_close)))
+                        (Ok(HostReady::Arrived(Box::new(node))), Some((hear_close, on_close)))
                     }
                 };
                 if let Ok(HostReady::Dialed(established)) = &result
@@ -739,7 +744,10 @@ impl Runtime {
                 }
             });
         if let Err(error) = spawned {
-            self.fail_device_connect_install(device_id);
+            self.fail_device_connect_before_link(
+                device_id,
+                crate::product_analytics::DeviceFailure::WorkerUnavailable,
+            );
             self.set_host_phase(
                 device_id,
                 HostPhase::Unavailable(format!("The helper worker could not start: {error}")),
@@ -1008,10 +1016,10 @@ impl Runtime {
                             helper_path,
                             upload,
                             kit,
-                        } = established;
+                        } = *established;
                         (node, Some((identity, installed, helper_path, upload)), kit)
                     }
-                    HostReady::Arrived(node) => (node, None, None),
+                    HostReady::Arrived(node) => (*node, None, None),
                 };
                 self.ingest_device_machine_id(
                     device_id,
@@ -1288,7 +1296,10 @@ impl Runtime {
         if host.generation != generation || !matches!(host.phase, HostPhase::Ready { .. }) {
             return false;
         }
-        self.fail_device_connect_install(device_id);
+        self.fail_device_connect_before_link(
+            device_id,
+            crate::product_analytics::DeviceFailure::HelperLost,
+        );
         self.set_host_phase(
             device_id,
             HostPhase::Unavailable(format!("The device helper disconnected: {reason}")),

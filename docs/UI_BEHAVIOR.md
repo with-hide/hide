@@ -672,7 +672,7 @@ A pane whose agent sleeps (PRD agent-sleep) shows its state in place of the term
 Its second row carries no ask while it sleeps, and typed input to the pane goes nowhere, from the first moment its end begins until the agent is back: keys, a dropped file's path, the find keys and a phone's reply alike ([The phone app](#the-phone-app)).
 Opening the pane's tab by a committed move (a row, a tab, a checkout, a relation) wakes it in the same pane with its conversation; a Recent Panels preview does not, and neither does a click inside the tab already on screen.
 Wake agent, Retry and Start new session take a mouse click as they take Enter: everything a pane draws over its terminal (these bodies, the reconnect caption, the attachment refusal, the header band) lies above every layer the terminal's renderer draws, so a click there never reaches the terminal (`web/src/terminals.ts` gives each terminal its own stacking context).
-The pane menu offers Sleep agent on an agent pane that is awake on this machine, or on the machine the window runs on when that machine's core runs on another machine, disabled with the core's reason when the agent is working, waiting for the operator, of another kind, or has no recorded conversation; a device's pane offers none.
+The pane menu offers Sleep agent on an awake agent's pane of any machine, this one, a device it connects to, or the machine the window runs on when that machine's core runs on another machine, disabled with the core's reason when the agent is working, waiting for the operator, of another kind, of a kind that closes its pane on a machine other than the core's, or has no recorded conversation; on a device that is not connected it is refused at once.
 Archive session (`세션 보관`, PRD session-archive) stands right under Sleep agent, or first in that group when the agent cannot sleep, on a root agent's pane; a delegated child's pane draws it disabled (`맨 위 세션과 함께 보관돼요`), as does an agent whose conversation Hide has not seen and a pane of a device that is not connected, each with its reason; a shell and Hide AI's own agents offer none ([The sidebar's 태스크 list](#tasks-the-보기-slot-and-the-pr-list) says what it does).
 Fork agent and Fork agent to the side follow it in the same group (PRD fork-operator-root): both are offered on a local agent pane with a recorded conversation (`fork.available`) and send `fork_pane` with the placement and the operator as its origin, which starts that conversation again as a new session the operator owns; on an agent that has a fork command but has not reported its conversation yet both are drawn disabled with the core's reason, and on a shell, an agent with no fork command or a device's pane there is neither.
 Fork agent opens the fork in a new tab immediately right of the source's tab in its Agent area, or at the end when the source's tab has closed meanwhile; Fork agent to the side splits the source's tab and puts the fork to the right of the source.
@@ -976,7 +976,7 @@ A mission belongs to the front project when it was made in that project's Worksp
 With no mission in the project the tool is the start guide: a moving picture of a mission (the Conductor, three workers side by side, one decision, a check beside each part as it finishes, purple then green, two checking the demo, then main), `한 번 말하면, 여럿이 나눠서 끝까지`, three dots (나란히 일하고, 다른 모델이 검증, 판단만 나에게), the `/hide-mission` and `$hide-mission` calls, `아무 에이전트 터미널에서 부르면 여기에 미션이 생겨요`, and under it the defaults in three lines (동시에, 어디까지, 검증) with `바꾸기 ›`; there is no field and no example prompt (B3).
 The picture loops in about ten seconds and runs only while it is on screen in a window that shows; with reduced motion it is one finished frame; its colours are the mission tokens in both themes (B4).
 `+` unfolds the same guide above the list; `+` again or its `✕` folds it (B8).
-⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Mission's own controls and values (how many at once, how far, the check strength, the cross-check, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Mission's words in place (B9).
+⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Mission's own controls and values (how many at once, how far, the check strength, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Mission's words in place (B9).
 A mission record that cannot be read is one line, `미션 기록을 읽지 못했어요`, and the reason goes to the diagnostic log (B10).
 
 ## Terminal image attachment boundary
@@ -2150,13 +2150,23 @@ The core keeps one value of each hint, so with several pages open the last page 
 
 ## Help menu
 
-Web owner: `web/src/components/help-menu.tsx`, `diagnosticsInputOf` in `web/src/settings.ts`, `web/src/updates.ts` (PRD sidebar-titlebar-refresh D-11, D-12; PRD auto-update D-03, D-21).
+Web owner: `web/src/components/help-menu.tsx`, `web/src/components/update-ready.tsx`, `diagnosticsInputOf` in `web/src/settings.ts`, `web/src/updates.ts`; host owner of the card's close `desktop/src/main/updater.ts` (PRD sidebar-titlebar-refresh D-11, D-12; PRD auto-update D-03, D-21; the update card is the operator's 2026-11-06 decision).
 
 The footer's `?` opens the Help menu above it: `Keyboard shortcuts` with its chord, which opens the shortcut sheet; `Practice Hide`, which opens the [Practice window](#practice-window) or brings the open one forward; `Copy diagnostics`, which puts About's diagnostics text on the clipboard and says `Copied` in place, or the failure when the clipboard refuses, keeping the menu open either way; `Report an issue`, which opens the repository's new-issue page in the default browser; then, under a separator, the `hide <version>` line in mono, which takes no press.
 The version is the release the app was built as, such as `0.4.0`, and a development build's own version, such as `0.4.0-main.<commit>`.
-When the desktop app has an update ready ([INSTALL.md](INSTALL.md#update)), a dot in the primary color sits on the `?`, whose name and tooltip become `Help · Update ready`, and the last line becomes a menu item, `hide <new version> ready` with `Restart` at its end, which installs the update and reopens the app.
-Nothing else of an update reaches the footer or this menu: looking, downloading and a failure show only in Settings > About.
-A browser tab and the phone have no dot and no update line.
+When the desktop app has an update ready ([INSTALL.md](INSTALL.md#update)), it shows in three places, since macOS and Windows install it only when the app quits and an operator who keeps the app open would otherwise not learn of it:
+
+- **The ↑ button.** A primary ↑ button heads the View, Help and Settings group, above them at the rail's foot or left of them in the sidebar footer while the rail is hidden, and stays until the restart, with no close; its name and tooltip are `hide <new version> ready` (`hide <버전> 준비됨`). When it appears a primary ring spreads out from it three times and stops, and a faint ring stays; with reduced motion only the faint ring shows.
+- **The card.** The first time a version is ready, its card opens by itself beside the button (to its right from the rail, above it in the footer): `Update ready` (`업데이트 준비됨`) with a close ✕, `Downloaded hide <new version>.` (`hide <버전> 받아 놨어요.`), `Restarting keeps your agents and panes running.` (`재시작해도 에이전트와 터미널은 그대로예요.`), then `Restart now` (`지금 재시작`), `Later` (`나중에`) and `What's new` (`바뀐 점`), which opens that version's release page on GitHub in the default browser.
+  Opened by itself it takes no keyboard focus and stays through Escape and clicks elsewhere, so it never takes a key meant for a pane; ✕ or Later folds it into the button.
+  The close is kept per version in the desktop profile, so the card does not open by itself again for that version, after a relaunch either, and opens once more when a newer version is ready; pressing the button opens it again as an ordinary popover, which Escape or a click elsewhere closes.
+- **Help.** A dot in the primary color sits on the `?`, whose name and tooltip become `Help · Update ready`, and the menu opens with the update: `hide <new version> is ready` (`hide <버전> 준비됐어요`), `Agents and panes keep running · What's new` and `Restart now`, above the usual items; the last line stays this app's own `hide <version>`.
+
+Every `Restart now` installs the update and reopens the app.
+The restart sentence holds because the reopened app only replaces the daemon: each pane's holder outlives it and the new daemon adopts it, as long as a new build still speaks to the holders already running (`OLDEST_HOLDER_VERSION` in `hide-holder-protocol`; [ARCHITECTURE.md](ARCHITECTURE.md#the-pane-holder)), and the package lane's update test checks the panes and their processes across a real Restart (`desktop/e2e/packaged-update.spec.ts`).
+Nothing else of an update reaches the sidebar or this menu: looking, downloading and a failure show only in Settings > About.
+With the sidebar hidden none of the three shows, as Help does not.
+A browser tab and the phone have no button, card, dot or update line.
 
 ## Moving a Herdr session into Hide
 
@@ -2530,7 +2540,7 @@ The page reuses the settings group, row and switch parts; loading is an ellipsis
 
 GitHub is the GitHub row: its description, whether `gh` is signed in, and Check again, which asks the core to read GitHub again for the registered projects (PRD settings-left-nav B8).
 The core reads GitHub with its own machine's `gh`, so in a window on another machine a signed-out `gh` is named on the core's machine ("Not signed in to gh on Mac mini") with the command that fixes it there (Run on Mac mini, `gh auth login`, with Copy) in place of `gh`'s own reason; on the core's own machine the row says it plainly ("Not signed in to gh") with the same command under Run in a terminal (PRD core-host-node-move B15, B1).
-`gh`'s own reason stays in the core's log on every machine; a missing `gh` has no one command that installs it on every system, so its row names the state only.
+`gh`'s own reason stays in the core's log on every machine; a missing `gh` has no one command that installs it on every system, so its row names the state only, and so does a `gh` older than Hide's commands need (`gh가 오래됐어요. 업데이트하세요`), which the PR list and the phone's PR screen say in the same words.
 Hide has no GitHub sign-in of its own, so there is no connect or reconnect action beyond that read.
 
 ### About
@@ -2549,7 +2559,7 @@ In the desktop app, an Updates row and a preview switch sit under the `hide` ver
 | Failed | `Couldn't check for updates` or `Couldn't update`, with the reason in the app's log | `Check again` |
 | Off | `Updates are off in development builds`, or on macOS `Move hide to Applications to get updates` for an app on the disk image or in a folder it cannot write | none |
 
-A ready update stays ready while a later check looks; a newer release that check finds is downloaded in its place, so the row shows that download and the dot and Help's line return with the newer version once it is ready, since the updater keeps one pending update.
+A ready update stays ready while a later check looks; a newer release that check finds is downloaded in its place, so the row shows that download, the ↑ button, the dot and Help's update leave meanwhile, and they return with the newer version once it is ready, with its card opening once, since the updater keeps one pending update.
 `Get preview versions (rc)`, with a note that turning it off never goes back to a lower version, is off at first, kept in the desktop profile, and cannot be turned while updates are off.
 `Check for updates…` in the app menu (macOS) or the Help menu (Windows, Linux) opens About and looks at once.
 A browser tab and the phone show neither row.
@@ -2699,18 +2709,20 @@ An agent installed later appears in these rows off and is never turned on by a p
 ### Mission
 
 Settings › Mission (`미션`; the tab was named Conductor until the skill and the map became hide-mission), in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
+The page's words call the agent that runs a mission the mission (`미션이 알아서 골라요`, `미션이 하는 일`) and never Conductor, a name it does not introduce; it says `워크트리` and `브랜치` for what the cleanup removes and keeps, `검증` for the section's review and run check (`리뷰`, `실행 확인`), and `생각 깊이` for a candidate's effort, as Desk's agent bar does.
 The page's title carries a `?` that opens the one window telling a mission from a task, the same one a mission's page and a task's page open from the kind mark in their head (`미션`, `태스크`); it shows both side by side, a Conductor sending work to three workers at once and one agent finishing its steps in turn, each as a short picture that plays when the window opens and again on `다시 보기`, lights the side the press came from (Mission, here), and with the reduced-motion setting on draws each picture finished and offers no replay; Esc or a press outside closes it ([A mission's map and a plan's map](#tasks-the-보기-slot-and-the-pr-list)).
 `동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
-`머지되면 작업 공간 정리` (Clean up a worktree once merged), right under them and on by default, is a switch with one line under it: `PR이 머지된 갈래의 워크트리와 빌드 캐시를 지워요. 고치던 파일이 남아 있거나 쓰는 중이면 그대로 둬요.`
+`머지되면 워크트리 정리` (Clean up a worktree once merged), right under them and on by default, is a switch with one line under it: `PR이 머지된 브랜치의 워크트리와 빌드 캐시를 지워요. 고치던 파일이 남아 있거나 쓰는 중이면 그대로 둬요.`
 On, a done node whose pull request GitHub reports merged has that branch's worktree removed with its build cache when its tree is clean and no agent pane or running program is in it, the branch always kept; a worktree that holds changes or is in use stays, is named in the diagnostic log and stays in the project's disk cleanup (`머지됨 N → 정리`), and nothing is removed while GitHub's answer is missing ([hide-private missions.md: What Hide settles in a mission by itself](delivery.md#missions)).
 Off, missions delete nothing. Unlike the values below, the switch applies to every mission at once, a running or closed one included.
 `작업자 후보` lists the agents a Conductor chooses workers from, at most 16: each row's agent, its model from the start panel's list (disabled with why when that list cannot be read), its effort automatic or fixed, and what it is for; an agent this machine has not installed is dimmed with `설치 안 됨`.
 With no candidates the Conductor chooses among the installed agents; with some, Hide refuses a worker that is none of them (`mission_candidate_refused`, [delivery.md: Missions](delivery.md#missions)).
-`검증` holds two controls, and the checkers come from the candidates above.
-`검증 강도` is a new mission's verification strength, `빠르게`, `보통` (the default) or `꼼꼼하게`, one segmented choice with what it has the Conductor do, how often a node is reviewed again and the work it suits under it, as `hide mission help` states the rules; `검사는 만든 에이전트와 다른 종류로 (Claude면 Codex)` (on by default) has the Conductor prefer a checker of a different kind of agent than the node's worker, shown on the mission tool's defaults as `교차 검사`.
+`검증` holds one control, and the checkers come from the candidates above.
+`검증 강도` is a new mission's verification strength, `빠르게`, `보통` (the default) or `꼼꼼하게`, one segmented choice with what it has the Conductor do, how often a node is reviewed again and the work it suits under it, as `hide mission help` states the rules.
+The page has no switch for which kind of agent checks: the Conductor always prefers a checker of a different kind of agent than the node's worker when the candidates have one, by `hide mission help`; a setting kept with the switch that once chose it reads without it.
 It is only the default: the Conductor proposes each mission's strength in its plan and changes it when the operator says so, before or during the mission, and the map's head shows it ([A mission's map](#tasks-the-보기-slot-and-the-pr-list)).
-A setting kept before strength (the review and verify defaults) reads as `보통`, with the switch off only where the operator had turned the cross-check off.
-Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope, candidates, strength and switch it was created with.
+A setting kept before strength (the review and verify defaults) reads as `보통`.
+Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope, candidates and strength it was created with.
 
 ### Hide AI
 

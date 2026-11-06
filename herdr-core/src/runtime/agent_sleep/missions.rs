@@ -13,7 +13,6 @@ use serde_json::json;
 use super::super::Runtime;
 use super::ends_left;
 use super::letters::Stage;
-use crate::agent_sleep::SleepMachine;
 use crate::missions::{Mission, MissionBook, MissionNode};
 use crate::model::AgentActionRefusal;
 
@@ -236,9 +235,7 @@ impl Runtime {
         let pane = &actor.pane_id;
         let device = crate::address::pane_device(pane);
         let machine = self.sleep_machine_of_pane(pane);
-        if machine == SleepMachine::Device
-            || device.is_none() && actor.device_id != self.node.as_str()
-        {
+        if device.is_none() && actor.device_id != self.node.as_str() {
             return Verdict::Drop("device");
         }
         let Some(agent) = self
@@ -266,7 +263,6 @@ impl Runtime {
                 | AgentActionRefusal::WaitingForYou
                 | AgentActionRefusal::UnknownActivity,
             ) => return Verdict::Keep,
-            Some(AgentActionRefusal::Device) => return Verdict::Drop("device"),
             Some(AgentActionRefusal::Unsupported) => return Verdict::Drop("unsupported"),
             Some(AgentActionRefusal::CoreMachineOnly) => return Verdict::Drop("core_machine_only"),
             Some(AgentActionRefusal::Asleep) => return Verdict::Drop("asleep"),

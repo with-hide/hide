@@ -402,6 +402,27 @@ function Store([string]$path, [long]$count) {
     $null -ne $file -and $whole
 }
 
+# Exactly $count bytes of the link, a gzip stream the node packed, unpacked
+# into $path: they land beside it first, since a stream that unpacks reads
+# rather than takes writes. Answers whether all of it arrived and unpacked;
+# the caller checks the unpacked file's digest.
+function Store-Packed([string]$path, [long]$count) {
+    $packed = "$path.gz"
+    try {
+        if (-not (Store $packed $count)) { return $false }
+        $from = $null; $unpack = $null; $to = $null
+        try {
+            $from = [IO.File]::OpenRead($packed)
+            $unpack = New-Object IO.Compression.GZipStream($from, [IO.Compression.CompressionMode]::Decompress)
+            $to = [IO.File]::Create($path, 65536, [IO.FileOptions]::None, (Private-File))
+            $unpack.CopyTo($to, 65536)
+            $true
+        } catch { $false } finally {
+            foreach ($stream in @($to, $unpack, $from)) { if ($null -ne $stream) { $stream.Dispose() } }
+        }
+    } finally { Remove-Quietly $packed }
+}
+
 # Renames $from to $to, replacing a file there, so $to only ever holds a
 # whole copy.
 function Replace-Into([string]$from, [string]$to) {
@@ -506,7 +527,7 @@ function Remove-Stale([string]$folder) {
     } catch {}
 }
 
-function Step-Put([string]$relative, [string]$digest, [string]$size) {
+function Step-Put([string]$relative, [string]$digest, [string]$size, [bool]$packed) {
     if (-not $state.Root) { Say fail 'no install folder was chosen'; exit 65 }
     $bad = Below $relative $true
     if ($bad) { [void](Copy-Bytes ([long]$size) $null); Say fail $bad; return }
@@ -515,7 +536,8 @@ function Step-Put([string]$relative, [string]$digest, [string]$size) {
     $temp = [IO.Path]::Combine($folder, ".upload-$([IO.Path]::GetFileName($target))-$PID")
     Remove-Stale $folder
     $state.Pending = $temp
-    if ((Store $temp ([long]$size)) -and (Sum $temp) -eq $digest -and (Replace-Into $temp $target)) {
+    $arrived = if ($packed) { Store-Packed $temp ([long]$size) } else { Store $temp ([long]$size) }
+    if ($arrived -and (Sum $temp) -eq $digest -and (Replace-Into $temp $target)) {
         $state.Pending = $null
         Say ok
     } else {
@@ -703,7 +725,7 @@ function Probe {
     $arch = ([string]$arch).ToLowerInvariant()
     $homeFolder = [string]$env:USERPROFILE
     if ($homeFolder) { $homeFolder = Wire $homeFolder }
-    Say probe ([Environment]::UserName) $homeFolder Windows $arch $machine yes
+    Say probe ([Environment]::UserName) $homeFolder Windows $arch $machine yes gzip
 }
 
 try {
@@ -713,7 +735,8 @@ try {
         switch -CaseSensitive ($fields[0]) {
             'root' { Step-Root $fields[1] }
             'held' { Step-Held $fields[1] }
-            'put' { Step-Put $fields[1] $fields[2] $fields[4] }
+            'put' { Step-Put $fields[1] $fields[2] $fields[4] $false }
+            'zput' { Step-Put $fields[1] $fields[2] $fields[4] $true }
             'start' { Step-Start $fields[1] $fields[2] }
             'run' { Step-Run $fields[1] $fields[2] }
             'fput' { Step-Fput $fields[1] $fields[2] $fields[3] }

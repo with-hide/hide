@@ -10,6 +10,7 @@ import type { AccentName } from "./theme";
 import { kitWhyText } from "./kitWhy";
 import type { AgentRow, CoreDiagnostic, Device, DeviceHost, DeviceProblem, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
+import { GH_REFUSAL_KEY, isGhRefusal } from "./githubFailure";
 import { registeredName } from "./screenMachine";
 import { redact } from "./redact";
 
@@ -72,14 +73,13 @@ export function githubAccess(workspaces: readonly Workspace[], devices: readonly
     .filter((status) => status !== undefined);
   if (statuses.some((status) => status.last_success_at_unix_ms != null && !status.stale)) return { state: "connected" };
   const failure =
-    statuses.find((status) => status.failure_category === "not_installed" || status.failure_category === "not_logged_in") ??
+    statuses.find((status) => isGhRefusal(status.failure_category)) ??
     statuses.find((status) => status.failure_category != null && status.failure_category !== "no_github_remote");
   return failure?.failure_category ? { state: "failed", category: failure.failure_category } : null;
 }
 
 const GH_FAILURE_KEY: Partial<Record<GithubFailureCategory, MessageKey>> = {
-  not_installed: "issueSettings.ghNotInstalled",
-  not_logged_in: "issueSettings.ghNotLoggedIn",
+  ...GH_REFUSAL_KEY,
   network_or_rate_limit: "issueSettings.readFailed",
 };
 

@@ -55,9 +55,6 @@ const QUIT_PRESSES: usize = 3;
 /// follows its hint inside the shortest double-press window declared (Claude
 /// Code's 800 ms, `LaunchDialect::quit_again`).
 const QUIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// `agent.start` waits this long for the agent to be ready; the read waits a
-/// little longer so a slow start is not reported as an unanswered one.
-const AGENT_START_TIMEOUT_MS: u64 = 120_000;
 
 /// Why an agent was not ended. `Busy` is the agent having started working, or
 /// waiting for the operator, since the decision was made: nothing was
@@ -447,7 +444,7 @@ pub(crate) fn start_agent(
         &format!("herdr-core:agent-sleep:{}:wake", request.pane_id),
         crate::agent_start::ShellStart::Plain,
         &start,
-        Duration::from_millis(AGENT_START_TIMEOUT_MS + 5_000),
+        crate::agent_start::START_ANSWER_WAIT,
         &|| Ok(()),
     ) {
         Ok(_) => {

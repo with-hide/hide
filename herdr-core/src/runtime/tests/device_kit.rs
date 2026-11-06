@@ -225,7 +225,7 @@ fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
         runtime.ingest_host_established(
             DEVICE,
             generation,
-            Ok(hosts::HostReady::Dialed(connected)),
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
         );
     }
     let state = kit(&shared);
@@ -885,7 +885,11 @@ fn a_contract_3_consent_is_carried_and_bound_to_the_machine_that_answers() {
     let mut connected = established_with_terminals();
     connected.identity.machine_id = Some("4c4c4544-0042".to_owned());
     connected.identity.host_key_sha256 = String::new();
-    runtime.ingest_host_established(DEVICE, generation, Ok(hosts::HostReady::Dialed(connected)));
+    runtime.ingest_host_established(
+        DEVICE,
+        generation,
+        Ok(hosts::HostReady::Dialed(Box::new(connected))),
+    );
     let bound = runtime
         .snapshot
         .ui_state
@@ -2083,7 +2087,7 @@ fn a_devices_terminals_ride_its_link_and_end_with_it() {
     runtime.ingest_host_established(
         DEVICE,
         generation,
-        Ok(hosts::HostReady::Dialed(established)),
+        Ok(hosts::HostReady::Dialed(Box::new(established))),
     );
     assert_eq!(terminals.devices(), ["install:studio"]);
 
@@ -2123,7 +2127,7 @@ fn a_devices_windows_drives_are_what_its_helper_reports() {
         runtime.ingest_host_established(
             DEVICE,
             generation,
-            Ok(hosts::HostReady::Dialed(connected)),
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
         );
         assert_eq!(
             runtime.host_snapshot(DEVICE).windows_drives.as_deref(),
@@ -2254,7 +2258,9 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     runtime.ingest_host_established(
         DEVICE,
         first,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session));
     assert_eq!(attaches(&terminals), 1, "the shown pane attached");
@@ -2274,7 +2280,9 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     runtime.ingest_host_established(
         DEVICE,
         second,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     assert_eq!(
         terminals.devices(),
@@ -2396,7 +2404,9 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
     runtime.ingest_host_established(
         DEVICE,
         first,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
     runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
@@ -2489,7 +2499,7 @@ fn a_helper_link_that_closed_during_establish_is_retried_not_stored_ready() {
     runtime.ingest_host_established(
         DEVICE,
         generation,
-        Ok(hosts::HostReady::Dialed(established(host, None))),
+        Ok(hosts::HostReady::Dialed(Box::new(established(host, None)))),
     );
     assert!(
         matches!(
@@ -2563,7 +2573,9 @@ fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
     runtime.ingest_host_established(
         DEVICE,
         generation,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
     report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
@@ -2608,10 +2620,11 @@ impl crate::product_analytics::Sink for DeviceStatistics {
     }
 }
 
-/// A completed bootstrap is one attempt, even when status reads, snapshots,
-/// or another completion arrive. A reconnect is a new attempt.
+/// A completed bootstrap is one outcome, even when status reads, snapshots,
+/// or another completion arrive. A reconnect that is ready again, as after
+/// the device slept, is the same state and sends nothing.
 #[test]
-fn device_connect_statistics_count_each_ready_bootstrap_once() {
+fn device_connect_statistics_count_a_ready_device_once_across_reconnects() {
     use crate::product_analytics::{DeviceOutcome, DevicePlatform, Event};
     let shared = with_consent(None);
     let statistics = Arc::new(DeviceStatistics::default());
@@ -2631,7 +2644,7 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
             runtime.ingest_host_established(
                 DEVICE,
                 generation,
-                Ok(hosts::HostReady::Dialed(connected)),
+                Ok(hosts::HostReady::Dialed(Box::new(connected))),
             );
         }
         runtime.refresh_device_snapshots();
@@ -2648,15 +2661,66 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
     }
     assert_eq!(
         *statistics.0.lock().unwrap(),
+        [Event::DeviceConnected {
+            outcome: DeviceOutcome::Ready,
+            platform: DevicePlatform::MacosAarch64,
+        }]
+    );
+}
+
+/// An unreachable device is retried every minute while it stays off; only
+/// a change of outcome is sent, so its retries count as one failure.
+#[test]
+fn device_connect_statistics_send_only_a_changed_outcome() {
+    use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
+    let shared = with_consent(None);
+    let statistics = Arc::new(DeviceStatistics::default());
+    let helper = KitDevice::answering(Ok(installed()));
+    let unreachable = crate::remote::EstablishError::Ssh(hide_node_link::device::SshFailure {
+        problem: hide_node_link::device::SshProblem::Unreachable,
+        detail: "ssh: connect to host 192.0.2.1 port 22: Operation timed out".to_owned(),
+    });
+    let fail = |times: usize| {
+        let mut runtime = shared.lock().unwrap();
+        for _ in 0..times {
+            runtime.begin_device_connect(DEVICE);
+            runtime.fail_device_connect(DEVICE, &unreachable);
+        }
+    };
+    let ready = || {
+        let mut runtime = shared.lock().unwrap();
+        runtime.close_device_host(DEVICE, "fixture reconnect");
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+        runtime.begin_device_connect(DEVICE);
+        let generation = runtime.device_host_generation(DEVICE);
+        let mut connected = established(helper.clone(), None);
+        connected.kit = Some(Ok(Box::new(installed())));
+        runtime.ingest_host_established(
+            DEVICE,
+            generation,
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
+        );
+    };
+    shared.lock().unwrap().product_analytics = Some(statistics.clone());
+    fail(3);
+    ready();
+    settle(&shared);
+    fail(2);
+    let failed = Event::DeviceConnected {
+        outcome: DeviceOutcome::Failed(DeviceFailure::Ssh(
+            hide_node_link::device::SshProblem::Unreachable,
+        )),
+        platform: DevicePlatform::Unknown,
+    };
+    assert_eq!(
+        *statistics.0.lock().unwrap(),
         [
+            failed,
             Event::DeviceConnected {
                 outcome: DeviceOutcome::Ready,
                 platform: DevicePlatform::MacosAarch64,
             },
-            Event::DeviceConnected {
-                outcome: DeviceOutcome::Ready,
-                platform: DevicePlatform::MacosAarch64,
-            },
+            failed,
         ]
     );
 }
@@ -2665,7 +2729,7 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
 /// the next connection is an attempt of its own that can succeed.
 #[test]
 fn device_connect_statistics_settle_failure_and_retry_once() {
-    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
     let helper = KitDevice::answering(Err("private kit failure detail".to_owned()));
     let shared = with_consent(Some(helper.clone()));
     let statistics = Arc::new(DeviceStatistics::default());
@@ -2681,7 +2745,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
     assert_eq!(
         *statistics.0.lock().unwrap(),
         [Event::DeviceConnected {
-            outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+            outcome: DeviceOutcome::Failed(DeviceFailure::KitFailed),
             platform: DevicePlatform::MacosAarch64,
         }]
     );
@@ -2705,7 +2769,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
         runtime.ingest_host_established(
             DEVICE,
             generation,
-            Ok(hosts::HostReady::Dialed(connected)),
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
         );
     }
     settle(&shared);
@@ -2713,7 +2777,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
         *statistics.0.lock().unwrap(),
         [
             Event::DeviceConnected {
-                outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+                outcome: DeviceOutcome::Failed(DeviceFailure::KitFailed),
                 platform: DevicePlatform::MacosAarch64,
             },
             Event::DeviceConnected {
@@ -2727,7 +2791,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
 /// A failure before SSH can report a platform still has one bounded outcome.
 #[test]
 fn device_connect_statistics_include_early_install_failure() {
-    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
     let mut runtime = runtime();
     let statistics = Arc::new(DeviceStatistics::default());
     runtime.product_analytics = Some(statistics.clone());
@@ -2743,7 +2807,7 @@ fn device_connect_statistics_include_early_install_failure() {
     assert_eq!(
         *statistics.0.lock().unwrap(),
         [Event::DeviceConnected {
-            outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+            outcome: DeviceOutcome::Failed(DeviceFailure::NoTransport),
             platform: DevicePlatform::Unknown,
         }]
     );

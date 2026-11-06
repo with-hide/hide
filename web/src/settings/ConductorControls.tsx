@@ -96,12 +96,6 @@ export function StrengthControl({ settings, send }: Pick<ConductorEdit, "setting
   );
 }
 
-/** Whether a checker comes from another company than the node's worker. */
-export function OtherVendorControl({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
-  const { t } = useInterfaceTranslation();
-  return <Switch checked={settings.other_vendor} aria-label={t("conductor.otherVendor")} onCheckedChange={(other_vendor) => send({ other_vendor })} data-conductor-other-vendor={String(settings.other_vendor)} />;
-}
-
 /** Whether a done node's worktree is removed once its pull request merged, when it is clean and nothing runs in it. */
 export function CleanMergedControl({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
   const { t } = useInterfaceTranslation();

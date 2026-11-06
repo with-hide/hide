@@ -31,7 +31,7 @@ const SHOWN_WITHIN: Duration = Duration::from_secs(30);
 /// How long a start may take to reach its program, the start wait a spawn
 /// gives an agent's screen.
 #[cfg(windows)]
-const START_WITHIN: Duration = Duration::from_secs(120);
+const START_WITHIN: Duration = crate::agent_start::AGENT_START_DEADLINE;
 
 /// A command line for the engine's default shell that prints `word-42`,
 /// spelled so that the line itself does not contain what it prints.
@@ -1414,7 +1414,7 @@ fn resumes_through_the_nodes_file(shell: &str) {
     // The resume waits for the restarted shell, then is typed key by key.
     until_within(
         "the resumed program records its words",
-        Duration::from_secs(120),
+        crate::agent_start::AGENT_START_DEADLINE,
         || words().is_some(),
     );
     assert_eq!(

@@ -47,6 +47,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_checker_is_worker"
             | "mission_external_invalid"
             | "mission_machine_node_refused"
+            | "mission_machine_no_repository"
             | "mission_nodes_unfinished"
             | "plan_invalid"
             | "plan_order_refused"
@@ -850,9 +851,6 @@ fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Agen
 /// What a caller does about each refusal `hide agent sleep` gives.
 pub fn sleep_next_action(code: &str) -> &'static str {
     match code {
-        "agent_sleep_device" => {
-            "Agents on a device Hide connects to cannot sleep; leave it, or end it with hide agent end"
-        }
         "agent_sleep_unsupported" => {
             "This kind of agent cannot sleep; leave it, or end its registration with hide agent end"
         }

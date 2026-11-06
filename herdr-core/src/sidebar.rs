@@ -241,6 +241,12 @@ pub struct SessionAgentPayload {
     /// (`agent_state::agent_starting`).
     #[serde(default)]
     pub launch_pending: bool,
+    /// The engine typed this agent's start and its program has not shown in
+    /// the pane yet, within the start's deadline: listed, and not yet
+    /// running. Unlike `launch_pending`, which a shown program asking a
+    /// question keeps, it ends when the program shows or the deadline passes.
+    #[serde(default)]
+    pub start_unshown: bool,
     #[serde(default)]
     pub tokens: BTreeMap<String, Value>,
     /// The core's label for this agent's current session, if proven.
@@ -726,7 +732,7 @@ pub(crate) fn provider_name(kind: Option<&str>) -> String {
     }
 }
 
-fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, String> {
+pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, String> {
     let pane_id = non_empty(agent.pane_id.as_deref().or(agent.id.as_deref()))
         .map(str::to_owned)
         .ok_or_else(|| "session agent is missing a pane id".to_owned())?;

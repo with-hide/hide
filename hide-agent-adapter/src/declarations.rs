@@ -9,7 +9,7 @@ const fn folder(definition: &Builtin) -> &'static [&'static str] {
         None => panic!("a built-in agent with Hide's features names its home"),
     }
 }
-use composer::{Composer, Placeholder, Region, Style};
+use composer::{Composer, LineCount, PasteMark, Placeholder, Region, Style};
 const GROK_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Grok discards SessionStart and UserPromptSubmit output; the installed path cannot inject guidance or Memory.",
     evidence: "docs/agent-hooks.md#which-agents-hide-supports",
@@ -299,6 +299,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 text: "",
                 style: Style::Dim,
             }],
+            // Claude Code counts a paste's line breaks: twelve lines show `+11
+            // lines` (`tests/fixtures/composer/claude-3-pasted.ansi`).
+            pasted: Some(PasteMark {
+                words: "[Pasted text #{n} +{count} lines]",
+                count: LineCount::Breaks,
+            }),
         }),
         // Claude Code's messaging socket is not a rung: Claude Code holds a
         // message for a session that bypasses permission prompts unless its
@@ -400,6 +406,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 text: "Ask Codex to do anything",
                 style: Style::Dim,
             }],
+            // Codex shows a paste as its text.
+            pasted: None,
         }),
         input: &[
             InputRung::AgentApi(AgentApi::LaunchPrompt),
@@ -510,6 +518,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 text: "",
                 style: Style::Italic,
             }],
+            // (`tests/fixtures/composer/grok-3-pasted.ansi`)
+            pasted: Some(PasteMark {
+                words: "[Pasted: {count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // Grok 1.0.70 holds `-- <prompt>` through its folder trust question,
         // and 1.0.52 shows none (measured 2026-11-02).
@@ -624,6 +637,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 text: "Ask anything…",
                 style: Style::Rgb(128, 128, 128),
             }],
+            // (`tests/fixtures/composer/opencode-3-pasted.ansi`; a 18-line brief
+            // showed `~18 lines` on Windows, agent journey run 41951563729)
+            pasted: Some(PasteMark {
+                words: "[Pasted ~{count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // OpenCode 2.0.29 submits a `--prompt=<prompt>` as soon as its model
         // list arrives, without waiting for the configuration that names the
@@ -735,6 +754,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             marker: &[],
             trailer: 0,
             empty: &[],
+            // (`tests/fixtures/composer/pi-3-pasted.ansi`)
+            pasted: Some(PasteMark {
+                words: "[paste #{n} +{count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // Pi 1.0.4 holds `-- <prompt>` through its folder trust question,
         // but reads one that starts with `@` as a file and exits when there
@@ -846,6 +870,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 text: "⇧⇥ to change thinking effort",
                 style: Style::Any,
             }],
+            // omp marks a paste with its number alone (`📄 #1`), which no count ties to the text.
+            pasted: None,
         }),
         // omp 18.7.0 holds `-- <prompt>` through its first-run setup and its
         // update notice (measured 2026-11-02).
@@ -961,6 +987,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             marker: &[">"],
             trailer: 0,
             empty: &[],
+            // (`tests/fixtures/composer/agy-3-pasted.ansi`)
+            pasted: Some(PasteMark {
+                words: "[Pasted text #{n} +{count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // agy 1.4.12 holds `-i` through its folder trust question (measured
         // 2026-11-01). Its running TUI is also a language server on a

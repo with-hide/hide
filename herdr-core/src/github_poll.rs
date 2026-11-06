@@ -480,6 +480,7 @@ fn pause(state: &mut PollState, project: &PollProject, kind: &'static str, now: 
 fn failure_kind(category: GithubFailureCategory) -> &'static str {
     match category {
         GithubFailureCategory::NotInstalled => "gh_missing",
+        GithubFailureCategory::Outdated => "gh_outdated",
         GithubFailureCategory::NotLoggedIn => "not_logged_in",
         GithubFailureCategory::NoGithubRemote => "no_remote",
         GithubFailureCategory::NetworkOrRateLimit => "network_or_rate_limit",

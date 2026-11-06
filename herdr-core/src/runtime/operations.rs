@@ -107,8 +107,9 @@ pub(super) const GEOMETRY_QUEUE_LIMIT: usize = 8;
 
 /// A start holds the tab through creation, durable identity saves, unzoom,
 /// move and authoritative confirmation. Bound each wait/lease by the existing
-/// two-minute agent-start effect budget, rather than a single five-second RPC.
-pub(super) const CHECKOUT_START_GEOMETRY_TIMEOUT_MS: u64 = 120_000;
+/// agent start's deadline, rather than a single five-second RPC.
+pub(super) const CHECKOUT_START_GEOMETRY_TIMEOUT_MS: u64 =
+    crate::agent_start::AGENT_START_DEADLINE.as_millis() as u64;
 
 #[derive(Clone, Debug)]
 pub(super) enum GeometryRequest {

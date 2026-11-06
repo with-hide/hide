@@ -211,7 +211,10 @@ impl Runtime {
             Err(message) => {
                 if registration.origin.core_redials() {
                     self.begin_device_connect(&device_id);
-                    self.fail_device_connect_install(&device_id);
+                    self.fail_device_connect_before_link(
+                        &device_id,
+                        crate::product_analytics::DeviceFailure::NoTransport,
+                    );
                 }
                 crate::diagnostic!(serde_json::json!({
                     "component": "remote_session_sync",
@@ -228,7 +231,10 @@ impl Runtime {
         if self.worker_context.is_none() {
             if registration.origin.core_redials() {
                 self.begin_device_connect(&device_id);
-                self.fail_device_connect_install(&device_id);
+                self.fail_device_connect_before_link(
+                    &device_id,
+                    crate::product_analytics::DeviceFailure::WorkerUnavailable,
+                );
             }
             return self.ingest_remote_session(
                 &device_id,
@@ -929,6 +935,7 @@ impl Runtime {
             .device_registrations
             .retain(|device| device.id != device_id);
         self.delivery_panes.remove(device_id);
+        self.forget_device_connect_outcome(device_id);
         // Hide's kit comes off the device on its own helper
         // connection, which the disconnect below leaves open for it.
         let kit_removal = self.queue_device_kit_removal(&registration);

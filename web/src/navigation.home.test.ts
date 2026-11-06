@@ -69,8 +69,8 @@ describe("the device's Home is no project (PRD home-device-rail D-13, B16)", () 
     expect(allProjectsCount(REST, "local")).toBe(1);
     expect(allProjectsCount(REST, "mini")).toBe(1);
     expect(allProjectsCount(REST)).toBe(2);
-    expect(mainSections(REST, [], "local").flatMap((section) => section.projects.map((project) => project.id))).toEqual(["a"]);
-    expect(mainSections(REST, []).map((section) => section.device.id)).toEqual(["local", "mini"]);
+    expect(mainSections(REST, "local").map((section) => section.device.id)).toEqual(["local"]);
+    expect(mainSections(REST).map((section) => section.device.id)).toEqual(["local", "mini"]);
     expect(boardProjects(REST, [], "mini").map((row) => row.workspace.id)).toEqual(["remote:mini:web"]);
     expect(boardProjects(REST, []).map((row) => row.workspace.id)).toEqual(["a", "remote:mini:web"]);
   });

@@ -33,8 +33,9 @@ const OUTBOUND_QUEUE: usize = 32;
 /// the list a parent's children hang under, with devices in one recency
 /// order (PRD mobile-companion-ui D-18). 3 adds a page View's screenshot, a
 /// `look_head` of mode `page`. 4 adds the pull request tab's `prs` frame and
-/// its requests, which a bundle that draws the tab needs a Hide that sends.
-/// The phone screens that follow ride on the same number, and
+/// its requests. An addition (a frame type, an optional field, a request sent
+/// only from what those draw) keeps the number; it is raised only for a change
+/// an older side would misread (`docs/ARCHITECTURE.md`, the phone app), and
 /// `web/src/mobile/phoneVersion.ts` carries it too.
 pub const PHONE_PROTOCOL: u32 = 4;
 

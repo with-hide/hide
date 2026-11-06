@@ -178,7 +178,7 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
              printf 'HIDE1\\tscript\\tpowershell\\n'\n\
              IFS= read -r size\n\
              head -c \"$size\" > '{record}.script'\n\
-             printf 'HIDE1\\tprobe\\t사용자\\tD:/계정/사용자\\tWindows\\tamd64\\t4C4C4544-0042\\tyes\\n'\n",
+             printf 'HIDE1\\tprobe\\t사용자\\tD:/계정/사용자\\tWindows\\tamd64\\t4C4C4544-0042\\tyes\\tgzip\\n'\n",
             record = record.display()
         ),
     );
@@ -234,10 +234,22 @@ fn the_powershell_wrapper_holds_nothing_a_login_shell_reads_inside_quotes() {
 fn a_probe_answer_names_only_a_machine_hide_runs_on() {
     let fields = |line: &str| line.split('\t').map(str::to_owned).collect::<Vec<_>>();
     let facts = read_probe(&fields(
-        "probe\talice\t/home/alice\tLinux\taarch64\tAB-12\tyes",
+        "probe\talice\t/home/alice\tLinux\taarch64\tAB-12\tyes\tgzip",
     ))
     .unwrap();
     assert_eq!(facts.machine_id, "ab-12");
+    assert!(
+        facts.unpacks,
+        "a device that names gzip takes its files packed"
+    );
+    let unpacked = read_probe(&fields(
+        "probe\talice\t/home/alice\tLinux\taarch64\tAB-12\tyes\t-",
+    ))
+    .unwrap();
+    assert!(
+        !unpacked.unpacks,
+        "a device without gzip takes them as they are"
+    );
     assert_eq!(
         (facts.os.as_str(), facts.arch.as_str()),
         ("linux", "aarch64")
@@ -246,29 +258,29 @@ fn a_probe_answer_names_only_a_machine_hide_runs_on() {
     for id in ["-", "", "a b", "ab\u{7}c", &"a".repeat(129)] {
         assert_eq!(
             read_probe(&fields(&format!(
-                "probe\talice\t/home/alice\tLinux\tx86_64\t{id}\tyes"
+                "probe\talice\t/home/alice\tLinux\tx86_64\t{id}\tyes\tgzip"
             ))),
             Err(super::NO_MACHINE_ID.to_owned()),
             "{id:?}"
         );
     }
     for refused in [
-        "probe\talice\t/home/alice\tLinux\tx86_64\t-\tnone",
-        "probe\tAlice Smith\t/home/alice\tLinux\tx86_64\t-\tyes",
-        "probe\talice\trelative\tLinux\tx86_64\t-\tyes",
-        "probe\talice\t/home/alice\tFreeBSD\tx86_64\t-\tyes",
-        "probe\talice\t/home/alice\tLinux\triscv64\t-\tyes",
+        "probe\talice\t/home/alice\tLinux\tx86_64\t-\tnone\tgzip",
+        "probe\tAlice Smith\t/home/alice\tLinux\tx86_64\t-\tyes\tgzip",
+        "probe\talice\trelative\tLinux\tx86_64\t-\tyes\tgzip",
+        "probe\talice\t/home/alice\tFreeBSD\tx86_64\t-\tyes\tgzip",
+        "probe\talice\t/home/alice\tLinux\triscv64\t-\tyes\tgzip",
         "fail\tsomething",
         // A Windows account's home is a drive path, and its name has none
         // of the characters Windows reserves in one.
-        "probe\talice\t/home/alice\tWindows\tamd64\tAB-12\tyes",
-        "probe\ta\\b\tD:/profiles/a\tWindows\tamd64\tAB-12\tyes",
-        "probe\talice\tD:/profiles/alice\tLinux\tx86_64\tAB-12\tyes",
+        "probe\talice\t/home/alice\tWindows\tamd64\tAB-12\tyes\tgzip",
+        "probe\ta\\b\tD:/profiles/a\tWindows\tamd64\tAB-12\tyes\tgzip",
+        "probe\talice\tD:/profiles/alice\tLinux\tx86_64\tAB-12\tyes\tgzip",
     ] {
         assert!(read_probe(&fields(refused)).is_err(), "{refused}");
     }
     let windows = read_probe(&fields(
-        "probe\tAlice Smith\tD:/profiles/Alice Smith\tWindows\tamd64\t5A1B2C3D-0000-4E5F\tyes",
+        "probe\tAlice Smith\tD:/profiles/Alice Smith\tWindows\tamd64\t5A1B2C3D-0000-4E5F\tyes\tgzip",
     ))
     .unwrap();
     assert_eq!(
@@ -298,7 +310,14 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
         let mut pipe = device.connect("");
         let facts = probe(&mut pipe, soon()).unwrap();
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-        install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap()
+        install(
+            &mut pipe,
+            "~/.hide/helper",
+            &facts.home,
+            &payload,
+            facts.unpacks,
+        )
+        .unwrap()
     };
 
     let first = install_once();
@@ -329,6 +348,70 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
         std::fs::read(folder.join("hide")).unwrap(),
         b"command build 1"
     );
+}
+
+/// with-hide/hide-private#582: a device that unpacks gzip is sent each
+/// file packed, and it lands as the same bytes; one that does not is sent
+/// the bytes as they are. Either way the install answers what crossed the
+/// link.
+#[test]
+fn a_packed_install_crosses_the_link_smaller_and_lands_whole() {
+    let helper = "helper build 1 ".repeat(64 * 1024);
+    for unpacks in [true, false] {
+        let device = Device::new();
+        let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, &helper);
+        let mut pipe = device.connect("");
+        let facts = probe(&mut pipe, soon()).unwrap();
+        assert!(facts.unpacks, "this machine's sh finds gzip");
+        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let installed =
+            install(&mut pipe, "~/.hide/helper", &facts.home, &payload, unpacks).unwrap();
+        assert_eq!((installed.upload.sent, installed.upload.reused), (3, 0));
+        assert_eq!(
+            std::fs::read(&installed.helper_path).unwrap(),
+            helper.as_bytes()
+        );
+        let upload = &installed.upload;
+        let own = (helper.len() + "command build 1".len() + "hooks build 1".len()) as u64;
+        assert_eq!(upload.bytes, own);
+        if unpacks {
+            assert!(upload.wire * 10 < upload.bytes, "{upload:?}");
+        } else {
+            assert_eq!(upload.wire, upload.bytes, "{upload:?}");
+        }
+    }
+}
+
+/// A packed file that does not unpack fails as one that did not arrive
+/// whole, and the script still read all of it: the next step answers.
+#[test]
+fn a_packed_file_that_does_not_unpack_fails_and_the_link_stays_in_step() {
+    let device = Device::new();
+    let mut pipe = device.connect("");
+    let facts = probe(&mut pipe, soon()).unwrap();
+    let root = format!("{}/.hide/helper", facts.home);
+    let [kind, _] = &step(&mut pipe, &format!("root\t{root}\n"), soon()).unwrap()[..] else {
+        panic!("the root step did not answer");
+    };
+    assert_eq!(kind, "root");
+    // Past any pipe buffer, so a reader that stopped early would leave
+    // the rest on the link.
+    let garbage = vec![b'x'; 4 * 1024 * 1024];
+    pipe.send(
+        format!("zput\tv1/hided\t00\t700\t{}\n", garbage.len()).as_bytes(),
+        soon(),
+    )
+    .unwrap();
+    pipe.send(&garbage, soon()).unwrap();
+    assert_eq!(
+        read_step(&mut pipe, soon()).unwrap(),
+        words(&["fail", "v1/hided did not arrive whole"])
+    );
+    assert!(!device.home().join(".hide/helper/v1/hided").exists());
+    let [kind, _] = &step(&mut pipe, &format!("root\t{root}\n"), soon()).unwrap()[..] else {
+        panic!("the step after the broken file did not answer");
+    };
+    assert_eq!(kind, "root");
 }
 
 /// B23: a connection that ends part way through a file leaves the final
@@ -374,9 +457,13 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
     let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-    let Err(EstablishError::Install(reason)) =
-        install(&mut pipe, "~/open/helper", &facts.home, &payload)
-    else {
+    let Err(EstablishError::Install(reason)) = install(
+        &mut pipe,
+        "~/open/helper",
+        &facts.home,
+        &payload,
+        facts.unpacks,
+    ) else {
         panic!("an install under a folder anyone can change was accepted");
     };
     assert!(reason.contains("chmod go-w"), "{reason}");
@@ -406,7 +493,14 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
     let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-    let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap();
+    let installed = install(
+        &mut pipe,
+        "~/.hide/helper",
+        &facts.home,
+        &payload,
+        facts.unpacks,
+    )
+    .unwrap();
     start(&mut pipe, &installed.helper_relative, None).unwrap();
     assert_eq!(pipe.line(soon()).unwrap(), b"args:node serve");
     let home = std::fs::canonicalize(device.home()).unwrap();
@@ -439,7 +533,14 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let own = format!("{}/candidate/home", facts.home);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
-    let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap();
+    let installed = install(
+        &mut pipe,
+        "~/.hide/helper",
+        &facts.home,
+        &payload,
+        facts.unpacks,
+    )
+    .unwrap();
     start(&mut pipe, &installed.helper_relative, Some(&own)).unwrap();
     pipe.line(soon()).unwrap();
     let made = home.join("candidate/home");
@@ -475,7 +576,13 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
         let mut pipe = device.connect("");
         let facts = probe(&mut pipe, soon()).unwrap();
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-        install(&mut pipe, "~/.hide/helper", &facts.home, &payload)
+        install(
+            &mut pipe,
+            "~/.hide/helper",
+            &facts.home,
+            &payload,
+            facts.unpacks,
+        )
     };
     let first = install_once().unwrap();
     let (version, _) = first.helper_relative.split_once('/').unwrap();

@@ -1470,7 +1470,6 @@ fn conductor_settings_change_only_what_an_edit_sends() {
     assert!(runtime.dispatch_json(&event(json!({"concurrency": 6}))));
     assert!(runtime.dispatch_json(&event(json!({"default_scope": "merge"}))));
     assert!(runtime.dispatch_json(&event(json!({"default_strength": "thorough"}))));
-    assert!(runtime.dispatch_json(&event(json!({"other_vendor": false}))));
     assert!(runtime.snapshot.ui_state.conductor_settings.clean_merged);
     assert!(runtime.dispatch_json(&event(json!({"clean_merged": false}))));
     assert!(runtime.dispatch_json(&event(json!({"map_flow": "across"}))));
@@ -1478,7 +1477,6 @@ fn conductor_settings_change_only_what_an_edit_sends() {
     assert_eq!(settings.concurrency, 6);
     assert_eq!(settings.default_scope, crate::missions::MissionScope::Merge);
     assert_eq!(settings.default_strength, Strength::Thorough);
-    assert!(!settings.other_vendor);
     assert!(!settings.clean_merged);
     assert_eq!(settings.map_flow, crate::missions::MapFlow::Across);
 }
@@ -1592,17 +1590,16 @@ fn a_kept_worktree_is_tried_again_only_when_what_keeps_it_may_leave() {
     }
 }
 
-/// A mission takes Settings › Mission's verification strength and choice
-/// of another company when it is created; its plan changes the strength
-/// before or during the mission, each change one event with its reason, and
-/// a plan that names none, or a later settings edit, keeps it.
+/// A mission takes Settings › Mission's verification strength when it is
+/// created; its plan changes the strength before or during the mission, each
+/// change one event with its reason, and a plan that names none, or a later
+/// settings edit, keeps it.
 #[test]
 fn a_mission_keeps_the_strength_it_was_created_with_until_its_plan_changes_it() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let settings = &mut runtime.snapshot.ui_state.conductor_settings;
     settings.default_strength = Strength::Fast;
-    settings.other_vendor = false;
     let (created, _) = command(
         &mut runtime,
         "sender",
@@ -1610,7 +1607,6 @@ fn a_mission_keeps_the_strength_it_was_created_with_until_its_plan_changes_it() 
     )
     .unwrap();
     assert_eq!(created["mission"]["strength"], "fast");
-    assert_eq!(created["mission"]["other_vendor"], false);
     let settings = &mut runtime.snapshot.ui_state.conductor_settings;
     settings.default_strength = Strength::Normal;
     let mut proposed = plan();
@@ -1624,7 +1620,6 @@ fn a_mission_keeps_the_strength_it_was_created_with_until_its_plan_changes_it() 
     command(&mut runtime, "sender", lighter.clone()).unwrap();
     let (shown, _) = command(&mut runtime, "sender", lighter).unwrap();
     assert_eq!(shown["mission"]["strength"], "normal");
-    assert_eq!(shown["mission"]["other_vendor"], false);
     assert_eq!(kinds(&runtime), ["planned", "strength", "strength"]);
     let log = &runtime.missions.events["mission-1"];
     assert_eq!(
@@ -5828,7 +5823,7 @@ fn a_merge_with_a_line_unmet_is_raised_to_the_conductor_once() {
         (
             AttentionReason::MergedUnproven,
             Some(7),
-            crate::runtime::missions::AttentionTo::Conductor
+            crate::missions::AttentionTo::Conductor
         )
     );
     let raised = |runtime: &Runtime| {
@@ -5896,7 +5891,7 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
         node_view(&runtime, "fix")
             .attention
             .map(|attention| attention.to),
-        Some(crate::runtime::missions::AttentionTo::Operator)
+        Some(crate::missions::AttentionTo::Operator)
     );
     assert!(runtime.claim_mission_notices().is_empty());
 
@@ -6901,6 +6896,16 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
         refused(&runtime, "mission-1:fix"),
         "mission_machine_no_repository"
     );
+    // A read that failed names what to fix, here a gh too old for Hide.
+    runtime.github.projects[0].status.failure_category =
+        Some(hide_node_link::gh::GithubFailureCategory::Outdated);
+    assert_eq!(
+        crate::coordination::split_refusal(&refused(&runtime, "mission-1:fix")),
+        (
+            "mission_machine_no_repository",
+            Some("GitHub is not read: gh on the core's machine is older than 2.72.0; update it")
+        )
+    );
     // The project's own machine runs every node's worker as before.
     assert_eq!(admit(&runtime, None, "mission-1:land").unwrap(), mission);
 }
@@ -7180,6 +7185,73 @@ fn warnings_of(runtime: &Runtime) -> (Vec<crate::missions::WarningKind>, Vec<Str
         })
         .collect();
     (kinds, letters)
+}
+
+/// `hide mission show` prints what the core decided a node waits on: a
+/// planned node the nodes before it, then nothing, a working one its first
+/// line not met with a failed line its worker's, then its pull request's
+/// merge, and a decision that stopped it before any of those.
+#[test]
+fn a_node_waits_on_what_the_core_decides_from_its_lines_and_its_decision() {
+    use crate::missions::WaitingOn;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let mut plan = criteria_plan();
+    plan["plan"]["nodes"][1]["depends_on"] = json!(["fix"]);
+    command(&mut runtime, "sender", plan).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    let waits = |runtime: &Runtime, key: &str| node_view(runtime, key).waiting_on;
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Start));
+    assert_eq!(
+        waits(&runtime, "docs"),
+        Some(WaitingOn::Nodes {
+            keys: vec!["fix".into()]
+        })
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Worker));
+    assert!(node_view(&runtime, "fix").asks_push);
+    assert!(!node_view(&runtime, "docs").asks_push);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Review));
+    let mut failed = record_of("fix", "review", json!({}));
+    failed["pass"] = json!(false);
+    command(&mut runtime, "reviewer", failed).unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Worker));
+    met_fix(&mut runtime);
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Merge));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?", "node": "fix"}),
+    )
+    .unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Decision));
+    assert_eq!(
+        waits(&runtime, "docs"),
+        Some(WaitingOn::Nodes {
+            keys: vec!["fix".into()]
+        })
+    );
 }
 
 /// with-hide/hide-private#552 c2: the review failing twice in a row warns

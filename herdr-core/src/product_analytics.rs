@@ -117,13 +117,40 @@ pub enum PhoneRoute {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceOutcome {
     Ready,
-    Failed(DeviceFailedStep),
+    Failed(DeviceFailure),
 }
 
+/// Why a device connection failed, as a closed class: never the error's
+/// text, which carries host names, addresses and paths.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeviceFailedStep {
-    Install,
+pub enum DeviceFailure {
+    /// `ssh` did not connect, as the device row classifies it.
+    Ssh(hide_node_link::device::SshProblem),
+    /// The machine is off and the attempt could not start it.
+    MachineStopped,
+    /// The connection opened but the helper could not be reached on it.
+    Connect,
+    /// Another machine answers the device's address.
+    IdentityChanged,
+    /// This build cannot serve the device's system.
+    Unsupported,
+    /// The release kit for the device's system could not be downloaded.
     Download,
+    /// The helper could not be installed on the device.
+    Install,
+    /// The installed helper did not start or answer.
+    Helper,
+    /// No connection could be set up from the registration (its SSH
+    /// config or id).
+    NoTransport,
+    /// This core could not start the worker that connects.
+    WorkerUnavailable,
+    /// The helper's link ended before the kit pass finished.
+    HelperLost,
+    /// The device's kit pass refused to install.
+    KitRefused,
+    /// The device's kit pass failed.
+    KitFailed,
 }
 
 /// Unknown means establishment failed before the helper reported its system.
@@ -182,18 +209,19 @@ impl Event {
                 properties
             }
             Self::DeviceConnected { outcome, platform } => {
-                let mut properties = Vec::with_capacity(3);
+                let mut properties = Vec::with_capacity(4);
                 match outcome {
                     DeviceOutcome::Ready => properties.push(("outcome", "ready")),
-                    DeviceOutcome::Failed(step) => {
+                    DeviceOutcome::Failed(failure) => {
                         properties.push(("outcome", "failed"));
                         properties.push((
                             "failed_step",
-                            match step {
-                                DeviceFailedStep::Install => "install",
-                                DeviceFailedStep::Download => "download",
+                            match failure {
+                                DeviceFailure::Download => "download",
+                                _ => "install",
                             },
                         ));
+                        properties.push(("failure", device_failure_name(failure)));
                     }
                 }
                 properties.push((
@@ -259,6 +287,39 @@ impl Event {
     }
 }
 
+fn device_failure_name(failure: DeviceFailure) -> &'static str {
+    use hide_node_link::device::SshProblem;
+    match failure {
+        DeviceFailure::Ssh(problem) => match problem {
+            SshProblem::SignInNeeded => "ssh_sign_in_needed",
+            SshProblem::BrowserTimeout => "ssh_browser_timeout",
+            SshProblem::SignInRefused => "ssh_sign_in_refused",
+            SshProblem::PolicyRefused => "ssh_policy_refused",
+            SshProblem::HostKeyChanged => "ssh_host_key_changed",
+            SshProblem::NameNotFound => "ssh_name_not_found",
+            SshProblem::Unreachable => "ssh_unreachable",
+            SshProblem::ProxyFailed => "ssh_proxy_failed",
+            SshProblem::Unsupported => "ssh_unsupported",
+            SshProblem::SshMissing => "ssh_missing",
+            SshProblem::OpenSshOld => "ssh_openssh_old",
+            SshProblem::HideUpdated => "ssh_hide_updated",
+            SshProblem::Unclassified => "ssh_unclassified",
+        },
+        DeviceFailure::MachineStopped => "machine_stopped",
+        DeviceFailure::Connect => "connect",
+        DeviceFailure::IdentityChanged => "identity_changed",
+        DeviceFailure::Unsupported => "unsupported",
+        DeviceFailure::Download => "download",
+        DeviceFailure::Install => "install",
+        DeviceFailure::Helper => "helper",
+        DeviceFailure::NoTransport => "no_transport",
+        DeviceFailure::WorkerUnavailable => "worker_unavailable",
+        DeviceFailure::HelperLost => "helper_lost",
+        DeviceFailure::KitRefused => "kit_refused",
+        DeviceFailure::KitFailed => "kit_failed",
+    }
+}
+
 fn agent_name(agent: hide_session::Agent) -> &'static str {
     match agent {
         hide_session::Agent::Codex => "codex",
@@ -276,4 +337,28 @@ fn agent_name(agent: hide_session::Agent) -> &'static str {
 pub trait Sink: Send + Sync + std::fmt::Debug {
     fn set_enabled(&self, enabled: bool);
     fn capture(&self, event: Event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_failure_names_its_class_and_never_its_text() {
+        let event = Event::DeviceConnected {
+            outcome: DeviceOutcome::Failed(DeviceFailure::Ssh(
+                hide_node_link::device::SshProblem::Unreachable,
+            )),
+            platform: DevicePlatform::Unknown,
+        };
+        assert_eq!(
+            event.properties(),
+            [
+                ("outcome", "failed"),
+                ("failed_step", "install"),
+                ("failure", "ssh_unreachable"),
+                ("platform", "unknown"),
+            ]
+        );
+    }
 }

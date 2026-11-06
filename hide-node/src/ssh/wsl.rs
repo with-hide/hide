@@ -382,8 +382,11 @@ impl DialedTransport for WslDevice {
             }
             let payload = self.packages.payload_for(&facts.os, &facts.arch)?;
             stage("install");
+            // Sent as they are: `wsl.exe` is a pipe on this PC, which packing
+            // only slows (with-hide/hide-private#582 measured 1.0-1.1 s raw
+            // against 4.2-4.7 s packed for the same kit).
             let installed =
-                bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
+                bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload, false)?;
             stage("start");
             bootstrap::start(&mut *pipe, &installed.helper_relative, None)?;
             Ok((installed, identity))

@@ -318,6 +318,16 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
           export HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
+      - name: Every gh command line on the oldest gh Hide supports
+        # hide-host/src/gh.rs: each command line the node runs `gh` with
+        # parses on `MINIMUM_VERSION` (hide-node-link/src/gh.rs), which
+        # scripts/fetch-gh.sh downloads against its pinned digest; a proxy
+        # that refuses every connection keeps every line off GitHub.
+        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
+        timeout-minutes: 10
+        run: |
+          gh_bin=$(bash scripts/fetch-gh.sh "$RUNNER_TEMP/gh-minimum")
+          HIDE_TEST_GH_BIN=$gh_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only --no-capture
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run

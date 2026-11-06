@@ -39,6 +39,7 @@ describe("prReading", () => {
 
   it("blocks on a refusal of gh itself before anything was read", () => {
     expect(prReading([project("a", { failure_category: "not_logged_in" }, { rows: [], groups: [], needs_you: 0 }, [])], NOW)).toEqual({ state: "blocked", category: "not_logged_in" });
+    expect(prReading([project("a", { failure_category: "outdated" }, { rows: [], groups: [], needs_you: 0 }, [])], NOW)).toEqual({ state: "blocked", category: "outdated" });
   });
 
   it("is reading until some project answered, then ready", () => {

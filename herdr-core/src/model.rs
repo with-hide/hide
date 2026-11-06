@@ -1907,8 +1907,6 @@ pub struct AgentSleepActionSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentActionRefusal {
-    /// An agent on another device.
-    Device,
     /// This agent's reader cannot sleep it.
     Unsupported,
     /// This agent sleeps only on the machine the core runs on.
@@ -1925,7 +1923,6 @@ pub enum AgentActionRefusal {
 impl AgentActionRefusal {
     pub fn detail(self) -> &'static str {
         match self {
-            Self::Device => "Agents on another device cannot sleep",
             Self::Unsupported => "This agent's reader does not support sleep",
             Self::CoreMachineOnly => "This agent sleeps only on the machine Hide's core runs on",
             Self::Asleep => "This agent is already asleep",
@@ -4892,7 +4889,7 @@ pub enum BacklogPhase {
     Failed,
 }
 
-/// The reason line a failed item shows: the four GitHub categories, a queue
+/// The reason line a failed item shows: the five GitHub categories, a queue
 /// past its bound, an answer Hide could not confirm, a repository the item
 /// may no longer go to, Hide's own record that could not be read just now
 /// (worth trying again), and a refusal (final).
@@ -4900,6 +4897,7 @@ pub enum BacklogPhase {
 #[serde(rename_all = "snake_case")]
 pub enum BacklogFailure {
     NotInstalled,
+    Outdated,
     NotLoggedIn,
     NoGithubRemote,
     NetworkOrRateLimit,
@@ -4919,6 +4917,7 @@ impl From<hide_node_link::gh::GithubFailureCategory> for BacklogFailure {
         use hide_node_link::gh::GithubFailureCategory as Category;
         match category {
             Category::NotInstalled => Self::NotInstalled,
+            Category::Outdated => Self::Outdated,
             Category::NotLoggedIn => Self::NotLoggedIn,
             Category::NoGithubRemote => Self::NoGithubRemote,
             Category::NetworkOrRateLimit => Self::NetworkOrRateLimit,
@@ -8932,7 +8931,6 @@ mod wire_enum_tests {
         checked.insert("herdr_profile_refusal");
 
         let action_refusals = [
-            AgentActionRefusal::Device,
             AgentActionRefusal::Unsupported,
             AgentActionRefusal::CoreMachineOnly,
             AgentActionRefusal::Asleep,
@@ -8943,8 +8941,7 @@ mod wire_enum_tests {
         ];
         for variant in action_refusals {
             match variant {
-                AgentActionRefusal::Device
-                | AgentActionRefusal::Unsupported
+                AgentActionRefusal::Unsupported
                 | AgentActionRefusal::CoreMachineOnly
                 | AgentActionRefusal::Asleep
                 | AgentActionRefusal::Working
@@ -9062,6 +9059,7 @@ mod wire_enum_tests {
         checked.insert("backlog_phase");
         let backlog_failures = [
             BacklogFailure::NotInstalled,
+            BacklogFailure::Outdated,
             BacklogFailure::NotLoggedIn,
             BacklogFailure::NoGithubRemote,
             BacklogFailure::NetworkOrRateLimit,
@@ -9074,6 +9072,7 @@ mod wire_enum_tests {
         for variant in backlog_failures {
             match variant {
                 BacklogFailure::NotInstalled
+                | BacklogFailure::Outdated
                 | BacklogFailure::NotLoggedIn
                 | BacklogFailure::NoGithubRemote
                 | BacklogFailure::NetworkOrRateLimit
@@ -9398,7 +9397,7 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_attention_reason", &reasons);
             checked.insert("mission_attention_reason");
-            use crate::runtime::missions::AttentionTo;
+            use crate::missions::AttentionTo;
             let whom = [AttentionTo::Conductor, AttentionTo::Operator];
             for variant in whom {
                 match variant {

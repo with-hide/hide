@@ -194,6 +194,46 @@ pub enum Blocked {
     UpstreamDropped,
 }
 
+/// Who a node waits on (D-02, D-05).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionTo {
+    Conductor,
+    Operator,
+}
+
+/// Who or what a mission node waits on now, decided once by the
+/// mission's view (`runtime::missions`) so `hide mission show`'s list, its
+/// node and the map's card read the same answer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaitingOn {
+    /// Its raise, on whom it reached and why.
+    Attention {
+        to: AttentionTo,
+        reason: AttentionReason,
+    },
+    /// The operator's answer to the decision that stopped it.
+    Decision,
+    /// A node it depends on was dropped.
+    Blocked,
+    /// The nodes it depends on that are not done, in its order.
+    Nodes {
+        keys: Vec<String>,
+    },
+    /// Nothing before it: it waits to be started.
+    Start,
+    /// Its worker: a line failed, or its first open line is the worker's.
+    Worker,
+    Review,
+    Verify,
+    Ci,
+    /// The merge of its pull request.
+    Merge,
+    /// Every line is met and nothing waits on GitHub: the Conductor's move.
+    Conductor,
+}
+
 /// Why a node waits on someone to look (PRD mission-node-simple D-04): the
 /// one `!` its card carries, and the line its hover and the operator's
 /// item say.
@@ -315,9 +355,10 @@ pub struct Woken {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
-    /// The review line failed `warn_review_fails` times in a row.
+    /// The review line failed `mission_health::REVIEW_FAILS_THAT_WARN` times
+    /// in a row.
     ReviewFails,
-    /// The node worked `warn_quiet_minutes` with no push and its pull
+    /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
     /// request does not just wait on others.
     NoPush,
 }
@@ -941,6 +982,14 @@ impl MissionNode {
         self.worked_at_unix_ms = Some(now);
     }
 
+    /// A change at work delivered by pull request: the node a push is asked
+    /// of, whose quiet without one can warn its Conductor.
+    pub fn asks_push(&self) -> bool {
+        self.status == NodeStatus::Working
+            && self.kind == NodeKind::Change
+            && self.delivery == Some(Delivery::Pr)
+    }
+
     /// When the node's time without a push counts from: its last push, or
     /// when it went to work if that is later. None for a node that never
     /// worked.
@@ -1017,11 +1066,6 @@ pub struct Mission {
     /// names. None for a mission from before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<Strength>,
-    /// Settings › Mission's choice of a checker from another company when
-    /// the mission was created; none for a mission from before it, whose
-    /// `checkers` say it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub other_vendor: Option<bool>,
     /// The review and verify defaults a mission created before verification
     /// strength recorded (PRD mission-map-git-criteria D-22), kept as
     /// written for its Conductor to read; no mission records them now.
@@ -1212,22 +1256,11 @@ pub struct ConductorSettings {
     /// How strongly a new mission's nodes are checked.
     #[serde(default)]
     pub default_strength: Strength,
-    /// Prefer a checker of another company than the node's worker.
-    #[serde(default = "default_other_vendor")]
-    pub other_vendor: bool,
     /// Remove a done node's worktree once its pull request merged, when the
     /// tree is clean and nothing runs in it (`runtime/mission_cleanup.rs`).
     /// Read live by every mission; a value kept before it reads as on.
     #[serde(default = "default_clean_merged")]
     pub clean_merged: bool,
-    /// How many failed reviews in a row warn a mission's Conductor about the
-    /// node (with-hide/hide-private#552). Read live by every mission.
-    #[serde(default = "default_warn_review_fails")]
-    pub warn_review_fails: u8,
-    /// How many minutes a node at work goes with no push before its
-    /// Conductor is warned. Read live by every mission.
-    #[serde(default = "default_warn_quiet_minutes")]
-    pub warn_quiet_minutes: u16,
     /// Which way every mission's map runs, chosen on the map itself. Left
     /// out while it is the default, so a build from before it still reads
     /// the rest of Settings › Mission until the operator turns a map.
@@ -1259,10 +1292,7 @@ impl Default for ConductorSettings {
             default_scope: MissionScope::Pr,
             candidates: Vec::new(),
             default_strength: Strength::Normal,
-            other_vendor: default_other_vendor(),
             clean_merged: default_clean_merged(),
-            warn_review_fails: default_warn_review_fails(),
-            warn_quiet_minutes: default_warn_quiet_minutes(),
             map_flow: MapFlow::Down,
         }
     }
@@ -1280,51 +1310,9 @@ pub enum Strength {
     Thorough,
 }
 
-/// The review and verify defaults Settings › Mission kept before
-/// verification strength, read only for the operator's choice of another
-/// company; every other field of theirs is left behind.
-#[derive(Deserialize)]
-struct StoredCheckers {
-    #[serde(default)]
-    review: StoredCheck,
-    #[serde(default)]
-    verify: StoredCheck,
-}
-
-#[derive(Deserialize)]
-struct StoredCheck {
-    #[serde(default = "default_other_vendor")]
-    other_vendor: bool,
-}
-
-impl Default for StoredCheck {
-    fn default() -> Self {
-        Self {
-            other_vendor: default_other_vendor(),
-        }
-    }
-}
-
-fn default_other_vendor() -> bool {
-    true
-}
-
 fn default_clean_merged() -> bool {
     true
 }
-
-fn default_warn_review_fails() -> u8 {
-    2
-}
-
-fn default_warn_quiet_minutes() -> u16 {
-    90
-}
-
-/// The range of `warn_review_fails`.
-pub const WARN_REVIEW_FAILS: std::ops::RangeInclusive<u8> = 1..=10;
-/// The range of `warn_quiet_minutes`: ten minutes to a day.
-pub const WARN_QUIET_MINUTES: std::ops::RangeInclusive<u16> = 10..=1440;
 
 fn default_cap() -> u8 {
     DEFAULT_CAP
@@ -1370,11 +1358,6 @@ impl ConductorSettings {
         if self.candidates.len() > CANDIDATE_LIMIT {
             return Err("conductor_settings.too_many_candidates".into());
         }
-        if !WARN_REVIEW_FAILS.contains(&self.warn_review_fails)
-            || !WARN_QUIET_MINUTES.contains(&self.warn_quiet_minutes)
-        {
-            return Err("conductor_settings.warning_out_of_range".into());
-        }
         for candidate in &self.candidates {
             check_worker(
                 &candidate.agent,
@@ -1391,30 +1374,27 @@ impl ConductorSettings {
         Ok(())
     }
 
-    /// The thresholds a node's warnings are judged by.
-    pub(crate) fn warn_rule(&self) -> crate::mission_health::WarnRule {
-        crate::mission_health::WarnRule {
-            review_fails: u32::from(self.warn_review_fails),
-            quiet_ms: u64::from(self.warn_quiet_minutes) * 60_000,
-        }
-    }
-
-    /// Reads the value `core-state.json` keeps. One kept before verification
-    /// strength has `checkers` instead: it reads as `normal`, with the
-    /// toggle off when the operator had turned another company off for the
-    /// review or the verify default, the only way either was ever off.
+    /// Reads the value `core-state.json` keeps. Fields a value kept by an
+    /// earlier build may carry are left behind: `checkers`, the review and
+    /// verify defaults from before verification strength (such a value reads
+    /// as `normal`); `warn_review_fails` and `warn_quiet_minutes`, which
+    /// nothing could change from their defaults and which are now fixed
+    /// (`mission_health::REVIEW_FAILS_THAT_WARN`, `QUIET_THAT_WARNS_MS`); and
+    /// `other_vendor`, the switch Settings › Mission had for a checker of
+    /// another kind than the worker, which the Conductor now always prefers
+    /// by `hide mission help`.
     pub(crate) fn from_stored(mut value: serde_json::Value) -> Result<Self, String> {
-        let stored = value
-            .as_object_mut()
-            .and_then(|fields| fields.remove("checkers"));
-        let mut settings: Self =
-            serde_json::from_value(value).map_err(|error| error.to_string())?;
-        if let Some(stored) = stored {
-            let checkers: StoredCheckers =
-                serde_json::from_value(stored).map_err(|error| error.to_string())?;
-            settings.other_vendor = checkers.review.other_vendor && checkers.verify.other_vendor;
+        if let Some(fields) = value.as_object_mut() {
+            for field in [
+                "checkers",
+                "warn_review_fails",
+                "warn_quiet_minutes",
+                "other_vendor",
+            ] {
+                fields.remove(field);
+            }
         }
-        Ok(settings)
+        serde_json::from_value(value).map_err(|error| error.to_string())
     }
 }
 
@@ -2958,7 +2938,6 @@ pub(crate) mod tests {
             cap: 4,
             candidates: Vec::new(),
             strength: None,
-            other_vendor: None,
             checkers: None,
             exempt: false,
             decided: Vec::new(),
@@ -3660,7 +3639,7 @@ pub(crate) mod tests {
         let mut stored = serde_json::to_value(mission()).unwrap();
         stored["checkers"] = recorded.clone();
         let read: Mission = serde_json::from_value(stored.clone()).unwrap();
-        assert_eq!((read.strength, read.other_vendor), (None, None));
+        assert_eq!(read.strength, None);
         assert_eq!(serde_json::to_value(&read).unwrap(), stored);
         let mut input = plan(Vec::new());
         input.strength = Some(Strength::Thorough);

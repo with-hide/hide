@@ -1040,10 +1040,8 @@ export function reportLine(plain: string, title: string): string | null {
   return first === title.trim() && second !== undefined ? second : first;
 }
 
-/** The nodes a waiting node still waits for (B28): those not finished or dropped, which its line names by pull request or title. */
+/** The nodes the core says a planned node still waits for (`waiting_on`, B28), which its line names by pull request or title. */
 export function waitingFor(mission: Mission, node: MissionNode): MissionNode[] {
-  return node.depends_on.flatMap((key) => {
-    const dep = mission.nodes.find((other) => other.key === key);
-    return dep && dep.status !== "done" && dep.status !== "dropped" ? [dep] : [];
-  });
+  if (node.waiting_on?.kind !== "nodes") return [];
+  return node.waiting_on.keys.flatMap((key) => mission.nodes.find((other) => other.key === key) ?? []);
 }

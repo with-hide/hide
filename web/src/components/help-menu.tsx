@@ -1,10 +1,11 @@
 // The sidebar footer's Help menu (PRD sidebar-titlebar-refresh D-11, D-12,
 // B13, B14): the shortcut sheet with its chord, the practice window, Copy
 // diagnostics with the same text as Settings' About, the repository's
-// new-issue page in the default browser, and the version, which is a line to read rather than an action
-// until an update of this app is ready (PRD auto-update D-03, B15): then a dot
-// sits on the menu's button and the line names the ready version and restarts
-// into it. Nothing else of an update shows here (D-21).
+// new-issue page in the default browser, and the version, a line to read
+// rather than an action. While an update of this app is ready (PRD auto-update
+// D-03, B15) a dot sits on the menu's button and the menu opens with the ready
+// version and Restart now; the ↑ button and its card beside Help are
+// `update-ready.tsx`. Nothing else of an update shows here (D-21).
 
 import { CircleHelpIcon } from "lucide-react";
 import { useState } from "react";
@@ -14,7 +15,7 @@ import { openPractice } from "../practice/channel";
 import { diagnosticsInputOf, diagnosticsText } from "../settings";
 import { commandLabel } from "../shortcutLabels";
 import { useShellStore } from "../store";
-import { readyVersion, restartIntoUpdate, useUpdateStatus } from "../updates";
+import { readyVersion, releaseNotesUrl, restartIntoUpdate, useUpdateStatus } from "../updates";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
@@ -54,6 +55,27 @@ export function HelpMenu({ actions, place = "footer" }: { actions: Actions; plac
         </DropdownMenuTrigger>
       </Hint>
       <DropdownMenuContent align="end" side={menuSide(place)} aria-label={t("sidebar.help")} data-help-menu="true">
+        {ready ? (
+          <>
+            {/* The ready update leads the menu: what is ready, what a restart keeps, its notes and Restart now. */}
+            <div className="m-xxs flex flex-col gap-xs rounded-sm border border-primary/30 bg-primary/10 p-sm" data-help-update-block={ready}>
+              <div className="flex items-center gap-xs font-medium text-foreground">
+                <span aria-hidden="true" className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" />
+                {t("sidebar.help.updateLine", { version: ready })}
+              </div>
+              <div className="flex flex-wrap items-center gap-xxs text-caption text-subtle-foreground">
+                <span>{t("sidebar.help.updateKeep")}</span>
+                <span aria-hidden="true">·</span>
+                <DropdownMenuItem className="p-0 text-caption text-subtle-foreground underline focus:bg-transparent focus:text-foreground" onSelect={() => actions.openLink(releaseNotesUrl(ready), true)} data-help-update-notes="true">
+                  {t("sidebar.updateCard.releaseNotes")}
+                </DropdownMenuItem>
+              </div>
+              <DropdownMenuItem className="self-start bg-primary px-sm font-medium text-primary-foreground focus:bg-primary/90 focus:text-primary-foreground" onSelect={restartIntoUpdate} data-help-update={ready}>
+                {t("settings.update.restartNow")}
+              </DropdownMenuItem>
+            </div>
+          </>
+        ) : null}
         <DropdownMenuItem data-help-item="shortcuts" onSelect={() => actions.openShortcuts()}>
           {t("sidebar.help.shortcuts")}
           {chord ? <DropdownMenuShortcut>{chord}</DropdownMenuShortcut> : null}
@@ -77,16 +99,9 @@ export function HelpMenu({ actions, place = "footer" }: { actions: Actions; plac
           {t("sidebar.help.reportIssue")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {ready ? (
-          <DropdownMenuItem data-help-update={ready} onSelect={restartIntoUpdate}>
-            <span className="font-mono text-caption">{t("sidebar.help.versionReady", { version: ready })}</span>
-            <span className="ml-auto text-caption font-medium text-primary">{t("sidebar.help.restart")}</span>
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuLabel className="font-mono text-caption font-normal text-muted-foreground" data-help-version={version ?? ""}>
-            {`hide ${version ?? t("settings.unavailable")}`}
-          </DropdownMenuLabel>
-        )}
+        <DropdownMenuLabel className="font-mono text-caption font-normal text-muted-foreground" data-help-version={version ?? ""}>
+          {`hide ${version ?? t("settings.unavailable")}`}
+        </DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
   );

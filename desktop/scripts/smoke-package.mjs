@@ -21,6 +21,7 @@
 //
 // macOS uses the isolated packaged-app e2e lane instead.
 
+import { Buffer } from "node:buffer";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -94,6 +95,31 @@ try {
     // No package carries Herdr (PRD engine-bundle-4-herdr-removal D-2).
     const herdr = [bundled("herdr"), path.join(resources, "conpty")].filter((file) => fs.existsSync(file));
     if (herdr.length > 0) throw new Error(`carries Herdr: ${herdr.map((file) => path.relative(app, file)).join(", ")}`);
+  });
+
+  // The checks below never start the Electron host, so a library the package
+  // does not depend on passes them; on a bare system it is missing, and the
+  // installed app fails to load. Every ELF file the package installs must
+  // find each library it links (desktop/scripts/installers.mjs, `depends`).
+  if (process.platform === "linux") check("every program finds its libraries", () => {
+    const missing = [];
+    let programs = 0;
+    for (const entry of fs.readdirSync(app, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const file = path.join(entry.parentPath, entry.name);
+      const head = Buffer.alloc(4);
+      const fd = fs.openSync(file, "r");
+      try { fs.readSync(fd, head, 0, 4, 0); } finally { fs.closeSync(fd); }
+      if (!head.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) continue;
+      programs += 1;
+      const ldd = spawnSync("ldd", [file], { encoding: "utf8", timeout: 30_000 });
+      if (ldd.error) throw ldd.error;
+      const text = `${ldd.stdout}${ldd.stderr}`;
+      if (ldd.status !== 0 && !text.includes("not a dynamic executable")) throw new Error(`ldd ${path.relative(app, file)} exited ${ldd.status}: ${text.trim()}`);
+      for (const line of text.split("\n")) if (line.includes("=> not found")) missing.push(`${path.relative(app, file)}: ${line.trim().split(" ")[0]}`);
+    }
+    if (missing.length > 0) throw new Error(`not found: ${missing.join(", ")}`);
+    return `${programs} ELF files`;
   });
 
   // What every process below runs with: the account's places moved under the

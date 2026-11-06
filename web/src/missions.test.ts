@@ -19,7 +19,7 @@ function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
-  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const rest = (items: Mission[]) => ({ missions: { items } }) as unknown as SnapshotRest;
@@ -377,11 +377,13 @@ describe("picking a card and the edges back (PRD mission-map-git-criteria B21, B
 
 describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
   it("says what a working node has left, what a planned one waits for, and what an outside one watches", () => {
-    const m = mission("m", { nodes: [node("core", { status: "working", pr: 1703 }), node("ui", { depends_on: ["core"] })] });
+    const m = mission("m", { nodes: [node("core", { status: "working", pr: 1703 }), node("ui", { depends_on: ["core"], waiting_on: { kind: "nodes", keys: ["core"] } })] });
     const working = node("w", { status: "working", criteria: [line("c1", "own", { state: "pass" }), line("review", "review"), line("ci", "ci", { state: "fail" })] });
     expect(cardLine(m, working, null, t)).toEqual({ text: "left: review, CI", attention: false });
     expect(cardLine(m, { ...working, line: "replay 19/31" }, null, t)?.text).toBe("replay 19/31");
     expect(cardLine(m, m.nodes[1]!, null, t)).toEqual({ text: "waiting for #1703", attention: false });
+    // The nodes it names are the core's `waiting_on`, never worked out again from `depends_on`.
+    expect(cardLine(m, { ...m.nodes[1]!, waiting_on: { kind: "start" } }, null, t)).toBeNull();
     const outside = node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status: "planned" });
     expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
     expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");

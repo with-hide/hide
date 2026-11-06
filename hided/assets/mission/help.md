@@ -33,13 +33,13 @@ Every command prints one JSON line: `{"ok":true,"result":…}` or `{"ok":false,"
 A command that names no `--mission` acts on the mission you conduct.
 Running a command again changes nothing more, so after a timeout read `hide mission show` and decide.
 
-`hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, and ⚠ on a warned node).
+`hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
 `hide mission show <node>` reads that node in full: its finish lines with their evidence and verdicts, its pull requests and CI, its branch and last push, its warnings, its worker and the worker's newest letters.
 With `--json` it prints the record itself instead, `{"mission":…}`, or for one node `{"mission_id","node","letters"}` (`letters` is null when the ledger could not be read): the fields this guide names in backticks, such as a node's `criteria`, the mission's `strength` and an open question's `key`, are read there.
 
 ## 1. Before the plan
 
-- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, the verification strength (`default_strength`) and whether checkers are a different kind of agent than the worker (`other_vendor`).
+- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates and the verification strength (`default_strength`).
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
   Name such an agent's model from its candidate's fixed model, or from `cli_default_model`.
@@ -136,7 +136,7 @@ Hide enforces none of it: the gate holds only each node's own lines, the check c
 - After the last round the strength allows, a serious finding still open is fixed in the node; a minor or rare-case one goes to the report as a follow-up.
 - A minor finding that blocks nothing gets no push of its own: the worker gathers them and sends them with the next push the node needs.
 - Choose every checker from the worker candidates in Settings › Mission, as you choose workers; with no candidates, among the agents installed here.
-  With the mission's `other_vendor` true, prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); with it false, any candidate.
+  Prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); when the candidates have none, any candidate.
 - A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers` in `hide mission show --json`) instead: follow them, or name a strength in the next plan.
 
 ## Cutting the mission and briefing a worker
@@ -181,7 +181,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   An agent whose pane is up but whose spawn never answered its id is not registered: the mission cannot bind it, and its `hide mission record` is refused (`mission_criterion_not_yours`).
 - Then record it: `hide mission node <key> --status working --agent-id <agent-N>`.
 - A worker runs on the machine the project is on, or, for a `change` node delivered by `pr` and its checkers only, on another connected device (`--machine <device id>`, with `--repo` and `--path` that device's paths) that has a project of the mission's GitHub repository.
-  Hide refuses it there with its reason: a node that is not a pull-request change (`mission_machine_node_refused`; a direct change, a research or a verify node runs on the project's machine), a device that is not connected (`mission_machine_unavailable`), a device whose projects Hide is still reading (`mission_projects_loading`, retry), or no project of the same GitHub repository there that Hide has read from GitHub (`mission_machine_no_repository`; also while GitHub is still being read for the mission's own project, so wait and retry).
+  Hide refuses it there with its reason: a node that is not a pull-request change (`mission_machine_node_refused`; a direct change, a research or a verify node runs on the project's machine), a device that is not connected (`mission_machine_unavailable`), a device whose projects Hide is still reading (`mission_projects_loading`, retry), or no project of the same GitHub repository there that Hide has read from GitHub (`mission_machine_no_repository`; also while GitHub is still being read for the mission's own project, so wait and retry; when GitHub's read failed, the refusal says what to fix, such as a `gh` too old or signed out on the core's machine, so tell the operator rather than retry).
   Binding an agent from another machine with `--agent-id`, `--reviewer` or `--verifier` is refused for the same reasons, since a checker's intent need not name its node; an agent the node already holds stays while its machine is away, and only a replan that would make its node one the project's machine runs is refused (`mission_machine_node_refused`).
   A worker there records its `check` line from its own checkout on that device, and Hide holds the line against that checkout while the device answers; while it is away the line shows open.
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).
@@ -236,7 +236,7 @@ Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a 
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
 - A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a `request` letter naming it, once per pull request, reason and commit.
 - When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request or branch is not in main, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
-- While the operator's Settings › Mission keeps `머지되면 작업 공간 정리` on (the default), Hide removes a done node's worktree and its build cache once GitHub says its pull request merged, when the tree is clean and no agent or running program is in it; the branch always stays, and a worktree with changes or in use stays for the operator. Off, Hide deletes no file.
+- While the operator's Settings › Mission keeps `머지되면 워크트리 정리` on (the default), Hide removes a done node's worktree and its build cache once GitHub says its pull request merged, when the tree is clean and no agent or running program is in it; the branch always stays, and a worktree with changes or in use stays for the operator. Off, Hide deletes no file.
 
 What is not certain is raised on the node to you first, with a letter naming the node and why: a pull request merged while a line is missing or failed, a worker that ended with the node not done, a pull request closed without its merge with no other open, a pull request the worker opened that no node holds, a worker Hide could not wake, and a close Hide could not make.
 Settle it by recording the line, skipping it with its reason, attaching the pull request with `--pr`, setting the node's status or dropping it; that takes the raise off the operator's turn too.
@@ -247,7 +247,7 @@ CI, review and merge waits call no one, and a worker waiting on them is not warn
 Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge is not quiet).
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review or a new push takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
-The two thresholds are the operator's, in Settings › Mission (`warn_review_fails`, `warn_quiet_minutes` in `hide mission settings`).
+The two thresholds are fixed: two failed reviews in a row and 90 minutes with no push.
 
 ### Finish lines
 

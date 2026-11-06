@@ -1,10 +1,12 @@
-//! One content-free final outcome per outbound device connect or bootstrap Retry.
+//! One content-free outcome each time an outbound device's connection result
+//! changes: a scheduled retry that fails as the last one did, or a reconnect
+//! that is ready as the last one was, sends nothing.
 //! Tokens stay inside the runtime and never enter an analytics event.
 
 use std::collections::BTreeMap;
 
 use super::Runtime;
-use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
 use crate::remote::EstablishError;
 
 const MAX_ATTEMPTS: usize = 128;
@@ -13,6 +15,9 @@ const MAX_ATTEMPTS: usize = 128;
 pub(super) struct Attempts {
     serial: u64,
     pending: BTreeMap<String, Attempt>,
+    /// The outcome last sent for each device in this daemon's life; the
+    /// next attempt with the same outcome is the same state, not news.
+    sent: BTreeMap<String, DeviceOutcome>,
 }
 
 struct Attempt {
@@ -63,14 +68,20 @@ impl Runtime {
     }
 
     pub(super) fn fail_device_connect(&mut self, device: &str, error: &EstablishError) {
-        let step = match error {
+        let failure = match error {
             EstablishError::Download { os, arch, .. } => {
                 self.device_connect_platform(device, os, arch);
-                DeviceFailedStep::Download
+                DeviceFailure::Download
             }
-            _ => DeviceFailedStep::Install,
+            EstablishError::Connect(_) => DeviceFailure::Connect,
+            EstablishError::Ssh(failure) => DeviceFailure::Ssh(failure.problem),
+            EstablishError::Stopped(_) => DeviceFailure::MachineStopped,
+            EstablishError::IdentityChanged { .. } => DeviceFailure::IdentityChanged,
+            EstablishError::Unsupported(_) => DeviceFailure::Unsupported,
+            EstablishError::Install(_) => DeviceFailure::Install,
+            EstablishError::Helper(_) => DeviceFailure::Helper,
         };
-        self.finish_device_connect(device, DeviceOutcome::Failed(step));
+        self.finish_device_connect(device, DeviceOutcome::Failed(failure));
     }
 
     pub(crate) fn complete_device_connect_kit(
@@ -88,28 +99,47 @@ impl Runtime {
         }
         let outcome = match report {
             Ok(report) if report.refused.is_none() => DeviceOutcome::Ready,
-            Ok(_) | Err(_) => DeviceOutcome::Failed(DeviceFailedStep::Install),
+            Ok(_) => DeviceOutcome::Failed(DeviceFailure::KitRefused),
+            Err(_) => DeviceOutcome::Failed(DeviceFailure::KitFailed),
         };
         self.finish_device_connect(device, outcome);
     }
 
-    pub(super) fn fail_device_connect_install(&mut self, device: &str) {
-        self.finish_device_connect(device, DeviceOutcome::Failed(DeviceFailedStep::Install));
+    pub(super) fn fail_device_connect_before_link(&mut self, device: &str, failure: DeviceFailure) {
+        self.finish_device_connect(device, DeviceOutcome::Failed(failure));
     }
 
     fn finish_device_connect(&mut self, device: &str, outcome: DeviceOutcome) {
-        let Some(attempt) = self.device_connect_analytics.pending.remove(device) else {
+        let attempts = &mut self.device_connect_analytics;
+        let Some(attempt) = attempts.pending.remove(device) else {
             return;
         };
-        if let Some(sink) = &self.product_analytics {
-            sink.capture(Event::DeviceConnected {
-                outcome,
-                platform: attempt.platform,
-            });
+        // Only an outcome handed to the sink is remembered as sent.
+        let Some(sink) = &self.product_analytics else {
+            return;
+        };
+        if attempts.sent.get(device) == Some(&outcome) {
+            return;
         }
+        if attempts.sent.len() < MAX_ATTEMPTS || attempts.sent.contains_key(device) {
+            attempts.sent.insert(device.to_owned(), outcome);
+        } else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "product_analytics", "kind": "device_outcome_limit",
+            }));
+        }
+        sink.capture(Event::DeviceConnected {
+            outcome,
+            platform: attempt.platform,
+        });
     }
 
     pub(super) fn forget_device_connect(&mut self, device: &str) {
         self.device_connect_analytics.pending.remove(device);
+    }
+
+    /// A removed device's next registration starts with no outcome sent.
+    pub(super) fn forget_device_connect_outcome(&mut self, device: &str) {
+        self.device_connect_analytics.sent.remove(device);
     }
 }

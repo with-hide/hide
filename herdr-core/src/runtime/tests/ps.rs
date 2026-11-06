@@ -270,7 +270,6 @@ fn mission(
         cap: 2,
         exempt: false,
         strength: None,
-        other_vendor: None,
         checkers: None,
         conductor: ConductorView {
             pane_id: conductor.into(),
@@ -324,7 +323,9 @@ fn mission(
             hide: None,
             review_fails: 0,
             pushed_at_unix_ms: None,
+            asks_push: false,
             warnings: Vec::new(),
+            waiting_on: None,
         }],
         merge_order: Vec::new(),
         landing_order: Vec::new(),

@@ -308,7 +308,6 @@ pub const COMMANDS: &[Spec] = &[
             "parent_authority_required",
             "actor_identity_conflict",
             "agent_sleep_unsupported",
-            "agent_sleep_device",
             "agent_sleep_core_machine_only",
             "agent_sleep_working",
             "agent_sleep_waiting_for_you",

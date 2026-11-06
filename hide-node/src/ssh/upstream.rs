@@ -166,9 +166,14 @@ impl Upstream {
             Some(press) => (press, Wake::Allowed),
             None => (Arc::new(NoSignIn), Wake::NotAllowed),
         };
-        let resolved = self.target.resolve().map_err(SessionError::Ssh)?;
+        // One clock for ssh's questions and its sign-in (with-hide/hide-private#584).
+        let until = Instant::now() + super::session::SIGN_IN_TIMEOUT;
+        let resolved = self
+            .target
+            .resolve(until, &self.cancel)
+            .map_err(SessionError::Ssh)?;
         *lock_recover(&self.resolved) = Some(resolved.clone());
-        Session::open(&self.target, &resolved, &self.cancel, asks, wake)
+        Session::open(&self.target, &resolved, until, &self.cancel, asks, wake)
     }
 
     /// Runs `program attach [--state-dir <dir>]` on the machine in place of
