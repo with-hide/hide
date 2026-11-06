@@ -246,7 +246,11 @@ mod tests {
                     session: None,
                     status: "idle".into(),
                     state_change_seq: 1,
-                    readiness: Readiness::of(Some(interactive), None),
+                    readiness: if interactive {
+                        Readiness::Ready
+                    } else {
+                        Readiness::NotReady
+                    },
                 }),
                 other => panic!("unexpected {other}"),
             });

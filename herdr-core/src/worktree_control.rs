@@ -1303,10 +1303,6 @@ impl AgentFailure {
     }
 }
 
-/// `agent.start` waits up to this long for the pane's shell; the read waits a
-/// little longer so a slow start is not reported as an unknown one.
-const AGENT_START_TIMEOUT_MS: u64 = 120_000;
-
 /// A PATH lookup on the node: a directory walk, nothing that should wait.
 const AGENT_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -1665,7 +1661,7 @@ fn launch_agent(
         &format!("herdr-core:task:{id}:agent"),
         shell,
         &start,
-        Duration::from_millis(AGENT_START_TIMEOUT_MS + 5_000),
+        crate::agent_start::START_ANSWER_WAIT,
         check,
     ) {
         Ok(_) => typed.map_or(Launch::Started, |prompt| {

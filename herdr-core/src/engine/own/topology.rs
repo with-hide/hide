@@ -1746,6 +1746,7 @@ impl Topology {
             &mut held.live,
             facts,
             &mut seq,
+            Instant::now(),
         );
         // An agent the pane's foreground shows is the pane's agent now.
         if held.agent.is_some() {
