@@ -10,11 +10,9 @@ import { Landing, DeviceIdentity } from "./Landing";
 import { ScanQr } from "./ScanQr";
 import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
+import { followPhoneTheme } from "./settings";
 
-const mode = window.matchMedia("(prefers-color-scheme: dark)");
-const theme = () => document.documentElement.classList.toggle("dark", mode.matches);
-theme();
-mode.addEventListener("change", theme);
+followPhoneTheme();
 // Take and clear secrets synchronously before any React effects or resource loading.
 const pairing = takePairing();
 

@@ -2998,6 +2998,8 @@ The hosted phone uses its WASM initiator.
 hided uses it for signed device admission, Noise responder sessions and QR v2; the phone credential is checked only inside the established encrypted session.
 
 Phone transport, pairing, conversation reads and delivery live in `hided/src/mobile/`; status projection and notification transitions belong to `herdr-core/src/agent_state/`.
+The phone's own language and light or dark choice are the one exception to "the core owns the preference": they belong to that phone's browser, in `web/src/mobile/settings.ts` (storage key `hide.phone.settings`), and are never sent to hided.
+The loader and the app read the same module, so the start page and every protocol bundle of an origin agree; the app's language is that choice, else the core's `interface_language`, else the phone's language, and `followPhoneTheme` is the one function that puts the `dark` class on the page.
 `Runtime::remote_herdr_api` lends the Herdr API connection the core already holds for a connected SSH device.
 Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, selected method, last direct scope, push mode, owned serve entry, VAPID key, device signing seed and Noise static key), written through a temporary file at mode 0600.
 An older file without a method keeps Tailscale when it has a Serve record or last tailnet; a new setup defaults to relay.

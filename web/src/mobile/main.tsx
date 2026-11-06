@@ -1,5 +1,5 @@
 // The phone app's entry (PRD mobile-companion D-02, D-16, B38): follow the
-// phone's light or dark setting and the operator's color theme
+// phone's light or dark choice (settings.ts) and the operator's color theme
 // (hide-color-theme D-12), register the service worker that caches the static
 // shell and shows pushes, and start the one socket.
 
@@ -12,13 +12,11 @@ import { openDetail, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { openKey } from "./protocol";
 import { hostedPhone } from "./relayRuntime";
+import { followPhoneTheme } from "./settings";
 import { patch, usePhone } from "./store";
 import { PALETTE_HIDE_CLASS, readColorTheme } from "../theme";
 
-const scheme = window.matchMedia("(prefers-color-scheme: dark)");
-const followScheme = () => document.documentElement.classList.toggle("dark", scheme.matches);
-followScheme();
-scheme.addEventListener("change", followScheme);
+followPhoneTheme();
 
 const followColorTheme = (value: string | null) =>
   document.documentElement.classList.toggle(PALETTE_HIDE_CLASS, readColorTheme(value).choice === "hide");
