@@ -19,31 +19,24 @@ jobs:
           set +e
           PS='C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
           T=$(cygpath -w "$RUNNER_TEMP")
-          t() { local name=$1; shift; local s=$(date +%s.%N); "$@" >"$RUNNER_TEMP/$name.out" 2>"$RUNNER_TEMP/$name.err"; local rc=$?; local e=$(date +%s.%N); printf '%-28s rc=%s %6.2fs stderr=%s\n' "$name" "$rc" "$(echo "$e - $s" | bc)" "$(head -c 300 "$RUNNER_TEMP/$name.err" | tr '\r\n' '  ')"; }
-          echo "nproc=$(nproc)"
-          ls -la "$LOCALAPPDATA/Microsoft/Windows/PowerShell" 2>&1 | head
+          ms() { python -c 'import time; print(int(time.time()*1000))'; }
+          t() { local name=$1; shift; local s=$(ms); "$@" >"$RUNNER_TEMP/$name.out" 2>"$RUNNER_TEMP/$name.err"; local rc=$?; local e=$(ms); printf '%-30s rc=%s %6sms stderr=%s\n' "$name" "$rc" "$((e - s))" "$(head -c 200 "$RUNNER_TEMP/$name.err" | tr '\r\n' '  ')"; }
+          echo "PSModuleAnalysisCachePath=$PSModuleAnalysisCachePath"
+          echo "LOCALAPPDATA=$LOCALAPPDATA USERPROFILE=$USERPROFILE"
+          ls -la "$(cygpath "$PSModuleAnalysisCachePath" 2>/dev/null)" 2>&1 | head -3
           t default-exit0 "$PS" -NoProfile -NonInteractive -Command 'exit 0'
-          t default-exit0-again "$PS" -NoProfile -NonInteractive -Command 'exit 0'
           t default-write-output "$PS" -NoProfile -NonInteractive -Command '$null = Write-Output x'
-          t default-write-output-again "$PS" -NoProfile -NonInteractive -Command '$null = Write-Output x'
-          ls -la "$LOCALAPPDATA/Microsoft/Windows/PowerShell" 2>&1 | head
-          for k in exit0 write-output exec import-utility add-type; do :; done
-          PSModuleAnalysisCachePath="$T\\c1" t cold-exit0 "$PS" -NoProfile -NonInteractive -Command 'exit 0'
-          PSModuleAnalysisCachePath="$T\\c2" t cold-write-output "$PS" -NoProfile -NonInteractive -Command '$null = Write-Output x'
-          PSModuleAnalysisCachePath="$T\\c3" t cold-new-object "$PS" -NoProfile -NonInteractive -Command '$null = New-Object IO.MemoryStream'
-          PSModuleAnalysisCachePath="$T\\c4" t cold-exec "$PS" -NoProfile -NonInteractive -Command 'exec sh'
-          PSModuleAnalysisCachePath="$T\\c5" t cold-import-utility "$PS" -NoProfile -NonInteractive -Command 'Import-Module Microsoft.PowerShell.Utility; $null = Write-Output x'
-          PSModuleAnalysisCachePath="$T\\c6" t cold-add-type "$PS" -NoProfile -NonInteractive -Command 'Add-Type -TypeDefinition "public static class P1 { public static int X() { return 1; } }"'
-          PSModuleAnalysisCachePath="$T\\c7" t cold-test-path "$PS" -NoProfile -NonInteractive -Command '$null = Test-Path C:\'
-          echo "--- four at once, each cold"
-          for n in 1 2 3 4; do (PSModuleAnalysisCachePath="$T\\p$n" t par-write-output-$n "$PS" -NoProfile -NonInteractive -Command '$null = Write-Output x') & done; wait
-          echo "--- four at once, one shared cold cache"
-          for n in 1 2 3 4; do (PSModuleAnalysisCachePath="$T\\shared" t shared-write-output-$n "$PS" -NoProfile -NonInteractive -Command '$null = Write-Output x') & done; wait
-          echo "--- pwsh"
-          PSModuleAnalysisCachePath="$T\\q1" t pwsh-cold-exec pwsh.exe -NoProfile -NonInteractive -c 'exec sh'
-          PSModuleAnalysisCachePath="$T\\q2" t pwsh-cold-exit0 pwsh.exe -NoProfile -NonInteractive -c 'exit 0'
-          echo "--- facts"
-          "$PS" -NoProfile -NonInteractive -Command '$env:PSModulePath -split ";" | % { "{0}  {1}" -f $_, (@(Get-ChildItem -LiteralPath $_ -Directory -ErrorAction SilentlyContinue).Count) }'
-          ls -la "$T"/c2 "$T"/shared 2>&1
-          "$PS" -NoProfile -NonInteractive -Command 'Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled,AMServiceEnabled,AntivirusEnabled,IoavProtectionEnabled,BehaviorMonitorEnabled | Format-List' 2>&1 | head -20
-          "$PS" -NoProfile -NonInteractive -Command 'Get-Process | Sort-Object CPU -Descending | Select-Object -First 12 Name,Id,CPU | Format-Table -AutoSize' 2>&1
+          mkdir -p "$RUNNER_TEMP/prof"
+          USERPROFILE="$T\\prof" t userprofile-write-output "$PS" -NoProfile -NonInteractive -Command '$null = Write-Output x'
+          env -u PSModuleAnalysisCachePath bash -c "$(declare -f ms t); PS='$PS'; RUNNER_TEMP='$RUNNER_TEMP'; t unset-write-output \"\$PS\" -NoProfile -NonInteractive -Command '\$null = Write-Output x'; t unset-write-output-again \"\$PS\" -NoProfile -NonInteractive -Command '\$null = Write-Output x'"
+          echo "--- cold, with module auto-loading off and explicit imports"
+          PSModuleAnalysisCachePath="$T\\n1" t cold-noautoload-import "$PS" -NoProfile -NonInteractive -Command '$PSModuleAutoLoadingPreference = "None"; Import-Module Microsoft.PowerShell.Utility; $null = Write-Output x; $null = New-Object IO.MemoryStream; Add-Type -TypeDefinition "public static class P2 { public static int X() { return 1; } }"'
+          PSModuleAnalysisCachePath="$T\\n2" t cold-noautoload-exec "$PS" -NoProfile -NonInteractive -Command '$PSModuleAutoLoadingPreference = "None"; exec sh'
+          PSModuleAnalysisCachePath="$T\\n3" t cold-noautoload-missing "$PS" -NoProfile -NonInteractive -Command '$PSModuleAutoLoadingPreference = "None"; $null = Write-Output x'
+          echo "--- is a cold start visible while it runs"
+          (PSModuleAnalysisCachePath="$T\\v1" "$PS" -NoProfile -NonInteractive -Command '$null = Write-Output x' >"$RUNNER_TEMP/v1.out" 2>"$RUNNER_TEMP/v1.err") &
+          sleep 8
+          echo "stderr bytes at 8 s: $(wc -c < "$RUNNER_TEMP/v1.err")"
+          "$PS" -NoProfile -NonInteractive -Command 'Import-Module Microsoft.PowerShell.Management; Get-CimInstance Win32_Process -Filter "Name=''powershell.exe''" | % { $p = Get-Process -Id $_.ProcessId; "{0} cpu={1:n1}s threads={2} {3}" -f $_.ProcessId, $p.CPU, $p.Threads.Count, $_.CommandLine }'
+          wait
+          echo "stderr at end: $(head -c 400 "$RUNNER_TEMP/v1.err" | tr '\r\n' '  ')"
