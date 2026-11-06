@@ -2620,10 +2620,11 @@ impl crate::product_analytics::Sink for DeviceStatistics {
     }
 }
 
-/// A completed bootstrap is one attempt, even when status reads, snapshots,
-/// or another completion arrive. A reconnect is a new attempt.
+/// A completed bootstrap is one outcome, even when status reads, snapshots,
+/// or another completion arrive. A reconnect that is ready again, as after
+/// the device slept, is the same state and sends nothing.
 #[test]
-fn device_connect_statistics_count_each_ready_bootstrap_once() {
+fn device_connect_statistics_count_a_ready_device_once_across_reconnects() {
     use crate::product_analytics::{DeviceOutcome, DevicePlatform, Event};
     let shared = with_consent(None);
     let statistics = Arc::new(DeviceStatistics::default());
@@ -2660,15 +2661,60 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
     }
     assert_eq!(
         *statistics.0.lock().unwrap(),
+        [Event::DeviceConnected {
+            outcome: DeviceOutcome::Ready,
+            platform: DevicePlatform::MacosAarch64,
+        }]
+    );
+}
+
+/// An unreachable device is retried every minute while it stays off; only
+/// a change of outcome is sent, so its retries count as one failure.
+#[test]
+fn device_connect_statistics_send_only_a_changed_outcome() {
+    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    let shared = with_consent(None);
+    let statistics = Arc::new(DeviceStatistics::default());
+    let helper = KitDevice::answering(Ok(installed()));
+    let fail = |times: usize| {
+        let mut runtime = shared.lock().unwrap();
+        for _ in 0..times {
+            runtime.begin_device_connect(DEVICE);
+            runtime.fail_device_connect_install(DEVICE);
+        }
+    };
+    let ready = || {
+        let mut runtime = shared.lock().unwrap();
+        runtime.close_device_host(DEVICE, "fixture reconnect");
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+        runtime.begin_device_connect(DEVICE);
+        let generation = runtime.device_host_generation(DEVICE);
+        let mut connected = established(helper.clone(), None);
+        connected.kit = Some(Ok(Box::new(installed())));
+        runtime.ingest_host_established(
+            DEVICE,
+            generation,
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
+        );
+    };
+    shared.lock().unwrap().product_analytics = Some(statistics.clone());
+    fail(3);
+    ready();
+    settle(&shared);
+    fail(2);
+    let failed = Event::DeviceConnected {
+        outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+        platform: DevicePlatform::Unknown,
+    };
+    assert_eq!(
+        *statistics.0.lock().unwrap(),
         [
+            failed,
             Event::DeviceConnected {
                 outcome: DeviceOutcome::Ready,
                 platform: DevicePlatform::MacosAarch64,
             },
-            Event::DeviceConnected {
-                outcome: DeviceOutcome::Ready,
-                platform: DevicePlatform::MacosAarch64,
-            },
+            failed,
         ]
     );
 }
