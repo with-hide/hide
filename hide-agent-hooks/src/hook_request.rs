@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use hide_platform::fs::private;
 use hide_platform::ipc::LocalStream;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::report::HookStatusReport;
 
@@ -232,15 +232,31 @@ pub fn workspace_bridges(state_dir: &Path) -> PathBuf {
     state_dir.join("workspace-bridges")
 }
 
-/// Connects to each node pane service that lives in `bridge_dir`, each
-/// connect waiting no later than `deadline`, which then bounds the stream.
+/// The node pane services in a bridges folder that may answer for a pane
+/// ([`install::may_answer`]), connected, and whether a live one was left out
+/// because it declares another installation than the pane's.
+pub struct LiveBridges {
+    pub streams: Vec<LocalStream>,
+    pub others: bool,
+}
+
+/// Connects to each node pane service that lives in `bridge_dir` and may
+/// answer for a pane naming `install`, each connect waiting no later than
+/// `deadline`, which then bounds the stream. A service that declares another
+/// installation is never connected to.
 pub fn live_bridges(
     bridge_dir: &Path,
     deadline: Instant,
-) -> Result<Vec<LocalStream>, &'static str> {
+    install: Option<&str>,
+) -> Result<LiveBridges, &'static str> {
     let metadata = match std::fs::symlink_metadata(bridge_dir) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LiveBridges {
+                streams: Vec::new(),
+                others: false,
+            });
+        }
         Err(_) => return Err("bridge_unavailable"),
     };
     if !metadata.is_dir()
@@ -252,10 +268,16 @@ pub fn live_bridges(
     }
     let entries = match std::fs::read_dir(bridge_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LiveBridges {
+                streams: Vec::new(),
+                others: false,
+            });
+        }
         Err(_) => return Err("bridge_unavailable"),
     };
     let mut streams = Vec::new();
+    let mut others = false;
     for entry in entries {
         let entry = entry.map_err(|_| "bridge_unavailable")?;
         if !entry.file_name().to_string_lossy().starts_with("bridge-") {
@@ -273,6 +295,10 @@ pub fn live_bridges(
         {
             continue;
         }
+        if !install::may_answer(&install::bridge_declared(&entry.path()), install) {
+            others = true;
+            continue;
+        }
         let Ok(stream) = LocalStream::connect_until(&socket, deadline) else {
             continue;
         };
@@ -281,7 +307,7 @@ pub fn live_bridges(
             return Err("bridge_limit");
         }
     }
-    Ok(streams)
+    Ok(LiveBridges { streams, others })
 }
 
 /// A fresh request id: the time and 16 random bytes.
@@ -317,7 +343,8 @@ enum Way<'a> {
     Node(PathBuf),
     /// The bootstrap socket the daemon of this state folder recorded.
     Daemon(&'a Path),
-    /// This device's node pane service, when exactly one is live.
+    /// This device's node pane service, when exactly one may be the pane's
+    /// ([`install::single_bridge`]).
     Bridges,
 }
 
@@ -373,7 +400,10 @@ pub struct Sent {
 ///
 /// The request goes to the route the pane's reference names, else to this
 /// account's daemon and this device's node in the order the pane's
-/// installation calls for ([`install::asks_bridges_first`]). It moves on to
+/// installation calls for ([`install::order`]). Of the device's nodes, it
+/// goes to the one that may be the pane's ([`install::single_bridge`]): a
+/// node declaring another installation is never asked, and with more than
+/// one left the command goes to none. It moves on to
 /// the next only when nothing ran: nothing took the connection, or a daemon
 /// or node of another installation refused it ([`install::OTHER_INSTALL`]).
 /// Any other answer is the request's, and neither a refusal nor a lost answer
@@ -438,10 +468,10 @@ pub fn send(
                 ),
                 Way::Bridges,
             ],
-            None if install::asks_bridges_first(caller.install) => {
-                [Way::Bridges, Way::Daemon(caller.state_dir)]
-            }
-            None => [Way::Daemon(caller.state_dir), Way::Bridges],
+            None => install::order(caller.install).map(|ask| match ask {
+                install::Ask::Daemon => Way::Daemon(caller.state_dir),
+                install::Ask::Bridges => Way::Bridges,
+            }),
         };
         let nonce = random_hex::<16>()?;
         let one_shot = command.one_shot();
@@ -452,14 +482,14 @@ pub fn send(
                 command: command.clone(),
                 token: token.clone(),
             };
-            let request = json!({
-                "pane_id": caller.pane_id.unwrap_or(""),
-                "nonce": nonce,
-                "one_shot": one_shot,
-                "hook": hook,
-                "install": caller.install,
-            });
-            let line = request.to_string();
+            let request = install::PaneRequest {
+                pane_id: caller.pane_id.unwrap_or("").to_owned(),
+                nonce: nonce.clone(),
+                one_shot,
+                hook: Some(hook),
+                install: caller.install.map(str::to_owned),
+            };
+            let line = serde_json::to_string(&request).map_err(|_| "invalid_request")?;
             if line.len() < HOOK_REQUEST_LIMIT {
                 break line;
             }
@@ -486,11 +516,13 @@ pub fn send(
                     .map_err(|refusal| (refusal.code(), None))
                     .and_then(|socket| connect(&socket)),
                 Way::Bridges => {
-                    let mut bridges = live_bridges(&workspace_bridges(caller.state_dir), deadline)?;
-                    if bridges.len() > 1 {
-                        return Err("ambiguous_pane".into());
-                    }
-                    match bridges.pop() {
+                    let bridges = live_bridges(
+                        &workspace_bridges(caller.state_dir),
+                        deadline,
+                        caller.install,
+                    )?;
+                    other_install |= bridges.others;
+                    match install::single_bridge(bridges.streams)? {
                         Some(stream) => Ok(stream),
                         None => continue,
                     }

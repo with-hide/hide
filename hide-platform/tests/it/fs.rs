@@ -2260,6 +2260,73 @@ fn until_free(folder: &Path) {
     }
 }
 
+/// A running program is replaced by name on every system, and it runs on
+/// from the file it started from: Windows refuses to replace its image, so
+/// the program is set aside under another name, which goes once the
+/// program has ended. macOS and Linux set nothing aside.
+#[test]
+fn a_running_program_is_replaced_and_its_set_aside_copy_goes_once_it_ends() {
+    let sandbox = folder();
+    let program = sandbox
+        .path()
+        .join(format!("program{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(std::env::current_exe().unwrap(), &program).unwrap();
+    #[cfg(windows)]
+    until_free(sandbox.path());
+    let mut running = Killed(
+        Command::new(&program)
+            .args([
+                "--exact",
+                "fs::idle_role",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(ROLE, "idle")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = running.0.stdout.take().unwrap();
+    let ready = BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line.contains("READY"));
+    assert!(ready, "the program never started");
+
+    let new = sandbox.path().join("new");
+    fs::write(&new, "the next build").unwrap();
+    atomic::replace_program(&new, &program).unwrap();
+    assert_eq!(read(&program), "the next build");
+    assert!(!new.exists());
+    assert_eq!(
+        running.0.try_wait().unwrap(),
+        None,
+        "the old program runs on"
+    );
+    let set_aside = names(sandbox.path()).len() - 1;
+    assert_eq!(
+        set_aside,
+        usize::from(cfg!(windows)),
+        "{:?}",
+        names(sandbox.path())
+    );
+    assert_eq!(atomic::remove_set_aside(&program).unwrap(), set_aside);
+
+    drop(running);
+    #[cfg(windows)]
+    until_free(sandbox.path());
+    assert_eq!(atomic::remove_set_aside(&program).unwrap(), 0);
+    assert_eq!(
+        names(sandbox.path()),
+        vec![program.file_name().unwrap().to_string_lossy().into_owned()]
+    );
+    // Nothing runs it now, so the next replacement takes the name in one step.
+    fs::write(&new, "a third build").unwrap();
+    atomic::replace_program(&new, &program).unwrap();
+    assert_eq!(read(&program), "a third build");
+    assert_eq!(names(sandbox.path()).len(), 1);
+}
+
 /// A folder whose files nothing holds is free to remove, on every system.
 #[test]
 fn a_folder_nothing_holds_is_not_in_use() {

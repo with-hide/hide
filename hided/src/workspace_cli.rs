@@ -21,9 +21,7 @@ use hide_platform::ipc::LocalStream;
 use crate::env::Env;
 use crate::pane_auth::{Reference, Route};
 use crate::state_file::SCHEMA_VERSION;
-#[cfg(test)]
-use hide_agent_hooks::hook_request::install::INSTALL_UNCONFIRMED;
-use hide_agent_hooks::hook_request::install::{self, OTHER_INSTALL, asks_bridges_first};
+use hide_agent_hooks::hook_request::install::{self, Ask, PaneRequest};
 use hide_agent_hooks::hook_request::node_socket;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -170,27 +168,33 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
     // The pane's installation goes with it, so a daemon of another one
     // refuses it rather than bind it by its folder (`pane_auth`).
-    let request = json!({"pane_id":pane_id,"nonce":hex::encode(nonce),"one_shot":one_shot,
-        "install":env.install});
+    let request = PaneRequest {
+        pane_id: pane_id.to_owned(),
+        nonce: hex::encode(nonce),
+        one_shot,
+        hook: None,
+        install: env.install.clone(),
+    };
+    let request = serde_json::to_value(&request).map_err(|_| "reference_unavailable".to_owned())?;
     let install = env.install.as_deref();
     in_pane_order(
-        asks_bridges_first(install),
+        install::order(install),
         || bootstrap_local(env, &request, install),
         || bootstrap_remote(env, &request, install),
     )
 }
 
 /// Asks this account's daemon (`local`) and the device bridges (`remote`) for
-/// the pane in the order its installation calls for ([`asks_bridges_first`]).
+/// the pane in the order its installation calls for ([`install::order`]).
 /// A pane that asks the daemon first, and hears both refuse, reports the
 /// bridge's reason: a daemon in the node role opens no bootstrap socket, so
 /// its node is the one that can say why.
 fn in_pane_order(
-    device_pane: bool,
+    order: [Ask; 2],
     local: impl FnOnce() -> Result<PathBuf, String>,
     remote: impl FnOnce() -> Result<Option<PathBuf>, String>,
 ) -> Result<PathBuf, String> {
-    if device_pane {
+    if order[0] == Ask::Bridges {
         return match remote() {
             Ok(Some(path)) => Ok(path),
             Ok(None) => local(),
@@ -252,61 +256,43 @@ fn bootstrap_remote(
     )
 }
 
-/// [`hide_agent_hooks::hook_request::live_bridges`], its reason owned.
-fn live_bridges(bridge_dir: &Path, deadline: Instant) -> Result<Vec<LocalStream>, String> {
-    hide_agent_hooks::hook_request::live_bridges(bridge_dir, deadline).map_err(str::to_owned)
+/// [`hide_agent_hooks::hook_request::live_bridges`] that may answer for a
+/// pane naming `install`, its reason owned.
+fn live_bridges(
+    bridge_dir: &Path,
+    deadline: Instant,
+    install: Option<&str>,
+) -> Result<Vec<LocalStream>, String> {
+    hide_agent_hooks::hook_request::live_bridges(bridge_dir, deadline, install)
+        .map(|bridges| bridges.streams)
+        .map_err(str::to_owned)
 }
 
-/// A bridge whose answer does not confirm `install` is not this pane's node,
-/// so it neither succeeds nor makes the pane ambiguous.
+/// Asks each bridge that may answer for a pane naming `install` in turn
+/// ([`install::settle_bridges`]): one whose answer does not confirm
+/// `install` is not this pane's node, so it neither succeeds nor makes the
+/// pane ambiguous.
 fn bootstrap_bridges(
     bridge_dir: &Path,
     request: &Value,
     install: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
-    let answers = live_bridges(bridge_dir, Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT)?
-        .into_iter()
-        .map(|mut stream| {
-            // Each bridge has the whole time: one answers after the one before.
-            stream.set_deadline(Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT);
-            writeln!(stream, "{request}").map_err(|_| "bridge_unavailable".to_owned())?;
-            match read_bootstrap_answer(&mut stream, install)? {
-                path if path.starts_with(bridge_dir) => Ok(path),
-                _ => Err("invalid_reference".to_owned()),
-            }
-        });
-    settle_bridge_answers(answers)
-}
-
-/// The pane's reference from the bridges' answers, read in turn: the one
-/// reference, `ambiguous_pane` at a second, or the last refusal of a node
-/// that may be the pane's. A node of another installation (`other_install`)
-/// is not the pane's, so its refusal is no answer and never replaces the
-/// pane's own installation's reason.
-fn settle_bridge_answers(
-    answers: impl IntoIterator<Item = Result<PathBuf, String>>,
-) -> Result<Option<PathBuf>, String> {
-    let mut success = None;
-    let mut reason = None;
-    for answer in answers {
-        match answer {
-            Ok(path) => {
-                if success.is_some() {
-                    // A bridge may return a persistent reference already held
-                    // by a live pane. Ambiguity cannot revoke either holder.
-                    return Err("ambiguous_pane".to_owned());
-                }
-                success = Some(path);
-            }
-            Err(error) if error == OTHER_INSTALL => {}
-            Err(error) => reason = Some(error),
+    let answers = live_bridges(
+        bridge_dir,
+        Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT,
+        install,
+    )?
+    .into_iter()
+    .map(|mut stream| {
+        // Each bridge has the whole time: one answers after the one before.
+        stream.set_deadline(Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT);
+        writeln!(stream, "{request}").map_err(|_| "bridge_unavailable".to_owned())?;
+        match read_bootstrap_answer(&mut stream, install)? {
+            path if path.starts_with(bridge_dir) => Ok(path),
+            _ => Err("invalid_reference".to_owned()),
         }
-    }
-    match (success, reason) {
-        (Some(path), _) => Ok(Some(path)),
-        (None, Some(reason)) => Err(reason),
-        (None, None) => Ok(None),
-    }
+    });
+    install::settle_bridges(answers)
 }
 
 /// [`hide_agent_hooks::hook_request::read_reference`], its reason owned.
@@ -552,7 +538,8 @@ pub fn request_project_open_on_bridge(env: &Env, path: &str) -> Result<Value, St
 }
 
 fn project_open_on_bridge(bridge_dir: &Path, path: &str) -> Result<Value, String> {
-    let mut bridges = live_bridges(bridge_dir, Instant::now() + TIMEOUT)?;
+    // A plain shell names no installation, so every live node may be meant.
+    let mut bridges = live_bridges(bridge_dir, Instant::now() + TIMEOUT, None)?;
     let mut stream = match bridges.len() {
         0 => return Err(NOT_LINKED.to_owned()),
         1 => bridges.remove(0),
@@ -1309,6 +1296,7 @@ async fn claim(socket: &mut WorkspaceSocket, path: &Path) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hide_agent_hooks::hook_request::install::{INSTALL_UNCONFIRMED, OTHER_INSTALL};
     use std::sync::{Arc, mpsc};
 
     /// A bootstrap listener recorded in `state` as a running daemon records
@@ -1549,6 +1537,102 @@ mod tests {
         assert_eq!(ask(Some(app), Some("root:/helper")), unconfirmed);
         assert_eq!(ask(Some(app), Some(app)), Ok(true));
         assert_eq!(ask(None, None), Ok(true));
+    }
+
+    /// A node pane service in this state folder's bridges, in its own folder
+    /// `name`, that declares `declared` as a current node does, or nothing
+    /// as an earlier one.
+    fn declared_bridge(
+        state: &Path,
+        name: &str,
+        declared: Option<Option<&str>>,
+        answer: impl Fn(&Value) -> Value + Send + 'static,
+    ) -> (PathBuf, Asked) {
+        let bridges = hide_kit::layout::workspace_bridges(state);
+        private::create_dir_all(&bridges).unwrap();
+        let folder = bridges.join(name);
+        private::create_dir(&folder).unwrap();
+        if let Some(install) = declared {
+            install::declare_bridge(&folder, install).unwrap();
+        }
+        let listener =
+            hide_platform::ipc::LocalListener::bind(&folder.join("bootstrap.sock")).unwrap();
+        (folder, Asked::serve(Box::new(listener), answer))
+    }
+
+    /// Two nodes in one device's bridges folder, the pane's own and another
+    /// installation's: the pane's hook and its `hide` both take the own
+    /// node's answer, and neither ever asks the other node
+    /// (with-hide/hide-private#622, group C).
+    #[test]
+    fn a_hook_and_hide_answer_alike_beside_another_installations_node() {
+        let state = short_dir();
+        let pane = hide_agent_hooks::route::install_of_root(&state.path().join("helper"));
+        let bridges = hide_kit::layout::workspace_bridges(state.path());
+        let reference = bridges.join("bridge-own").join("ref.json");
+        let wire = hide_platform::path::to_wire(&reference).unwrap();
+        let run = ran(Some(&pane));
+        let own_install = pane.clone();
+        let (_, own) = declared_bridge(
+            state.path(),
+            "bridge-own",
+            Some(Some(&pane)),
+            move |request| {
+                if request["hook"].is_object() {
+                    run(request)
+                } else {
+                    json!({"ok": true, "reference": wire, "install": own_install})
+                }
+            },
+        );
+        let (_, other) = declared_bridge(
+            state.path(),
+            "bridge-other",
+            Some(Some(hide_agent_hooks::route::APP_INSTALL)),
+            refuses_other_install,
+        );
+        let mut env = env_at(state.path());
+        env.install = Some(pane.clone());
+        assert_eq!(ask_hook(&env).map(|answer| answer["ok"] == true), Ok(true));
+        assert_eq!(bootstrap(&env, true), Ok(reference));
+        let asked = own.close();
+        assert_eq!(asked.len(), 2, "the own node is asked by each: {asked:?}");
+        assert!(
+            asked
+                .iter()
+                .all(|request| request["install"] == json!(pane))
+        );
+        assert_eq!(
+            other.close(),
+            Vec::<Value>::new(),
+            "another installation's node is never asked"
+        );
+    }
+
+    /// A hook's command lands on at most one node: with two that may each be
+    /// the pane's, the pane's own by its declaration and one from before
+    /// nodes declared theirs, the hook asks neither and says why.
+    #[test]
+    fn a_hooks_command_reaches_at_most_one_node() {
+        let state = short_dir();
+        let pane = hide_agent_hooks::route::install_of_root(&state.path().join("helper"));
+        let (_, own) = declared_bridge(
+            state.path(),
+            "bridge-own",
+            Some(Some(&pane)),
+            ran(Some(&pane)),
+        );
+        let (_, earlier) = declared_bridge(state.path(), "bridge-earlier", None, ran(Some(&pane)));
+        let daemon = Asked::daemon(state.path(), refuses_other_install);
+        let mut env = env_at(state.path());
+        env.install = Some(pane);
+        assert_eq!(
+            ask_hook(&env),
+            Err((install::AMBIGUOUS_PANE.to_owned(), "refused"))
+        );
+        assert_eq!(own.close(), Vec::<Value>::new());
+        assert_eq!(earlier.close(), Vec::<Value>::new());
+        assert_eq!(daemon.close(), Vec::<Value>::new());
     }
 
     /// A device helper's pane is its node's, so its hook asks the node
@@ -1898,49 +1982,23 @@ mod tests {
     fn a_panes_hide_reaches_the_installation_that_started_it() {
         let daemon = || Ok(PathBuf::from("daemon"));
         let bridge = || Ok(Some(PathBuf::from("bridge")));
-        assert_eq!(in_pane_order(true, daemon, bridge), Ok("bridge".into()));
-        assert_eq!(in_pane_order(false, daemon, bridge), Ok("daemon".into()));
+        let device = install::order(Some("root:/helper"));
+        let app = install::order(Some(hide_agent_hooks::route::APP_INSTALL));
+        assert_eq!(in_pane_order(device, daemon, bridge), Ok("bridge".into()));
+        assert_eq!(in_pane_order(app, daemon, bridge), Ok("daemon".into()));
         // A node that does not hold the pane leaves it to the daemon.
         assert_eq!(
-            in_pane_order(true, daemon, || Ok(None)),
+            in_pane_order(device, daemon, || Ok(None)),
             Ok("daemon".into())
         );
         // Refused by both, a device pane says why its node refused.
         assert_eq!(
             in_pane_order(
-                true,
+                device,
                 || Err("hide_unavailable".to_owned()),
                 || Err("pane_unavailable".to_owned())
             ),
             Err("pane_unavailable".to_owned())
-        );
-    }
-
-    /// A node of another installation refuses the pane (`other_install`),
-    /// which says nothing about the pane: in either order it neither
-    /// replaces the reason of a node that may be the pane's nor counts as an
-    /// answer, while a second reference still makes the pane ambiguous.
-    #[test]
-    fn another_installations_refusal_never_replaces_the_panes_own_reason() {
-        let other = || Err::<PathBuf, _>(OTHER_INSTALL.to_owned());
-        let unconfirmed = || Err::<PathBuf, _>(INSTALL_UNCONFIRMED.to_owned());
-        assert_eq!(
-            settle_bridge_answers([unconfirmed(), other()]),
-            Err(INSTALL_UNCONFIRMED.to_owned())
-        );
-        assert_eq!(
-            settle_bridge_answers([other(), unconfirmed()]),
-            Err(INSTALL_UNCONFIRMED.to_owned())
-        );
-        assert_eq!(settle_bridge_answers([other(), other()]), Ok(None));
-        let path = || Ok::<_, String>(PathBuf::from("reference"));
-        assert_eq!(
-            settle_bridge_answers([other(), path(), unconfirmed()]),
-            Ok(Some(PathBuf::from("reference")))
-        );
-        assert_eq!(
-            settle_bridge_answers([path(), other(), path()]),
-            Err("ambiguous_pane".to_owned())
         );
     }
 

@@ -25,6 +25,7 @@ pub mod agents;
 mod cli;
 mod codex_trust;
 mod coordination_retirement;
+pub mod current;
 mod device;
 pub mod device_herdr;
 mod herdr_integration;
@@ -57,7 +58,8 @@ pub use agents::{
     AgentAdapter, AgentReport, Availability, Feature, HookSupport, PieceReport, SkillDir,
 };
 pub use coordination_retirement::preflight as retirement_preflight;
-pub use device::{CURRENT, device_target};
+pub use current::CURRENT;
+pub use device::device_target;
 pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
