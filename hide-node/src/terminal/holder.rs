@@ -936,18 +936,9 @@ impl Holders {
             let reconciled = self.panes.reconcile(owner, RECONCILE_BUDGET);
             let pending = reconciled.pending();
             recovered.complete = reconciled.is_complete();
-            for (pane, judgment) in reconciled.panes {
-                let waits = matches!(judgment, Judgment::Pending(_) | Judgment::Starting(_));
-                // A pane a round took up keeps what it was found; one left
-                // pending takes what a later round finds.
-                let settled = judged.get(&pane).is_some_and(|earlier| {
-                    !matches!(earlier, Judgment::Pending(_) | Judgment::Starting(_))
-                });
-                if !settled && !(waits && judged.contains_key(&pane)) {
-                    judged.insert(pane, judgment);
-                }
-            }
+            let unsettled = take_round(&mut judged, reconciled.panes);
             failed = reconciled.failed;
+            recovered.complete = recovered.complete && unsettled == 0;
             if recovered.complete {
                 break;
             }
@@ -956,6 +947,7 @@ impl Holders {
                 "kind": "pane_holder.reconcile_pending",
                 "round": round,
                 "pending": pending,
+                "unsettled": unsettled,
             }));
         }
         let mut alive = Vec::new();
@@ -1007,6 +999,18 @@ impl Holders {
         }
         if let Some(failed) = failed {
             recovered.unjudged.push((String::new(), failed));
+        }
+        if !recovered.unjudged.is_empty() {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.recovery_unjudged",
+                "rounds": RECONCILE_ROUNDS,
+                "panes": recovered
+                    .unjudged
+                    .iter()
+                    .map(|(pane, why)| json!({ "pane": pane, "reason": why }))
+                    .collect::<Vec<_>>(),
+            }));
         }
         let present = alive
             .iter()
@@ -1221,6 +1225,33 @@ fn finished(reason: Option<EndReason>) -> bool {
     )
 }
 
+/// Takes one reconcile round's judgments into `judged` and answers how many
+/// panes are left whose records could not be written. A pane a round took
+/// up keeps what it was found; one left pending, one whose start is under
+/// way, and one whose record could not be written (its lock held past its
+/// wait, as a machine under load holds it) take what a later round finds,
+/// except that a later round's pending or starting never replaces an
+/// earlier answer. Left unwritten, a pane would count as running and its
+/// shell would never start again.
+fn take_round(judged: &mut BTreeMap<String, Judgment>, round: BTreeMap<String, Judgment>) -> usize {
+    for (pane, judgment) in round {
+        let waits = matches!(judgment, Judgment::Pending(_) | Judgment::Starting(_));
+        let settled = judged.get(&pane).is_some_and(|earlier| {
+            !matches!(
+                earlier,
+                Judgment::Pending(_) | Judgment::Starting(_) | Judgment::Unsettled(_)
+            )
+        });
+        if !settled && !(waits && judged.contains_key(&pane)) {
+            judged.insert(pane, judgment);
+        }
+    }
+    judged
+        .values()
+        .filter(|judgment| matches!(judgment, Judgment::Unsettled(_)))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1311,6 +1342,63 @@ mod tests {
         ] {
             assert_eq!(finished(reason), closes, "{reason:?}");
         }
+    }
+
+    /// After a reboot a loaded machine held the records' lock past its wait
+    /// and nine panes stayed unwritten: counted as running, their shells
+    /// never started. A record that could not be written is judged again by
+    /// the next round, and its answer is kept.
+    #[test]
+    fn a_record_that_could_not_be_written_is_judged_again_by_the_next_round() {
+        use hide_holder_protocol::record::{self, End, Phase};
+        let ended = |pane: &str| {
+            Judgment::Ended(PaneRecord {
+                format: record::LEGACY_RECORD_FORMAT,
+                pane: pane.to_owned(),
+                owner: "1:2".to_owned(),
+                incarnation: 1,
+                phase: Phase::Ended,
+                protocol: hide_holder_protocol::PROTOCOL_VERSION,
+                version_folder: String::new(),
+                spec: String::new(),
+                reservation: None,
+                reserved_at_unix_ms: 0,
+                boot: None,
+                holder: None,
+                program: None,
+                end: Some(End::new(EndReason::MachineRestarted, "earlier boot")),
+            })
+        };
+        let unsettled = || Judgment::Unsettled("the records' lock was held for 5 s".into());
+        let mut judged = BTreeMap::new();
+        let first = BTreeMap::from([
+            ("p1".to_owned(), unsettled()),
+            ("p2".to_owned(), ended("p2")),
+        ]);
+        assert_eq!(
+            take_round(&mut judged, first),
+            1,
+            "the unwritten pane is left"
+        );
+
+        let second = BTreeMap::from([
+            ("p1".to_owned(), ended("p1")),
+            ("p2".to_owned(), unsettled()),
+        ]);
+        assert_eq!(
+            take_round(&mut judged, second),
+            0,
+            "the next round wrote it"
+        );
+        assert!(
+            matches!(judged["p1"], Judgment::Ended(_)),
+            "{:?}",
+            judged["p1"]
+        );
+        assert!(
+            matches!(judged["p2"], Judgment::Ended(_)),
+            "a pane already settled keeps what it was found"
+        );
     }
 
     #[test]

@@ -310,6 +310,7 @@ impl SleepRecord {
             telemetry_stale: false,
             terminal_failed: false,
             launch_pending: false,
+            start_unshown: false,
             id: Some(
                 self.agent_name
                     .clone()
@@ -445,7 +446,13 @@ impl AgentSleepStore {
             // Only an entry that names a provider and carries another state
             // sequence is a new agent. The ended agent can stay listed a
             // moment with its old sequence, and a pane whose metadata a
-            // plugin reports stays listed with no provider at all.
+            // plugin reports stays listed with no provider at all. A start
+            // the engine typed and whose program has not shown is not one
+            // yet: the wake's own start is listed so before its input is
+            // even delivered, and a refused or failed start must find the
+            // record still there to say why. A program that shows is one,
+            // whatever its start still waits on (a question it asks keeps
+            // `launch_pending`), so the operator's keys reach it.
             let new_agent = payload.agents.iter().any(|agent| {
                 agent.pane_id.as_deref().or(agent.id.as_deref()) == Some(session_pane_id)
                     && agent
@@ -453,6 +460,7 @@ impl AgentSleepStore {
                         .as_deref()
                         .is_some_and(|kind| !kind.trim().is_empty())
                     && agent.state_change_seq != record.state_change_seq
+                    && !agent.start_unshown
             });
             if new_agent {
                 settled.push(Settled::Woke {
@@ -1047,6 +1055,33 @@ mod tests {
                 .iter()
                 .all(|agent| agent.agent.as_deref() == Some("claude"))
         );
+
+        // The wake's own start, typed and not shown yet, is no new agent.
+        let starting = serde_json::json!([{"pane_id": "w1:p1", "agent": "claude",
+            "agent_status": "unknown", "state_change_seq": 0, "launch_pending": true,
+            "start_unshown": true}]);
+        let mut session = payload(starting, &["w1:p1", "w1:p2"]);
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core)
+                .is_empty(),
+            "a start whose program has not shown wakes nothing"
+        );
+        assert_eq!(store.records.len(), 2);
+
+        // A program that showed is the new agent even while its start waits
+        // on a question it asks (folder trust), so the operator can answer.
+        let asking = serde_json::json!([{"pane_id": "w1:p2", "agent": "claude",
+            "agent_status": "blocked", "state_change_seq": 8, "launch_pending": true}]);
+        let mut session = payload(asking, &["w1:p1", "w1:p2"]);
+        assert_eq!(
+            store.settle_payload(&mut session, SleepScope::Core),
+            [Settled::Woke {
+                pane_id: "w1:p2".into(),
+                phase: SleepPhase::Sleeping
+            }]
+        );
+        asleep(&mut store, &agent("w1:p2"));
 
         let fresh = serde_json::json!([{"pane_id": "w1:p1", "agent": "claude",
             "agent_status": "idle", "state_change_seq": 9}]);

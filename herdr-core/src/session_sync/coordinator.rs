@@ -552,6 +552,7 @@ fn publish_session(
     labels: &mut Option<LabelWorker>,
 ) -> bool {
     let mut payload = session.project();
+    let resting = session.published_state().resting_payloads();
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
@@ -798,9 +799,14 @@ fn publish_session(
     };
     let (changed, readback) = match runtime.lock() {
         Ok(mut guard) => {
+            // A restore's resting agents become sleeping records first, so
+            // this ingest draws their rows as sleeping.
+            let kept = guard.adopt_resting(resting, overlay.as_ref());
             // The ingest observes this payload for delivery and lays the
             // turns its observations wait on, with this pass's overlay.
-            guard.ingest_observed_session(payload, Some(precomputed), host_scope, overlay)
+            let (changed, readback) =
+                guard.ingest_observed_session(payload, Some(precomputed), host_scope, overlay);
+            (changed || kept, readback)
         }
         Err(_) => return false,
     };
