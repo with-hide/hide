@@ -294,7 +294,9 @@ for (const [name] of shipped) {
   if (!fs.statSync(file).isFile()) throw new Error(`${name} did not land as a file in ${bundledResources}`);
 }
 if (platform === "win32") {
-  for (const file of ["conpty.dll", "x64/OpenConsole.exe", "arm64/OpenConsole.exe", "conpty-files.json"]) {
+  // The files contracts/conpty.json pins and the file list the fetch writes beside them.
+  const pinned = Object.keys(JSON.parse(fs.readFileSync(path.join(repo, "contracts", "conpty.json"), "utf8")).files);
+  for (const file of [...pinned, "conpty-files.json"]) {
     if (!fs.statSync(path.join(bundledResources, HOLDER_CONPTY, file), { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`the holder's ConPTY runtime ${file} did not land in ${path.join(bundledResources, HOLDER_CONPTY)}`);
     }

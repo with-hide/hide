@@ -399,6 +399,7 @@ The private workflow is maintained outside this repository; the public producer 
 
 Every core picks a device's programs by one rule (`HelperPackages`, `hide-node/src/ssh/kit/select.rs`), on the connection worker and never under the runtime mutex.
 A developer's `<name>-<os>-<arch>` file in the build's folder comes first (`holder-conpty-<os>-<arch>` for the Windows runtime folder); for the core's own platform, its own programs under their system's names come next; for any other platform the contract carries, the kit of this build's release.
+From a folder a device gets exactly the runtime files its kit names, the files a release kit carries, and a folder short of one is refused with its name; the Windows kit's runtime is held to `contracts/conpty.json` by hide-node's contract test, which a change to the pin runs.
 A build that is not a published release (a `-main.` or `0.0.0-` version, one without a commit, or one no package numbered, such as a plain `cargo build --release`, whose build order is 0) downloads nothing, and its refusal names the developer folder: `node desktop/scripts/device-helpers.mjs stage <device-bundles.json> <archive> <folder>` checks a release or CI kit against its manifest and unpacks it there under those names.
 
 The connection worker fetches `https://github.com/with-hide/hide/releases/download/v<app-version>/device-bundles.json`, then the kit's archive, over HTTPS with a 60-second request bound and at most five redirects; the manifest is capped at 64 KiB and a kit at 256 MiB.

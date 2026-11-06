@@ -99,19 +99,16 @@ pub(in crate::ssh) fn platform(os: &str, arch: &str) -> String {
     format!("{os}-{arch}")
 }
 
-/// Whether a device of `os`/`arch` may be served: a platform the contract
+/// The kit a device of `os`/`arch` is served from: a platform the contract
 /// refuses answers its reason, and one it carries no kit for answers that.
-pub(in crate::ssh) fn admit(os: &str, arch: &str, label: &str) -> Result<(), String> {
+pub(in crate::ssh) fn admit(os: &str, arch: &str, label: &str) -> Result<&'static Kit, String> {
     let contract = &*CONTRACT;
     if let Some(reason) = contract.refused.get(&platform(os, arch)) {
         return Err(reason.clone());
     }
-    if contract.kit(os, arch).is_none() {
-        return Err(format!(
-            "The device runs {label} on {arch}, for which Hide ships no device kit"
-        ));
-    }
-    Ok(())
+    contract.kit(os, arch).ok_or_else(|| {
+        format!("The device runs {label} on {arch}, for which Hide ships no device kit")
+    })
 }
 
 #[cfg(test)]
@@ -137,7 +134,12 @@ mod tests {
             let arch = raw["kits"][name]["arch"].as_str().unwrap();
             assert_eq!(*name, platform(os, arch));
             assert!(!contract.refused.contains_key(name), "{name}");
-            assert_eq!(kit.suffix, if os == "windows" { ".exe" } else { "" });
+            for program in &contract.programs {
+                assert_eq!(
+                    kit.program(program),
+                    crate::ssh::host::device_program(program, os)
+                );
+            }
             for path in kit.runtime.keys() {
                 assert!(
                     !path.starts_with('/')
@@ -151,6 +153,35 @@ mod tests {
             contract.asset("linux-aarch64", "1.2.3"),
             "hide-device-linux-aarch64-1.2.3.tar.gz"
         );
+    }
+
+    /// The Windows kit's runtime is the holder's ConPTY runtime as
+    /// `contracts/conpty.json` pins it: each pinned file, and the file list
+    /// `scripts/fetch-conpty.py` writes beside them, in the folder a node
+    /// finds it in. A file there is a program exactly when Windows starts
+    /// it, and no other kit carries a runtime. A pin that adds or renames a
+    /// file fails here, not first in a release's kit.
+    #[test]
+    fn the_windows_kit_runtime_is_the_pinned_conpty_runtime() {
+        let conpty: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../contracts/conpty.json")).unwrap();
+        let folder = hide_kit::holders::CONPTY_SOURCE;
+        let mut pinned = conpty["files"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|file| format!("{folder}/{file}"))
+            .collect::<Vec<_>>();
+        pinned.push(format!("{folder}/conpty-files.json"));
+        pinned.sort();
+        let windows = CONTRACT.kit("windows", "x86_64").unwrap();
+        assert_eq!(windows.runtime.keys().cloned().collect::<Vec<_>>(), pinned);
+        for (path, &program) in &windows.runtime {
+            assert_eq!(program, path.ends_with(".exe"), "{path}");
+        }
+        for kit in CONTRACT.kits.values() {
+            assert!(std::ptr::eq(kit, windows) || kit.runtime.is_empty());
+        }
     }
 
     /// The headers name the processors the kits are for, written here in

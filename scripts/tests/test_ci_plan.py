@@ -232,6 +232,14 @@ class Selection(unittest.TestCase):
         # package lane carries the kits.
         self.assertEqual(set(contract["lanes"]), set(node["lanes"]) | {"checks", "package"})
 
+    def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
+        pin = plan("contracts/conpty.json")
+        self.assertFalse(pin["full"])
+        self.assertIn("rust", pin["lanes"])
+        self.assertIn("hide-node", pin["rust_packages"])
+        # Its own lanes stay: the holder's Windows tests and the package.
+        self.assertLessEqual({"vt", "package", "windows-e2e", "holder-restart"}, set(pin["lanes"]))
+
     def test_the_wsl_lane_follows_the_crates_the_wsl_link_crosses(self):
         for path in (
             "hide-platform/src/wsl.rs", "hide-node/src/ssh/wsl.rs", "hide-node-link/src/device.rs",

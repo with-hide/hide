@@ -8,10 +8,11 @@
 
 use super::super::{
     CLI_NAME, EstablishError, HELPER_NAME, HOLDER_NAME, HOOKS_NAME, HelperPackages, Payload,
-    device_program, platform_label, read_folder, read_package,
+    device_program, platform_label, read_package,
 };
 use super::cache;
-use super::contract::CONTRACT;
+use super::contract::{CONTRACT, admit};
+use hide_kit::holders::CONPTY_SOURCE;
 use std::path::PathBuf;
 
 /// Where the core's own release keeps its assets.
@@ -86,7 +87,8 @@ impl HelperPackages {
 
     /// What a device of `os`/`arch` gets: the helper, the kit's parts, the
     /// pane holder, which runs the device's panes for the core's own
-    /// engine, and on Windows the ConPTY runtime the holder loads.
+    /// engine, and the runtime files its kit names, on Windows the ConPTY
+    /// runtime the holder loads.
     pub(in crate::ssh) fn payload_for(
         &self,
         os: &str,
@@ -95,6 +97,7 @@ impl HelperPackages {
         if let Source::Release = self.source(os, arch)? {
             return self.release_kit(os, arch);
         }
+        let kit = admit(os, arch, platform_label(os)).map_err(EstablishError::Unsupported)?;
         let mut payload = self.local(os, arch)?;
         // A build that does not carry the holder for the device's system
         // connects nothing rather than a node that could run no pane.
@@ -105,24 +108,34 @@ impl HelperPackages {
             ))
         })?;
         payload.files.push(
-            read_package(&device_program(HOLDER_NAME, os), &holder)
+            read_package(&device_program(HOLDER_NAME, os), &holder, os, arch)
                 .map_err(EstablishError::Install)?,
         );
-        // A Windows holder loads the pinned ConPTY runtime from the
-        // folder beside the node's program (`hide_kit::holders`).
-        if os == "windows" {
-            let conpty = self
-                .find_built_folder(hide_kit::holders::CONPTY_SOURCE, os, arch)
-                .map_err(|()| {
-                    EstablishError::Unsupported(format!(
-                        "This Hide build does not include the pane holder's ConPTY runtime for {} {arch}; the core's own engine cannot run this device's panes",
-                        platform_label(os)
-                    ))
-                })?;
-            payload.files.extend(
-                read_folder(hide_kit::holders::CONPTY_SOURCE, &conpty)
-                    .map_err(EstablishError::Install)?,
-            );
+        // A kit's runtime is the holder's pinned ConPTY runtime (Windows),
+        // which it loads from the folder beside the node's program
+        // (`hide_kit::holders`): each file the contract names, the same
+        // files a release kit carries, and nothing else in the folder.
+        if !kit.runtime.is_empty() {
+            let lacks = |what: &str| {
+                EstablishError::Unsupported(format!(
+                    "This Hide build does not include the pane holder's ConPTY runtime{what} for {} {arch}; the core's own engine cannot run this device's panes",
+                    platform_label(os)
+                ))
+            };
+            let folder = self
+                .find_built_folder(CONPTY_SOURCE, os, arch)
+                .map_err(|()| lacks(""))?;
+            for path in kit.runtime.keys() {
+                let file = path
+                    .strip_prefix(CONPTY_SOURCE)
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .map(|rest| folder.join(rest))
+                    .filter(|file| file.is_file())
+                    .ok_or_else(|| lacks(&format!(" file {path}")))?;
+                payload
+                    .files
+                    .push(read_package(path, &file, os, arch).map_err(EstablishError::Install)?);
+            }
         }
         Ok(payload)
     }
@@ -149,7 +162,7 @@ impl HelperPackages {
     /// by the same rule as the helper.
     fn local(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
         let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
-        let helper = read_package(&device_program(HELPER_NAME, os), &helper)
+        let helper = read_package(&device_program(HELPER_NAME, os), &helper, os, arch)
             .map_err(EstablishError::Install)?;
         let mut payload = Payload {
             files: vec![helper],
@@ -157,7 +170,7 @@ impl HelperPackages {
         };
         for name in [CLI_NAME, HOOKS_NAME] {
             match self.find_built_program(name, os, arch) {
-                Ok(path) => match read_package(&device_program(name, os), &path) {
+                Ok(path) => match read_package(&device_program(name, os), &path, os, arch) {
                     Ok(package) => payload.files.push(package),
                     Err(reason) => payload.missing.push(reason),
                 },

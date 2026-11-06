@@ -542,13 +542,20 @@ fn a_local_build_names_the_developer_folder_instead_of_downloading() {
     }
 }
 
-/// The Windows kit marks its files as programs exactly as a Windows core
-/// reads its own folder, so a Windows device holds one version folder for
-/// the same bytes whichever core sent them.
+/// A core whose files carry no mode (Windows) marks a file as a program
+/// exactly as the device's kit names it, the rule a release kit follows, so
+/// a device holds one version folder for the same bytes whichever core sent
+/// them: a Windows device's `.exe` programs and ConPTY runtime, a WSL
+/// distribution's programs by their bare names, and nothing for a file the
+/// device's kit does not name.
 #[test]
-fn the_windows_kit_marks_its_programs_as_a_windows_core_reads_them() {
-    let kit = &CONTRACT.kits["windows-x86_64"];
-    for (name, program) in kit.files(&CONTRACT.programs) {
-        assert_eq!(program_by_contract(&name), Some(program), "{name}");
-    }
+fn a_core_without_file_modes_marks_programs_by_the_device_kit() {
+    let windows = |relative| program_by_contract("windows", "x86_64", relative);
+    assert_eq!(windows("hide-holder.exe"), Some(true));
+    assert_eq!(windows("holder-conpty/x64/OpenConsole.exe"), Some(true));
+    assert_eq!(windows("holder-conpty/conpty.dll"), Some(false));
+    assert_eq!(windows("hided"), None);
+    assert_eq!(windows("holder-conpty/notes.txt"), None);
+    assert_eq!(program_by_contract("linux", "x86_64", "hided"), Some(true));
+    assert_eq!(program_by_contract("linux", "x86_64", "hided.exe"), None);
 }
