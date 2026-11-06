@@ -1091,9 +1091,6 @@ fn a_launched_first_input_reaches_npms_program_whole_in_powershell_7() {
 
 #[cfg(windows)]
 fn launched_input_reaches_npms_program(shell: &str) {
-    use hide_node_link::protocol::StartForm;
-    use hide_platform::programs::{self, Start};
-
     struct Running(BuiltHolders);
     impl Drop for Running {
         fn drop(&mut self) {
@@ -1110,43 +1107,10 @@ fn launched_input_reaches_npms_program(shell: &str) {
     // A local npm install of Codex whose script writes the words it was
     // given to the file its pane names.
     let install = tempfile::tempdir().unwrap();
-    let package = install
-        .path()
-        .join("node_modules")
-        .join("@openai")
-        .join("codex");
-    std::fs::create_dir_all(package.join("bin")).unwrap();
-    std::fs::write(
-        package.join("package.json"),
-        r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        package.join("bin").join("codex.js"),
-        "#!/usr/bin/env node\nrequire('fs').writeFileSync(process.env.HIDE_TEST_ARGV, JSON.stringify(process.argv.slice(2)));\n",
-    )
-    .unwrap();
-    let bin = install.path().join("node_modules").join(".bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let launcher = bin.join("codex.cmd");
-    std::fs::write(
-        &launcher,
-        include_str!("../../../hide-platform/tests/fixtures/launchers/npm-script.cmd"),
-    )
-    .unwrap();
-    // As a node answers `Call::AgentInstalled` (hide-host's
-    // `agent_start_form`), Node found on the runner's `PATH`.
-    let search = std::env::var_os("PATH").expect("the runner's PATH holds Node");
-    let form = match programs::start(&launcher, &search) {
-        Start::Direct { program, leading } => StartForm::Direct {
-            program: program.into_os_string().into_string().unwrap(),
-            leading: leading
-                .into_iter()
-                .map(|word| word.into_string().unwrap())
-                .collect(),
-        },
-        Start::Batch => panic!("npm's launcher is read as the program it runs"),
-    };
+    let form = npm_install(
+        install.path(),
+        "require('fs').writeFileSync(process.env.HIDE_TEST_ARGV, JSON.stringify(process.argv.slice(2)));",
+    );
 
     let short = "100% of %PATH% & a ^ b \"quoted\" a\\\"b c:\\dir\\\nnext line";
     let long: String = std::iter::once('-')
@@ -1265,15 +1229,56 @@ impl hide_node_link::NodeLink for AnsweringStart {
     }
 }
 
+/// A local npm install of Codex under `install` whose script runs
+/// `script` under npm's own launcher, and how a node answers for it
+/// (`Call::AgentInstalled`, hide-host's `agent_start_form`): the launcher
+/// read as the program it runs, Node found on the runner's `PATH`.
+#[cfg(windows)]
+fn npm_install(install: &std::path::Path, script: &str) -> hide_node_link::protocol::StartForm {
+    use hide_node_link::protocol::StartForm;
+    use hide_platform::programs::{self, Start};
+    let package = install.join("node_modules").join("@openai").join("codex");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("bin").join("codex.js"),
+        format!("#!/usr/bin/env node\n{script}\n"),
+    )
+    .unwrap();
+    let bin = install.join("node_modules").join(".bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let launcher = bin.join("codex.cmd");
+    std::fs::write(
+        &launcher,
+        include_str!("../../../hide-platform/tests/fixtures/launchers/npm-script.cmd"),
+    )
+    .unwrap();
+    let search = std::env::var_os("PATH").expect("the runner's PATH holds Node");
+    match programs::start(&launcher, &search) {
+        Start::Direct { program, leading } => StartForm::Direct {
+            program: program.into_os_string().into_string().unwrap(),
+            leading: leading
+                .into_iter()
+                .map(|word| word.into_string().unwrap())
+                .collect(),
+        },
+        Start::Batch => panic!("npm's launcher is read as the program it runs"),
+    }
+}
+
 /// The stand-in's program as its node would answer for it, and the file it
 /// writes the words it was given into, one to a line.
 fn stand_in_start(
     install: &std::path::Path,
 ) -> (hide_node_link::protocol::StartForm, std::path::PathBuf) {
-    use hide_node_link::protocol::StartForm;
     let given = install.join("argv");
     #[cfg(unix)]
     let form = {
+        use hide_node_link::protocol::StartForm;
         let script = install.join("standin.sh");
         std::fs::write(
             &script,
@@ -1286,47 +1291,13 @@ fn stand_in_start(
         }
     };
     #[cfg(windows)]
-    let form = {
-        use hide_platform::programs::{self, Start};
-        // A local npm install whose script writes the words it was given
-        // beside it, under npm's own launcher.
-        let package = install.join("node_modules").join("@openai").join("codex");
-        std::fs::create_dir_all(package.join("bin")).unwrap();
-        std::fs::write(
-            package.join("package.json"),
-            r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            package.join("bin").join("codex.js"),
-            format!(
-                "#!/usr/bin/env node\nrequire('fs').writeFileSync({}, process.argv.slice(2).map((word) => word + '\\n').join(''));\n",
-                serde_json::to_string(given.to_str().unwrap()).unwrap()
-            ),
-        )
-        .unwrap();
-        let bin = install.join("node_modules").join(".bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let launcher = bin.join("codex.cmd");
-        std::fs::write(
-            &launcher,
-            include_str!("../../../hide-platform/tests/fixtures/launchers/npm-script.cmd"),
-        )
-        .unwrap();
-        // As a node answers `Call::AgentInstalled` (hide-host's
-        // `agent_start_form`), Node found on the runner's `PATH`.
-        let search = std::env::var_os("PATH").expect("the runner's PATH holds Node");
-        match programs::start(&launcher, &search) {
-            Start::Direct { program, leading } => StartForm::Direct {
-                program: program.into_os_string().into_string().unwrap(),
-                leading: leading
-                    .into_iter()
-                    .map(|word| word.into_string().unwrap())
-                    .collect(),
-            },
-            Start::Batch => panic!("npm's launcher is read as the program it runs"),
-        }
-    };
+    let form = npm_install(
+        install,
+        &format!(
+            "require('fs').writeFileSync({}, process.argv.slice(2).map((word) => word + '\\n').join(''));",
+            serde_json::to_string(given.to_str().unwrap()).unwrap()
+        ),
+    );
     (form, given)
 }
 
