@@ -11,8 +11,10 @@
 //! or a GitHub tool given its owner, name and number.
 //!
 //! The shell text is read by `hide-shell`, as the hooks read a call before it
-//! runs: heredoc bodies, quotes and comments are text, so an address in a
-//! commit message or a letter's body names nothing. A command hidden a layer
+//! runs and in the syntax of the shell that ran it (`crate::call_shell`, which
+//! the caller passes): heredoc bodies, quotes and comments are text, so an
+//! address in a commit message or a letter's body names nothing, and a
+//! PowerShell `cd .\app` moves to `app`. A command hidden a layer
 //! deeper (`bash -c`, a script, an alias) is not looked for.
 //!
 //! A call that makes a pull request ([`creates_pull_request`]) is read the
@@ -20,6 +22,7 @@
 //! is the one it made, whatever the clocks say.
 
 use crate::{pull_request_addresses, sightings::is_name};
+use hide_shell::Syntax;
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
@@ -54,8 +57,9 @@ const FOLDER_KEYS: [&str; 5] = ["workdir", "cwd", "Cwd", "working_directory", "d
 const NUMBER_KEYS: [&str; 4] = ["pull_number", "pullNumber", "pr_number", "prNumber"];
 
 /// The pull requests one tool call's input names. `folder` is where the
-/// record says the session was when it made the call, when it says so.
-pub(crate) fn tool_call(input: &Value, folder: Option<&str>) -> Vec<NamedPr> {
+/// record says the session was when it made the call, when it says so, and
+/// `syntax` the shell's that ran it.
+pub(crate) fn tool_call(input: &Value, folder: Option<&str>, syntax: Syntax) -> Vec<NamedPr> {
     let mut found = Found::default();
     let Some(object) = input.as_object() else {
         return found.named;
@@ -66,7 +70,7 @@ pub(crate) fn tool_call(input: &Value, folder: Option<&str>) -> Vec<NamedPr> {
         .filter(|folder| !folder.trim().is_empty())
         .or(folder);
     let place = folder.map_or(Place::Session, |folder| Place::At(PathBuf::from(folder)));
-    commands(object, &place, &mut found);
+    commands(object, &place, syntax, &mut found);
     // A tool whose argument is the address itself: a fetch, a browser's
     // navigation.
     for (key, value) in object {
@@ -98,27 +102,34 @@ pub(crate) fn tool_call(input: &Value, folder: Option<&str>) -> Vec<NamedPr> {
 }
 
 /// Every shell command the call carries, under each of [`COMMAND_KEYS`].
-fn commands(object: &serde_json::Map<String, Value>, place: &Place, found: &mut Found) {
+fn commands(
+    object: &serde_json::Map<String, Value>,
+    place: &Place,
+    syntax: Syntax,
+    found: &mut Found,
+) {
     for key in COMMAND_KEYS {
         match object.get(key) {
-            Some(Value::String(text)) => shell(text, place.clone(), 0, found),
+            Some(Value::String(text)) => shell(text, place.clone(), 0, syntax, found),
             Some(Value::Array(argv)) => {
                 let words: Option<Vec<String>> = argv
                     .iter()
                     .map(|word| word.as_str().map(str::to_owned))
                     .collect();
                 match words.as_deref() {
-                    // `["bash", "-lc", "<script>"]`: the script is the line.
+                    // `["bash", "-lc", "<script>"]` or `["powershell.exe",
+                    // "-Command", "<script>"]`: the script is the line, in
+                    // the syntax of the shell the argv names.
                     Some([shell_program, flag, script])
-                        if is_shell(shell_program)
-                            && flag.starts_with('-')
-                            && flag.contains('c') =>
+                        if flag.starts_with('-')
+                            && flag.to_ascii_lowercase().contains('c')
+                            && let Some(script_syntax) = shell_of(shell_program) =>
                     {
-                        shell(script, place.clone(), 0, found);
+                        shell(script, place.clone(), 0, script_syntax, found);
                     }
                     Some(words) => {
                         let mut place = place.clone();
-                        command(words, &mut place, found);
+                        command(words, &mut place, syntax, found);
                     }
                     None => {}
                 }
@@ -132,9 +143,10 @@ fn commands(object: &serde_json::Map<String, Value>, place: &Place, found: &mut 
 /// create`, a `gh api` POST to `repos/<owner>/<name>/pulls`, or a GitHub
 /// tool named for it (`create_pull_request`, as the GitHub MCP server names
 /// it, under any prefix). `name` is the tool's own name when the record
-/// keeps one. A shell call with an `||` makes no claim: the command after
-/// it runs because one failed, and what it prints is no making.
-pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value) -> bool {
+/// keeps one, and `syntax` the shell's that ran it. A shell call with an
+/// `||` makes no claim: the command after it runs because one failed, and
+/// what it prints is no making.
+pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value, syntax: Syntax) -> bool {
     if name.is_some_and(|name| name.to_ascii_lowercase().ends_with("create_pull_request")) {
         return true;
     }
@@ -142,19 +154,20 @@ pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value) -> bool {
         return false;
     };
     let mut found = Found::default();
-    commands(object, &Place::Session, &mut found);
+    commands(object, &Place::Session, syntax, &mut found);
     found.creates && !found.fallback
 }
 
 /// Whether a tool call runs `git commit` (PRD project-panel-results D-20):
 /// a shell command whose git subcommand, past git's own options, is
-/// `commit`. Whether the commit took is the checkout's to say.
-pub(crate) fn runs_git_commit(input: &Value) -> bool {
+/// `commit`, read in `syntax`. Whether the commit took is the checkout's to
+/// say.
+pub(crate) fn runs_git_commit(input: &Value, syntax: Syntax) -> bool {
     let Some(object) = input.as_object() else {
         return false;
     };
     let mut found = Found::default();
-    commands(object, &Place::Session, &mut found);
+    commands(object, &Place::Session, syntax, &mut found);
     found.commits
 }
 
@@ -223,20 +236,20 @@ enum Place {
     Unknown,
 }
 
-fn shell(text: &str, mut place: Place, depth: usize, found: &mut Found) {
-    let line = hide_shell::shell_line(text, hide_shell::Syntax::Posix);
+fn shell(text: &str, mut place: Place, depth: usize, syntax: Syntax, found: &mut Found) {
+    let line = hide_shell::shell_line(text, syntax);
     found.fallback |= line.fallback;
     for words in &line.commands {
-        command(words, &mut place, found);
+        command(words, &mut place, syntax, found);
     }
     if depth < SUBSTITUTION_DEPTH {
         for (_, text) in &line.substitutions {
-            shell(text, place.clone(), depth + 1, found);
+            shell(text, place.clone(), depth + 1, syntax, found);
         }
     }
 }
 
-fn command(words: &[String], place: &mut Place, found: &mut Found) {
+fn command(words: &[String], place: &mut Place, syntax: Syntax, found: &mut Found) {
     let mut repository_variable = None;
     let mut at = 0;
     while let Some(word) = words.get(at) {
@@ -252,13 +265,17 @@ fn command(words: &[String], place: &mut Place, found: &mut Found) {
     let Some((first, args)) = words[at..].split_first() else {
         return;
     };
-    match program(first) {
-        "cd" | "pushd" => {
-            *place = match args.iter().find(|arg| !arg.starts_with('-') || *arg == "-") {
-                Some(target) => moved(place, target),
-                None => Place::Unknown,
-            };
-        }
+    let program = syntax.program(first);
+    if syntax.changes_folder(&program).is_some() {
+        // A bare one goes home or swaps folders, neither of which this
+        // reading follows.
+        *place = match args.iter().find(|arg| !arg.starts_with('-') || *arg == "-") {
+            Some(target) => moved(place, &syntax.path_word(target)),
+            None => Place::Unknown,
+        };
+        return;
+    }
+    match program.as_str() {
         "gh" => gh(args, repository_variable, place, found),
         "git" => found.commits |= git_subcommand(args) == Some("commit"),
         "open" | "xdg-open" | "start" | "curl" | "wget" => addresses(args, found),
@@ -577,13 +594,14 @@ fn pr_number(text: &str) -> Option<u64> {
 
 /// A command word's program name: its last path part, without Windows'
 /// `.exe`.
-fn program(word: &str) -> &str {
-    let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
-    name.strip_suffix(".exe").unwrap_or(name)
-}
-
-fn is_shell(word: &str) -> bool {
-    matches!(program(word), "bash" | "sh" | "zsh" | "dash" | "ksh")
+/// The syntax of the shell an argv's first word names, when it is a shell
+/// that runs a script it is handed.
+fn shell_of(word: &str) -> Option<Syntax> {
+    match Syntax::PowerShell.program(word).as_str() {
+        "bash" | "sh" | "zsh" | "dash" | "ksh" => Some(Syntax::Posix),
+        "pwsh" | "powershell" => Some(Syntax::PowerShell),
+        _ => None,
+    }
 }
 
 /// Where a `cd` to `target` leads from `place`.
@@ -621,6 +639,63 @@ fn normal(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // The cases below are POSIX shell calls; the PowerShell ones name their
+    // syntax.
+    fn tool_call(input: &Value, folder: Option<&str>) -> Vec<NamedPr> {
+        super::tool_call(input, folder, Syntax::Posix)
+    }
+
+    fn creates_pull_request(name: Option<&str>, input: &Value) -> bool {
+        super::creates_pull_request(name, input, Syntax::Posix)
+    }
+
+    fn runs_git_commit(input: &Value) -> bool {
+        super::runs_git_commit(input, Syntax::Posix)
+    }
+
+    /// A PowerShell call is read as PowerShell reads it: `\` separates
+    /// names, a command's name has no case, `Set-Location` and its aliases
+    /// move the folder, and an argv that runs PowerShell hands it a
+    /// PowerShell script.
+    #[test]
+    fn a_powershell_call_is_read_in_its_own_syntax() {
+        let powershell = |input: Value| super::tool_call(&input, Some("/work"), Syntax::PowerShell);
+        let in_app = vec![NamedPr {
+            repository: None,
+            number: 5,
+            folder: Some("/work/app".into()),
+        }];
+        for command in [
+            r"cd .\app; gh pr view 5",
+            r"Set-Location -Path .\app; GH.EXE pr view 5",
+            r"sl app
+gh pr view 5",
+            r"Push-Location .\app; gh pr view 5",
+        ] {
+            assert_eq!(
+                powershell(json!({ "command": command })),
+                in_app,
+                "{command}"
+            );
+        }
+        assert_eq!(
+            tool_call(
+                &json!({"command": ["powershell.exe", "-Command", r"cd .\app; gh pr view 5"]}),
+                Some("/work")
+            ),
+            in_app
+        );
+        assert!(super::creates_pull_request(
+            None,
+            &json!({"command": "GH.exe pr create --fill"}),
+            Syntax::PowerShell
+        ));
+        assert!(super::runs_git_commit(
+            &json!({"command": r"& 'C:\Program Files\Git\cmd\git.exe' commit -m x"}),
+            Syntax::PowerShell
+        ));
+    }
 
     fn shell_call(command: &str) -> Vec<NamedPr> {
         tool_call(&json!({ "command": command }), Some("/work/app"))

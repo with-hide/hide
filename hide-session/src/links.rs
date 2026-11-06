@@ -13,7 +13,9 @@
 //! (the last one per branch span and the one before each pull request
 //! address) leave this module.
 
-use crate::{EventKind, PrSighting, pull_request_addresses};
+use crate::{EventKind, PrSighting, call_shell, pull_request_addresses};
+use hide_agent_adapter::HookDialect;
+use hide_shell::Syntax;
 use serde_json::Value;
 
 /// A request is kept to this many characters (D-40).
@@ -182,12 +184,13 @@ impl LinkAccumulator {
         self.made_here.clear();
     }
 
-    /// A call `id` that makes a pull request, when it does.
-    fn call_made(&mut self, id: Option<&str>, name: Option<&str>, input: &Value) {
+    /// A call `id`, read in `syntax`, that makes a pull request, when it
+    /// does.
+    fn call_made(&mut self, id: Option<&str>, name: Option<&str>, input: &Value, syntax: Syntax) {
         let Some(id) = id.filter(|id| !id.is_empty()) else {
             return;
         };
-        if !crate::named_prs::creates_pull_request(name, input)
+        if !crate::named_prs::creates_pull_request(name, input, syntax)
             || self.creating.iter().any(|kept| kept == id)
         {
             return;
@@ -352,14 +355,19 @@ impl LinkAccumulator {
         }
     }
 
-    /// Every tool call among `calls`, each `(input, folder)`.
-    fn calls<'a>(&mut self, calls: impl Iterator<Item = (&'a Value, Option<&'a str>)>, at: u64) {
-        for (input, folder) in calls {
-            let named = crate::named_prs::tool_call(input, folder);
+    /// Every tool call among `calls`, each `(input, folder, syntax)`, the
+    /// last the syntax of the shell that ran it (`crate::call_shell`).
+    fn calls<'a>(
+        &mut self,
+        calls: impl Iterator<Item = (&'a Value, Option<&'a str>, Syntax)>,
+        at: u64,
+    ) {
+        for (input, folder, syntax) in calls {
+            let named = crate::named_prs::tool_call(input, folder, syntax);
             if !named.is_empty() {
                 self.named(named, at);
             }
-            if crate::named_prs::runs_git_commit(input) {
+            if crate::named_prs::runs_git_commit(input, syntax) {
                 self.committed(at);
             }
         }
@@ -478,22 +486,28 @@ pub(crate) fn claude_line(item: &Value, offset: u64, links: &mut LinkAccumulator
         match item.get("type").and_then(Value::as_str) {
             Some("assistant") => {
                 let folder = item.get("cwd").and_then(Value::as_str);
-                let uses: Vec<&Value> = blocks
+                let uses: Vec<(&Value, Syntax)> = blocks
                     .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+                    .map(|block| {
+                        let tool = block.get("name").and_then(Value::as_str);
+                        let syntax =
+                            call_shell::syntax(HookDialect::ClaudeCode, tool.unwrap_or_default());
+                        (block, syntax)
+                    })
                     .collect();
-                for block in &uses {
+                for (block, syntax) in &uses {
                     if let Some(input) = block.get("input") {
                         links.call_made(
                             block.get("id").and_then(Value::as_str),
                             block.get("name").and_then(Value::as_str),
                             input,
+                            *syntax,
                         );
                     }
                 }
                 let calls = uses
                     .into_iter()
-                    .filter_map(|block| block.get("input"))
-                    .map(|input| (input, folder));
+                    .filter_map(|(block, syntax)| Some((block.get("input")?, folder, syntax)));
                 links.calls(calls, at);
             }
             Some("user") => {
@@ -536,15 +550,22 @@ pub(crate) fn pi_line(item: &Value, offset: u64, links: &mut LinkAccumulator) {
                     .flatten()
                     .filter(|block| block["type"] == "toolCall")
                     .collect();
+                let syntax = |block: &Value| {
+                    call_shell::syntax(HookDialect::Pi, block["name"].as_str().unwrap_or_default())
+                };
                 for block in &uses {
                     if let Some(input) = block.get("arguments") {
-                        links.call_made(block["id"].as_str(), block["name"].as_str(), input);
+                        links.call_made(
+                            block["id"].as_str(),
+                            block["name"].as_str(),
+                            input,
+                            syntax(block),
+                        );
                     }
                 }
                 let calls = uses
                     .into_iter()
-                    .filter_map(|block| block.get("arguments"))
-                    .map(|input| (input, None));
+                    .filter_map(|block| Some((block.get("arguments")?, None, syntax(block))));
                 links.calls(calls, at);
             }
             Some("toolResult") => {
@@ -566,6 +587,7 @@ pub(crate) fn pi_line(item: &Value, offset: u64, links: &mut LinkAccumulator) {
                     && crate::named_prs::creates_pull_request(
                         None,
                         &serde_json::json!({ "command": command }),
+                        call_shell::syntax(HookDialect::Pi, "bash"),
                     )
                 {
                     links.made_now(crate::named_prs::created_addresses(&[output]), at);
@@ -592,8 +614,9 @@ pub(crate) fn grok_line(item: &Value, _offset: u64, links: &mut LinkAccumulator)
         match update.get("sessionUpdate").and_then(Value::as_str) {
             Some("tool_call") => {
                 if let Some(input) = update.get("rawInput") {
-                    links.call_made(id, None, input);
-                    links.calls(std::iter::once((input, None)), at);
+                    let syntax = call_shell::syntax(HookDialect::Grok, "run_terminal_command");
+                    links.call_made(id, None, input, syntax);
+                    links.calls(std::iter::once((input, None, syntax)), at);
                 }
             }
             Some("tool_call_update") if crate::grok::terminal(update) => {
@@ -619,7 +642,10 @@ pub(crate) fn antigravity_line(item: &Value, _offset: u64, links: &mut LinkAccum
             .into_iter()
             .flatten()
             .filter_map(|call| call.get("args"))
-            .map(|input| (input, None));
+            .map(|input| {
+                let syntax = call_shell::syntax(HookDialect::Antigravity, "run_command");
+                (input, None, syntax)
+            });
         links.calls(calls, at);
     }
 }
@@ -693,20 +719,19 @@ pub(crate) fn codex_line(item: &Value, _offset: u64, links: &mut LinkAccumulator
                 .and_then(Value::as_str)
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
             {
-                links.call_made(
-                    call_id(payload),
-                    payload
-                        .and_then(|payload| payload.get("name"))
-                        .and_then(Value::as_str),
-                    &input,
-                );
-                links.calls(std::iter::once((&input, None)), at);
+                let name = payload
+                    .and_then(|payload| payload.get("name"))
+                    .and_then(Value::as_str);
+                let syntax = call_shell::syntax(HookDialect::Codex, name.unwrap_or_default());
+                links.call_made(call_id(payload), name, &input, syntax);
+                links.calls(std::iter::once((&input, None, syntax)), at);
             }
         }
         Some("local_shell_call") => {
             if let Some(action) = payload.and_then(|payload| payload.get("action")) {
-                links.call_made(call_id(payload), None, action);
-                links.calls(std::iter::once((action, None)), at);
+                let syntax = call_shell::syntax(HookDialect::Codex, "local_shell");
+                links.call_made(call_id(payload), None, action, syntax);
+                links.calls(std::iter::once((action, None, syntax)), at);
             }
         }
         Some("function_call_output" | "custom_tool_call_output") => {

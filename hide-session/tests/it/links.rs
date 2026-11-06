@@ -410,6 +410,74 @@ fn a_pull_request_a_tool_printed_is_seen_and_one_its_call_named_is_named_in_ever
     }
 }
 
+/// A recorded call is read in the syntax of the shell that ran it, as the
+/// hooks read it before it runs (docs/agent-hooks.md, Which shell reads a
+/// call): Claude Code's `PowerShell` tool, where `\` separates names and a
+/// command's name has no case, and its `Bash` tool, Git Bash on Windows,
+/// where `\` escapes the next character; Codex's shell, PowerShell on
+/// Windows and POSIX elsewhere. The session file is read on the machine
+/// whose agent wrote it, so the system running the test is the session's.
+#[test]
+fn a_recorded_call_is_read_in_the_syntax_of_the_shell_that_ran_it() {
+    // The folder as the reader joins it on this system.
+    let at = |name: &str| -> String {
+        Path::new("/work")
+            .join(name)
+            .components()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned()
+    };
+    let in_app = named_five(&at("app"));
+    for (tool, command, expected) in [
+        ("PowerShell", r"cd .\app; gh pr view 5", in_app.clone()),
+        (
+            "PowerShell",
+            r"Set-Location .\app; gh pr view 5",
+            in_app.clone(),
+        ),
+        ("PowerShell", r"SL app; gh pr view 5", in_app.clone()),
+        ("Bash", r"cd .\app; gh pr view 5", named_five(&at(".app"))),
+        (
+            "Bash",
+            r"Set-Location .\app; gh pr view 5",
+            named_five(&at("")),
+        ),
+    ] {
+        let line = serde_json::json!({
+            "type": "assistant", "sessionId": "s1", "cwd": "/work", "entrypoint": "cli",
+            "timestamp": "2026-10-03T01:00:20.000Z", "uuid": "call-1",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": tool, "input": {"command": command}}
+            ]},
+        });
+        let facts = parse_events(Agent::Claude, &format!("{line}\n")).links;
+        assert_eq!(named(&facts), expected, "{tool}: {command}");
+    }
+
+    let arguments = serde_json::json!({"cmd": r"cd .\app; gh pr view 5", "workdir": "/work"});
+    let line = serde_json::json!({
+        "timestamp": "2026-10-03T01:00:20.000Z", "type": "response_item",
+        "payload": {"type": "function_call", "name": "exec_command",
+            "arguments": arguments.to_string(), "call_id": "call_1"},
+    });
+    let facts = parse_events(Agent::Codex, &format!("{line}\n")).links;
+    let expected = if cfg!(windows) {
+        in_app
+    } else {
+        named_five(&at(".app"))
+    };
+    assert_eq!(named(&facts), expected, "Codex");
+}
+
+fn named_five(folder: &str) -> Vec<hide_session::NamedPr> {
+    vec![hide_session::NamedPr {
+        repository: None,
+        number: 5,
+        folder: Some(folder.to_owned()),
+    }]
+}
+
 #[test]
 fn an_opencode_call_that_names_a_pull_request_is_named_in_both_schemas() {
     for schema in ["opencode-1.18.30", "opencode-2.0.29"] {

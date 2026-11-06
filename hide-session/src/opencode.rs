@@ -1334,7 +1334,11 @@ impl Read {
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
         let input = part.pointer("/state/input");
-        self.note_call(input, called);
+        let syntax = crate::call_shell::syntax(
+            hide_agent_adapter::HookDialect::OpenCode,
+            part.get("tool").and_then(Value::as_str).unwrap_or_default(),
+        );
+        self.note_call(input, syntax, called);
         let Some(output) = part.pointer("/state/output").and_then(Value::as_str) else {
             return;
         };
@@ -1345,21 +1349,23 @@ impl Read {
         let made = made_by(
             part.get("tool").and_then(Value::as_str),
             input,
+            syntax,
             part,
             output,
         );
         self.note_sightings(output, at, &made);
     }
 
-    /// The pull requests a tool call's input named, as of `at`.
-    fn note_call(&mut self, input: Option<&Value>, at: u64) {
+    /// The pull requests a tool call's input, read in `syntax`, named, as
+    /// of `at`.
+    fn note_call(&mut self, input: Option<&Value>, syntax: hide_shell::Syntax, at: u64) {
         let Some(input) = input else {
             return;
         };
-        if crate::named_prs::runs_git_commit(input) {
+        if crate::named_prs::runs_git_commit(input, syntax) {
             self.committed_at = self.committed_at.max(Some(at));
         }
-        let named = crate::named_prs::tool_call(input, None);
+        let named = crate::named_prs::tool_call(input, None, syntax);
         if named.is_empty() {
             return;
         }
@@ -1411,6 +1417,7 @@ impl Read {
 fn made_by(
     name: Option<&str>,
     input: Option<&Value>,
+    syntax: hide_shell::Syntax,
     part: &Value,
     output: &str,
 ) -> Vec<(String, u64)> {
@@ -1419,7 +1426,9 @@ fn made_by(
             .pointer("/state/metadata/exit")
             .and_then(Value::as_i64)
             .is_none_or(|code| code == 0);
-    if succeeded && input.is_some_and(|input| crate::named_prs::creates_pull_request(name, input)) {
+    if succeeded
+        && input.is_some_and(|input| crate::named_prs::creates_pull_request(name, input, syntax))
+    {
         crate::named_prs::created_addresses(&[output])
     } else {
         Vec::new()

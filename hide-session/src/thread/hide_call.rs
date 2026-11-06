@@ -4,7 +4,7 @@
 //! mission. Only the command's words are read; what the part shows now is
 //! Hide's own state, which the screen looks up by the names read here.
 
-use hide_shell::{is_assignment, is_prefix, simple_commands};
+use hide_shell::{Syntax, is_assignment, is_prefix, simple_commands};
 use serde_json::Value;
 
 /// What a `hide` command made.
@@ -38,12 +38,13 @@ pub enum ViewKind {
 }
 
 /// The `hide` command a shell call's command line ran, the first one when
-/// it ran several; `None` when it ran none a thread draws as a part (a read
-/// such as `hide task show` or `hide inbox` stays a shell call).
-pub fn hide_call(command: &str) -> Option<HideCall> {
-    simple_commands(command, hide_shell::Syntax::Posix)
+/// it ran several, read in `syntax`, the syntax of the shell that ran it
+/// (`crate::call_shell`); `None` when it ran none a thread draws as a part
+/// (a read such as `hide task show` or `hide inbox` stays a shell call).
+pub fn hide_call(command: &str, syntax: Syntax) -> Option<HideCall> {
+    simple_commands(command, syntax)
         .iter()
-        .find_map(|words| read(program_words(words)?))
+        .find_map(|words| read(program_words(words, syntax)?))
 }
 
 /// The agent a `hide agent spawn` call's output names: the id of the
@@ -62,13 +63,12 @@ pub fn spawned_agent(output: &str) -> Option<String> {
 
 /// A command's words after the environment and prefix words, when its
 /// program is `hide`.
-fn program_words(words: &[String]) -> Option<&[String]> {
+fn program_words(words: &[String], syntax: Syntax) -> Option<&[String]> {
     let start = words
         .iter()
         .position(|word| !is_assignment(word) && !is_prefix(word, true))?;
     let words = &words[start..];
-    let program = words.first()?.rsplit(['/', '\\']).next()?;
-    matches!(program, "hide" | "hide.exe").then(|| &words[1..])
+    (syntax.program(words.first()?) == "hide").then(|| &words[1..])
 }
 
 fn read(args: &[String]) -> Option<HideCall> {
@@ -195,7 +195,7 @@ mod tests {
             ("echo hide task set", None),
         ];
         for (command, expected) in cases {
-            assert_eq!(hide_call(command), expected, "{command}");
+            assert_eq!(hide_call(command, Syntax::Posix), expected, "{command}");
         }
     }
 
@@ -205,17 +205,35 @@ mod tests {
     fn a_hide_command_is_found_behind_its_capability_path_and_in_a_list() {
         assert_eq!(
             hide_call(
-                "HIDE_CAP_REF='/Users/me/.hide/state/pane-capabilities/a.json' '/Applications/hide.app/Contents/Resources/hide' request send agent-18238 --kind progress --intent m:t --body \"계획\""
+                "HIDE_CAP_REF='/Users/me/.hide/state/pane-capabilities/a.json' '/Applications/hide.app/Contents/Resources/hide' request send agent-18238 --kind progress --intent m:t --body \"계획\"",
+                Syntax::Posix
             ),
             Some(letter("agent-18238", Some("계획")))
         );
         assert_eq!(
-            hide_call("cd app && 'C:\\Hide\\hide.exe' plan approve; ls"),
+            hide_call(
+                "cd app && 'C:\\Hide\\hide.exe' plan approve; ls",
+                Syntax::Posix
+            ),
             Some(HideCall::Plan)
         );
         assert_eq!(
-            hide_call("hide request send --body=hi --intent k agent-3"),
+            hide_call(
+                "hide request send --body=hi --intent k agent-3",
+                Syntax::Posix
+            ),
             Some(letter("agent-3", Some("hi")))
+        );
+        // PowerShell runs the bundled `hide` with `&`, and `\` is no escape.
+        assert_eq!(
+            hide_call(
+                r"$env:HIDE_CAP_REF='C:\a.json'; & 'C:\Hide\HIDE.EXE' file open .\out.png",
+                Syntax::PowerShell
+            ),
+            Some(HideCall::View {
+                view: ViewKind::File,
+                target: r".\out.png".to_owned(),
+            })
         );
     }
 
