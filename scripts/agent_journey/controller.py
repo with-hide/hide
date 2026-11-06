@@ -15,7 +15,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from agent_live_check.processes import ProcessError
+from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import private_directory, write_private
 from agent_live_check.runtime import clean_env
 from agent_live_check.system import WINDOWS, exe, home_env, remove_pane_files, temp_env
@@ -178,9 +178,11 @@ class Controller:
         wait_error, status = None, None
         try:
             status = runtime.wait(lambda: self.completed.is_file() and self.completed.read_text().strip(), seconds)
-        except ProcessError as error:
+        except (ProcessError, Cancelled) as error:
             wait_error = str(error)
             self.unsettled = True
+            if isinstance(error, Cancelled):
+                raise
         def output(path):
             if not path.is_file():
                 return b""

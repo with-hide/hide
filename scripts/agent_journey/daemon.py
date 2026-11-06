@@ -16,7 +16,7 @@ import struct
 import threading
 import time
 
-from agent_live_check.processes import ProcessError
+from agent_live_check.processes import Cancelled, ProcessError
 
 # A snapshot of a private daemon with a few agents is well under this.
 MAX_FRAME = 32 * 1024 * 1024
@@ -187,7 +187,7 @@ class Daemon:
         with self.lock:
             while True:
                 if self.cancelled.is_set():
-                    raise ProcessError("run_cancelled")
+                    raise Cancelled("run_cancelled")
                 if self.closed:
                     raise ProcessError("daemon_connection_lost:" + self.closed)
                 if self.rest is not None and (value := predicate(self.rest)):

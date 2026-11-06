@@ -22,7 +22,7 @@ import base64
 import json
 import time
 
-from agent_live_check.processes import ProcessError
+from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import WINDOWS
 
@@ -126,7 +126,7 @@ def wait_for(journey, expected, before_read=None):
         if verdict == expected or now - last_key > STEP_SECONDS:
             return verdict, reads, round(now - start, 1)
         if journey.runtime.owner.cancelled.wait(POLL_SECONDS):
-            raise ProcessError("run_cancelled")
+            raise Cancelled("run_cancelled")
 
 
 def prompts(journey):
@@ -168,6 +168,6 @@ def measure(journey):
             try:
                 wait_for(journey, "empty", Backspaces(journey))
             except ProcessError:
-                if journey.runtime.owner.cancelled.is_set():
-                    raise
+                # Best effort: the steps already carry the cell's verdict.
+                pass
     journey.settle(CELL, cells.composer_verdict(record["steps"]), journey.evidence(CELL, record))

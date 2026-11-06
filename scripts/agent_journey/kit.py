@@ -60,8 +60,6 @@ def measure(journey):
     try:
         journey.daemon.wait(installed, KIT_SECONDS, "the kit row to read the agent's pieces installed")
     except ProcessError as error:
-        if journey.runtime.owner.cancelled.is_set():
-            raise
         journey.record.setdefault(CELL, {})["kit_wait"] = str(error)
     row = kit_agent(journey.daemon.snapshot() or {}, journey.id)
     session = (journey.engine_agent() or {}).get("agent_session")
