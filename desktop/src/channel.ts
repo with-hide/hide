@@ -96,14 +96,15 @@ export const EDITOR_OPEN_CHANNEL = "hide:editor-open";
 /**
  * This app's own updates (PRD auto-update): the shell asks for the status
  * once (invoke) and hears every change (main -> renderer); it asks for a
- * check, a Restart into the ready update, and preview releases on or off
- * (renderer -> main).
+ * check, a Restart into the ready update, preview releases on or off, and
+ * the close of the ready card for one version (renderer -> main).
  */
 export const UPDATE_STATUS_GET_CHANNEL = "hide:update-status-get";
 export const UPDATE_STATUS_CHANNEL = "hide:update-status";
 export const UPDATE_CHECK_CHANNEL = "hide:update-check";
 export const UPDATE_RESTART_CHANNEL = "hide:update-restart";
 export const UPDATE_PRERELEASE_CHANNEL = "hide:update-prerelease";
+export const UPDATE_DISMISS_CHANNEL = "hide:update-dismiss";
 
 /** Help > Practice Hide and the empty Home: open the practice window, or bring it forward (renderer -> main). */
 export const PRACTICE_OPEN_CHANNEL = "hide:practice-open";

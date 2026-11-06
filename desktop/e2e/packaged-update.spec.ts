@@ -152,13 +152,17 @@ test("the installed app updates to the next version and the panes and daemon kee
     };
     const panes = await panesNow();
 
-    // The first look comes 15 s after launch; then the download (B15).
+    // The first look comes 15 s after launch; then the download (B15), and the ↑ button, its card opened once and Help's dot.
     const trigger = page.locator("[data-help-menu-trigger]");
     await expect(trigger.locator("[data-help-update-dot]")).toBeVisible({ timeout: 180_000 });
     await expect(trigger).toHaveAttribute("aria-label", /Update ready/);
+    await expect(page.locator(`[data-update-button="${next}"]`)).toBeVisible();
+    await expect(page.locator(`[data-update-card="${next}"]`)).toBeVisible();
+    // Help opens with the update; its Restart now is the one pressed here.
     await trigger.click();
+    await expect(page.locator(`[data-help-update-block="${next}"]`)).toContainText(`hide ${next} is ready`);
     const restart = page.locator(`[data-help-update="${next}"]`);
-    await expect(restart).toHaveText(new RegExp(`hide ${next.replace(/\./g, "\\.")} ready.*Restart`));
+    await expect(restart).toHaveText("Restart now");
     await screenshot(page, "update-ready");
     expect(hostLog(run.env).map((line) => line.event)).toEqual(expect.arrayContaining(["update.check", "update.found", "update.ready"]));
 

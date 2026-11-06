@@ -17,7 +17,7 @@ import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-update
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
@@ -59,7 +59,7 @@ import { Editor } from "./editor";
 import { frameOptions, hidesTitleBar, windowChrome } from "./windowChrome";
 import { NOTIFICATION_SETTINGS_URL, NotificationPermissionReader } from "./notificationPermission";
 import { fromPage, toPage, WirePathError } from "./wirePath";
-import { AppUpdates, fetchReleases, macosLocation, readPackageType, readPrerelease, savePrerelease, updatesFile, updateSystem, type UpdateSystem, type UpdaterLike } from "./updater";
+import { AppUpdates, fetchReleases, macosLocation, readPackageType, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateSystem, type UpdaterLike } from "./updater";
 
 declare const __HIDE_BACKGROUND__: string;
 declare const __HIDE_WARNING__: string;
@@ -538,7 +538,8 @@ export class DesktopHost {
 
   /**
    * This app's own updates (PRD auto-update): the updater, the status the
-   * shell draws, and the shell's check, Restart and preview switch. Only this
+   * shell draws, and the shell's check, Restart, preview switch and the
+   * ready card's close. Only this
    * window's page on the daemon origin is heard or told; a browser tab or the
    * phone has no bridge, so it shows none of it (B24).
    */
@@ -564,10 +565,10 @@ export class DesktopHost {
           const timer = setTimeout(run, ms);
           return () => clearTimeout(timer);
         },
-        savePrerelease: (on) => savePrerelease(file, on),
+        saveChoices: (choices) => saveUpdateChoices(file, choices),
       },
       this.log,
-      { prerelease: readPrerelease(file), feedOverride: this.env.updateFeedUrl },
+      { ...readUpdateChoices(file), feedOverride: this.env.updateFeedUrl },
     );
     this.updates = updates;
     updates.onChange((status) => {
@@ -583,6 +584,9 @@ export class DesktopHost {
     });
     ipcMain.on(UPDATE_PRERELEASE_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
       if (this.fromShell(event) && typeof reported === "boolean") updates.setPrerelease(reported);
+    });
+    ipcMain.on(UPDATE_DISMISS_CHANNEL, (event: IpcMainEvent, version: unknown) => {
+      if (this.fromShell(event) && typeof version === "string") updates.dismiss(version);
     });
     updates.start();
   }

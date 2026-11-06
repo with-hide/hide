@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { UpdateStatus } from "../../../web/src/host";
 import type { HostLog } from "./log";
-import { AppUpdates, chooseRelease, CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, macosLocation, updateSystem, type UpdaterLike, type UpdateSystem } from "./updater";
+import { AppUpdates, chooseRelease, CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, macosLocation, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateChoices, type UpdaterLike, type UpdateSystem } from "./updater";
 
 const uploaded = (name: string) => ({ name, state: "uploaded" });
 
@@ -123,11 +126,11 @@ class FakeUpdater {
   emit(event: string, value: unknown) { (this.handlers.get(event) as (value: unknown) => void)(value); }
 }
 
-function harness(options: { system?: UpdateSystem | { off: "development" | "location" }; releases?: unknown[]; prerelease?: boolean; feedOverride?: string | null } = {}) {
+function harness(options: { system?: UpdateSystem | { off: "development" | "location" }; releases?: unknown[]; prerelease?: boolean; dismissed?: string | null; feedOverride?: string | null; saveError?: Error } = {}) {
   const updater = new FakeUpdater();
   const events: [string, Record<string, unknown>][] = [];
   const timers: { run: () => void; ms: number; cancelled: boolean }[] = [];
-  const saved: boolean[] = [];
+  const saved: UpdateChoices[] = [];
   let releases: unknown = options.releases ?? [];
   let releasesError: Error | null = null;
   const log = { event: (event: string, fields: Record<string, unknown> = {}) => events.push([event, fields]) } as unknown as HostLog;
@@ -135,8 +138,8 @@ function harness(options: { system?: UpdateSystem | { off: "development" | "loca
     releases: async () => { if (releasesError) throw releasesError; return releases; },
     now: () => 1_000,
     later: (run, ms) => { const timer = { run, ms, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true; }; },
-    savePrerelease: (on) => saved.push(on),
-  }, log, { prerelease: options.prerelease ?? false, feedOverride: options.feedOverride ?? null });
+    saveChoices: (choices) => { if (options.saveError) throw options.saveError; saved.push(choices); },
+  }, log, { prerelease: options.prerelease ?? false, dismissed: options.dismissed ?? null, feedOverride: options.feedOverride ?? null });
   const seen: UpdateStatus[] = [];
   updates.onChange((status) => seen.push(status));
   return {
@@ -342,7 +345,7 @@ describe("the updater's states (D-17 to D-21)", () => {
     expect(updater.feeds).toEqual([]);
     updates.setPrerelease(true);
     updates.setPrerelease(true);
-    expect(saved).toEqual([true]);
+    expect(saved).toEqual([{ prerelease: true, dismissed: null }]);
     expect(seen.at(-1)?.prerelease).toBe(true);
     updater.available = "0.5.0-rc.1";
     const check = updates.check("operator");
@@ -350,6 +353,86 @@ describe("the updater's states (D-17 to D-21)", () => {
     expect(updater.feeds).toEqual(["https://github.com/with-hide/hide/releases/download/v0.5.0-rc.1"]);
     updater.download!.resolve([]);
     await check;
+  });
+});
+
+describe("the ready card's close", () => {
+  /** A harness whose update `version` is downloaded and ready. */
+  async function ready(version: string, options: Parameters<typeof harness>[0] = {}) {
+    const subject = harness({ releases: [release(`v${version}`)], ...options });
+    await readyAgain(subject, version);
+    return subject;
+  }
+  async function readyAgain(subject: ReturnType<typeof harness>, version: string) {
+    subject.setReleases([release(`v${version}`)]);
+    subject.updater.available = version;
+    subject.updater.download = null;
+    const check = subject.updates.check("operator");
+    await settle(() => subject.updater.download !== null);
+    subject.updater.download!.resolve([]);
+    await check;
+    expect(subject.updates.status().phase).toEqual({ kind: "ready", version });
+  }
+
+  it("closes the card for the ready version only, keeps the update ready, and saves the close with the preview choice", async () => {
+    const subject = await ready("0.5.0", { prerelease: true });
+    const { updates, updater, saved, seen } = subject;
+    expect(updates.status().dismissed).toBeNull();
+    // A close for a version that is not the ready one (a page behind a newer download) changes nothing.
+    updates.dismiss("0.4.9");
+    expect(saved).toEqual([]);
+    updates.dismiss("0.5.0");
+    updates.dismiss("0.5.0");
+    expect(saved).toEqual([{ prerelease: true, dismissed: "0.5.0" }]);
+    expect(seen.at(-1)).toMatchObject({ phase: { kind: "ready", version: "0.5.0" }, dismissed: "0.5.0" });
+    // The ↑ button, Help and About still restart into it.
+    updates.restart();
+    expect(updater.installs).toEqual([[true, true]]);
+  });
+
+  it("names the closed version while a newer one downloads and is ready, so the card can come back for it", async () => {
+    const subject = await ready("0.5.0");
+    subject.updates.dismiss("0.5.0");
+    await readyAgain(subject, "0.5.1");
+    expect(subject.updates.status()).toMatchObject({ phase: { kind: "ready", version: "0.5.1" }, dismissed: "0.5.0" });
+  });
+
+  it("refuses a close while nothing is ready", () => {
+    const { updates, saved } = harness();
+    updates.dismiss("0.5.0");
+    expect(updates.status().dismissed).toBeNull();
+    expect(saved).toEqual([]);
+  });
+
+  it("starts with the close a launch before saved", () => {
+    expect(harness({ dismissed: "0.5.0" }).updates.status().dismissed).toBe("0.5.0");
+  });
+
+  it("logs a close that could not be saved and still holds it for this launch", async () => {
+    const { updates, events } = await ready("0.5.0", { saveError: new Error("EACCES") });
+    updates.dismiss("0.5.0");
+    expect(updates.status().dismissed).toBe("0.5.0");
+    expect(events.slice(-2)).toEqual([["update.choices_save_failed", { detail: "EACCES" }], ["update.card_dismissed", { version: "0.5.0" }]]);
+  });
+});
+
+describe("the update choices file", () => {
+  it("reads what it saved, an earlier build's preview-only file, and nothing from a missing or broken one", () => {
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), "hide-update-choices-"));
+    try {
+      const file = updatesFile(folder);
+      expect(readUpdateChoices(file)).toEqual({ prerelease: false, dismissed: null });
+      fs.writeFileSync(file, JSON.stringify({ prerelease: true }));
+      expect(readUpdateChoices(file)).toEqual({ prerelease: true, dismissed: null });
+      saveUpdateChoices(file, { prerelease: true, dismissed: "0.5.0-rc.2" });
+      expect(readUpdateChoices(file)).toEqual({ prerelease: true, dismissed: "0.5.0-rc.2" });
+      fs.writeFileSync(file, JSON.stringify({ prerelease: "yes", dismissed: "../latest" }));
+      expect(readUpdateChoices(file)).toEqual({ prerelease: false, dismissed: null });
+      fs.writeFileSync(file, "{");
+      expect(readUpdateChoices(file)).toEqual({ prerelease: false, dismissed: null });
+    } finally {
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
   });
 });
 

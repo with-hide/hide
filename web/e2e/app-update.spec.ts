@@ -1,5 +1,6 @@
 // This app's own update as the shell draws it (PRD auto-update D-03, D-20,
-// D-21, B15, B24 to B28): the dot on the footer's `?`, Help's last line, and
+// D-21, B15, B24 to B28): the ↑ button beside Help and the card it opens once
+// per ready version, the dot on `?` and the update at the head of Help, and
 // Settings > About's update row and preview switch. The desktop host's
 // updater is stood in for by its bridge (`window.hideHost.updates`), driven
 // from the test; the updater itself is unit tested in the desktop package and
@@ -20,7 +21,7 @@ type Phase =
   | { kind: "failed"; stage: "check" | "download" }
   | { kind: "off"; reason: "development" | "location" };
 
-type Calls = { check: number; restart: number; prerelease: boolean[] };
+type Calls = { check: number; restart: number; prerelease: boolean[]; dismiss: string[]; links: string[] };
 
 declare global {
   interface Window {
@@ -31,17 +32,24 @@ declare global {
 /** The desktop host's bridge with its updater replaced by the test, installed before the page loads. */
 async function desktopBridge(page: Page): Promise<void> {
   await page.addInitScript((platform) => {
-    const calls: Calls = { check: 0, restart: 0, prerelease: [] };
+    const calls: Calls = { check: 0, restart: 0, prerelease: [], dismiss: [], links: [] };
     let listener: ((status: unknown) => void) | null = null;
     let prerelease = false;
-    let current: unknown = { phase: { kind: "idle", checkedAt: null }, prerelease, installOnQuit: true };
+    // The host keeps the closed version beside the status, as `AppUpdates.dismiss` does.
+    let dismissed: string | null = null;
+    let phase: Phase = { kind: "idle", checkedAt: null };
+    let installOnQuit = true;
+    const send = () => listener?.({ phase, prerelease, installOnQuit, dismissed });
     window.updateTest = {
       calls,
-      show: (phase, installOnQuit = true) => {
-        current = { phase, prerelease, installOnQuit };
-        listener?.(current);
+      show: (next, onQuit = true) => {
+        phase = next;
+        installOnQuit = onQuit;
+        send();
       },
     };
+    // Release notes open in the default browser through the page's opener.
+    window.open = ((url?: string | URL) => { calls.links.push(String(url)); return null; }) as typeof window.open;
     window.hideHost = {
       kind: "electron",
       platform,
@@ -65,7 +73,7 @@ async function desktopBridge(page: Page): Promise<void> {
       updates: {
         onStatus: (next: (status: unknown) => void) => {
           listener = next;
-          next(current);
+          send();
           return () => undefined;
         },
         check: () => { calls.check += 1; },
@@ -73,6 +81,13 @@ async function desktopBridge(page: Page): Promise<void> {
         setPrerelease: (on: boolean) => {
           calls.prerelease.push(on);
           prerelease = on;
+        },
+        dismiss: (version: string) => {
+          calls.dismiss.push(version);
+          if (phase.kind === "ready" && phase.version === version) {
+            dismissed = version;
+            send();
+          }
         },
       },
     } as never;
@@ -97,7 +112,7 @@ async function load(page: Page, daemon: Daemon): Promise<void> {
   await expect(page.locator("nav[data-sidebar]")).toBeVisible({ timeout: 20_000 });
 }
 
-test("the desktop app shows a ready update as the Help dot and line, and every state in About; a browser tab shows none", async ({ page }) => {
+test("the desktop app shows every update state in About and nothing beside Help until one is ready; a browser tab shows none", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const herdr = await startFixture();
   let daemon: Daemon | null = null;
@@ -111,6 +126,7 @@ test("the desktop app shows a ready update as the Help dot and line, and every s
     await load(page, daemon);
     await expect(trigger).toHaveAccessibleName("Help");
     await expect(dot).toHaveCount(0);
+    await expect(page.locator("[data-update-button]")).toHaveCount(0);
     await openAbout(page);
     await expect(page.locator('[data-settings-group="about"]')).toBeVisible();
     await expect(row).toHaveCount(0);
@@ -132,19 +148,7 @@ test("the desktop app shows a ready update as the Help dot and line, and every s
     await expect(page.locator("[data-help-update]")).toHaveCount(0);
     await page.keyboard.press("Escape");
 
-    // B15: ready puts a named dot on `?` and turns Help's last line into Restart, reached by keyboard (B30).
-    await show(page, { kind: "ready", version: "0.5.0" });
-    await expect(dot).toBeVisible();
-    await expect(trigger).toHaveAccessibleName("Help · Update ready");
-    await trigger.focus();
-    await page.keyboard.press("Enter");
-    const line = page.locator('[data-help-update="0.5.0"]');
-    await expect(line).toHaveText(/^hide 0\.5\.0 ready\s*Restart$/);
-    await expect(page.locator("[data-help-version]")).toHaveCount(0);
-    await screenshot(page, "app-update-help-ready");
-    await line.focus();
-    await page.keyboard.press("Enter");
-    expect((await calls(page)).restart).toBe(1);
+    await expect(page.locator("[data-update-button]")).toHaveCount(0);
 
     // B25 to B28: About's row in each state, with its one action.
     await openAbout(page);
@@ -182,6 +186,90 @@ test("the desktop app shows a ready update as the Help dot and line, and every s
     expect((await calls(page)).prerelease).toEqual([true]);
     await show(page, { kind: "ready", version: "0.5.0" });
     await screenshot(page, "app-update-about-ready");
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+});
+
+test("a ready update shows the ↑ button, opens its card once per version, and leads Help", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const herdr = await startFixture();
+  let daemon: Daemon | null = null;
+  try {
+    daemon = await startHided(herdr, "app-update-ready");
+    const trigger = page.locator("[data-help-menu-trigger]");
+    const dot = trigger.locator("[data-help-update-dot]");
+    await desktopBridge(page);
+    await load(page, daemon);
+
+    // Ready: the ↑ button heads View, Help and Settings, and its card opens by itself once,
+    // taking nothing from where the keyboard was.
+    // The keyboard stays where it was when the card opens by itself.
+    await trigger.focus();
+    await show(page, { kind: "ready", version: "0.5.0" });
+    const button = page.locator('[data-update-button="0.5.0"]');
+    const card = page.locator('[data-update-card="0.5.0"]');
+    await expect(button).toBeVisible();
+    await expect(button).toHaveAccessibleName("hide 0.5.0 ready");
+    await expect(card).toBeVisible();
+    await expect(page.locator('[data-update-card-open="auto"]')).toBeVisible();
+    await expect(card).toContainText("Update ready");
+    await expect(card).toContainText("Downloaded hide 0.5.0.");
+    await expect(card).toContainText("Restarting keeps your agents and panes running.");
+    await expect(trigger).toBeFocused();
+    await expect(dot).toBeVisible();
+    await screenshot(page, "app-update-card");
+
+    // Opened by itself it stays through Escape and a click elsewhere; What's new opens the release page.
+    await page.keyboard.press("Escape");
+    await page.locator("main").click({ position: { x: 200, y: 400 } });
+    await expect(card).toBeVisible();
+    await card.locator("[data-update-card-notes]").click();
+    expect((await calls(page)).links).toEqual(["https://github.com/with-hide/hide/releases/tag/v0.5.0"]);
+
+    // Later folds it into the button; the host keeps the close, so the same version does not open it again.
+    await card.locator("[data-update-card-later]").click();
+    await expect(card).toHaveCount(0);
+    expect((await calls(page)).dismiss).toEqual(["0.5.0"]);
+    await show(page, { kind: "ready", version: "0.5.0" });
+    await expect(card).toHaveCount(0);
+    await expect(button).toBeVisible();
+    await expect(dot).toBeVisible();
+    await screenshot(page, "app-update-button");
+
+    // The button opens the card on request, as an ordinary popover that Escape closes.
+    await button.click();
+    await expect(page.locator('[data-update-card-open="asked"]')).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(card).toHaveCount(0);
+    await button.click();
+    await card.locator("[data-update-card-restart]").click();
+    expect((await calls(page)).restart).toBe(1);
+    expect((await calls(page)).dismiss).toEqual(["0.5.0"]);
+
+    // B15: Help keeps its named dot and opens with the update, Restart now reached by keyboard (B30);
+    // the version line at its foot stays this app's own.
+    await page.keyboard.press("Escape");
+    await expect(trigger).toHaveAccessibleName("Help · Update ready");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    const block = page.locator('[data-help-update-block="0.5.0"]');
+    await expect(block).toContainText("hide 0.5.0 is ready");
+    await expect(block).toContainText("Agents and panes keep running");
+    await expect(page.locator("[data-help-version]")).toBeVisible();
+    await screenshot(page, "app-update-help-ready");
+    const line = page.locator('[data-help-update="0.5.0"]');
+    await expect(line).toHaveText("Restart now");
+    await line.focus();
+    await page.keyboard.press("Enter");
+    expect((await calls(page)).restart).toBe(2);
+
+    // A newer ready version opens the card once more.
+    await show(page, { kind: "downloading", version: "0.5.1", percent: 10 });
+    await expect(button).toHaveCount(0);
+    await show(page, { kind: "ready", version: "0.5.1" });
+    await expect(page.locator('[data-update-card="0.5.1"]')).toBeVisible();
   } finally {
     daemon?.stop();
     herdr.stop();

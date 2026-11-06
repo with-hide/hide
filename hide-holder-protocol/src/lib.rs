@@ -75,6 +75,9 @@ pub const PROTOCOL_VERSION: u16 = 1;
 
 /// The oldest holder version this build speaks to as a node. A holder older
 /// than this is reported as unsupported and left running, never ended.
+/// Raising it makes an app update cut off the panes that run, which the
+/// ready-update card of every older build promises it does not
+/// (`docs/UI_BEHAVIOR.md`, Help menu).
 pub const OLDEST_HOLDER_VERSION: u16 = 1;
 
 /// The most bytes one [`Fragment`]'s ANSI carries: what a node can draw at
