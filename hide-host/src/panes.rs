@@ -27,6 +27,7 @@ use std::thread::Scope;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use hide_agent_hooks::hook_request::install;
 use hide_node_link::panes::{
     MAX_CHUNK, MAX_STREAMS, NodeEvent, PROJECT_OPEN_ACCEPT, PROJECT_OPEN_ANSWER,
     PROJECT_OPENS_PER_MINUTE, PaneIdentity, PanesStarted, ProofAnswer, StreamCaller,
@@ -68,21 +69,6 @@ enum Proved {
     Pane(PaneIdentity),
     /// The wire spelling of the caller's canonical working directory.
     Checkout(String),
-}
-
-/// A credential request, as a pane's `hide` sends it.
-#[derive(Deserialize)]
-struct Bootstrap {
-    pane_id: String,
-    nonce: String,
-    #[serde(default)]
-    one_shot: bool,
-    #[serde(default)]
-    hook: Option<hide_node_link::panes::HookRequest>,
-    /// The Hide installation the caller's pane names (`HIDE_INSTALL`), when
-    /// it names one: only that installation's node answers for it.
-    #[serde(default)]
-    install: Option<String>,
 }
 
 #[derive(Clone)]
@@ -199,10 +185,11 @@ impl Panes {
         self
     }
 
-    /// Names the installation this node is: a pane of another one is refused
-    /// (`other_install`) before it is proved, even by its folder, and every
-    /// reference this node answers names this one, which the pane's `hide`
-    /// requires (with-hide/hide-private#497).
+    /// Names the installation this node is: its bridge folder declares it, a
+    /// pane of another one is refused (`other_install`) before it is proved,
+    /// even by its folder, and every answer this node gives names this one,
+    /// which the pane's `hide` and hooks require
+    /// (`hide_agent_hooks::hook_request::install`).
     pub fn with_install(mut self, install: Option<String>) -> Self {
         self.install = install;
         self
@@ -241,6 +228,9 @@ impl Panes {
         let socket = folder.join("bootstrap.sock");
         let bound = (|| {
             private::restrict_to_owner(&folder)?;
+            // Before the socket is there, so a live bridge always says whose
+            // node it is and a pane of another installation never asks it.
+            install::declare_bridge(&folder, self.install.as_deref())?;
             let wire = hide_platform::path::to_wire(&socket)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             let listener = LocalListener::bind(&socket)?;
@@ -472,18 +462,14 @@ impl Panes {
                 .ok()
                 .and_then(|pid| i32::try_from(pid).ok())
                 .ok_or("caller_unavailable")?;
-            let request: Bootstrap =
+            let request: install::PaneRequest =
                 serde_json::from_value(request).map_err(|_| "invalid_request")?;
             if request.nonce.len() != 32
                 || !request.nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
             {
                 return Err("invalid_nonce".to_owned());
             }
-            if let Some(install) = request.install.as_deref()
-                && self.install.as_deref() != Some(install)
-            {
-                return Err(hide_agent_hooks::hook_request::install::OTHER_INSTALL.to_owned());
-            }
+            install::refuse_other(&request, self.install.as_deref())?;
             if request
                 .hook
                 .as_ref()
@@ -972,14 +958,14 @@ fn report_refusal(output: &Mutex<impl Write>, pane_id: Option<String>, reason: &
 fn answer_client(
     stream: &mut LocalStream,
     result: Result<BootstrapAnswer, String>,
-    install: Option<&str>,
+    own: Option<&str>,
 ) -> io::Result<()> {
     let answer = match result {
         Ok(BootstrapAnswer::Reference { path, info }) => {
             let reference = hide_platform::path::to_wire(&path).map_err(io::Error::other)?;
             let mut answer = info.unwrap_or_else(|| json!({"ok":true}));
             answer["reference"] = json!(reference);
-            answer["install"] = json!(install);
+            install::stamp(&mut answer, own);
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err(io::Error::other("hook response too large"));
             }
@@ -988,9 +974,7 @@ fn answer_client(
         // The core's answer to a hook, which this node gives the pane: it
         // names this node's installation, as a reference does.
         Ok(BootstrapAnswer::Hook(mut answer)) => {
-            if let Some(fields) = answer.as_object_mut() {
-                fields.insert("install".to_owned(), json!(install));
-            }
+            install::stamp(&mut answer, own);
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err(io::Error::other("hook response too large"));
             }
@@ -1139,10 +1123,11 @@ mod tests {
     }
 
     /// A node answers only for its own installation's panes
-    /// (with-hide/hide-private#497): a request naming another installation
-    /// is refused before anything is proved or sent up, even where the node
-    /// proves a caller by its folder, and the reference or hook answer it
-    /// does give names its installation, which the pane requires.
+    /// (with-hide/hide-private#497): its bridge folder declares the
+    /// installation, a request naming another one is refused before anything
+    /// is proved or sent up, even where the node proves a caller by its
+    /// folder, and the reference or hook answer it does give names its
+    /// installation, which the pane requires.
     #[test]
     fn a_node_answers_only_for_its_own_installation() {
         use std::io::BufRead;
@@ -1162,8 +1147,14 @@ mod tests {
         });
         // The pane's own installation passes the check and goes on to the
         // pane's proof, which this node, given no pane holders, cannot make.
+        // Its bridge folder names its installation before the socket is
+        // there, so a pane of another installation never asks it.
         let panes = Panes::new().with_install(Some(mine.to_owned()));
         with_service_of(panes, |_, _, socket| {
+            assert_eq!(
+                install::bridge_declared(socket.parent().unwrap()),
+                install::Declared::Install(Some(mine.to_owned()))
+            );
             let answer = ask(socket, request(mine)).join().unwrap();
             assert_eq!(answer["reason"], "bridge_unavailable");
         });
