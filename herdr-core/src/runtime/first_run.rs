@@ -24,7 +24,7 @@ impl Runtime {
     /// ssh config Host and no default WSL distribution, skips it. A list cut short
     /// (an Include past its bounds) proves nothing.
     pub(super) fn first_run_has_devices(&self) -> bool {
-        let profiles = &self.snapshot.status.herdr_profiles;
+        let profiles = &self.snapshot.status.machine_profiles;
         profiles.state != "ready" || !profiles.profiles.is_empty() || profiles.truncated
     }
 

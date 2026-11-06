@@ -1576,9 +1576,9 @@ fn a_broken_sync_update_keeps_the_last_valid_agents_and_says_it_is_disconnected(
         1,
         "the last valid agent list is retained rather than blanked"
     );
-    assert_eq!(down.status.herdr.state, "socket_missing");
+    assert_eq!(down.status.engine.state, "socket_missing");
     assert!(
-        down.status.herdr.message.is_some(),
+        down.status.engine.message.is_some(),
         "a missing socket is stated, never a silent idle"
     );
     assert_eq!(
@@ -1588,7 +1588,7 @@ fn a_broken_sync_update_keeps_the_last_valid_agents_and_says_it_is_disconnected(
 
     // The next valid sync update recovers on its own.
     runtime.ingest_session(Ok(working_payload()));
-    assert_eq!(runtime.snapshot().status.herdr.state, "connected");
+    assert_eq!(runtime.snapshot().status.engine.state, "connected");
     assert_ne!(runtime.agent_worked_at_unix_ms, 0);
 }
 
@@ -1843,7 +1843,7 @@ fn read_record_keeps_up_with_the_pane_the_operator_is_watching() {
 /// AC2, R2. Once the engine moves focus off the pane the operator chose, that
 /// pane stops counting as watched, so its next change comes back unread.
 #[test]
-fn read_record_stops_following_a_pane_herdr_moved_focus_away_from() {
+fn read_record_stops_following_a_pane_the_engine_moved_focus_away_from() {
     let mut runtime = live_runtime();
     let panes = [("w1:p1", 6018_u64), ("w1:p2", 6019), ("w1:p3", 6020)];
     runtime.ingest_session(Ok(finished_tab_payload(&panes, "w1:p1")));

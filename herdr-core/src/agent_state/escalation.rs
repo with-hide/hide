@@ -479,7 +479,7 @@ mod tests {
     /// answer, and what Grok waits for is read from its current state, so a
     /// delegated Grok child rises as blocked all the same.
     #[test]
-    fn a_delegated_grok_child_waiting_for_the_operator_rises_while_herdr_reports_working() {
+    fn a_delegated_grok_child_waiting_for_the_operator_rises_while_the_engine_reports_working() {
         for status in ["working", "idle"] {
             let row = waiting_child("grok", status);
             assert!(row.blocked, "{status}");

@@ -111,8 +111,8 @@ fn shown(runtime: &mut Runtime) -> crate::model::SidebarAgentSnapshot {
 }
 
 #[test]
-fn the_rows_already_shown_ask_and_stop_asking_as_the_review_moves_without_herdr_sending_them_again()
-{
+fn the_rows_already_shown_ask_and_stop_asking_as_the_review_moves_without_the_engine_sending_them_again()
+ {
     let root = tempfile::tempdir().unwrap();
     let (runtime, sender, _worker) = start(root.path());
     let mut runtime = runtime.lock().unwrap();

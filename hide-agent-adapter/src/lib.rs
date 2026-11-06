@@ -776,15 +776,6 @@ pub enum SkillLocation {
     Antigravity,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct HerdrIntegration {
-    /// The agent kind the engine reports the agent's panes as.
-    pub name: &'static str,
-    /// The name Herdr's `integration install <target>` took, which is the kind for
-    /// every agent but agy (kind `agy`, target `antigravity-cli`).
-    pub target: &'static str,
-}
-
 /// The agent as a Hide AI provider (`hide-ai`, registry).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AiProvider {
@@ -950,7 +941,8 @@ pub struct AgentAdapter {
     pub skill_location: SkillLocation,
     pub hook: HookInstall,
     pub guidance: Capability<ContextRoute>,
-    pub herdr: HerdrIntegration,
+    /// The agent kind the engine reports the agent's panes as.
+    pub engine_kind: &'static str,
     /// The variable that moves the agent's own folder away from
     /// [`AgentAdapter::folder`] when the operator runs it (Codex's
     /// `CODEX_HOME`), read only through [`AgentAdapter::home`]; `None` for an
@@ -1021,12 +1013,12 @@ pub fn adapter(value: &str) -> Option<&'static AgentAdapter> {
 /// Known identities use the kind's spelling; an unknown captured kind stays
 /// byte-for-byte intact, without granting it any adapter capability.
 pub fn canonical_kind(value: &str) -> &str {
-    adapter(value).map_or(value, |row| row.herdr.name)
+    adapter(value).map_or(value, |row| row.engine_kind)
 }
 
 pub fn start_kind(value: &str) -> Option<&'static str> {
     let row = adapter(value)?;
-    row.start.map(|_| row.herdr.name)
+    row.start.map(|_| row.engine_kind)
 }
 
 const fn start_count() -> usize {
@@ -1047,7 +1039,7 @@ const fn start_kinds() -> [&'static str; start_count()] {
     let mut destination = 0;
     while source < ADAPTERS.len() {
         if ADAPTERS[source].start.is_some() {
-            result[destination] = ADAPTERS[source].herdr.name;
+            result[destination] = ADAPTERS[source].engine_kind;
             destination += 1;
         }
         source += 1;

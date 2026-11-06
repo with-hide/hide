@@ -25,7 +25,7 @@ impl Runtime {
                 "component": "cleanup",
                 "kind": "gone_worktree.close_requested",
                 "workspace_id": gone.workspace_id,
-                "herdr_workspace_ids": gone.herdr_workspace_ids,
+                "herdr_workspace_ids": gone.engine_workspace_ids,
                 "checkout": gone.path,
                 "pane_ids": gone.panes,
             }));
@@ -109,8 +109,8 @@ impl Runtime {
                     .collect();
                 closable.push(GoneCheckout {
                     workspace_id: workspace.id.clone(),
-                    herdr_workspace_ids: self
-                        .herdr_workspace_tab_order
+                    engine_workspace_ids: self
+                        .engine_workspace_tab_order
                         .iter()
                         .filter(|(_, tabs)| tabs.iter().any(|tab| tab_ids.contains(&tab.as_str())))
                         .map(|(workspace, _)| workspace.clone())

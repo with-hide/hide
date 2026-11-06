@@ -119,7 +119,7 @@ fn agent(status: &str) -> Value {
 
 /// An engine with no workspace open that opens a marked Folder owner and
 /// starts whatever agent it is asked for.
-fn herdr() -> Fake {
+fn fake_engine() -> Fake {
     FakeEngine::start(|method, params| match method {
         "workspace_tokens" => reply(vec![("w1".to_owned(), None::<String>)]),
         "create_workspace" => reply(("w4".to_owned(), "w4:t1".to_owned(), "w4:p1".to_owned())),
@@ -151,9 +151,9 @@ fn herdr() -> Fake {
     })
 }
 
-/// A runtime whose device `DEVICE` is connected through `herdr` and whose
+/// A runtime whose device `DEVICE` is connected through `fake` and whose
 /// helper's account home is `user_home`.
-fn device_runtime(herdr: &Fake, machine: &Machine) -> SharedRuntime {
+fn device_runtime(fake: &Fake, machine: &Machine) -> SharedRuntime {
     let mut runtime = runtime();
     runtime
         .snapshot
@@ -183,7 +183,7 @@ fn device_runtime(herdr: &Fake, machine: &Machine) -> SharedRuntime {
     let mut runtime = shared.lock().unwrap();
     runtime.install_remote_control(RemoteControlContext::new(
         DEVICE,
-        herdr.engine(),
+        fake.engine(),
         shared.weak(),
         ChangeNotifier::noop(),
     ));
@@ -193,14 +193,14 @@ fn device_runtime(herdr: &Fake, machine: &Machine) -> SharedRuntime {
 }
 
 /// The same for this machine: its own engine and in-process helper.
-fn local_runtime(herdr: &Fake, machine: &Machine) -> SharedRuntime {
+fn local_runtime(fake: &Fake, machine: &Machine) -> SharedRuntime {
     let mut runtime = runtime();
     runtime.own_node = machine.helper();
     let shared = SharedRuntime::new(runtime);
     let mut runtime = shared.lock().unwrap();
     runtime.live = Some(live::LiveContext {
         runtime: shared.weak(),
-        ..herdr.live()
+        ..fake.live()
     });
     runtime.install_worker_context(shared.weak(), ChangeNotifier::noop());
     drop(runtime);
@@ -234,8 +234,8 @@ fn operation(shared: &Arc<Mutex<Runtime>>) -> crate::model::TaskOperationSnapsho
 #[test]
 fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
     let machine = machine();
-    let herdr = herdr();
-    let shared = device_runtime(&herdr, &machine);
+    let fake = fake_engine();
+    let shared = device_runtime(&fake, &machine);
     shared.lock().unwrap().ingest_kit_report(
         DEVICE,
         &hide_kit::KitReport {
@@ -322,7 +322,7 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
         (DEVICE, home_path.as_str(), true, "Home")
     );
 
-    let calls = herdr.calls();
+    let calls = fake.calls();
     let start = calls
         .iter()
         .find(|(method, _)| *method == "start_agent")
@@ -364,8 +364,8 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
 #[test]
 fn a_device_home_start_with_unknown_codex_reports_the_next_action_without_starting() {
     let machine = machine();
-    let herdr = herdr();
-    let shared = device_runtime(&herdr, &machine);
+    let fake = fake_engine();
+    let shared = device_runtime(&fake, &machine);
     dispatch(
         &shared,
         json!({"home": true, "device_id": DEVICE, "provider": "codex", "prompt": "tidy the notes", "request_id": "unknown"}),
@@ -384,8 +384,7 @@ fn a_device_home_start_with_unknown_codex_reports_the_next_action_without_starti
     );
     assert_eq!(outcome.request_id.as_deref(), Some("unknown"));
     assert!(
-        herdr
-            .calls()
+        fake.calls()
             .iter()
             .all(|(method, _)| *method != "start_agent")
     );
@@ -397,8 +396,8 @@ fn a_device_home_start_with_unknown_codex_reports_the_next_action_without_starti
 #[test]
 fn home_links_follow_registrations_once_home_exists() {
     let machine = machine();
-    let herdr = herdr();
-    let shared = local_runtime(&herdr, &machine);
+    let fake = fake_engine();
+    let shared = local_runtime(&fake, &machine);
     shared
         .lock()
         .unwrap()
@@ -456,10 +455,9 @@ fn home_links_follow_registrations_once_home_exists() {
         },
     );
     assert!(shared.lock().unwrap().snapshot.status.last_error.is_none());
-    assert!(herdr.methods().contains(&"focus_pane"));
+    assert!(fake.methods().contains(&"focus_pane"));
     assert!(
-        herdr
-            .calls()
+        fake.calls()
             .iter()
             .all(|(method, _)| *method != "start_agent"),
         "a new tab starts no agent"
@@ -505,10 +503,10 @@ fn home_links_follow_registrations_once_home_exists() {
 #[test]
 fn the_first_registration_after_launch_is_linked_into_an_existing_home() {
     let machine = machine();
-    let herdr = herdr();
+    let fake = fake_engine();
     // The earlier run's Home, with the first project linked.
     let earlier = hide_host::home::sync(&machine.user_home, &machine.projects[..1]).unwrap();
-    let shared = local_runtime(&herdr, &machine);
+    let shared = local_runtime(&fake, &machine);
     {
         let mut runtime = shared.lock().unwrap();
         let registrations = &mut runtime.snapshot.ui_state.workspace_registrations;
@@ -533,9 +531,9 @@ fn the_first_registration_after_launch_is_linked_into_an_existing_home() {
 #[test]
 fn a_link_change_missed_while_the_helper_reconnects_is_sent_once_it_is_ready() {
     let machine = machine();
-    let herdr = herdr();
+    let fake = fake_engine();
     let earlier = hide_host::home::sync(&machine.user_home, &machine.projects[..1]).unwrap();
-    let shared = device_runtime(&herdr, &machine);
+    let shared = device_runtime(&fake, &machine);
     let home = machine.user_home.join("hide");
     let generation = {
         let mut runtime = shared.lock().unwrap();
@@ -602,8 +600,8 @@ fn a_link_change_missed_while_the_helper_reconnects_is_sent_once_it_is_ready() {
 #[test]
 fn a_foreign_home_folder_refuses_the_start_and_is_left_alone() {
     let machine = machine();
-    let herdr = herdr();
-    let shared = local_runtime(&herdr, &machine);
+    let fake = fake_engine();
+    let shared = local_runtime(&fake, &machine);
     let home = machine.user_home.join("hide");
     std::fs::create_dir(&home).unwrap();
     std::fs::write(home.join("mine.txt"), "operator's").unwrap();
@@ -643,7 +641,7 @@ fn a_foreign_home_folder_refuses_the_start_and_is_left_alone() {
         1,
         "nothing was written into the operator's folder"
     );
-    assert!(herdr.calls().is_empty(), "no tab was opened");
+    assert!(fake.calls().is_empty(), "no tab was opened");
 }
 
 /// B25, D-22: a start in a device's checkout opens its tab in the checkout's
@@ -651,8 +649,8 @@ fn a_foreign_home_folder_refuses_the_start_and_is_left_alone() {
 #[test]
 fn a_device_checkout_start_opens_its_tab_on_that_device() {
     let machine = machine();
-    let herdr = herdr();
-    let shared = device_runtime(&herdr, &machine);
+    let fake = fake_engine();
+    let shared = device_runtime(&fake, &machine);
     {
         let mut runtime = shared.lock().unwrap();
         let workspace_id = format!("remote:{DEVICE}:workspace:w9");
@@ -702,7 +700,7 @@ fn a_device_checkout_start_opens_its_tab_on_that_device() {
         operation.pane_id.as_deref(),
         Some(crate::address::scoped_pane_id(DEVICE, "w9:p2").as_str())
     );
-    let created = herdr
+    let created = fake
         .calls()
         .into_iter()
         .find(|(method, _)| *method == "create_tab")
@@ -747,8 +745,8 @@ fn a_start_naming_no_place_or_two_is_refused() {
 #[test]
 fn a_prompt_the_command_line_cannot_carry_is_refused_before_anything_opens() {
     let machine = machine();
-    let herdr = herdr();
-    let shared = local_runtime(&herdr, &machine);
+    let fake = fake_engine();
+    let shared = local_runtime(&fake, &machine);
     let long = "a".repeat(300 * 1024);
     for (request_id, payload) in [
         (
@@ -772,5 +770,5 @@ fn a_prompt_the_command_line_cannot_carry_is_refused_before_anything_opens() {
         assert!(runtime.snapshot.task_operation.is_none());
     }
     assert!(!machine.user_home.join("hide").exists());
-    assert!(herdr.calls().is_empty(), "{:?}", herdr.calls());
+    assert!(fake.calls().is_empty(), "{:?}", fake.calls());
 }

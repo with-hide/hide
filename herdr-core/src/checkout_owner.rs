@@ -254,8 +254,8 @@ mod tests {
     }
 
     #[test]
-    fn a_git_checkout_is_owned_by_the_workspace_herdr_binds_to_its_path_not_by_where_its_tabs_sit()
-    {
+    fn a_git_checkout_is_owned_by_the_workspace_the_engine_binds_to_its_path_not_by_where_its_tabs_sit()
+     {
         // w8P holds the checkout's tabs but the engine binds the path to w9J.
         let workspaces = [
             facts("w8P", None, None),

@@ -474,7 +474,7 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
 /// B24: the helper starts in place of the script, on the same pipes, with
 /// the home folders the registration names.
 #[test]
-fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
+fn the_helper_starts_on_the_same_pipes_with_the_chosen_homes() {
     let device = Device::new();
     // It names each folder variable it was started with, and each agent's
     // home.

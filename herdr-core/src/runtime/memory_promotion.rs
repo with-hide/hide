@@ -3182,7 +3182,7 @@ pub(super) mod tests {
 
     type Shared = Arc<std::sync::Mutex<Repository>>;
 
-    fn herdr(repository: &Shared) -> Arc<crate::engine::fake::FakeEngine<'static>> {
+    fn fake_engine(repository: &Shared) -> Arc<crate::engine::fake::FakeEngine<'static>> {
         use crate::engine::fake::{processes, reply, session};
         let repository = Arc::clone(repository);
         crate::engine::fake::FakeEngine::start(move |method, params| {
@@ -3282,8 +3282,8 @@ pub(super) mod tests {
             .unwrap()
             .panes
             .push(("w2:p1".into(), "/r.worktrees/first/docs".into()));
-        let herdr = herdr(&repository);
-        let engine = herdr.engine();
+        let fake = fake_engine(&repository);
+        let engine = fake.engine();
         let failed = Promotion {
             state: PromotionState::Failed,
             ..running(None, 1)
@@ -3345,8 +3345,8 @@ pub(super) mod tests {
                 repository.commits = commits;
                 repository.changed = changed;
             }
-            let herdr = herdr(&repository);
-            let engine = herdr.engine();
+            let fake = fake_engine(&repository);
+            let engine = fake.engine();
             release_attempt(
                 engine.as_ref(),
                 &Machine(Arc::clone(&repository)),
@@ -3400,9 +3400,9 @@ pub(super) mod tests {
                     .push(("w2:p1".into(), "/r.worktrees/first".into()));
                 setup(&mut repository);
             }
-            let herdr = herdr(&repository);
+            let fake = fake_engine(&repository);
             release_attempt(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &first,
@@ -3453,11 +3453,11 @@ pub(super) mod tests {
     #[test]
     fn a_settled_attempt_ends_its_agent_and_removes_a_clean_worktree_keeping_the_branch() {
         let repository = settled_repository(|_| {});
-        let herdr = herdr(&repository);
+        let fake = fake_engine(&repository);
         let retire = retire_of(&branch(7, 1));
         assert_eq!(
             retire_attempt(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire,
                 &own(),
@@ -3497,12 +3497,12 @@ pub(super) mod tests {
         ];
         for (case, setup) in cases {
             let repository = settled_repository(setup);
-            let herdr = herdr(&repository);
+            let fake = fake_engine(&repository);
             let machine = Machine(Arc::clone(&repository));
             let retire = retire_of(&branch(7, 1));
             for _ in 0..2 {
                 assert_eq!(
-                    retire_attempt(herdr.engine().as_ref(), &machine, &retire, &own(), false),
+                    retire_attempt(fake.engine().as_ref(), &machine, &retire, &own(), false),
                     Retired::Kept,
                     "{case}"
                 );
@@ -3534,7 +3534,7 @@ pub(super) mod tests {
             repository.lookalikes = vec!["w2:p3".into()];
             repository.attempt_agents = vec!["w2:p1".into()];
         });
-        let first = herdr(&repository);
+        let first = fake_engine(&repository);
         assert_eq!(
             retire_attempt(
                 first.engine().as_ref(),
@@ -3559,7 +3559,7 @@ pub(super) mod tests {
         }
         // No agent recorded: nothing ends, and the listed agent keeps the worktree.
         let repository = settled_repository(|_| {});
-        let second = herdr(&repository);
+        let second = fake_engine(&repository);
         assert_eq!(
             retire_attempt(
                 second.engine().as_ref(),
@@ -3642,10 +3642,10 @@ pub(super) mod tests {
             repository.commits = 0;
             repository.agents.push("w2:p1".into());
         });
-        let herdr = herdr(&repository);
+        let fake = fake_engine(&repository);
         let release = || {
             release_attempt(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &retire.branch,
@@ -3674,10 +3674,10 @@ pub(super) mod tests {
     #[test]
     fn retiring_an_attempt_whose_worktree_is_gone_is_done() {
         let repository = settled_repository(|repository| repository.worktrees.clear());
-        let herdr = herdr(&repository);
+        let fake = fake_engine(&repository);
         assert_eq!(
             retire_attempt(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -3694,10 +3694,10 @@ pub(super) mod tests {
             repository.worktrees.insert(branch(7, 1), "/r".into());
             repository.panes = vec![("w1:p1".into(), "/r".into())];
         });
-        let herdr = herdr(&repository);
+        let fake = fake_engine(&repository);
         assert_eq!(
             retire_attempt(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),

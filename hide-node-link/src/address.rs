@@ -325,7 +325,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_device_pane_round_trips_and_a_node_pane_keeps_herdrs_id() {
+    fn a_device_pane_round_trips_and_a_node_pane_keeps_the_engine_s_id() {
         let remote = pane_id_on("core", "mini", "w1:p2");
         assert_eq!(remote, "remote:mini:pane:w1:p2");
         assert_eq!(
@@ -341,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn the_same_herdr_pane_on_two_devices_is_two_addresses() {
+    fn the_same_engine_pane_on_two_devices_is_two_addresses() {
         let mini = scoped_pane_id("mini", "w1:p1");
         let studio = scoped_pane_id("studio", "w1:p1");
         assert_ne!(mini, studio);

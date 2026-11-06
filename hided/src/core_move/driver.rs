@@ -233,8 +233,8 @@ pub fn forward_change(
     source: &herdr_core::MoveSource,
     home: &Path,
     host_name: Option<&str>,
-    own_herdr_socket: String,
-    target_herdr_socket: String,
+    own_engine_socket: String,
+    target_engine_socket: String,
 ) -> Result<(OwnerChange, IdTable), MoveFailure> {
     let registration = serde_json::from_value(json!({
         "id": source.node,
@@ -250,8 +250,8 @@ pub fn forward_change(
         new_owner: source.device_node.clone(),
         new_owner_was: source.device.clone(),
         old_owner_registration: registration,
-        old_owner_herdr_socket: own_herdr_socket,
-        new_owner_herdr_socket: target_herdr_socket,
+        old_owner_engine_socket: own_engine_socket,
+        new_owner_engine_socket: target_engine_socket,
     };
     let roots = project_roots(&source.projects, &source.node, home);
     let projects = source

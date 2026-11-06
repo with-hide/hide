@@ -150,7 +150,7 @@ The engine's done/idle distinction supplies completion evidence only; Hide's own
 A completion is news only when it appears.
 A record that holds a completion the row no longer shows still covers the row: a completion goes away only when the agent works again, which its own change already says, or when a restarted engine no longer reports it.
 Any other change to the fingerprint (the agent working again, a state change between two looks, another session in the pane) still turns the row unread.
-Regression owners: `a_read_demand_stays_read_when_herdr_marks_its_tab_seen_after_focus_left` and `a_read_demand_turns_unread_again_only_for_news` in `sidebar.rs`, and `web/e2e/blocked-state.spec.ts`, which finishes a blocked and an unfinished turn after the operator moved on.
+Regression owners: `a_read_demand_stays_read_when_the_engine_marks_its_tab_seen_after_focus_left` and `a_read_demand_turns_unread_again_only_for_news` in `sidebar.rs`, and `web/e2e/blocked-state.spec.ts`, which finishes a blocked and an unfinished turn after the operator moved on.
 
 A restarted engine reports neither `done` nor a `completion_seq` for a pane whose completion it lost; a restored Claude pane comes back `idle`.
 So Hide keeps the completions it saw (`pane_completions` in the persisted UI state, keyed by pane), each with the agent session, engine mark and sequence it was last seen at.
@@ -299,7 +299,7 @@ Activity, completion and approval are judged in one order: the agent's hook firs
 
 These ranks are decided once, in `agent_state::turn_projection` (activity, an approval prompt, a question or plan approval of the agent's own), and every consumer reads that answer: the row's axes, the letter doorbell and the tool-letter handover ([delivery.md](delivery.md#safe-intake-and-manual-fallback)), the confirmation of a brief or letter Hide sent, typed or through the agent's own way in, and the retype of a typed one ([delivery.md](delivery.md#input-an-agent-did-not-take)), and agent sleep through the row.
 A row the turn shows at rest is not by that a pane safe to type into: the engine's blocked prompt and readiness, Hide's input clocks and the composer read stay the doorbell's own gate, which a typed input's composer read shares (`doorbell::unheld_turn`, `doorbell::takes_keys`).
-Regression owners: `runtime::tests::turn_authority`, which crosses the hook, the engine and the session read and asserts both the row and the letter's hold, and `runtime::typed_input::tests::a_child_whose_hook_says_it_works_owes_no_record_while_herdr_reads_it_idle` with its reverse, which assert the typed input's notice and retype.
+Regression owners: `runtime::tests::turn_authority`, which crosses the hook, the engine and the session read and asserts both the row and the letter's hold, and `runtime::typed_input::tests::a_child_whose_hook_says_it_works_owes_no_record_while_the_engine_reads_it_idle` with its reverse, which assert the typed input's notice and retype.
 
 An agent-list transport failure makes the retained telemetry unconfirmed while the topology stream remains connected.
 Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
@@ -309,7 +309,7 @@ Its agent is read as stopped, with no completion, demand, block or start, whatev
 `sidebar::project_agents` lays that fact on each agent from its pane (`SessionAgentPayload::terminal_failed`) before any axis is read, so the row mark, the popovers, the close sheet and every local and remote close guard read one answer; none of them looks at the pane's failed terminal again.
 Regression owner: `runtime::tests::tree_close::a_child_whose_terminal_failed_to_restore_rests_and_never_blocks_its_parents_close`.
 No pane token is read for any of these.
-Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_herdrs_state`, `agent_hooks::facts::tests`, `runtime::tests::labels::a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it`, `runtime::tests::labels::a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest`, `runtime::tests::labels::an_approval_ends_when_the_session_file_reads_the_refused_calls_result`, `runtime::tests::agent_connection::an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call`, `runtime::tests::agent_connection::an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session`.
+Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_the_engine_s_state`, `agent_hooks::facts::tests`, `runtime::tests::labels::a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it`, `runtime::tests::labels::a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest`, `runtime::tests::labels::an_approval_ends_when_the_session_file_reads_the_refused_calls_result`, `runtime::tests::agent_connection::an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call`, `runtime::tests::agent_connection::an_agent_started_again_in_its_pane_follows_its_hook_over_the_engine_s_earlier_session`.
 Demand has these sources:
 
 - A question is the core's label verdict on the agent's last message (`label.question`, see Task identity below).

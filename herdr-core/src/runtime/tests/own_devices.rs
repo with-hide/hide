@@ -209,7 +209,7 @@ fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
 
 /// With the switch off a dialed device's panes stay on its engine.
 #[test]
-fn a_core_on_herdr_opens_no_device_engine() {
+fn a_core_with_the_switch_off_opens_no_device_engine() {
     let shared = super::device_kit::with_consent(None);
     connect(&shared, ready(Arc::new(HolderNode::default()), Ok(())));
     assert!(shared.lock().unwrap().own_device_engines().is_empty());

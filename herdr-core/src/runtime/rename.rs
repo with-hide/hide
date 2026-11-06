@@ -32,7 +32,7 @@ impl PendingRename {
 
 pub(super) fn refresh_strip_labels(checkout: &mut CheckoutSnapshot) {
     for entry in &mut checkout.strip {
-        if entry.kind == StripTabKind::Herdr
+        if entry.kind == StripTabKind::Engine
             && let Some(tab) = checkout
                 .tabs
                 .iter()

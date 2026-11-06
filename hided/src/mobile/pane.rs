@@ -69,7 +69,7 @@ pub fn read(engine: &EngineHandle, pane_id: &str, lines: u32) -> Result<Rows, Pa
 }
 
 /// The keys a phone may send, as key-combo strings.
-pub fn herdr_key(key: &str) -> Option<&'static str> {
+pub fn engine_key(key: &str) -> Option<&'static str> {
     match key {
         "enter" => Some("enter"),
         "escape" => Some("esc"),
@@ -135,11 +135,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_quick_keys_map_to_herdr_keys() {
-        assert_eq!(herdr_key("escape"), Some("esc"));
-        assert_eq!(herdr_key("ctrl_c"), Some("ctrl+c"));
-        assert_eq!(herdr_key("ctrl_d"), None);
-        assert_eq!(herdr_key("prefix+c"), None);
+    fn only_the_quick_keys_map_to_engine_keys() {
+        assert_eq!(engine_key("escape"), Some("esc"));
+        assert_eq!(engine_key("ctrl_c"), Some("ctrl+c"));
+        assert_eq!(engine_key("ctrl_d"), None);
+        assert_eq!(engine_key("prefix+c"), None);
     }
 
     #[test]

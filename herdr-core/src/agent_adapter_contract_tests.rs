@@ -69,7 +69,7 @@ fn all_core_gates_accept_the_same_aliases_without_enabling_other_agents() {
             );
             assert_eq!(
                 crate::sidebar::provider_name(Some(&spelling)),
-                row.sidebar_label.unwrap_or(row.herdr.name),
+                row.sidebar_label.unwrap_or(row.engine_kind),
                 "{}: sidebar fallback",
                 row.id
             );

@@ -595,7 +595,7 @@ fn the_end_of_checks_is_news_once_and_a_row_read_after_it_stays_read() {
     ));
     let tabs = ["w-order:t1", "w-order:t2"];
     // The engine's layout with `active` in front, the agent stopped in the first tab.
-    let herdr = |active: &str| {
+    let engine = |active: &str| {
         let mut payload = tab_order_payload(CHECKOUT, &tabs, &tabs, active);
         let agent: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents": [{
             "id": "worker", "pane_id": PANE, "agent": "claude",
@@ -606,7 +606,7 @@ fn the_end_of_checks_is_news_once_and_a_row_read_after_it_stays_read() {
         payload.agents.extend(agent.agents);
         payload
     };
-    runtime.ingest_session(Ok(herdr("w-order:t1")));
+    runtime.ingest_session(Ok(engine("w-order:t1")));
     let mut pull_request = checks_pull_request();
     pull_request.work.running_checks = 2;
     runtime.ingest_github(checks_github(&pull_request, false));
@@ -628,7 +628,7 @@ fn the_end_of_checks_is_news_once_and_a_row_read_after_it_stays_read() {
     // The operator moves to another tab and the engine confirms it.
     let leave = |runtime: &mut Runtime| {
         assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
-        runtime.ingest_session(Ok(herdr("w-order:t2")));
+        runtime.ingest_session(Ok(engine("w-order:t2")));
     };
 
     // The operator looks at the waiting row, then moves on.
@@ -649,11 +649,11 @@ fn the_end_of_checks_is_news_once_and_a_row_read_after_it_stays_read() {
 
     // Read again: later answers and projections with the same end keep it read.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
-    runtime.ingest_session(Ok(herdr("w-order:t1")));
+    runtime.ingest_session(Ok(engine("w-order:t1")));
     assert!(runtime.dispatch_json(&operator_focus_event(PANE)));
     leave(&mut runtime);
     runtime.ingest_github(checks_github(&pull_request, false));
-    runtime.ingest_session(Ok(herdr("w-order:t2")));
+    runtime.ingest_session(Ok(engine("w-order:t2")));
     runtime.refresh_checks_waits();
     let read = row(&runtime);
     assert_eq!(read["unread"].as_bool(), Some(false), "{read}");

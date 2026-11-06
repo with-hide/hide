@@ -2329,7 +2329,7 @@ pub(crate) mod tests {
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
         ]})).unwrap();
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
-        runtime.snapshot.status.herdr.state = "connected".into();
+        runtime.snapshot.status.engine.state = "connected".into();
         let panes = ["sender", "recipient"]
             .into_iter()
             .map(|id| crate::model::PaneSnapshot {
@@ -2339,7 +2339,7 @@ pub(crate) mod tests {
                 terminal_id: None,
                 failed_terminal_id: None,
                 id: id.into(),
-                herdr_label: None,
+                engine_label: None,
                 terminal_title: None,
                 cwd: "/checkouts/fixture".into(),
                 status_code: crate::model::AgentStatusCode::Attached,
@@ -2439,9 +2439,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// Puts the fixture's recipient at rest in native session `native`, idle
-    /// with no key and no change of status for long past the quiet period,
-    /// and makes `herdr` the engine this machine's panes are reached through.
     /// The agent rows the sidebar shows on this machine.
     pub(crate) fn show_agents(runtime: &mut Runtime, payload: SessionSnapshotPayload) {
         runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
@@ -2559,7 +2556,7 @@ pub(crate) mod tests {
         observation.status_changed_at_unix_ms = since;
         observation.last_input_at_unix_ms = since - 1;
         observation.last_submit_at_unix_ms = since - 1;
-        observation.herdr("working");
+        observation.engine("working");
     }
 
     /// The pane as the core observes it after a turn a prompt hook of its
@@ -2578,7 +2575,7 @@ pub(crate) mod tests {
     pub(crate) fn end_turn(runtime: &mut Runtime, pane: &str, at: u64) {
         let observation = runtime.delivery_observations.get_mut(pane).unwrap();
         observation.status_changed_at_unix_ms = at;
-        observation.herdr("idle");
+        observation.engine("idle");
     }
 
     /// A prompt hook of the pane's own session reaching the core now.
@@ -2689,7 +2686,7 @@ pub(crate) mod tests {
         }
 
         /// The engine reports `status` and the ingest lays the turn again.
-        pub(crate) fn herdr(&mut self, status: &str) {
+        pub(crate) fn engine(&mut self, status: &str) {
             self.status = status.into();
             *self = self.clone().laid(None, None);
         }
@@ -4473,7 +4470,7 @@ pub(crate) mod tests {
     /// watches on it in the durable ledger, and frees its name; the agent
     /// whose pane is still open stays registered.
     #[test]
-    fn herdr_closing_a_registered_pane_ends_the_registration_and_its_watches() {
+    fn the_engine_closing_a_registered_pane_ends_the_registration_and_its_watches() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
         let (worker, client) = Worker::store(
@@ -4521,7 +4518,7 @@ pub(crate) mod tests {
     /// The same close ends the answer wait of a request the closed pane's agent
     /// held, in the durable ledger, and its sender reads why through `show`.
     #[test]
-    fn herdr_closing_a_pane_ends_the_answer_wait_of_the_requests_it_held() {
+    fn the_engine_closing_a_pane_ends_the_answer_wait_of_the_requests_it_held() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
         let (worker, client) = Worker::store(

@@ -86,7 +86,7 @@ impl Runtime {
         }
         let row = |row: &SidebarAgentSnapshot, machine: &str, pane: &str| PsAgent {
             id: None,
-            name: row.herdr_name.clone(),
+            name: row.given_name.clone(),
             kind: row.agent_kind.clone(),
             state: if disconnected.contains(machine) {
                 PsState::Disconnected
@@ -169,7 +169,7 @@ impl Runtime {
                                 title: agent
                                     .is_none()
                                     .then(|| {
-                                        pane.herdr_label
+                                        pane.engine_label
                                             .clone()
                                             .or_else(|| pane.terminal_title.clone())
                                     })

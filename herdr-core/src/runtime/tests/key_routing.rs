@@ -28,7 +28,7 @@ fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
     .unwrap()
 }
 
-fn fake_herdr() -> Fake {
+fn fake_engine() -> Fake {
     FakeEngine::start(|method, _| match method {
         "split_pane" | "split_pane_at" => reply(SPLIT_PANE.to_owned()),
         "create_tab" => reply(("w-order:t9".to_owned(), "w-order:t9:p".to_owned())),
@@ -39,10 +39,10 @@ fn fake_herdr() -> Fake {
 /// One tab with one attached pane, on a fake engine, with recorded terminal
 /// routes. Workers cannot report back; each engine answer reaches the
 /// runtime when the test hands it.
-fn runtime_on(herdr: &Fake) -> (Runtime, Arc<RecordedTerminals>) {
+fn runtime_on(fake: &Fake) -> (Runtime, Arc<RecordedTerminals>) {
     let (mut runtime, _) = tab_order_runtime(CHECKOUT);
     let terminals = record_terminals(&mut runtime);
-    runtime.live = Some(herdr.live());
+    runtime.live = Some(fake.live());
     runtime.ingest_session(Ok(tab_order_payload(
         CHECKOUT,
         &["w-order:t1"],
@@ -153,8 +153,8 @@ fn split_answer(runtime: &mut Runtime, answer: Result<PaneControlOutcome, String
 /// write them there and the request reads ready.
 #[test]
 fn keys_typed_before_a_split_answers_reach_only_the_new_pane() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     runtime.dispatch_json(&split("r-split"));
     assert_eq!(
         request_state(&runtime, "r-split"),
@@ -197,8 +197,8 @@ fn keys_typed_before_a_split_answers_reach_only_the_new_pane() {
 /// slow startup file) still gets them: nothing typed is lost to the wait.
 #[test]
 fn keys_for_a_split_whose_shell_never_reads_still_reach_it() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     runtime.dispatch_json(&split("r-slow"));
     split_answer(
         &mut runtime,
@@ -226,8 +226,8 @@ fn keys_for_a_split_whose_shell_never_reads_still_reach_it() {
 /// was typed for it and anything typed for it afterwards.
 #[test]
 fn a_refused_split_drops_its_keys_everywhere() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     runtime.dispatch_json(&split("r-refused"));
     split_answer(&mut runtime, Err("pane too small".to_owned()));
     assert_eq!(
@@ -244,9 +244,9 @@ fn a_refused_split_drops_its_keys_everywhere() {
 /// its request, so the shell stops sending keys against it and the node
 /// drops any it holds.
 #[test]
-fn a_split_refused_before_herdr_answers_its_request_as_discarded() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+fn a_split_refused_before_the_engine_answers_its_request_as_discarded() {
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     runtime.live = None;
     runtime.dispatch_json(&split("r-offline"));
     assert_eq!(
@@ -266,8 +266,8 @@ fn a_split_refused_before_herdr_answers_its_request_as_discarded() {
 /// answered inside it waits for the shell.
 #[test]
 fn keys_for_a_creation_answered_after_the_wait_s_bound_reach_its_pane_at_once() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     let late = super::terminal_input::InputOrigin::TabCreate(41);
     let opened_long_ago = std::time::Instant::now()
         .checked_sub(Duration::from_secs(3))
@@ -305,8 +305,8 @@ fn keys_for_a_creation_answered_after_the_wait_s_bound_reach_its_pane_at_once() 
 /// shell reads keys.
 #[test]
 fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     let workspace_id = runtime.snapshot().navigator.workspaces[0].id.clone();
     let checkout_id = runtime.snapshot().navigator.focused_checkout_id.clone();
     // The checkout's tabs live in engine workspace w-order, so the tab is made
@@ -330,7 +330,7 @@ fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
     else {
         panic!("the creation opened its key request");
     };
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     runtime.complete_lane_tab(
         RemoteControlAction::CreateTab {
             workspace_id: "w-order".to_owned(),
@@ -370,9 +370,9 @@ fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
 /// not carry the pane yet, as when the engine's layout comes after Hide's
 /// drawing of the tab has expired: the node keeps the keys for it.
 #[test]
-fn keys_for_a_new_tab_survive_an_update_before_herdr_lays_out_its_pane() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+fn keys_for_a_new_tab_survive_an_update_before_the_engine_lays_out_its_pane() {
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     let workspace_id = runtime.snapshot().navigator.workspaces[0].id.clone();
     let checkout_id = runtime.snapshot().navigator.focused_checkout_id.clone();
     for checkout in runtime
@@ -394,7 +394,7 @@ fn keys_for_a_new_tab_survive_an_update_before_herdr_lays_out_its_pane() {
     else {
         panic!("the creation opened its key request");
     };
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     runtime.complete_lane_tab(
         RemoteControlAction::CreateTab {
             workspace_id: "w-order".to_owned(),
@@ -482,8 +482,8 @@ fn session_with_split_pane(laid_out: bool) -> SessionSnapshotPayload {
 /// gives that id; a wait for its shell that ends afterwards writes nothing.
 #[test]
 fn keys_for_a_split_whose_pane_left_reach_no_pane_that_reuses_its_id() {
-    let herdr = fake_herdr();
-    let (mut runtime, terminals) = runtime_on(&herdr);
+    let fake = fake_engine();
+    let (mut runtime, terminals) = runtime_on(&fake);
     runtime.dispatch_json(&split("r-gone"));
     split_answer(
         &mut runtime,

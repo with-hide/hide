@@ -102,7 +102,7 @@ pub(crate) fn spawn_saved_close_effect(
     thread::Builder::new()
         .name("herdr-core-saved-close".into())
         .spawn(move || {
-            let gate = crate::agent_sleep_herdr::dormant_close_gate(&context, &effect);
+            let gate = crate::agent_sleep_engine::dormant_close_gate(&context, &effect);
             let engine = context.engine.gated(gate);
             run_close_effects(&context, engine.as_ref(), vec![effect]);
         })

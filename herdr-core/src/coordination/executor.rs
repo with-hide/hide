@@ -2274,8 +2274,8 @@ mod tests {
     /// which the engine offers as its identifier, is not a name, and neither is a
     /// name that only restates the pane.
     #[test]
-    fn registering_an_agent_herdr_never_named_stores_no_name() {
-        let herdr = FakeEngine::start(move |method, _| {
+    fn registering_an_agent_the_engine_never_named_stores_no_name() {
+        let fake = FakeEngine::start(move |method, _| {
             assert_eq!(method, "session");
             reply(session(json!({"agents":[{
                 "pane_id":"w9J:p9R","workspace_id":"w9J","tab_id":"w9J:t1",
@@ -2285,7 +2285,7 @@ mod tests {
                     "kind":"id","value":"parent-session"}}]})))
         });
         let native =
-            wait_native_identity(herdr.engine().as_ref(), "w9J:p9R", None, "claude").unwrap();
+            wait_native_identity(fake.engine().as_ref(), "w9J:p9R", None, "claude").unwrap();
         assert_eq!(native.name, None);
         let host = || HostIdentity {
             machine: crate::node::TEST_NODE,
@@ -2306,7 +2306,7 @@ mod tests {
     /// bytes: a registration keeps the same, and a longer one is refused by
     /// its own reason when the record is made, never as an unavailable ledger.
     #[test]
-    fn a_session_path_registers_up_to_herdrs_bound_and_past_it_is_refused_by_name() {
+    fn a_session_path_registers_up_to_the_engine_s_bound_and_past_it_is_refused_by_name() {
         for (bytes, expected) in [
             (crate::delivery::SESSION_LIMIT, None),
             (
@@ -2317,7 +2317,7 @@ mod tests {
             let file = "/session.jsonl";
             let path = format!("/{}{file}", "d".repeat(bytes - file.len() - 1));
             let reported = path.clone();
-            let herdr = FakeEngine::start(move |method, _| {
+            let fake = FakeEngine::start(move |method, _| {
                 assert_eq!(method, "session");
                 reply(session(json!({"agents":[{
                     "pane_id":"w9J:p9R","workspace_id":"w9J","tab_id":"w9J:t1",
@@ -2327,7 +2327,7 @@ mod tests {
                         "kind":"path","value":reported}}]})))
             });
             let native =
-                wait_native_identity(herdr.engine().as_ref(), "w9J:p9R", Some("child"), "pi")
+                wait_native_identity(fake.engine().as_ref(), "w9J:p9R", Some("child"), "pi")
                     .unwrap();
             let made = record(
                 &native,
@@ -2357,7 +2357,7 @@ mod tests {
             ("codex", " Codex", "codex"),
             ("claude_code", "claude", "claude"),
         ] {
-            let herdr = FakeEngine::start(move |method, _| {
+            let fake = FakeEngine::start(move |method, _| {
                 assert_eq!(method, "session");
                 reply(session(json!({"agents":[{
                     "pane_id":"w2:p1","workspace_id":"w2","tab_id":"w2:t1",
@@ -2368,7 +2368,7 @@ mod tests {
                 }]})))
             });
             let child =
-                wait_native_identity(herdr.engine().as_ref(), "w2:p1", Some("child"), requested)
+                wait_native_identity(fake.engine().as_ref(), "w2:p1", Some("child"), requested)
                     .unwrap();
             assert_eq!(child.agent.as_deref(), Some(reported));
             assert_eq!(
@@ -2382,7 +2382,7 @@ mod tests {
     fn an_accepted_start_waits_for_native_identity_without_starting_again() {
         let observations = Arc::new(AtomicUsize::new(0));
         let reads = observations.clone();
-        let herdr = FakeEngine::start(move |method, _| {
+        let fake = FakeEngine::start(move |method, _| {
             assert_eq!(method, "session");
             let mut agent = json!({"pane_id":"w2:p1","workspace_id":"w2",
                 "tab_id":"w2:t1","terminal_id":"fixture-child-terminal",
@@ -2394,14 +2394,14 @@ mod tests {
             }
             reply(session(json!({"agents":[agent]})))
         });
-        let child = wait_native_identity(herdr.engine().as_ref(), "w2:p1", Some("child"), "claude")
-            .unwrap();
+        let child =
+            wait_native_identity(fake.engine().as_ref(), "w2:p1", Some("child"), "claude").unwrap();
         assert_eq!(
             child.lineage_session,
             crate::engine::tokens::session_digest("fixture-child-session")
         );
         assert_eq!(observations.load(Ordering::SeqCst), 2);
-        assert_eq!(herdr.methods(), ["session", "session"]);
+        assert_eq!(fake.methods(), ["session", "session"]);
     }
     /// A Factory parent and the spawn records of its attempts, each made the
     /// way the executor makes them: reserved, then advanced with its pane and
@@ -2546,9 +2546,8 @@ mod tests {
         })
     }
 
-    fn closed_panes(herdr: &FakeEngine<'static>) -> Vec<String> {
-        herdr
-            .calls_of("close_pane")
+    fn closed_panes(fake: &FakeEngine<'static>) -> Vec<String> {
+        fake.calls_of("close_pane")
             .into_iter()
             .map(|params| params["pane"].as_str().unwrap().to_owned())
             .collect()
@@ -2568,7 +2567,7 @@ mod tests {
         attempts.attempt("other", "factory-857", "w3:p1", Some("t31"));
         let current = attempts.attempt("worker", "factory-801-a3", "w2:p4", Some("t4"));
         // The shell runs a command in w2:p3: that attempt is busy.
-        let herdr = attempt_panes(
+        let fake = attempt_panes(
             &[
                 ("w2:p1", "t1"),
                 ("w2:p2", "t2"),
@@ -2589,12 +2588,12 @@ mod tests {
         ]}))
         .agents;
         close_unstarted_attempts(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &attempts.ledger,
             &current,
             &observed,
         );
-        assert_eq!(closed_panes(&herdr), ["w2:p1"]);
+        assert_eq!(closed_panes(&fake), ["w2:p1"]);
     }
 
     /// Herdr handed a pane id out again after its server was replaced (issue
@@ -2610,14 +2609,14 @@ mod tests {
         let replaced = attempts.attempt("worker", "factory-801-a1", "w2:p2", Some("t2-before"));
         let unrecorded = attempts.attempt("worker", "factory-801-a2", "w2:p3", None);
         let current = attempts.attempt("worker", "factory-801-a3", "w2:p4", Some("t4"));
-        let herdr = attempt_panes(
+        let fake = attempt_panes(
             &[("w2:p1", "t1"), ("w2:p2", "t2-after"), ("w2:p3", "t3")],
             &[],
         );
         let ((), records) = crate::diagnostics::capture(|| {
-            close_unstarted_attempts(herdr.engine().as_ref(), &attempts.ledger, &current, &[]);
+            close_unstarted_attempts(fake.engine().as_ref(), &attempts.ledger, &current, &[]);
         });
-        assert_eq!(closed_panes(&herdr), ["w2:p1"]);
+        assert_eq!(closed_panes(&fake), ["w2:p1"]);
         let outcome = |attempt: &SpawnRecord| {
             records
                 .iter()

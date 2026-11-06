@@ -201,9 +201,9 @@ fn a_gone_worktree_holding_a_tab_the_operator_named_is_kept() {
 /// asks the node again, reads that the pane holds only its shell, and asks
 /// the engine to close the pane, after which the workspace is gone.
 #[test]
-fn the_core_closes_the_pane_herdr_left_in_a_gone_worktree() {
+fn the_core_closes_the_pane_the_engine_left_in_a_gone_worktree() {
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let herdr = FakeEngine::start({
+    let fake = FakeEngine::start({
         let closed = Arc::clone(&closed);
         move |method, params| match method {
             "session" => reply(fake::session(session(
@@ -224,10 +224,10 @@ fn the_core_closes_the_pane_herdr_left_in_a_gone_worktree() {
     });
     let shared = SharedRuntime::new(runtime());
     shared.lock().unwrap().live = Some(live::LiveContext {
-        socket_path: herdr.scope(),
+        socket_path: fake.scope(),
         runtime: shared.weak(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
+        engine: fake.engine(),
         node: Arc::new(GoneNode),
     });
     let (_, records) = crate::diagnostics::capture(|| {
@@ -244,7 +244,7 @@ fn the_core_closes_the_pane_herdr_left_in_a_gone_worktree() {
     assert_eq!(requested["checkout"], gone());
     assert_eq!(requested["herdr_workspace_ids"], serde_json::json!(["w1"]));
     wait_for("the engine to be asked to close the pane", || {
-        herdr.methods().contains(&"close_pane")
+        fake.methods().contains(&"close_pane")
     });
 }
 

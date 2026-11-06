@@ -41,29 +41,29 @@ impl ForkableAgent {
             Self::Claude => {
                 hide_agent_adapter::LaunchDialect::Claude
                     .adapter()
-                    .herdr
-                    .name
+                    .engine_kind
             }
             Self::Codex => {
                 hide_agent_adapter::LaunchDialect::Codex
                     .adapter()
-                    .herdr
-                    .name
+                    .engine_kind
             }
-            Self::Grok => hide_agent_adapter::LaunchDialect::Grok.adapter().herdr.name,
-            Self::Pi => hide_agent_adapter::LaunchDialect::Pi.adapter().herdr.name,
-            Self::Omp => hide_agent_adapter::LaunchDialect::Omp.adapter().herdr.name,
+            Self::Grok => {
+                hide_agent_adapter::LaunchDialect::Grok
+                    .adapter()
+                    .engine_kind
+            }
+            Self::Pi => hide_agent_adapter::LaunchDialect::Pi.adapter().engine_kind,
+            Self::Omp => hide_agent_adapter::LaunchDialect::Omp.adapter().engine_kind,
             Self::OpenCode => {
                 hide_agent_adapter::LaunchDialect::OpenCode
                     .adapter()
-                    .herdr
-                    .name
+                    .engine_kind
             }
             Self::Antigravity => {
                 hide_agent_adapter::LaunchDialect::Antigravity
                     .adapter()
-                    .herdr
-                    .name
+                    .engine_kind
             }
         }
     }
@@ -461,18 +461,18 @@ mod tests {
     }
 
     #[test]
-    fn two_tasks_running_one_provider_get_names_herdr_accepts_and_keeps_apart() {
+    fn two_tasks_running_one_provider_get_names_the_engine_accepts_and_keeps_apart() {
         let first = task_agent_name("claude", "w4:p1");
         let second = task_agent_name("claude", "w8P:p1");
         assert_eq!(first, "hide-claude-w4-p1");
         assert_ne!(first, second);
-        assert!(herdr_accepts(&first) && herdr_accepts(&second));
+        assert!(engine_accepts(&first) && engine_accepts(&second));
     }
 
     /// The engine's own rule, from the error it answers an unacceptable name with:
     /// `agent name must start with a lowercase letter and contain only
     /// lowercase letters, digits, '-' or '_' (1-32 characters)`.
-    fn herdr_accepts(name: &str) -> bool {
+    fn engine_accepts(name: &str) -> bool {
         let length = name.chars().count();
         (1..=32).contains(&length)
             && name.starts_with(|character: char| character.is_ascii_lowercase())
@@ -490,7 +490,7 @@ mod tests {
     /// only the failure. Every fork in the run that shipped this happened to
     /// be from a lowercase pane id, which is why none of them hit it.
     #[test]
-    fn a_pane_id_with_capitals_still_makes_a_name_herdr_accepts() {
+    fn a_pane_id_with_capitals_still_makes_a_name_the_engine_accepts() {
         // Both were refused in the field: a capital in the pane part, and a
         // capital in the workspace part.
         for (pane_id, nonce, expected) in [
@@ -499,7 +499,7 @@ mod tests {
         ] {
             let name = fork_name(pane_id, nonce);
             assert_eq!(name, expected);
-            assert!(herdr_accepts(&name), "The engine would refuse {name:?}");
+            assert!(engine_accepts(&name), "The engine would refuse {name:?}");
         }
     }
 
@@ -507,7 +507,7 @@ mod tests {
     /// nonce have to come back inside the rule on their own, and still tell
     /// two forks apart.
     #[test]
-    fn a_long_name_is_cut_to_herdrs_limit_and_still_separates_two_forks() {
+    fn a_long_name_is_cut_to_the_engine_s_limit_and_still_separates_two_forks() {
         let long_pane = "workspace-with-a-very-long-name:pane-42";
         let first = fork_name(long_pane, "17-1788624371518");
         let second = fork_name(long_pane, "18-1788624371518");
@@ -517,7 +517,7 @@ mod tests {
         );
 
         for name in [&first, &second, &other_pane] {
-            assert!(herdr_accepts(name), "The engine would refuse {name:?}");
+            assert!(engine_accepts(name), "The engine would refuse {name:?}");
         }
         assert_ne!(first, second, "two forks of one parent share a name");
         assert_ne!(first, other_pane, "forks of two parents share a name");

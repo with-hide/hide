@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn a_split_herdr_already_shows_changes_nothing() {
+    fn a_split_the_engine_already_shows_changes_nothing() {
         let shown = layout(split(Right, 0.5, pane("w1:p1"), pane("w1:p2")), "w1:p2");
         let again = predict(
             &shown,

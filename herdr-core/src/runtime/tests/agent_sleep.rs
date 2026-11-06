@@ -1,6 +1,6 @@
 //! PRD agent-sleep through the runtime's own events and session updates.
 //! The engine workers are not run here (their boundary has its own tests in
-//! `agent_sleep_herdr.rs`); what they hand back is fed in through the same
+//! `agent_sleep_engine.rs`); what they hand back is fed in through the same
 //! `ingest_agent_sleep_*` calls a worker makes.
 
 use super::*;
@@ -177,7 +177,7 @@ fn a_resting_agent_with_no_proven_session_keeps_the_one_its_restore_named() {
 // event stream brings the session that no longer does: the end asks for no
 // read of its own there.
 #[test]
-fn a_sleep_end_on_herdr_asks_for_no_session_read() {
+fn a_sleep_end_on_the_engine_asks_for_no_session_read() {
     let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
     runtime.ingest_session(Ok(session(Some(4))));
     runtime.dispatch_json(&event(
@@ -702,7 +702,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
     let create_backup_bytes = backup_bytes.clone();
     let (effects, observed) = std::sync::mpsc::channel();
     let mut created = false;
-    let herdr = FakeEngine::start(move |method, params| match method {
+    let fake = FakeEngine::start(move |method, params| match method {
         "export_layout" => {
             assert_eq!(
                 persisted_dormant(&saved_path, &saved_id)["phase"],
@@ -800,7 +800,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         }
         other => panic!("unexpected dormant effect: {other}"),
     });
-    runtime.live.as_mut().unwrap().engine = herdr.engine();
+    runtime.live.as_mut().unwrap().engine = fake.engine();
     let shared = Arc::new(std::sync::Mutex::new(runtime));
     shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
     shared.lock().unwrap().write_ui_state().unwrap();
@@ -826,12 +826,12 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         // effects after the exact native route becomes unconfirmed.
         assert!(observed.try_recv().is_err());
         assert!(
-            !herdr.methods().iter().any(|method| matches!(
+            !fake.methods().iter().any(|method| matches!(
                 *method,
                 "close_pane" | "close_tab" | "apply_layout" | "start_agent"
             )),
             "unexpected effect: {:?}",
-            herdr.methods()
+            fake.methods()
         );
         assert_eq!(row(&shared.lock().unwrap())["pane_id"], SLEEPER);
         if let Some(alias) = migration_alias {
@@ -895,7 +895,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
                 == DormantPhase::Failed
         });
         assert!(
-            !herdr
+            !fake
                 .methods()
                 .iter()
                 .any(|method| matches!(*method, "apply_layout" | "start_agent"))
@@ -920,7 +920,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             shared.lock().unwrap().snapshot.ui_state.agent_sleep.dormant[&id].phase
                 == DormantPhase::Failed
         });
-        assert!(!herdr.methods().contains(&"start_agent"));
+        assert!(!fake.methods().contains(&"start_agent"));
         assert_eq!(
             shared.lock().unwrap().snapshot.ui_state.agent_sleep.dormant[&id]
                 .wake_pane_id
@@ -936,16 +936,16 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
     );
     {
         let mut runtime = shared.lock().unwrap();
-        let work = crate::agent_sleep_herdr::DormantWork {
+        let work = crate::agent_sleep_engine::DormantWork {
             id: id.clone(),
             record: runtime.snapshot.ui_state.agent_sleep.dormant[&id].clone(),
         };
         let mut stale = work.clone();
         stale.record.connection_generation += 1;
-        assert!(
-            !runtime
-                .ingest_dormant_tab(&stale, crate::agent_sleep_herdr::DormantTabOutcome::Unknown)
-        );
+        assert!(!runtime.ingest_dormant_tab(
+            &stale,
+            crate::agent_sleep_engine::DormantTabOutcome::Unknown
+        ));
         assert_eq!(
             runtime.snapshot.ui_state.agent_sleep.dormant[&id],
             work.record
@@ -959,7 +959,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             "w-order:t1",
         );
         let mut agent = session(Some(5)).agents.remove(0);
-        let wake_name = crate::agent_sleep_herdr::dormant_wake_name(&work);
+        let wake_name = crate::agent_sleep_engine::dormant_wake_name(&work);
         agent.name = Some(wake_name.clone());
         agent.agent = Some(kind.into());
         agent.pane_id = Some("w-order:t3:p".into());
@@ -1005,7 +1005,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         ));
         assert!(runtime.close_operations.is_empty());
     }
-    let calls = herdr.methods();
+    let calls = fake.methods();
     assert_eq!(
         calls
             .iter()
@@ -1136,7 +1136,7 @@ fn a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows
     assert!(!listed(&runtime, &repo.linked));
     assert!(runtime.snapshot.navigator.sleeping_sessions[0].wake_available);
 
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "session" => reply(fake::session(serde_json::json!({}))),
         "open_worktree" => reply(crate::engine::OpenedWorktree {
             tab_label: "1".into(),
@@ -1150,15 +1150,15 @@ fn a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows
         // The owner is open; what follows is the ordinary wake tab.
         _ => refused("fixture_end", "the fixture stops after the owner"),
     });
-    runtime.live.as_mut().unwrap().engine = herdr.engine();
+    runtime.live.as_mut().unwrap().engine = fake.engine();
     let shared = Arc::new(std::sync::Mutex::new(runtime));
     shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
     shared.lock().unwrap().write_ui_state().unwrap();
     assert!(shared.lock().unwrap().request_dormant_wake(&id));
     wait_for("the wake tab's owner", || {
-        herdr.methods().contains(&"apply_layout")
+        fake.methods().contains(&"apply_layout")
     });
-    let calls = herdr.calls();
+    let calls = fake.calls();
     let params = |wanted: &str| {
         calls
             .iter()
@@ -1266,7 +1266,7 @@ fn a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_i
     );
 
     // A wake that failed keeps saying why it failed.
-    let failed = crate::agent_sleep_herdr::WAKE_NOT_RESUMED;
+    let failed = crate::agent_sleep_engine::WAKE_NOT_RESUMED;
     {
         let record = runtime
             .snapshot
@@ -1344,11 +1344,11 @@ fn checking_an_uncertain_sent_sleep_keeps_live_topology_and_sends_no_mutation() 
     record.phase = crate::agent_sleep::DormantPhase::CloseUnknown;
     record.close_key = Some("saved-sent-close".into());
     runtime.refresh_dormant_rows();
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "session" => reply(fake::session(dormant_wire_session(CHECKOUT, &TABS))),
         other => panic!("status inspection must not mutate the engine: {other}"),
     });
-    runtime.live.as_mut().unwrap().engine = herdr.engine();
+    runtime.live.as_mut().unwrap().engine = fake.engine();
     let shared = Arc::new(std::sync::Mutex::new(runtime));
     shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
     assert!(shared.lock().unwrap().request_dormant_status(&id));
@@ -1356,7 +1356,7 @@ fn checking_an_uncertain_sent_sleep_keeps_live_topology_and_sends_no_mutation() 
         runtime.dormant_status_check.is_none()
     });
     let runtime = shared.lock().unwrap();
-    assert_eq!(herdr.methods(), ["session"]);
+    assert_eq!(fake.methods(), ["session"]);
     assert_eq!(pane(&runtime)["id"], SLEEPER);
     let row = &runtime.snapshot.navigator.sleeping_sessions[0];
     assert_eq!(row.sleep_id, id);
@@ -1419,14 +1419,14 @@ fn a_dormant_close_never_becomes_reopenable_after_archive_retirement() {
         .get_mut(&id)
         .unwrap()
         .phase = crate::agent_sleep::DormantPhase::Closing;
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "export_layout" => reply(fake::closed_layout(serde_json::json!({
             "workspace_id":"w-order","tab_id":"w-order:t2","zoomed":false,"focused_pane_id":SLEEPER,
             "root":{"type":"pane","pane_id":SLEEPER,"cwd":CHECKOUT,"env":{}}
         }))),
         other => panic!("unexpected retired sleep effect: {other}"),
     });
-    runtime.live.as_mut().unwrap().engine = herdr.engine();
+    runtime.live.as_mut().unwrap().engine = fake.engine();
     runtime.close_local_pane(SLEEPER.into(), false, false);
     let key = runtime.snapshot.ui_state.agent_sleep.dormant[&id]
         .close_key
@@ -1459,7 +1459,7 @@ fn a_dormant_close_never_becomes_reopenable_after_archive_retirement() {
     assert_eq!(runtime.snapshot.recent_closed.count, 0);
     assert!(!runtime.snapshot.recent_closed.can_reopen);
     assert!(runtime.snapshot.recent_closed.pending.is_empty());
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
 }
 
 #[test]
@@ -1580,7 +1580,7 @@ fn a_late_sleep_status_answer_never_resurrects_a_cleared_intent() {
         .unwrap();
     record.closed = true;
     record.phase = crate::agent_sleep::DormantPhase::WakeUnknown;
-    let work = crate::agent_sleep_herdr::DormantWork {
+    let work = crate::agent_sleep_engine::DormantWork {
         id: id.clone(),
         record: record.clone(),
     };
@@ -1707,7 +1707,7 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
 /// (status-marks D-21, B31);
 /// an awake row carries no `sleep` key, so an older reader's decode holds.
 #[test]
-fn a_slept_agent_keeps_its_row_after_herdr_forgets_it() {
+fn a_slept_agent_keeps_its_row_after_the_engine_forgets_it() {
     let (mut runtime, _) = asleep();
     runtime.ingest_session(Ok(session(None)));
     let slept = row(&runtime);
@@ -1973,8 +1973,8 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     assert!(runtime.ingest_agent_wake(
         SLEEPER,
         crate::agent_sleep::WakeMode::Resume,
-        crate::agent_sleep_herdr::WakeOutcome::Failed {
-            reason: crate::agent_sleep_herdr::WAKE_NOT_RESUMED.into(),
+        crate::agent_sleep_engine::WakeOutcome::Failed {
+            reason: crate::agent_sleep_engine::WAKE_NOT_RESUMED.into(),
             detail: "agent_start_failed: exited".into(),
         },
     ));
@@ -1982,7 +1982,7 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     assert_eq!(failed["sleep"]["state"], "failed");
     assert_eq!(
         failed["sleep"]["reason"],
-        crate::agent_sleep_herdr::WAKE_NOT_RESUMED
+        crate::agent_sleep_engine::WAKE_NOT_RESUMED
     );
     assert_eq!(failed["status_code"], "sleep_failed");
     assert!(runtime.dispatch_json(&event(
@@ -2023,7 +2023,7 @@ fn a_wake_whose_agent_never_appears_fails_at_the_starts_deadline() {
     runtime.ingest_agent_wake(
         SLEEPER,
         crate::agent_sleep::WakeMode::Resume,
-        crate::agent_sleep_herdr::WakeOutcome::Started,
+        crate::agent_sleep_engine::WakeOutcome::Started,
     );
     runtime.tick_agent_sleep(started + 30_000);
     assert_eq!(
@@ -2037,7 +2037,7 @@ fn a_wake_whose_agent_never_appears_fails_at_the_starts_deadline() {
     assert_eq!(failed["sleep"]["state"], "failed");
     assert_eq!(
         failed["sleep"]["reason"],
-        crate::agent_sleep_herdr::WAKE_NOT_READY
+        crate::agent_sleep_engine::WAKE_NOT_READY
     );
     assert_eq!(failed["status_code"], "sleep_failed");
 }

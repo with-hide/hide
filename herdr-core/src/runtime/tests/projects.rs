@@ -2878,7 +2878,7 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
 }
 
 #[test]
-fn a_registration_herdr_already_has_a_workspace_for_is_listed_once() {
+fn a_registration_the_engine_already_has_a_workspace_for_is_listed_once() {
     let checkout_path = "/private/tmp/hide-duplicate-registration";
     let spaces = vec![workspace::SessionSpace {
         checkout: None,
@@ -3399,7 +3399,7 @@ fn close_context_keeps_project_lookup_separate_from_session_workspace() {
     tab.id = Some("w7:t2".to_owned());
     project.checkouts[0].active_tab_id = Some("w7:t2".to_owned());
     runtime.snapshot.navigator.workspaces = vec![project];
-    runtime.herdr_workspace_tab_order.insert(
+    runtime.engine_workspace_tab_order.insert(
         "w7".to_owned(),
         vec!["w7:t1".to_owned(), "w7:t2".to_owned()],
     );
@@ -3491,7 +3491,7 @@ fn checkout_at(runtime: &Runtime, path: &str) -> (String, String) {
 /// checkout, even while every tab the checkout shows sits in another, unbound
 /// workspace; with no bound workspace open, Hide opens one at the checkout.
 #[test]
-fn a_new_tab_goes_to_the_workspace_herdr_binds_to_the_checkout_not_where_its_tabs_sit() {
+fn a_new_tab_goes_to_the_workspace_the_engine_binds_to_the_checkout_not_where_its_tabs_sit() {
     let path = owner_fixture("git", true);
     let bound = serde_json::json!({
         "workspace_id": "w9J",
@@ -4642,7 +4642,7 @@ fn tab_with_pane(pane_id: &str) -> TabSnapshot {
             terminal_id: None,
             failed_terminal_id: None,
             id: pane_id.to_owned(),
-            herdr_label: None,
+            engine_label: None,
             terminal_title: None,
             cwd: "/tmp/hide-runtime-asleep".to_owned(),
             status_code: crate::model::AgentStatusCode::Unknown,

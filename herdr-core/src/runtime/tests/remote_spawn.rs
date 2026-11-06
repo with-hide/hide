@@ -129,7 +129,7 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
 /// passed, `refused` makes the engine refuse the next start before typing
 /// anything, and `list_fails` is how many agent lists after the start the
 /// engine fails to answer.
-fn device_herdr(
+fn device_engine(
     started: Arc<AtomicBool>,
     session: Arc<Mutex<Option<String>>>,
     shows: Arc<AtomicBool>,
@@ -225,7 +225,7 @@ struct Spawner {
     refused: Arc<AtomicBool>,
     /// How many agent lists after the start the engine fails to answer.
     list_fails: Arc<AtomicUsize>,
-    herdr: Fake,
+    fake: Fake,
     path: PathBuf,
     _worker: Worker,
     client: crate::delivery::worker::Client,
@@ -258,7 +258,7 @@ fn spawner() -> Spawner {
     let unmarked = Arc::new(AtomicUsize::new(0));
     let refused = Arc::new(AtomicBool::new(false));
     let list_fails = Arc::new(AtomicUsize::new(0));
-    let herdr = device_herdr(
+    let fake = device_engine(
         started,
         session.clone(),
         shows.clone(),
@@ -324,7 +324,7 @@ fn spawner() -> Spawner {
         );
         guard.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            herdr.engine(),
+            fake.engine(),
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
         ));
@@ -381,7 +381,7 @@ fn spawner() -> Spawner {
         unmarked,
         refused,
         list_fails,
-        herdr,
+        fake,
         path,
         _worker: worker,
         client,
@@ -443,7 +443,7 @@ impl Spawner {
     }
 
     fn count(&self, method: &str) -> usize {
-        self.herdr
+        self.fake
             .methods()
             .iter()
             .filter(|seen| **seen == method)
@@ -459,7 +459,7 @@ impl Spawner {
             .install_delivery_client(self.client.clone());
         crate::coordination::lineage::Writer::new(
             DEVICE.into(),
-            self.herdr.engine(),
+            self.fake.engine(),
             Arc::downgrade(&self.runtime),
         )
         .unwrap()
@@ -469,7 +469,7 @@ impl Spawner {
     /// session sync does on each refresh.
     fn refresh(&self, writer: &mut crate::coordination::lineage::Writer) {
         let agents = crate::engine::Engine::agents(
-            self.herdr.as_ref(),
+            self.fake.as_ref(),
             crate::engine::Wait::Each(Duration::from_secs(2)),
         )
         .unwrap();
@@ -616,7 +616,7 @@ fn a_delegated_spawn_makes_the_child_on_the_device_under_the_caller() {
     );
     // The token goes to the device's pane and names the caller's machine.
     let tokens = spawner
-        .herdr
+        .fake
         .calls()
         .into_iter()
         .find(|(method, _)| *method == "report_pane_tokens")
@@ -642,7 +642,7 @@ fn a_spawn_starts_the_agent_with_its_choice_ahead_of_the_prompt() {
         .spawn_with(Some("here"), Some(DEVICE), "chosen", launch.clone(), native)
         .unwrap();
     let start = spawner
-        .herdr
+        .fake
         .calls()
         .into_iter()
         .find(|(method, _)| *method == "start_agent")
@@ -777,7 +777,7 @@ fn a_spawn_refuses_a_choice_the_agent_does_not_take_before_anything_is_made() {
         Err("invalid_launch_choice".into())
     );
     assert!(spawner.ledger().spawns.is_empty());
-    assert!(spawner.herdr.methods().is_empty());
+    assert!(spawner.fake.methods().is_empty());
     assert_eq!(spawner.node.calls.load(Ordering::SeqCst), 0);
 }
 
@@ -872,7 +872,7 @@ fn a_device_that_cannot_take_the_spawn_is_refused_before_anything_is_made() {
         ("agent_not_installed".into(), None)
     );
     assert!(spawner.ledger().spawns.is_empty());
-    assert!(spawner.herdr.methods().is_empty());
+    assert!(spawner.fake.methods().is_empty());
     // The refusals reserved nothing, so the same intent works once the device
     // can take it.
     spawner.node.installed.store(true, Ordering::SeqCst);
@@ -921,7 +921,7 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
         .spawn(Some("here"), Some(DEVICE), "resume")
         .expect_err("still no session");
     assert_eq!(again, error);
-    let before = spawner.herdr.methods();
+    let before = spawner.fake.methods();
     assert_eq!(count(&before, "create_worktree"), 1);
     assert_eq!(count(&before, "start_agent"), 1);
     // The repository and the agent were used by the first attempt; the retry
@@ -932,7 +932,7 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
     let answer = spawner
         .spawn(Some("here"), Some(DEVICE), "resume")
         .expect("the retry finishes the same spawn");
-    let after = spawner.herdr.methods();
+    let after = spawner.fake.methods();
     assert_eq!(count(&after, "create_worktree"), 1, "{after:?}");
     assert_eq!(count(&after, "start_agent"), 1, "{after:?}");
     assert_eq!(spawner.ledger().spawns.len(), 1);
@@ -949,11 +949,11 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
 /// typed once more, and a second start that never shows is the answer: the
 /// agent did not start.
 #[test]
-fn the_same_intent_types_its_start_once_more_only_after_herdr_lets_the_name_go() {
+fn the_same_intent_types_its_start_once_more_only_after_the_engine_lets_the_name_go() {
     let spawner = spawner();
     spawner.shows.store(false, Ordering::SeqCst);
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "unseen");
-    let starts = || count(&spawner.herdr.methods(), "start_agent");
+    let starts = || count(&spawner.fake.methods(), "start_agent");
     assert_eq!(
         split_refusal(&ask().expect_err("never showed")).0,
         "native_identity_unavailable"
@@ -984,7 +984,7 @@ fn the_same_intent_types_its_start_once_more_only_after_herdr_lets_the_name_go()
         split_refusal(&ask().expect_err("not started")).0,
         "agent_not_started"
     );
-    let methods = spawner.herdr.methods();
+    let methods = spawner.fake.methods();
     assert_eq!(count(&methods, "start_agent"), 2, "{methods:?}");
     assert_eq!(count(&methods, "create_worktree"), 1, "{methods:?}");
 }
@@ -1012,7 +1012,7 @@ fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
     ask().expect("the retry starts once the first prompt is marked");
     assert_eq!(spawner.unmarked.load(Ordering::SeqCst), 0);
     assert!(spawner.count("pane_token") >= reads + 4);
-    let methods = spawner.herdr.methods();
+    let methods = spawner.fake.methods();
     let marked = methods
         .iter()
         .rposition(|method| *method == "pane_token")
@@ -1040,7 +1040,7 @@ fn an_unowned_parent_is_refused_before_the_device_is_asked() {
         .expect_err("refused");
     assert_eq!(error, "parent_authority_required");
     assert!(spawner.ledger().spawns.is_empty());
-    assert!(spawner.herdr.methods().is_empty());
+    assert!(spawner.fake.methods().is_empty());
 }
 
 /// An agent on a device cannot start work on this machine or on a third one.
@@ -1062,7 +1062,7 @@ fn a_caller_on_a_device_may_name_no_other_device() {
 /// unavailable, not a raw transport error, and the same command continues
 /// the spawn once the device answers again.
 #[test]
-fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() {
+fn a_device_engine_that_stops_answering_is_unavailable_and_the_retry_converges() {
     let spawner = spawner();
     let install = |connector: crate::engine::SharedEngine| {
         spawner
@@ -1086,14 +1086,14 @@ fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() 
     let reserved = spawner.ledger().spawns;
     assert_eq!(reserved.len(), 1);
     assert!(reserved[0].pane.is_none() && reserved[0].child.is_none());
-    install(spawner.herdr.engine());
+    install(spawner.fake.engine());
     let answer = spawner
         .spawn(Some("here"), Some(DEVICE), "down")
         .expect("the retry continues the same spawn");
     let ledger = spawner.ledger();
     assert_eq!(ledger.spawns.len(), 1);
     assert_eq!(ledger.spawns[0].child.as_deref(), answer["id"].as_str());
-    assert_eq!(count(&spawner.herdr.methods(), "create_worktree"), 1);
+    assert_eq!(count(&spawner.fake.methods(), "create_worktree"), 1);
 }
 
 /// An agent on a device is refused by the spawn itself, before the intent is
@@ -1131,7 +1131,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
         assert_eq!(error, "machine_not_permitted", "{machine}");
     }
     assert!(spawner.ledger().spawns.is_empty());
-    assert!(spawner.herdr.methods().is_empty());
+    assert!(spawner.fake.methods().is_empty());
     assert_eq!(spawner.node.calls.load(Ordering::SeqCst), 0);
 }
 
@@ -1154,14 +1154,14 @@ fn a_busy_spawn_lock_refuses_after_the_checks_and_creates_nothing() {
     }
     assert!(spawner.node.calls.load(Ordering::SeqCst) > 0);
     assert!(spawner.ledger().spawns.is_empty());
-    assert!(spawner.herdr.methods().is_empty());
+    assert!(spawner.fake.methods().is_empty());
     assert!(spawner.spawn(Some("here"), Some(DEVICE), "busy").is_ok());
 }
 
 /// A device whose engine answers and refuses keeps the refusal's own code: only
 /// an engine that stopped answering makes the device unavailable.
 #[test]
-fn a_device_herdr_that_refuses_keeps_its_own_failure() {
+fn a_device_engine_that_refuses_keeps_its_own_failure() {
     let spawner = spawner();
     let refusing = FakeEngine::start(|method, _| match method {
         "worktree_path" => refused("repository_busy", "the repository is busy"),
@@ -1571,7 +1571,7 @@ fn a_spawn_takes_its_devices_permission_and_codex_overrides_go_beside_its_own_fl
             )
             .unwrap();
         let start = spawner
-            .herdr
+            .fake
             .calls()
             .into_iter()
             .find(|(method, _)| *method == "start_agent")

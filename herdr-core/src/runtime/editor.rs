@@ -841,7 +841,7 @@ impl Runtime {
         let project_workspace_id = tab.workspace_id.as_ref()?;
         let checkout_id = tab.checkout_id.as_ref()?;
         let (session_workspace_id, tab_order) = self
-            .herdr_workspace_tab_order
+            .engine_workspace_tab_order
             .iter()
             .find(|(_, ids)| ids.iter().any(|id| id == tab_id))?;
         self.snapshot
@@ -922,7 +922,7 @@ impl Runtime {
                     });
                 ClosedPane {
                     pane_id: pane.id.clone(),
-                    label: crate::start_claim::public_label(pane.herdr_label.as_deref()).or_else(
+                    label: crate::start_claim::public_label(pane.engine_label.as_deref()).or_else(
                         || crate::start_claim::public_label(pane.terminal_title.as_deref()),
                     ),
                     cwd: pane.cwd.clone(),
@@ -1406,7 +1406,7 @@ impl Runtime {
                 .panes
                 .iter()
                 .find(|pane| pane.id == *pane_id)
-                .and_then(|pane| pane.herdr_label.clone().or(pane.terminal_title.clone()))
+                .and_then(|pane| pane.engine_label.clone().or(pane.terminal_title.clone()))
                 .unwrap_or_else(|| pane_id.clone()),
             crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => {
                 tab.label.clone().unwrap_or_else(|| "Tab".to_owned())
@@ -2852,7 +2852,7 @@ impl Runtime {
     pub fn ingest_reopen_result(
         &mut self,
         request: &crate::recent_closed::reopen::ReopenRequest,
-        result: Result<crate::recent_closed::reopen::FileReopenResultOrHerdr, String>,
+        result: Result<crate::recent_closed::reopen::FileReopenResultOrEngine, String>,
     ) -> bool {
         let key = request.item.key();
         if self.reopen_in_flight.as_deref() != Some(key) {
@@ -2883,7 +2883,7 @@ impl Runtime {
                     message: format!("Reopen failed; retry is available: {message}.{reservation}"),
                 }]);
             }
-            Ok(crate::recent_closed::reopen::FileReopenResultOrHerdr::File(file)) => {
+            Ok(crate::recent_closed::reopen::FileReopenResultOrEngine::File(file)) => {
                 match file {
                     crate::recent_closed::reopen::FileReopenResult::Opened(opened) => {
                         let (document, place) = *opened;
@@ -2948,7 +2948,7 @@ impl Runtime {
                     }
                 }
             }
-            Ok(crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(outcome)) => {
+            Ok(crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(outcome)) => {
                 // Only this machine's closes reopen, so each pane id is the
                 // core's own.
                 for agent in &outcome.agents {

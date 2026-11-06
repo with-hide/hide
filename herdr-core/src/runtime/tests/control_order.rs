@@ -8,7 +8,7 @@
 use super::*;
 
 /// An engine that answers tab focus and tab creation, recording each call.
-fn fake_herdr(_name: &str) -> Fake {
+fn fake_engine(_name: &str) -> Fake {
     FakeEngine::start(|method, _| match method {
         "focus_tab" => reply(()),
         "create_tab" => reply(("w-order:t9".to_owned(), "w-order:t9:p".to_owned())),
@@ -16,12 +16,12 @@ fn fake_herdr(_name: &str) -> Fake {
     })
 }
 
-/// A runtime on three tabs of one checkout whose engine is `herdr`. Its
+/// A runtime on three tabs of one checkout whose engine is `fake`. Its
 /// workers cannot report back, so each answer reaches it only when the test
 /// calls `complete_lane_tab`.
-fn runtime_on(herdr: &Fake, checkout_path: &str) -> (Runtime, String) {
+fn runtime_on(fake: &Fake, checkout_path: &str) -> (Runtime, String) {
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
-    runtime.live = Some(herdr.live());
+    runtime.live = Some(fake.live());
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
     runtime.ingest_session(Ok(tab_order_payload(
         checkout_path,
@@ -56,12 +56,12 @@ fn acknowledged() -> Result<RemoteControlOutcome, live::ControlFailure> {
     })
 }
 
-/// Waits until the request `action` sends has reached `herdr`. The lane's
+/// Waits until the request `action` sends has reached `fake`. The lane's
 /// worker sends it on its own thread, and the engine answers only what it has
 /// received; an answer handed over before that starts the next job while
 /// the first is still on its way, and the two can reach the engine in either
 /// order (issue 837).
-fn received(herdr: &Fake, action: &RemoteControlAction) {
+fn received(fake: &Fake, action: &RemoteControlAction) {
     let (method, tab_id) = match action {
         RemoteControlAction::FocusTab { tab_id } => ("focus_tab", Some(tab_id.as_str())),
         RemoteControlAction::CreateTab { .. } => ("create_tab", None),
@@ -69,8 +69,8 @@ fn received(herdr: &Fake, action: &RemoteControlAction) {
     };
     let mut count = 1;
     loop {
-        herdr.wait_for_calls(count, Duration::from_secs(5));
-        if herdr.calls().iter().any(|(sent, params)| {
+        fake.wait_for_calls(count, Duration::from_secs(5));
+        if fake.calls().iter().any(|(sent, params)| {
             *sent == method && tab_id.is_none_or(|tab_id| params["tab"] == tab_id)
         }) {
             return;
@@ -84,11 +84,11 @@ fn received(herdr: &Fake, action: &RemoteControlAction) {
 /// its own workers cannot report back.
 fn answer(
     runtime: &mut Runtime,
-    herdr: &Fake,
+    fake: &Fake,
     action: RemoteControlAction,
     result: Result<RemoteControlOutcome, live::ControlFailure>,
 ) -> (bool, bool) {
-    received(herdr, &action);
+    received(fake, &action);
     let (changed, next) = runtime.complete_lane_tab(action, result, 4);
     let started = next.is_some();
     if let Some(next) = next {
@@ -152,9 +152,8 @@ pub(super) fn diagnostic_messages(runtime: &Runtime, kind: &str) -> Vec<String> 
         .collect()
 }
 
-fn focused_tabs(herdr: &Fake) -> Vec<String> {
-    herdr
-        .calls()
+fn focused_tabs(fake: &Fake) -> Vec<String> {
+    fake.calls()
         .into_iter()
         .filter(|(method, _)| *method == "focus_tab")
         .map(|(_, params)| params["tab"].as_str().unwrap_or_default().to_owned())
@@ -167,8 +166,8 @@ fn focused_tabs(herdr: &Fake) -> Vec<String> {
 /// round trip, and two focuses on the wire at once can land in either order.
 #[test]
 fn rapid_tab_focus_sends_the_first_and_the_latest_one_after_the_other() {
-    let herdr = fake_herdr("order-rapid");
-    let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-rapid");
+    let fake = fake_engine("order-rapid");
+    let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-rapid");
 
     for tab in ["w-order:t2", "w-order:t3", "w-order:t1"] {
         assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, tab)));
@@ -179,22 +178,22 @@ fn rapid_tab_focus_sends_the_first_and_the_latest_one_after_the_other() {
         1,
         "the middle click was replaced while it waited"
     );
-    herdr.wait_for_calls(1, Duration::from_secs(5));
-    assert_eq!(focused_tabs(&herdr), ["w-order:t2"]);
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(focused_tabs(&fake), ["w-order:t2"]);
 
     // Only now does the engine's answer to the first reach the runtime.
     answer(
         &mut runtime,
-        &herdr,
+        &fake,
         focus_action("w-order:t2"),
         acknowledged(),
     );
-    herdr.wait_for_calls(2, Duration::from_secs(5));
-    assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t1"]);
+    fake.wait_for_calls(2, Duration::from_secs(5));
+    assert_eq!(focused_tabs(&fake), ["w-order:t2", "w-order:t1"]);
 
     answer(
         &mut runtime,
-        &herdr,
+        &fake,
         focus_action("w-order:t1"),
         acknowledged(),
     );
@@ -205,8 +204,8 @@ fn rapid_tab_focus_sends_the_first_and_the_latest_one_after_the_other() {
 /// it is on its way and none is remembered; one replaced after it was sent is.
 #[test]
 fn a_tab_focus_replaced_before_it_was_sent_leaves_no_late_answer_to_wait_for() {
-    let herdr = fake_herdr("order-unsent");
-    let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-unsent");
+    let fake = fake_engine("order-unsent");
+    let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-unsent");
 
     for tab in ["w-order:t2", "w-order:t3", "w-order:t1"] {
         assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, tab)));
@@ -224,15 +223,15 @@ fn a_tab_focus_replaced_before_it_was_sent_leaves_no_late_answer_to_wait_for() {
 /// next click starts a new request.
 #[test]
 fn a_lost_tab_focus_answer_does_not_release_the_focus_waiting_behind_it() {
-    let herdr = fake_herdr("order-lost");
-    let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-lost");
+    let fake = fake_engine("order-lost");
+    let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-lost");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
 
     let (changed, started) = answer(
         &mut runtime,
-        &herdr,
+        &fake,
         focus_action("w-order:t2"),
         Err(live::ControlFailure::Ambiguous(
             "tab.focus result is unknown: response timed out".into(),
@@ -262,30 +261,30 @@ fn a_lost_tab_focus_answer_does_not_release_the_focus_waiting_behind_it() {
     );
 
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t3")));
-    herdr.wait_for_calls(2, Duration::from_secs(5));
-    assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t3"]);
+    fake.wait_for_calls(2, Duration::from_secs(5));
+    assert_eq!(focused_tabs(&fake), ["w-order:t2", "w-order:t3"]);
 }
 
 /// The engine refusing one focus neither blocks the lane nor takes the tab away
 /// from the operator: the focus waiting behind it still goes out.
 #[test]
 fn a_refused_tab_focus_lets_the_next_control_through_and_keeps_the_tab() {
-    let herdr = fake_herdr("order-refused");
-    let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-refused");
+    let fake = fake_engine("order-refused");
+    let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-refused");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t3")));
 
     answer(
         &mut runtime,
-        &herdr,
+        &fake,
         focus_action("w-order:t2"),
         Err(live::ControlFailure::Definite(
             "tab.focus was refused: tab_not_found".into(),
         )),
     );
 
-    herdr.wait_for_calls(2, Duration::from_secs(5));
-    assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t3"]);
+    fake.wait_for_calls(2, Duration::from_secs(5));
+    assert_eq!(focused_tabs(&fake), ["w-order:t2", "w-order:t3"]);
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t3")
@@ -302,8 +301,8 @@ fn a_refused_tab_focus_lets_the_next_control_through_and_keeps_the_tab() {
 /// back when its answer arrives.
 #[test]
 fn a_tab_created_before_a_click_does_not_take_the_screen_back_from_it() {
-    let herdr = fake_herdr("order-create");
-    let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-create");
+    let fake = fake_engine("order-create");
+    let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-create");
 
     runtime
         .submit_local_control(create_action())
@@ -316,7 +315,7 @@ fn a_tab_created_before_a_click_does_not_take_the_screen_back_from_it() {
 
     answer(
         &mut runtime,
-        &herdr,
+        &fake,
         create_action(),
         Ok(RemoteControlOutcome::Acknowledged {
             created_tab_id: Some("w-order:t9".to_owned()),
@@ -334,9 +333,9 @@ fn a_tab_created_before_a_click_does_not_take_the_screen_back_from_it() {
         Some("w-order:t2:p")
     );
     assert_eq!(diagnostic_count(&runtime, "tab.create.focus_superseded"), 1);
-    herdr.wait_for_calls(2, Duration::from_secs(5));
+    fake.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(
-        herdr.methods(),
+        fake.methods(),
         ["create_tab", "focus_tab"],
         "creation left first, the click after its answer"
     );
@@ -345,16 +344,16 @@ fn a_tab_created_before_a_click_does_not_take_the_screen_back_from_it() {
 /// With no later click, the created tab is the operator's choice and shows.
 #[test]
 fn a_tab_created_with_no_later_click_takes_the_screen() {
-    let herdr = fake_herdr("order-create-alone");
+    let fake = fake_engine("order-create-alone");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-create-alone");
+        runtime_on(&fake, "/private/tmp/hide-control-order-create-alone");
     runtime
         .submit_local_control(create_action())
         .expect("the lane takes the creation");
 
     answer(
         &mut runtime,
-        &herdr,
+        &fake,
         create_action(),
         Ok(RemoteControlOutcome::Acknowledged {
             created_tab_id: Some("w-order:t9".to_owned()),
@@ -373,9 +372,9 @@ fn a_tab_created_with_no_later_click_takes_the_screen() {
 /// A refused creation says so, releases the lane, and leaves the screen alone.
 #[test]
 fn a_refused_tab_creation_releases_the_lane_for_the_focus_behind_it() {
-    let herdr = fake_herdr("order-create-refused");
+    let fake = fake_engine("order-create-refused");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-create-refused");
+        runtime_on(&fake, "/private/tmp/hide-control-order-create-refused");
     runtime
         .submit_local_control(create_action())
         .expect("the lane takes the creation");
@@ -383,15 +382,15 @@ fn a_refused_tab_creation_releases_the_lane_for_the_focus_behind_it() {
 
     answer(
         &mut runtime,
-        &herdr,
+        &fake,
         create_action(),
         Err(live::ControlFailure::Definite(
             "tab.create was refused: invalid_cwd".into(),
         )),
     );
 
-    herdr.wait_for_calls(2, Duration::from_secs(5));
-    assert_eq!(herdr.methods(), ["create_tab", "focus_tab"]);
+    fake.wait_for_calls(2, Duration::from_secs(5));
+    assert_eq!(fake.methods(), ["create_tab", "focus_tab"]);
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t3")
@@ -402,8 +401,8 @@ fn a_refused_tab_creation_releases_the_lane_for_the_focus_behind_it() {
 /// queued without bound and never dropped without a word.
 #[test]
 fn the_control_lane_refuses_what_passes_its_cap() {
-    let herdr = fake_herdr("order-cap");
-    let (mut runtime, _) = runtime_on(&herdr, "/private/tmp/hide-control-order-cap");
+    let fake = fake_engine("order-cap");
+    let (mut runtime, _) = runtime_on(&fake, "/private/tmp/hide-control-order-cap");
     runtime
         .submit_local_control(create_action())
         .expect("the first control starts");
@@ -467,9 +466,9 @@ fn a_tab_focus_waits_for_the_pane_focus_ahead_of_it() {
 /// the engine before the focus that came after it.
 #[test]
 fn a_replacing_focus_queues_behind_the_control_accepted_between_the_two() {
-    let herdr = fake_herdr("order-replace-position");
+    let fake = fake_engine("order-replace-position");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-replace-position");
+        runtime_on(&fake, "/private/tmp/hide-control-order-replace-position");
 
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t3")));
@@ -479,26 +478,25 @@ fn a_replacing_focus_queues_behind_the_control_accepted_between_the_two() {
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
     assert_eq!(runtime.control_lane.queued_len(), 2);
 
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     answer(
         &mut runtime,
-        &herdr,
+        &fake,
         focus_action("w-order:t2"),
         acknowledged(),
     );
-    herdr.wait_for_calls(2, Duration::from_secs(5));
+    fake.wait_for_calls(2, Duration::from_secs(5));
     let methods = || {
-        herdr
-            .calls()
+        fake.calls()
             .into_iter()
             .map(|(method, _)| method)
             .collect::<Vec<_>>()
     };
     assert_eq!(methods(), ["focus_tab", "create_tab"]);
 
-    answer(&mut runtime, &herdr, create_action(), acknowledged());
-    herdr.wait_for_calls(3, Duration::from_secs(5));
-    assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t1"]);
+    answer(&mut runtime, &fake, create_action(), acknowledged());
+    fake.wait_for_calls(3, Duration::from_secs(5));
+    assert_eq!(focused_tabs(&fake), ["w-order:t2", "w-order:t1"]);
 }
 
 /// The unknown-result rule is the same whichever control was lost: a pane
@@ -588,9 +586,9 @@ fn a_lost_pane_focus_answer_records_the_queued_pane_focus_it_drops() {
 /// when it leaves, not when it was accepted.
 #[test]
 fn a_tab_move_replaced_while_it_waited_is_not_sent() {
-    let herdr = fake_herdr("order-stale-move");
+    let fake = fake_engine("order-stale-move");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-stale-move");
+        runtime_on(&fake, "/private/tmp/hide-control-order-stale-move");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     let stale = RemoteControlAction::MoveTab {
         checkout_id: checkout_id.clone(),
@@ -607,17 +605,17 @@ fn a_tab_move_replaced_while_it_waited_is_not_sent() {
     runtime.submit_local_control(stale).expect("accepted");
     assert_eq!(runtime.control_lane.queued_len(), 1);
 
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     let (_, started) = answer(
         &mut runtime,
-        &herdr,
+        &fake,
         focus_action("w-order:t2"),
         acknowledged(),
     );
 
     assert!(!started, "no pending move carries this generation");
     assert!(!runtime.control_lane.is_busy());
-    assert_eq!(herdr.calls().len(), 1);
+    assert_eq!(fake.calls().len(), 1);
 }
 
 fn queued_move(runtime: &mut Runtime, checkout_id: &str, phase: &str) {
@@ -626,7 +624,7 @@ fn queued_move(runtime: &mut Runtime, checkout_id: &str, phase: &str) {
         PendingTabMove {
             desired: vec!["herdr:w-order:t2".to_owned(), "herdr:w-order:t1".to_owned()],
             workspace_id: "w-order".to_owned(),
-            herdr_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
+            engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
             target_id: "w-order:t1".to_owned(),
             generation: 7,
             connection_generation: runtime.live_generation,
@@ -653,10 +651,10 @@ fn queued_move(runtime: &mut Runtime, checkout_id: &str, phase: &str) {
 /// A move waiting behind another control has no clock running: its five
 /// seconds are the wait for the engine, and the engine has not been asked yet.
 #[test]
-fn a_queued_tab_moves_wait_for_herdr_starts_when_it_leaves() {
-    let herdr = fake_herdr("order-move-deadline");
+fn a_queued_tab_moves_wait_for_the_engine_starts_when_it_leaves() {
+    let fake = fake_engine("order-move-deadline");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-move-deadline");
+        runtime_on(&fake, "/private/tmp/hide-control-order-move-deadline");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     queued_move(&mut runtime, &checkout_id, "transmitting");
     assert_eq!(
@@ -664,7 +662,7 @@ fn a_queued_tab_moves_wait_for_herdr_starts_when_it_leaves() {
         None
     );
 
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
 
     assert!(
@@ -688,13 +686,13 @@ fn a_queued_tab_moves_wait_for_herdr_starts_when_it_leaves() {
 /// A move whose own wait was already declared unknown is not sent late.
 #[test]
 fn a_tab_move_that_is_no_longer_transmitting_is_not_sent() {
-    let herdr = fake_herdr("order-move-unknown");
+    let fake = fake_engine("order-move-unknown");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-move-unknown");
+        runtime_on(&fake, "/private/tmp/hide-control-order-move-unknown");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     queued_move(&mut runtime, &checkout_id, "unknown");
 
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
 
     assert!(next.is_none());
@@ -705,9 +703,8 @@ fn a_tab_move_that_is_no_longer_transmitting_is_not_sent() {
 /// that turn, so the engine ends on what the operator did last.
 #[test]
 fn a_joining_pane_focus_queues_behind_the_control_accepted_after_the_turn() {
-    let herdr = fake_herdr("order-pane-join");
-    let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-pane-join");
+    let fake = fake_engine("order-pane-join");
+    let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-pane-join");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&correlated_pane_focus_event("w-order:t3:p", "pane-1")));
     runtime
@@ -720,7 +717,7 @@ fn a_joining_pane_focus_queues_behind_the_control_accepted_after_the_turn() {
         2,
         "one turn for both clicks, and the create"
     );
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
     assert!(
         matches!(
@@ -738,12 +735,12 @@ fn a_joining_pane_focus_queues_behind_the_control_accepted_after_the_turn() {
 /// never came holds back the pane focus waiting behind it.
 #[test]
 fn a_lost_tab_focus_answer_does_not_release_the_pane_focus_behind_it() {
-    let herdr = fake_herdr("order-tab-lost-pane");
+    let fake = fake_engine("order-tab-lost-pane");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-tab-lost-pane");
+        runtime_on(&fake, "/private/tmp/hide-control-order-tab-lost-pane");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&correlated_pane_focus_event("w-order:t3:p", "pane-1")));
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
 
     let (changed, next) = runtime.complete_lane_tab(
         focus_action("w-order:t2"),
@@ -771,12 +768,12 @@ fn a_lost_tab_focus_answer_does_not_release_the_pane_focus_behind_it() {
 /// its insert index names the order the first one showed.
 #[test]
 fn a_tab_move_queued_on_an_earlier_connection_is_not_sent() {
-    let herdr = fake_herdr("order-move-connection");
+    let fake = fake_engine("order-move-connection");
     let (mut runtime, checkout_id) =
-        runtime_on(&herdr, "/private/tmp/hide-control-order-move-connection");
+        runtime_on(&fake, "/private/tmp/hide-control-order-move-connection");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     queued_move(&mut runtime, &checkout_id, "transmitting");
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
     runtime.live_generation += 1;
 
     let (_, next) = runtime.complete_lane_tab(focus_action("w-order:t2"), acknowledged(), 4);
@@ -791,11 +788,11 @@ fn a_tab_move_queued_on_an_earlier_connection_is_not_sent() {
 /// in progress (#438 review: a close that "waits behind" the lane).
 #[test]
 fn a_pane_close_starts_while_an_unanswered_tab_focus_holds_the_lane() {
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "toggle_zoom" => reply(true),
         _ => reply(()),
     });
-    let (mut runtime, checkout_id) = runtime_on(&herdr, "/private/tmp/hide-control-order-close");
+    let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-close");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(
         runtime.control_lane.is_busy(),
@@ -867,12 +864,12 @@ fn a_zoom_and_resize_in_other_tabs_start_while_an_unanswered_pane_focus_holds_th
 /// close in its tab until the deadline.
 #[test]
 fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answer() {
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "toggle_zoom" => reply(true),
         other => panic!("unexpected {other}"),
     });
     let checkout_path = "/private/tmp/hide-control-order-early-topology";
-    let (mut runtime, _checkout_id) = runtime_on(&herdr, checkout_path);
+    let (mut runtime, _checkout_id) = runtime_on(&fake, checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
     let split = || {
         with_second_pane(
@@ -885,7 +882,7 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
 
     runtime.dispatch_json(zoom.as_bytes());
     assert_eq!(runtime.pane_operations.len(), 1);
-    herdr.wait_for_calls(1, Duration::from_secs(5));
+    fake.wait_for_calls(1, Duration::from_secs(5));
 
     // The engine's update with the zoomed layout arrives while the request is
     // still unanswered.
@@ -918,7 +915,7 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
 
     // The next zoom in the tab is sent, not turned away as already running.
     runtime.dispatch_json(zoom.as_bytes());
-    herdr.wait_for_calls(2, Duration::from_secs(5));
+    fake.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(runtime.pane_operations.len(), 1);
 }
 
@@ -929,12 +926,12 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
 /// once the tab holds a second pane, it is.
 #[test]
 fn a_zoom_on_a_tabs_only_pane_is_not_sent_and_leaves_the_tab_free() {
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "toggle_zoom" => reply(true),
         other => panic!("unexpected {other}"),
     });
     let checkout_path = "/private/tmp/hide-control-order-zoom-single-pane";
-    let (mut runtime, _checkout_id) = runtime_on(&herdr, checkout_path);
+    let (mut runtime, _checkout_id) = runtime_on(&fake, checkout_path);
     let zoom = r#"{"schema_version":2,"kind":"toggle_zoom","payload":{"pane_id":"w-order:t2:p"}}"#;
 
     runtime.dispatch_json(zoom.as_bytes());
@@ -942,7 +939,7 @@ fn a_zoom_on_a_tabs_only_pane_is_not_sent_and_leaves_the_tab_free() {
         runtime.pane_operations.is_empty(),
         "nothing waits on the tab"
     );
-    assert!(herdr.methods().is_empty(), "Herdr was not asked");
+    assert!(fake.methods().is_empty(), "Herdr was not asked");
     assert_eq!(
         diagnostic_messages(&runtime, "pane.zoom.single_pane"),
         ["Pane w-order:t2:p is its tab's only pane; zoom was not sent"]
@@ -954,6 +951,6 @@ fn a_zoom_on_a_tabs_only_pane_is_not_sent_and_leaves_the_tab_free() {
         "w-order:t2",
     )));
     runtime.dispatch_json(zoom.as_bytes());
-    herdr.wait_for_calls(1, Duration::from_secs(5));
-    assert_eq!(herdr.methods(), ["toggle_zoom"]);
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(fake.methods(), ["toggle_zoom"]);
 }

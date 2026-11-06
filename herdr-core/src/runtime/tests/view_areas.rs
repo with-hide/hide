@@ -962,7 +962,7 @@ fn pane_close_preserves_a_dirty_last_view_after_closing_its_twin() {
     open(&mut runtime, &checkout_id, &path, false, true);
     let tab_id = tab_of(&runtime, "notes.md");
     draft(&mut runtime, &tab_id, "unsaved draft\n");
-    runtime.snapshot.status.herdr.state = "connected".to_owned();
+    runtime.snapshot.status.engine.state = "connected".to_owned();
     let pane_id = "pane-cli";
     let checkout = runtime
         .snapshot
@@ -3303,7 +3303,7 @@ fn an_outside_file_opens_once_per_grant_and_its_log_names_no_file() {
         "an image is not a page"
     );
     // Pages are listed for the checkouts of a live engine.
-    runtime.snapshot.status.herdr.state = "connected".to_owned();
+    runtime.snapshot.status.engine.state = "connected".to_owned();
     assert!(external_open(
         &mut runtime,
         serde_json::json!({"grant": GRANT_B, "name": "preview.html", "kind": "html", "workspace": workspace}),

@@ -384,8 +384,8 @@ fn a_wheel_before_the_attach_is_sent_with_the_first_frame() {
 /// that the engine knows it by; a device that is not connected answers the reason
 /// in the find bar instead of searching this machine.
 #[test]
-fn a_device_pane_is_searched_on_its_own_herdr() {
-    let herdr = FakeEngine::start(|method, params| {
+fn a_device_pane_is_searched_on_its_own_engine() {
+    let fake = FakeEngine::start(|method, params| {
         assert_eq!(method, "read_pane");
         assert_eq!(params["pane"], "w1:p2");
         reply(crate::engine::PaneText {
@@ -427,7 +427,7 @@ fn a_device_pane_is_searched_on_its_own_herdr() {
         });
         runtime.install_remote_control(live::RemoteControlContext::new(
             "mini",
-            herdr.engine(),
+            fake.engine(),
             shared.weak(),
             crate::handle::ChangeNotifier::noop(),
         ));
@@ -436,7 +436,7 @@ fn a_device_pane_is_searched_on_its_own_herdr() {
             runtime.snapshot.find.unavailable_reason.as_deref(),
             Some("Mini is not connected")
         );
-        assert!(herdr.calls().is_empty());
+        assert!(fake.calls().is_empty());
         runtime.snapshot.status.remote[0].state = "connected".to_owned();
         runtime.dispatch_json(&find);
     }
@@ -962,7 +962,7 @@ fn connection_loss_cancels_acknowledged_creation_before_reconnect() {
         runtime.ingest_session(Err(SessionFetchError::Unreachable(
             "private server ended".into(),
         )));
-        assert_eq!(runtime.snapshot().status.herdr.state, "unreachable");
+        assert_eq!(runtime.snapshot().status.engine.state, "unreachable");
         assert!(runtime.provisional_tabs.is_empty());
         let tabs = RETENTION_TABS;
         runtime.ingest_session(Ok(retention_session(RETENTION_PATH, &tabs[..5], tabs[4])));
@@ -1244,10 +1244,10 @@ fn close_projection_a_failure_on_a_living_pane_still_reports_ended() {
 /// names the request that asked. Claude Code's transcript toggles on the key
 /// that opens it, so a second ⌘F inside it only starts a new search.
 #[test]
-fn find_opens_the_agents_own_search_only_where_herdr_holds_no_history() {
+fn find_opens_the_agents_own_search_only_where_the_engine_holds_no_history() {
     let history = Arc::new(Mutex::new(0_u64));
     let screen = Arc::new(Mutex::new(String::from("❯ \n  ? for shortcuts\n")));
-    let herdr = {
+    let fake = {
         let history = Arc::clone(&history);
         let screen = Arc::clone(&screen);
         FakeEngine::start(move |method, params| match method {
@@ -1272,7 +1272,7 @@ fn find_opens_the_agents_own_search_only_where_herdr_holds_no_history() {
         let mut runtime = shared.lock().unwrap();
         runtime.live = Some(live::LiveContext {
             runtime: shared.weak(),
-            ..herdr.live()
+            ..fake.live()
         });
         runtime
             .terminal_states
@@ -1307,8 +1307,7 @@ fn find_opens_the_agents_own_search_only_where_herdr_holds_no_history() {
         answered(&shared.lock().unwrap()).unwrap().route
     };
     let sent_keys = || {
-        herdr
-            .calls()
+        fake.calls()
             .into_iter()
             .filter(|(method, _)| *method == "send_keys")
             .map(|(_, params)| params["keys"].clone())

@@ -58,14 +58,14 @@ fn retired_history_keeps_conversation_mode_without_restoring_active_capabilities
 }
 
 /// The kind the engine names an agent by, from the kit adapter's id.
-fn herdr_kind(adapter: &hide_kit::AgentAdapter) -> &'static str {
-    hide_agent_adapter::adapter(adapter.id).unwrap().herdr.name
+fn engine_kind(adapter: &hide_kit::AgentAdapter) -> &'static str {
+    hide_agent_adapter::adapter(adapter.id).unwrap().engine_kind
 }
 
 #[test]
 fn every_flag_of_the_table_is_what_the_cores_own_gates_do() {
     for adapter in hide_kit::agents::ADAPTERS {
-        let kind = herdr_kind(adapter);
+        let kind = engine_kind(adapter);
         // What instruments a session: a settings-file hook the core reads a
         // runtime for, a script file of Hide's the kit installs (OpenCode's
         // plugin, Pi's and omp's extension), or a hook entry that answers the
@@ -114,7 +114,7 @@ fn every_flag_of_the_table_is_what_the_cores_own_gates_do() {
             conversation_agent_kind(kind),
             "{kind}: conversation titles"
         );
-        assert_eq!(adapter.herdr.name, kind, "{kind}: kind");
+        assert_eq!(adapter.engine_kind, kind, "{kind}: kind");
     }
 }
 

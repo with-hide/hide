@@ -4,7 +4,7 @@
 //! retains one Agent area in each named group.
 
 use super::device_catalog::{
-    connected_status, dispatch, herdr_workspace, next_request, recording_engine, session, tree,
+    connected_status, dispatch, engine_workspace, next_request, recording_engine, session, tree,
 };
 use super::*;
 use crate::device_catalog;
@@ -234,7 +234,7 @@ fn device_in_front(
 /// `focused`.
 fn focused_on(path: &str, tabs: &[&str], focused: &str) -> RemoteSessionSnapshot {
     let tabs = tabs.iter().map(|tab| (*tab, path)).collect::<Vec<_>>();
-    let mut raw = session(vec![herdr_workspace(NODE, "w1", path, &tabs)]);
+    let mut raw = session(vec![engine_workspace(NODE, "w1", path, &tabs)]);
     raw.focused_workspace_id = Some(format!("remote:{NODE}:workspace:w1"));
     raw.focused_checkout_id = Some(format!("remote:{NODE}:checkout:w1"));
     raw.focused_tab_id = Some(tab(focused));
@@ -293,7 +293,7 @@ fn collect(
 /// the tab the new area holds, and attaches the panes of both; the node's
 /// stale keyboard focus does not replace the explicitly selected area.
 #[test]
-fn a_node_that_dialed_in_splits_its_tabs_into_agent_areas_and_its_herdr_shows_the_active_one() {
+fn a_node_that_dialed_in_splits_its_tabs_into_agent_areas_and_its_engine_shows_the_active_one() {
     let t = tree();
     let (mut runtime, requests, _views) =
         device_in_front(crate::model::LinkOrigin::Inbound, &t.main);

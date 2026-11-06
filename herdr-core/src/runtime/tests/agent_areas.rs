@@ -34,7 +34,7 @@ fn layout(runtime: &Runtime) -> crate::agent_layout::Layout {
         .clone()
 }
 #[test]
-fn agent_split_shows_both_tabs_retains_their_attaches_and_preserves_herdr_order() {
+fn agent_split_shows_both_tabs_retains_their_attaches_and_preserves_engine_order() {
     let (mut runtime, checkout) = setup();
     let order = ordered_tab_ids(&runtime, &checkout);
     action(
@@ -615,7 +615,7 @@ fn reopen_unknown_claim_survives_error_and_retry_launch_failure_then_transfers_t
     runtime.ingest_reopen_result(
         &request,
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: Some("w-order:restored".into()),
                     consumed: true,
@@ -975,7 +975,8 @@ fn a_closing_tab_leaves_its_area_at_once_and_a_refusal_puts_it_and_the_operator_
 /// while Hide's focus on the area's next tab is unanswered, so it is read as
 /// the answer and the operator stays where the screen went.
 #[test]
-fn an_accepted_close_stays_out_of_its_area_and_herdrs_own_next_tab_does_not_move_the_operator() {
+fn an_accepted_close_stays_out_of_its_area_and_the_engine_s_own_next_tab_does_not_move_the_operator()
+ {
     let (mut runtime, checkout) = two_areas_on_t1();
     let during = [
         area("w-order:t3", &["w-order:t3"]),
@@ -1048,9 +1049,9 @@ fn closing_the_primary_checkouts_last_tab_beside_a_linked_worktree_makes_no_shel
         is_linked_worktree: false,
     };
     runtime
-        .herdr_worktrees
+        .engine_worktrees
         .insert("w-order".into(), primary.clone());
-    runtime.herdr_worktrees.insert(
+    runtime.engine_worktrees.insert(
         "linked".into(),
         crate::domain::WorktreeProjection {
             is_linked_worktree: true,
@@ -1283,7 +1284,7 @@ fn reopen(runtime: &mut Runtime) {
 /// The chip is gone before the engine confirms the close, so a reopen pressed at
 /// once is offered, waits for that close, and starts when it is confirmed.
 #[test]
-fn a_reopen_pressed_while_the_close_settles_starts_once_herdr_confirms_the_close() {
+fn a_reopen_pressed_while_the_close_settles_starts_once_the_engine_confirms_the_close() {
     let (mut runtime, _) = two_areas_on_t1();
     close_tab(&mut runtime, "w-order:t1");
     answer_close(&mut runtime, Ok(()));
@@ -1393,8 +1394,8 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
     close_tab(&mut runtime, "w-order:t3");
     answer_close(&mut runtime, Ok(()));
     let after_close = ["w-order:t1", "w-order:t2"];
-    let mut herdr = HerdrMoves::new();
-    runtime.ingest_session(Ok(herdr.after(
+    let mut engine = EngineMoves::new();
+    runtime.ingest_session(Ok(engine.after(
         &[],
         tab_order_payload("/agent-groups", &after_close, &after_close, "w-order:t1"),
     )));
@@ -1407,7 +1408,7 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
     // leaves, and only a request that has left is confirmed.
     let _ = runtime.advance_lane();
     // The engine confirms the click on the right area's tab.
-    runtime.ingest_session(Ok(herdr.after(
+    runtime.ingest_session(Ok(engine.after(
         &["w-order:t2"],
         tab_order_payload("/agent-groups", &after_close, &after_close, "w-order:t2"),
     )));
@@ -1425,7 +1426,7 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
             owner: None,
         },
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: Some("w-order:t4".into()),
                     consumed: true,
@@ -1447,11 +1448,11 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
         revision: 1,
         creation: true,
     });
-    runtime.ingest_session(Ok(herdr.after(&[], seed.clone())));
+    runtime.ingest_session(Ok(engine.after(&[], seed.clone())));
     let focus = seed.tab_focus.as_mut().unwrap();
     focus.creation = false;
     focus.revision = 2;
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t8"], seed)));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t8"], seed)));
     assert_eq!(
         runtime.snapshot().terminal.pane_id.as_deref(),
         Some("w-order:t8:p"),
@@ -1461,7 +1462,7 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
     // The seed goes and the restored tab arrives, with the engine's keyboard back
     // on the right area's tab.
     let restored = ["w-order:t1", "w-order:t2", "w-order:t4"];
-    runtime.ingest_session(Ok(herdr.after(
+    runtime.ingest_session(Ok(engine.after(
         &["w-order:t2"],
         tab_order_payload("/agent-groups", &restored, &restored, "w-order:t2"),
     )));
@@ -1493,7 +1494,7 @@ fn a_reopened_tab_listed_before_its_answer_returns_to_the_area_it_was_closed_fro
     close_tab(&mut runtime, "w-order:t3");
     answer_close(&mut runtime, Ok(()));
     let after_close = ["w-order:t1", "w-order:t2"];
-    let mut engine = HerdrMoves::new();
+    let mut engine = EngineMoves::new();
     runtime.ingest_session(Ok(engine.after(
         &[],
         tab_order_payload("/agent-groups", &after_close, &after_close, "w-order:t1"),
@@ -1528,7 +1529,7 @@ fn a_reopened_tab_listed_before_its_answer_returns_to_the_area_it_was_closed_fro
             owner: None,
         },
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: Some("w-order:t4".into()),
                     consumed: true,
@@ -1825,7 +1826,7 @@ fn a_fork_tab_the_full_agent_area_cannot_show_does_not_take_the_keyboard() {
 // A pane the replaced engine made is neither placed nor focused on the
 // connection that replaced it.
 #[test]
-fn a_fork_pane_from_a_replaced_herdr_is_not_placed_or_focused() {
+fn a_fork_pane_from_a_replaced_engine_is_not_placed_or_focused() {
     let (mut runtime, _) = setup();
     pending_fork(&mut runtime, "w-order:t1:p", Some("fork-keys"));
     runtime.live_generation += 1;
@@ -1962,7 +1963,7 @@ fn keys_held_for(runtime: &Runtime, pane: &str) -> bool {
 // With another checkout in front the journey's Grok fork waited 30 s on
 // `pane.projection_unavailable` on macOS.
 #[test]
-fn a_fork_brings_its_checkout_forward_before_herdr_lists_its_pane() {
+fn a_fork_brings_its_checkout_forward_before_the_engine_lists_its_pane() {
     let before = ["w-order:t1", "w-order:t2"];
     for from_elsewhere in [false, true] {
         let (mut runtime, checkout, pane) = forked(from_elsewhere, true);
@@ -2022,7 +2023,7 @@ fn a_fork_brings_its_checkout_forward_before_herdr_lists_its_pane() {
 // pane rather than following the front checkout's own pane (the journey's
 // Grok fork on Windows: `Herdr focused pane w1:p1; Hide was on w8:p3`).
 #[test]
-fn herdrs_layout_of_a_fork_is_not_read_as_herdr_moving_the_keyboard() {
+fn the_engine_s_layout_of_a_fork_is_not_read_as_the_engine_moving_the_keyboard() {
     for tab in [true, false] {
         let (mut runtime, checkout, pane) = forked(true, tab);
         // The engine confirms the fork's focus in milliseconds, before its layout
@@ -2089,7 +2090,7 @@ fn herdrs_layout_of_a_fork_is_not_read_as_herdr_moving_the_keyboard() {
 // is, and a fork whose agent never started takes back what was drawn for the
 // pane its worker closed.
 #[test]
-fn a_fork_pane_herdr_never_lays_out_is_released_at_its_bound() {
+fn a_fork_pane_the_engine_never_lays_out_is_released_at_its_bound() {
     let before = ["w-order:t1", "w-order:t2"];
     let (mut runtime, _, pane) = forked(false, false);
     runtime.tick_async_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1_000);
@@ -2215,7 +2216,7 @@ fn focus_pane(runtime: &mut Runtime, pane: &str) {
 // first read as: that report is not followed into a checkout not in front,
 // and the answer then brings the checkout forward with the fork.
 #[test]
-fn herdr_reporting_a_fork_tab_before_its_answer_is_not_followed() {
+fn the_engine_reporting_a_fork_tab_before_its_answer_is_not_followed() {
     let before = ["w-order:t1", "w-order:t2"];
     let with_fork = ["w-order:t1", "w-order:t2", "w-order:t4"];
     let (mut runtime, checkout, elsewhere) = entered_from_elsewhere(&before);

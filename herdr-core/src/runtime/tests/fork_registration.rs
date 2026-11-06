@@ -32,7 +32,7 @@ fn row(pane: &str, name: &str, session: Option<&str>) -> Value {
 struct Forking {
     _root: tempfile::TempDir,
     runtime: Arc<Mutex<Runtime>>,
-    herdr: Fake,
+    fake: Fake,
     live: crate::live::LiveContext,
     /// Whether the engine lists the fork's agent.
     listed: Arc<AtomicBool>,
@@ -50,7 +50,7 @@ fn forking() -> Forking {
     let listed = Arc::new(AtomicBool::new(true));
     let reported = Arc::new(AtomicBool::new(false));
     let (shown, own) = (listed.clone(), reported.clone());
-    let herdr = FakeEngine::start(move |method, _| match method {
+    let fake = FakeEngine::start(move |method, _| match method {
         "session" => {
             let mut agents = vec![row("sender", "sender", Some("sender-native"))];
             if shown.load(Ordering::SeqCst) {
@@ -63,10 +63,10 @@ fn forking() -> Forking {
         other => panic!("unexpected {other}"),
     });
     let live = crate::live::LiveContext {
-        socket_path: herdr.scope(),
+        socket_path: fake.scope(),
         runtime: Arc::downgrade(&runtime),
         notifier: ChangeNotifier::noop(),
-        engine: herdr.engine(),
+        engine: fake.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     };
     let (worker, client) =
@@ -94,7 +94,7 @@ fn forking() -> Forking {
     Forking {
         _root: root,
         runtime,
-        herdr,
+        fake,
         live,
         listed,
         reported,
@@ -111,7 +111,7 @@ impl Forking {
     fn writer(&self) -> Writer {
         Writer::new(
             crate::node::TEST_NODE.into(),
-            self.herdr.engine(),
+            self.fake.engine(),
             Arc::downgrade(&self.runtime),
         )
         .unwrap()
@@ -195,7 +195,7 @@ fn a_fork_whose_session_arrives_late_registers_as_the_operators_root_from_its_so
     // Its pane names the source under the fork keys, which is what shows
     // the row as forked from it.
     wait_for("the fork's pane is told its source", || {
-        forking.herdr.calls().iter().any(|(method, params)| {
+        forking.fake.calls().iter().any(|(method, params)| {
             *method == "report_pane_tokens"
                 && params["pane"] == FORK_PANE
                 && params["tokens"]["fork_pane"] == "sender"

@@ -19,7 +19,7 @@ const NATIVE: &str = "native-1";
 /// What one pane shows the engine, its hook and its session read.
 struct Witnesses {
     kind: &'static str,
-    herdr: &'static str,
+    engine_status: &'static str,
     hook: Option<HookTurn>,
     /// The session read's records, for the engine state the pane is in.
     session: &'static [Read],
@@ -145,10 +145,10 @@ fn sync_inputs(
         true,
         false,
     );
-    let herdr = serde_json::json!({
+    let engine_session = serde_json::json!({
         "agents": [{
             "id": "agent-1", "pane_id": PANE, "agent": witnesses.kind,
-            "agent_status": witnesses.herdr, "state_change_seq": seq,
+            "agent_status": witnesses.engine_status, "state_change_seq": seq,
             "cwd": "/fixture", "workspace_label": "Fixture",
             "agent_session": {"kind": "id", "value": NATIVE},
             "lineage_session": "lineage-1",
@@ -164,7 +164,7 @@ fn sync_inputs(
         }],
     });
     (
-        crate::sidebar::owned_label_fixture(herdr).expect("session payload"),
+        crate::sidebar::owned_label_fixture(engine_session).expect("session payload"),
         overlay,
     )
 }
@@ -225,10 +225,10 @@ fn pass(witnesses: &Witnesses) -> Seen {
 /// reads the screen as working. The row is stopped, so a letter is rung at
 /// rest instead of waiting out five minutes of work the engine no longer does.
 #[test]
-fn a_turn_the_hook_ended_while_herdr_reads_work_is_stopped_and_rings_at_rest() {
+fn a_turn_the_hook_ended_while_the_engine_reads_work_is_stopped_and_rings_at_rest() {
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "working",
+        engine_status: "working",
         hook: Some(HookTurn::Done),
         session: &[Read::Finished],
     });
@@ -240,10 +240,10 @@ fn a_turn_the_hook_ended_while_herdr_reads_work_is_stopped_and_rings_at_rest() {
 /// a quiet screen. The row works, and a letter waits for the mid-turn wait
 /// rather than being rung as if the agent rested.
 #[test]
-fn a_hook_turn_herdr_reads_as_a_stop_works_and_holds_a_fresh_letter_as_working() {
+fn a_hook_turn_the_engine_reads_as_a_stop_works_and_holds_a_fresh_letter_as_working() {
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "idle",
+        engine_status: "idle",
         hook: Some(HookTurn::Working),
         session: &[Read::Finished],
     });
@@ -256,10 +256,10 @@ fn a_hook_turn_herdr_reads_as_a_stop_works_and_holds_a_fresh_letter_as_working()
 /// the engine's blocked prompt on the screen, yet the engine refuses input there, so
 /// the letter waits on the engine's readiness, named apart from the turn.
 #[test]
-fn herdr_blocked_under_a_reported_turn_shows_no_approval_and_holds_as_not_ready() {
+fn the_engine_blocked_under_a_reported_turn_shows_no_approval_and_holds_as_not_ready() {
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "blocked",
+        engine_status: "blocked",
         hook: Some(HookTurn::Done),
         session: &[Read::Finished],
     });
@@ -269,10 +269,10 @@ fn herdr_blocked_under_a_reported_turn_shows_no_approval_and_holds_as_not_ready(
 
 /// With no hook turn, the engine's blocked prompt is the approval on both sides.
 #[test]
-fn herdr_blocked_with_no_hook_turn_is_an_approval_on_the_row_and_for_the_letter() {
+fn the_engine_blocked_with_no_hook_turn_is_an_approval_on_the_row_and_for_the_letter() {
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "blocked",
+        engine_status: "blocked",
         hook: None,
         session: &[Read::Finished],
     });
@@ -282,10 +282,10 @@ fn herdr_blocked_with_no_hook_turn_is_an_approval_on_the_row_and_for_the_letter(
 
 /// The hook's permission wait outranks the engine's stop on both sides.
 #[test]
-fn a_hook_permission_wait_herdr_reads_as_a_stop_is_an_approval_on_both_sides() {
+fn a_hook_permission_wait_the_engine_reads_as_a_stop_is_an_approval_on_both_sides() {
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "idle",
+        engine_status: "idle",
         hook: Some(HookTurn::Waiting),
         session: &[Read::Finished],
     });
@@ -300,7 +300,7 @@ fn a_hook_permission_wait_herdr_reads_as_a_stop_is_an_approval_on_both_sides() {
 fn an_open_async_question_under_a_working_hook_is_a_question_and_holds_the_letter() {
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "working",
+        engine_status: "working",
         hook: Some(HookTurn::Working),
         session: &[Read::AsyncQuestion],
     });
@@ -318,7 +318,7 @@ fn an_open_async_question_under_a_working_hook_is_a_question_and_holds_the_lette
 fn a_plan_approval_read_under_a_working_hook_is_over_on_both_sides() {
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "done",
+        engine_status: "done",
         hook: Some(HookTurn::Working),
         session: &[Read::PlanProposed],
     });
@@ -327,7 +327,7 @@ fn a_plan_approval_read_under_a_working_hook_is_over_on_both_sides() {
     // With no hook turn, the same read holds both.
     let seen = pass(&Witnesses {
         kind: "codex",
-        herdr: "done",
+        engine_status: "done",
         hook: None,
         session: &[Read::PlanProposed],
     });
@@ -343,10 +343,10 @@ fn a_plan_approval_read_under_a_working_hook_is_over_on_both_sides() {
 /// letters at its tools is not rung while the engine reads work, since the engine
 /// reads Grok's plan review as work.
 #[test]
-fn a_stop_the_hook_reports_under_herdrs_work_still_keeps_the_draft_quiet_and_tool_gates() {
+fn a_stop_the_hook_reports_under_the_engine_s_work_still_keeps_the_draft_quiet_and_tool_gates() {
     let witnesses = Witnesses {
         kind: "codex",
-        herdr: "working",
+        engine_status: "working",
         hook: Some(HookTurn::Done),
         session: &[Read::Finished],
     };
@@ -381,31 +381,32 @@ fn a_stop_the_hook_reports_under_herdrs_work_still_keeps_the_draft_quiet_and_too
 fn a_newer_state_is_observed_and_laid_in_one_step() {
     let (mut runtime, actor) = synced(&Witnesses {
         kind: "codex",
-        herdr: "idle",
+        engine_status: "idle",
         hook: None,
         session: &[],
     });
     let now = unix_milliseconds();
-    let herdr: SessionSnapshotPayload = crate::sidebar::owned_label_fixture(serde_json::json!({
-        "agents": [{
-            "id": "agent-1", "pane_id": PANE, "agent": "codex",
-            "agent_status": "idle", "state_change_seq": 5,
-            "cwd": "/fixture", "workspace_label": "Fixture",
-            "agent_session": {"kind": "id", "value": NATIVE},
-            "lineage_session": "lineage-1",
-        }],
-        "panes": [{"pane_id": PANE, "cwd": "/fixture", "tokens": {}}],
-        "tabs": [{"workspace_id": "w1", "tab_id": "t0", "label": ""}],
-        "layouts": [{
-            "workspace_id": "w1", "tab_id": "t0", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
-            "focused_pane_id": PANE,
-            "panes": [{"pane_id": PANE, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
-            "splits": [],
-        }],
-    }))
-    .unwrap();
-    let _ = runtime.ingest_observed_session(herdr, None, None, None);
+    let engine_session: SessionSnapshotPayload =
+        crate::sidebar::owned_label_fixture(serde_json::json!({
+            "agents": [{
+                "id": "agent-1", "pane_id": PANE, "agent": "codex",
+                "agent_status": "idle", "state_change_seq": 5,
+                "cwd": "/fixture", "workspace_label": "Fixture",
+                "agent_session": {"kind": "id", "value": NATIVE},
+                "lineage_session": "lineage-1",
+            }],
+            "panes": [{"pane_id": PANE, "cwd": "/fixture", "tokens": {}}],
+            "tabs": [{"workspace_id": "w1", "tab_id": "t0", "label": ""}],
+            "layouts": [{
+                "workspace_id": "w1", "tab_id": "t0", "zoomed": false,
+                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "focused_pane_id": PANE,
+                "panes": [{"pane_id": PANE, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+                "splits": [],
+            }],
+        }))
+        .unwrap();
+    let _ = runtime.ingest_observed_session(engine_session, None, None, None);
     // The turn is laid with the observation; what holds now is the session
     // read, which has not read the new state.
     assert_eq!(
@@ -423,10 +424,10 @@ fn a_newer_state_is_observed_and_laid_in_one_step() {
 /// status) observes and lays nothing; and once the pass commits, the row
 /// shows the question and the letter waits for the operator.
 #[test]
-fn a_question_read_under_an_unchanged_herdr_state_never_rings_on_the_last_turn() {
+fn a_question_read_under_an_unchanged_engine_state_never_rings_on_the_last_turn() {
     let settled = Witnesses {
         kind: "codex",
-        herdr: "idle",
+        engine_status: "idle",
         hook: None,
         session: &[Read::Finished],
     };

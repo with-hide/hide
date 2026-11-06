@@ -1959,13 +1959,13 @@ mod pending_core_tests {
     fn a_pending_core_reads_nothing_from_github_until_its_link_commits() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, ..) = crate::runtime::delivery::tests::fixture(root.path());
-        let herdr = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
         let context = SessionSyncContext::local(
             &LiveContext {
-                socket_path: herdr.scope(),
+                socket_path: fake.scope(),
                 runtime: Arc::downgrade(&runtime),
                 notifier: ChangeNotifier::noop(),
-                engine: herdr.engine(),
+                engine: fake.engine(),
                 node: Arc::new(hide_node::Local::of_process()),
             },
             Arc::new(hide_node::Local::of_process()),

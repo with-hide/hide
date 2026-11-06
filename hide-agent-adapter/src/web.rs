@@ -7,7 +7,8 @@ pub struct WebAdapter {
     pub aliases: &'static [&'static str],
     pub label: &'static str,
     pub picker_label: &'static str,
-    pub herdr_kind: &'static str,
+    #[serde(rename = "herdr_kind")]
+    pub engine_kind: &'static str,
     pub doc_url: &'static str,
     pub install_url: &'static str,
     pub logo_id: &'static str,
@@ -45,7 +46,7 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
         aliases: row.aliases,
         label: row.label,
         picker_label: row.picker_label,
-        herdr_kind: row.herdr.name,
+        engine_kind: row.engine_kind,
         doc_url: row.doc_url,
         install_url: row.install_url,
         logo_id: row.logo_id,

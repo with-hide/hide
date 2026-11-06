@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::agent_sleep::{SleepPhase, SleepRecord, WakeMode};
-use crate::agent_sleep_herdr::WakeOutcome;
+use crate::agent_sleep_engine::WakeOutcome;
 use crate::coordination::AgentRecord;
 use crate::delivery::Actor;
 use crate::delivery::ledger::{Ledger, State};
@@ -339,7 +339,7 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
         WORKER,
         WakeMode::Resume,
         WakeOutcome::Failed {
-            reason: crate::agent_sleep_herdr::WAKE_FOLDER_MISSING.into(),
+            reason: crate::agent_sleep_engine::WAKE_FOLDER_MISSING.into(),
             detail: "fixture".into(),
         },
     );
@@ -347,7 +347,7 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
     let failed = runtime.delivery_wake_failures();
     assert_eq!(
         failed.get(&request).map(String::as_str),
-        Some(crate::agent_sleep_herdr::WAKE_FOLDER_MISSING)
+        Some(crate::agent_sleep_engine::WAKE_FOLDER_MISSING)
     );
     assert!(!failed.contains_key(&report));
     // The store's pass applies it.

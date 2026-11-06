@@ -320,7 +320,7 @@ impl Agent {
     }
 
     pub const fn as_str(self) -> &'static str {
-        self.format().adapter().herdr.name
+        self.format().adapter().engine_kind
     }
 
     pub const fn reports_turns(self) -> bool {

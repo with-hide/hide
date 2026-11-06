@@ -306,7 +306,7 @@ impl UsageDriver {
                             LimitSource::AntigravityUsage => paths.claude_cwd.clone(),
                         };
                         SourceRead::new(
-                            row.herdr.name,
+                            row.engine_kind,
                             source,
                             root,
                             Arc::clone(&node),

@@ -2644,7 +2644,7 @@ fn closing_a_mission_ends_its_decision_and_records_an_answer_never_typed() {
 }
 
 #[test]
-fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it_again() {
+fn an_answer_the_engine_may_have_typed_is_typed_again_only_when_the_operator_sends_it_again() {
     use crate::runtime::mission_events::SendFailure;
     use crate::runtime::missions::AnswerState;
     let fixture = conducting();

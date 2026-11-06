@@ -203,13 +203,13 @@ pub fn spawn_workspace_creation(
                         &worktrees,
                         &before_paths,
                     );
-                    let needs_herdr_workspace = before_catalog
+                    let needs_engine_workspace = before_catalog
                         .iter()
                         .any(|workspace| workspace.id == registration.id);
                     // The project's first workspace is its checkout's owner
                     // (PRD checkout-workspace-binding B12), never a plain
                     // workspace a later tab would pass over.
-                    let created = needs_herdr_workspace
+                    let created = needs_engine_workspace
                         .then(|| {
                             ensure_owner(
                                 context.engine.as_ref(),
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn local_tab_control_opens_the_checkouts_bound_workspace_when_none_is_open() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "open_worktree" => reply(crate::engine::OpenedWorktree {
                 tab_label: "1".to_owned(),
                 workspace_id: "w9".to_owned(),
@@ -679,7 +679,7 @@ mod tests {
         });
 
         let outcome = execute_remote_control(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &RemoteControlAction::OpenOwner {
                 owner: OwnerOpen::Worktree {
                     path: "/repo-feat".to_owned(),
@@ -707,7 +707,7 @@ mod tests {
         // worktree, and a label on the open would rename a workspace that was
         // already there, so the new one is named after it opens (D-14).
         assert_eq!(
-            herdr.calls(),
+            fake.calls(),
             [
                 (
                     "open_worktree",
@@ -725,7 +725,7 @@ mod tests {
     #[test]
     fn a_second_request_for_an_open_owner_adds_a_tab_there_instead_of_another_workspace() {
         for focus in [true, false] {
-            let herdr = FakeEngine::start(|method, _| match method {
+            let fake = FakeEngine::start(|method, _| match method {
                 "open_worktree" => reply(crate::engine::OpenedWorktree {
                     tab_label: "1".to_owned(),
                     workspace_id: "w9".to_owned(),
@@ -739,7 +739,7 @@ mod tests {
             });
 
             let tab = open_owner_tab(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &OwnerOpen::Worktree {
                     path: "/repo".to_owned(),
                     repository_root: "/repo".to_owned(),
@@ -763,21 +763,21 @@ mod tests {
                     launched: true,
                 }
             );
-            assert_eq!(herdr.methods(), ["open_worktree", "create_tab"]);
-            assert_eq!(herdr.calls()[0].1["focus"], focus);
-            assert_eq!(herdr.calls()[1].1["focus"], focus);
+            assert_eq!(fake.methods(), ["open_worktree", "create_tab"]);
+            assert_eq!(fake.calls()[0].1["focus"], focus);
+            assert_eq!(fake.calls()[1].1["focus"], focus);
         }
     }
 
     #[test]
     fn a_refused_owner_open_fails_the_request_and_creates_nothing_elsewhere() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "open_worktree" => refused("not_found", "no such checkout"),
             other => panic!("unexpected {other}"),
         });
 
         let failure = open_owner_tab(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &OwnerOpen::Worktree {
                 path: "/gone".to_owned(),
                 repository_root: "/gone".to_owned(),
@@ -793,7 +793,7 @@ mod tests {
 
         assert!(!failure.is_ambiguous());
         assert!(failure.message().contains("no such checkout"));
-        assert_eq!(herdr.methods(), ["open_worktree"]);
+        assert_eq!(fake.methods(), ["open_worktree"]);
     }
 
     #[test]
@@ -803,7 +803,7 @@ mod tests {
             let listed_mark = mark.clone();
             let marked = Arc::new(Mutex::new(false));
             let marked_in_server = marked.clone();
-            let herdr = FakeEngine::start(move |method, params| match method {
+            let fake = FakeEngine::start(move |method, params| match method {
                 "workspace_tokens" => {
                     assert_eq!(params["token"], crate::checkout_owner::OWNER_TOKEN);
                     let token = marked_in_server
@@ -832,7 +832,7 @@ mod tests {
             };
 
             let first = open_owner_tab(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &owner,
                 "/notes",
                 "Tab 1",
@@ -842,7 +842,7 @@ mod tests {
             )
             .expect("first tab");
             let second = open_owner_tab(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &owner,
                 "/notes",
                 "Tab 2",
@@ -861,10 +861,10 @@ mod tests {
                 ("w4", "w4:t2")
             );
             assert!(*marked.lock().unwrap());
-            assert_eq!(herdr.calls()[1].1["focus"], focus);
-            assert_eq!(herdr.calls()[5].1["focus"], focus);
+            assert_eq!(fake.calls()[1].1["focus"], focus);
+            assert_eq!(fake.calls()[5].1["focus"], focus);
             assert_eq!(
-                herdr.methods(),
+                fake.methods(),
                 [
                     "workspace_tokens",
                     "create_workspace",

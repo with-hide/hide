@@ -559,7 +559,7 @@ pub(crate) fn start_agent(
         ),
         // The engine refused the pane as busy until the start's deadline: nothing
         // was typed, and the same intent asks again in the same pane.
-        crate::agent_start::StartError::Herdr(EngineError::Refused { code, .. })
+        crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
             if code == crate::agent_start::PANE_BUSY =>
         {
             PANE_BUSY_REFUSAL.to_owned()
@@ -609,7 +609,7 @@ pub(crate) fn start_agent_checked(
         check,
     ) {
         Ok(started) => Ok(started.pane_id),
-        Err(crate::agent_start::StartError::Herdr(EngineError::Answer(detail))) => {
+        Err(crate::agent_start::StartError::Engine(EngineError::Answer(detail))) => {
             Err(crate::agent_start::StartError::NotStarted {
                 reason: "agent_start.unconfirmed".into(),
                 detail,
@@ -626,7 +626,7 @@ pub(crate) fn start_error_message(error: crate::agent_start::StartError) -> Stri
         crate::agent_start::StartError::ShellStarting(screen) => {
             crate::agent_start::shell_starting_message(screen.as_deref())
         }
-        crate::agent_start::StartError::Herdr(error) => format!("agent.start failed: {error}"),
+        crate::agent_start::StartError::Engine(error) => format!("agent.start failed: {error}"),
     }
 }
 

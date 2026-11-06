@@ -866,12 +866,12 @@ impl Runtime {
         };
         let owner = self.dormant_owner(&record);
         self.dormant_status_check = Some((id.clone(), self.live_generation));
-        let work = agent_sleep_herdr::DormantWork {
+        let work = agent_sleep_engine::DormantWork {
             id: id.clone(),
             record,
         };
         if let Err(reason) =
-            agent_sleep_herdr::spawn_dormant_status(context, work, self.live_generation, owner)
+            agent_sleep_engine::spawn_dormant_status(context, work, self.live_generation, owner)
         {
             self.dormant_status_check = None;
             self.reject_dormant_action(id, "agent_sleep.status_unavailable", &reason);
@@ -891,9 +891,9 @@ impl Runtime {
 
     pub(crate) fn ingest_dormant_status(
         &mut self,
-        work: &agent_sleep_herdr::DormantWork,
+        work: &agent_sleep_engine::DormantWork,
         generation: u64,
-        result: Result<agent_sleep_herdr::DormantStatus, String>,
+        result: Result<agent_sleep_engine::DormantStatus, String>,
     ) -> bool {
         if self.dormant_status_check.as_ref() != Some(&(work.id.clone(), generation)) {
             return false;
@@ -982,16 +982,16 @@ impl Runtime {
             self.fail_dormant(id, reason);
             return;
         }
-        let work = agent_sleep_herdr::DormantWork {
+        let work = agent_sleep_engine::DormantWork {
             id: id.clone(),
             record: current.clone(),
         };
-        if let Err(reason) = agent_sleep_herdr::spawn_dormant_tab(context, work, owner) {
+        if let Err(reason) = agent_sleep_engine::spawn_dormant_tab(context, work, owner) {
             self.fail_dormant(id, &reason);
         }
     }
 
-    pub(crate) fn dormant_work_is_current(&self, work: &agent_sleep_herdr::DormantWork) -> bool {
+    pub(crate) fn dormant_work_is_current(&self, work: &agent_sleep_engine::DormantWork) -> bool {
         work.record.connection_generation == self.live_generation
             && work.record.node_id == self.node.as_str()
             && self.live.is_some()
@@ -1000,14 +1000,14 @@ impl Runtime {
 
     pub(crate) fn ingest_dormant_tab(
         &mut self,
-        work: &agent_sleep_herdr::DormantWork,
-        result: agent_sleep_herdr::DormantTabOutcome,
+        work: &agent_sleep_engine::DormantWork,
+        result: agent_sleep_engine::DormantTabOutcome,
     ) -> bool {
         if !self.dormant_work_is_current(work) || work.record.phase != DormantPhase::Creating {
             return false;
         }
         match result {
-            agent_sleep_herdr::DormantTabOutcome::Created(tab, pane, snapshot) => {
+            agent_sleep_engine::DormantTabOutcome::Created(tab, pane, snapshot) => {
                 let name = self.snapshot.ui_state.agent_sleep.dormant[&work.id]
                     .context
                     .operator_tab_name()
@@ -1031,10 +1031,10 @@ impl Runtime {
                 }
                 self.persist_ui_state();
             }
-            agent_sleep_herdr::DormantTabOutcome::NotCreated(reason) => {
+            agent_sleep_engine::DormantTabOutcome::NotCreated(reason) => {
                 self.fail_dormant(&work.id, reason);
             }
-            agent_sleep_herdr::DormantTabOutcome::Unknown => {
+            agent_sleep_engine::DormantTabOutcome::Unknown => {
                 let current = self
                     .snapshot
                     .ui_state
@@ -1102,30 +1102,30 @@ impl Runtime {
             return;
         }
         current.transition_started_unix_ms = unix_milliseconds();
-        let work = agent_sleep_herdr::DormantWork {
+        let work = agent_sleep_engine::DormantWork {
             id: id.clone(),
             record: current.clone(),
         };
-        if let Err(reason) = agent_sleep_herdr::spawn_dormant_start(context, work, args) {
+        if let Err(reason) = agent_sleep_engine::spawn_dormant_start(context, work, args) {
             self.fail_dormant(id, &reason);
         }
     }
 
     pub(crate) fn ingest_dormant_start(
         &mut self,
-        work: &agent_sleep_herdr::DormantWork,
-        outcome: agent_sleep_herdr::DormantStartOutcome,
+        work: &agent_sleep_engine::DormantWork,
+        outcome: agent_sleep_engine::DormantStartOutcome,
     ) -> bool {
         if !self.dormant_work_is_current(work) || work.record.phase != DormantPhase::Starting {
             return false;
         }
         match outcome {
-            agent_sleep_herdr::DormantStartOutcome::Started => {}
-            agent_sleep_herdr::DormantStartOutcome::NotStarted => self.fail_dormant(
+            agent_sleep_engine::DormantStartOutcome::Started => {}
+            agent_sleep_engine::DormantStartOutcome::NotStarted => self.fail_dormant(
                 &work.id,
                 "The saved conversation could not be resumed. Retry uses the same wake tab.",
             ),
-            agent_sleep_herdr::DormantStartOutcome::Unknown => {
+            agent_sleep_engine::DormantStartOutcome::Unknown => {
                 let current = self
                     .snapshot
                     .ui_state
@@ -1211,10 +1211,11 @@ impl Runtime {
             // It is kept here, where the wake is confirmed once, because
             // the engine can show the woken agent before the start's own answer.
             if let Some(pane) = record.wake_pane_id.as_deref() {
-                let name = agent_sleep_herdr::dormant_wake_name(&agent_sleep_herdr::DormantWork {
-                    id: id.clone(),
-                    record: record.clone(),
-                });
+                let name =
+                    agent_sleep_engine::dormant_wake_name(&agent_sleep_engine::DormantWork {
+                        id: id.clone(),
+                        record: record.clone(),
+                    });
                 self.put_pane_launch(
                     pane,
                     &record.kind,

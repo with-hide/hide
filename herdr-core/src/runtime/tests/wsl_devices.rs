@@ -456,11 +456,11 @@ fn the_first_run_row_reaches_the_distribution_only_once_connect_is_pressed() {
             .dispatch_json(&event("herdr_profiles_list", serde_json::json!({})))
     );
     super::wait(&shared, "the device listing", |runtime| {
-        runtime.snapshot().status.herdr_profiles.state == "ready"
+        runtime.snapshot().status.machine_profiles.state == "ready"
     });
     {
         let runtime = shared.lock().unwrap();
-        let rows = &runtime.snapshot().status.herdr_profiles.profiles;
+        let rows = &runtime.snapshot().status.machine_profiles.profiles;
         assert_eq!(
             rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
             ["wsl:Ubuntu"],

@@ -14,7 +14,7 @@ fn record_agent(pane_id: &str, session_id: &str, parent: Option<&str>) -> Sideba
     agent.agent_kind = "claude".into();
     agent.session_id = Some(session_id.into());
     agent.lineage_parent_pane_id = parent.map(str::to_owned);
-    agent.herdr_name = Some(format!("Name {pane_id}"));
+    agent.given_name = Some(format!("Name {pane_id}"));
     agent
 }
 

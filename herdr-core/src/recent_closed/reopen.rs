@@ -221,8 +221,8 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
                 folders: &folders,
                 program: &program,
             };
-            let result = run_herdr_reopen(context.engine.as_ref(), &asks, &request)
-                .map(FileReopenResultOrHerdr::Herdr);
+            let result = run_engine_reopen(context.engine.as_ref(), &asks, &request)
+                .map(FileReopenResultOrEngine::Engine);
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
             };
@@ -270,17 +270,17 @@ pub fn spawn_file_reopen(
 }
 
 #[derive(Debug)]
-pub enum FileReopenResultOrHerdr {
+pub enum FileReopenResultOrEngine {
     File(FileReopenResult),
-    Herdr(ReopenOutcome),
+    Engine(ReopenOutcome),
 }
 
 fn run_file_reopen(
     channel: &dyn crate::node_access::NodeLink,
     root: &crate::files::DocumentRoot,
     path: &str,
-) -> FileReopenResultOrHerdr {
-    FileReopenResultOrHerdr::File(match crate::files::open_document(channel, root, path) {
+) -> FileReopenResultOrEngine {
+    FileReopenResultOrEngine::File(match crate::files::open_document(channel, root, path) {
         Ok(opened) => FileReopenResult::Opened(Box::new(opened)),
         Err(crate::files::OpenFailure::Missing) => FileReopenResult::Missing,
         Err(failure) => FileReopenResult::Failed(failure.message()),
@@ -296,7 +296,7 @@ struct ReopenNode<'a> {
     program: &'a dyn Fn(&str) -> Option<crate::engine::StartProgram>,
 }
 
-fn run_herdr_reopen(
+fn run_engine_reopen(
     engine: &dyn Engine,
     node: &ReopenNode<'_>,
     request: &ReopenRequest,
@@ -505,7 +505,7 @@ fn ensure_workspace_and_tab(
             CONTROL_WAIT,
             &workspace_id,
             seed_tab_id.as_deref(),
-            context.herdr_tab_label(),
+            context.engine_tab_label(),
             &tagged_root,
         )
         .map_err(failed("layout.apply"))?;
@@ -536,7 +536,7 @@ fn repair_incomplete_tab_layout(
             CONTROL_WAIT,
             &layout.workspace_id,
             Some(&layout.tab_id),
-            context.herdr_tab_label(),
+            context.engine_tab_label(),
             &tag_reopen_layout(root, key, ReopenIntentStage::Layout),
         )
         .map_err(failed("layout.apply"))?;
@@ -1044,7 +1044,7 @@ mod tests {
     fn a_restored_agent_starts_with_its_launch_choice_resumed_or_new() {
         let starts = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = Arc::clone(&starts);
-        let herdr = FakeEngine::start(move |method, params| match method {
+        let fake = FakeEngine::start(move |method, params| match method {
             "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                 "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
             }}))),
@@ -1070,7 +1070,7 @@ mod tests {
         };
         let mut notices = Vec::new();
         let started = start_or_degrade_agent(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "key",
             0,
             "pane",
@@ -1123,7 +1123,7 @@ mod tests {
             (" CLAUDE_CODE ", "claude", vec!["--resume", "session"]),
             (" CODEX ", "codex", vec!["resume", "session"]),
         ] {
-            let herdr = FakeEngine::start(move |method, params| match method {
+            let fake = FakeEngine::start(move |method, params| match method {
                 "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                     "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
                 }}))),
@@ -1142,7 +1142,7 @@ mod tests {
             });
             let mut notices = Vec::new();
             start_or_degrade_agent(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 "key",
                 0,
                 "pane",
@@ -1162,12 +1162,9 @@ mod tests {
                 &mut notices,
             );
             assert!(notices.is_empty(), "{kind}: {notices:?}");
-            assert_eq!(
-                herdr.methods(),
-                ["session", "pane_processes", "start_agent"]
-            );
+            assert_eq!(fake.methods(), ["session", "pane_processes", "start_agent"]);
         }
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                 "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": [{
                     "pane_id": "pane", "terminal_id": "term", "workspace_id": "w1", "tab_id": "w1:t1",
@@ -1177,18 +1174,18 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         assert!(agent_is_running(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "pane",
             " CLAUDE_CODE "
         ));
         assert!(!agent_is_running(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "other-pane",
             "claude_code"
         ));
-        assert!(!agent_is_running(herdr.engine().as_ref(), "pane", "codex"));
+        assert!(!agent_is_running(fake.engine().as_ref(), "pane", "codex"));
         assert!(!agent_is_running(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "pane",
             "future-agent"
         ));
@@ -1196,7 +1193,7 @@ mod tests {
 
     #[test]
     fn nested_split_reopen_applies_the_original_outer_and_inner_geometry() {
-        let herdr = FakeEngine::start(|method, params| match method {
+        let fake = FakeEngine::start(|method, params| match method {
             "export_layout" => reply(closed_layout(json!({"type":"layout_export","layout": {
                 "workspace_id":"w1", "tab_id":"w1:t1", "zoomed":false,
                 "focused_pane_id":"outer-left",
@@ -1292,7 +1289,7 @@ mod tests {
         };
 
         let outcome = reopen_pane(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &ReopenNode {
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
@@ -1306,7 +1303,7 @@ mod tests {
         .expect("nested pane reopens through layout.apply");
 
         assert_eq!(outcome.focused_pane_id.as_deref(), Some("reopened"));
-        assert_eq!(herdr.methods(), ["export_layout", "apply_layout"]);
+        assert_eq!(fake.methods(), ["export_layout", "apply_layout"]);
     }
 
     #[test]
@@ -1406,7 +1403,7 @@ mod tests {
         std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700))
             .expect("restore traversal");
         match result {
-            FileReopenResultOrHerdr::File(FileReopenResult::Failed(message)) => {
+            FileReopenResultOrEngine::File(FileReopenResult::Failed(message)) => {
                 assert!(message.contains("could not be opened"), "{message}");
             }
             other => panic!("permission failure must stay retryable, got {other:?}"),
@@ -1415,7 +1412,7 @@ mod tests {
 
     #[test]
     fn pane_reopen_ignores_an_unowned_same_cwd_pane() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "session" => reply(session(json!({"type":"session_snapshot","snapshot": {
                 "workspaces":[], "tabs":[], "agents":[],
                 "panes":[{"pane_id":"w1:p3", "terminal_id": "fixture-terminal","workspace_id":"w1","tab_id":"w1:t1","cwd":"/tmp","focused":false,"agent_status":"idle","revision":0}],
@@ -1483,7 +1480,7 @@ mod tests {
         };
 
         let outcome = reopen_pane(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &ReopenNode {
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
@@ -1497,7 +1494,7 @@ mod tests {
         .expect("fixture reopen succeeds");
 
         assert_eq!(outcome.focused_pane_id.as_deref(), Some("w1:p4"));
-        let split = herdr
+        let split = fake
             .calls_of("split_pane_at")
             .pop()
             .expect("the reopen creates its own pane");
@@ -1505,13 +1502,13 @@ mod tests {
             split["env"][REOPEN_INTENT_ENV],
             reopen_intent_marker("first-attempt", ReopenIntentStage::Pane)
         );
-        assert!(herdr.calls_of("send_text").is_empty());
+        assert!(fake.calls_of("send_text").is_empty());
     }
 
     #[test]
     fn tab_reopen_ignores_unowned_same_label_workspace_and_tab() {
         let mut layout_apply_count = 0;
-        let herdr = FakeEngine::start(move |method, params| match method {
+        let fake = FakeEngine::start(move |method, params| match method {
             "session" => reply(session(json!({"type":"session_snapshot","snapshot": {
                 "workspaces":[{"workspace_id":"w2","label":"Fixture","active_tab_id":"w2:t1","number":2,"focused":true,"pane_count":1,"tab_count":1,"agent_status":"idle"}],
                 "tabs":[{"workspace_id":"w2","tab_id":"w2:t1","label":"Tab","number":1,"focused":true,"pane_count":1,"agent_status":"idle"}],
@@ -1598,7 +1595,7 @@ mod tests {
         };
         let mut notices = Vec::new();
         let restored = ensure_workspace_and_tab(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "layout-intent",
             &context,
             &OwnerOpen::Folder {
@@ -1622,7 +1619,7 @@ mod tests {
             ["The incomplete tab restore was repaired before reopening sessions"]
         );
         assert_eq!(
-            herdr.methods(),
+            fake.methods(),
             // The closed tab's workspace is gone, so it reopens in the
             // folder's owner, made and marked here; the old index names a
             // place in another workspace and is not restored.
@@ -1640,7 +1637,7 @@ mod tests {
 
     #[test]
     fn recovered_partial_tab_layout_is_repaired_and_revalidated() {
-        let herdr = FakeEngine::start(move |method, params| match method {
+        let fake = FakeEngine::start(move |method, params| match method {
             "session" => reply(session(json!({"type":"session_snapshot","snapshot": {
                 "workspaces":[{"workspace_id":"w1","label":"Fixture","active_tab_id":"w1:t2","number":1,"focused":true,"pane_count":1,"tab_count":1,"agent_status":"idle",
                     "worktree":{"repo_key":"/tmp","repo_name":"tmp","repo_root":"/tmp","checkout_path":"/tmp","is_linked_worktree":false}}],
@@ -1711,7 +1708,7 @@ mod tests {
         };
         let mut notices = Vec::new();
         let restored = ensure_workspace_and_tab(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "recovered-intent",
             &context,
             &OwnerOpen::Worktree {
@@ -1732,14 +1729,14 @@ mod tests {
             ["The incomplete tab restore was repaired before reopening sessions"]
         );
         assert_eq!(
-            herdr.methods(),
+            fake.methods(),
             ["session", "export_layout", "apply_layout", "move_tab"]
         );
     }
 
     #[test]
     fn reused_agent_process_is_interrupted_before_resume() {
-        let herdr = FakeEngine::start(|method, params| match method {
+        let fake = FakeEngine::start(|method, params| match method {
             "session" => reply(session(json!({
                 "type": "session_snapshot",
                 "snapshot": {
@@ -1772,10 +1769,10 @@ mod tests {
         });
 
         assert!(
-            interrupt_reused_agent(herdr.engine().as_ref(), "w1:p1")
+            interrupt_reused_agent(fake.engine().as_ref(), "w1:p1")
                 .expect("reused agent is interrupted")
         );
 
-        assert_eq!(herdr.methods(), ["session", "send_text"]);
+        assert_eq!(fake.methods(), ["session", "send_text"]);
     }
 }

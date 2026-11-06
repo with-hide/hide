@@ -72,7 +72,7 @@ pub enum ClosedTabName {
 impl ClosedContext {
     /// The label a reopen or a wake sends the engine; none for a tab nobody
     /// named, so the engine keeps or picks the tab's own.
-    pub(crate) fn herdr_tab_label(&self) -> Option<&str> {
+    pub(crate) fn engine_tab_label(&self) -> Option<&str> {
         match &self.tab_name {
             ClosedTabName::Named(name) | ClosedTabName::Labeled(name) => Some(name),
             ClosedTabName::Unnamed => None,
@@ -640,7 +640,7 @@ mod tests {
             "agent_area": null, "replacement_shell": false
         });
         let old: ClosedContext = serde_json::from_value(saved_before).unwrap();
-        assert_eq!(old.herdr_tab_label(), Some("Planning"));
+        assert_eq!(old.engine_tab_label(), Some("Planning"));
         for (tab_name, sent) in [
             (ClosedTabName::Unnamed, None),
             (ClosedTabName::Named("Planning".into()), Some("Planning")),
@@ -652,7 +652,7 @@ mod tests {
             };
             let saved: ClosedContext =
                 serde_json::from_value(serde_json::to_value(&context).unwrap()).unwrap();
-            assert_eq!(saved.herdr_tab_label(), sent);
+            assert_eq!(saved.engine_tab_label(), sent);
         }
     }
 

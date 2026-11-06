@@ -32,17 +32,17 @@ fn live_checkout(name: &str) -> (Runtime, String, PathBuf) {
 fn setup(name: &str) -> (Runtime, String, PathBuf) {
     let (runtime, checkout_id, directory) = live_checkout(name);
     let mut runtime = with_new_views(runtime, name);
-    runtime.snapshot.status.herdr.state = "connected".to_owned();
+    runtime.snapshot.status.engine.state = "connected".to_owned();
     for file in ["a.md", "b.md", "c.md", "d.md"] {
         std::fs::write(directory.join(file), format!("{file}\n")).expect("fixture");
     }
-    herdr_focuses(&mut runtime, &directory, "w-order:t1");
+    engine_focuses(&mut runtime, &directory, "w-order:t1");
     (runtime, checkout_id, directory)
 }
 
 /// The three tabs with the first split in two: `w-order:t1:p`, which holds
 /// the keyboard, and `w-order:t1:q` beside it.
-fn herdr_splits_first_tab(runtime: &mut Runtime, directory: &Path) {
+fn engine_splits_first_tab(runtime: &mut Runtime, directory: &Path) {
     let path = directory.to_string_lossy();
     let tabs: Vec<_> = TABS
         .iter()
@@ -92,7 +92,7 @@ fn herdr_splits_first_tab(runtime: &mut Runtime, directory: &Path) {
 }
 
 /// A session snapshot of the three tabs with the engine focused on `active`.
-fn herdr_focuses(runtime: &mut Runtime, directory: &Path, active: &str) {
+fn engine_focuses(runtime: &mut Runtime, directory: &Path, active: &str) {
     runtime.ingest_session(Ok(tab_order_payload(
         &directory.to_string_lossy(),
         &TABS,
@@ -258,7 +258,7 @@ fn agent_act(runtime: &mut Runtime, directory: &Path, mut payload: serde_json::V
 /// The operator's tab choice, then the engine's answer that it took the focus.
 fn focus_tab(runtime: &mut Runtime, checkout_id: &str, directory: &Path, tab_id: &str) {
     dispatch_focus_tab(runtime, checkout_id, tab_id);
-    herdr_focuses(runtime, directory, tab_id);
+    engine_focuses(runtime, directory, tab_id);
 }
 
 fn dispatch_focus_tab(runtime: &mut Runtime, checkout_id: &str, tab_id: &str) {
@@ -617,7 +617,7 @@ fn a_front_tab_open_calls_the_lane_and_keeps_the_explorer() {
 #[test]
 fn only_the_operators_pane_brings_its_open_forward() {
     let (mut runtime, checkout, directory) = setup("operator-pane");
-    herdr_splits_first_tab(&mut runtime, &directory);
+    engine_splits_first_tab(&mut runtime, &directory);
     open(&mut runtime, &checkout, &directory, "a.md");
     let calls = |runtime: &Runtime| runtime.snapshot.workspace_view.as_ref().unwrap().lane_calls;
     let before = calls(&runtime);
@@ -1264,7 +1264,7 @@ fn a_view_opened_in_a_workspace_not_in_front_is_listed_to_every_tab() {
 fn setup_never_front(name: &str) -> (Runtime, PathBuf) {
     let (runtime, _checkout_id, directory) = live_checkout(name);
     let mut runtime = with_new_views(runtime, name);
-    runtime.snapshot.status.herdr.state = "connected".to_owned();
+    runtime.snapshot.status.engine.state = "connected".to_owned();
     for file in ["a.md", "b.md", "c.md", "d.md"] {
         std::fs::write(directory.join(file), format!("{file}\n")).expect("fixture");
     }

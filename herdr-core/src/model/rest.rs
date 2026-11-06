@@ -49,11 +49,22 @@ impl<T: Serialize> Serialize for Retained<T> {
     }
 }
 
+/// A section field's key on the wire: its name, or the `as` name a field
+/// renamed since keeps, so the wire an older shell reads stays the same.
+macro_rules! wire_key {
+    ($field:ident) => {
+        stringify!($field)
+    };
+    ($field:ident $wire:literal) => {
+        $wire
+    };
+}
+
 /// Each field has one semantic replacement and one stamp. This is a fixed
 /// projection of the supported snapshot, not a row-patch protocol.
 macro_rules! section {
     ($name:ident, $source:ty, $s:ident,
-     { $($field:ident: $ty:ty => $value:expr $(; generation $generation:expr)?),* $(,)? },
+     { $($field:ident $(as $wire:literal)?: $ty:ty => $value:expr $(; generation $generation:expr)?),* $(,)? },
      { $($group:ident: $group_ty:ident => $group_source:expr),* $(,)? }) => {
         #[derive(Clone, Debug)]
         pub struct $name {
@@ -77,8 +88,8 @@ macro_rules! section {
                 let mut map = serializer.serialize_map(None)?;
                 $(if self.$field.revision > have {
                     // A legacy complete rest omitted an absent Workspace.
-                    if !(legacy && self.legacy_omit(stringify!($field))) {
-                        map.serialize_entry(stringify!($field), self.$field.value.as_ref())?;
+                    if !(legacy && self.legacy_omit(wire_key!($field $($wire)?))) {
+                        map.serialize_entry(wire_key!($field $($wire)?), self.$field.value.as_ref())?;
                     }
                 })*
                 $(if self.$group.revision() > have {
@@ -136,7 +147,7 @@ section!(TerminalSections, TerminalSnapshot, s, {
 section!(StatusSections, StatusSnapshot, s, {
     server_discovery: ServerDiscoverySnapshot => s.server_discovery,
     tab_rename: Option<TabRenameSnapshot> => s.tab_rename,
-    herdr: ProviderStatusSnapshot => s.herdr,
+    engine as "herdr": ProviderStatusSnapshot => s.engine,
     herdr_import: Option<HerdrImportSnapshot> => s.herdr_import,
     herdr_import_devices: Vec<HerdrImportSnapshot> => s.herdr_import_devices,
     remote: Vec<RemoteStatusSnapshot> => s.remote,
@@ -144,7 +155,7 @@ section!(StatusSections, StatusSnapshot, s, {
     agent_hooks: AgentHooksSnapshot => s.agent_hooks,
     background_ai: BackgroundAiSnapshot => s.background_ai,
     ssh_hosts: SshHostsSnapshot => s.ssh_hosts,
-    herdr_profiles: HerdrProfilesSnapshot => s.herdr_profiles,
+    machine_profiles as "herdr_profiles": MachineProfilesSnapshot => s.machine_profiles,
     diagnostics: Vec<DiagnosticSnapshot> => s.diagnostics,
     last_error: Option<LastErrorSnapshot> => s.last_error,
     async_operations: Vec<AsyncOperationSnapshot> => s.async_operations,

@@ -914,7 +914,7 @@ impl Runtime {
                 &agent.agent_kind,
                 &agent.session_id,
                 &agent.lineage_parent_pane_id,
-                &agent.herdr_name,
+                &agent.given_name,
             )
                 .hash(&mut hasher);
         }

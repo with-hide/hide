@@ -114,7 +114,7 @@ impl AgentUsage {
         hide_agent_adapter::ADAPTERS
             .iter()
             .map(|row| Self {
-                agent: row.herdr.name.into(),
+                agent: row.engine_kind.into(),
                 limits: if row.usage.limit_sources().next().is_some() {
                     Cell::Loading
                 } else {

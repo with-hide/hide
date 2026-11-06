@@ -1157,7 +1157,7 @@ impl Runtime {
                             .priority
                             .iter()
                             .filter_map(|provider| hide_agent_adapter::adapter(provider.agent()))
-                            .map(|row| row.herdr.name.to_owned())
+                            .map(|row| row.engine_kind.to_owned())
                             .collect()
                     })
                     .unwrap_or_default()
@@ -1170,7 +1170,7 @@ impl Runtime {
     /// Stamps when an agent last worked or waited on the operator, the clock
     /// the usage limit reads (`limit_reads_usage`).
     pub(super) fn note_agent_work(&mut self) {
-        let connected = self.snapshot.status.herdr.state == "connected";
+        let connected = self.snapshot.status.engine.state == "connected";
         if crate::agent_state::any_agent_active(&self.snapshot.navigator.agents, connected) {
             self.agent_worked_at_unix_ms = unix_milliseconds();
         }

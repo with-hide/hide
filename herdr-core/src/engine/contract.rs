@@ -1430,7 +1430,7 @@ fn resumes_through_the_nodes_file(shell: &str) {
 /// PRD engine-bundle-3-core-owns B18's hook cells: on the core's own engine
 /// a Claude whose hook said its conversation is put to sleep in its pane by
 /// its own quit key and woken there resuming that conversation by id, the
-/// way the pane menu's Sleep and Wake run (`agent_sleep_herdr`). The
+/// way the pane menu's Sleep and Wake run (`agent_sleep_engine`). The
 /// stand-in `claude` records each start's arguments and rests until Ctrl+C
 /// ends it, as Claude Code quits on one press into an empty composer.
 #[cfg(unix)]
@@ -1441,7 +1441,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     use std::path::Path;
 
     use crate::agent_sleep::WakeMode;
-    use crate::agent_sleep_herdr::{WakeOutcome, WakeRequest, end_agent, start_agent};
+    use crate::agent_sleep_engine::{WakeOutcome, WakeRequest, end_agent, start_agent};
     use crate::agent_start::{ShellStart, start_at_shell_reusing_name};
     use crate::codex_launch::CodexDaemon;
     use crate::recent_closed::{ClosedAgent, resume_arguments};

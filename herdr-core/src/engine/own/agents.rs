@@ -111,7 +111,7 @@ pub(super) fn kind_name(definition: &Definition) -> String {
         .find_map(|name| hide_agent_adapter::adapter(name))
         .map_or_else(
             || definition.id.clone(),
-            |adapter| adapter.herdr.name.to_owned(),
+            |adapter| adapter.engine_kind.to_owned(),
         )
 }
 

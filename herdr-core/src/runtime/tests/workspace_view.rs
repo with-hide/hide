@@ -129,7 +129,7 @@ fn browser_inventory_revokes_removed_and_disconnected_catalog_checkouts() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().to_string_lossy().into_owned();
     let mut runtime = runtime();
-    runtime.snapshot.status.herdr.state = "connected".into();
+    runtime.snapshot.status.engine.state = "connected".into();
     let project = workspace(
         "inventory-project",
         "Inventory",
@@ -195,14 +195,14 @@ fn browser_inventory_revokes_removed_and_disconnected_catalog_checkouts() {
     );
 
     runtime.snapshot.navigator.workspaces = vec![project];
-    runtime.snapshot.status.herdr.state = "disconnected".into();
+    runtime.snapshot.status.engine.state = "disconnected".into();
     runtime.sync_workspace_view();
     assert!(
         runtime.snapshot.browser_views.is_empty(),
         "offline saved layout has no page authority"
     );
     assert!(runtime.snapshot.browser_scopes.is_empty());
-    runtime.snapshot.status.herdr.state = "connected".into();
+    runtime.snapshot.status.engine.state = "connected".into();
     runtime.sync_workspace_view();
     assert_eq!(
         runtime.snapshot.browser_views.len(),

@@ -421,7 +421,7 @@ fn a_file_of_a_nodes_checkout_in_front_is_revealed_through_the_node() {
 /// Group-tabs B28 makes checkout navigation core-owned: an empty checkout
 /// can read its file immediately without an engine workspace or focus request.
 #[test]
-fn a_file_of_a_nodes_checkout_behind_is_revealed_without_a_herdr_focus_ack() {
+fn a_file_of_a_nodes_checkout_behind_is_revealed_without_an_engine_focus_ack() {
     let (f, requests, _held) = behind_reveal("documents-node-reveal");
     f.wait("the device file read", |_| {
         f.device.reads().iter().any(|read| read.ends_with("a.txt"))

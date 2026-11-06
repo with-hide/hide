@@ -52,7 +52,7 @@ pub struct PaneFindOutcome {
 #[derive(Clone)]
 pub struct PaneApiRoute {
     pub(crate) pane_id: String,
-    herdr_pane_id: String,
+    engine_pane_id: String,
     engine: SharedEngine,
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
@@ -62,7 +62,7 @@ impl PaneApiRoute {
     pub(crate) fn local(context: &LiveContext, pane_id: &str) -> Self {
         Self {
             pane_id: pane_id.to_owned(),
-            herdr_pane_id: pane_id.to_owned(),
+            engine_pane_id: pane_id.to_owned(),
             engine: Arc::clone(&context.engine),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
@@ -72,11 +72,11 @@ impl PaneApiRoute {
     pub(crate) fn remote(
         context: &RemoteControlContext,
         pane_id: &str,
-        herdr_pane_id: &str,
+        engine_pane_id: &str,
     ) -> Self {
         Self {
             pane_id: pane_id.to_owned(),
-            herdr_pane_id: herdr_pane_id.to_owned(),
+            engine_pane_id: engine_pane_id.to_owned(),
             engine: Arc::clone(&context.engine),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
@@ -94,7 +94,7 @@ impl PaneApiRoute {
         thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
-                let result = work(self.engine.as_ref(), &self.herdr_pane_id);
+                let result = work(self.engine.as_ref(), &self.engine_pane_id);
                 let Some(runtime) = self.runtime.upgrade() else {
                     return;
                 };
@@ -120,7 +120,7 @@ impl PaneApiRoute {
 pub fn spawn_pane_find(route: PaneApiRoute, request: PaneFindRequest) -> Result<(), String> {
     route.spawn(
         "herdr-core-pane-find",
-        move |engine, herdr_pane_id| run_pane_find(engine, herdr_pane_id, &request),
+        move |engine, engine_pane_id| run_pane_find(engine, engine_pane_id, &request),
         |runtime, pane_id, result| runtime.ingest_pane_find(pane_id, result),
     )
 }
@@ -138,8 +138,8 @@ pub(crate) fn spawn_agent_find(
     let core_pane_id = route.pane_id.clone();
     route.spawn(
         "herdr-core-agent-find",
-        move |engine, herdr_pane_id| {
-            open_agent_find(engine, herdr_pane_id, find, &gate, &core_pane_id)
+        move |engine, engine_pane_id| {
+            open_agent_find(engine, engine_pane_id, find, &gate, &core_pane_id)
         },
         move |runtime, pane_id, result| runtime.ingest_agent_find(pane_id, request_id, result),
     )

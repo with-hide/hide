@@ -1349,7 +1349,7 @@ fn a_turn_that_ran_between_two_looks_ends_the_question() {
 /// sequence when it marks the pane's tab seen. No turn ran, so the question
 /// or the block the turn ended on is still the turn's answer.
 #[test]
-fn herdr_marking_a_turn_seen_keeps_its_question_and_its_block() {
+fn the_engine_marking_a_turn_seen_keeps_its_question_and_its_block() {
     for (end, line) in [("question", "A/B 선택"), ("blocked", "디스크가 가득 참")] {
         let harness = Harness::new();
         let (mut worker, woken, _) = harness.worker(harness.store());

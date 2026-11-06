@@ -89,14 +89,18 @@ struct PaneFacts {
     /// that lists none afterwards has lost its agent.
     seen_agent: bool,
     /// The session id the engine last named for the pane's agent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    herdr_session: Option<String>,
+    #[serde(
+        rename = "herdr_session",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    engine_session: Option<String>,
     /// A hook reported since the engine last named another session for the pane:
     /// the hook's session, proven to run in the pane, is then the pane's
     /// current one even where the engine still names an earlier one (an agent
     /// started again in the same pane).
     #[serde(skip)]
-    reported_since_herdr: bool,
+    reported_since_engine: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -227,7 +231,7 @@ impl HookFacts {
                 waiting_seq: None,
             },
         };
-        facts.reported_since_herdr = true;
+        facts.reported_since_engine = true;
         let turn_before = fact.turn;
         fact.version = report.version;
         if report.session.is_some() {
@@ -293,15 +297,15 @@ impl HookFacts {
                 facts.seen_agent = true;
                 moved = true;
             }
-            if let Some(named) = herdr_session(agent)
-                && facts.herdr_session.as_deref() != Some(named)
+            if let Some(named) = engine_session(agent)
+                && facts.engine_session.as_deref() != Some(named)
             {
                 // The engine naming another session than before is newer than
                 // every report so far; its first naming is not.
-                if facts.herdr_session.is_some() {
-                    facts.reported_since_herdr = false;
+                if facts.engine_session.is_some() {
+                    facts.reported_since_engine = false;
                 }
-                facts.herdr_session = Some(named.to_owned());
+                facts.engine_session = Some(named.to_owned());
                 moved = true;
             }
             let Some(fact) = bound(facts, agent) else {
@@ -353,7 +357,7 @@ impl HookFacts {
 }
 
 /// The session id the engine names for `agent`, when it names one by id.
-fn herdr_session(agent: &SessionAgentPayload) -> Option<&str> {
+fn engine_session(agent: &SessionAgentPayload) -> Option<&str> {
     agent
         .agent_session
         .as_ref()
@@ -425,7 +429,7 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
 /// there.
 fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
     let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
-    let reported = herdr_session(agent);
+    let reported = engine_session(agent);
     let named = facts.sessions.iter().rposition(|fact| {
         fact.runtime == runtime
             && match (reported, fact.session.as_deref()) {
@@ -435,7 +439,7 @@ fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'
     });
     let at = named.or_else(|| {
         facts
-            .reported_since_herdr
+            .reported_since_engine
             .then(|| {
                 facts
                     .sessions
@@ -479,7 +483,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
 
 fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
     before.seen_agent != after.seen_agent
-        || before.herdr_session != after.herdr_session
+        || before.engine_session != after.engine_session
         || before.sessions.len() != after.sessions.len()
         || before
             .sessions
@@ -542,7 +546,7 @@ mod tests {
     /// that ended there, and the session the hook reported since speaks for
     /// the pane until the engine names yet another one.
     #[test]
-    fn the_session_the_hook_reported_since_herdr_last_changed_its_id_speaks_for_the_pane() {
+    fn the_session_the_hook_reported_since_the_engine_last_changed_its_id_speaks_for_the_pane() {
         let mut facts = HookFacts::default();
         facts
             .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Working)))

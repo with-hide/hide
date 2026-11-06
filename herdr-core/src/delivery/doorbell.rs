@@ -1577,7 +1577,7 @@ mod tests {
         for kind in ["claude", "codex"] {
             for status in ["idle", "done"] {
                 let mut pane = at_rest(kind);
-                pane.herdr(status);
+                pane.engine(status);
                 assert_eq!(judge(&pane, WAITED, NOW), Ok(()), "{kind} {status}");
             }
         }
@@ -1588,11 +1588,11 @@ mod tests {
         let mut pane = at_rest("grok");
         pane.reads(Waiting::Nothing);
         for status in ["idle", "done"] {
-            pane.herdr(status);
+            pane.engine(status);
             assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
         }
         pane.entered_working_at_unix_ms = 1;
-        pane.herdr("working");
+        pane.engine("working");
         assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Working));
         assert_eq!(
             judge(
@@ -1605,7 +1605,7 @@ mod tests {
             ),
             Err(Hold::Working)
         );
-        pane.herdr("idle");
+        pane.engine("idle");
         pane.last_input_at_unix_ms += 1;
         assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::Draft));
         pane.last_submit_at_unix_ms = pane.last_input_at_unix_ms;
@@ -1614,7 +1614,7 @@ mod tests {
             assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::AwaitingOperator));
         }
         pane.turn = Turn::Unread;
-        pane.herdr("idle");
+        pane.engine("idle");
         assert_eq!(judge(&pane, WAITED, NOW), Err(Hold::SessionUnread));
         pane.reads(Waiting::Nothing);
         assert_eq!(judge(&pane, WAITED, NOW), Ok(()));
@@ -1630,9 +1630,13 @@ mod tests {
                 Hold::Kind,
             ),
             ("session", |pane| pane.actor.session = None, Hold::Session),
-            ("working", |pane| pane.herdr("working"), Hold::Working),
-            ("menu", |pane| pane.herdr("blocked"), Hold::Blocked),
-            ("unknown status", |pane| pane.herdr("unknown"), Hold::Status),
+            ("working", |pane| pane.engine("working"), Hold::Working),
+            ("menu", |pane| pane.engine("blocked"), Hold::Blocked),
+            (
+                "unknown status",
+                |pane| pane.engine("unknown"),
+                Hold::Status,
+            ),
             (
                 "no sequence",
                 |pane| pane.state_change_seq = None,
@@ -1672,7 +1676,7 @@ mod tests {
     fn a_session_waiting_for_the_operator_or_not_read_holds_the_letter() {
         for status in ["idle", "done"] {
             let mut pane = at_rest("codex");
-            pane.herdr(status);
+            pane.engine(status);
             pane.reads(Waiting::Question);
             assert_eq!(
                 judge(&pane, WAITED, NOW),
@@ -1686,7 +1690,7 @@ mod tests {
                 "{status}"
             );
             pane.turn = Turn::Unread;
-            pane.herdr(status);
+            pane.engine(status);
             assert_eq!(
                 judge(&pane, WAITED, NOW),
                 Err(Hold::SessionUnread),
@@ -1738,7 +1742,7 @@ mod tests {
         let mut pane = at_rest("claude");
         pane.entered_working_at_unix_ms = NOW - MID_TURN_WAIT_MS;
         pane.status_changed_at_unix_ms = NOW - MID_TURN_WAIT_MS;
-        pane.herdr("working");
+        pane.engine("working");
         // Arrived as the work began: due at five minutes, not before.
         assert_eq!(judge(&pane, arrived(NOW - MID_TURN_WAIT_MS), NOW), Ok(()));
         assert_eq!(
@@ -1758,7 +1762,7 @@ mod tests {
         // Sent with --now: at the next gap, forty seconds into the work.
         pane.entered_working_at_unix_ms = NOW - 40_000;
         pane.status_changed_at_unix_ms = NOW - 40_000;
-        pane.herdr("working");
+        pane.engine("working");
         assert_eq!(judge(&pane, urgent, NOW), Ok(()));
         assert_eq!(judge(&pane, arrived(NOW - 1_000), NOW), Err(Hold::Working));
         // A key typed since the work began is a draft: the letter waits.
@@ -1767,11 +1771,11 @@ mod tests {
         pane.last_input_at_unix_ms = NOW - 60_000;
         // A working state the engine has not confirmed waits.
         pane.state_change_seq = None;
-        pane.herdr("working");
+        pane.engine("working");
         assert_eq!(judge(&pane, urgent, NOW), Err(Hold::Working));
         // A kind no bell rings for is never typed into, working or not.
         let mut pane = at_rest("opencode");
-        pane.herdr("working");
+        pane.engine("working");
         assert_eq!(judge(&pane, urgent, NOW), Err(Hold::Kind));
     }
 
@@ -2581,7 +2585,7 @@ mod tests {
     /// and in a turn the hook alone runs, the next letter rings once the
     /// agent has taken the one the last bell was typed for.
     #[test]
-    fn a_turn_the_hook_alone_moves_decides_the_next_bell_while_herdr_stays_idle() {
+    fn a_turn_the_hook_alone_moves_decides_the_next_bell_while_the_engine_stays_idle() {
         use crate::runtime::delivery::tests::lay_hook;
         use hide_node_link::panes::HookTurn;
         let bell = Bell::start(json!({}));
@@ -2662,7 +2666,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_herdr_reports_no_readiness_for_is_belled_at_rest_like_a_started_one() {
+    fn a_pane_the_engine_reports_no_readiness_for_is_belled_at_rest_like_a_started_one() {
         // A pane the operator started by typing `codex` carries neither flag;
         // one the engine started reports itself ready.
         for flags in [json!({}), json!({"interactive_ready": true})] {
@@ -2858,7 +2862,8 @@ mod tests {
     }
 
     #[test]
-    fn herdr_reporting_an_agent_not_ready_holds_the_letter_for_that_reason_and_reserves_nothing() {
+    fn the_engine_reporting_an_agent_not_ready_holds_the_letter_for_that_reason_and_reserves_nothing()
+     {
         for (flags, reason) in [
             (json!({"interactive_ready": false}), "not_ready"),
             (json!({"launch_pending": true}), "launch_pending"),
@@ -2886,7 +2891,7 @@ mod tests {
     }
 
     #[test]
-    fn a_letter_held_by_herdr_is_belled_once_the_cause_clears_while_the_pane_stays_put() {
+    fn a_letter_held_by_the_engine_is_belled_once_the_cause_clears_while_the_pane_stays_put() {
         let bell = Bell::start(json!({"launch_pending": true}));
         let mut doorbell = Doorbell::default();
         let start = now();
@@ -2903,7 +2908,7 @@ mod tests {
     }
 
     #[test]
-    fn a_letter_herdr_keeps_refusing_is_asked_about_less_often_and_never_reserves() {
+    fn a_letter_the_engine_keeps_refusing_is_asked_about_less_often_and_never_reserves() {
         let bell = Bell::start(json!({"interactive_ready": false}));
         let mut doorbell = Doorbell::default();
         let start = now();
@@ -3700,7 +3705,7 @@ mod tests {
     /// A hook after a key typed during the work is a queued prompt, and the
     /// composer may hold the operator's newer draft, so it marks nothing.
     #[test]
-    fn a_hook_after_herdr_reports_work_still_marks_the_check_moment() {
+    fn a_hook_after_the_engine_reports_work_still_marks_the_check_moment() {
         use crate::runtime::delivery::tests::{observe_working_since, submit_prompt};
         for (key_during_work, checked) in [(false, 1), (true, 0)] {
             let bell = Bell::start(json!({}));

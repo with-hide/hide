@@ -116,7 +116,7 @@ impl Runtime {
                     .map(|provider| provider.default_model())
                     .filter(|model| !model.is_empty());
                 json!({
-                    "agent": adapter.herdr.name,
+                    "agent": adapter.engine_kind,
                     "id": adapter.id,
                     "label": adapter.label,
                     "installed": installed,

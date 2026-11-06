@@ -256,7 +256,7 @@ fn recent_navigation_restores_file_and_diff_across_projects_atomically() {
 }
 
 #[test]
-fn tab_strip_lists_herdr_tabs_and_then_the_file_that_was_opened() {
+fn tab_strip_lists_engine_tabs_and_then_the_file_that_was_opened() {
     let directory_folder = scratch_dir("hide-strip-open-");
     let directory = directory_folder.path().to_path_buf();
     std::fs::create_dir_all(&directory).expect("checkout directory");
@@ -304,7 +304,7 @@ fn tab_strip_lists_herdr_tabs_and_then_the_file_that_was_opened() {
 }
 
 #[test]
-fn tab_strip_appends_a_reopened_file_nowhere_and_a_new_herdr_tab_at_the_end() {
+fn tab_strip_appends_a_reopened_file_nowhere_and_a_new_engine_tab_at_the_end() {
     let directory_folder = scratch_dir("hide-strip-append-");
     let directory = directory_folder.path().to_path_buf();
     std::fs::create_dir_all(&directory).expect("checkout directory");
@@ -359,7 +359,7 @@ fn tab_strip_appends_a_reopened_file_nowhere_and_a_new_herdr_tab_at_the_end() {
 }
 
 #[test]
-fn tab_strip_keeps_a_file_in_its_slot_while_herdr_reorders_around_it() {
+fn tab_strip_keeps_a_file_in_its_slot_while_the_engine_reorders_around_it() {
     let directory_folder = scratch_dir("hide-strip-slot-");
     let directory = directory_folder.path().to_path_buf();
     std::fs::create_dir_all(&directory).expect("checkout directory");
@@ -438,7 +438,7 @@ fn tab_strip_keeps_a_file_in_its_slot_while_herdr_reorders_around_it() {
 }
 
 #[test]
-fn tab_strip_reorder_moves_a_file_tab_without_asking_herdr() {
+fn tab_strip_reorder_moves_a_file_tab_without_asking_the_engine() {
     let (mut runtime, checkout_id, directory) = strip_checkout("file-move");
     let tabs = ["w-order:t1", "w-order:t2"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
@@ -1849,9 +1849,11 @@ fn recent_closed_failure_retains_and_missing_file_consumes() {
     runtime.reopen_in_flight = Some("reopen-fixture".to_owned());
     assert!(runtime.ingest_reopen_result(
         &request,
-        Ok(crate::recent_closed::reopen::FileReopenResultOrHerdr::File(
-            crate::recent_closed::reopen::FileReopenResult::Missing,
-        )),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::File(
+                crate::recent_closed::reopen::FileReopenResult::Missing,
+            )
+        ),
     ));
     let consumed = runtime.snapshot();
     assert_eq!(consumed.recent_closed.count, 0);
@@ -1884,7 +1886,7 @@ fn reopen_completion_preserves_a_newer_close() {
     assert!(runtime.ingest_reopen_result(
         &request,
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: None,
                     consumed: true,
@@ -1908,7 +1910,7 @@ fn reopen_completion_preserves_a_newer_close() {
 #[test]
 fn every_consuming_reopen_result_removes_only_its_request_key() {
     let assert_newer_close_survives =
-        |result: crate::recent_closed::reopen::FileReopenResultOrHerdr, first_path: &str| {
+        |result: crate::recent_closed::reopen::FileReopenResultOrEngine, first_path: &str| {
             let mut runtime = runtime();
             let first = closed_file("first", first_path);
             runtime.push_recent_closed(first.clone());
@@ -1932,13 +1934,13 @@ fn every_consuming_reopen_result_removes_only_its_request_key() {
         };
 
     assert_newer_close_survives(
-        crate::recent_closed::reopen::FileReopenResultOrHerdr::File(
+        crate::recent_closed::reopen::FileReopenResultOrEngine::File(
             crate::recent_closed::reopen::FileReopenResult::Missing,
         ),
         "/repo/missing.rs",
     );
     assert_newer_close_survives(
-        crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+        crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
             crate::recent_closed::reopen::ReopenOutcome {
                 tab_id: None,
                 consumed: true,
@@ -1959,7 +1961,7 @@ fn every_consuming_reopen_result_removes_only_its_request_key() {
     std::fs::write(&path, "fn main() {}\n").unwrap();
     let opened = crate::files::tests::open_local(&path);
     assert_newer_close_survives(
-        crate::recent_closed::reopen::FileReopenResultOrHerdr::File(
+        crate::recent_closed::reopen::FileReopenResultOrEngine::File(
             crate::recent_closed::reopen::FileReopenResult::Opened(Box::new(opened)),
         ),
         path.to_str().unwrap(),
@@ -1991,7 +1993,7 @@ fn completion_is_safe_after_the_in_flight_item_was_evicted() {
     assert!(runtime.ingest_reopen_result(
         &request,
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: None,
                     consumed: true,
@@ -2071,7 +2073,7 @@ fn a_reopen_saves_the_pane_it_brings_the_keyboard_to() {
     assert!(runtime.ingest_reopen_result(
         &request,
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: None,
                     consumed: true,

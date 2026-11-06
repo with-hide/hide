@@ -249,7 +249,7 @@ mod tests {
 
     type Shared = Arc<Mutex<Repository>>;
 
-    fn herdr(repository: &Shared) -> Arc<crate::engine::fake::FakeEngine<'static>> {
+    fn fake_engine(repository: &Shared) -> Arc<crate::engine::fake::FakeEngine<'static>> {
         use crate::engine::fake::{processes, reply, session};
         let repository = Arc::clone(repository);
         crate::engine::fake::FakeEngine::start(move |method, params| {
@@ -355,9 +355,9 @@ mod tests {
         ];
         for (expected, setup) in cases {
             let repository = merged(setup);
-            let herdr = herdr(&repository);
+            let fake = fake_engine(&repository);
             let retirement = retire_worktree(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 "fix",
@@ -379,8 +379,8 @@ mod tests {
             }
         }
         let gone = merged(|repository| repository.worktree = None);
-        let herdr = herdr(&gone);
-        let retirement = retire_worktree(herdr.engine().as_ref(), &Machine(gone), "/r", "fix", &[]);
+        let fake = fake_engine(&gone);
+        let retirement = retire_worktree(fake.engine().as_ref(), &Machine(gone), "/r", "fix", &[]);
         assert_eq!(retirement.outcome, Outcome::Gone);
     }
 

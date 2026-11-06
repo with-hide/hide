@@ -662,7 +662,7 @@ mod tests {
             let expected_cwd = cwd.display().to_string();
             let tab_source = source.clone();
             let tab_other = other_before.clone();
-            let herdr = FakeEngine::start(move |method, params| {
+            let fake = FakeEngine::start(move |method, params| {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                 "workspaces": [], "tabs": [], "panes": [], "agents": [],
@@ -752,7 +752,7 @@ mod tests {
             };
             let created = std::cell::RefCell::new(Vec::new());
             let result = run_agent_fork_with_registration(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &node,
                 &request,
                 &|| {
@@ -773,7 +773,7 @@ mod tests {
             assert_eq!(result.is_err(), case != "success", "{case}");
             // The core hears of the fork's tab once, as soon as the engine made it,
             // whatever happens to its start afterwards.
-            let made_tab = herdr.methods().contains(&"launch_tab");
+            let made_tab = fake.methods().contains(&"launch_tab");
             assert_eq!(
                 created.into_inner(),
                 if made_tab {
@@ -826,7 +826,7 @@ mod tests {
             } else if refuse {
                 expected.push("close_pane");
             }
-            assert_eq!(herdr.methods(), expected, "{case}");
+            assert_eq!(fake.methods(), expected, "{case}");
         }
     }
 
@@ -869,7 +869,7 @@ mod tests {
             let expected_shell = shell.shell.clone().unwrap();
             let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let expected_cwd = checkout.clone();
-            let herdr = FakeEngine::start(move |method, params| {
+            let fake = FakeEngine::start(move |method, params| {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                 "workspaces": [], "tabs": [], "panes": [], "agents": [],
@@ -941,7 +941,7 @@ mod tests {
                 permission: Default::default(),
             };
             let result = run_agent_fork_with_registration(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &node,
                 &request,
                 &|| {
@@ -981,7 +981,7 @@ mod tests {
                 ],
                 _ => &["session", "launch_tab", "close_pane"],
             };
-            assert_eq!(herdr.methods(), expected, "{case}");
+            assert_eq!(fake.methods(), expected, "{case}");
         }
     }
 
@@ -1051,9 +1051,9 @@ mod tests {
                 },
                 log: Arc::clone(&log),
             };
-            let herdr_log = Arc::clone(&log);
-            let herdr = FakeEngine::start(move |method, params| {
-                herdr_log.lock().unwrap().push(method.to_owned());
+            let engine_log = Arc::clone(&log);
+            let fake = FakeEngine::start(move |method, params| {
+                engine_log.lock().unwrap().push(method.to_owned());
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                     "workspaces": [], "tabs": [], "panes": [], "agents": [],
@@ -1103,7 +1103,7 @@ mod tests {
                 permission: Default::default(),
             };
             let result = run_agent_fork_with_registration(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &node,
                 &request,
                 &|| Ok(()),
@@ -1172,7 +1172,7 @@ mod tests {
             let shell = crate::fixture::integrated_shell(home.path());
             let expected_shell = shell.shell.clone().unwrap();
             let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
-            let herdr = FakeEngine::start(move |method, params| {
+            let fake = FakeEngine::start(move |method, params| {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                 "workspaces": [], "tabs": [], "panes": [], "agents": [],
@@ -1235,7 +1235,7 @@ mod tests {
                 permission: Default::default(),
             };
             let result = run_agent_fork_with_registration(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &node,
                 &request,
                 &|| {
@@ -1269,7 +1269,7 @@ mod tests {
                 "summary-changed-before" => &[],
                 _ => &["session", "launch_tab", "close_pane"],
             };
-            assert_eq!(herdr.methods(), expected, "{case}");
+            assert_eq!(fake.methods(), expected, "{case}");
         }
     }
 
@@ -1350,7 +1350,7 @@ mod tests {
                 if case == "done" { "done" } else { "idle" },
             ]));
             let held = Arc::new(Mutex::new(matches!(case, "stray" | "stuck")));
-            let herdr = FakeEngine::start(move |method, params| match method {
+            let fake = FakeEngine::start(move |method, params| match method {
                 "read_screen" => {
                     let text = if case == "no-composer" {
                         "$ "
@@ -1438,7 +1438,7 @@ mod tests {
                 launch: Default::default(),
                 permission: Default::default(),
             };
-            let result = fork_antigravity(herdr.engine().as_ref(), &node, &request, "child-pane");
+            let result = fork_antigravity(fake.engine().as_ref(), &node, &request, "child-pane");
             // Eight erases of eight reach the limit of 64.
             let mut stuck = vec!["pane_agent_status", "pane_agent_status", "read_screen"];
             for _ in 0..8 {
@@ -1511,7 +1511,7 @@ mod tests {
                     ]
                 }
             };
-            assert_eq!(herdr.methods(), expected, "{case}");
+            assert_eq!(fake.methods(), expected, "{case}");
             assert_eq!(
                 node.left.load(std::sync::atomic::Ordering::SeqCst),
                 0,
@@ -1663,7 +1663,7 @@ mod tests {
 
     #[test]
     fn internal_registration_failure_keeps_the_started_fork() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "split_beside" => reply("child-pane".to_owned()),
             "pane_processes" => reply(processes(
                 &json!({"type": "pane_process_info", "process_info": {
@@ -1690,7 +1690,7 @@ mod tests {
         };
 
         let pane_id = run_agent_fork_with_registration(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &hide_node::Local::new(None),
             &request,
             &|| Ok(()),
@@ -1700,7 +1700,7 @@ mod tests {
         .expect("registration cannot close a started fork");
         assert_eq!(pane_id, "child-pane");
         assert_eq!(
-            herdr.methods(),
+            fake.methods(),
             ["split_beside", "pane_processes", "start_agent",]
         );
     }

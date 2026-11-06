@@ -1559,8 +1559,8 @@ pub struct SidebarAgentSnapshot {
     /// none or only one Hide made up from its pane (`fork::hide_made_name`).
     /// `id` falls back to the pane id and a device's row replaces it, so it
     /// cannot stand in for this.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub herdr_name: Option<String>,
+    #[serde(rename = "herdr_name", skip_serializing_if = "Option::is_none")]
+    pub given_name: Option<String>,
     /// The name the engine reports the agent by, a name Hide made up included,
     /// which a pane's launch record is matched by (`runtime::agent_choice`).
     /// Never on the wire.
@@ -2183,7 +2183,7 @@ pub struct CheckoutSnapshot {
     /// row. Core only: the device's grouping places a folder its helper can
     /// no longer read by it (`device_catalog::recorded_place`).
     #[serde(skip_serializing)]
-    pub herdr_repo_root: Option<String>,
+    pub engine_repo_root: Option<String>,
     pub github: GithubStatusSnapshot,
     pub agent_summary: CheckoutAgentSummary,
     pub id: String,
@@ -2289,18 +2289,19 @@ pub struct StripTabSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StripTabKind {
-    Herdr,
+    #[serde(rename = "herdr")]
+    Engine,
     File,
     Diff,
     Session,
 }
 
 impl StripTabSnapshot {
-    pub fn herdr(source_id: impl Into<String>, label: impl Into<String>) -> Self {
+    pub fn engine(source_id: impl Into<String>, label: impl Into<String>) -> Self {
         let source_id = source_id.into();
         Self {
             id: format!("herdr:{source_id}"),
-            kind: StripTabKind::Herdr,
+            kind: StripTabKind::Engine,
             source_id,
             label: label.into(),
             preview: false,
@@ -2366,11 +2367,11 @@ impl StripTabSnapshot {
     /// A tab holding only delegated children is left out: the canvas keeps
     /// one pane, and a strip slot for every child would put the pile back
     /// where the split used to be (PRD B1).
-    pub fn from_herdr_tabs(tabs: &[TabSnapshot]) -> Vec<Self> {
+    pub fn from_engine_tabs(tabs: &[TabSnapshot]) -> Vec<Self> {
         tabs.iter()
             .filter(|tab| !tab.delegated)
             .filter_map(|tab| {
-                Some(Self::herdr(
+                Some(Self::engine(
                     tab.id.clone()?,
                     tab.label.clone().unwrap_or_default(),
                 ))
@@ -2684,7 +2685,8 @@ pub struct PaneSnapshot {
     /// them. The core ships the ingredients rather than a chosen title so the
     /// local and remote projections cannot disagree about the ladder, and so
     /// the one that runs it stays testable in the shell.
-    pub herdr_label: Option<String>,
+    #[serde(rename = "herdr_label")]
+    pub engine_label: Option<String>,
     pub terminal_title: Option<String>,
     pub cwd: String,
     /// The status code of the agent in this pane, from the same derivation the
@@ -4417,7 +4419,7 @@ pub struct UiStateSnapshot {
     /// (`consume_restore_hint`). Core only, and kept in the store until that
     /// session takes it.
     #[serde(skip)]
-    pub focus_from_herdr: bool,
+    pub focus_from_engine: bool,
     pub shortcut_bindings: BTreeMap<String, String>,
     /// Whether `shortcut_bindings` was already brought across from the removed
     /// native app's state. Persisted, never on the wire: once the import ran, an
@@ -5365,7 +5367,7 @@ impl Default for UiStateSnapshot {
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,
             selected_pane_id: None,
-            focus_from_herdr: false,
+            focus_from_engine: false,
             shortcut_bindings: BTreeMap::new(),
             shortcut_bindings_imported: false,
             browser_shortcut_bindings: BTreeMap::new(),
@@ -6808,7 +6810,8 @@ pub struct PaneMovePreviewSnapshot {
 pub struct StatusSnapshot {
     pub server_discovery: ServerDiscoverySnapshot,
     pub tab_rename: Option<TabRenameSnapshot>,
-    pub herdr: ProviderStatusSnapshot,
+    #[serde(rename = "herdr")]
+    pub engine: ProviderStatusSnapshot,
     /// What this machine's Herdr save offers to move into the core's own
     /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
     /// nothing to show.
@@ -6822,7 +6825,8 @@ pub struct StatusSnapshot {
     pub background_ai: BackgroundAiSnapshot,
     /// The Host entries Add device offers (Settings › Devices).
     pub ssh_hosts: SshHostsSnapshot,
-    pub herdr_profiles: HerdrProfilesSnapshot,
+    #[serde(rename = "herdr_profiles")]
+    pub machine_profiles: MachineProfilesSnapshot,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -6930,14 +6934,14 @@ pub struct SshHostSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct HerdrProfilesSnapshot {
+pub struct MachineProfilesSnapshot {
     pub state: String,
     pub error: Option<String>,
-    pub profiles: Vec<HerdrProfileSnapshot>,
+    pub profiles: Vec<MachineProfileSnapshot>,
     pub truncated: bool,
 }
 
-impl Default for HerdrProfilesSnapshot {
+impl Default for MachineProfilesSnapshot {
     fn default() -> Self {
         Self {
             state: "idle".to_owned(),
@@ -6952,7 +6956,7 @@ impl Default for HerdrProfilesSnapshot {
 /// ssh config (Add device's list), one row per `user@host:port`, or this
 /// PC's default WSL distribution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct HerdrProfileSnapshot {
+pub struct MachineProfileSnapshot {
     pub id: String,
     pub label: String,
     /// The Host alias, or the distribution of a WSL row.
@@ -6974,14 +6978,14 @@ pub struct HerdrProfileSnapshot {
     /// words (`contracts/snapshot-wire-enums.json`: `herdr_profile_refusal`).
     /// A connection that was tried and failed has none: its row reads the
     /// device's connection state.
-    pub connect_refusal: Option<HerdrProfileRefusal>,
+    pub connect_refusal: Option<MachineProfileRefusal>,
 }
 
 /// Why Hide declined to connect a first-run machine, one per thing the
 /// operator does next.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HerdrProfileRefusal {
+pub enum MachineProfileRefusal {
     /// The helper installation was not allowed.
     NoConsent,
     /// The Host or distribution cannot be used.
@@ -7532,7 +7536,7 @@ impl Snapshot {
             status: StatusSnapshot {
                 tab_rename: None,
                 // The engine's status until the session sync first answers.
-                herdr: ProviderStatusSnapshot {
+                engine: ProviderStatusSnapshot {
                     state: "unconfigured".to_owned(),
                     socket_path: None,
                     message: None,
@@ -7544,7 +7548,7 @@ impl Snapshot {
                 agent_hooks: AgentHooksSnapshot::default(),
                 background_ai: BackgroundAiSnapshot::unread(),
                 ssh_hosts: SshHostsSnapshot::default(),
-                herdr_profiles: HerdrProfilesSnapshot::default(),
+                machine_profiles: MachineProfilesSnapshot::default(),
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
@@ -8377,14 +8381,14 @@ mod wire_enum_tests {
         checked.insert("descendant_mark");
 
         let strip_kinds = [
-            StripTabKind::Herdr,
+            StripTabKind::Engine,
             StripTabKind::File,
             StripTabKind::Diff,
             StripTabKind::Session,
         ];
         for variant in strip_kinds {
             match variant {
-                StripTabKind::Herdr
+                StripTabKind::Engine
                 | StripTabKind::File
                 | StripTabKind::Diff
                 | StripTabKind::Session => {}
@@ -8914,17 +8918,17 @@ mod wire_enum_tests {
         checked.insert("kit_unavailable");
 
         let profile_refusals = [
-            HerdrProfileRefusal::NoConsent,
-            HerdrProfileRefusal::InvalidTarget,
-            HerdrProfileRefusal::DiscoveryPending,
-            HerdrProfileRefusal::DeviceLimit,
+            MachineProfileRefusal::NoConsent,
+            MachineProfileRefusal::InvalidTarget,
+            MachineProfileRefusal::DiscoveryPending,
+            MachineProfileRefusal::DeviceLimit,
         ];
         for variant in profile_refusals {
             match variant {
-                HerdrProfileRefusal::NoConsent
-                | HerdrProfileRefusal::InvalidTarget
-                | HerdrProfileRefusal::DiscoveryPending
-                | HerdrProfileRefusal::DeviceLimit => {}
+                MachineProfileRefusal::NoConsent
+                | MachineProfileRefusal::InvalidTarget
+                | MachineProfileRefusal::DiscoveryPending
+                | MachineProfileRefusal::DeviceLimit => {}
             }
         }
         assert_wire(&contract, "herdr_profile_refusal", &profile_refusals);

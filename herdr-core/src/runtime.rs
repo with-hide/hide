@@ -45,7 +45,6 @@ mod gone_worktrees;
 pub(crate) mod group_starts;
 mod guardrails;
 mod herdr_import;
-mod herdr_profiles;
 mod hide_notes;
 mod home;
 mod hosts;
@@ -53,6 +52,7 @@ mod inbound;
 mod issues;
 mod kit;
 pub(crate) mod links;
+mod machine_profiles;
 pub(crate) mod memory;
 pub(crate) mod memory_analysis;
 mod memory_branch;
@@ -195,14 +195,14 @@ pub(super) fn device_workspace_tab_order(
     raw.workspaces
         .iter()
         .filter_map(|workspace| {
-            let herdr_id = workspace.session_workspace_ids.first()?;
+            let engine_id = workspace.session_workspace_ids.first()?;
             let tabs = workspace
                 .checkouts
                 .iter()
                 .flat_map(|checkout| checkout.tabs.iter())
                 .filter_map(|tab| tab.id.clone())
                 .collect();
-            Some((herdr_id.clone(), tabs))
+            Some((engine_id.clone(), tabs))
         })
         .collect()
 }
@@ -223,28 +223,28 @@ fn place_checkout_strip(
     pending: &mut BTreeMap<String, PendingTabMove>,
     dropped_moves: &mut Vec<String>,
 ) {
-    let herdr = StripTabSnapshot::from_herdr_tabs(&checkout.tabs);
+    let engine_tabs = StripTabSnapshot::from_engine_tabs(&checkout.tabs);
     let stored = order.entry(checkout.id.clone()).or_default();
     if let Some(held) = pending.get(&checkout.id) {
         // Only the tabs the move was asked about: the workspace it named, as
         // this checkout currently holds them.
-        let live_owned = herdr
+        let live_owned = engine_tabs
             .iter()
             .map(|entry| &entry.source_id)
             .filter(|tab_id| owners.get(*tab_id) == Some(&held.workspace_id))
             .cloned()
             .collect::<Vec<_>>();
         if live_owned.iter().cloned().collect::<BTreeSet<_>>()
-            != held.herdr_order.iter().cloned().collect::<BTreeSet<_>>()
+            != held.engine_order.iter().cloned().collect::<BTreeSet<_>>()
         {
             pending.remove(&checkout.id);
             dropped_moves.push(checkout.id.clone());
-        } else if live_owned == held.herdr_order {
+        } else if live_owned == held.engine_order {
             *stored = held.desired.clone();
             pending.remove(&checkout.id);
         }
     }
-    checkout.strip = ordered_strip(stored, &herdr, &editor, owners);
+    checkout.strip = ordered_strip(stored, &engine_tabs, &editor, owners);
     *stored = checkout
         .strip
         .iter()
@@ -262,17 +262,17 @@ fn place_checkout_strip(
 /// newly opened file and a newly created engine tab belong.
 fn ordered_strip(
     stored: &[String],
-    herdr: &[StripTabSnapshot],
+    engine_tabs: &[StripTabSnapshot],
     files: &[StripTabSnapshot],
     workspace_of: &BTreeMap<String, String>,
 ) -> Vec<StripTabSnapshot> {
     let mut by_id = BTreeMap::new();
-    for entry in herdr.iter().chain(files.iter()) {
+    for entry in engine_tabs.iter().chain(files.iter()) {
         by_id.insert(entry.id.as_str(), entry.clone());
     }
     // A stored order that names the same tab twice holds one slot, not two, so
     // the engine slot count stays equal to the engine tab count below.
-    let mut placed = Vec::with_capacity(herdr.len() + files.len());
+    let mut placed = Vec::with_capacity(engine_tabs.len() + files.len());
     let mut held = BTreeSet::new();
     for id in stored {
         let Some(entry) = by_id.get(id.as_str()) else {
@@ -283,7 +283,7 @@ fn ordered_strip(
         }
     }
     placed.extend(
-        herdr
+        engine_tabs
             .iter()
             .chain(files.iter())
             .filter(|entry| !held.contains(&entry.id))
@@ -300,11 +300,11 @@ fn ordered_strip(
             .get(&entry.source_id)
             .map_or("", |workspace_id| workspace_id.as_str())
     };
-    for entry in herdr {
+    for entry in engine_tabs {
         queues.entry(owner(entry)).or_default().push_back(entry);
     }
     for entry in &mut placed {
-        if entry.kind == StripTabKind::Herdr {
+        if entry.kind == StripTabKind::Engine {
             *entry = queues
                 .get_mut(owner(entry))
                 .and_then(VecDeque::pop_front)
@@ -327,7 +327,7 @@ struct PendingTabMove {
     /// The moved tab's own workspace's tabs in this checkout, in the order
     /// the operator asked for. That workspace reporting exactly this order is
     /// what commits the arrangement.
-    herdr_order: Vec<String>,
+    engine_order: Vec<String>,
     target_id: String,
     generation: u64,
     connection_generation: u64,
@@ -365,7 +365,7 @@ enum TabMoveCarrier {
 ///
 /// `None` means the move cannot be expressed as an engine move: the named tab is
 /// not one of the engine's, or an anchor it needs is not in the workspace's list.
-fn herdr_insert_index(
+fn engine_insert_index(
     workspace_order: &[String],
     desired: &[String],
     moved: &str,
@@ -660,7 +660,7 @@ const RELOCATION_RETRY_INTERVAL_MS: u64 = 5_000;
 /// workspace's memory of where it was last, and following one of those moved
 /// the canvas away from the tab the operator had just chosen.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct HerdrTabView {
+struct EngineTabView {
     /// The engine's active tab in each engine workspace.
     active_tab_by_workspace: BTreeMap<String, String>,
     /// The engine workspace that owns each tab.
@@ -670,7 +670,7 @@ struct HerdrTabView {
     focus_event: Option<crate::sidebar::SessionTabFocus>,
 }
 
-impl HerdrTabView {
+impl EngineTabView {
     fn from_payload(payload: &SessionSnapshotPayload) -> Self {
         let active_tab_by_workspace = payload
             .workspaces
@@ -962,7 +962,7 @@ fn sync_strip_agent_identity(
         for entry in checkout
             .strip
             .iter_mut()
-            .filter(|entry| entry.kind == crate::model::StripTabKind::Herdr)
+            .filter(|entry| entry.kind == crate::model::StripTabKind::Engine)
         {
             let identity = checkout
                 .tabs
@@ -1638,16 +1638,16 @@ pub struct Runtime {
     tab_focus_requests: Vec<tab_focus::TabFocusRequest>,
     /// How many of the engine's tab moves have been read, and of which
     /// engine count, so the next session says which moves are new.
-    herdr_tab_moves_read: Option<(u64, u64)>,
+    engine_tab_moves_read: Option<(u64, u64)>,
     /// The tabs active in their engine workspaces at the last session.
     /// When moves were dropped, the difference from it stands in for them.
-    herdr_active_tabs_seen: BTreeSet<String>,
+    engine_active_tabs_seen: BTreeSet<String>,
     /// The tab the engine had focused at the last session update. A follow needs
     /// the engine's focus to have moved; a focused tab that merely differs from
     /// Hide's, as it does after a notification the engine never answered, is not
     /// an operator action and is not followed.
-    herdr_focused_tab_seen: Option<String>,
-    herdr_tab_focus_seen: Option<crate::sidebar::SessionTabFocus>,
+    engine_focused_tab_seen: Option<String>,
+    engine_tab_focus_seen: Option<crate::sidebar::SessionTabFocus>,
     /// The pane focus Hide has told the engine about and is still waiting to see
     /// confirmed.
     pending_pane_focus: Option<PendingViewFocus>,
@@ -1787,8 +1787,8 @@ pub struct Runtime {
     /// repository and its worktrees. `tab.move` counts its insertion index in
     /// the workspace's list, not in a checkout's part of it, so the index has
     /// to be read off this list or the tab lands somewhere else.
-    herdr_workspace_tab_order: BTreeMap<String, Vec<String>>,
-    herdr_worktrees: BTreeMap<String, crate::domain::WorktreeProjection>,
+    engine_workspace_tab_order: BTreeMap<String, Vec<String>>,
+    engine_worktrees: BTreeMap<String, crate::domain::WorktreeProjection>,
     /// The arrangement a reorder asked for and the engine has not reported yet,
     /// per checkout. The engine owns where its own tabs sit, so a drag that moves
     /// one of them is held here rather than written into the strip: an
@@ -1982,7 +1982,7 @@ pub struct Runtime {
     /// Set when the devices this core dials run on its own engine, the
     /// development switch on (`own_devices`).
     own_devices: Option<own_devices::OwnDevices>,
-    herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
+    machine_profiles_job: Option<machine_profiles::MachineProfilesJob>,
     /// Where each ssh config Host the first-run step listed leads, as
     /// `user@host:port`, by alias.
     ssh_host_endpoints: BTreeMap<String, String>,
@@ -2494,10 +2494,10 @@ impl Runtime {
             read_marks_made: 1,
             visible_tab_ids: BTreeMap::new(),
             tab_focus_requests: Vec::new(),
-            herdr_tab_moves_read: None,
-            herdr_active_tabs_seen: BTreeSet::new(),
-            herdr_focused_tab_seen: None,
-            herdr_tab_focus_seen: None,
+            engine_tab_moves_read: None,
+            engine_active_tabs_seen: BTreeSet::new(),
+            engine_focused_tab_seen: None,
+            engine_tab_focus_seen: None,
             pending_pane_focus: None,
             pane_focus_in_flight: None,
             pane_focus_readback: None,
@@ -2549,8 +2549,8 @@ impl Runtime {
             catalog_paths,
             catalog_from_coordinator: false,
             checkout_tab_order: BTreeMap::new(),
-            herdr_workspace_tab_order: BTreeMap::new(),
-            herdr_worktrees: BTreeMap::new(),
+            engine_workspace_tab_order: BTreeMap::new(),
+            engine_worktrees: BTreeMap::new(),
             pending_tab_move: BTreeMap::new(),
             next_tab_move_generation: 0,
             unresolved_active_tabs: BTreeSet::new(),
@@ -2612,7 +2612,7 @@ impl Runtime {
             ssh_hosts_job: None,
             agent_definitions: None,
             own_devices: None,
-            herdr_profiles_job: None,
+            machine_profiles_job: None,
             ssh_host_endpoints: BTreeMap::new(),
             first_run_attempts: BTreeMap::new(),
             purpose_operation_target: None,
@@ -3003,7 +3003,7 @@ fn project_layout_panes(
                 terminal_id: source.and_then(|source| source.terminal_id.clone()),
                 failed_terminal_id: source.and_then(|source| source.failed_terminal_id.clone()),
                 id: pane.pane_id.clone(),
-                herdr_label: source
+                engine_label: source
                     .and_then(|source| crate::start_claim::public_label(source.label.as_deref())),
                 terminal_title: source.and_then(|source| {
                     crate::start_claim::public_label(source.terminal_title.as_deref())

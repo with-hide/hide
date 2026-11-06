@@ -48,7 +48,7 @@ pub(super) struct TabFocusRequest {
     pub(super) tab_id: String,
     /// The tab the engine shows just before applying this request, as Hide knew
     /// when it left.
-    herdr_before: Option<String>,
+    engine_before: Option<String>,
     /// The pane focus that moves the engine to this tab; `None` for a tab focus
     /// or a creation.
     pub(super) pane_control_serial: Option<u64>,
@@ -113,21 +113,21 @@ impl Runtime {
     /// for. When the session Hide last read already shows it, its move has
     /// arrived and nothing more of it will.
     pub(super) fn send_created_tab(&mut self, checkout_id: String, tab_id: String) {
-        if !self.herdr_active_tabs_seen.contains(&tab_id) {
+        if !self.engine_active_tabs_seen.contains(&tab_id) {
             self.send_tab_move(checkout_id, tab_id, None);
         }
     }
 
     fn send_tab_move(&mut self, checkout_id: String, tab_id: String, serial: Option<u64>) {
-        let herdr_before = self
+        let engine_before = self
             .tab_focus_requests
             .last()
             .map(|earlier| earlier.tab_id.clone())
-            .or_else(|| self.herdr_focused_tab_seen.clone());
+            .or_else(|| self.engine_focused_tab_seen.clone());
         self.tab_focus_requests.push(TabFocusRequest {
             checkout_id,
             tab_id,
-            herdr_before,
+            engine_before,
             pane_control_serial: serial,
             pane_focus_confirmed: false,
             requested_at_unix_ms: unix_milliseconds(),
@@ -169,7 +169,7 @@ impl Runtime {
     fn withdraw_tab_move(&mut self, index: usize) -> TabFocusRequest {
         let withdrawn = self.tab_focus_requests.remove(index);
         if let Some(next) = self.tab_focus_requests.get_mut(index) {
-            next.herdr_before.clone_from(&withdrawn.herdr_before);
+            next.engine_before.clone_from(&withdrawn.engine_before);
         }
         withdrawn
     }
@@ -177,7 +177,7 @@ impl Runtime {
     /// The engine answered the tab focus for `tab_id`.
     pub(super) fn answer_tab_focus(&mut self, tab_id: &str) {
         if let Some(index) = self.tab_focus_index(tab_id) {
-            self.settle_where_herdr_already_was(index);
+            self.settle_where_engine_already_was(index);
         }
     }
 
@@ -191,7 +191,7 @@ impl Runtime {
         else {
             return;
         };
-        if !self.settle_where_herdr_already_was(index) {
+        if !self.settle_where_engine_already_was(index) {
             self.tab_focus_requests[index].pane_focus_confirmed = true;
             self.tab_focus_requests[index].requested_at_unix_ms = unix_milliseconds();
         }
@@ -265,21 +265,21 @@ impl Runtime {
     /// recorded; with nothing waiting, a reconnect's new count is no gap.
     pub(super) fn take_tab_focus_answers(
         &mut self,
-        herdr: &HerdrTabView,
+        engine: &EngineTabView,
         moves: Option<&crate::sidebar::SessionTabMoves>,
-        herdr_focus_moved: bool,
+        engine_focus_moved: bool,
     ) -> Vec<TabFocusRequest> {
         let Some(moves) = moves else {
             return Vec::new();
         };
-        let active = herdr.active_tab_ids();
+        let active = engine.active_tab_ids();
         let read = self
-            .herdr_tab_moves_read
+            .engine_tab_moves_read
             .replace((moves.generation, moves.applied));
         // The first session from the stream starts the count; nothing before
         // it is known to have moved.
         let Some((generation, consumed)) = read else {
-            self.herdr_active_tabs_seen = active;
+            self.engine_active_tabs_seen = active;
             return Vec::new();
         };
         let mut answered = Vec::new();
@@ -303,10 +303,10 @@ impl Runtime {
                     "kept": moves.recent.len(),
                 }));
                 let mut moved = active
-                    .difference(&self.herdr_active_tabs_seen)
+                    .difference(&self.engine_active_tabs_seen)
                     .cloned()
                     .collect::<Vec<_>>();
-                if herdr_focus_moved && let Some(focused) = herdr.focused_tab_id.as_ref() {
+                if engine_focus_moved && let Some(focused) = engine.focused_tab_id.as_ref() {
                     moved.push(focused.clone());
                 }
                 if let Some(last) = moved
@@ -318,7 +318,7 @@ impl Runtime {
                 }
             }
         }
-        self.herdr_active_tabs_seen = active;
+        self.engine_active_tabs_seen = active;
         answered
     }
 
@@ -381,10 +381,10 @@ impl Runtime {
 
     /// Ends the request at `index` when the engine was already on its tab as it
     /// applied it, and says whether it did.
-    fn settle_where_herdr_already_was(&mut self, index: usize) -> bool {
+    fn settle_where_engine_already_was(&mut self, index: usize) -> bool {
         let request = &self.tab_focus_requests[index];
-        let herdr_there = request.herdr_before.as_ref() == Some(&request.tab_id);
-        if herdr_there {
+        let engine_there = request.engine_before.as_ref() == Some(&request.tab_id);
+        if engine_there {
             let request = self.tab_focus_requests.remove(index);
             crate::diagnostic!(serde_json::json!({
                 "component": "view_state",
@@ -393,7 +393,7 @@ impl Runtime {
                 "tab_id": request.tab_id,
             }));
         }
-        herdr_there
+        engine_there
     }
 
     pub(super) fn checkout_holding_tab(&self, tab_id: &str) -> Option<String> {
