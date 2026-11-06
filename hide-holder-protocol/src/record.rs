@@ -110,6 +110,16 @@ pub enum EndReason {
 }
 
 impl EndReason {
+    /// Whether a pane that ended this way is finished, so it closes and no
+    /// new shell takes it: its program ended on its own, or a node asked it
+    /// to end. Any other end interrupted the pane, which starts again.
+    pub fn closes_the_pane(self) -> bool {
+        matches!(
+            self,
+            Self::ProgramExited | Self::Terminated | Self::TreeEndUnconfirmed
+        )
+    }
+
     /// The end a holder reports with `reason`.
     pub fn of_close(reason: CloseReason) -> Self {
         match reason {

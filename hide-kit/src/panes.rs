@@ -59,8 +59,13 @@ pub use requests::Request;
 /// counts, and so does one that cannot be read, since it may name a holder.
 pub const HOLDER_CAP: usize = 128;
 
-/// The most ended records kept for their reasons; past it the oldest go.
+/// The most ended records kept for their reasons; past it the finished go
+/// before the interrupted, oldest first (`count_live_for`).
 pub const ENDED_KEPT: usize = 128;
+
+// Every interrupted record was a holder under the cap, so the ended records
+// kept can hold all of them at once.
+const _: () = assert!(HOLDER_CAP <= ENDED_KEPT);
 
 /// The most record files a reconcile or a start reads; a folder holding more
 /// is reported rather than read.
@@ -621,12 +626,18 @@ impl Panes {
         }
     }
 
+    /// Whether `record` was written in another boot of the machine, so
+    /// nothing it names runs in this one. A record or a folder whose boot is
+    /// not known is not of another boot.
+    fn of_another_boot(&self, record: &PaneRecord) -> bool {
+        record.boot.is_some() && self.boot.is_some() && record.boot != self.boot
+    }
+
     /// Whether an earlier start of a pane still holds its id. Read under the
     /// lock, so it looks only at the record and the processes it names.
     fn state_of(&self, existing: &PaneRecord) -> Earlier {
         let runs = existing.holder.is_some_and(|holder| holder.runs());
-        let other_boot =
-            existing.boot.is_some() && self.boot.is_some() && existing.boot != self.boot;
+        let other_boot = self.of_another_boot(existing);
         match existing.phase {
             Phase::Reserved => Earlier::Lives,
             Phase::Ended if self.still_running(existing).is_empty() => Earlier::Over,
@@ -655,7 +666,7 @@ impl Panes {
     /// cannot be read, the pids its end says were left that are still alive.
     /// Nothing of another boot runs in this one.
     fn still_running(&self, existing: &PaneRecord) -> Vec<u32> {
-        if existing.boot.is_some() && self.boot.is_some() && existing.boot != self.boot {
+        if self.of_another_boot(existing) {
             return Vec::new();
         }
         let left = || {
@@ -1030,7 +1041,13 @@ impl Panes {
     }
 
     /// The records not ended, and the ones that cannot be read, which may
-    /// name a holder. Ended records past [`ENDED_KEPT`] go, oldest first.
+    /// name a holder. Ended records past [`ENDED_KEPT`] go: finished ones
+    /// first, oldest first, then interrupted ones, oldest first. An
+    /// interrupted record is one a restore may still start again in place
+    /// (it names the incarnation it replaces), and closing the finished
+    /// panes of that same restore writes them newer ends; at most
+    /// [`HOLDER_CAP`] panes ran, so at most that many are interrupted at
+    /// once and none of them goes while the bound holds.
     fn count_live_for(&self, owner: &Owner, scan: &[(String, RecordRead)]) -> usize {
         let mut live = 0;
         let mut ended = Vec::new();
@@ -1044,6 +1061,11 @@ impl Panes {
                         }) =>
                 {
                     ended.push((
+                        !record.cancelled()
+                            && record
+                                .end
+                                .as_ref()
+                                .is_some_and(|end| !end.reason.closes_the_pane()),
                         record.end.as_ref().map_or(0, |end| end.at_unix_ms),
                         pane.clone(),
                         record.holder,
@@ -1053,8 +1075,10 @@ impl Panes {
             }
         }
         if ended.len() > ENDED_KEPT {
-            ended.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
-            for (_, pane, holder) in &ended[..ended.len() - ENDED_KEPT] {
+            ended.sort_by(|left, right| {
+                (left.0, left.1, &left.2).cmp(&(right.0, right.1, &right.2))
+            });
+            for (_, _, pane, holder) in &ended[..ended.len() - ENDED_KEPT] {
                 // A holder still exiting keeps its record until it is gone.
                 if let Some(holder) = holder.filter(|holder| holder.runs()) {
                     self.emit(
@@ -1261,21 +1285,33 @@ impl Panes {
     /// Judges one record and does what it calls for.
     fn judge(&self, owner: &Owner, current: &PaneRecord) -> Judgment {
         let pane = current.pane.clone();
-        let judgment = if current.owner != self.owner {
-            Judgment::OtherOwner(current.clone())
-        } else if current.protocol < OLDEST_HOLDER_VERSION {
-            Judgment::Unsupported(current.clone())
-        } else if current.boot.is_some() && self.boot.is_some() && current.boot != self.boot {
+        let judgment = if self.of_another_boot(current) {
             // Nothing a record of another boot names runs in this one; its
-            // pids and start times may name processes of this boot.
+            // pids and start times may name processes of this boot. With no
+            // process left to guard, the record is this folder's to settle
+            // whatever owner it names: the owner is the folder's volume and
+            // number, and macOS may number a volume anew at each boot, which
+            // left every record of the earlier boot unjudged.
+            let mine = PaneRecord {
+                owner: self.owner.clone(),
+                ..current.clone()
+            };
             let ended = if current.phase == Phase::Ended && !current.cancelled() {
                 // A boot fence forbids process cleanup, not the completed
                 // outcome: changing ProgramExited to MachineRestarted would
                 // make node recovery start a shell the user already ended.
-                Judgment::Ended(current.clone())
+                if mine == *current {
+                    Judgment::Ended(mine)
+                } else {
+                    match self.write_if_unchanged(current, &mine) {
+                        Ok(()) => Judgment::Ended(mine),
+                        Err(why) => Judgment::Unsettled(why),
+                    }
+                }
             } else {
-                self.end_record(
+                self.finish_record(
                     current,
+                    mine,
                     End::new(
                         EndReason::MachineRestarted,
                         "the record is from an earlier boot of the machine",
@@ -1285,6 +1321,10 @@ impl Panes {
             // No process of another boot holds a lock in this one.
             self.remove_stale_socket(&pane, Duration::ZERO);
             ended
+        } else if current.owner != self.owner {
+            Judgment::OtherOwner(current.clone())
+        } else if current.protocol < OLDEST_HOLDER_VERSION {
+            Judgment::Unsupported(current.clone())
         } else if current.phase == Phase::Ended && current.cancelled() {
             let mut closing = current.clone();
             closing.phase = Phase::Closing;
@@ -1447,7 +1487,13 @@ impl Panes {
     /// Writes `current` as ended with `end`, if it has not changed since it
     /// was read, and answers its judgment.
     fn end_record(&self, current: &PaneRecord, end: End) -> Judgment {
-        let mut ended = current.clone();
+        self.finish_record(current, current.clone(), end)
+    }
+
+    /// [`Self::end_record`] writing `base` ended in place of `current`, as
+    /// long as the record is still `current`.
+    fn finish_record(&self, current: &PaneRecord, base: PaneRecord, end: End) -> Judgment {
+        let mut ended = base;
         ended.finish(end);
         // Every caller established that no holder of this boot remains and
         // completed its leftover cleanup before this exact-record CAS.
@@ -1938,6 +1984,77 @@ mod tests {
             assert!(ended.cancelled());
             assert!(holder.runs(), "a previous boot does not own this process");
         }
+    }
+
+    /// 2026-11-06: macOS numbered the state folder's volume anew after a
+    /// reboot, so every record named another owner and was left unjudged;
+    /// the restore took the panes as running and started none. A record of
+    /// an earlier boot is settled as this folder's whatever owner it names,
+    /// and a process of this boot that reuses its pid is left alone.
+    #[test]
+    fn a_record_of_an_earlier_boot_is_settled_here_whatever_owner_it_names() {
+        let home = tempfile::tempdir().unwrap();
+        let mut panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+        panes.boot = Some("current-boot".to_owned());
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let stand_in = StandIn::start();
+        let holder = stand_in.identity();
+        let mut earlier = reserved(&panes, Some(holder), Phase::Running);
+        earlier.boot = Some("previous-boot".to_owned());
+        earlier.owner = "1000012:12a9ed47".to_owned();
+        record::write(&layout::pane_record(&panes.state_dir, "p1"), &earlier).unwrap();
+
+        let found = panes.reconcile(&owner, Duration::from_secs(5));
+        let Some(Judgment::Ended(ended)) = found.panes.get("p1") else {
+            panic!("the earlier boot's record was not settled: {found:?}");
+        };
+        assert_eq!(
+            ended.end.as_ref().unwrap().reason,
+            EndReason::MachineRestarted
+        );
+        let kept = panes.record("p1").unwrap().unwrap();
+        assert_eq!(kept.owner, panes.owner(), "the record is this folder's now");
+        assert_eq!(kept.phase, Phase::Ended);
+        assert!(holder.runs(), "a process of this boot is not the record's");
+    }
+
+    /// 2026-11-06: closing the finished panes of a restore wrote them newer
+    /// ends, so the cap on ended records dropped the interrupted ones the
+    /// same restore was about to start again. The finished go first.
+    #[test]
+    fn the_ended_records_past_the_cap_are_the_finished_ones_before_any_interrupted() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let write = |pane: &str, reason: EndReason, at: u64| {
+            let mut ended = reserved(&panes, None, Phase::Ended);
+            ended.pane = pane.to_owned();
+            let mut end = End::new(reason, "test");
+            end.at_unix_ms = at;
+            ended.end = Some(end);
+            record::write(&layout::pane_record(&panes.state_dir, pane), &ended).unwrap();
+        };
+        let interrupted: Vec<String> = (0..10).map(|n| format!("i{n}")).collect();
+        for (n, pane) in interrupted.iter().enumerate() {
+            write(pane, EndReason::MachineRestarted, 1_000 + n as u64);
+        }
+        for n in 0..ENDED_KEPT {
+            write(&format!("f{n}"), EndReason::Terminated, 2_000 + n as u64);
+        }
+
+        let scan = panes.scan().unwrap();
+        assert_eq!(panes.count_live_for(&owner, &scan), 0);
+        for pane in &interrupted {
+            assert!(panes.record(pane).unwrap().is_some(), "{pane} was dropped");
+        }
+        let finished = (0..ENDED_KEPT)
+            .filter(|n| panes.record(&format!("f{n}")).unwrap().is_some())
+            .count();
+        assert_eq!(finished, ENDED_KEPT - interrupted.len());
+        assert!(
+            panes.record("f0").unwrap().is_none(),
+            "the oldest finished goes first"
+        );
     }
 
     #[test]
