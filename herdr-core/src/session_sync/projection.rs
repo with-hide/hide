@@ -103,6 +103,11 @@ pub(crate) struct ProjectionState {
     pub(crate) panes: Vec<ProjectedPane>,
     pub(crate) layouts: Vec<SessionLayoutPayload>,
     pub(crate) agents: Vec<ProjectedAgent>,
+    /// The agents a restore left resting in their panes rather than start
+    /// again, each until the core keeps it as a sleeping agent
+    /// (`Runtime::adopt_resting`) and says so (`Engine::rested`). None is
+    /// running, so none is among `agents`.
+    pub(crate) resting: Vec<ProjectedAgent>,
     /// The next moment an agent start this read has pending (`launch_pending`)
     /// can end with nothing the engine reports changing: its settle passing
     /// while its screen already rests, or its deadline. The coordinator that
@@ -113,14 +118,19 @@ pub(crate) struct ProjectionState {
 }
 
 impl ProjectionState {
-    pub(crate) fn project(&self) -> SessionSnapshotPayload {
+    /// The agents a restore left resting, as the session's own agents
+    /// project, so the core reads each the way it reads a listed one.
+    pub(crate) fn resting_payloads(&self) -> Vec<SessionAgentPayload> {
+        self.agent_payloads(&self.resting)
+    }
+
+    fn agent_payloads(&self, agents: &[ProjectedAgent]) -> Vec<SessionAgentPayload> {
         let workspace_labels = self
             .workspaces
             .iter()
             .map(|workspace| (workspace.workspace_id.as_str(), workspace.label.as_str()))
             .collect::<BTreeMap<_, _>>();
-        let agents = self
-            .agents
+        agents
             .iter()
             .map(|agent| {
                 let workspace_label = workspace_labels
@@ -161,7 +171,11 @@ impl ProjectionState {
                     notification_finalized: false,
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    pub(crate) fn project(&self) -> SessionSnapshotPayload {
+        let agents = self.agent_payloads(&self.agents);
         let tabs = self
             .tabs
             .iter()

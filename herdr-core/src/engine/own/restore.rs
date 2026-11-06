@@ -733,6 +733,7 @@ impl OwnEngine<'static> {
     /// once its shell is ready; one that cannot be typed leaves its pane a
     /// shell and logs why. A cut resume is owed its letter from before its
     /// line is typed, so the agent's first hook report never comes first.
+    /// One that was resting is not typed ([`Self::rests`]).
     pub(super) fn resume_agents(engine: &std::sync::Weak<super::Shared>, resumes: &[Resume]) {
         let mut shell = None;
         for resume in resumes {
@@ -746,6 +747,9 @@ impl OwnEngine<'static> {
             };
             if engine.check().is_err() {
                 return;
+            }
+            if engine.rests(resume) {
+                continue;
             }
             // A restarted pane runs the shell a pane with no program runs: it
             // marks its first prompt when that is the integration's, and the
@@ -816,6 +820,53 @@ impl OwnEngine<'static> {
                 }
             }
         }
+    }
+
+    /// Leaves the agent of `resume` resting in its pane when its turn was
+    /// not cut off, and answers whether it did: started again, every agent
+    /// of a machine that was running dozens would load it at once, while
+    /// one that rested is waited on by no one. The core keeps it as a
+    /// sleeping agent the operator's visit wakes (`Topology::rest`). Only
+    /// this machine's hook files say a turn was cut (`mark_cut`), so a
+    /// device's agents, a given-back conversation with no pane yet, and one
+    /// with no session to wake into are started again as before.
+    fn rests(&self, resume: &Resume) -> bool {
+        let local = self
+            .shared
+            .place
+            .as_ref()
+            .is_some_and(|place| place.hooks_home.is_some());
+        if !local || resume.cut || resume.new_tab.is_some() || resume.session.is_none() {
+            return false;
+        }
+        // Only an agent that sleeps in its pane can wait there; one whose
+        // sleep closes its pane, or that cannot sleep, starts again.
+        let catalog = self.shared.definitions.get();
+        let kind = agents::definition(&catalog, &resume.kind)
+            .map_or_else(|| resume.kind.clone(), agents::kind_name);
+        let sleeps_in_pane = hide_agent_adapter::adapter(&kind)
+            .and_then(|adapter| adapter.sleep)
+            .is_some_and(|dialect| !dialect.closes_pane_when_sleeping());
+        if !sleeps_in_pane {
+            return false;
+        }
+        let agent = PaneAgent {
+            kind: resume.kind.clone(),
+            name: resume.name.clone(),
+            session: resume.session.clone(),
+            ..PaneAgent::default()
+        };
+        if !self.topology().rest(&resume.pane, agent) {
+            return false;
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "own_engine",
+            "kind": "agent.resume_rested",
+            "pane_id": resume.pane,
+            "agent": resume.kind,
+        }));
+        self.changed();
+        true
     }
 
     /// A given-back conversation whose tab could not open (`why`) waits

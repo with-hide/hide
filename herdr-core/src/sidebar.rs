@@ -726,7 +726,7 @@ pub(crate) fn provider_name(kind: Option<&str>) -> String {
     }
 }
 
-fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, String> {
+pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, String> {
     let pane_id = non_empty(agent.pane_id.as_deref().or(agent.id.as_deref()))
         .map(str::to_owned)
         .ok_or_else(|| "session agent is missing a pane id".to_owned())?;

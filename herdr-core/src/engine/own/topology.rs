@@ -121,6 +121,12 @@ pub(super) struct Pane {
     pub(super) env: BTreeMap<String, String>,
     /// The agent the pane runs and its session, saved for a restore.
     pub(super) agent: Option<PaneAgent>,
+    /// The agent a restore found resting in this pane and did not start
+    /// again: the pane is a shell, and the core keeps the agent as a
+    /// sleeping one that a visit wakes. Projected (`ProjectionState::resting`)
+    /// until the core says it took it (`Engine::rested`); in memory only,
+    /// since the core's sleep record is what keeps it from then on.
+    pub(super) resting: Option<PaneAgent>,
     /// The latest hook report that arrived before foreground detection.
     /// Never saved; a pane owns at most one and drops it when it ends.
     pending_session: Option<(String, String)>,
@@ -1085,6 +1091,7 @@ impl Topology {
             panes: Vec::new(),
             layouts: Vec::new(),
             agents: Vec::new(),
+            resting: Vec::new(),
             settles_at: self.next_start_change(now),
         };
         for workspace in &self.workspaces {
@@ -1152,6 +1159,21 @@ impl Topology {
                             catalog,
                             now,
                         ));
+                    } else if let Some(agent) =
+                        pane.resting.as_ref().filter(|_| pane.agent.is_none())
+                    {
+                        state.resting.push(ProjectedAgent {
+                            agent_status: Some(Status::Idle.as_str().to_owned()),
+                            ..projected_agent(
+                                &workspace.id,
+                                &tab.id,
+                                &pane_id,
+                                pane,
+                                agent,
+                                catalog,
+                                now,
+                            )
+                        });
                     }
                 }
                 state.layouts.push(tab.layout(&workspace.id)?);
@@ -1762,6 +1784,27 @@ impl Topology {
         })
     }
 
+    /// Keeps `agent` as the one resting in `pane`, a shell with no agent;
+    /// answers whether the pane is there to keep it.
+    pub(super) fn rest(&mut self, pane: &str, agent: PaneAgent) -> bool {
+        match self.pane_mut(pane) {
+            Ok(held) if held.agent.is_none() => {
+                held.resting = Some(agent);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Forgets the resting agents of `panes`, which the core now keeps.
+    pub(super) fn rested(&mut self, panes: &[String]) {
+        for pane in panes {
+            if let Ok(held) = self.pane_mut(pane) {
+                held.resting = None;
+            }
+        }
+    }
+
     /// Reserves the metadata of a start while its input is being delivered.
     pub(super) fn start_agent(
         &mut self,
@@ -1776,6 +1819,9 @@ impl Topology {
                 message: format!("pane {pane} is already starting an agent"),
             });
         }
+        // Whatever starts in the pane now is its agent: one the restore left
+        // resting there is no longer the pane's to hand to the core.
+        held.resting = None;
         let claim = Arc::new(());
         agent.live.start_claim = Some(Arc::clone(&claim));
         let previous = AgentStart {

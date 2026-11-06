@@ -1371,12 +1371,30 @@ mod tests {
         };
         let unsettled = || Judgment::Unsettled("the records' lock was held for 5 s".into());
         let mut judged = BTreeMap::new();
-        let first = BTreeMap::from([("p1".to_owned(), unsettled()), ("p2".to_owned(), ended("p2"))]);
-        assert_eq!(take_round(&mut judged, first), 1, "the unwritten pane is left");
+        let first = BTreeMap::from([
+            ("p1".to_owned(), unsettled()),
+            ("p2".to_owned(), ended("p2")),
+        ]);
+        assert_eq!(
+            take_round(&mut judged, first),
+            1,
+            "the unwritten pane is left"
+        );
 
-        let second = BTreeMap::from([("p1".to_owned(), ended("p1")), ("p2".to_owned(), unsettled())]);
-        assert_eq!(take_round(&mut judged, second), 0, "the next round wrote it");
-        assert!(matches!(judged["p1"], Judgment::Ended(_)), "{:?}", judged["p1"]);
+        let second = BTreeMap::from([
+            ("p1".to_owned(), ended("p1")),
+            ("p2".to_owned(), unsettled()),
+        ]);
+        assert_eq!(
+            take_round(&mut judged, second),
+            0,
+            "the next round wrote it"
+        );
+        assert!(
+            matches!(judged["p1"], Judgment::Ended(_)),
+            "{:?}",
+            judged["p1"]
+        );
         assert!(
             matches!(judged["p2"], Judgment::Ended(_)),
             "a pane already settled keeps what it was found"

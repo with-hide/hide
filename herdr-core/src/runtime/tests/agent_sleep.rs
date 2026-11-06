@@ -120,6 +120,47 @@ fn a_sleep_whose_agent_left_the_session_before_its_end_landed_draws_its_row_on_t
     assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
 }
 
+// 2026-11-06: a reboot started every agent again, forty-two at once, and
+// the machine crawled. A restore leaves an agent that had finished its turn
+// resting in its pane, a shell, and the core keeps it as a sleeping agent
+// from the row it would have had: nothing runs to be ended, a visit wakes it
+// into its conversation, and the engine is told it was taken, once.
+#[test]
+fn an_agent_a_restore_left_resting_is_kept_asleep_in_its_conversation() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(None)));
+    let resting = session(Some(0)).agents;
+    assert_eq!(
+        runtime.adopt_resting(resting.clone(), None),
+        vec![SLEEPER.to_owned()]
+    );
+    runtime.ingest_session(Ok(session(None)));
+    assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
+    assert_eq!(pane(&runtime)["sleep"]["state"], "sleeping");
+    let record = runtime.snapshot().ui_state.agent_sleep.records[SLEEPER].clone();
+    assert_eq!(record.kind, "claude");
+    assert_eq!(
+        record.session_id.as_deref(),
+        Some("11111111-2222-3333-4444-555555555555"),
+        "a wake resumes its conversation"
+    );
+    assert_eq!(
+        record.state_change_seq, None,
+        "any agent listed there is new"
+    );
+
+    // Named again before the engine heard it was taken: the record stays as
+    // it is, and the pane is taken again.
+    assert_eq!(
+        runtime.adopt_resting(resting, None),
+        vec![SLEEPER.to_owned()]
+    );
+    assert_eq!(
+        runtime.snapshot().ui_state.agent_sleep.records[SLEEPER],
+        record
+    );
+}
+
 // The engine can still list the agent when its sleep ends, and its
 // event stream brings the session that no longer does: the end asks for no
 // read of its own there.

@@ -180,6 +180,11 @@ pub(crate) trait Engine: Send + Sync {
         Ok(false)
     }
 
+    /// Forgets the agents a restore left resting in `panes`
+    /// (`ProjectionState::resting`), which the core now keeps as sleeping
+    /// agents. An engine that leaves none resting has none to forget.
+    fn rested(&self, _panes: &[String]) {}
+
     // The session as a whole.
 
     /// Every workspace, tab, pane, layout and agent, with the focus.
