@@ -80,6 +80,9 @@ pub(crate) struct ProjectedAgent {
     /// (`agent.start`). It says, with no state reported yet, that the agent
     /// is starting (`agent_state::agent_starting`); it never reaches the shell.
     pub(crate) launch_pending: bool,
+    /// The engine typed the start and its program has not shown yet
+    /// (`SessionAgentPayload::start_unshown`).
+    pub(crate) start_unshown: bool,
     pub(crate) tokens: BTreeMap<String, Value>,
 }
 
@@ -162,6 +165,7 @@ impl ProjectionState {
                     state_change_seq: Some(agent.state_change_seq),
                     completion_seq: agent.completion_seq,
                     launch_pending: agent.launch_pending,
+                    start_unshown: agent.start_unshown,
                     tokens: agent.tokens.clone(),
                     // The coordinator's label worker lays these on.
                     label: None,

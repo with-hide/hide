@@ -1713,6 +1713,7 @@ fn projected_agent(
         state_change_seq: agent.live.seq,
         completion_seq: agent.live.completion,
         launch_pending: agent.launch_pending(now),
+        start_unshown: agent.starting(now),
         tokens: pane.tokens.clone(),
     }
 }

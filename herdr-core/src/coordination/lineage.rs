@@ -757,6 +757,7 @@ mod tests {
             state_change_seq: 1,
             completion_seq: None,
             launch_pending: false,
+            start_unshown: false,
             tokens,
         }
     }
