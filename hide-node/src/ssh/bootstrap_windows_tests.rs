@@ -286,6 +286,82 @@ fn words(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
 }
 
+/// The wrapper in Windows PowerShell with its own module analysis cache at
+/// `cache`, handed `script` (a byte count line and the text) and then the end
+/// of its input, so the script ends by itself and PowerShell writes any cache
+/// it built as it exits.
+fn wrapper_reads(script: &str, cache: &Path) -> hide_platform::process::CapturedOutput {
+    use std::io::Write;
+    let mut command =
+        std::process::Command::new(system32(r"WindowsPowerShell\v1.0\powershell.exe"));
+    command
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(powershell_wrapper())
+        .env("PSModuleAnalysisCachePath", cache)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = hide_platform::process::OwnedChild::spawn(&mut command).unwrap();
+    let started = Instant::now();
+    let mut input = child.take_stdin().unwrap();
+    input.write_all(script.as_bytes()).unwrap();
+    drop(input);
+    let pid = child.id();
+    child
+        .capture_until(soon(), 64 * 1024)
+        .unwrap_or_else(|error| {
+            panic!(
+                "the wrapper did not end: {error:?}; pid {pid} used {:?} of processor in {:?}",
+                hide_platform::process::cpu_time(pid),
+                started.elapsed()
+            )
+        })
+}
+
+/// The whole start script runs under the wrapper with a module analysis
+/// cache PowerShell has never filled, and PowerShell writes none: it found
+/// every cmdlet the wrapper and the script use in the one module the wrapper
+/// imports and searched the module path for none, the search that took a
+/// fresh runner 12 to 38 s (with-hide/hide-private#580).
+#[test]
+fn the_start_script_runs_under_an_empty_module_cache_without_building_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("ModuleAnalysisCache");
+    let output = wrapper_reads(&powershell_script(), &cache);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("HIDE1\tscript\tpowershell") && stdout.contains("HIDE1\tprobe\t"),
+        "{stdout}\n{stderr}"
+    );
+    assert!(
+        !cache.exists(),
+        "PowerShell searched the module path and built a module analysis cache"
+    );
+}
+
+/// A cmdlet outside the module the wrapper imports fails at once by name and
+/// builds no module analysis cache: with auto-loading on, PowerShell would
+/// search the whole module path for it instead, silently.
+#[test]
+fn a_cmdlet_outside_the_wrappers_import_fails_by_name_and_starts_no_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("ModuleAnalysisCache");
+    let text = "$null = Get-Item -LiteralPath $env:SystemRoot";
+    let output = wrapper_reads(&format!("{}\n{text}", text.len()), &cache);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Get-Item") && stderr.contains("is not recognized"),
+        "{:?}: {stderr}",
+        output.status
+    );
+    assert!(
+        !cache.exists(),
+        "PowerShell searched the module path and built a module analysis cache"
+    );
+}
+
 /// Every login shell a Windows sshd may run reaches the PowerShell script
 /// with one connection: `cmd.exe` through the `&` its single quotes do not
 /// hide, both PowerShells by the statement after the `exec` they do not
