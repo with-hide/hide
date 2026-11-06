@@ -26,6 +26,7 @@ export function MissionsScreen() {
   const { t } = useInterfaceTranslation();
   const entries = useMissionEntries();
   const failed = usePhone((s) => s.missionsFailed);
+  const omitted = usePhone((s) => s.missionsOmitted);
   const connected = usePhone((s) => s.connected);
   const unreachable = usePhone((s) => s.unreachable);
   // The last record stays, dimmed, under the unreachable line (B45).
@@ -54,6 +55,9 @@ export function MissionsScreen() {
         ) : (
           groupMissions(entries ?? []).map(({ group, entries: rows }) => <Group key={group} group={group} entries={rows} />)
         )}
+        {!failed && omitted > 0 ? (
+          <p className="px-xl py-md text-body text-muted-foreground" data-phone-missions-omitted={omitted}>{t("mobile.missions.omitted", { count: omitted })}</p>
+        ) : null}
       </div>
       <TabBar active="missions" />
     </main>

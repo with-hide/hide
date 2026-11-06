@@ -17,8 +17,8 @@ use super::Runtime;
 use crate::delivery::Actor;
 use crate::mission_events::{AnswerSource, EventKind, History, MissionEvent};
 use crate::missions::{
-    ANSWER_LIMIT, Answer, AnswerFailure, Mission, MissionEnd, MissionNode, MissionStatus, Question,
-    WakeEvent,
+    Answer, AnswerFailure, Mission, MissionEnd, MissionNode, MissionStatus, Question, WakeEvent,
+    answer_text,
 };
 use crate::model::DetailItem;
 
@@ -430,16 +430,7 @@ impl Runtime {
                 .and_then(|question| question.options.get(usize::from(choice).checked_sub(1)?))
                 .cloned()
                 .ok_or("mission_answer_invalid")?,
-            (None, Some(text)) => {
-                let text = text.trim().to_owned();
-                if text.is_empty()
-                    || text.chars().count() > ANSWER_LIMIT
-                    || text.chars().any(char::is_control)
-                {
-                    return Err("mission_answer_invalid".into());
-                }
-                text
-            }
+            (None, Some(text)) => answer_text(&text).ok_or("mission_answer_invalid")?,
             _ => return Err("mission_answer_invalid".into()),
         };
         let node = mission
