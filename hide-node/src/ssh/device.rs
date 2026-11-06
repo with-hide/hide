@@ -437,6 +437,7 @@ impl DialedTransport for SshDevice {
                 &consent.helper_root,
                 home.as_deref().unwrap_or(&facts.home),
                 &payload,
+                facts.unpacks,
             )?;
             stage("start");
             bootstrap::start(&mut *pipe, &installed.helper_relative, home.as_deref())?;

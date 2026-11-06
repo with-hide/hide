@@ -357,7 +357,11 @@ impl SshProgram {
         cancel: &Cancel,
     ) -> Result<hide_platform::process::Finished, SshFailure> {
         let started = Instant::now();
-        match run_to_end(command, until.saturating_duration_since(started), cancel.flag()) {
+        match run_to_end(
+            command,
+            until.saturating_duration_since(started),
+            cancel.flag(),
+        ) {
             Ok(finished) if finished.stdout.len() + finished.stderr.len() <= QUERY_OUTPUT_LIMIT => {
                 Ok(finished)
             }
@@ -956,11 +960,17 @@ mod tests {
         });
         let hang_guard = Instant::now() + Duration::from_secs(60);
         while !started.exists() {
-            assert!(Instant::now() < hang_guard, "the stand-in ssh never started");
+            assert!(
+                Instant::now() < hang_guard,
+                "the stand-in ssh never started"
+            );
             #[allow(clippy::disallowed_methods)] // a bounded poll for the stand-in's start
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(!asked.is_finished(), "the question gave up before the attempt did");
+        assert!(
+            !asked.is_finished(),
+            "the question gave up before the attempt did"
+        );
         cancel.cancel();
         let failure = asked.join().unwrap().unwrap_err();
         assert_eq!(failure.problem, SshProblem::Unclassified);

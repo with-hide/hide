@@ -383,7 +383,7 @@ impl DialedTransport for WslDevice {
             let payload = self.packages.payload_for(&facts.os, &facts.arch)?;
             stage("install");
             let installed =
-                bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
+                bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload, facts.unpacks)?;
             stage("start");
             bootstrap::start(&mut *pipe, &installed.helper_relative, None)?;
             Ok((installed, identity))

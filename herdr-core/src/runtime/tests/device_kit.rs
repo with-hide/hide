@@ -225,7 +225,7 @@ fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
         runtime.ingest_host_established(
             DEVICE,
             generation,
-            Ok(hosts::HostReady::Dialed(connected)),
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
         );
     }
     let state = kit(&shared);
@@ -885,7 +885,11 @@ fn a_contract_3_consent_is_carried_and_bound_to_the_machine_that_answers() {
     let mut connected = established_with_terminals();
     connected.identity.machine_id = Some("4c4c4544-0042".to_owned());
     connected.identity.host_key_sha256 = String::new();
-    runtime.ingest_host_established(DEVICE, generation, Ok(hosts::HostReady::Dialed(connected)));
+    runtime.ingest_host_established(
+        DEVICE,
+        generation,
+        Ok(hosts::HostReady::Dialed(Box::new(connected))),
+    );
     let bound = runtime
         .snapshot
         .ui_state
@@ -2083,7 +2087,7 @@ fn a_devices_terminals_ride_its_link_and_end_with_it() {
     runtime.ingest_host_established(
         DEVICE,
         generation,
-        Ok(hosts::HostReady::Dialed(established)),
+        Ok(hosts::HostReady::Dialed(Box::new(established))),
     );
     assert_eq!(terminals.devices(), ["install:studio"]);
 
@@ -2123,7 +2127,7 @@ fn a_devices_windows_drives_are_what_its_helper_reports() {
         runtime.ingest_host_established(
             DEVICE,
             generation,
-            Ok(hosts::HostReady::Dialed(connected)),
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
         );
         assert_eq!(
             runtime.host_snapshot(DEVICE).windows_drives.as_deref(),
@@ -2254,7 +2258,9 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     runtime.ingest_host_established(
         DEVICE,
         first,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session));
     assert_eq!(attaches(&terminals), 1, "the shown pane attached");
@@ -2274,7 +2280,9 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     runtime.ingest_host_established(
         DEVICE,
         second,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     assert_eq!(
         terminals.devices(),
@@ -2396,7 +2404,9 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
     runtime.ingest_host_established(
         DEVICE,
         first,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
     runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
@@ -2489,7 +2499,7 @@ fn a_helper_link_that_closed_during_establish_is_retried_not_stored_ready() {
     runtime.ingest_host_established(
         DEVICE,
         generation,
-        Ok(hosts::HostReady::Dialed(established(host, None))),
+        Ok(hosts::HostReady::Dialed(Box::new(established(host, None)))),
     );
     assert!(
         matches!(
@@ -2563,7 +2573,9 @@ fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
     runtime.ingest_host_established(
         DEVICE,
         generation,
-        Ok(hosts::HostReady::Dialed(established_with_terminals())),
+        Ok(hosts::HostReady::Dialed(Box::new(
+            established_with_terminals(),
+        ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
     report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
@@ -2631,7 +2643,7 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
             runtime.ingest_host_established(
                 DEVICE,
                 generation,
-                Ok(hosts::HostReady::Dialed(connected)),
+                Ok(hosts::HostReady::Dialed(Box::new(connected))),
             );
         }
         runtime.refresh_device_snapshots();
@@ -2705,7 +2717,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
         runtime.ingest_host_established(
             DEVICE,
             generation,
-            Ok(hosts::HostReady::Dialed(connected)),
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
         );
     }
     settle(&shared);

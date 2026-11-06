@@ -291,7 +291,14 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
         let mut pipe = device.connect();
         let facts = probe(&mut pipe, soon()).unwrap();
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-        install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap()
+        install(
+            &mut pipe,
+            "~/.hide/helper",
+            &facts.home,
+            &payload,
+            facts.unpacks,
+        )
+        .unwrap()
     };
 
     let first = install_once();
@@ -323,6 +330,79 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
         std::fs::read(folder.join("hide.exe")).unwrap(),
         b"command build 1"
     );
+}
+
+/// with-hide/hide-private#582: a Windows device unpacks each file the node
+/// packed with .NET's gzip, and it lands as the same bytes after far fewer
+/// crossed the link.
+#[test]
+fn a_packed_install_crosses_the_link_smaller_and_lands_whole() {
+    let device = Device::new();
+    let builds = device.dir.path().join("builds");
+    std::fs::create_dir_all(&builds).unwrap();
+    let helper = "helper build 1 ".repeat(64 * 1024);
+    for (name, bytes) in [
+        ("hided", helper.as_str()),
+        ("hide", "command build 1"),
+        ("hide-agent-hooks", "hooks build 1"),
+    ] {
+        std::fs::write(builds.join(format!("{name}-windows-x86_64")), bytes).unwrap();
+    }
+    let packages = HelperPackages::new(Some(builds), UNPUBLISHED);
+    let mut pipe = device.connect();
+    let facts = probe(&mut pipe, soon()).unwrap();
+    assert!(facts.unpacks, "every Windows device unpacks gzip");
+    let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+    let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload, true).unwrap();
+    assert_eq!((installed.upload.sent, installed.upload.reused), (3, 0));
+    let landed = hide_platform::path::from_wire(&installed.helper_path).unwrap();
+    assert_eq!(std::fs::read(&landed).unwrap(), helper.as_bytes());
+    assert!(hide_platform::fs::private::is_private(&landed).unwrap());
+    let upload = &installed.upload;
+    assert!(upload.wire * 10 < upload.bytes, "{upload:?}");
+    let folder = landed.parent().unwrap();
+    let left: Vec<_> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().starts_with(".upload-"))
+        .collect();
+    assert!(left.is_empty(), "the packed copy stayed behind: {left:?}");
+}
+
+/// A packed file that does not unpack fails as one that did not arrive
+/// whole, leaves neither copy behind, and the script read all of it: the
+/// next step answers.
+#[test]
+fn a_packed_file_that_does_not_unpack_fails_and_the_link_stays_in_step() {
+    let device = Device::new();
+    let mut pipe = device.connect();
+    let facts = probe(&mut pipe, soon()).unwrap();
+    let root = format!("{}/.hide/helper", facts.home);
+    let [kind, _] = &step(&mut pipe, &format!("root\t{root}\n"), soon()).unwrap()[..] else {
+        panic!("the root step did not answer");
+    };
+    assert_eq!(kind, "root");
+    let garbage = vec![b'x'; 4 * 1024 * 1024];
+    pipe.send(
+        format!("zput\tv1/hided.exe\t00\t700\t{}\n", garbage.len()).as_bytes(),
+        soon(),
+    )
+    .unwrap();
+    pipe.send(&garbage, soon()).unwrap();
+    assert_eq!(
+        read_step(&mut pipe, soon()).unwrap(),
+        words(&["fail", "v1/hided.exe did not arrive whole"])
+    );
+    let folder = device.home().join(r".hide\helper\v1");
+    assert_eq!(
+        std::fs::read_dir(&folder).unwrap().count(),
+        0,
+        "the broken file left something behind"
+    );
+    let [kind, _] = &step(&mut pipe, &format!("root\t{root}\n"), soon()).unwrap()[..] else {
+        panic!("the step after the broken file did not answer");
+    };
+    assert_eq!(kind, "root");
 }
 
 /// B23: a connection that ends part way through a file leaves the final
@@ -393,7 +473,8 @@ fn an_install_under_a_folder_others_can_change_or_a_link_is_refused() {
         let mut pipe = device.connect();
         let facts = probe(&mut pipe, soon()).unwrap();
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-        let Err(EstablishError::Install(reason)) = install(&mut pipe, root, &facts.home, &payload)
+        let Err(EstablishError::Install(reason)) =
+            install(&mut pipe, root, &facts.home, &payload, facts.unpacks)
         else {
             panic!("an install under {root} was accepted");
         };
@@ -416,7 +497,13 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
         let mut pipe = device.connect();
         let facts = probe(&mut pipe, soon()).unwrap();
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-        install(&mut pipe, "~/.hide/helper", &facts.home, &payload)
+        install(
+            &mut pipe,
+            "~/.hide/helper",
+            &facts.home,
+            &payload,
+            facts.unpacks,
+        )
     };
     let first = install_once().unwrap();
     let (version, _) = first.helper_relative.split_once('/').unwrap();

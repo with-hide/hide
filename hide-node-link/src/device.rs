@@ -1023,6 +1023,12 @@ pub struct Upload {
     pub sent: usize,
     pub reused: usize,
     pub missing: Vec<String>,
+    /// The sent files' own size, and what crossed the link for them: less
+    /// when the device unpacks what the node packed.
+    pub bytes: u64,
+    pub wire: u64,
+    /// The time the node spent packing them.
+    pub pack_ms: u64,
 }
 
 /// Where an alias leads, as `ssh -G` resolved it.

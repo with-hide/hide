@@ -640,7 +640,13 @@ impl Session {
         let payload = packages
             .payload(&self.facts.os, &self.facts.arch)
             .map_err(|error| SessionError::Refused(error.to_string()))?;
-        let installed = bootstrap::install_build(&mut self.pipe, root, &self.facts.home, payload);
+        let installed = bootstrap::install_build(
+            &mut self.pipe,
+            root,
+            &self.facts.home,
+            payload,
+            self.facts.unpacks,
+        );
         // The install reads its own failure into words; whether the
         // connection is still in step is not among them.
         if installed.is_err() {

@@ -541,7 +541,18 @@ mod unix {
         std::fs::write(local.join(".ssh/config"), "").unwrap();
         let packages = base.join("p");
         std::fs::create_dir(&packages).unwrap();
-        std::fs::write(packages.join("hided"), vec![7u8; 8 * 1024 * 1024]).unwrap();
+        // Bytes that do not pack, so the link still carries more than the
+        // stand-in device reads before it stops.
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let helper: Vec<u8> = (0..8 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        std::fs::write(packages.join("hided"), helper).unwrap();
         // Every device gets the pane holder beside the helper.
         std::fs::write(packages.join("hide-holder"), b"holder").unwrap();
         let ssh = base.join("ssh");
