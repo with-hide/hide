@@ -31,6 +31,8 @@ The runtime admits one token per outbound helper establish or bootstrap Retry, a
 Only the first Apply claims a token; status polls, snapshots, duplicate completions and superseded generations cannot recapture it, while reconnects and Retry admit a fresh token.
 A Retry after a failed start reconnects the device, so the reconnect's token is the one that Retry settles; a Retry of a refused kit admits its own token for the Apply.
 Cancellation, consent withdrawal and removal discard pending tokens; at most 128 attempts are retained, with a content-free diagnostic at the cap.
+A settled outcome is sent only when it differs from the outcome last sent for that device in this daemon's life, so a device that stays unreachable sends one failure however often its scheduled retry runs, and a reconnect that is ready again after the device slept sends nothing.
+Removing the device forgets that last outcome; at most 128 devices' last outcomes are kept, and a device beyond the cap is sent every time, with a content-free diagnostic.
 Capture uses the existing bounded Sink under the short runtime admission, with no network, disk, subprocess or new worker on that path; opt-out drops the outcome without replay.
 No prompt, response, conversation, code, path, file name, session id, mission title or plan, pull request, provider, model, project name, token count, account identity, device or phone name or local usage ledger enters that transport.
 The private `product-analytics-id` file under the core state directory holds the random UUID; it derives from neither the account nor hardware, and remains stable across restarts and moves with the core's state.
