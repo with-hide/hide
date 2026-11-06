@@ -1,6 +1,6 @@
 // What a spec reads at the moment one of its waits gives up, kept with the failure.
 // A wait that times out says only what it saw last; for a flake that does not reproduce
-// the other side of the race (what Herdr holds, what the page drew) is gone by the time
+// the other side of the race (what the engine holds, what the page drew) is gone by the time
 // anyone looks, so the spec records both when it throws. The step's own error is rethrown
 // unchanged: this explains a failure and never absorbs one.
 import { test, type Page } from "@playwright/test";

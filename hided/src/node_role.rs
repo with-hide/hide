@@ -3,7 +3,7 @@
 //! names, and this daemon keeps one link to it. It dials the core's machine
 //! over SSH, runs the attach role there, trades the handshake, and answers
 //! the core's calls on that channel exactly as a device the core dialed
-//! answers them, with its own Herdr reached through the link.
+//! answers them.
 //!
 //! While the core cannot be reached the node waits and tries again, two
 //! seconds after the first failure and doubling to a minute; a link that

@@ -1,5 +1,5 @@
 //! A device's projects are grouped from its helper's facts (PRD S5.5 B1-B4):
-//! one repository is one project whatever Herdr workspaces sit in it, a
+//! one repository is one project whatever engine workspaces sit in it, a
 //! workspace whose tabs sit in two repositories is split between them, the
 //! same place on two devices is two projects, and a directory the helper has
 //! not answered for is shown unconfirmed rather than guessed. A checkout is
@@ -57,7 +57,7 @@ pub(super) fn tree() -> Tree {
     }
 }
 
-/// One Herdr workspace as the session projection reports it: one row, one
+/// One engine workspace as the session projection reports it: one row, one
 /// checkout, a tab per (id, directory).
 pub(super) fn herdr_workspace(
     target: &str,
@@ -294,7 +294,7 @@ fn with_refused(mut facts: DeviceFacts, refused: &[&str]) -> DeviceFacts {
     facts
 }
 
-/// A Herdr workspace attached to a linked worktree of `repository` at
+/// An engine workspace attached to a linked worktree of `repository` at
 /// `path`, as the session projection reports it.
 fn worktree_workspace(wid: &str, path: &str, repository: &str) -> WorkspaceSnapshot {
     let mut workspace = herdr_workspace(TARGET, wid, path, &[(wid, path)]);
@@ -732,7 +732,7 @@ fn a_reconnected_device_keeps_its_panes_in_their_checkouts_until_its_helper_answ
 }
 
 /// Retry connects to the same device again, so its panes keep the checkouts
-/// its helper confirmed: the new connection's Herdr session, which arrives
+/// its helper confirmed: the new connection's engine session, which arrives
 /// before its helper does, is grouped as before rather than by folder, and a
 /// pane's command bound to its checkout is not refused as moved.
 #[test]
@@ -793,14 +793,14 @@ fn retrying_a_device_keeps_its_panes_in_their_checkouts() {
     );
 
     // The link dropped and the operator retries; the new connection's
-    // Herdr session arrives before its helper is up.
+    // engine session arrives before its helper is up.
     runtime.snapshot.status.remote[0].state = "unavailable".to_owned();
     assert!(runtime.retry_remote_device(TARGET));
     runtime.ingest_remote_session(TARGET, Ok(raw));
     assert_eq!(context(&runtime), Ok(bound));
 }
 
-/// A device registered and connected with the catalog's helper, its Herdr
+/// A device registered and connected with the catalog's helper, its engine
 /// session showing `workspaces`; everything runs on the calling thread.
 fn catalog_device_runtime(workspaces: Vec<WorkspaceSnapshot>) -> (Runtime, tempfile::TempDir) {
     let mut runtime = runtime();
@@ -861,7 +861,7 @@ fn listed_branch(runtime: &Runtime, path: &str) -> Option<String> {
         .clone()
 }
 
-/// A Retry whose helper is up before the device's Herdr session still reads
+/// A Retry whose helper is up before the device's engine session still reads
 /// every repository again once the session names them: a branch that moved
 /// while the device was away is shown as it is now.
 #[test]
@@ -1093,9 +1093,9 @@ pub(super) fn dispatch(runtime: &mut Runtime, kind: &str, payload: serde_json::V
 }
 
 /// B3, B23-B25: a project registered on a device is listed there with no
-/// Herdr workspace in it, is pinned and removed as a local one is, and a
+/// engine workspace in it, is pinned and removed as a local one is, and a
 /// registration of the same path on this machine never shows on the device
-/// nor leaves with it; a Herdr-only project on the device is not registered.
+/// nor leaves with it; an engine-only project on the device is not registered.
 #[test]
 fn a_device_registration_is_listed_without_panes_pinned_and_removed_on_that_device_only() {
     let t = tree();
@@ -1402,7 +1402,7 @@ fn a_new_project_folder_on_a_device_is_refused_before_the_helper() {
     assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
 }
 
-/// B23, B12: a new tab in a device project Herdr has no workspace in opens
+/// B23, B12: a new tab in a device project the engine has no workspace in opens
 /// its owner at the registered folder on that device; a project that is not
 /// registered there names nothing.
 #[test]
@@ -1509,7 +1509,7 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
     );
 }
 
-/// A device whose helper is ready before its Herdr's session arrives, so its
+/// A device whose helper is ready before its engine's session arrives, so its
 /// folders are confirmed by the helper's facts as they are named.
 fn registering_device(runtime: &mut Runtime, sessions: Vec<WorkspaceSnapshot>) {
     let mut row = runtime.snapshot.navigator.devices[0].clone();
@@ -1549,7 +1549,7 @@ fn register_on_device(runtime: &mut Runtime, root: &str) -> bool {
 }
 
 /// A project added on a device opens on one terminal there, as one added on
-/// this machine does: the registration itself asks the device's Herdr to open
+/// this machine does: the registration itself asks the device's engine to open
 /// the checkout's owner, with no second event from the shell. A folder whose
 /// checkout already has a tab there is left as it is.
 #[test]
@@ -1713,8 +1713,8 @@ fn device_strip(runtime: &Runtime, checkout_id: &str) -> Vec<String> {
 }
 
 /// B23: a device's strip is arranged as this machine's is. A file tab keeps
-/// the slot it was dropped in without asking Herdr; a Herdr tab moves on the
-/// device's own Herdr by the id that Herdr knows, and the strip follows only
+/// the slot it was dropped in without asking the engine; an engine tab moves on the
+/// device's own engine by the id that the engine knows, and the strip follows only
 /// when the device reports the new order. A device that is not connected
 /// takes no move.
 #[test]
@@ -1830,7 +1830,7 @@ fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_drop
 
 /// B26: removing a device removes Hide's record of it and nothing else. Its
 /// project registrations, expanded folders, file tabs and closed items go;
-/// this machine's stay; and the device's Herdr is not asked for anything.
+/// this machine's stay; and the device's engine is not asked for anything.
 #[test]
 fn removing_a_device_forgets_its_projects_tabs_and_folders_and_keeps_this_machines() {
     let mut runtime = runtime();
@@ -2057,7 +2057,7 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     assert!(panel(&runtime, &t.main));
 
     // Group-tabs B28: explicit navigation chooses the core checkout now,
-    // independently of the device Herdr focus that may arrive later.
+    // independently of the device engine focus that may arrive later.
     let resumed = |runtime: &mut Runtime| {
         runtime.sync_workspace_view();
         let view = runtime.snapshot.workspace_view.clone().expect("front");
@@ -2092,7 +2092,7 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     moved(&mut runtime, "w1");
     assert_eq!(resumed(&mut runtime), (t.main.clone(), true));
 
-    // A stale report from Herdr cannot take the explicitly chosen checkout.
+    // A stale report from the engine cannot take the explicitly chosen checkout.
     moved(&mut runtime, "w2");
     assert_eq!(resumed(&mut runtime), (t.main.clone(), true));
 
@@ -2224,7 +2224,7 @@ fn a_device_pane_carries_its_children_and_its_path_to_the_parent() {
 }
 
 /// A device's session is regrouped whenever its facts, worktrees or kit
-/// change, and the regrouped rows come from Herdr's raw session, which has no
+/// change, and the regrouped rows come from the engine's raw session, which has no
 /// lineage; the rows published after it keep the lineage a subtree close
 /// waits on (`close_descendant_pane_ids`).
 #[test]
@@ -2430,7 +2430,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
     assert!(children(&runtime).instrumented);
 }
 
-/// Records what a device's Herdr is asked, one connection per request.
+/// Records what a device's engine is asked, one connection per request.
 fn recording_device(runtime: &mut Runtime) -> Arc<Mutex<Vec<serde_json::Value>>> {
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
@@ -2459,7 +2459,7 @@ pub(super) fn next_request(
 }
 
 /// PRD checkout-workspace-binding B8, B9, D-13: the mini's shape, one folder
-/// held by the workspace Herdr binds to it (w5N) and by an unbound one
+/// held by the workspace the engine binds to it (w5N) and by an unbound one
 /// (w5T), is one checkout row holding both workspaces' tabs, whether or not
 /// the helper has answered for the folder. A new tab there goes to w5N,
 /// opening the row brings a tab forward without making anything, and a
@@ -2496,7 +2496,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
             "a row is never named after a Herdr workspace"
         );
     }
-    // The tab brought forward: Herdr's focused tab when it is in the
+    // The tab brought forward: the engine's focused tab when it is in the
     // checkout, else the owner's active tab.
     let grouped = device_catalog::group(TARGET, &raw(), &answered(&[&t.main]), None);
     let id = device_catalog::checkout_id(TARGET, &t.main);
@@ -2798,7 +2798,7 @@ pub(super) fn connected_status(target: &str) -> RemoteStatusSnapshot {
     }
 }
 
-/// A runtime with the mini connected, its Herdr not yet reported.
+/// A runtime with the mini connected, its engine not yet reported.
 fn connected_device_runtime() -> Runtime {
     let mut runtime = runtime();
     runtime
@@ -2809,7 +2809,7 @@ fn connected_device_runtime() -> Runtime {
     runtime
 }
 
-/// `target`'s Herdr as it reports one workspace with the tabs `tabs`, tab
+/// `target`'s engine as it reports one workspace with the tabs `tabs`, tab
 /// `t1` holding a second pane (`t1b`) for a zoom to hide, zoomed or not.
 fn device_report(target: &str, path: &str, tabs: &[&str], zoomed: bool) -> RemoteSessionSnapshot {
     let tabs = tabs.iter().map(|tab| (*tab, path)).collect::<Vec<_>>();
@@ -2907,7 +2907,7 @@ fn close_pane_t2() -> RemoteControlRequest {
     }
 }
 
-/// Zoom has nothing to hide on a tab's only pane: the device's Herdr answers
+/// Zoom has nothing to hide on a tab's only pane: the device's engine answers
 /// it unchanged (`single_pane`), so no session would confirm it, and the
 /// operation left waiting turned away every later split, zoom and close in
 /// the tab. Such a zoom is not sent, and the tab stays free.
@@ -3023,7 +3023,7 @@ fn a_device_close_whose_session_arrived_before_its_answer_settles_on_the_answer(
     assert!(!runtime.remote_operations.contains_key(&key));
 }
 
-/// A device's update says what its own Herdr has. Another device's pane being
+/// A device's update says what its own engine has. Another device's pane being
 /// absent from it proves nothing about that device's close.
 #[test]
 fn one_devices_update_does_not_settle_another_devices_operation() {
@@ -3161,7 +3161,7 @@ fn device_tabs_in(runtime: &Runtime, project: &str) -> Vec<String> {
         .collect()
 }
 
-/// The first tab of a worktree created on a device is in a Herdr workspace of
+/// The first tab of a worktree created on a device is in an engine workspace of
 /// its own whose pane reports the birth cwd. It belongs to the worktree the
 /// device's `worktree.create` answered with, as a local one does, rather than
 /// to the project the birth cwd names.

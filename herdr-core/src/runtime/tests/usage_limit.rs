@@ -104,7 +104,7 @@ fn a_row_carries_its_weekly_figure_and_whether_it_is_past_the_limit() {
     assert!(row(&runtime, "claude").past_limit, "86 is past 80");
 }
 
-/// Herdr and the usage rows name agy `agy`, Hide AI names it `antigravity`:
+/// The engine and the usage rows name agy `agy`, Hide AI names it `antigravity`:
 /// its row carries the figure agy's `/usage` gave, as Claude's does.
 #[test]
 fn an_agy_row_carries_the_weekly_figure_its_usage_row_holds() {

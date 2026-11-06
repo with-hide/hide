@@ -56,7 +56,7 @@ struct LockState {
 }
 
 impl LabelLocks {
-    /// Takes the lock of the Herdr server at `socket` for the core's worker
+    /// Takes the lock of the engine at `socket` for the core's worker
     /// `generator`, or answers which process holds it. Asked again by the
     /// same worker while held, it is held; by another worker of the same
     /// core, this process holds it.
@@ -181,7 +181,7 @@ fn unlock(file: File) {
 }
 
 /// The holder writes who it is into the lock, so a core standing by can say
-/// which process generates for its server: a stray daemon on the same Herdr
+/// which process generates for its server: a stray daemon on the same engine
 /// is otherwise invisible.
 fn record_holder(file: &File) {
     use std::io::{Seek, Write};

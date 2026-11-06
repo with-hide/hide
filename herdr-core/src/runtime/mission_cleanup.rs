@@ -46,7 +46,7 @@ pub(crate) struct MissionCleanup {
     /// folder).
     settled: HashSet<Target>,
     /// Targets kept for something that may pass (an agent or a program in
-    /// it) or refused (Herdr, the node, a machine away), with what was last
+    /// it) or refused (the engine, the node, a machine away), with what was last
     /// logged, so the next pass tries them again and logs only a change.
     waiting: HashMap<Target, String>,
     /// A pass's retires are out on the worker.

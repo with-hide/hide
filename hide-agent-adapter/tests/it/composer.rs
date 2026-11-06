@@ -88,7 +88,7 @@ fn every_supported_agent_reads_typed_pasted_and_erased_composers() {
 /// Grok 1.0.52 under Herdr 0.9.5 at 119 columns on 2026-10-22, after a turn
 /// ended: its predicted next prompt stands in the empty composer as italic
 /// ghost text (`suggest`), and a console Grok takes for Windows' legacy one
-/// (`GROK_FORCE_LEGACY_CONSOLE=1`, as a Herdr pane on Windows is) draws `>`
+/// (`GROK_FORCE_LEGACY_CONSOLE=1`, as a pane on Windows is) draws `>`
 /// for `❯` (`legacy`). Each step as above, then typing the start of the
 /// suggestion, which leaves the rest of it as ghost text after the typed
 /// letters.

@@ -270,8 +270,8 @@ impl Runtime {
 
     /// The link Hide keeps between a checkout and an issue: the branch's issue
     /// link and its Workspace token, written on a worker on the checkout's
-    /// own machine: this machine's git and Herdr, or a node's through its
-    /// link and its Herdr. `Err` names the diagnostic kind and why nothing
+    /// own machine: this machine's git and the engine, or a node's through its
+    /// link and its engine. `Err` names the diagnostic kind and why nothing
     /// was started; the write's own answer lands in
     /// `ingest_issue_operation_result`.
     pub(super) fn link_checkout_issue(
@@ -349,7 +349,7 @@ impl Runtime {
             }
         };
         // The Workspace that carries the token: this machine's authoritative
-        // one for the checkout, or the Herdr workspace that owns a node's.
+        // one for the checkout, or the engine workspace that owns a node's.
         let (session, previous) = match node.as_deref() {
             None => {
                 let session = workspace::authoritative_session_space(
@@ -517,7 +517,7 @@ impl Runtime {
     /// link at once, from the token and branch note the write set and the
     /// issue it read; the node's next session event and worktree read confirm
     /// them. A token the node may hold after a failed rollback is logged:
-    /// the node's own Herdr is what the next session event reports.
+    /// the node's own engine is what the next session event reports.
     fn ingest_node_issue_write(
         &mut self,
         node: &str,
@@ -609,7 +609,7 @@ impl Runtime {
         true
     }
 
-    /// Settles a node's unconfirmed tokens against the tokens its Herdr
+    /// Settles a node's unconfirmed tokens against the tokens its engine
     /// reports now, by the rule this machine's follow (`settle_unconfirmed`).
     pub(super) fn settle_node_issue_tokens(&mut self, node: &str, raw: &RemoteSessionSnapshot) {
         let Some(unconfirmed) = self.unconfirmed_node_issue_tokens.get_mut(node) else {
@@ -1694,7 +1694,7 @@ impl Runtime {
     /// node named, read with this machine's login in the node's pull request
     /// pass (D-16), and a Local project's from this core's store under the
     /// node's id, the slot a core move wrote them into. A checkout's link is
-    /// the chain a local checkout reads, from the node's Herdr tokens and
+    /// the chain a local checkout reads, from the node's engine tokens and
     /// branch notes. It runs with `derive_device_session`, so only when the
     /// node's session or one of these answers moved; an idle fetch keeps the
     /// published rows.
@@ -1837,8 +1837,8 @@ enum ChainLink {
     Github(IssueCandidate),
 }
 
-/// What one machine's Herdr says about its checkouts' links, gathered once
-/// per pass, for this machine's checkouts and a node's alike: each Herdr
+/// What one machine's engine says about its checkouts' links, gathered once
+/// per pass, for this machine's checkouts and a node's alike: each engine
 /// workspace's manual token, the values a failed write here may have left
 /// unconfirmed there, and each pane's token with those of every agent it
 /// delegated to.
@@ -1866,7 +1866,7 @@ impl<'a> LinkTokens<'a> {
     }
 
     /// A checkout's issue by the link chain (`chain_link`): the manual token
-    /// of the Herdr workspace that carries it (`session`), unless it is a
+    /// of the engine workspace that carries it (`session`), unless it is a
     /// value a failed write left unconfirmed, then its panes' and their
     /// descendants' tokens, its branch note, its pull request and its branch.
     fn checkout_link(

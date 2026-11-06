@@ -34,7 +34,7 @@ pub struct WorkspaceCreationOutcome {
 }
 
 /// Why a project's registration failed: the `last_error` kind the shell words
-/// the failure by, and the sentence the diagnostic log keeps (Herdr's protocol
+/// the failure by, and the sentence the diagnostic log keeps (the engine's protocol
 /// answer, a socket path, an io error), which no screen draws.
 #[derive(Debug)]
 pub struct WorkspaceCreationFailure {
@@ -87,8 +87,8 @@ impl WorkspaceCreationFailure {
         }
     }
 
-    /// Herdr could not be read: not running or unreachable is the connection's
-    /// state, which the shell words as Herdr not connected yet. The read
+    /// The engine could not be read: not running or unreachable is the connection's
+    /// state, which the shell words as the engine not connected yet. The read
     /// `after` the project's workspace was opened leaves whether it was added
     /// unknown, so it is worded as unconfirmed rather than as a plain retry.
     fn from_session_read(step: &str, error: &SessionFetchError) -> Self {
@@ -112,7 +112,7 @@ impl WorkspaceCreationFailure {
         }
     }
 
-    /// Herdr's answer to opening the project's first workspace: a lost answer
+    /// The engine's answer to opening the project's first workspace: a lost answer
     /// leaves whether it was made unknown, which must not read as a refusal a
     /// plain retry would repeat.
     fn from_owner(error: &ControlFailure) -> Self {
@@ -294,7 +294,7 @@ fn registered_owner(
 /// How long the node may take to make a project's folder and repository.
 const PROJECT_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A tab Hide created in a checkout's owner Herdr workspace.
+/// A tab Hide created in a checkout's owner the engine workspace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OwnedTab {
     /// Label returned by creation, only while retaining that exact first tab.
@@ -312,7 +312,7 @@ pub(crate) struct OwnedTab {
 /// racing for a folder with no owner converge on one workspace; a Git
 /// checkout converges through `worktree.open` itself (`already_open`). The
 /// lock spans every folder and device rather than one folder: an open here
-/// happens once per folder per Herdr server life (D-11), and each call it
+/// happens once per folder per the engine life (D-11), and each call it
 /// holds across is bounded by its own timeout, so the rare wait this costs
 /// an unrelated folder is not worth a keyed lock registry.
 static FOLDER_OWNER_OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -322,7 +322,7 @@ static FOLDER_OWNER_OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// is the new tab, and an owner that was already open gets a new tab. A
 /// refusal fails the request; nothing is created in any other workspace (B3).
 /// With a `command`, the tab's pane runs it (`layout.apply`); a newly opened
-/// owner's first tab, which Herdr starts with its own shell, is replaced by
+/// owner's first tab, which the engine starts with its own shell, is replaced by
 /// one that does (PRD agent-start-shell-ready D-10).
 pub(crate) fn open_owner_tab(
     engine: &dyn Engine,
@@ -389,8 +389,8 @@ pub(crate) fn open_owner_tab(
 }
 
 /// The checkout's owner workspace, opened when none is open, and the tab and
-/// pane Herdr made with it when this call opened it (`None` when it was
-/// already open). `env` reaches the first pane only where Herdr takes it
+/// pane the engine made with it when this call opened it (`None` when it was
+/// already open). `env` reaches the first pane only where the engine takes it
 /// (`workspace.create`); `worktree.open` takes none.
 type FirstTab = (String, String, Option<String>);
 
@@ -412,7 +412,7 @@ pub(crate) fn ensure_owner(
             if opened.already_open {
                 return Ok((opened.workspace_id, None));
             }
-            // Only a workspace Herdr opened for this request takes the
+            // Only a workspace the engine opened for this request takes the
             // checkout's name (D-14); the tab is real either way.
             if !label.trim().is_empty()
                 && opened.label != *label
@@ -476,7 +476,7 @@ pub(crate) fn ensure_owner(
 }
 
 /// A new tab in `workspace_id` whose pane is started with `env`, running
-/// `command` when there is one (`layout.apply`) and Herdr's own shell
+/// `command` when there is one (`layout.apply`) and the engine's own shell
 /// otherwise (`tab.create`).
 pub(crate) fn create_tab_in(
     engine: &dyn Engine,
@@ -513,7 +513,7 @@ pub(crate) fn create_tab_in(
     })
 }
 
-/// `tab`, a workspace's first tab Herdr started with its own shell, replaced
+/// `tab`, a workspace's first tab the engine started with its own shell, replaced
 /// by one whose pane runs `command` with `env` (`layout.apply` with the
 /// tab's id): `worktree.create`, `worktree.open` and `workspace.create` take
 /// no command. Nothing is shown of it, since the workspace was made for this
@@ -703,7 +703,7 @@ mod tests {
                 created_pane_id: Some(ref pane_id),
             } if tab_id == "w9:t1" && pane_id == "w9:p1"
         ));
-        // Herdr opens a linked worktree only from its repository's main
+        // The engine opens a linked worktree only from its repository's main
         // worktree, and a label on the open would rename a workspace that was
         // already there, so the new one is named after it opens (D-14).
         assert_eq!(

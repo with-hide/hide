@@ -1100,7 +1100,7 @@ fn an_unreadable_views_file_is_kept_and_reported_in_the_diagnostic_log() {
     assert!(kept);
 }
 
-/// B8: coming back to a Workspace that has no Herdr tab shows the View tab
+/// B8: coming back to a Workspace that has no engine tab shows the View tab
 /// that was active there, not the newest one.
 #[test]
 fn returning_to_a_workspace_without_agent_tabs_keeps_its_active_view_tab() {
@@ -1341,7 +1341,7 @@ fn opening_a_file_that_came_back_clears_its_unavailable_tab() {
 }
 
 /// D-11: the app opens on the Workspace the operator last chose, after a
-/// reload or a restart; a first run, or a front only Herdr's own focus put
+/// reload or a restart; a first run, or a front only the engine's own focus put
 /// there, starts on Main.
 #[test]
 fn only_the_workspace_the_operator_chose_is_resumed() {

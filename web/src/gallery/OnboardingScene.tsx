@@ -268,7 +268,7 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
   };
 }
 
-/** This machine's Herdr connection and its save, as the core publishes them for the `import-*` states. */
+/** This machine's engine connection and its Herdr save, as the core publishes them for the `import-*` states. */
 function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
   const connected = { state: "connected", received_version: "0.9.5", received_protocol: 22, expected_protocol: 22 };
   switch (state) {

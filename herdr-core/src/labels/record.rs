@@ -14,7 +14,7 @@ pub enum RecordConnection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecordBinding {
     pub provider: String,
-    /// The Herdr reference observed when this result was accepted. Even a
+    /// The engine reference observed when this result was accepted. Even a
     /// display-only result cannot cross a later reported session change.
     pub reported_reference: Option<String>,
     pub connection: RecordConnection,

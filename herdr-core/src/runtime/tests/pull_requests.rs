@@ -260,7 +260,7 @@ fn a_local_issue_is_linked_in_hide_only() {
         "pr_link_issue",
         serde_json::json!({"request_id": "r3", "workspace_id": "w", "pr_number": 7, "new_issue": {"title": "로컬 이슈"}}),
     )));
-    // No live Herdr here, so the link write fails at once, and no body step ran.
+    // No live engine here, so the link write fails at once, and no body step ran.
     let failed = link(&runtime);
     assert_eq!(
         (
@@ -550,7 +550,7 @@ fn a_pre_check_starts_like_any_delegation_and_is_followed_to_its_session() {
     assert!(runtime.snapshot().task_operation.is_none());
     assert!(client.review_facts_for_test().is_none());
 
-    // Herdr's next session update names the agent's session.
+    // The engine's next session update names the agent's session.
     super::agent_connection::feed(&mut runtime, &[("w1:p1", "claude", false)]);
     let facts = client
         .review_facts_for_test()

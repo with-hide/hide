@@ -1,5 +1,5 @@
 //! Where a pane's cwd is a birth value (the folder its shell is still in
-//! before it enters the start folder, which Herdr never announces settling),
+//! before it enters the start folder, which the engine never announces settling),
 //! what each reader of it shows. #420 gave a tab Hide created its checkout by
 //! creation intent; these are the other readers of the same value.
 
@@ -144,7 +144,7 @@ fn a_created_worktrees_first_tab_joins_its_row_while_its_pane_reports_the_birth_
         .into_owned();
     let payload = payload_with_created_workspace(&directory.to_string_lossy(), &birth_cwd);
 
-    // Herdr answered the creation, and the session carries the first tab with the cwd its pane was born with.
+    // The engine answered the creation, and the session carries the first tab with the cwd its pane was born with.
     let id = runtime
         .begin_task_operation(
             "worktree_create",
@@ -451,9 +451,9 @@ fn a_nested_worktree_under_a_linked_checkout_is_not_inside_the_outer_checkout() 
     );
 }
 
-/// Herdr answers a pane's cwd resolved and without a trailing separator, even
-/// when the folder was asked for through a link and a trailing `/` (pinned
-/// 0.9.1, `workspace.create` and `tab.create`). The comparison reads both
+/// A pane's cwd comes back resolved and without a trailing separator, even
+/// when the folder was asked for through a link and a trailing `/` (as Herdr
+/// v0.9.1 answered `workspace.create` and `tab.create`). The comparison reads both
 /// sides as the folder they name, so the reported cwd settles the tab in any
 /// of those spellings; the recorded spelling is the next test's.
 #[cfg(unix)]

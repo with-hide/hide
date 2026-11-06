@@ -2666,7 +2666,7 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     assert!(!runtime.mission_answer_event("mission-1", 1, None, None, true));
     assert_eq!(runtime.mission_answers_due().len(), 1);
     // The prompt is asked: the answer reads as sending, and the book already
-    // holds it as unconfirmed, so a stop before Herdr's reply never types it
+    // holds it as unconfirmed, so a stop before the engine's reply never types it
     // again after a restart.
     runtime.mission_answer_typing("mission-1", 1);
     runtime.refresh_missions();
@@ -2695,7 +2695,7 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
             .unwrap()
             .unconfirmed
     );
-    // Herdr's reply to the prompt timed out: the answer may be in the conversation.
+    // The engine's reply to the prompt timed out: the answer may be in the conversation.
     runtime.mission_answer_sent(
         "mission-1",
         1,
@@ -5158,7 +5158,7 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
     assert_eq!(conductor_shown(&mut runtime).ask_subject, None);
 }
 
-/// A decision a Herdr sync laid before any refresh read it, cleared before
+/// A decision an engine sync laid before any refresh read it, cleared before
 /// the next refresh, still leaves the row (needs-you-cleanup B3).
 #[test]
 fn a_decision_laid_by_a_sync_and_cleared_before_the_next_refresh_leaves_the_row() {
@@ -5173,7 +5173,7 @@ fn a_decision_laid_by_a_sync_and_cleared_before_the_next_refresh_leaves_the_row(
         json!({"op": "decide", "line": "Skip the check line?"}),
     )
     .unwrap();
-    // Herdr sends the row again before the next pull reads the books.
+    // The engine sends the row again before the next pull reads the books.
     let mut synced = std::mem::take(&mut runtime.snapshot.navigator.agents);
     runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut synced);
     assert!(synced[0].ask_subject.is_some());
@@ -6717,7 +6717,7 @@ fn a_node_that_cannot_remember_a_cause_does_not_raise_it() {
 const DEVICE: &str = "mini";
 const DEVICE_ROOT: &str = "/Users/example/fixture";
 
-/// `DEVICE`'s link in `state`, its Herdr session showing `workspaces`.
+/// `DEVICE`'s link in `state`, its engine session showing `workspaces`.
 fn device_status(
     state: &str,
     workspaces: Vec<WorkspaceSnapshot>,

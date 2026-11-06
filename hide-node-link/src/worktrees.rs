@@ -111,7 +111,7 @@ pub struct Registered {
 }
 
 /// One operator-confirmed worktree deletion, recorded before the host's
-/// preflight and reused after Herdr confirms every pane is gone.
+/// preflight and reused after the engine confirms every pane is gone.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConfirmedRemoval {
     pub repository_root: String,

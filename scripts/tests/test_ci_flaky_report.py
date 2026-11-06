@@ -257,8 +257,8 @@ class Filing(unittest.TestCase):
 
 class Workflows(unittest.TestCase):
     def test_every_e2e_log_upload_keeps_a_flaky_run_as_it_keeps_a_failed_one(self):
-        # A flaky run passed, but its first attempt failed, and the daemon,
-        # Herdr and input logs of that attempt are the only evidence its issue
+        # A flaky run passed, but its first attempt failed, and the daemon
+        # and input logs of that attempt are the only evidence its issue
         # gets. Each job that reports flaky Playwright tests and keeps those
         # logs reads the output of its own report.
         uploads = 0

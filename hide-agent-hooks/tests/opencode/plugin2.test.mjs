@@ -146,7 +146,7 @@ class OpenCode {
     }
   }
 
-  /** A terminal in Herdr pane `id` (or outside one, with no id), showing `route`. */
+  /** A terminal in pane `id` (or outside one, with no id), showing `route`. */
   terminal(id, route = { type: "home" }) {
     const view = { route, attached: [], gone: false };
     for (const name of PANE_VARIABLES) delete process.env[name];

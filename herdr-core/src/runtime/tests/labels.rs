@@ -1,7 +1,7 @@
 //! The labels the local coordinator published reach every local projection
 //! the runtime ingests (PRD labels-in-hided D-04), not only the
 //! coordinator's own: a workspace creation or an agent close hands the
-//! runtime a fresh Herdr projection of its own.
+//! runtime a fresh engine projection of its own.
 
 use super::*;
 
@@ -14,7 +14,7 @@ const PANE: &str = "w-order:t1:p";
 const SESSION: &str = "11111111-2222-3333-4444-555555555555";
 
 /// A fresh projection with one idle Claude agent on `session`, carrying no
-/// label, as Herdr itself reports it.
+/// label, as the engine itself reports it.
 fn projection(session: &str) -> SessionSnapshotPayload {
     let mut payload = tab_order_payload(CHECKOUT, &TABS, &TABS, "w-order:t1");
     let agent: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents": [{
@@ -303,7 +303,7 @@ fn a_blocked_turn_is_a_needs_you_block_and_an_unfinished_one_a_stop_not_a_check(
     assert_eq!(done["mark"], "done");
     assert_eq!(done["status_code"], "done");
 
-    // With no label verdict (summaries off) the same Herdr `done` is a stop
+    // With no label verdict (summaries off) the same engine `done` is a stop
     // to read with no verdict: a plain dot, never the green one (D-03).
     let off = row(&runtime_with_record(
         record(LabelEnd::Blocked, "디스크 여유가 없어 검증을 못 함"),
@@ -594,7 +594,7 @@ fn the_end_of_checks_is_news_once_and_a_row_read_after_it_stays_read() {
         true,
     ));
     let tabs = ["w-order:t1", "w-order:t2"];
-    // Herdr's layout with `active` in front, the agent stopped in the first tab.
+    // The engine's layout with `active` in front, the agent stopped in the first tab.
     let herdr = |active: &str| {
         let mut payload = tab_order_payload(CHECKOUT, &tabs, &tabs, active);
         let agent: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents": [{
@@ -625,7 +625,7 @@ fn the_end_of_checks_is_news_once_and_a_row_read_after_it_stays_read() {
         })
         .map(|checkout| checkout.id.clone())
         .expect("the checkout");
-    // The operator moves to another tab and Herdr confirms it.
+    // The operator moves to another tab and the engine confirms it.
     let leave = |runtime: &mut Runtime| {
         assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
         runtime.ingest_session(Ok(herdr("w-order:t2")));
@@ -661,7 +661,7 @@ fn the_end_of_checks_is_news_once_and_a_row_read_after_it_stays_read() {
 }
 
 /// A fresh projection with one Codex agent on `SESSION` at `status` and
-/// Herdr state `seq`.
+/// engine state `seq`.
 fn codex_projection(status: &str, seq: u64) -> SessionSnapshotPayload {
     let mut payload = projection(SESSION);
     for agent in &mut payload.agents {
@@ -674,7 +674,7 @@ fn codex_projection(status: &str, seq: u64) -> SessionSnapshotPayload {
     payload
 }
 
-/// The overlay a label worker publishes once it has read, under Herdr state
+/// The overlay a label worker publishes once it has read, under engine state
 /// `seq`, a Codex session whose plan turn finished with a plan.
 fn plan_waiting_overlay(seq: u64) -> LabelOverlay {
     use hide_session::turns::{TurnMark, TurnMode, TurnTracker};
@@ -778,8 +778,8 @@ fn a_plan_read_from_the_session_file_puts_the_row_in_needs_you() {
 
 /// PRD codex-plan-approval-hold B1, B2, B5, D-05: a Codex plan waiting for
 /// approval, read for the agent's current state, is an approval in Needs You
-/// that stays there after the row is read; once Herdr's state moves past the
-/// read, the row is what Herdr says again.
+/// that stays there after the row is read; once the engine's state moves past the
+/// read, the row is what the engine says again.
 #[test]
 fn a_codex_plan_waiting_for_approval_is_an_approval_that_stays_in_needs_you() {
     let mut runtime = runtime();
@@ -800,14 +800,14 @@ fn a_codex_plan_waiting_for_approval_is_an_approval_that_stays_in_needs_you() {
     assert_eq!(read["unread"], false);
     assert_eq!(read["group"], "needs_you", "{read}");
 
-    // Herdr says the agent works before its new turn was written: the read
+    // The engine says the agent works before its new turn was written: the read
     // for that state still finds the plan, and the row does not wait.
     runtime.set_label_overlay(plan_waiting_overlay(5));
     runtime.ingest_session(Ok(codex_projection("working", 5)));
     assert_eq!(row(&runtime)["demand"], "none");
     assert_eq!(row(&runtime)["group"], "working");
 
-    // The operator approved: Herdr's next state was not read as waiting.
+    // The operator approved: the engine's next state was not read as waiting.
     runtime.set_label_overlay(plan_waiting_overlay(4));
     runtime.ingest_session(Ok(codex_projection("working", 5)));
     assert_eq!(row(&runtime)["demand"], "none");
@@ -819,7 +819,7 @@ fn a_codex_plan_waiting_for_approval_is_an_approval_that_stays_in_needs_you() {
 
 /// The Enter that approves a waiting plan is the operator's: Codex writes
 /// the next turn's message ("Implement the plan.") from it, so it is kept
-/// as a submit, unlike an Enter at a prompt Herdr reports.
+/// as a submit, unlike an Enter at a prompt the engine reports.
 #[test]
 fn the_enter_that_approves_a_waiting_plan_is_the_operators_submit() {
     let mut runtime = runtime();
@@ -843,7 +843,7 @@ fn the_enter_that_approves_a_waiting_plan_is_the_operators_submit() {
             .submits(crate::labels::store::LOCAL_TARGET, PANE)
             .len()
     };
-    // Herdr reads the menu as done under one Codex manifest and as unknown
+    // The engine reads the menu as done under one Codex manifest and as unknown
     // under another; the coordinator observes each state for delivery.
     let mut seq = 4;
     for status in ["done", "unknown"] {
@@ -857,7 +857,7 @@ fn the_enter_that_approves_a_waiting_plan_is_the_operators_submit() {
         assert_eq!(enter(&mut runtime), before + 1, "{status}");
         seq += 1;
     }
-    // A prompt Herdr reports is answered, not submitted to.
+    // A prompt the engine reports is answered, not submitted to.
     let projection = codex_projection("blocked", seq);
     runtime.observe_delivery_laid(crate::node::TEST_NODE, &projection, None, None);
     runtime.ingest_session(Ok(projection));
@@ -865,7 +865,7 @@ fn the_enter_that_approves_a_waiting_plan_is_the_operators_submit() {
     assert_eq!(enter(&mut runtime), before, "blocked");
 }
 
-/// The overlay a label worker publishes after reading, under Herdr state
+/// The overlay a label worker publishes after reading, under engine state
 /// `seq`, a Claude Code session whose process started background work.
 fn wake_overlay(seq: u64, marks: &[hide_session::turns::WakeMark]) -> LabelOverlay {
     wake_overlay_with(seq, marks, false)
@@ -917,9 +917,9 @@ fn claude_projection(status: &str, seq: u64) -> SessionSnapshotPayload {
 }
 
 /// B18, D-26: a Claude Code session that proves a running background task
-/// keeps its stopped row waiting, in Working, for the Herdr state the read was
+/// keeps its stopped row waiting, in Working, for the engine state the read was
 /// made under; a read for another state, a finished task, or a new process
-/// leaves the row as Herdr reports it.
+/// leaves the row as the engine reports it.
 #[test]
 fn a_proven_background_task_keeps_a_stopped_claude_row_waiting() {
     use hide_session::turns::WakeMark;
@@ -1010,7 +1010,7 @@ fn a_proven_background_task_keeps_a_stopped_claude_row_waiting() {
     assert_eq!(row(&runtime)["wait"], "background");
 }
 
-/// The overlay a label worker publishes at the moment Herdr reports a Claude
+/// The overlay a label worker publishes at the moment the engine reports a Claude
 /// Code turn's end under state `seq`, before the read of it has landed: the
 /// read made under the state before it is what the record holds.
 fn turn_end_owed_overlay(seq: u64) -> LabelOverlay {
@@ -1103,7 +1103,7 @@ fn a_turn_ending_with_a_background_task_is_never_announced_done() {
     runtime.ingest_session(Ok(claude_projection("working", 4)));
     assert_eq!(look(&runtime).0, "working");
 
-    // Herdr reports the stop; the read of it is owed and has not landed.
+    // The engine reports the stop; the read of it is owed and has not landed.
     runtime.set_label_overlay(turn_end_owed_overlay(5));
     runtime.ingest_session(Ok(claude_projection("done", 5)));
     let (group, notices) = look(&runtime);
@@ -1169,7 +1169,7 @@ fn a_turn_ending_with_a_background_task_is_never_announced_done() {
 
 /// D-9: Claude Code's Esc sends no Stop and, often, no `idle_prompt`. The
 /// hook's working turn stands until the session read, made under the later
-/// Herdr state Herdr moved to at rest, finds the interruption; the row then
+/// engine state the engine moved to at rest, finds the interruption; the row then
 /// stops with nothing asked of the operator, and the next prompt's hook
 /// starts the turn again.
 #[test]
@@ -1225,7 +1225,7 @@ fn a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it() {
     runtime.ingest_session(Ok(claude("working", 4)));
     assert_eq!(axes(&runtime).0, "working");
 
-    // Esc: Herdr reads the agent done at once, and the session read under
+    // Esc: the engine reads the agent done at once, and the session read under
     // that state has not landed yet; the hook's turn still stands.
     runtime.ingest_session(Ok(claude("done", 5)));
     assert_eq!(axes(&runtime).0, "working");
@@ -1421,9 +1421,9 @@ fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
 /// D-9: Claude Code 2.1.314 puts a prompt interrupted before its first
 /// output back in the composer and records no interruption, no `Stop` and
 /// no notification; its session file keeps the prompt with nothing of the
-/// agent's after it. Read under a later Herdr state with the agent at rest,
+/// agent's after it. Read under a later engine state with the agent at rest,
 /// the hook's turn ends; a turn the agent answered stays the hook's until
-/// an interruption record or its next event, whatever Herdr reads.
+/// an interruption record or its next event, whatever the engine reads.
 #[test]
 fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
     use hide_node_link::panes::{HookStatusReport, HookTurn};
@@ -1536,7 +1536,7 @@ fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
 
 /// D-10: a refusal with the operator's feedback in Claude Code's dialog
 /// sends no hook event and the turn may go on writing text alone. The
-/// session read under the later Herdr state finds the refused call's
+/// session read under the later engine state finds the refused call's
 /// result, so the approval ends and the row is working again before the
 /// turn's `Stop`.
 #[test]
@@ -1653,7 +1653,7 @@ fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
     runtime.ingest_session(Ok(claude("blocked", 5)));
     assert_eq!(axes(&runtime).1, "approval");
 
-    // The operator refuses with a note; Herdr reads the agent working again,
+    // The operator refuses with a note; the engine reads the agent working again,
     // and the read under that state finds the refusal.
     overlay(&mut runtime, &records, 6);
     runtime.ingest_session(Ok(claude("working", 6)));

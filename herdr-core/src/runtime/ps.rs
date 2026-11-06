@@ -1,7 +1,7 @@
 //! `hide ps`: every live pane by project, checkout and tab, the agent each
 //! holds, and the registered agents no pane holds. It reads what the core
 //! already publishes (the navigator, its agent rows, the mission map) and
-//! the delivery ledger, and asks Herdr nothing. Only owned rows are taken
+//! the delivery ledger, and asks the engine nothing. Only owned rows are taken
 //! under the lock (`Runtime::ps_rows`); the ledger join runs after it
 //! (`PsRows::answer`).
 

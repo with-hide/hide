@@ -22,7 +22,7 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
         .name("herdr-core-agent-fork".to_owned())
         .spawn(move || {
             // Includes pane creation and the start acknowledgment, so this
-            // input wait never extends Herdr's 120-second start reservation.
+            // input wait never extends the engine's 120-second start reservation.
             let input_deadline =
                 Instant::now() + crate::agent_start::AGENT_START_DEADLINE - Duration::from_secs(5);
             finish_fork_worker(&context, &request.parent_pane_id, || {
@@ -140,7 +140,7 @@ fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Resul
 }
 
 /// Starts a fork where the operator asked for it, in its own tab or beside
-/// the source. Herdr makes the pane without moving the keyboard; `created`
+/// the source. The engine makes the pane without moving the keyboard; `created`
 /// hands it to the core, which moves the keyboard to it and places its tab.
 /// A pane whose agent never started is closed; registration never turns a
 /// working fork into a failure.
@@ -198,7 +198,7 @@ fn run_agent_fork_with_registration(
         let shell = crate::agent_start::ShellStart::of_tab(true, launch.as_ref());
         let child_pane_id = match request.placement {
             // `Fork agent`: the fork's own tab, which the core puts right of the
-            // source's tab once Herdr has named it (`created`).
+            // source's tab once the engine has named it (`created`).
             ForkPlacement::Tab => {
                 let cwd = request
                     .cwd
@@ -434,8 +434,8 @@ pub(crate) fn read_past_writes<T: serde::de::DeserializeOwned>(
 }
 
 /// Whether an agent's status reads it at rest, ready for what is typed:
-/// `idle`, or `done`, a rest after work, as Herdr's start wait reads both
-/// (`herdr agent start`, v0.9.5). agy redrawing the resumed conversation
+/// `idle`, or `done`, a rest after work, as the engine's start wait reads both
+/// (as Herdr's did, v0.9.5). agy redrawing the resumed conversation
 /// can read working for a moment as it starts, which leaves its rest `done`.
 fn at_rest(status: &str) -> bool {
     matches!(status, "idle" | "done")
@@ -446,11 +446,11 @@ fn at_rest(status: &str) -> bool {
 /// conversation; this types `/fork` once the engine reads agy at rest there
 /// ([`at_rest`]), finds
 /// the conversation `/fork` made in agy's index on the pane's node, and
-/// reports it to Herdr, which would keep the source's id until the next
+/// reports it to the engine, which would keep the source's id until the next
 /// prompt. Everything the fork assumes of agy's screen is in this function;
 /// a failure leaves the source conversation as it was and the caller closes
 /// the pane.
-#[allow(clippy::disallowed_methods)] // a production wait, not test code: polls Herdr and agy's index, bounded by a deadline
+#[allow(clippy::disallowed_methods)] // a production wait, not test code: polls the engine and agy's index, bounded by a deadline
 fn fork_antigravity(
     engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
@@ -530,7 +530,7 @@ fn fork_antigravity(
         .map_err(failed("pane.report_agent_session"))
 }
 
-/// Empties agy's composer in the fork's pane before `/fork` is typed. Herdr's
+/// Empties agy's composer in the fork's pane before `/fork` is typed. The engine's
 /// terminal answers the mode query agy sends as it starts, and part of that
 /// answer can stay in the composer as text (`27;1$y`, #1529); typed behind
 /// it, `/fork` is a prompt and not the command. The pane is the one this
@@ -771,7 +771,7 @@ mod tests {
                 |_, _| Ok(()),
             );
             assert_eq!(result.is_err(), case != "success", "{case}");
-            // The core hears of the fork's tab once, as soon as Herdr made it,
+            // The core hears of the fork's tab once, as soon as the engine made it,
             // whatever happens to its start afterwards.
             let made_tab = herdr.methods().contains(&"launch_tab");
             assert_eq!(
@@ -986,7 +986,7 @@ mod tests {
     }
 
     /// A node that forks OpenCode sessions as `answer` says and records each
-    /// ask in `log`, beside the Herdr requests the test records there.
+    /// ask in `log`, beside the engine requests the test records there.
     struct OpenCodeForking {
         inner: hide_node::Local,
         answer: Result<hide_node_link::protocol::OpenCodeFork, &'static str>,
@@ -1286,7 +1286,7 @@ mod tests {
         // (1 fork in 3 failed on a live agy 1.4.0) and are read again.
         // `unreadable`: a refusal that is not agy writing ends the fork at
         // its first read, with no second one.
-        // `stray`: the composer holds text before `/fork` (Herdr's answer to
+        // `stray`: the composer holds text before `/fork` (the engine's answer to
         // agy's mode query, `27;1$y`, #1529), which is erased first.
         // `stuck`: text outlasts the erase, as a hint a later agy draws in an
         // empty composer might, and `/fork` is typed as before.

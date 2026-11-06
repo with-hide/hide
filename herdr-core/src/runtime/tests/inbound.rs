@@ -302,13 +302,13 @@ fn the_core_never_redials_a_node_and_takes_its_next_link() {
 }
 
 /// B16: a doorbell, a warning or a phone reply for an agent on a node goes
-/// to that node's Herdr through its link; while the link is down there is
-/// no way to it, and none is ever the core's own Herdr instead.
+/// to that node's engine through its link; while the link is down there is
+/// no way to it, and none is ever the core's own engine instead.
 #[test]
 fn a_node_s_agents_are_reached_only_through_its_link() {
     let shared = shared_runtime();
     {
-        // The core's own Herdr, which a node's agent must never be sent to.
+        // The core's own engine, which a node's agent must never be sent to.
         let mut runtime = shared.lock().unwrap();
         let socket = std::env::temp_dir()
             .join(format!(
@@ -911,7 +911,7 @@ fn a_linked_node_s_sessions_are_read_through_its_link() {
 /// A Factory runs on this machine or a node that dials it, never a device
 /// it dials (PRD core-host-node-move Q17): a create sheet's machine names
 /// its node, a caller on the node is admitted as on that machine and its
-/// hint is a pane there, and a worker start holds on to the node's Herdr
+/// hint is a pane there, and a worker start holds on to the node's engine
 /// and link, which stop being current once the link ends.
 /// After a move every checkout of the machine the core left is a node's
 /// (PRD core-host-node-move D-29, arch review open question): one in front
@@ -1081,7 +1081,7 @@ fn machine_kit(cli: hide_kit::ComponentState) -> hide_kit::KitReport {
 /// the device rules, from the app it runs and through its link: its link
 /// installs it, with the command folder a device gets by default (which
 /// `HIDE_HOST_CLI_DIR` moves, so a test never writes the account's own) and
-/// no Herdr socket, so the node uses its own; its row shows what the node
+/// no engine socket, so the node uses its own; its row shows what the node
 /// answered, and Reinstall repairs it there. Removing the node leaves its
 /// kit, since the node runs Hide itself and registers again on its next
 /// link.

@@ -6,14 +6,14 @@
 //! and decides whether to try again.
 //!
 //! Everything here runs off `Mutex<Runtime>`: the panes and agents are the
-//! machine's Herdr, read through the engine, and the git work is the node's,
+//! machine's engine, read through the engine, and the git work is the node's,
 //! on the machine that holds the checkout, which is where the system
 //! differences live (`hide-host`, `hide-platform`).
 
 use hide_node_link::git::GitCommand;
 use hide_node_link::protocol::Call;
 
-/// How long one of Herdr's reads here may take.
+/// How long one of the engine's reads here may take.
 const READ_WAIT: crate::engine::Wait = crate::engine::Wait::Each(std::time::Duration::from_secs(5));
 /// How long one of the node's git calls here may take.
 const NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -59,13 +59,13 @@ pub(super) enum Outcome {
     /// The worktree was removed; the branch stays.
     Removed,
     Kept(Kept),
-    /// Herdr or the node refused or did not answer, which may pass.
+    /// The engine or the node refused or did not answer, which may pass.
     Failed(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Retirement {
-    /// The worktree's folder, once Herdr named one.
+    /// The worktree's folder, once the engine named one.
     pub(super) path: Option<String>,
     pub(super) outcome: Outcome,
 }
@@ -191,7 +191,7 @@ pub(super) fn worktree_path(
         .map_err(String::from)
 }
 
-/// Every agent Herdr runs now.
+/// Every agent the engine runs now.
 pub(super) fn agents_listed(
     engine: &dyn crate::engine::Engine,
 ) -> Result<Vec<crate::session_sync::ProjectedAgent>, String> {
@@ -211,7 +211,7 @@ fn within(cwd: &str, path: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// The panes Herdr runs in the folder `path` or below it.
+/// The panes the engine runs in the folder `path` or below it.
 pub(super) fn panes_in(
     engine: &dyn crate::engine::Engine,
     path: &str,
@@ -234,7 +234,7 @@ mod tests {
     use serde_json::json;
     use std::sync::{Arc, Mutex};
 
-    /// One repository's machine as Herdr and the node answer it: the
+    /// One repository's machine as the engine and the node answer it: the
     /// branch's worktree, the panes in it, which of them runs an agent or
     /// a program, whether its tree has changes, and the removals asked.
     #[derive(Default)]

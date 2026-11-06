@@ -1,8 +1,8 @@
 //! The agent journey check's composer judge (`scripts/agent_journey`): one
-//! screen Herdr read with styling, judged by the same declaration and parser
+//! screen read with styling, judged by the same declaration and parser
 //! the core uses before it releases a held letter. Not a product binary.
 //!
-//! journey_composer <agent id or Herdr kind> <screen file>
+//! journey_composer <agent id or kind> <screen file>
 //! prints {"verdict": "empty" | "not_empty" | "not_found"}, or exits non-zero
 //! with the reason on stderr: 2 for a wrong call, 1 for an agent that is
 //! unknown or declares no composer, or a screen that cannot be read.

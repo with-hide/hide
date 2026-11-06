@@ -1,5 +1,5 @@
-// The sidebar's width (PRD sidebar-typography B10-B12) on an isolated pinned
-// Herdr and hided: the right edge drags between 220 and 440 and stops there,
+// The sidebar's width (PRD sidebar-typography B10-B12) on an isolated
+// engine and hided: the right edge drags between 220 and 440 and stops there,
 // the nav alone follows the pointer while the center and its terminal stay
 // put, one ui_state_update lands the width on release, a reload keeps it, and
 // a double-click returns it to 292. Captures land in HIDE_E2E_SCREENSHOT_DIR.

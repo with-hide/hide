@@ -11,7 +11,7 @@ fn register_device(runtime: &mut Runtime, id: &str, alias: &str) -> bool {
 }
 
 /// A device registered as Add device registers one, with the helper
-/// allowed: its Herdr rides the helper's link, so nothing else dials it.
+/// allowed: its engine rides the helper's link, so nothing else dials it.
 fn register_allowed_device(runtime: &mut Runtime, id: &str, alias: &str) -> bool {
     let event = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,

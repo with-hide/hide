@@ -66,7 +66,7 @@ impl BranchDecision {
     }
 }
 
-/// An agent to end before a spawn, with the Herdr and node of its machine.
+/// An agent to end before a spawn, with the engine and node of its machine.
 type EndFirst = (
     Arc<dyn crate::engine::Engine>,
     Arc<dyn crate::node_access::NodeLink>,

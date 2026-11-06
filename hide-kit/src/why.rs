@@ -59,9 +59,9 @@ pub enum PartCause {
     /// Installed, but Hide could not save that it installed it, so the next
     /// pass installs it again.
     RecordUnsaved,
-    /// Herdr is not found on this machine.
+    /// Retired: Herdr was not found on this machine. Hide runs no Herdr now.
     HerdrAbsent,
-    /// This Herdr has no integration for the agent; a newer Herdr has one.
+    /// Retired: the Herdr on this machine had no integration for the agent.
     UpdateHerdr,
     /// Retiring an earlier Hide's coordination has not finished; the next
     /// pass carries it on.

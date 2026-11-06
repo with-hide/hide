@@ -198,7 +198,7 @@ fn checkout_start_revalidates_its_group_target_after_waiting() {
     let first = zoom(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
     // The checkout presentation was removed while the worker waited. Its
-    // unchanged Herdr pane is insufficient authority to start in that group.
+    // unchanged engine pane is insufficient authority to start in that group.
     runtime.workspace_views = None;
     confirm_unzoom(&mut runtime, &first);
     assert!(ready.try_recv().unwrap().is_err());

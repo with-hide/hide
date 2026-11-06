@@ -1,7 +1,7 @@
 //! When the operator submitted something to a pane through Hide (PRD
 //! overview-request-view D-19).
 //!
-//! Herdr's input calls carry no sender, so who wrote a person's message in a
+//! The engine's input calls carry no sender, so who wrote a person's message in a
 //! conversation is decided from what Hide itself saw: the desktop's and a
 //! device pane's keyboard (the node's input report) and the phone's reply
 //! (`pane_input_submitted`). Only the moment of a submit is kept, never what
@@ -57,7 +57,7 @@ struct Record {
 }
 
 pub(crate) struct OperatorInput {
-    /// The label target of the core's own Herdr server: its node id.
+    /// The label target of the core's own engine: its node id.
     node: String,
     record: Mutex<Record>,
 }

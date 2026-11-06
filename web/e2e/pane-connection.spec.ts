@@ -2,10 +2,9 @@
 // a Claude Code pane that was running when Hide's hook was installed wears the chip, its popover offers
 // Reopen and Not now, Reopen ends the agent and starts the same conversation in the same pane, and the
 // pane's own SessionStart hook (the real helper, run the way the agent would run it) turns the chip off.
-// A refused Reopen leaves the pane as it was and says why in the popover. A pane the hook connected stays
-// connected across a Herdr live handoff, which empties every pane token, with no further hook event (issue 799).
+// A refused Reopen leaves the pane as it was and says why in the popover.
 // The Codex shared-server reasons
-// need a Codex pane Herdr detects and a machine kit that read it, which this fixture has no program for:
+// need a Codex pane the engine detects and a machine kit that read it, which this fixture has no program for:
 // `PaneConnection.test.tsx` and the core's `runtime::tests::agent_connection` own them.
 
 import { expect, test, type Page } from "@playwright/test";
@@ -21,7 +20,7 @@ import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 
-// The session the fixture's second agent runs, and the one the Herdr-only handoff test gives its pane.
+// The session the fixture's second agent runs, and the one the hook reports for its pane.
 const FIXTURE_SESSION = "fixture-two";
 const SESSION = "22222222-3333-4444-5555-666666666666";
 const HELPER = path.resolve("..", "target", "debug", "hide-agent-hooks");

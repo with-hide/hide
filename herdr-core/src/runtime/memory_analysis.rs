@@ -5,7 +5,7 @@
 //! and of each linked device, whatever the screen shows, each read
 //! through its own node's link. For each of its sessions it records the
 //! receipts a live pane's label read cannot see (a session started outside
-//! Herdr, or whose pane is gone), from a JSONL file or OpenCode's database,
+//! the engine, or whose pane is gone), from a JSONL file or OpenCode's database,
 //! and analyzes a session once its conversation has been quiet for
 //! [`MEMORY_QUIESCENCE_MS`] or its pane closed. A pass runs on
 //! a worker off the runtime lock; the lock is taken only to report a

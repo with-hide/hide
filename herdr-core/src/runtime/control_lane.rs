@@ -1,11 +1,11 @@
-//! The one ordered lane for the Herdr controls Hide sends on its own socket.
+//! The one ordered lane for the engine controls Hide sends on its own socket.
 //!
 //! A control passes through four states, and this module owns the first
 //! three for the controls that share the lane:
 //!
-//! - **Queued**: accepted, not sent. Nothing about it can reach Herdr, so a
+//! - **Queued**: accepted, not sent. Nothing about it can reach the engine, so a
 //!   newer request that replaces it leaves no late answer behind.
-//! - **In flight**: sent, unanswered. Herdr applies it whatever Hide has
+//! - **In flight**: sent, unanswered. The engine applies it whatever Hide has
 //!   decided since, so its answer is still coming after a newer request and
 //!   must not be read as someone else moving the focus; the tab moves in
 //!   flight are kept in the order they left (`tab_focus.rs`).
@@ -14,10 +14,10 @@
 //!
 //! One socket operation runs at a time and the rest wait in arrival order.
 //! Before the lane, each control ran on a thread of its own, so a tab focus,
-//! a tab creation and a pane focus sent a moment apart could reach Herdr in
+//! a tab creation and a pane focus sent a moment apart could reach the engine in
 //! either order, and the screen then followed the wrong one.
 //!
-//! Only this machine's Herdr is on the lane. A device's controls keep their
+//! Only this machine's engine is on the lane. A device's controls keep their
 //! own connection and generation (`live::spawn_remote_control`), which no
 //! other request of this process shares.
 
@@ -115,7 +115,7 @@ impl ControlLane {
     pub(super) fn submit(&mut self, job: LaneJob) -> (u64, Submitted) {
         // A focus names where the operator is now, so only the newest one
         // waiting is worth sending. Every other control is a distinct intent
-        // and reaches Herdr in the order it was made.
+        // and reaches the engine in the order it was made.
         let coalesces_with = |queued: &LaneJob| {
             matches!(
                 (queued, &job),
@@ -135,7 +135,7 @@ impl ControlLane {
                 return (self.queued[index].0, Submitted::Joined);
             }
             // The newer focus goes behind everything already waiting, so a
-            // control accepted between the two still reaches Herdr first. A
+            // control accepted between the two still reaches the engine first. A
             // pane-focus turn that joins keeps the newest target, so it moves
             // back the same way when something was accepted after it.
             let serial = self.take_serial();
@@ -217,7 +217,7 @@ struct LostAnswer {
 }
 
 impl Runtime {
-    /// The one way a local Herdr tab control leaves Hide. It is sent now when
+    /// The one way a local engine tab control leaves Hide. It is sent now when
     /// the lane is idle and otherwise waits its turn.
     pub(super) fn submit_local_control(
         &mut self,
@@ -324,7 +324,7 @@ impl Runtime {
                         ..
                     } = &action
                     {
-                        // The wait for Herdr starts when the move leaves, not
+                        // The wait for the engine starts when the move leaves, not
                         // when it was accepted behind other controls. A move
                         // the operator has since replaced is not sent.
                         let current =

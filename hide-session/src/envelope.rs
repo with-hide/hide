@@ -27,7 +27,7 @@ pub fn envelope_names(sender: &str, name: &str) -> bool {
 
 /// Whether the first Hide letter header is the operator's own: the letter a
 /// View feedback Send makes (PRD view-opener-feedback D-11). The core alone
-/// writes the `operator` sender kind; an agent's kind is the provider Herdr
+/// writes the `operator` sender kind; an agent's kind is the provider the engine
 /// detected.
 pub fn envelope_from_operator(text: &str) -> bool {
     text.trim_start()

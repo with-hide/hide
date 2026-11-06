@@ -95,7 +95,7 @@ impl Runtime {
     }
 
     /// Lays the block on this Mac's rows, whose pull requests come from
-    /// their checkout's branch and their session. `live_panes` is Herdr's
+    /// their checkout's branch and their session. `live_panes` is the engine's
     /// pane topology when the caller has one; only then do the verb records
     /// of panes outside it go.
     pub(super) fn lay_local_requests(

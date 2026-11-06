@@ -2,7 +2,7 @@
 //! with the model and effort it was started with, from the pane's launch
 //! record, and a record from a build that kept none restarts on the CLI's
 //! defaults as before. The restarts run through their real workers against a
-//! fake Herdr; the expected command lines are each CLI's own spelling
+//! fake engine; the expected command lines are each CLI's own spelling
 //! (`claude --model <m> --effort <e>`, `codex --model <m> -c
 //! model_reasoning_effort=<e>`), measured against Claude Code 2.1.302 and
 //! Codex 0.163.0, where a bare resume or fork fell back to the configured
@@ -16,7 +16,7 @@ use serde_json::json;
 const TABS: [&str; 2] = ["w-order:t1", "w-order:t2"];
 const AGENT: &str = "w-order:t2:p";
 const SESSION: &str = "11111111-2222-3333-4444-555555555555";
-/// The Herdr name Hide started the t2 agent under.
+/// The engine name Hide started the t2 agent under.
 const NAME: &str = "reviewer";
 
 fn choice(model: &str, effort: &str) -> LaunchChoice {
@@ -67,7 +67,7 @@ fn session(checkout: &str, kind: &str, listed: bool) -> SessionSnapshotPayload {
     )
 }
 
-/// The same session with t2 hosting `agent`: its kind, the name Herdr
+/// The same session with t2 hosting `agent`: its kind, the name the engine
 /// reports it by (none for one started by hand) and its conversation.
 fn hosting(
     checkout: &str,
@@ -467,7 +467,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
 /// under: an agent started in the same pane by hand (no name, or another),
 /// one of another kind, or a pane that is gone drops it, and an unnamed agent
 /// matches only by the conversation the named one last reported, as one back
-/// from a Herdr restart without its name does.
+/// from an engine restart without its name does.
 #[test]
 fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
     let launch = choice("sonnet", "high");
@@ -506,7 +506,7 @@ fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
     assert_eq!(described(&runtime), launch);
     assert_eq!(launches(&runtime)[AGENT].session.as_deref(), Some(cleared));
 
-    // Back from a Herdr restart without its name, on the same conversation.
+    // Back from an engine restart without its name, on the same conversation.
     runtime.ingest_session(Ok(hosting(
         &checkout,
         Some(("claude", None, Some(cleared))),
@@ -548,7 +548,7 @@ fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
     assert!(launches(&runtime).is_empty());
 }
 
-/// The records are bounded: one per pane a registered machine's Herdr holds,
+/// The records are bounded: one per pane a registered machine's engine holds,
 /// a removed device takes its own with it, and past the cap a start is
 /// recorded nowhere and logged.
 #[test]

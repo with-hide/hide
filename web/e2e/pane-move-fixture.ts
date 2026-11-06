@@ -69,7 +69,7 @@ export async function startMove(page: Page) {
     daemon = await startHided(fixture, "pane-move");
     control = await connectControl(daemon);
     const target = await newTab(control, fixture, "Move destination");
-    // It came forward with no page to size it, as no operator's New tab does; sized here, its terminal attaches on Herdr too.
+    // It came forward with no page to size it, as no operator's New tab does; sized here, its terminal attaches too.
     viewPane(control, target.pane);
     // The new tab came forward as New tab makes it; the pair of panes stays in front.
     await focusTab(control, fixture, fixture.tab);

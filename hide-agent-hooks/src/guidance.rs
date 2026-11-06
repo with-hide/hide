@@ -30,7 +30,7 @@
 //! answers put text into the conversation and its `PreToolUse` refuses a
 //! call, so its hook carries the guidance, Memory and the letters as well
 //! (`crate::antigravity`). Its file is the shared one agy reads beside the
-//! operator's and Herdr's blocks; Hide's block is the top-level key `hide`
+//! operator's and other tools' blocks; Hide's block is the top-level key `hide`
 //! and nothing else of the file is Hide's.
 //! | Augment (retired) | `~/.augment/settings.json` | `hooks.SessionStart[{hooks[{type, command, timeout ms}]}]` |
 //! | Junie (retired) | `~/.junie/config.json` | `hooks.SessionStart[{hooks[{type, command, timeout s, async}]}]` |
@@ -236,8 +236,8 @@ impl GuidanceAgent {
     }
 
     /// The folder whose presence means the agent is set up for this account.
-    /// agy makes `~/.gemini/config` on its first run, and Herdr's integration
-    /// needs it too; `~/.gemini` alone is also the retired Gemini CLI's.
+    /// agy makes `~/.gemini/config` on its first run; `~/.gemini` alone is also
+    /// the retired Gemini CLI's.
     pub fn home_directory(self, home: &Path) -> PathBuf {
         match self {
             Self::Gemini => home.join(".gemini"),
@@ -322,7 +322,7 @@ impl GuidanceAgent {
             // its own beside the other tools' files.
             Self::Grok => Layout::event_map(folder.join("hooks").join("hide.json"), true),
             // agy reads one global `hooks.json` whose top-level keys are
-            // named blocks; Herdr's is `herdr`, Hide's is `hide`. Hide creates
+            // named blocks; Hide's is `hide` (Herdr's was `herdr`). Hide creates
             // the file when agy has none and deletes it again only when
             // nothing is left in it.
             Self::Antigravity => Layout {

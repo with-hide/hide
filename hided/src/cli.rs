@@ -1449,7 +1449,7 @@ fn absolute_caller_path(path: &str) -> Result<String, String> {
         }
     }
     // A pane's cwd may be reached through a platform alias such as macOS
-    // /var -> /private/var, while Herdr reports the checkout's real path.
+    // /var -> /private/var, while the engine reports the checkout's real path.
     // Resolve the nearest existing ancestor so deleted diff paths still
     // retain their final components and the host can judge them in its root.
     let mut ancestor = normalized.as_path();
@@ -2591,7 +2591,7 @@ fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
 }
 
 /// Answers the folder the desktop host runs this package's daemon, CLI and
-/// Herdr from, as one JSON line. A Windows package's is a copy outside its
+/// pane holder from, as one JSON line. A Windows package's is a copy outside its
 /// install folder (PRD auto-update D-10), made here once per build, and the
 /// copies of other builds nothing runs from are removed; what could not be
 /// removed is reported to stderr as records the host logs (D-11). Elsewhere

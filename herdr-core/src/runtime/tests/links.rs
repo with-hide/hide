@@ -340,7 +340,7 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
 }
 
 /// A registration as `hide agent spawn` records it: the session is the
-/// value Herdr reported for the pane, which for Pi and omp is the session's
+/// value the engine reported for the pane, which for Pi and omp is the session's
 /// file.
 fn spawned_record(
     id: &str,
@@ -373,7 +373,7 @@ fn spawned_record(
     }
 }
 
-/// Pi and omp report their session to Herdr as its file, while the link
+/// Pi and omp report their session to the engine as its file, while the link
 /// reader names it by the id in the file's header. A child spawned that way
 /// is in its parent's record once its file is read, whichever of the spawn
 /// and the read reaches the record first.
@@ -1715,7 +1715,7 @@ fn resuming_starts_the_providers_resume_and_refuses_what_cannot_resume() {
     }
 }
 
-/// A parent Herdr never named is called by its registration id in its
+/// A parent the engine never named is called by its registration id in its
 /// letters' envelopes and in the lineage facts that recognise those letters as
 /// work. Its screen title changes with every turn, so neither side may take
 /// its name from it.
@@ -2103,7 +2103,7 @@ fn a_pre_check_reaches_the_record_as_its_session_and_a_failed_or_closed_start_is
     assert_eq!(runtime.links_work.pre_checks[0].request_id, "r-cap-2");
 }
 
-/// The same Herdr pane id on this machine and on a device names two panes:
+/// The same engine pane id on this machine and on a device names two panes:
 /// a device worker's parent is that device's lead, found by the device's own
 /// address, and never this machine's pane of the same raw id.
 #[test]

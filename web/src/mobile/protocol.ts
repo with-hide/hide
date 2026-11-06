@@ -363,7 +363,7 @@ export const GROUP_TITLE: Record<GroupId, MessageKey> = {
 };
 
 
-/** The five quick keys (B26, B38): what hided sends Herdr, the keycap, and the accessible name. */
+/** The five quick keys (B26, B38): what hided sends the engine, the keycap, and the accessible name. */
 export type QuickKey = "enter" | "escape" | "up" | "down" | "ctrl_c";
 
 export const QUICK_KEYS: readonly { key: QuickKey; label: string; name: MessageKey }[] = [

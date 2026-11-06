@@ -1,6 +1,6 @@
 //! A device's projects from its helper's facts (`crate::device_catalog`).
 //!
-//! The runtime keeps each device's session as Herdr reported it and derives
+//! The runtime keeps each device's session as the engine reported it and derives
 //! the published one from it and the facts the device's helper has answered.
 //! The facts are asked on a worker with the runtime lock released, once per
 //! directory; a new directory in the session, or a new helper connection,
@@ -270,7 +270,7 @@ impl Runtime {
         }
         if status.session.as_ref() != Some(&session) {
             let before = status.session.replace(session);
-            // Rows regrouped from Herdr's raw session carry no lineage, which
+            // Rows regrouped from the engine's raw session carry no lineage, which
             // only the pass across every machine derives; a subtree close
             // waits on it, so the session is never published without it.
             self.refresh_agent_lineage();
@@ -289,7 +289,7 @@ impl Runtime {
         changed
     }
 
-    /// A device tab Herdr no longer lists loses its View bookmark (D-11).
+    /// A device tab the engine no longer lists loses its View bookmark (D-11).
     pub(super) fn device_catalog_ready(&self, target: &str) -> bool {
         self.snapshot
             .status
@@ -345,7 +345,7 @@ impl Runtime {
     /// Carries folds saved under a device checkout's old, workspace-keyed id
     /// over to its folder-keyed id (`device_catalog::legacy_checkout_ids`); a
     /// device's selection is not saved (`ui_state.focused_checkout_id` holds
-    /// only this machine's), since the device's own Herdr focus picks it.
+    /// only this machine's), since the device's own engine focus picks it.
     fn rename_saved_device_checkouts(&mut self, target: &str, session: &RemoteSessionSnapshot) {
         let Some(raw) = self.device_raw_sessions.get(target) else {
             return;
@@ -386,7 +386,7 @@ impl Runtime {
         self.persist_current_ui_state();
     }
 
-    /// Remembers the tab the device's Herdr has in focus under the checkout
+    /// Remembers the tab the device's engine has in focus under the checkout
     /// holding it, and makes each checkout's remembered tab, while it still
     /// exists, the one its row brings forward; the grouping's own choice is
     /// the fallback for a checkout with nothing remembered.
@@ -905,7 +905,7 @@ impl Runtime {
         changed | self.request_device_worktrees(target, true)
     }
 
-    /// Forgets what the device's Herdr reported and the tabs Hide created
+    /// Forgets what the device's engine reported and the tabs Hide created
     /// there. What its helper answered about its directories stays: a Retry
     /// connects to the same device again, and that connection asks again
     /// (`reread_device_facts`), so meanwhile the device's panes keep their
@@ -1066,7 +1066,7 @@ impl Runtime {
     /// the folder against that device's home, and a folder outside it against
     /// the operator's confirmation of that path (PRD wsl-device D-10), and
     /// names the project it belongs to; the registration is that project, and
-    /// it is listed with or without a Herdr workspace there. Nothing is
+    /// it is listed with or without an engine workspace there. Nothing is
     /// created on the device.
     pub(super) fn create_device_registration(
         &mut self,

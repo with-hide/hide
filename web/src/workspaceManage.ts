@@ -33,8 +33,8 @@ export function purposeCountLabel(text: string, t: TFunction<"translation">): st
 
 /**
  * Where a saved purpose is kept (PRD S5.5 B30). A device's purpose is its
- * Herdr's workspace metadata only; on this machine a branch also keeps it as
- * its Git description, which outlives the Herdr workspace.
+ * engine's workspace metadata only; on this machine a branch also keeps it as
+ * its Git description, which outlives the engine workspace.
  */
 export function purposeScope(deviceLabel: string | null, branch: string | null, t: TFunction<"translation">): string {
   if (deviceLabel) return t("workspace.purposeScopeRemote", { device: deviceLabel });
@@ -144,10 +144,10 @@ function editorItem(workspace: Workspace, host: MenuHost, t: TFunction<"translat
 /**
  * The project row's menu on any device, registered or not (PRD
  * sidebar-context-menus D-02, D-14): open the project, start work in it, find
- * its folder, then keep or drop it. A row Herdr shows without a registration
+ * its folder, then keep or drop it. A row the engine shows without a registration
  * offers the same Pin and Remove: Pin registers it with its device and root
  * and pins it in the same event, and Remove closes its panes, after which the
- * row leaves with Herdr's workspace because there is no registration to keep it.
+ * row leaves with the engine's workspace because there is no registration to keep it.
  */
 export function projectMenu(workspace: Workspace, host: MenuHost, t: TFunction<"translation">, storedIssueSource?: string, folder = false): MenuItem[] {
   const primary = primaryCheckout(workspace);
@@ -202,7 +202,7 @@ export function projectRemovalFacts(workspace: Workspace, t: TFunction<"translat
   const facts: string[] = [];
   if (panes > 0) facts.push(t("workspace.facts.panesClose", { count: panes }));
   if (panes > 0 && running > 0) facts.push(t("workspace.facts.agentsStop", { count: running }));
-  // A row Herdr shows without a registration leaves once its panes do.
+  // A row the engine shows without a registration leaves once its panes do.
   facts.push(workspace.registered ? t("workspace.facts.registrationOnly") : panes > 0 ? t("workspace.facts.rowWithPanes") : t("workspace.facts.rowWithWorkspace"));
   facts.push(t("workspace.facts.filesStay"));
   return facts;
@@ -288,8 +288,8 @@ export type AgentMenuItem = MenuPresentation & {
  * An agent row's menu (PRD sidebar-context-menus D-04, D-06): go to its pane,
  * copy its reference (name and pane id) or its session id, close the tab it is in through the tab close
  * confirmation. `showChord` is the ⌥n that selects the same row, or "" when
- * it holds no number on this host. Herdr 0.9.1 can neither mark a pane seen
- * nor stop an agent, so neither is offered (D-05).
+ * it holds no number on this host. The engine can neither mark a pane seen
+ * nor stop an agent from this menu, so neither is offered (D-05).
  */
 export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"translation">): AgentMenuItem[] {
   return [
@@ -302,7 +302,7 @@ export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"tran
 
 /**
  * A linked worktree whose folder is gone and that Git, having answered for its
- * repository, no longer lists: only Herdr's panes in the folder keep the row,
+ * repository, no longer lists: only the engine's panes in the folder keep the row,
  * so deleting it closes them and asks nothing of Git (the core's
  * `unlisted_missing_worktree`).
  */

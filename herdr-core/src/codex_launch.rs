@@ -1,7 +1,7 @@
 //! `--no-daemon` on every Codex Hide starts (PRD overview-request-view D-20).
 //!
 //! A Codex attached to the shared app-server daemon runs its hooks in the
-//! daemon's environment, so Herdr never learns that pane's session and Hide
+//! daemon's environment, so the engine never learns that pane's session and Hide
 //! cannot read it (openai/codex#48500). Every start Hide makes, a new agent,
 //! a start from an issue or PR, a reopen, a fork and a wake, goes through
 //! the engine's start ([`crate::engine::Engine::prepare_start`]), which takes

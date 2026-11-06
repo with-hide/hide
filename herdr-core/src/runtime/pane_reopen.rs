@@ -1,6 +1,6 @@
 //! Reopen on a pane Hide cannot hear, inside the runtime (PRD settings-cleanup
 //! B29, D-11): the event, the one-in-flight rule per pane, and the worker's
-//! answer. What touches Herdr lives in `crate::pane_reopen`; nothing here
+//! answer. What touches the engine lives in `crate::pane_reopen`; nothing here
 //! blocks.
 
 use super::*;
@@ -186,7 +186,7 @@ impl Runtime {
         }
     }
 
-    /// Publishes a refusal as the pane's one line and logs Herdr's words.
+    /// Publishes a refusal as the pane's one line and logs the engine's words.
     fn settle_pane_reopen(
         &mut self,
         pane_id: &str,

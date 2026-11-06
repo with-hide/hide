@@ -15,14 +15,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const STORE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Herdr runs `git worktree add` inside `worktree.create`, which on a large
+/// The engine runs `git worktree add` inside `worktree.create`, which on a large
 /// repository under load takes longer than the 5 s every other call gets.
 const WORKTREE_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
-/// The refusal for a `worktree.create` whose answer never came: Herdr may
+/// The refusal for a `worktree.create` whose answer never came: the engine may
 /// still finish the worktree, and asking the same intent again continues it.
 pub(crate) const WORKTREE_UNCONFIRMED: &str = "worktree_unconfirmed";
 
-/// What a failed `worktree.create` is refused as. Herdr's own refusal keeps
+/// What a failed `worktree.create` is refused as. The engine's own refusal keeps
 /// its words; a reply that never arrived leaves the worktree unknown, which
 /// the same intent resolves, so it gets its own code instead of the
 /// transport's sentence.
@@ -284,7 +284,7 @@ fn wait_native_identity(
     // The public socket start acknowledges the typed command before the
     // process and its native session are detected. Wait for that observation,
     // never send another start, and keep every read within one finite deadline.
-    // The agent runs by now, so a read Herdr did not answer says nothing of
+    // The agent runs by now, so a read the engine did not answer says nothing of
     // it: the wait reads again, and at its deadline the spawn leaves the
     // registration to an identity wait rather than an agent nothing tracks.
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -317,7 +317,7 @@ fn wait_native_identity(
         );
     }
 }
-/// Waits until Herdr reports the agent `name` in `pane` ready for input
+/// Waits until the engine reports the agent `name` in `pane` ready for input
 /// (`BRIEF_READY_WAIT`), the moment the spawn's brief may be typed. An agent
 /// that never takes input in that time is `brief_not_submitted`: nothing was
 /// typed, and the same command waits again.
@@ -474,7 +474,7 @@ fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Acto
         } else {
             crate::address::scoped_pane_id(device, &agent.pane_id)
         },
-        // Herdr's own identifier for the agent: its name, else its pane. It
+        // The engine's own identifier for the agent: its name, else its pane. It
         // keys the pane, never labels it (`AgentRecord::wire_name`).
         name: agent.name.clone().unwrap_or_else(|| agent.pane_id.clone()),
         kind: agent.agent.clone().ok_or("native_identity_unavailable")?,
@@ -507,7 +507,7 @@ pub(super) fn record(
     super::kept_session(&session)?;
     Ok(AgentRecord {
         id: String::new(),
-        // A pane id is never a name: Herdr's fallback identifier for an
+        // A pane id is never a name: the engine's fallback identifier for an
         // agent it never named, or a name restating the pane, is none.
         name: name.filter(|name| *name != agent.pane_id),
         machine: host.machine.into(),
@@ -671,7 +671,7 @@ pub(super) fn publish_tokens(client: &Client, engine: &dyn Engine, id: &str) -> 
     }
     Ok(())
 }
-/// The caller's own live registration, made from what Herdr reports of its
+/// The caller's own live registration, made from what the engine reports of its
 /// pane when it has none yet: a spawn's parent, and the session that takes a
 /// mission over (`Command::RegisterSelf`). Converges on the existing record.
 fn own_registration(
@@ -685,7 +685,7 @@ fn own_registration(
         return Ok(own.id.clone());
     }
     if actor.hide_owned() {
-        // Hide's own work (Desk, Hide AI) has no pane for Herdr to
+        // Hide's own work (Desk, Hide AI) has no pane for the engine to
         // report: its record is the origin it registers here, once.
         return register_code_owned(client, authority, actor);
     }
@@ -713,7 +713,7 @@ fn own_registration(
             on_node,
         },
         native.pane_id.clone(),
-        // Herdr's name for the caller while it has one; a caller Herdr never
+        // The engine's name for the caller while it has one; a caller the engine never
         // named stays unnamed instead of taking its pane id for a name.
         native.name.clone(),
         None,
@@ -1078,7 +1078,7 @@ fn spawn(
             // core's own) has this record name it first, so the pane is
             // never seen running unregistered, and a pane whose holder does
             // not start is taken off the record in the same call (PRD
-            // engine-bundle-3-core-owns D-11). Herdr names a pane only once
+            // engine-bundle-3-core-owns D-11). The engine names a pane only once
             // it runs, so its pane is recorded below, after the call.
             let engine = engine.gated(crate::engine::Gate::placing(SpawnPlacement {
                 client: client.clone(),
@@ -1137,7 +1137,7 @@ fn spawn(
                         .map(|workspace| workspace.label.as_str()),
                     &label,
                 );
-                // A split beside the caller runs Herdr's own shell, as a fork's
+                // A split beside the caller runs the engine's own shell, as a fork's
                 // does, so only a tab is launched with Hide's.
                 let launch = beside_of
                     .is_none()
@@ -1145,7 +1145,7 @@ fn spawn(
                     .flatten();
                 // A tab under the spawn's label is one this spawn opened, with
                 // the launch when there is one; a workspace under it holds
-                // Herdr's own first tab, which was never replaced.
+                // the engine's own first tab, which was never replaced.
                 let labelled_tab = snapshot
                     .tabs
                     .iter()
@@ -1167,7 +1167,7 @@ fn spawn(
                 });
                 let mut seed_tab = None;
                 let pane = match (beside_of.as_deref(), existing_pane) {
-                    // Herdr's own shell runs in the split, as in a fork's.
+                    // The engine's own shell runs in the split, as in a fork's.
                     (Some(caller), _) => {
                         shell = ShellStart::Plain;
                         let (pane, split) = beside_pane(
@@ -1177,7 +1177,7 @@ fn spawn(
                             &existing,
                             &reserved.id,
                         )?;
-                        // Drawing ahead is only the screen's: Herdr's layout
+                        // Drawing ahead is only the screen's: the engine's layout
                         // replaces it, so a runtime that cannot draw it now
                         // never fails the spawn.
                         if split
@@ -1227,7 +1227,7 @@ fn spawn(
                 return Err("beside_other_checkout".into());
             } else {
                 // A device whose helper is not connected leaves the start to
-                // Herdr, the folder's own HEAD.
+                // the engine, the folder's own HEAD.
                 let start = node
                     .as_deref()
                     .and_then(|node| crate::worktree_control::new_branch_start(node, repo, None));
@@ -1275,7 +1275,7 @@ fn spawn(
                 crate::agent_start::trust_worktree(node.as_deref(), kind, &checkout)?;
             }
             // The terminal is recorded with the pane, so a later attempt can
-            // tell this pane from one Herdr gives the same id afterwards.
+            // tell this pane from another terminal that later answers to the same id.
             let terminal = pane_terminal(engine.as_ref(), &pane)?;
             reserved = serde_json::from_value(mutate(
                 client,
@@ -1293,7 +1293,7 @@ fn spawn(
             )?)
             .map_err(|_| "spawn_unavailable")?;
             // The record names the split now, so its label has done its work
-            // and leaves Herdr's own title of the pane.
+            // and leaves the engine's own title of the pane.
             if let (Some(_), Some(pane)) = (beside_of.as_ref(), reserved.pane.as_deref()) {
                 let cleared = engine
                     .rename_pane(Wait::Each(Duration::from_secs(5)), pane, None)
@@ -1320,7 +1320,7 @@ fn spawn(
                 return Err("child_identity_changed".into());
             }
             if reserved.typed > 0 {
-                // A start of this spawn was typed here already. While Herdr
+                // A start of this spawn was typed here already. While the engine
                 // holds its name with no agent (`launch_pending`), it gives
                 // that name to whatever agent shows in this terminal and
                 // refuses another start here, so nothing is typed while the
@@ -1333,7 +1333,7 @@ fn spawn(
                 if held && !name_released(engine.as_ref(), name) {
                     return Err("native_identity_unavailable".into());
                 }
-                // Herdr gave that start up. Only a shell back at rest, with
+                // The engine gave that start up. Only a shell back at rest, with
                 // nothing of its own in the foreground, takes the start again,
                 // and only once: a start typed into a question at startup is
                 // typed again at the prompt that followed, and a second one
@@ -1542,7 +1542,7 @@ fn spawn(
             Err(reason) if reason == "native_identity_unavailable" => {
                 // The agent rests without a session (Codex and OpenCode 2
                 // report theirs at their first turn): the core binds it when
-                // Herdr shows one, and the caller hears it has not yet.
+                // the engine shows one, and the caller hears it has not yet.
                 mutate(
                     client,
                     authority,
@@ -1696,7 +1696,7 @@ impl crate::engine::Placement for SpawnPlacement {
 /// device or in another checkout than the caller's (a new worktree, another
 /// branch or another folder), or when the caller is no agent pane Hide knows.
 /// `target` is the repository, branch and folder asked for, compared with
-/// Herdr's worktrees; none for a retry whose pane exists already.
+/// the engine's worktrees; none for a retry whose pane exists already.
 fn beside_target(
     client: &Client,
     authority: &Authority,
@@ -1791,7 +1791,7 @@ fn beside_pane(
     Ok((pane, true))
 }
 
-/// Whether Herdr has let go of `name`. Herdr holds the name of a start whose
+/// Whether the engine has let go of `name`. The engine holds the name of a start whose
 /// agent never showed until that start's own deadline, and settles a passed
 /// deadline only when the name is read, which this `agent.get` is.
 fn name_released(engine: &dyn Engine, name: &str) -> bool {
@@ -1809,7 +1809,7 @@ fn shell_alone(engine: &dyn Engine, pane: &str) -> Result<bool, String> {
         .map(|group| group.shell_holds_terminal())
 }
 
-/// The terminal Herdr runs in `pane` now.
+/// The terminal the engine runs in `pane` now.
 fn pane_terminal(engine: &dyn Engine, pane: &str) -> Result<String, String> {
     engine
         .pane_terminal(Wait::Each(Duration::from_secs(5)), pane)
@@ -1818,16 +1818,17 @@ fn pane_terminal(engine: &dyn Engine, pane: &str) -> Result<String, String> {
 
 /// Closes the pane of every earlier attempt of `reserved`: a spawn of the
 /// same parent, name and device that made a pane and never bound a child,
-/// because its agent did not start (a refused start, or one Herdr typed that
+/// because its agent did not start (a refused start, or one engine typed that
 /// never showed its agent). Each new attempt is its own intent with a pane of
 /// its own, so the earlier pane would stay behind as an extra tab, holding the
-/// agent's name in Herdr when its start was typed. Herdr hands a pane id out
-/// again (a new server, a live handoff), so a pane is the attempt's own only
+/// agent's name in the engine when its start was typed. A pane id can outlive its
+/// terminal (Herdr handed ids out again after a new server, and a live handoff
+/// moves a pane), so a pane is the attempt's own only
 /// while it runs the terminal the attempt recorded; any other pane under that
 /// id, and a record from before terminals were recorded, is logged and left
 /// open. A pane where an agent shows or the shell does not hold the terminal
 /// is left alone, and a pane that cannot be read or closed is logged and left
-/// to Herdr's own answer.
+/// to the engine's own answer.
 fn close_unstarted_attempts(
     engine: &dyn Engine,
     ledger: &crate::delivery::ledger::Ledger,
@@ -1885,7 +1886,7 @@ pub(super) fn close_refused_pane(
 }
 
 /// Whether `pane` is still the terminal `record` recorded with it, so a pane
-/// Herdr gave the same id afterwards is never taken for the spawn's.
+/// that later answers to the same id is never taken for the spawn's.
 fn same_terminal(engine: &dyn Engine, record: &SpawnRecord, pane: &str) -> Result<(), String> {
     let recorded = record
         .terminal
@@ -1905,7 +1906,7 @@ fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
 }
 
 /// A failure of a spawn's work on a device, as the caller should read it: the
-/// device is unavailable when its Herdr no longer answers, whatever step was
+/// device is unavailable when its engine no longer answers, whatever step was
 /// running; any other failure keeps its own code. The dropped cause is logged
 /// with the device and the spawn it belongs to.
 fn device_unreachable(engine: &dyn Engine, device: &str, spawn: &str, reason: String) -> String {
@@ -1926,9 +1927,9 @@ fn device_unreachable(engine: &dyn Engine, device: &str, spawn: &str, reason: St
 }
 
 /// Records the fork Hide started in pane `child` from the agent in pane
-/// `source`, under the Herdr name `name` the fork's start gave it. The
+/// `source`, under the engine name `name` the fork's start gave it. The
 /// source is registered now, while it is the execution that was forked; the
-/// fork is registered once Herdr shows its own session, which Codex reports
+/// fork is registered once the engine shows its own session, which Codex reports
 /// only at the fork's first turn, so the registration waits for it in the
 /// ledger (`identity_wait`) rather than for a fixed time here.
 pub(crate) fn link_fork(
@@ -2219,7 +2220,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A `worktree.create` whose answer never came may still finish in
-    /// Herdr, so it is one stable code the same intent resolves; a refusal
+    /// the engine, so it is one stable code the same intent resolves; a refusal
     /// and a connection that never opened keep their own words.
     #[test]
     fn a_worktree_create_with_no_answer_is_refused_as_unconfirmed() {
@@ -2269,8 +2270,8 @@ mod tests {
         );
     }
 
-    /// An agent Herdr never named is registered with no name: its pane id,
-    /// which Herdr offers as its identifier, is not a name, and neither is a
+    /// An agent the engine never named is registered with no name: its pane id,
+    /// which the engine offers as its identifier, is not a name, and neither is a
     /// name that only restates the pane.
     #[test]
     fn registering_an_agent_herdr_never_named_stores_no_name() {
@@ -2301,7 +2302,7 @@ mod tests {
         assert_eq!(make(Some("lead".into())).name.as_deref(), Some("lead"));
     }
 
-    /// Pi names its session by its file path, which Herdr keeps up to 4096
+    /// Pi names its session by its file path, which the engine keeps up to 4096
     /// bytes: a registration keeps the same, and a longer one is refused by
     /// its own reason when the record is made, never as an unavailable ledger.
     #[test]
@@ -2512,7 +2513,7 @@ mod tests {
         }
     }
 
-    /// A Herdr whose panes run the given terminals, each with its shell
+    /// An engine whose panes run the given terminals, each with its shell
     /// alone at the prompt unless named busy, and that closes what it is
     /// asked to.
     fn attempt_panes(
@@ -2576,7 +2577,7 @@ mod tests {
             ],
             &["w2:p3"],
         );
-        // An agent shows in w2:p2, and Herdr holds the name for the start in
+        // An agent shows in w2:p2, and the engine holds the name for the start in
         // w2:p1 that never showed one.
         let observed: Vec<ProjectedAgent> = session(json!({"agents": [
             {"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
@@ -2596,8 +2597,8 @@ mod tests {
         assert_eq!(closed_panes(&herdr), ["w2:p1"]);
     }
 
-    /// Herdr hands a pane id out again after its server is replaced, so an
-    /// earlier attempt's pane id can name an idle shell the attempt never
+    /// Herdr handed a pane id out again after its server was replaced (issue
+    /// 874), so an earlier attempt's pane id can name an idle shell the attempt never
     /// made (issue 874). Only a pane still running the terminal the attempt
     /// recorded is its own and closed; a pane id now running another
     /// terminal, and a record an older build wrote without one, are left

@@ -2,7 +2,7 @@
 // WebGL with the addon the shell bundles: the installed package rewritten by
 // the same function the build applies (src/webglAtlasSlots.ts).
 //
-// This spec starts no Herdr or hided: the fault is inside the renderer, between
+// This spec starts no engine or hided: the fault is inside the renderer, between
 // the atlas and the GPU, and terminal bytes take the same path whether a PTY or
 // `term.write` produced them. What it checks is what the GPU draws from: at
 // every glyph draw, the canvas last uploaded to each texture slot must be the atlas

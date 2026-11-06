@@ -2,7 +2,7 @@
 //! pane (PRD core-host-node-terminal).
 //!
 //! A node owns its panes' terminal attaches and their bytes: keys from the
-//! screen reach the node's writer and a frame from Herdr reaches the screen
+//! screen reach the node's writer and a frame from the pane reaches the screen
 //! without passing the core. The core decides which panes attach and keeps
 //! the facts it projects; it says so with [`TerminalControl`] and hears what
 //! happened as [`TerminalReport`]. Neither carries a key or a frame's bytes,
@@ -10,7 +10,7 @@
 //! pasted attachment's paths).
 //!
 //! Pane ids here are the node's own: a device's node knows its panes by its
-//! Herdr's ids, and the screen side scopes them to the device.
+//! the engine's ids, and the screen side scopes them to the device.
 
 use std::sync::Arc;
 
@@ -27,7 +27,7 @@ pub const MAX_UNSENT_KEY_BYTES: usize = 256 * 1024;
 /// watch belongs to an operation the core has already closed.
 pub const MAX_FRAME_WATCHES: usize = 64;
 /// The longest pane or creation id a screen may name to a node. A device
-/// pane's id, `remote:<device>:pane:<Herdr's id>`, is the longest, with a
+/// pane's id, `remote:<device>:pane:<the device's id>`, is the longest, with a
 /// device id of at most 256 bytes; the node's pane caps count entries, so
 /// this bounds their bytes too.
 pub const MAX_PANE_ID_BYTES: usize = 512;
@@ -59,7 +59,7 @@ pub const MAX_ATTACHMENT_INPUT_BYTES: usize = 64 * 1024;
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum TerminalControl {
-    /// Attach the pane, in control when Herdr allows it. A pane with no
+    /// Attach the pane, in control when the pane's holder allows it. A pane with no
     /// size waits for [`TerminalControl::Resize`]. `manual` is an operator's
     /// Reconnect: it starts again from a first attempt.
     Attach {
@@ -72,14 +72,14 @@ pub enum TerminalControl {
     /// The pane's tab left the attach window: end its session and keep only
     /// that it was released, with the core's words for why.
     Release { pane: String, message: String },
-    /// Herdr no longer has the pane: forget everything about it.
+    /// The engine no longer has the pane: forget everything about it.
     Forget { pane: String },
-    /// Hide asked Herdr to close the pane (`closing`), or that close ended.
+    /// Hide asked the engine to close the pane (`closing`), or that close ended.
     /// A session that ends while its pane closes is not a failure, and keys
     /// for it are refused.
     Closing { pane: String, closing: bool },
     /// The PTY size the core settled for the pane: the grid its view fits
-    /// in the rectangle drawn for it, confirmed by Herdr or not, since the
+    /// in the rectangle drawn for it, confirmed by the engine or not, since the
     /// controller alone sizes the PTY (PRD grid-ahead-of-herdr D-02).
     Resize { pane: String, size: GridSize },
     /// The panes of the tabs on screen. A failed attach is retried on its
@@ -107,12 +107,12 @@ pub enum TerminalControl {
     Write { pane: String, data: String },
     /// The agent in the pane sleeps: keys for it are dropped until it wakes.
     Asleep { pane: String, asleep: bool },
-    /// A creation the screen sends keys against before Herdr names its pane.
+    /// A creation the screen sends keys against before the engine names its pane.
     RequestOpen { request: String, fork: bool },
     /// The pane exists but its creation is still starting. All clients' keys
     /// for it join this request's queue on the pane's node.
     RequestHold { request: String, pane: String },
-    /// Herdr's answer for the creation named its pane.
+    /// The engine's answer for the creation named its pane.
     RequestResolve { request: String, pane: String },
     /// The creation made no pane the keys may follow.
     RequestDiscard { request: String, reason: String },
@@ -225,7 +225,7 @@ pub enum AttachmentInputOutcome {
     Cancelling,
 }
 
-/// Where a screen's key goes: a pane, or a creation whose pane Herdr has not
+/// Where a screen's key goes: a pane, or a creation whose pane the engine has not
 /// named yet.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

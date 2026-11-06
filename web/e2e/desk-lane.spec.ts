@@ -15,7 +15,7 @@ import { enterWorkspace } from "./wire";
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
 // spawn the core would have recorded (its shape is `coordination::started`'s
-// `register` and `spawn`) for a real pane of the fixture's Herdr, while the
+// `register` and `spawn`) for a real pane of the fixture's engine, while the
 // daemon is down.
 
 type Desk = { page: Page; herdr: AgentFixture; daemon: Daemon; pane: string };

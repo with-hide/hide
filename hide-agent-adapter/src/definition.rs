@@ -6,8 +6,8 @@
 //! The built-in files are `agents/*.toml` in this crate: the seven agents
 //! with Hide's own features, whose identity `AgentAdapter` reads from the
 //! constants `build.rs` generates out of these files, and sixteen agents
-//! Herdr has screen rules for, which have the definition only. The
-//! operator's own files (`~/.hide/agents/*.toml`, read by
+//! with screen rules taken from Herdr's manifests, which have the definition
+//! only. The operator's own files (`~/.hide/agents/*.toml`, read by
 //! `hide_kit::agent_definitions`) come after them in name order: a file with
 //! a built-in agent's id replaces that agent's screen rules only, and a new
 //! id either names its program and `hooks = "none"` or copies a built-in

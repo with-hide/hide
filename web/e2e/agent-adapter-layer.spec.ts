@@ -1,4 +1,4 @@
-// The approved Basic-chip journey against a private pinned Herdr and kit HOME.
+// The approved Basic-chip journey against a private engine and kit HOME.
 // Expected membership and words are independent of the production declaration.
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";

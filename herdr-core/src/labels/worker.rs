@@ -1,4 +1,4 @@
-//! One Herdr server's labels: which session each agent pane runs, when its
+//! One engine's labels: which session each agent pane runs, when its
 //! conversation is read, when it is analyzed, and what the projection shows.
 //!
 //! The session-sync coordinator owns one worker and drives it from the agent
@@ -151,7 +151,7 @@ pub(crate) struct SightedPullRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SightedMemoryReceipt {
     pub(crate) context_reset: bool,
-    /// Memory's provider id: the agent's Herdr kind.
+    /// Memory's provider id: the agent's engine kind.
     pub(crate) provider: &'static str,
     pub(crate) session_id: String,
     /// The pane's cwd, which names the Project.
@@ -162,7 +162,7 @@ pub(crate) struct SightedMemoryReceipt {
 }
 
 /// A session a live pane on the target's machine holds, as Memory names it:
-/// the provider (the agent's Herdr kind) and the session id.
+/// the provider (the agent's engine kind) and the session id.
 pub(crate) type MemorySession = (&'static str, String);
 
 /// What the label reads give Memory since the last take: the receipts they
@@ -181,7 +181,7 @@ pub(crate) struct ObservedAgent {
     pub(crate) pane_id: String,
     pub(crate) agent: Option<String>,
     pub(crate) status: Option<String>,
-    /// Herdr's `agent_session` as `(kind, value)`.
+    /// The engine's `agent_session` as `(kind, value)`.
     pub(crate) reference: Option<(String, String)>,
     pub(crate) cwd: Option<String>,
     pub(crate) state_change_seq: u64,
@@ -193,7 +193,7 @@ pub(crate) struct WorkerConfig {
     pub(crate) suggestions: SuggestionsHandle,
     /// The store key: the core's node id, or `device:<id>`.
     pub(crate) target: String,
-    /// Where the Herdr server's generator lock is (D-10); see `generator`.
+    /// Where the engine's generator lock is (D-10); see `generator`.
     pub(crate) lock: LockPlace,
     /// Where the runtime records the operator's submits (D-19).
     pub(crate) input: Arc<OperatorInput>,
@@ -302,7 +302,7 @@ enum WorkerResult {
         resolved_reference: Option<(String, String)>,
         metadata: Box<MetadataRead>,
         from_start: bool,
-        /// Herdr's `state_change_seq` the read was asked under.
+        /// The engine's `state_change_seq` the read was asked under.
         state_change_seq: Option<u64>,
         result: Box<Result<LabelTranscript, ReadFailure>>,
     },
@@ -603,7 +603,7 @@ impl LabelWorker {
             // and sentence are over, and the new turn's analysis writes anew. A
             // stopped agent whose state moved and is stopped again (or at a
             // permission prompt) ran in between, even when its working state
-            // came and went inside one burst of Herdr events and was never
+            // came and went inside one burst of the engine events and was never
             // seen here.
             let ran = status == "working"
                 || (seq_moved
@@ -628,7 +628,7 @@ impl LabelWorker {
                 .as_ref()
                 .and_then(|(kind, value)| label_reference_token(agent.as_str(), kind, value));
             // A turn that just ended is not a stop until its session read lands
-            // (#902): the read is owed from the moment Herdr reports the stop
+            // (#902): the read is owed from the moment the engine reports the stop
             // until it lands, fails or the agent runs again. A state first
             // seen here, or one a read already settled, owes nothing.
             record.turn_end_owed = if !agent.reports_wake_devices()
@@ -722,7 +722,7 @@ impl LabelWorker {
                             next_analysis_at: None,
                             start_held: None,
                             // Native-file titles and waits can change without
-                            // a Herdr lifecycle transition, including at EOF.
+                            // an engine lifecycle transition, including at EOF.
                             follow_up_at: (resumable && agent.requires_native_file_proof())
                                 .then_some(now + FOLLOW_UP_READ),
                             follow_up_armed: status_moved,
@@ -802,7 +802,7 @@ impl LabelWorker {
             self.forget_pane(&id);
         }
         if let Some(live) = live_panes {
-            // An agent Herdr lists is live even when its pane is not in
+            // An agent the engine lists is live even when its pane is not in
             // the pane list yet (a pane created between the two reads).
             let before = self.records.len();
             self.records
@@ -1512,7 +1512,7 @@ impl LabelWorker {
         // A resume argv is launch intent, not live identity: an agent can
         // choose another conversation without replacing its process. Read
         // the intended record, but grant no current facts or analysis until
-        // Herdr reports the conversation its hooks witnessed.
+        // the engine reports the conversation its hooks witnessed.
         if pane.reported_reference.is_none() {
             let read = result.as_ref().expect("native identity checked above");
             let mut display = saved
@@ -1767,7 +1767,7 @@ impl LabelWorker {
             .into_iter()
             .map(|failure| (Signal::FailedTool, failure.head, failure.at_unix_ms, None))
             .collect::<Vec<_>>();
-        // The agent stopped for the operator: a native question, or Herdr's
+        // The agent stopped for the operator: a native question, or the engine's
         // `blocked` (a permission or input prompt). A plan waiting for
         // approval is the turn's own end, not a stop.
         let waits = [
@@ -1999,7 +1999,7 @@ impl LabelWorker {
             return changed;
         }
         // A line and its end belong to the Human turn that was analyzed.
-        // A new turn can begin while Herdr still reports Working, or while
+        // A new turn can begin while the engine still reports Working, or while
         // the old turn's end analysis is in flight.
         if let Some(turn) = turn_key(pane.events.make_contiguous())
             && let Some(record) = self.records.get_mut(pane_id)
@@ -2066,7 +2066,7 @@ impl LabelWorker {
     }
 
     /// A read that failed cannot say whether a task will wake the agent, and
-    /// never will for this state, so the row goes back to what Herdr reports.
+    /// never will for this state, so the row goes back to what the engine reports.
     /// The hold ends on every path of the read, not on a timer: the read has
     /// its own bound (`DEVICE_READ_TIMEOUT`).
     fn release_turn_end(&mut self, pane_id: &str) -> bool {

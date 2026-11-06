@@ -1,5 +1,5 @@
 // The words for a failure the core sends as a code: a `last_error.kind`, an
-// agent start's reason code, and the state of this machine's Herdr or of a
+// agent start's reason code, and the state of this machine's engine or of a
 // device's connection (docs/LOCALIZATION.md, Translation boundary). The core's
 // own sentence is diagnostic detail and stays in the log; `coreError.ts` picks
 // one of these by code, and a code missing here is worded `coreError.other`.

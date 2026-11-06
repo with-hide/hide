@@ -3998,7 +3998,7 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
 /// Runs the boundary on a client event. The roots follow the core on their own
 /// reads, so an event can name a checkout this client read in a snapshot the
 /// boundary has not applied yet: after a launch, a checkout the core learns
-/// from Herdr's first sync reaches both on separate reads. A refusal as
+/// from the engine's first sync reaches both on separate reads. A refusal as
 /// outside every checkout therefore brings the roots current (`catch_up`) and
 /// runs the check once more before it is answered. The first check's
 /// `path.refused` line stays in the log, followed by `boundary.roots_caught_up`
@@ -5371,7 +5371,7 @@ mod tests {
         assert!(!token_matches("", "abc"));
     }
 
-    /// After a launch, a checkout the core learns from Herdr's first sync
+    /// After a launch, a checkout the core learns from the engine's first sync
     /// reaches a client's snapshot and the boundary on separate reads. A
     /// listing that names it before the boundary applied it is answered once
     /// the roots are current, instead of leaving the Explorer empty on

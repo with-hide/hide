@@ -1,5 +1,5 @@
-//! The core's own engine (PRD engine-bundle-3-core-owns D-3): the second
-//! implementation of [`Engine`], which runs a machine's panes without Herdr.
+//! The core's own engine (PRD engine-bundle-3-core-owns D-3): the
+//! implementation of [`Engine`] that runs a machine's panes.
 //! It holds its session's topology ([`topology::Topology`]) under a lock of
 //! its own, never the runtime's, and asks the machine's node to start, end,
 //! read and type into each pane's holder through [`PaneHolders`], always

@@ -1,7 +1,7 @@
 //! Agent sleep inside the runtime: the minute decision, the visit that wakes,
-//! the three events, and the results the Herdr workers hand back (PRD
+//! the three events, and the results the engine workers hand back (PRD
 //! agent-sleep). What is decided and remembered lives in
-//! `crate::agent_sleep`; what touches Herdr and processes lives in
+//! `crate::agent_sleep`; what touches the engine and processes lives in
 //! `crate::agent_sleep_herdr`. Nothing here blocks: every end and every wake
 //! runs on a worker and comes back through `ingest_agent_sleep_*`.
 
@@ -103,7 +103,7 @@ impl Runtime {
 
     /// Fails each wake whose agent has not appeared in its pane by the
     /// start's deadline, with the reason a start that never got ready gives.
-    /// Herdr answers `agent.start` once it has typed the start line, so a
+    /// The engine answers `agent.start` once it has typed the start line, so a
     /// line the pane's shell never ran (a Windows prompt reading a leftover
     /// bracketed paste as keys) would leave the row waking for good.
     fn fail_unstarted_wakes(&mut self, now_unix_ms: u64) -> bool {
@@ -209,12 +209,12 @@ impl Runtime {
     }
 
     /// Reconciles the records with a fresh local session before it is
-    /// projected, and adds the rows of sleeping agents Herdr stopped listing.
+    /// projected, and adds the rows of sleeping agents the engine stopped listing.
     pub(super) fn settle_agent_sleep(&mut self, payload: &mut SessionSnapshotPayload) {
         self.settle_agent_sleep_in(payload, SleepScope::Core);
     }
 
-    /// The same for a node that dials this core, on its session as its Herdr
+    /// The same for a node that dials this core, on its session as its engine
     /// names it, before the session is scoped to the device.
     pub(crate) fn settle_node_agent_sleep(
         &mut self,
@@ -285,7 +285,7 @@ impl Runtime {
         }
     }
 
-    /// A node's Herdr moved the tab on its screen: a visit, as a committed
+    /// A node's engine moved the tab on its screen: a visit, as a committed
     /// local one is (B12), once the node's session confirms it. Wakes what
     /// sleeps in the tabs that came on screen and stamps the last look of
     /// those and of the tabs that left.
@@ -527,9 +527,9 @@ impl Runtime {
                     // record was still ending, which draws no row, and it
                     // publishes again only on a change; its session is read
                     // again so the sleeping row is drawn from the record. A
-                    // node's session draws it on its next report. Herdr's
-                    // replica can still list the agent here, and its event
-                    // stream brings the session that no longer does.
+                    // node's session draws it on its next report. The engine
+                    // can still list the agent here, and the published
+                    // session stream brings the session that no longer does.
                     if self.runs_own_engine() && crate::address::pane_device(pane_id).is_none() {
                         self.request_republish();
                     }
@@ -859,7 +859,7 @@ impl Runtime {
     }
 
     /// The tabs of a node's session on screen: its Agent areas' while it is
-    /// in front with them, else the tab its Herdr has in front.
+    /// in front with them, else the tab its engine has in front.
     fn shown_node_tabs(&self, device: &str) -> Vec<String> {
         if !self.device_in_front(device) {
             return Vec::new();
@@ -941,7 +941,7 @@ impl Runtime {
             .map_or(SleepMachine::Core, |device| self.sleep_machine(device))
     }
 
-    /// Where a pane's sleep or wake runs: the core's own Herdr and node, or
+    /// Where a pane's sleep or wake runs: the core's own engine and node, or
     /// those of the node that dials the core with the pane.
     fn sleep_target(&self, pane_id: &str) -> Option<SleepTarget> {
         let Some(device) = crate::address::pane_device(pane_id) else {

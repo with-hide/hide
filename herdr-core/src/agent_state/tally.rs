@@ -244,7 +244,7 @@ pub fn sync_checkout_agent_summaries(
     // names the panes the close will send and the agents still working in
     // them as of the same projection (D-10). "Running" is the deletion
     // gate's definition: the agent's activity axis says working. Every local
-    // row offers `Remove project…`, a row Herdr shows without a registration
+    // row offers `Remove project…`, a row the engine shows without a registration
     // too (PRD sidebar-context-menus D-14), so every local row carries the
     // gate; a device's rows get theirs where its session is derived
     // (`device_catalog::apply_registrations`), because a remote tree arrives
@@ -355,7 +355,7 @@ pub mod phone {
     #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
     pub struct PhoneAgent {
         pub device_id: String,
-        /// The core's pane id: a Herdr pane id on this Mac, `remote:<device>:pane:<id>` on a device.
+        /// The core's pane id: an engine pane id on this Mac, `remote:<device>:pane:<id>` on a device.
         pub pane_id: String,
         /// The pane id of this agent's lineage root on the same device; itself for a root.
         pub root_pane_id: String,
@@ -510,7 +510,7 @@ pub mod phone {
             format!("{}|{}", self.device_id, self.pane_id)
         }
 
-        /// The pane id Herdr knows on the device that owns it.
+        /// The pane id the engine knows on the device that owns it.
         pub fn herdr_pane_id(&self) -> &str {
             crate::address::pane_of(&self.pane_id, &self.device_id).unwrap_or(&self.pane_id)
         }

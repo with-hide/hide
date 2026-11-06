@@ -1,4 +1,4 @@
-//! Core-owned records for every Herdr-owned mutation still in flight.
+//! Core-owned records for every engine-owned mutation still in flight.
 //!
 //! A split, zoom, resize, tab move, remote mutation or close is one record
 //! from the moment the operator asks until fresh topology confirms it, with
@@ -89,19 +89,19 @@ pub(super) struct PendingPaneOperation {
     pub(super) retryable: bool,
     pub(super) created_pane_id: Option<String>,
     pub(super) baseline_signature: PaneTopologySignature,
-    /// What this record asks Herdr for. It waits in its tab's line in phase
+    /// What this record asks the engine for. It waits in its tab's line in phase
     /// `queued` and is sent when every operation ahead of it has answered
     /// (PRD instant-pane-topology D-10).
     pub(super) request: GeometryRequest,
     /// Its place in its tab's line.
     pub(super) sequence: u64,
-    /// What the canvas draws for it ahead of Herdr (D-07): set at the request
+    /// What the canvas draws for it ahead of the engine (D-07): set at the request
     /// for a close, zoom or resize and at the answer for a split, and cleared
     /// when it settles, fails, or its result becomes unknown.
     pub(super) prediction: Option<super::pane_prediction::Prediction>,
 }
 
-/// How many operations may wait in one tab's line behind the one Herdr is
+/// How many operations may wait in one tab's line behind the one the engine is
 /// answering; the next is refused and logged (D-10, engineering 15).
 pub(super) const GEOMETRY_QUEUE_LIMIT: usize = 8;
 
@@ -150,7 +150,7 @@ pub(super) struct PaneTopologySignature {
     pub(super) focused_pane_id: String,
     pub(super) pane_ids: Vec<String>,
     pub(super) splits: Vec<(u8, u32)>,
-    /// Raw geometry is present only on a signature taken from Herdr's fresh
+    /// Raw geometry is present only on a signature taken from the engine's fresh
     /// session payload. Model projections intentionally do not invent it.
     pub(super) pane_rects: Option<Vec<PaneRect>>,
     pub(super) split_rects: Option<Vec<SplitRect>>,
@@ -290,7 +290,7 @@ impl RemoteSettle {
     }
 }
 
-/// Whether `session`, a device's session as its Herdr last reported it, shows
+/// Whether `session`, a device's session as its engine last reported it, shows
 /// the effect of `operation`.
 fn remote_operation_confirmed_by(
     operation: &PendingRemoteOperation,
@@ -339,7 +339,7 @@ impl Runtime {
 
     /// Advances every bounded asynchronous operation from a coordinator timer.
     /// Snapshot publication is an output of this work, never its clock: an
-    /// idle Herdr session must still turn an expired acknowledgement into an
+    /// idle engine session must still turn an expired acknowledgement into an
     /// explicit unknown result at its deadline.
     pub(crate) fn tick_async_operations(&mut self, now_unix_ms: u64) -> bool {
         self.drive_unreadable_letters();
@@ -810,7 +810,7 @@ impl Runtime {
     }
 
     /// Whether `pane_id` is the only pane of an unzoomed tab, where zoom has
-    /// nothing to hide. Herdr answers such a zoom unchanged (`single_pane`),
+    /// nothing to hide. The engine answers such a zoom unchanged (`single_pane`),
     /// so no topology would ever confirm it, and the operation left waiting
     /// would turn away every later split, zoom, resize and close in the tab.
     pub(super) fn pane_alone_unzoomed(&self, pane_id: &str) -> bool {
@@ -999,9 +999,9 @@ impl Runtime {
     }
 
     /// Admits a split, zoom or resize into its tab's line and sends it when
-    /// nothing ahead of it is still waiting for Herdr (D-10). A zoom or resize
+    /// nothing ahead of it is still waiting for the engine (D-10). A zoom or resize
     /// is drawn at once on top of what the operations ahead of it will leave
-    /// (D-07); a split is drawn when Herdr names the pane it made.
+    /// (D-07); a split is drawn when the engine names the pane it made.
     pub(super) fn begin_pane_operation(
         &mut self,
         action: PaneControlAction,
@@ -1060,7 +1060,7 @@ impl Runtime {
         // A zoom or resize is drawn at the request, and the pane's grid
         // follows the drawing, so its record waits for the frame after the
         // resize that drawing sends (PRD grid-ahead-of-herdr D-06); a
-        // split's record learns its pane from Herdr's answer.
+        // split's record learns its pane from the engine's answer.
         if matches!(kind, "pane.zoom" | "pane.resize") {
             self.await_op_frame(&id, &target_id, true);
         }
@@ -1080,9 +1080,9 @@ impl Runtime {
         true
     }
 
-    /// Draws a split Herdr has already answered outside the tab's line, as
+    /// Draws a split the engine has already answered outside the tab's line, as
     /// the fork worker's split right of its source is, through the record a
-    /// split Hide asked for keeps from its answer: drawn until Herdr's layout
+    /// split Hide asked for keeps from its answer: drawn until the engine's layout
     /// lists `created`, unknown at the same bound, and holding the tab's line
     /// meanwhile, since what waits there is predicted on the layout with it.
     pub(crate) fn draw_answered_split(&mut self, target: &str, created: &str) {
@@ -1121,7 +1121,7 @@ impl Runtime {
     }
 
     /// Takes back the drawn split of `created`, a pane its worker closed
-    /// before Herdr laid it out, and lets the tab's line move on.
+    /// before the engine laid it out, and lets the tab's line move on.
     pub(super) fn take_back_answered_split(&mut self, created: &str) {
         let Some(id) = self
             .pane_operations
@@ -1155,9 +1155,9 @@ impl Runtime {
     /// a busy tab past the line's limit, and every tree close start as they
     /// always did.
     ///
-    /// Whether the close removes the whole tab is Herdr's layout's answer,
+    /// Whether the close removes the whole tab is the engine's layout's answer,
     /// not the drawing's: a pane drawn alone because a close ahead took its
-    /// sibling still has that sibling in Herdr's tab, so its close waits its
+    /// sibling still has that sibling in the engine's tab, so its close waits its
     /// turn instead of meeting the close in progress. It is drawn gone only
     /// while the line leaves another pane; the tab's last pane leaves with
     /// its tab when the close runs.
@@ -1275,7 +1275,7 @@ impl Runtime {
         false
     }
 
-    /// Whether an operation of the tab is still waiting for Herdr, so the
+    /// Whether an operation of the tab is still waiting for the engine, so the
     /// next one has to wait its turn. A result that became unknown does not
     /// hold the line (D-09, D-12).
     fn geometry_in_flight(&self, scope_id: &str) -> bool {
@@ -1314,9 +1314,9 @@ impl Runtime {
 
     /// The tab's layout as it will stand once every operation already in its
     /// line lands: what the next request is predicted on.
-    /// The tab as the line will leave it: Herdr's confirmed layout with every
+    /// The tab as the line will leave it: the engine's confirmed layout with every
     /// prediction folded in. The stored layout already shows the drawn ones,
-    /// so the fold starts from what Herdr confirmed when there is a drawing.
+    /// so the fold starts from what the engine confirmed when there is a drawing.
     fn predicted_tab_layout(&self, scope_id: &str) -> Option<PaneLayoutSnapshot> {
         let layout = self.confirmed_layouts.get(scope_id).or_else(|| {
             self.snapshot
@@ -1421,7 +1421,7 @@ impl Runtime {
         predictions.retain(|prediction| {
             self.pane_operations[&last_id].prediction.as_ref() != Some(prediction)
         });
-        // From Herdr's confirmed layout, as `predicted_tab_layout`: the
+        // From the engine's confirmed layout, as `predicted_tab_layout`: the
         // stored one already shows the entry being replaced.
         let prediction = self
             .confirmed_layouts
@@ -1506,7 +1506,7 @@ impl Runtime {
             .collect()
     }
 
-    /// The closes of one pane among several drawn gone ahead of Herdr.
+    /// The closes of one pane among several drawn gone ahead of the engine.
     fn drawn_close_keys(&self) -> Vec<&str> {
         let mut keys = self
             .close_operations
@@ -1524,7 +1524,7 @@ impl Runtime {
     }
 
     /// Runs `apply`, a close's answer arriving off the session stream, and
-    /// when it changed which closes are drawn ahead of Herdr reads the session
+    /// when it changed which closes are drawn ahead of the engine reads the session
     /// again (a refused or unknown close is drawn back) and lets the tab
     /// lines behind those closes move on.
     pub(super) fn with_close_geometry<T>(&mut self, apply: impl FnOnce(&mut Self) -> T) -> T {
@@ -1542,7 +1542,7 @@ impl Runtime {
     }
 
     /// Sends the next operation of the tab's line once nothing ahead of it
-    /// is still waiting for Herdr.
+    /// is still waiting for the engine.
     pub(super) fn pump_geometry_queue(&mut self, scope_id: &str) -> bool {
         // An operation the pump starts can end at once and pump again; the
         // outer pump owns the line, so the inner one leaves it alone.
@@ -1690,7 +1690,7 @@ impl Runtime {
         operation.stage = "request".to_owned();
         operation.connection_generation = self.live_generation;
         operation.deadline_at_unix_ms = Some(now.saturating_add(CLOSE_STAGE_TIMEOUT_MS));
-        // The tab as Herdr has it now, after what was ahead in the line.
+        // The tab as the engine has it now, after what was ahead in the line.
         operation.baseline_signature = baseline;
         if let Err(message) =
             live::spawn_pane_control_with_generation(context, action, Some(self.live_generation))
@@ -1701,7 +1701,7 @@ impl Runtime {
 
     /// Drops every operation still waiting in the tab's line after the one
     /// ahead of it was refused, failed or became unknown (D-09, D-10): the
-    /// layout returns to what Herdr confirmed and keys typed for a dropped
+    /// layout returns to what the engine confirmed and keys typed for a dropped
     /// split reach no pane.
     pub(super) fn drop_geometry_queue(&mut self, scope_id: &str, reason: &str) {
         self.drop_geometry_followers(scope_id, None, reason);
@@ -1799,7 +1799,7 @@ impl Runtime {
             (operation.id.clone(), operation.scope_id.clone())
         };
         let (operation_id, scope_id) = operation_id;
-        // An unknown result draws what Herdr confirmed and drops what waited
+        // An unknown result draws what the engine confirmed and drops what waited
         // behind it, the same as a refusal; it does not hold the line.
         self.drop_geometry_queue(&scope_id, "unknown");
         self.request_republish();
@@ -1851,8 +1851,8 @@ impl Runtime {
                 if let Some(created) = created_pane_id.as_deref() {
                     self.op_timings.learn(id, None, Some(created));
                     self.await_op_frame(id, created, false);
-                    // The split is drawn now, with the pane Herdr named
-                    // (D-03, D-07); Herdr's layout replaces it on arrival.
+                    // The split is drawn now, with the pane the engine named
+                    // (D-03, D-07); the engine's layout replaces it on arrival.
                     if let GeometryRequest::Pane(PaneControlAction::Split {
                         pane_id,
                         direction,
@@ -1873,7 +1873,7 @@ impl Runtime {
                         self.request_republish();
                     }
                     // Keys typed since the split was asked for belong to
-                    // the pane Herdr just named, and to no other, once its
+                    // the pane the engine just named, and to no other, once its
                     // shell reads them.
                     self.resolve_input_request_at_shell(
                         &super::terminal_input::InputOrigin::Split(id.to_owned()),
@@ -1903,7 +1903,7 @@ impl Runtime {
                     self.request_republish();
                 }
             }
-            // Herdr moved nothing, so no layout event follows: the operation
+            // The engine moved nothing, so no layout event follows: the operation
             // ends at this answer and the line moves on (D-12).
             Ok(PaneControlOutcome::Unchanged) => {
                 self.pane_operations.remove(id);
@@ -1958,7 +1958,7 @@ impl Runtime {
         self.settle_pane_operations(completed)
     }
 
-    /// Whether `current`, a tab's layout as Herdr last reported it, shows the
+    /// Whether `current`, a tab's layout as the engine last reported it, shows the
     /// effect of `operation`.
     fn pane_operation_confirmed_by(
         operation: &PendingPaneOperation,
@@ -1973,7 +1973,7 @@ impl Runtime {
             return false;
         }
         match operation.kind.as_str() {
-            // A split is confirmed by the exact pane Herdr said it created. A
+            // A split is confirmed by the exact pane the engine said it created. A
             // changed focus or ratio alone is not proof that this split landed.
             "pane.split" => operation
                 .created_pane_id
@@ -1996,10 +1996,10 @@ impl Runtime {
         }
     }
 
-    /// Settles the operation `id` from the layout Herdr last reported for its
+    /// Settles the operation `id` from the layout the engine last reported for its
     /// tab. A session update that shows an operation's effect can arrive while
     /// the request is still unanswered, when only the update's own pass could
-    /// have confirmed it; Herdr sends nothing more once the layout stops
+    /// have confirmed it; the engine sends nothing more once the layout stops
     /// moving, so the answer has to look at what was already received.
     fn settle_pane_operation_from_known_topology(&mut self, id: &str) -> bool {
         let Some(operation) = self.pane_operations.get(id) else {
@@ -2052,7 +2052,7 @@ impl Runtime {
     }
 
     /// When the engine's confirmed layout differs from what the operation's
-    /// prediction draws (a ratio Herdr rounds otherwise, a focus it places
+    /// prediction draws (a ratio the engine rounds otherwise, a focus it places
     /// elsewhere), the confirmed layout is drawn and the difference goes to
     /// the log only (B18). Read only when nothing else is drawn for the tab,
     /// so the comparison is of this operation alone.
@@ -2284,7 +2284,7 @@ impl Runtime {
                 _ => {}
             }
         }
-        // A deadline is an unknown result: it draws what Herdr confirmed and
+        // A deadline is an unknown result: it draws what the engine confirmed and
         // drops what waited behind it (D-09, D-10).
         for scope_id in &expired_scopes {
             self.drop_geometry_queue(scope_id, "unknown");

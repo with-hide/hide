@@ -1,11 +1,11 @@
-//! Registrations Hide owes an agent it started whose session Herdr has not
+//! Registrations Hide owes an agent it started whose session the engine has not
 //! shown yet. Codex runs its session hook at its first turn and OpenCode 2
 //! makes no session before its first prompt, so a fork, or a spawn given no
 //! prompt, can rest without one for as long as the operator leaves it. The
 //! registration is kept as a wait in the ledger instead of failing after a
 //! fixed time.
 //!
-//! The lineage writer reads each agent list Herdr answers against the waits
+//! The lineage writer reads each agent list the engine answers against the waits
 //! on its server ([`plan`], on the session-sync thread, with no I/O) and its
 //! worker settles what it found ([`settle`]): the agent showing its session
 //! in the wait's pane under the wait's name registers it as owed; the pane
@@ -33,11 +33,11 @@ pub struct IdentityWait {
     pub id: String,
     /// The device the pane is on, as a registration's `machine` names it.
     pub machine: String,
-    /// Herdr's id of the pane on that device.
+    /// The engine's id of the pane on that device.
     pub pane: String,
-    /// The name the start gave the agent in Herdr. Herdr lists the agent
-    /// under it and drops it when the agent ends, so a pane id Herdr hands
-    /// out again never matches the wait.
+    /// The name the start gave the agent in the engine. The engine lists the agent
+    /// under it and drops it when the agent ends, so a pane id that later names
+    /// another agent never matches the wait.
     pub name: String,
     pub kind: String,
     pub owed: Owed,
@@ -62,7 +62,7 @@ pub(crate) const PANE_TAKEN: &str = "pane_taken";
 /// What the writer found for one wait in an agent list.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Step {
-    /// Herdr shows the agent with its session: register it.
+    /// The engine shows the agent with its session: register it.
     Bind(Box<ProjectedAgent>),
     /// Nothing will show for it any more, for this reason.
     End(&'static str),
@@ -75,7 +75,7 @@ pub(crate) enum Settle {
     End(String),
 }
 
-/// The step each wait on `device` takes for `agents`, one of Herdr's agent
+/// The step each wait on `device` takes for `agents`, one of the engine's agent
 /// lists. A wait whose agent is not listed is judged only once `known` holds
 /// it, which says it was in the ledger when an earlier list was read: a list
 /// asked before the wait existed may predate the agent's start. The second
@@ -102,7 +102,7 @@ pub(crate) fn plan(
             .iter()
             .find(|agent| agent.pane_id == wait.pane && agent.name.as_deref() == Some(&wait.name));
         let step = match own {
-            // Herdr holds the name with no agent while the start is pending.
+            // The engine holds the name with no agent while the start is pending.
             Some(agent) => match agent.agent.as_deref() {
                 Some(kind) if !same_kind(kind) => Some(Step::End(PANE_TAKEN)),
                 Some(_) if agent.lineage_session.is_some() && agent.agent_session.is_some() => {
@@ -131,7 +131,7 @@ pub(crate) fn plan(
 }
 
 /// Settles wait `id` on `device` as the writer found it, on the writer's
-/// worker: builds the registration from what Herdr showed, has the store
+/// worker: builds the registration from what the engine showed, has the store
 /// apply it, and writes the new registration's lineage tokens on its pane.
 /// Returns the store's answer.
 pub(crate) fn settle(
@@ -201,7 +201,7 @@ pub(crate) fn settle(
     Ok(answer)
 }
 
-/// The registration `wait` owes the agent Herdr shows in its pane, as the
+/// The registration `wait` owes the agent the engine shows in its pane, as the
 /// spawn's or the fork's own path would have made it.
 fn owed_record(
     ledger: &Ledger,
@@ -474,7 +474,7 @@ mod tests {
         }
     }
 
-    /// The fork's agent as Herdr lists it, with its session once it has one.
+    /// The fork's agent as the engine lists it, with its session once it has one.
     fn listed(pane: &str, name: &str, session: Option<&str>) -> ProjectedAgent {
         ProjectedAgent {
             pane_id: pane.into(),
@@ -508,7 +508,7 @@ mod tests {
             .collect()
     }
 
-    /// Codex at rest after `codex fork` has no session in Herdr; its first
+    /// Codex at rest after `codex fork` has no session in the engine; its first
     /// turn reports one, and only then is the fork registered.
     #[test]
     fn a_wait_binds_once_herdr_shows_the_agents_session_and_holds_while_it_rests() {

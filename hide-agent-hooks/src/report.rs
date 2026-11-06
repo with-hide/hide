@@ -3,7 +3,7 @@
 //! The report is one hook request to hided (`HookCommand::Status`, which
 //! `hide workspace status --hook` also sends), which proves the caller is in
 //! the pane like every other hook request and hands the report to the core
-//! (PRD engine-bundle-1 D-7). Nothing is written to Herdr. The request ends
+//! (PRD engine-bundle-1 D-7). The request ends
 //! within [`REPORT_TIMEOUT`], so a daemon that is gone or does not answer
 //! costs the agent's turn that long and no more (B13).
 

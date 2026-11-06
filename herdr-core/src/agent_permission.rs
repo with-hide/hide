@@ -190,7 +190,7 @@ mod tests {
                 ]),
             }
         );
-        // A `$` stays literal: Herdr quotes every argument it types.
+        // A `$` stays literal: the engine quotes every argument it types.
         assert_eq!(
             arguments("codex", &AgentPermission::custom("-c x=$HOME").unwrap()),
             words(&["-c", "x=$HOME"])

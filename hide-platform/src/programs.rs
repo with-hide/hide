@@ -320,7 +320,7 @@ pub fn find_cli(name: &str) -> Option<Program> {
 /// the account installed. Every program a node starts by name is started
 /// this way. Only a process's first command waits for the login shell, and
 /// at most [`FIRST_READ_WITHIN`]; a caller that must have the shell's
-/// current answer (a move's checks, a login item's Herdr server) asks
+/// current answer (a move's checks, a login item's daemon) asks
 /// [`account_path`] and runs [`command_on`] with it.
 pub fn command(program: impl AsRef<Path>) -> Command {
     command_on(account_path_now().as_deref(), program)

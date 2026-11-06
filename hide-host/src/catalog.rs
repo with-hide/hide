@@ -1,7 +1,7 @@
 //! What paths are on this node, as the core's catalog reads them
 //! (`hide_node_link::catalog`). Every fact is read from files: the catalog is
 //! rebuilt on the session-sync coordinator, where a process would hold every
-//! Herdr event behind it.
+//! engine event behind it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

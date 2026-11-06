@@ -247,7 +247,7 @@ impl Runtime {
 
     /// Brings `target` in front, as a sidebar click on its row does: this
     /// machine's checkout through `focus_checkout`, a device's through that
-    /// device's Herdr with the device moved in front.
+    /// device's engine with the device moved in front.
     fn bring_target_forward(&mut self, device: &str, target: &Target, request_id: &str) {
         if device == self.node.as_str() {
             self.focus_checkout(&target.workspace_id, &target.checkout_id);

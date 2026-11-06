@@ -423,7 +423,7 @@ fn a_new_branch_is_checked_by_gits_own_rules_before_anything_is_created() {
         existing.message,
         "fatal: a branch named 'existing' already exists"
     );
-    // The checked-out branch passes: Herdr answers Git's worktree refusal.
+    // The checked-out branch passes: adding the worktree answers Git's worktree refusal.
     assert!(check(root, "main").is_ok());
     // Asking created nothing.
     let branches = Command::new("git")

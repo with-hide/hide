@@ -148,7 +148,7 @@ fn split_answer(runtime: &mut Runtime, answer: Result<PaneControlOutcome, String
     );
 }
 
-/// B9: a split opens its request at once; Herdr's answer names the new pane
+/// B9: a split opens its request at once; the engine's answer names the new pane
 /// the keys wait for, and once its shell reads keys the node is told to
 /// write them there and the request reads ready.
 #[test]
@@ -240,7 +240,7 @@ fn a_refused_split_drops_its_keys_everywhere() {
     assert!(is_discard(&controls[1], "r-refused"), "{controls:?}");
 }
 
-/// A split the core refuses before Herdr (no live connection) still answers
+/// A split the core refuses before the engine (no live connection) still answers
 /// its request, so the shell stops sending keys against it and the node
 /// drops any it holds.
 #[test]
@@ -261,7 +261,7 @@ fn a_split_refused_before_herdr_answers_its_request_as_discarded() {
 }
 
 /// The wait is bounded from the request's opening, about when its first key
-/// was typed: a creation Herdr answers after that bound gives its keys to the
+/// was typed: a creation the engine answers after that bound gives its keys to the
 /// pane at once rather than make the oldest too old to be written, while one
 /// answered inside it waits for the shell.
 #[test]
@@ -309,7 +309,7 @@ fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
     let (mut runtime, terminals) = runtime_on(&herdr);
     let workspace_id = runtime.snapshot().navigator.workspaces[0].id.clone();
     let checkout_id = runtime.snapshot().navigator.focused_checkout_id.clone();
-    // The checkout's tabs live in Herdr workspace w-order, so the tab is made
+    // The checkout's tabs live in engine workspace w-order, so the tab is made
     // there rather than through opening an owner.
     for checkout in runtime
         .snapshot
@@ -367,7 +367,7 @@ fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
 }
 
 /// B9: a new tab's request and its pane survive a session update that does
-/// not carry the pane yet, as when Herdr's layout comes after Hide's
+/// not carry the pane yet, as when the engine's layout comes after Hide's
 /// drawing of the tab has expired: the node keeps the keys for it.
 #[test]
 fn keys_for_a_new_tab_survive_an_update_before_herdr_lays_out_its_pane() {
@@ -410,7 +410,7 @@ fn keys_for_a_new_tab_survive_an_update_before_herdr_lays_out_its_pane() {
         }),
         7,
     );
-    // The drawing has expired and Herdr's next update does not list the tab.
+    // The drawing has expired and the engine's next update does not list the tab.
     runtime.provisional_tabs.clear();
     runtime.ingest_session(Ok(tab_order_payload(
         CHECKOUT,
@@ -478,7 +478,7 @@ fn session_with_split_pane(laid_out: bool) -> SessionSnapshotPayload {
 }
 
 /// D-11: once the split's pane has been laid out and then left, the request
-/// is discarded, so keys sent against it reach no pane, even one Herdr later
+/// is discarded, so keys sent against it reach no pane, even one engine later
 /// gives that id; a wait for its shell that ends afterwards writes nothing.
 #[test]
 fn keys_for_a_split_whose_pane_left_reach_no_pane_that_reuses_its_id() {

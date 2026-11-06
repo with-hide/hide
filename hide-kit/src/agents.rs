@@ -61,7 +61,7 @@ impl SkillDir {
     /// The folder the skill folder sits in: the shared `~/.agents`, which no
     /// one agent owns, or the agent's own folder in the install scope
     /// (`hide_agent_adapter::HomeScope::Install`), the one its hooks and
-    /// Herdr's integration go into.
+    /// go into.
     fn folder(self, home: &Path) -> PathBuf {
         match self {
             Self::Shared => home.join(".agents"),
@@ -127,9 +127,10 @@ pub struct AgentAdapter {
     /// The folder the agent reads skills from.
     pub skill_dir: SkillDir,
     pub hook: HookSupport,
-    /// Herdr's integration for the agent. Every supported agent has one: an
-    /// agent the pinned Herdr ships no integration for is not supported
-    /// (`docs/agent-hooks.md`, Which agents Hide supports).
+    /// The Herdr integration an earlier build installed for the agent. Every
+    /// supported agent has one: an agent the pinned Herdr shipped no
+    /// integration for is not supported (`docs/agent-hooks.md`, Which agents
+    /// Hide supports).
     pub herdr: HerdrIntegration,
     /// Whether the agent is on without the operator choosing, as Claude Code
     /// and Codex have been since their hooks became part of the kit.

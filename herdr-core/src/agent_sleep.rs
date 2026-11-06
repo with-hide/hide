@@ -1,15 +1,15 @@
 //! Agent sleep: ending an agent that has sat untouched, and keeping its
 //! conversation to resume in the same pane (PRD agent-sleep).
 //!
-//! This module decides and remembers; it makes no Herdr call and ends no
+//! This module decides and remembers; it makes no engine call and ends no
 //! process. `agent_sleep_herdr.rs` is the one boundary that does, so when
-//! Herdr offers a hibernate of its own only that file changes (D-20).
+//! the engine offers a hibernate of its own only that file changes (D-20).
 //!
-//! The pinned Herdr forgets an agent whose process ended: it drops it from
+//! The engine forgets an agent whose process ended (Herdr did too): it drops it from
 //! `agent.list` together with its session ref. The record kept here is
 //! therefore the only holder of the provider, the conversation id and the
 //! row's name while the agent sleeps, and the sleeping row is drawn from it
-//! (B10). Nothing here clears or rewrites anything Herdr keeps (B9).
+//! (B10). Nothing here clears or rewrites anything the engine keeps (B9).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -51,7 +51,7 @@ pub enum SleepMachine {
 }
 
 /// The panes of one machine's session: the core's own, or a device's under
-/// its device-scoped ids (`crate::address`). A device session carries Herdr's
+/// its device-scoped ids (`crate::address`). A device session carries the engine's
 /// own pane ids, which the store keeps scoped to the device.
 #[derive(Clone, Copy, Debug)]
 pub enum SleepScope<'a> {
@@ -96,7 +96,7 @@ pub struct AgentSleepStore {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PaneStamps {
-    /// When Herdr last reported this agent's state change, or when it
+    /// When the engine last reported this agent's state change, or when it
     /// appeared (D-04).
     pub changed_at_unix_ms: u64,
     /// When the operator last had this pane on screen; zero for never.
@@ -108,8 +108,8 @@ pub struct PaneStamps {
 
 impl PaneStamps {
     /// When the agent was last talked to or looked at. The conversation's
-    /// own time is the clock once a session read proves it: a relaunch or a
-    /// Herdr handoff can report a state for a moment and move the change
+    /// own time is the clock once a session read proves it: a relaunch can
+    /// report a state for a moment and move the change
     /// stamp, but adds no line to the conversation. The change stamp counts
     /// only until that read lands.
     fn idle_since(&self, agent: &SidebarAgentSnapshot) -> u64 {
@@ -166,7 +166,7 @@ pub struct SleepRecord {
     /// The conversation a wake resumes; none for an agent that slept before
     /// it reported one (`sleeps_without_session`), which wakes as a new one.
     pub session_id: Option<String>,
-    /// The agent's Herdr name, when it had one: orchestrators address agents
+    /// The agent's engine name, when it had one: orchestrators address agents
     /// by name, so a wake restarts it under the same one.
     #[serde(default)]
     pub agent_name: Option<String>,
@@ -181,7 +181,7 @@ pub struct SleepRecord {
     /// thirteen digits are the core's state change time, which the row's
     /// elapsed time is counted from.
     pub last_activity: String,
-    /// Herdr's state change sequence of the agent that was ended. A listed
+    /// The engine's state change sequence of the agent that was ended. A listed
     /// agent on the pane with this sequence is that agent still being
     /// reported; any other sequence is a new agent (B18).
     #[serde(default)]
@@ -197,7 +197,7 @@ pub struct SleepRecord {
     pub parent_session: Option<String>,
     /// The source a sleeping fork was forked from and the digest of the
     /// session it hosted (`SidebarAgentSnapshot::declared_fork`), so the row
-    /// keeps its fork mark while Herdr lists no agent there.
+    /// keeps its fork mark while the engine lists no agent there.
     #[serde(default)]
     pub fork_source: Option<(String, Option<String>)>,
     pub workspace_label: String,
@@ -241,7 +241,7 @@ impl SleepRecord {
             kind: agent.agent_kind.clone(),
             session_id,
             // A device row's id is the core's own scoped one, never a name;
-            // its Herdr name, when someone gave one, is `herdr_name`.
+            // its engine name, when someone gave one, is `herdr_name`.
             agent_name: agent.herdr_name.clone().or_else(|| {
                 (!crate::address::is_device_scoped(&agent.pane_id)
                     && agent.id != agent.pane_id
@@ -284,7 +284,7 @@ impl SleepRecord {
         })
     }
 
-    /// The agent row Herdr no longer sends, drawn from what the record kept.
+    /// The agent row the engine no longer sends, drawn from what the record kept.
     fn payload(
         &self,
         pane_id: &str,
@@ -299,7 +299,7 @@ impl SleepRecord {
             question: false,
             blocked: false,
         });
-        // Any other key is Herdr's padded sequence, which the sequence below
+        // Any other key is the engine's padded sequence, which the sequence below
         // reproduces.
         let changed_at_unix_ms = (self.last_activity.len() == 13)
             .then(|| self.last_activity.parse().ok())
@@ -384,7 +384,7 @@ pub enum Settled {
 impl AgentSleepStore {
     /// A store read back at launch. An end that was in flight when the
     /// process stopped cannot be known to have happened, so its record goes
-    /// and the pane is read as Herdr reports it; a wake in flight is asleep
+    /// and the pane is read as the engine reports it; a wake in flight is asleep
     /// until an agent shows up in the pane.
     pub fn after_load(&mut self) {
         for record in self.dormant.values_mut() {
@@ -401,7 +401,7 @@ impl AgentSleepStore {
     }
 
     /// Reconciles the records of one machine with its session and adds a row
-    /// for each sleeping agent Herdr no longer lists. `payload` is that
+    /// for each sleeping agent the engine no longer lists. `payload` is that
     /// machine's whole topology, so a record of the machine whose pane it
     /// does not hold is a closed pane; another machine's records stay.
     pub fn settle_payload(
@@ -477,7 +477,7 @@ impl AgentSleepStore {
             .map(|workspace| (workspace.workspace_id.as_str(), workspace.label.clone()))
             .collect::<HashMap<_, _>>();
         // A sleeping pane's row is drawn from its record alone, whatever
-        // Herdr still lists for the pane.
+        // the engine still lists for the pane.
         let mut rows = Vec::new();
         for (pane_id, record) in &self.records {
             if record.phase == SleepPhase::Ending || !scope.holds(pane_id) {
@@ -610,7 +610,7 @@ impl AgentSleepStore {
     }
 }
 
-/// Whether Hide can put an agent of this Herdr kind to sleep and wake it:
+/// Whether Hide can put an agent of this engine kind to sleep and wake it:
 /// the kinds whose adapter declares a sleep.
 pub(crate) fn sleeps_kind(kind: &str) -> bool {
     hide_agent_adapter::adapter(kind).is_some_and(|row| row.sleep.is_some())
@@ -843,7 +843,7 @@ mod tests {
         let mut agents = [agent("w1:p1")];
         agents[0].last_conversation_at_unix_ms = Some(HOUR);
         let mut store = stamped(&agents);
-        // A relaunch or a Herdr handoff reports a state for a moment.
+        // A relaunch reports a state for a moment.
         agents[0].activity = "unknown".to_owned();
         assert!(store.stamp(&agents, SleepScope::Core, 20 * HOUR));
         agents[0].activity = "stopped".to_owned();

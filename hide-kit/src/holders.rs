@@ -50,7 +50,7 @@ pub const CONPTY: &str = "conpty";
 /// The folder beside a node's own program that holds the holder's pinned
 /// ConPTY runtime (Windows): where the app package puts it and where
 /// `scripts/fetch-conpty.py --out` is pointed for a lane's binaries. It is
-/// not named [`CONPTY`] because the app also ships the bundled Herdr's own
+/// not named [`CONPTY`] because the app once shipped the bundled Herdr's own
 /// `conpty` folder beside `herdr.exe`, whose file list differs, and a
 /// runtime folder holds exactly its own files. A version folder names its
 /// copy [`CONPTY`].

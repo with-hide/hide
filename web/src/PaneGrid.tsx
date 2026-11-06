@@ -23,10 +23,10 @@ import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
 // The center draws the visible tab's projection tree as nested CSS grids
-// (PRD S2 B4): every split is a two-track grid sized by Herdr's ratio and
+// (PRD S2 B4): every split is a two-track grid sized by the engine's ratio and
 // every leaf is a pane with its own xterm instance. A zoomed tab draws only
 // the zoomed pane, over the whole canvas, so its fit follows the full
-// geometry Herdr gave the PTY (B19); the other panes' terminals stay alive
+// geometry the engine gave the PTY (B19); the other panes' terminals stay alive
 // and fed while parked (`toggle_zoom` decides, the shell only draws).
 
 type PaneProps = {
@@ -79,10 +79,10 @@ export function PaneCanvas({ actions, tab }: { actions: Actions; tab: Tab | null
 const EMPTY_TRANSPORTS: TerminalPane[] = [];
 
 /**
- * A selected SSH device's visible tab (PRD S5 B19). Herdr reports a remote
+ * A selected SSH device's visible tab (PRD S5 B19). The device's engine reports a remote
  * tab's geometry as each pane's rectangle rather than the split tree, so the
  * panes are placed where it says. Hairlines mark internal edges, without a
- * resize handle: a remote pane's size is its host's. A zoomed tab draws the pane Herdr
+ * resize handle: a remote pane's size is its host's. A zoomed tab draws the pane the engine
  * zoomed, its focused one, over the whole canvas.
  */
 export function RemotePaneCanvas({

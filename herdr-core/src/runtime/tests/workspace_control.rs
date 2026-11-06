@@ -1785,7 +1785,7 @@ fn hide_memory_refuses_a_disconnected_or_unknown_caller_and_a_changed_checkout()
 #[test]
 fn hide_memory_reads_a_person_only_in_a_pane_no_agent_runs_in() {
     // PRD memory-stale-cards D-10 as amended: a release gives a card's report
-    // back only for a person, so neither Herdr nor the ledger may name an
+    // back only for a person, so neither the engine nor the ledger may name an
     // agent in the caller's pane, and a caller outside every pane is no one
     // Hide can name.
     use crate::memory_command::{MemoryCaller, MemoryCommand};

@@ -1,5 +1,5 @@
-//! Hide-owned Agent groups. Herdr tab identity and delegated canvas policy
-//! adapt the shared tree; no operation here changes Herdr topology.
+//! Hide-owned Agent groups. The engine tab identity and delegated canvas policy
+//! adapt the shared tree; no operation here changes the engine topology.
 use crate::split_tree::{AreaItem, SplitTree, TreeLimits};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
