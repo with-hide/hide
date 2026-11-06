@@ -7,11 +7,11 @@ import { enterWorkspace, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test("View toolbar shortcuts keep New tab, Close, recent tabs and Find in the View", async ({ page }) => {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(herdr.root, "fixture", name), "sample text\n");
-    daemon = await startHided(herdr, "view-toolbar-shortcuts");
+    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(engine.root, "fixture", name), "sample text\n");
+    daemon = await startHided(engine, "view-toolbar-shortcuts");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
@@ -43,6 +43,6 @@ test("View toolbar shortcuts keep New tab, Close, recent tabs and Find in the Vi
     await expect(page.locator("[data-find-bar]")).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

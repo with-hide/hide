@@ -19,23 +19,23 @@ declare global {
 }
 
 async function start(page: Page) {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   const stop = () => {
-    try { daemon?.stop(); } finally { herdr.stop(); }
+    try { daemon?.stop(); } finally { engine.stop(); }
   };
   try {
-    daemon = await startHided(herdr, "terminal-webgl");
+    daemon = await startHided(engine, "terminal-webgl");
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const pane = herdr.panes[0];
+    const pane = engine.panes[0];
     const view = page.locator(`[data-pane-view="${pane}"]`);
     await expect(view).toHaveAttribute("data-transport", "controlling");
     await view.locator(".xterm-helper-textarea").focus();
     await expect.poll(() => page.evaluate(() => window.__hideProbe?.paneId())).toBe(pane);
     await typeMarker(page, pane, "BEFORE_GPU_LOSS");
-    return { herdr, daemon, pane, view, sent, stop };
+    return { engine, daemon, pane, view, sent, stop };
   } catch (error) {
     stop();
     throw error;
@@ -79,8 +79,8 @@ async function loseContext(page: Page, pane: string) {
   await expect.poll(() => page.evaluate(() => window.__webglLoss?.lost)).toBe(true);
 }
 
-function received(herdr: AgentFixture) {
-  return fs.readFileSync(herdr.inputLogs[0], "utf8").replaceAll("\r", "\n");
+function received(engine: AgentFixture) {
+  return fs.readFileSync(engine.inputLogs[0], "utf8").replaceAll("\r", "\n");
 }
 
 test("unavailable WebGL keeps the terminal usable and closes cleanly", async ({ page }) => {
@@ -89,7 +89,7 @@ test("unavailable WebGL keeps the terminal usable and closes cleanly", async ({ 
   try {
     await expect(flow.view.locator(".xterm-rows")).toHaveCount(1);
     await typeMarker(page, flow.pane, "AFTER_NO_WEBGL");
-    await expect.poll(() => received(flow.herdr)).toBe("BEFORE_GPU_LOSS\nAFTER_NO_WEBGL\n");
+    await expect.poll(() => received(flow.engine)).toBe("BEFORE_GPU_LOSS\nAFTER_NO_WEBGL\n");
     await withControl(flow.daemon, (control) => closePane(control, flow.pane));
     await expect.poll(() => page.evaluate(() => window.__hideProbe?.liveTerminals())).not.toContain(flow.pane);
   } finally { flow.stop(); }
@@ -133,7 +133,7 @@ webglTest.describe("WebGL recovery", () => {
       expect(await page.evaluate((id) => window.__hideProbe!.paneSelection(id), flow.pane)).toBe("BEFORE_GPU_LOSS");
       await expect(flow.view.locator(".xterm-selection div").first()).toBeVisible();
       await typeMarker(page, flow.pane, "AFTER_FALLBACK");
-      await expect.poll(() => received(flow.herdr)).toBe("BEFORE_GPU_LOSS\nAFTER_RESTORE\nAFTER_FALLBACK\n");
+      await expect.poll(() => received(flow.engine)).toBe("BEFORE_GPU_LOSS\nAFTER_RESTORE\nAFTER_FALLBACK\n");
       expect(flow.sent.get("terminal_viewport") ?? 0).toBe(viewports);
       await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id), flow.pane)).toContain("BEFORE_GPU_LOSS");
       await test.info().attach("dom-after-context-loss", { body: await flow.view.screenshot(), contentType: "image/png" });

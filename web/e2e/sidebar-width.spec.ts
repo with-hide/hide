@@ -33,10 +33,10 @@ async function dragEdge(page: Page, edge: Locator, dx: number): Promise<() => Pr
 
 test("the sidebar's edge drags between its bounds, lands once, survives a reload and resets on a double-click", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "sidebar-width");
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "sidebar-width");
   try {
-    const folder = path.join(herdr.root, "notes");
+    const folder = path.join(engine.root, "notes");
     fs.mkdirSync(folder);
     const opened = await withControl(daemon, (control) => openProject(control, folder, "notes"));
 
@@ -110,6 +110,6 @@ test("the sidebar's edge drags between its bounds, lands once, survives a reload
     await expect.poll(() => width(nav)).toBe(292 + RAIL);
   } finally {
     await daemon.stop();
-    await herdr.stop();
+    await engine.stop();
   }
 });

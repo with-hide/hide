@@ -9,11 +9,11 @@ import { enterWorkspace, screenshot } from "./wire";
 
 test("checkout header reads working files with Changes closed, current-SHA statuses, and idempotent Changes", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    const fixture = checkoutGitFixture(herdr, { historyCount: 6 });
-    daemon = await startHided(herdr, "checkout-header");
+    const fixture = checkoutGitFixture(engine, { historyCount: 6 });
+    daemon = await startHided(engine, "checkout-header");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const files = page.locator("[data-checkout-files]");
@@ -57,7 +57,7 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     await expect(page.locator("[data-checkout-ci]")).toHaveCount(0, { timeout: 15_000 });
     fs.unlinkSync(path.join(fixture.root, "tracked.txt"));
     await expect(files).toHaveText("1", { timeout: 5_000 });
-    const terminal = page.locator(`[data-terminal-host="${herdr.panes[0]}"] textarea`);
+    const terminal = page.locator(`[data-terminal-host="${engine.panes[0]}"] textarea`);
     await terminal.focus();
     await files.click();
     await expect(page.locator('aside[data-lane="changes"]')).toBeVisible();
@@ -72,35 +72,35 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     await expect(commit).toBeFocused();
     await screenshot(page, "checkout-header-browser");
   } finally {
-    daemon?.stop(); herdr.stop();
+    daemon?.stop(); engine.stop();
   }
 });
 
 test("a commit pushed to origin shows as one to receive, without a manual fetch, and Pull takes it only past the operator's files", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
     // A GitHub-named origin whose fetch is rewritten to a local bare repository, so the header
     // makes commit pages while the fetch stays on this machine (the fixture allows `file` only).
-    const root = fs.realpathSync(path.join(herdr.root, "fixture"));
-    const bare = path.join(herdr.root, "origin.git");
+    const root = fs.realpathSync(path.join(engine.root, "fixture"));
+    const bare = path.join(engine.root, "origin.git");
     const origin = "https://github.com/example/freshness.git";
     const local = `file://${bare.replaceAll("\\", "/")}`;
-    git(herdr.root, ["init", "--bare", bare]);
+    git(engine.root, ["init", "--bare", bare]);
     git(root, ["init"]);
     git(root, ["commit", "--allow-empty", "-m", "base"]);
     git(root, ["remote", "add", "origin", origin]);
     git(root, ["config", `url.${local}.insteadOf`, origin]);
     git(root, ["push", "-u", "origin", "main"]);
-    const theirs = path.join(herdr.root, "theirs");
-    git(herdr.root, ["clone", local, theirs]);
+    const theirs = path.join(engine.root, "theirs");
+    git(engine.root, ["clone", local, theirs]);
     fs.writeFileSync(path.join(theirs, "shared.txt"), "theirs\n");
     git(theirs, ["add", "shared.txt"]);
     git(theirs, ["commit", "-m", "Pushed elsewhere"]);
     git(theirs, ["push", "origin", "main"]);
     const incoming = git(theirs, ["rev-parse", "HEAD"]).trim();
-    daemon = await startHided(herdr, "checkout-freshness");
+    daemon = await startHided(engine, "checkout-freshness");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const upstream = page.locator('[data-checkout-upstream="tracked"]');
@@ -136,6 +136,6 @@ test("a commit pushed to origin shows as one to receive, without a manual fetch,
     expect(git(root, ["rev-parse", "HEAD"]).trim()).toBe(incoming);
     expect(fs.readFileSync(path.join(root, "shared.txt"), "utf8")).toBe("theirs\n");
   } finally {
-    daemon?.stop(); herdr.stop();
+    daemon?.stop(); engine.stop();
   }
 });

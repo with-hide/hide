@@ -39,24 +39,24 @@ const PLAN = {
 
 test("a plan put up for review asks on the pane, the agent's approval clears it, and its steps draw on the chip and in the 보기 slot", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repoDir = path.join(herdr.root, "plan-repo");
+    const repoDir = path.join(engine.root, "plan-repo");
     fs.mkdirSync(repoDir);
     const repo = fs.realpathSync(repoDir);
     for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "baseline"]]) {
       const git = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
       expect(git.status, git.stderr).toBe(0);
     }
-    daemon = await startHided(herdr, "plan-review");
+    daemon = await startHided(engine, "plan-review");
     // The agent starts before the page shows the pane, so the pane is sized first.
     const { pane } = await withControl(daemon, async (control) => {
       const opened = await openProject(control, repo, "plan-repo");
       viewPane(control, opened.pane);
       return opened;
     });
-    const agent = await agentPane(herdr, daemon.stateDir, pane);
+    const agent = await agentPane(engine, daemon.stateDir, pane);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "plan-repo");
 
@@ -116,6 +116,6 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(chip).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -19,8 +19,8 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
  * folder each agent makes), a kit record only when `record`, and a daemon that runs the kit.
  */
 async function start(record: boolean, options: { seedHideAi?: boolean; savedProfile?: boolean } = {}) {
-  const herdr = await startFixture();
-  const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ob-")), "home");
+  const engine = await startFixture();
+  const home = path.join(fs.mkdtempSync(path.join(engine.root, "ob-")), "home");
   for (const folder of [".claude", ".grok"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });
   for (const program of ["claude", "grok"]) fs.writeFileSync(path.join(home, ".local", "bin", program), "#!/bin/sh\n", { mode: 0o755 });
@@ -34,7 +34,7 @@ async function start(record: boolean, options: { seedHideAi?: boolean; savedProf
     fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
     fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [] }));
   }
-  const daemon = await startHided(herdr, "agent-onboarding", home, {}, true, options);
+  const daemon = await startHided(engine, "agent-onboarding", home, {}, true, options);
   return { daemon, home };
 }
 

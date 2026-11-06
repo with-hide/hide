@@ -8,11 +8,11 @@ import { chord } from "./chords";
 
 test("View close follows MRU, preserves background input and hands collapsed areas their keyboard", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    for (const name of ["a.txt", "b.txt", "c.txt", "d.txt"]) fs.writeFileSync(path.join(herdr.root, "fixture", name), `${name}\n`);
-    daemon = await startHided(herdr, "view-close-focus");
+    for (const name of ["a.txt", "b.txt", "c.txt", "d.txt"]) fs.writeFileSync(path.join(engine.root, "fixture", name), `${name}\n`);
+    daemon = await startHided(engine, "view-close-focus");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
@@ -72,6 +72,6 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await expect(page.locator("[data-terminal-host] textarea:focus")).toHaveCount(1);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -10,15 +10,15 @@ import { chord } from "./chords";
 
 test("View new tab replaces itself with a file or changed-file diff", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const root = path.join(herdr.root, "fixture");
+    const root = path.join(engine.root, "fixture");
     const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
     fs.writeFileSync(path.join(root, "note.txt"), "original\n");
     git("init", "-q"); git("add", ".");
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "Initial files");
-    daemon = await startHided(herdr, "new-tab");
+    daemon = await startHided(engine, "new-tab");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
@@ -66,20 +66,20 @@ test("View new tab replaces itself with a file or changed-file diff", async ({ p
     await expect(page.locator('[data-palette="Open file"]')).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("New tab chord opens where the keyboard is: its View area, its pane's Agent area, else the active area", async ({ page }) => {
   test.setTimeout(150_000);
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const root = path.join(herdr.root, "fixture");
+    const root = path.join(engine.root, "fixture");
     fs.writeFileSync(path.join(root, "note.txt"), "original\n");
-    daemon = await startHided(herdr, "new-tab-keyboard");
-    const secondId = (await withControl(daemon, (control) => newTab(control, herdr, "second"))).tab;
+    daemon = await startHided(engine, "new-tab-keyboard");
+    const secondId = (await withControl(daemon, (control) => newTab(control, engine, "second"))).tab;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const agentTab = (id: string) => page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`);
@@ -133,6 +133,6 @@ test("New tab chord opens where the keyboard is: its View area, its pane's Agent
     await expect(viewTabs).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

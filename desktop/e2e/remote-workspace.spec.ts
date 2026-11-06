@@ -42,8 +42,8 @@ async function canBindLoopback(port: number, host: string): Promise<boolean> {
   });
 }
 
-function changedCheckout(herdr: SshPaneFixture, filename: string): string {
-  const checkout = path.join(herdr.root, "fixture");
+function changedCheckout(engine: SshPaneFixture, filename: string): string {
+  const checkout = path.join(engine.root, "fixture");
   const file = path.join(checkout, filename);
   fs.writeFileSync(file, "Baseline\n");
   for (const args of [["init", "-q"], ["add", filename], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-qm", "Fixture baseline"]]) {
@@ -314,8 +314,8 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     });
     await new Promise<void>((resolve) => twinServer!.listen(0, "127.0.0.1", resolve));
     const twinPort = (twinServer.address() as AddressInfo).port;
-    const openTwin = async (herdr: SshPaneFixture, label: string) => {
-      const opened = await commandFromPane(herdr, run, bridge, ["browser", "open", `http://localhost:${twinPort}/twin.html`], label);
+    const openTwin = async (engine: SshPaneFixture, label: string) => {
+      const opened = await commandFromPane(engine, run, bridge, ["browser", "open", `http://localhost:${twinPort}/twin.html`], label);
       expect(opened.status, JSON.stringify(opened.answer)).toBe(0);
       return opened.answer.result as { view_id: string; load: number };
     };

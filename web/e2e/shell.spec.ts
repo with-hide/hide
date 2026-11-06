@@ -27,11 +27,11 @@ async function typedTextEchoes(page: Page, marker: string): Promise<void> {
 
 // @platform: Real PTY input and echo through the platform's engine and its shell.
 test("a sidebar row click switches the pane and typed text echoes there", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    daemon = await startHided(herdr, "shell");
-    const [first, second] = herdr.panes;
+    daemon = await startHided(engine, "shell");
+    const [first, second] = engine.panes;
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page);
     // The sidebar opens on Projects; the rows this test clicks are the Agents list's.
@@ -62,6 +62,6 @@ test("a sidebar row click switches the pane and typed text echoes there", { tag:
     );
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

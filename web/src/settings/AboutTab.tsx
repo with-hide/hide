@@ -6,7 +6,7 @@ import { Disclosure, Group, Note, Row, Status, Value, type Tone } from "../compo
 import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime, formatPercent } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { diagnosticsInputOf, diagnosticsText, environmentTone, herdrLine, shownIn } from "../settings";
+import { diagnosticsInputOf, diagnosticsText, environmentTone, engineLine, shownIn } from "../settings";
 import { useShellStore } from "../store";
 import type { UpdateStatus } from "../host";
 import { checkedAgo, checkForUpdates, restartIntoUpdate, setPreviewUpdates, useUpdateStatus } from "../updates";
@@ -16,10 +16,10 @@ export function AboutTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const daemon = useShellStore((s) => s.daemon);
   const connection = useShellStore((s) => s.connection);
-  const herdr = useShellStore((s) => s.rest?.status?.herdr);
+  const engine = useShellStore((s) => s.rest?.status?.herdr);
   const environment = useShellStore((s) => s.rest?.status?.environment);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
-  const line = herdrLine(herdr, t);
+  const line = engineLine(engine, t);
   const copyDiagnostics = () => {
     const text = diagnosticsText(diagnosticsInputOf(useShellStore.getState(), navigator.userAgent));
     void actions.copyText(text, "diagnostics").then((copied) => setCopy(copied ? "copied" : "failed"));
@@ -48,14 +48,14 @@ export function AboutTab({ actions }: { actions: Actions }) {
         <Row
           label={t("settings.herdrRuntime")}
           detail={
-            line.tone !== "ok" && herdr?.message ? (
-              <Note tone={line.tone === "error" ? "error" : "warn"} data-herdr-message="true">
-                {herdr.message}
+            line.tone !== "ok" && engine?.message ? (
+              <Note tone={line.tone === "error" ? "error" : "warn"} data-engine-message="true">
+                {engine.message}
               </Note>
             ) : null
           }
         >
-          <Status tone={line.tone === "ok" ? "ok" : "warn"} data-engine-state={herdr?.state ?? "unavailable"}>
+          <Status tone={line.tone === "ok" ? "ok" : "warn"} data-engine-state={engine?.state ?? "unavailable"}>
             {line.text}
           </Status>
         </Row>

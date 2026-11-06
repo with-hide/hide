@@ -20,34 +20,34 @@ test.describe.configure({ timeout: 120_000 });
 
 test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects restores the last surface", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "fixture", "plan.txt"), "plan line\n");
-    fs.mkdirSync(path.join(herdr.root, "beta"), { recursive: true });
-    daemon = await startHided(herdr, "recent");
+    fs.writeFileSync(path.join(engine.root, "fixture", "plan.txt"), "plan line\n");
+    fs.mkdirSync(path.join(engine.root, "beta"), { recursive: true });
+    daemon = await startHided(engine, "recent");
     // One agent per tab, so each row is named and marked by its agent: a
     // Codex in beta (the fixture's shim under that name) and a Claude alone
     // in a second fixture tab. The fixture's first tab holds two agents and
     // keeps its tab label and the neutral mark. The page shows neither pane
     // yet, so each is sized on this connection, which types the program too.
-    fs.copyFileSync(path.join(herdr.root, "bin", fixtureExecutable("claude")), path.join(herdr.root, "bin", fixtureExecutable("codex")));
+    fs.copyFileSync(path.join(engine.root, "bin", fixtureExecutable("claude")), path.join(engine.root, "bin", fixtureExecutable("codex")));
     const { tab: betaTab, pane: betaPane } = await withControl(daemon, async (control) => {
       const run = async (pane: string, program: string) => {
         viewPane(control, pane);
         sendKeys(control, pane, `${program}\r`);
         await control.until((rest) => agentIn(rest, pane), `${program} in ${pane}`, 30_000);
       };
-      const beta = await openProject(control, path.join(herdr.root, "beta"), "beta");
+      const beta = await openProject(control, path.join(engine.root, "beta"), "beta");
       await run(beta.pane, "codex");
-      await run((await newTab(control, herdr, "solo")).pane, "claude");
+      await run((await newTab(control, engine, "solo")).pane, "claude");
       return beta;
     });
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const root = path.join(fs.realpathSync(herdr.root), "fixture");
+    const root = path.join(fs.realpathSync(engine.root), "fixture");
     const canvas = page.locator("[data-canvas]").first();
     const cycleRow = page.locator("[data-cycle] [aria-selected=true]");
 
@@ -128,9 +128,9 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     await expect(marks(betaTab).locator("[data-agent-mark]")).toHaveCount(0);
     await expect(page.locator(`[data-cycle=panels] [data-cycle-row="${betaTab}"]`)).toHaveAttribute("aria-label", /Codex agent/);
     await expect(page.locator('[data-cycle=panels] [data-agent-mark]:not([data-agent-mark="neutral"])')).toHaveCount(0);
-    await expect(marks(herdr.tab)).toHaveAttribute("data-cycle-marks", "herdr");
-    await expect(marks(herdr.tab).locator('[data-agent-mark="neutral"]')).toHaveCount(1);
-    await expect(marks(herdr.tab).locator("[data-cycle-status]")).toHaveCount(0);
+    await expect(marks(engine.tab)).toHaveAttribute("data-cycle-marks", "herdr");
+    await expect(marks(engine.tab).locator('[data-agent-mark="neutral"]')).toHaveCount(1);
+    await expect(marks(engine.tab).locator("[data-cycle-status]")).toHaveCount(0);
     await expect(marks(display!).locator('[data-view-mark="file"]')).toHaveCount(1);
     await screenshot(page, "recent-panels-marks");
     await page.keyboard.press("Escape");
@@ -208,7 +208,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     await page.keyboard.press("Alt+Backquote");
     await expect(page.locator("[data-cycle]")).toHaveCount(0);
     expect(sent.get("focus_pane") ?? 0).toBe(focuses);
-    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.txt"), "notes line\n");
+    fs.writeFileSync(path.join(engine.root, "fixture", "notes.txt"), "notes line\n");
     await page.locator(`[data-explorer-row="${path.join(root, "notes.txt")}"]`).dblclick();
     await expect(editor).toContainText("notes line");
     await editor.click();
@@ -235,6 +235,6 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     await expect(page.locator(`[data-pane-view="${chosenPane}"] .xterm-helper-textarea`)).toBeFocused();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

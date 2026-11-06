@@ -74,7 +74,7 @@ import { SidebarLensSwitch, TaskLens } from "./TaskLens";
 import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
 
-function herdrRowLabel(state: string | null, t: TFunction<"translation">): string | null {
+function engineRowLabel(state: string | null, t: TFunction<"translation">): string | null {
   if (state === "unconfigured" || state === "socket_missing") return t("sidebar.herdrSocketMissing");
   if (state === "not_connected" || state === "unreachable" || state === "stale") {
     return t("sidebar.herdrNotResponding");
@@ -84,12 +84,12 @@ function herdrRowLabel(state: string | null, t: TFunction<"translation">): strin
 
 export function Sidebar({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const herdrState = useShellStore((s) => s.herdrState);
+  const engineState = useShellStore((s) => s.engineState);
   const visible = useShellStore((s) => s.rest?.ui_state?.left_sidebar_visible ?? true);
   // The row speaks for this machine's engine, so it is not shown over a
   // selected SSH device's lists; that device's state is on the canvas.
   const remote = useShellStore((s) => focusedRemoteDevice(s.rest) !== null);
-  const status = remote ? null : herdrRowLabel(herdrState, t);
+  const status = remote ? null : engineRowLabel(engineState, t);
   // The rail is shown unless the operator hid it (quick device-rail-badges B1, B6).
   const rail = useShellStore((s) => railShown(s.rest));
   const body = useShellStore((s) => sidebarBody(s.rest));

@@ -48,10 +48,10 @@ async function closeAddDeviceDialog(page: Page): Promise<void> {
 
 test("the rail follows the registered devices; a device that cannot be reached is dimmed and offers Reconnect", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "device-rail");
+    daemon = await startHided(engine, "device-rail");
     writeSshHost(daemon, ALIAS);
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -193,6 +193,6 @@ test("the rail follows the registered devices; a device that cannot be reached i
     await expect(page.locator(CENTER).first()).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

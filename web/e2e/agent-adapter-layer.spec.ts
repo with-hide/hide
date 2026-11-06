@@ -12,14 +12,14 @@ test.skip(process.platform === "win32", "the kit installs POSIX hooks");
 
 test("Basic chips expose three accessible groups in all four languages and return keyboard focus", async ({ page }) => {
   test.setTimeout(180_000);
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ad-")), "home");
+    const home = path.join(fs.mkdtempSync(path.join(engine.root, "ad-")), "home");
     for (const folder of [".claude", ".codex", ".grok", ".local/bin", ".hide/kit"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
     for (const program of ["claude", "codex", "grok", "opencode", "pi", "omp", "agy"]) fs.writeFileSync(path.join(home, ".local/bin", program), "#!/bin/sh\n", { mode: 0o755 });
     fs.writeFileSync(path.join(home, ".hide/kit/installed.json"), JSON.stringify({ format: 1, installed: [] }));
-    daemon = await startHided(herdr, "adapter-groups", home, {}, true);
+    daemon = await startHided(engine, "adapter-groups", home, {}, true);
     await page.setViewportSize({ width: 560, height: 1000 });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -77,8 +77,8 @@ test("Basic chips expose three accessible groups in all four languages and retur
       }
     }
   } catch (error) {
-    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => herdr.stop());
+    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => engine.stop());
   }
-  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => herdr.stop()); }
-  herdr.stop();
+  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => engine.stop()); }
+  engine.stop();
 });

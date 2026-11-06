@@ -14,13 +14,13 @@ test.describe.configure({ timeout: 120_000 });
 
 test("a ready Mac is one line, the QR waits for Show QR, and the push dropdown on Notifications describes one mode", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   const tailscale = new FakeTailscale();
   let daemon: Daemon | null = null;
   try {
     tailscale.install();
     tailscale.ready();
-    daemon = await startHided(herdr, "mobile-settings", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    daemon = await startHided(engine, "mobile-settings", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-sidebar-overview]")).toBeVisible({ timeout: 20_000 });
     await page.keyboard.press(chord("settings"));
@@ -64,7 +64,7 @@ test("a ready Mac is one line, the QR waits for Show QR, and the push dropdown o
     await expect(page.locator("[data-push-detail]")).toHaveCount(1);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     tailscale.remove();
   }
 });

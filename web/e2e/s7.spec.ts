@@ -32,7 +32,7 @@ test.use({ actionTimeout: 15_000 });
 type SentEvent = { kind: string; payload: Record<string, unknown> };
 
 type Stack = {
-  herdr: AgentFixture;
+  engine: AgentFixture;
   daemon: Daemon;
   /** The resolved checkout root in the core's wire spelling. */
   root: string;
@@ -123,18 +123,18 @@ async function startStack(
   page: Page,
   label: string,
   files: Record<string, string>,
-  options: { beforeOpen?: () => Promise<void>; prepare?: (checkout: string) => void; projects?: (daemon: Daemon, herdr: AgentFixture) => Promise<void> } = {},
+  options: { beforeOpen?: () => Promise<void>; prepare?: (checkout: string) => void; projects?: (daemon: Daemon, engine: AgentFixture) => Promise<void> } = {},
 ): Promise<Stack> {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
     for (const [name, contents] of Object.entries(files)) {
-      fs.mkdirSync(path.dirname(path.join(herdr.root, "fixture", name)), { recursive: true });
-      fs.writeFileSync(path.join(herdr.root, "fixture", name), contents);
+      fs.mkdirSync(path.dirname(path.join(engine.root, "fixture", name)), { recursive: true });
+      fs.writeFileSync(path.join(engine.root, "fixture", name), contents);
     }
-    options.prepare?.(path.join(herdr.root, "fixture"));
-    daemon = await startHided(herdr, label);
-    await options.projects?.(daemon, herdr);
+    options.prepare?.(path.join(engine.root, "fixture"));
+    daemon = await startHided(engine, label);
+    await options.projects?.(daemon, engine);
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     const events: SentEvent[] = [];
@@ -144,17 +144,17 @@ async function startStack(
     await open(page, daemon);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    return { herdr, daemon, root: toPage(path.join(fs.realpathSync(herdr.root), "fixture")), sent, last, events, diagnostics };
+    return { engine, daemon, root: toPage(path.join(fs.realpathSync(engine.root), "fixture")), sent, last, events, diagnostics };
   } catch (error) {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
 
 function stopStack(stack: Stack): void {
   stack.daemon.stop();
-  stack.herdr.stop();
+  stack.engine.stop();
 }
 
 /**
@@ -679,8 +679,8 @@ test("a drag or a tab menu begun on one Workspace ends when another client moves
       fs.mkdirSync(beta, { recursive: true });
       for (const name of ["b1.txt", "b2.txt"]) fs.writeFileSync(path.join(beta, name), `${name}\n`);
     },
-    projects: async (daemon, herdr) => {
-      await withControl(daemon, (control) => openProject(control, path.join(herdr.root, "beta"), "beta"));
+    projects: async (daemon, engine) => {
+      await withControl(daemon, (control) => openProject(control, path.join(engine.root, "beta"), "beta"));
     },
   });
   const other = await page.context().newPage();

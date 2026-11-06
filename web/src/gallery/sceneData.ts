@@ -379,7 +379,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     agent({ pane_id: "a1c8", identity_label: "문서 링크 점검", group: "seen", mark: "quiet", status_code: "idle", elapsed: "3h", delegated: true, lineage_parent_pane_id: "a1", lineage_depth: 1 }),
   );
 
-  const herdrCheckouts: Checkout[] = [
+  const hideCheckouts: Checkout[] = [
     checkout({ id: "hide:main", workspace: "hide", branch: "main", primary: true, age: 10, purpose: "사이드바 가독성 개선", panes: ["a1", ...A1_CHILDREN.filter((pane) => pane !== "a1c1"), "a1g1", "a1g2", "a2", "a2c1", "a2c2", "a3"], marks: { turn: 2, going: 3, quiet: 1 } }, now),
     checkout({ id: "hide:155", workspace: "hide", branch: "quick/155-browser-display", age: 40 * 60, purpose: issueTitle(155, "browser display (WebContentsView)"), panes: ["q1"], marks: { turn: 1 } }, now),
     checkout({ id: "hide:154", workspace: "hide", branch: "quick/154-search-palette", age: 3600, purpose: issueTitle(154, "⌘K search palette UI"), panes: ["q2"], marks: { done: 1 }, pr: { number: 154, title: "Search palette", badge: "open", is_draft: true, state: "draft" } }, now),
@@ -397,7 +397,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     workspace(
       "hide",
       {
-        checkouts: herdrCheckouts,
+        checkouts: hideCheckouts,
         inactive_checkouts: { expanded: folds.inactiveCheckoutsOpen.includes(`${ROOT}/hide`), checkout_ids: INACTIVE.map((_, index) => `hide:inactive-${index}`) },
       },
       folds,

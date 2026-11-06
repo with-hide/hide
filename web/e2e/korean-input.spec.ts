@@ -22,11 +22,11 @@ function heard(log: string, from: number): string {
 // @platform: Hangul bytes reach the agent's PTY through the platform's engine.
 test("⇧↩ right after a Hangul syllable reaches the program after that syllable", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "korean-terminal");
-    const [agent] = herdr.panes;
+    daemon = await startHided(engine, "korean-terminal");
+    const [agent] = engine.panes;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     // This pane was focused when the fixture made it; a click would send
@@ -35,7 +35,7 @@ test("⇧↩ right after a Hangul syllable reaches the program after that syllab
     await expect(view).toHaveAttribute("data-focused", "true", { timeout: 20_000 });
     const textarea = view.locator(".xterm-helper-textarea");
     await textarea.focus();
-    const before = fs.readFileSync(herdr.inputLogs[0]).length;
+    const before = fs.readFileSync(engine.inputLogs[0]).length;
 
     // While a syllable is marked, the terminal draws it in its own colours,
     // not xterm's white on black.
@@ -53,7 +53,7 @@ test("⇧↩ right after a Hangul syllable reaches the program after that syllab
     // Two syllables, so the second's start reads where the first ended. Exactly
     // ed959c eab880 reaches the program; JSON keeps a control byte readable in a failure.
     await composeKorean(page, [["하", "한"], ["ㄱ", "그", "글"]]);
-    await expect.poll(() => JSON.stringify(heard(herdr.inputLogs[0], before)), { timeout: 10_000 }).toBe(JSON.stringify("한글"));
+    await expect.poll(() => JSON.stringify(heard(engine.inputLogs[0], before)), { timeout: 10_000 }).toBe(JSON.stringify("한글"));
 
     // macOS Chromium ends the last syllable with `compositionend` and then
     // delivers the ⇧↩ that ended it as a second keydown, before xterm sends
@@ -68,19 +68,19 @@ test("⇧↩ right after a Hangul syllable reaches the program after that syllab
     });
     // ⇧↩ is ESC CR, the newline Claude Code and Codex read without sending;
     // a Unix tty hands the program the CR as LF, the Windows console as CR.
-    await expect.poll(() => JSON.stringify(heard(herdr.inputLogs[0], before)), { timeout: 10_000 }).toMatch(/^"한글로\\u001b\\[rn]"$/);
+    await expect.poll(() => JSON.stringify(heard(engine.inputLogs[0], before)), { timeout: 10_000 }).toMatch(/^"한글로\\u001b\\[rn]"$/);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Escape while Hangul is composing in the search field keeps ⌘K open, and closes it once the syllable is in", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "korean-escape");
+    daemon = await startHided(engine, "korean-escape");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const palette = page.locator('[data-palette="Search"]');
@@ -110,6 +110,6 @@ test("Escape while Hangul is composing in the search field keeps ⌘K open, and 
     await expect(palette).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

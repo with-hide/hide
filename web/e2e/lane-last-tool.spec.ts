@@ -25,10 +25,10 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
 test("⌘E reopens the tool a whole-lane close kept, and the Explorer for a lane with no column to bring back", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "lane-last-tool");
+    daemon = await startHided(engine, "lane-last-tool");
     await open(page, daemon);
     await closed(page);
     await page.keyboard.press(chord("toggle_lane"));
@@ -74,18 +74,18 @@ test("⌘E reopens the tool a whole-lane close kept, and the Explorer for a lane
     await shows(page, "explorer");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the documents wait on their rail button (B15)", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n");
-    daemon = await startHided(herdr, "lane-tool-alone");
+    fs.writeFileSync(path.join(engine.root, "fixture", "notes.md"), "# Notes\n");
+    daemon = await startHided(engine, "lane-tool-alone");
     await open(page, daemon);
     await showExplorer(page);
     await page.locator('[data-explorer-row$="/notes.md"]').click();
@@ -130,18 +130,18 @@ test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the docu
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⌘E bringing the documents back hands the keyboard to the shown document", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n");
-    daemon = await startHided(herdr, "lane-toggle-keyboard");
+    fs.writeFileSync(path.join(engine.root, "fixture", "notes.md"), "# Notes\n");
+    daemon = await startHided(engine, "lane-toggle-keyboard");
     await open(page, daemon);
     await showExplorer(page);
     await page.locator('[data-explorer-row$="/notes.md"]').click();
@@ -159,17 +159,17 @@ test("⌘E bringing the documents back hands the keyboard to the shown document"
     await expect(editor).toBeFocused();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⇧⌘L opens the Project's Memory tool, ⇧⌘R the sidebar's PR list, ⇧⌘G Changes and closes it showing, ⌥⌘1-4 do nothing, and the last tool survives a restart (B24, B25)", async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "lane-tool-chords");
+    daemon = await startHided(engine, "lane-tool-chords");
     await open(page, daemon);
     expect(commandLabel("open_project_memory")).toMatch(/L$/);
     await page.keyboard.press(chord("open_project_memory"));
@@ -211,6 +211,6 @@ test("⇧⌘L opens the Project's Memory tool, ⇧⌘R the sidebar's PR list, �
     await shows(page, "changes");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

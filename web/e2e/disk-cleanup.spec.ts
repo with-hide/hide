@@ -124,10 +124,10 @@ async function showTheme(page: Page, theme: "light" | "dark"): Promise<void> {
 // @platform: Disk measuring and removal, and Trash, on the platform's filesystem.
 test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktree after one confirmation", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
@@ -137,13 +137,13 @@ test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktr
     git(repo, ["add", "."]);
     git(repo, ["commit", "-m", "initial"]);
     // A repository with an origin, as a real one has: the core measures each branch against origin's default.
-    const origin = path.join(herdr.root, "origin.git");
-    git(herdr.root, ["init", "--bare", origin]);
+    const origin = path.join(engine.root, "origin.git");
+    git(engine.root, ["init", "--bare", origin]);
     git(repo, ["remote", "add", "origin", origin]);
     git(repo, ["push", "-q", "origin", "main"]);
     git(repo, ["remote", "set-head", "origin", "main"]);
-    const shipped = path.join(herdr.root, "repo-shipped");
-    const active = path.join(herdr.root, "repo-active");
+    const shipped = path.join(engine.root, "repo-shipped");
+    const active = path.join(engine.root, "repo-active");
     git(repo, ["worktree", "add", "-b", "prd/shipped", shipped]);
     git(shipped, ["commit", "--allow-empty", "-m", "shipped work"]);
     git(repo, ["merge", "--ff-only", "prd/shipped"]);
@@ -151,7 +151,7 @@ test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktr
     git(active, ["commit", "--allow-empty", "-m", "active work"]);
     for (const dir of [repo, shipped, active]) build(dir);
 
-    daemon = await startHided(herdr, "disk-cleanup", undefined, { PATH: `${fakeGh(herdr.root, "prd/shipped", git(shipped, ["rev-parse", "HEAD"]).trim())}${path.delimiter}${herdr.fixturePath}` });
+    daemon = await startHided(engine, "disk-cleanup", undefined, { PATH: `${fakeGh(engine.root, "prd/shipped", git(shipped, ["rev-parse", "HEAD"]).trim())}${path.delimiter}${engine.fixturePath}` });
     await withControl(daemon, (control) => openProject(control, repo, "repo"));
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -272,29 +272,29 @@ test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktr
     expect((sent.get("cleanup_confirm") ?? 0) - confirmsBefore).toBe(2);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("a checkout with a working agent cannot be ticked, and an open pane alone does not block main", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "home", ".zshenv"), `export PATH="${path.join(herdr.root, "bin")}:$PATH"\n`);
-    const repo = path.join(herdr.root, "repo");
+    fs.writeFileSync(path.join(engine.root, "home", ".zshenv"), `export PATH="${path.join(engine.root, "bin")}:$PATH"\n`);
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "package.json"), '{"name":"fixture"}\n');
     fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\ndist/\n");
     git(repo, ["add", "."]);
     git(repo, ["commit", "-m", "initial"]);
-    const busy = path.join(herdr.root, "repo-busy");
+    const busy = path.join(engine.root, "repo-busy");
     git(repo, ["worktree", "add", "-b", "prd/busy", busy]);
     git(busy, ["commit", "--allow-empty", "-m", "busy work"]);
     for (const dir of [repo, busy]) build(dir);
 
-    daemon = await startHided(herdr, "disk-cleanup-busy");
+    daemon = await startHided(engine, "disk-cleanup-busy");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
     // The core lists the worktree once a client shows its repository, so the page is open first.
@@ -324,7 +324,7 @@ test("a checkout with a working agent cannot be ticked, and an open pane alone d
     expect(fs.existsSync(path.join(busy, "node_modules"))).toBe(true);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
@@ -333,30 +333,30 @@ test("a checkout with a working agent cannot be ticked, and an open pane alone d
 // approval still blocks it.
 test("a worktree left with only a finished agent's pane is chosen and its pane closes with it, and a waiting agent blocks it", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "home", ".zshenv"), `export PATH="${path.join(herdr.root, "bin")}:$PATH"\n`);
-    const repo = path.join(herdr.root, "repo");
+    fs.writeFileSync(path.join(engine.root, "home", ".zshenv"), `export PATH="${path.join(engine.root, "bin")}:$PATH"\n`);
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "package.json"), '{"name":"fixture"}\n');
     fs.writeFileSync(path.join(repo, ".gitignore"), "target/\nnode_modules/\ndist/\nagents/runs/\n");
     git(repo, ["add", "."]);
     git(repo, ["commit", "-m", "initial"]);
-    const origin = path.join(herdr.root, "origin.git");
-    git(herdr.root, ["init", "--bare", origin]);
+    const origin = path.join(engine.root, "origin.git");
+    git(engine.root, ["init", "--bare", origin]);
     git(repo, ["remote", "add", "origin", origin]);
     git(repo, ["push", "-q", "origin", "main"]);
     git(repo, ["remote", "set-head", "origin", "main"]);
-    const shipped = path.join(herdr.root, "repo-shipped");
+    const shipped = path.join(engine.root, "repo-shipped");
     git(repo, ["worktree", "add", "-b", "prd/shipped", shipped]);
     git(shipped, ["commit", "--allow-empty", "-m", "shipped work"]);
     git(repo, ["merge", "--ff-only", "prd/shipped"]);
     git(repo, ["push", "-q", "origin", "main"]);
     build(shipped);
 
-    daemon = await startHided(herdr, "disk-cleanup-panes");
+    daemon = await startHided(engine, "disk-cleanup-panes");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
     // The core lists the worktree once a client shows its repository, so the page is open first.
@@ -409,6 +409,6 @@ test("a worktree left with only a finished agent's pane is chosen and its pane c
     await withControl(daemon, (control) => control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `${pane} closed`, 20_000));
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

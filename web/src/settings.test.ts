@@ -18,7 +18,7 @@ import {
   diagnosticsText,
   kitConsentTerms as kitConsentTermsIn,
   kitRemovalLine as kitRemovalLineIn,
-  herdrLine as herdrLineIn,
+  engineLine as engineLineIn,
   hostLine as hostLineIn,
   kitPartLine as kitPartLineIn,
   kitPartNeedsReinstall,
@@ -47,7 +47,7 @@ const deviceRemovalLines = (deviceId: string, registrations: Parameters<typeof d
 const deviceLine = (device: Device, remote: RemoteStatus | undefined) => deviceLineIn(device, remote, t);
 const kitConsentTerms = (helperRoot: string | null, cliDir: string | null) => kitConsentTermsIn(helperRoot, cliDir, t);
 const kitRemovalLine = (device: Device) => kitRemovalLineIn(device, t);
-const herdrLine = (herdr: Parameters<typeof herdrLineIn>[0]) => herdrLineIn(herdr, t);
+const engineLine = (engine: Parameters<typeof engineLineIn>[0]) => engineLineIn(engine, t);
 const hostLine = (host: DeviceHost | undefined) => hostLineIn(host, t);
 const kitPartLine = (part: KitComponent) => kitPartLineIn(part, t);
 const kitPartText = (part: Pick<KitComponent, "state" | "why">) => kitPartTextIn(part, t);
@@ -208,9 +208,9 @@ describe("settings rules", () => {
   });
 
   it("words the terminal engine's connection from the core's state", () => {
-    expect(herdrLine({ state: "socket_missing" })).toEqual({ text: "The terminal engine is not running.", tone: "warn" });
-    expect(herdrLine({ state: "connected" }).text).toBe("Connected");
-    expect(herdrLine(undefined).text).toBe("unavailable");
+    expect(engineLine({ state: "socket_missing" })).toEqual({ text: "The terminal engine is not running.", tone: "warn" });
+    expect(engineLine({ state: "connected" }).text).toBe("Connected");
+    expect(engineLine(undefined).text).toBe("unavailable");
   });
 
   it("copies diagnostics without the page token or any secret-shaped value", () => {
@@ -231,7 +231,7 @@ describe("settings rules", () => {
         idle_secs: 600,
       },
       connection: "live",
-      herdr: { state: "connected", received_version: "0.9.1" },
+      engine: { state: "connected", received_version: "0.9.1" },
       environment: [],
       diagnostics: [{ kind: "ws.url", message: `opened #token=${token} with key=abc123`, occurred_at: 0 }],
       lastError: { kind: "provider.failed", message: 'ghp_Q9zR2wK7mN5pT8vS3uX6yL4gH1jV0qB {"password":"q7Z"} someone@example.invalid' },

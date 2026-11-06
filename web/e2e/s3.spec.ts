@@ -90,7 +90,7 @@ function gitFixture(dir: string): void {
 }
 
 type Fixture = {
-  herdr: AgentFixture;
+  engine: AgentFixture;
   daemon: Daemon;
   /** The resolved checkout root in the core's wire spelling. */
   repo: string;
@@ -105,10 +105,10 @@ async function openCheckout(
   beforeLoad?: (page: Page) => Promise<void>,
   extraFiles: Record<string, string> = {},
 ): Promise<Fixture> {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const repoDir = path.join(herdr.root, "repo");
+    const repoDir = path.join(engine.root, "repo");
     fs.mkdirSync(path.join(repoDir, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoDir, "src", "main.ts"), SOURCE);
     fs.writeFileSync(path.join(repoDir, "README.md"), "# repo\n");
@@ -137,7 +137,7 @@ async function openCheckout(
     fs.truncateSync(path.join(repoDir, "huge.txt"), 17 * 1024 * 1024);
     const repo = toPage(fs.realpathSync(repoDir));
 
-    daemon = await startHided(herdr, "s3");
+    daemon = await startHided(engine, "s3");
     await withControl(daemon, (control) => openProject(control, repoDir, "repo"));
     const lastSent = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, lastSent);
@@ -158,10 +158,10 @@ async function openCheckout(
     await expect(page.locator(`[data-explorer-row="${repo}/src/main.ts"]`)).toBeVisible();
     await page.locator(`[data-explorer-row="${repo}/src/main.ts"]`).click();
     await expect(page.locator('[data-editor-codemirror] .cm-content')).toContainText("export const answer = 41;");
-    return { herdr, daemon, repo, file: `${repo}/src/main.ts`, sent, lastSent };
+    return { engine, daemon, repo, file: `${repo}/src/main.ts`, sent, lastSent };
   } catch (error) {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
@@ -221,7 +221,7 @@ async function storedDrafts(page: Page): Promise<DraftRow[]> {
 
 function close(fixture: Fixture): void {
   fixture.daemon.stop();
-  fixture.herdr.stop();
+  fixture.engine.stop();
 }
 
 test.describe.configure({ timeout: 90_000 });
@@ -1342,9 +1342,9 @@ test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" 
 
 test("Explorer files paste paths and images attach to the receiving terminal", { tag: "@platform" }, async ({ page }) => {
   const fixture = await openCheckout(page);
-  const { herdr, sent } = fixture;
+  const { engine, sent } = fixture;
   try {
-    const folder = path.join(herdr.root, "fixture");
+    const folder = path.join(engine.root, "fixture");
     const name = "한글 ' $HOME 파일.txt";
     const file = path.join(folder, name);
     fs.writeFileSync(file, "original file");
@@ -1357,10 +1357,10 @@ test("Explorer files paste paths and images attach to the receiving terminal", {
     const image = toPage(fs.realpathSync(path.join(folder, "drag-image.png")));
     await expect(page.locator(`[data-explorer-row="${source}"]`)).toBeVisible();
     await expect(page.locator(`[data-explorer-row="${image}"]`)).toBeVisible();
-    const [target] = herdr.panes;
+    const [target] = engine.panes;
     await expect(page.locator(`[data-pane-view="${target}"]`)).toBeVisible();
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
-    const [log] = herdr.inputLogs;
+    const [log] = engine.inputLogs;
     const read = () => fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "";
     const before = read().length;
     const dragToTerminal = (from: string) => page.evaluate(({ from, target }) => {
@@ -1413,7 +1413,7 @@ test("Explorer files paste paths and images attach to the receiving terminal", {
 
 test("a dropped file reaches the terminal as an attachment", async ({ page }) => {
   const fixture = await openCheckout(page);
-  const { herdr, sent } = fixture;
+  const { engine, sent } = fixture;
   try {
     // The fixture checkout's panes run the shim that logs every PTY byte, so
     // the pasted token is observable there; openCheckout focused the repository.
@@ -1421,7 +1421,7 @@ test("a dropped file reaches the terminal as an attachment", async ({ page }) =>
     // click, so the drop waits for the fixture's own first pane, by its id.
     const project = page.locator("[data-project]", { hasText: "fixture" });
     await project.locator("[data-checkout]").first().click();
-    const [target] = herdr.panes;
+    const [target] = engine.panes;
     await expect(page.locator(`[data-pane-view="${target}"]`)).toBeVisible();
 
     // A file drop is bytes the browser can read but cannot name; the shell
@@ -1441,7 +1441,7 @@ test("a dropped file reaches the terminal as an attachment", async ({ page }) =>
 
     // The shim logs every byte its PTY received, so the pasted token shows up
     // in the log of the pane it was dropped on (`inputLogs` follows `panes`).
-    const [log] = herdr.inputLogs;
+    const [log] = engine.inputLogs;
     const read = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
     // The drop's paste reaches the shim's PTY only through the core: if it never shows, what the shim
     // log holds, what the pane runs and what the page sent say which hop dropped it.

@@ -81,28 +81,28 @@ async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<void> {
 // from its row, the agent's from the Agents list.
 async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-menus");
+    const worktree = path.join(engine.root, "repo-menus");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
 
     // The fixture's folders are in the daemon's home, as an operator's projects
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
-    const daemon = await startHided(herdr, "sidebar-menus", herdr.root);
+    const daemon = await startHided(engine, "sidebar-menus", engine.root);
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: daemon.origin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
     // An agent in the main checkout, then one in the linked worktree, which the core lists once a client shows its repository.
     const opened = await withControl(daemon, async (control) => {
       const project = await openProject(control, repo, "repo");
-      await startAgentAt(herdr, daemon, control, project.folder, "menus-main", "메인 체크아웃 정리");
+      await startAgentAt(engine, daemon, control, project.folder, "menus-main", "메인 체크아웃 정리");
       // The shell Add project opened is not the main agent's: its tab goes.
       await closePane(control, project.pane);
       return project;
@@ -110,7 +110,7 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
     const worktreePane = await withControl(daemon, async (control) => {
       await control.until((rest) => checkoutAt(rest, toPage(fs.realpathSync(worktree))), "the linked worktree listed", 30_000);
       // The session the menu copies carries the row's title too.
-      return (await startAgentAt(herdr, daemon, control, toPage(fs.realpathSync(worktree)), SESSION, "사이드바 메뉴 구현")).pane;
+      return (await startAgentAt(engine, daemon, control, toPage(fs.realpathSync(worktree)), SESSION, "사이드바 메뉴 구현")).pane;
     });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
@@ -126,9 +126,9 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
       await menu.locator('[data-menu-item="pin"]').click();
       await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
     }
-    return { herdr, daemon, opened, worktreePane, project, projectRow, main, feature, agentRow, stop: () => { daemon.stop(); herdr.stop(); } };
+    return { engine, daemon, opened, worktreePane, project, projectRow, main, feature, agentRow, stop: () => { daemon.stop(); engine.stop(); } };
   } catch (error) {
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
@@ -216,16 +216,16 @@ test("the project row's Issue source submenu shows the stored choice and changes
 // choice too, so a choice made there is still checked when the menu reopens.
 test("a plain folder's row shows the stored Issue source, not Automatic", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const folder = path.join(herdr.root, "notes");
+    const folder = path.join(engine.root, "notes");
     fs.mkdirSync(folder);
     fs.writeFileSync(path.join(folder, "todo.txt"), "write\n");
-    daemon = await startHided(herdr, "sidebar-menus-folder");
+    daemon = await startHided(engine, "sidebar-menus-folder");
     await withControl(daemon, async (control) => {
       const project = await openProject(control, folder, "notes");
-      await startAgentAt(herdr, daemon!, control, project.folder, "menus-notes", "메모 정리");
+      await startAgentAt(engine, daemon!, control, project.folder, "menus-notes", "메모 정리");
       await closePane(control, project.pane);
     });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -246,7 +246,7 @@ test("a plain folder's row shows the stored Issue source, not Automatic", async 
     await page.keyboard.press("Escape");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 

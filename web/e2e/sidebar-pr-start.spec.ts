@@ -116,16 +116,16 @@ function repositoryWithWorktree(server: EngineServer, name: string, branch: stri
 
 test("the sidebar draws every project's pull request with no screen asking, and a restart keeps them as stale", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon = null as Daemon | null;
   try {
     const heads = new Map<string, string>();
-    for (const { name, branch } of REPOSITORIES) heads.set(name, repositoryWithWorktree(herdr, name, branch));
-    const gh = fakeGh(herdr.root, heads);
-    daemon = await startHided(herdr, "sidebar-pr-start", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
+    for (const { name, branch } of REPOSITORIES) heads.set(name, repositoryWithWorktree(engine, name, branch));
+    const gh = fakeGh(engine.root, heads);
+    daemon = await startHided(engine, "sidebar-pr-start", undefined, { PATH: `${gh.bin}${path.delimiter}${engine.fixturePath}` });
     // Each repository is a project, as Add project makes it; its linked worktree is listed under it.
     await withControl(daemon, async (control) => {
-      for (const { name } of REPOSITORIES) await openProject(control, path.join(herdr.root, name), name);
+      for (const { name } of REPOSITORIES) await openProject(control, path.join(engine.root, name), name);
     });
 
     // The first run opens on All projects and chooses a Workspace, so the next start resumes on it.
@@ -166,7 +166,7 @@ test("the sidebar draws every project's pull request with no screen asking, and 
     daemon = await daemon.restart((stateDir) => {
       const file = path.join(stateDir, "core-state.json");
       const state = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
-      fs.writeFileSync(file, JSON.stringify({ ...state, right_panel_visible: true, right_panel_section: "explorer", expanded_inactive_checkout_project_paths: [toPage(path.join(herdr.root, "charlie"))] }));
+      fs.writeFileSync(file, JSON.stringify({ ...state, right_panel_visible: true, right_panel_section: "explorer", expanded_inactive_checkout_project_paths: [toPage(path.join(engine.root, "charlie"))] }));
     });
     let sent = await attach(daemon);
     // B7 defaults each agentless fold closed. Wait for both catalog answers
@@ -213,6 +213,6 @@ test("the sidebar draws every project's pull request with no screen asking, and 
     nothingAsked(sent);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

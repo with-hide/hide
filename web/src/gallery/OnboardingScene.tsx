@@ -19,7 +19,7 @@ import { OverviewPage } from "../Overview";
 import { SettingsGate } from "../SettingsSheet";
 import { SETTINGS_GROUPS, type SettingsTab } from "../settings";
 import { Sidebar } from "../sidebar";
-import type { AiProvider, HerdrImport, HerdrProfile, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import type { AiProvider, HerdrImport, MachineProfile, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
 import { StartPanelHost } from "../StartPanel";
 import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
@@ -270,7 +270,7 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
 }
 
 /** This machine's engine connection and its Herdr save, as the core publishes them for the `import-*` states. */
-function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
+function sceneEngineStatus(state: OnboardingState): { herdr: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
   const connected = { state: "connected", received_version: "0.9.5", received_protocol: 22, expected_protocol: 22 };
   switch (state) {
     case "import-device": return { herdr: connected, herdr_import_devices: [{ ...sceneHerdrImport("import-ask")!, tabs: 2, agents: 1, device: "build" }] };
@@ -317,9 +317,9 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
     ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR", stop: REFUSED_STOP[system] } }
     : { agents, components: [{ id: "cli", label: "hide", state: "off", why: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
   // A Host of the account's ssh config, the list Add device reads too.
-  const host = (alias: string, address: string | null, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id: `ssh:${alias}`, label: alias, target: alias, ssh_host: alias, address, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
+  const host = (alias: string, address: string | null, patch: Partial<MachineProfile> = {}): MachineProfile => ({ id: `ssh:${alias}`, label: alias, target: alias, ssh_host: alias, address, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
   // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
-  const wsl = (name: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id: `wsl:${name}`, label: `WSL ${name}`, target: name, ssh_host: null, address: null, wsl_distro: name, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
+  const wsl = (name: string, patch: Partial<MachineProfile> = {}): MachineProfile => ({ id: `wsl:${name}`, label: `WSL ${name}`, target: name, ssh_host: null, address: null, wsl_distro: name, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
   const linked = (alias: string, connect_state: string) => ({ added_as: alias, device_id: alias, connect_state });
   const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => host(`research-team-build-server-${index + 1}-for-the-long-running-project`, `developer-${index}@very-long-research-hostname.engineering.example.test:2222`))
     : state === "devices-unavailable" ? [host("build", null, { problem: "ssh_failed" }), host("design-mac", "me@design-mac.example:22", linked("design-mac", "added")), host("old-lab", null, { problem: "timed_out" })]
@@ -351,7 +351,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { ...sceneHerdr(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : sshRemotes(state) },
+    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : sshRemotes(state) },
   } as unknown as SnapshotRest;
 }
 

@@ -20,16 +20,16 @@ const front = (page: Page) => page.locator('[data-view-tab-bar] [role="tab"][ari
 
 test("an agent's open the operator has not looked at waits on its row until the row brings it forward", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const fixture = path.join(herdr.root, "fixture");
+    const fixture = path.join(engine.root, "fixture");
     fs.writeFileSync(path.join(fixture, "login.md"), "# Login\n");
     fs.writeFileSync(path.join(fixture, "notes.md"), "# Notes\n");
     fs.writeFileSync(path.join(fixture, "plan.md"), "# Plan\n");
-    daemon = await startHided(herdr, "unseen-views");
-    const [pane, other] = herdr.panes;
-    const agent = await agentPane(herdr, daemon.stateDir, pane);
+    daemon = await startHided(engine, "unseen-views");
+    const [pane, other] = engine.panes;
+    const agent = await agentPane(engine, daemon.stateDir, pane);
     const hide = async (args: string[]) => {
       const answer = await agent(args);
       expect(answer.status, answer.out).toBe(0);
@@ -83,6 +83,6 @@ test("an agent's open the operator has not looked at waits on its row until the 
     await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

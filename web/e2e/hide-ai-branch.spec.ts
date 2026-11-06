@@ -90,11 +90,11 @@ async function open(page: Page, origin: string, token: string): Promise<void> {
 
 test("a fix waits on its local branch, shows its files and diff in the 보기 slot, and merges into main on the press without a remote", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const repo = repository(herdr.root);
-    daemon = await startHided(herdr, "hide-ai-branch");
+    const repo = repository(engine.root);
+    daemon = await startHided(engine, "hide-ai-branch");
     await withControl(daemon, (control) => openProject(control, repo, "branchy"));
     const sent = new Map<string, Record<string, unknown>>();
     countSent(page, sent);
@@ -111,7 +111,7 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     await open(page, daemon.origin, daemon.token);
     await (await showProjectRow(page, project.locator("[data-checkout]").first())).click();
     await showProjectMemory(page);
-    const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR ?? herdr.root;
+    const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR ?? engine.root;
 
     // B3: the core read each branch from git, so the row is the operator's turn with the branch, its files and lines.
     const fix = lane.locator('[data-suggestion="s1"]');
@@ -159,6 +159,6 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     expect(execFileSync("git", ["remote"], { cwd: repo, encoding: "utf8" }).trim()).toBe("");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

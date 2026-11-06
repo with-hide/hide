@@ -10,13 +10,13 @@ import { enterWorkspace, showTasks } from "./wire";
 
 test("prompt elapsed survives state changes and restart, advances only on a prompt, and clears for a new session", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "prompt-elapsed");
-    const pane = herdr.panes[0]!;
+    daemon = await startHided(engine, "prompt-elapsed");
+    const pane = engine.panes[0]!;
     const at = Date.now() - 3 * 3_600_000 - 60_000;
-    const session = await labelAgentPane(herdr, daemon, pane, { task: "마지막 요청 시간 확인", at });
+    const session = await labelAgentPane(engine, daemon, pane, { task: "마지막 요청 시간 확인", at });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const projectTime = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${pane}"] [data-agent-elapsed]`);
@@ -36,19 +36,19 @@ test("prompt elapsed survives state changes and restart, advances only on a prom
     await page.goto("about:blank");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(taskTime).toHaveText("3h", { timeout: 30_000 });
-    continueFixtureTranscript(herdr, session, { task: "마지막 요청 시간 확인", at: Date.now() - 7 * 60_000 - 5_000 });
+    continueFixtureTranscript(engine, session, { task: "마지막 요청 시간 확인", at: Date.now() - 7 * 60_000 - 5_000 });
     await setAgentState(daemon, pane, "blocked");
     await expect(taskTime).toHaveText("7m", { timeout: 30_000 });
     // Metadata alone cannot manufacture a prompt time or inherit the old session's.
-    fs.writeFileSync(path.join(claudeProjects(herdr), "e2e", "no-prompt.jsonl"), `${JSON.stringify({ type: "system", sessionId: "no-prompt", timestamp: new Date().toISOString(), subtype: "init" })}\n`);
-    await setAgentSession(herdr, daemon, pane, "no-prompt");
+    fs.writeFileSync(path.join(claudeProjects(engine), "e2e", "no-prompt.jsonl"), `${JSON.stringify({ type: "system", sessionId: "no-prompt", timestamp: new Date().toISOString(), subtype: "init" })}\n`);
+    await setAgentSession(engine, daemon, pane, "no-prompt");
     await expect(tasks.locator(`[data-task-row="${pane}"]`)).toBeVisible();
     await expect(taskTime).toHaveCount(0, { timeout: 30_000 });
-    continueFixtureTranscript(herdr, "no-prompt", { task: "새 세션 요청", at: Date.now() - 2 * 60_000 - 5_000 });
+    continueFixtureTranscript(engine, "no-prompt", { task: "새 세션 요청", at: Date.now() - 2 * 60_000 - 5_000 });
     await setAgentState(daemon, pane, "working");
     await expect(taskTime).toHaveText("2m", { timeout: 30_000 });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

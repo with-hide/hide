@@ -38,12 +38,12 @@ it.each([
 
 // An agent whose mark is withdrawn moves to the manifest's `monogram` list and draws its initials there (docs/BRAND.md); today every adapter has a bundled mark.
 const MONOGRAMS: ReadonlySet<string> = new Set((manifest.monogram as { id: string }[]).map((row) => row.id));
-it.each(AGENT_ADAPTERS.map((row) => [row.id, row.herdr_kind, row.label]))("draws the logo or monogram of %s, never the neutral mark", (id, herdrKind, label) => {
-  const markup = renderToStaticMarkup(<AgentMark kind={herdrKind} />);
-  expect(markup).toContain(`data-agent-mark="${herdrKind}"`);
+it.each(AGENT_ADAPTERS.map((row) => [row.id, row.herdr_kind, row.label]))("draws the logo or monogram of %s, never the neutral mark", (id, engineKind, label) => {
+  const markup = renderToStaticMarkup(<AgentMark kind={engineKind} />);
+  expect(markup).toContain(`data-agent-mark="${engineKind}"`);
   if (MONOGRAMS.has(id)) expect(markup).toContain(`>${monogram(label)}<`);
   else expect(markup).toContain("<img");
-  expect(renderToStaticMarkup(<AgentMark kind={` ${id.toUpperCase()} `} />)).toContain(`data-agent-mark="${herdrKind}"`);
+  expect(renderToStaticMarkup(<AgentMark kind={` ${id.toUpperCase()} `} />)).toContain(`data-agent-mark="${engineKind}"`);
 });
 
 // A plain shell has no kind, and a retired kind names no agent Hide actively supports.

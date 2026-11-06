@@ -6,15 +6,15 @@ import { createActions } from "./actions";
 import { FirstRunDevices } from "./FirstRunDevices";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Dialog, DialogContent } from "./components/ui/dialog";
-import type { HerdrProfile, HerdrProfiles } from "./snapshot";
+import type { MachineProfile, MachineProfiles } from "./snapshot";
 import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
-const profile = (id: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label: id, target: id, ssh_host: id, address: `${id}@server.example:22`, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_refusal: null, ...patch });
+const profile = (id: string, patch: Partial<MachineProfile> = {}): MachineProfile => ({ id, label: id, target: id, ssh_host: id, address: `${id}@server.example:22`, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_refusal: null, ...patch });
 
-async function mount(profiles: HerdrProfiles, devices: string[] | null = []) {
+async function mount(profiles: MachineProfiles, devices: string[] | null = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
@@ -94,7 +94,7 @@ it("keeps a successful device while Retry sends only the failed selected profile
 
 it("follows a recovered live connection over an earlier profile failure while keeping current failures actionable", async () => {
   const row = profile("recovered", { device_id: "dev", added_as: "Recovered", connect_state: "failed" });
-  const profiles: HerdrProfiles = { state: "ready", error: null, profiles: [row], truncated: false };
+  const profiles: MachineProfiles = { state: "ready", error: null, profiles: [row], truncated: false };
   const view = await mount(profiles, [row.id]);
   const update = async (remoteState: string, failedKit = false) => act(async () => useShellStore.setState((current) => ({
     revision: current.revision + 1,
@@ -131,7 +131,7 @@ it("words Hide's own refusal to connect a profile from its code", async () => {
 
 // PRD wsl-device B1, B2, B29: this PC's default WSL distribution is the step's row, checked until the
 // operator unchecks it; only Connect sends it, and a WSL 1 one shows the command that switches it instead.
-const wslRow = (distro: string, patch: Partial<HerdrProfile> = {}) => profile(`wsl:${distro}`, { label: `WSL ${distro}`, target: distro, ssh_host: null, address: null, wsl_distro: distro, ...patch });
+const wslRow = (distro: string, patch: Partial<MachineProfile> = {}) => profile(`wsl:${distro}`, { label: `WSL ${distro}`, target: distro, ssh_host: null, address: null, wsl_distro: distro, ...patch });
 
 it("checks this PC's default WSL distribution and sends it only when Connect is pressed (B1, B2)", async () => {
   const view = await mount({ state: "ready", error: null, truncated: false, profiles: [wslRow("Ubuntu"), profile("one")] }, null);
@@ -194,10 +194,10 @@ it("titles the step the same with or without Herdr, and starts every row uncheck
   await view.unmount();
 });
 
-const host = (alias: string, patch: Partial<HerdrProfile> = {}) => profile(`ssh:${alias}`, { label: alias, target: alias, ssh_host: alias, address: `me@${alias}.example:22`, ...patch });
+const host = (alias: string, patch: Partial<MachineProfile> = {}) => profile(`ssh:${alias}`, { label: alias, target: alias, ssh_host: alias, address: `me@${alias}.example:22`, ...patch });
 const device = (id: string, patch: Record<string, unknown> = {}) => ({ id, label: id, kind: "remote", state: "unavailable", message: null, ssh_alias: id, agent_count: 0, test: null, problem: null, sign_in: null, ...patch });
 /** The store as the core reports it after the step's Connect added `rows`' devices. */
-const after = async (rows: HerdrProfile[], devices: ReturnType<typeof device>[], remote: { target_id: string; state: string }[]) => act(async () => useShellStore.setState((current) => ({
+const after = async (rows: MachineProfile[], devices: ReturnType<typeof device>[], remote: { target_id: string; state: string }[]) => act(async () => useShellStore.setState((current) => ({
   revision: current.revision + 1,
   rest: { ui_state: { first_run_choices: { devices: rows.map((row) => row.id) } }, status: { herdr_profiles: { state: "ready", error: null, truncated: false, profiles: rows }, remote }, navigator: { devices } },
 }) as never));

@@ -27,7 +27,7 @@ const OPERATOR_HOOKS = { mine: { Stop: [{ type: "command", command: "/opt/mine.s
 const OPERATOR_SETTINGS = { theme: "dark", trustedWorkspaces: ["/opt/mine"] };
 const OPERATOR_SKILL = "---\nname: mine\ndescription: the operator's own skill\n---\n";
 
-type Stack = { herdr: AgentFixture; daemon: Daemon; home: string };
+type Stack = { engine: AgentFixture; daemon: Daemon; home: string };
 
 const hooksFile = (home: string) => path.join(home, ".gemini", "config", "hooks.json");
 const settingsFile = (home: string) => path.join(home, ".gemini", "antigravity-cli", "settings.json");
@@ -41,10 +41,10 @@ const aiFolder = (home: string) => path.join(home, ".hide", "ai", "antigravity-r
  * copy of the fixture's agent shim on the fixture PATH, which is the PATH the kit searches.
  */
 async function start(label: string, options: { chosen?: boolean } = {}): Promise<Stack> {
-  const herdr = await startFixture({ agents: false });
-  fs.copyFileSync(path.join(herdr.root, "bin", "claude"), path.join(herdr.root, "bin", "agy"));
-  fs.chmodSync(path.join(herdr.root, "bin", "agy"), 0o755);
-  const home = path.join(fs.mkdtempSync(path.join(herdr.root, "agy-")), "home");
+  const engine = await startFixture({ agents: false });
+  fs.copyFileSync(path.join(engine.root, "bin", "claude"), path.join(engine.root, "bin", "agy"));
+  fs.chmodSync(path.join(engine.root, "bin", "agy"), 0o755);
+  const home = path.join(fs.mkdtempSync(path.join(engine.root, "agy-")), "home");
   fs.mkdirSync(path.join(operatorSkills(home), "mine"), { recursive: true });
   // The panes' shells start in the daemon's HOME on the own engine; without a startup file zsh asks its new-user questions first.
   fs.writeFileSync(path.join(home, ".zshrc"), "PS1='fixture %# '\n");
@@ -55,16 +55,16 @@ async function start(label: string, options: { chosen?: boolean } = {}): Promise
   fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
   fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [], ...(options.chosen === undefined ? {} : { agents: { antigravity: options.chosen } }) }));
   try {
-    return { herdr, daemon: await startHided(herdr, label, home, {}, true), home };
+    return { engine, daemon: await startHided(engine, label, home, {}, true), home };
   } catch (error) {
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
 
-const stop = ({ herdr, daemon }: Stack) => {
+const stop = ({ engine, daemon }: Stack) => {
   daemon.stop();
-  herdr.stop();
+  engine.stop();
 };
 
 /** agy's hook piece as the page's snapshot frames last said it. */
@@ -155,15 +155,15 @@ test("the agy switch writes Hide's block, skill and Hide AI folder beside the op
 test("the installed agy tool command refuses a result handed to the system opener in agy's shape and leaves every other call to agy", async ({ page }) => {
   // No recorded choice: agy is on by default, and its block goes in on the first pass.
   const stack = await start("agy-guard");
-  const { herdr, home } = stack;
+  const { engine, home } = stack;
   try {
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expect.poll(() => read(hooksFile(home)), { timeout: 60_000 }).toContain("--runtime antigravity");
     // agy's tool command runs from inside an agent in the fixture's first pane, as agy runs it.
-    const [pane] = herdr.panes;
-    const asAgent = await agentPane(herdr, stack.daemon.stateDir, pane);
-    const checkout = path.join(herdr.root, "fixture");
+    const [pane] = engine.panes;
+    const asAgent = await agentPane(engine, stack.daemon.stateDir, pane);
+    const checkout = path.join(engine.root, "fixture");
     const call = (name: string, args: Record<string, unknown>) => ({ conversationId: "ade08778-fcdd-4e96-88ba-fd1c4e594fa2", toolCall: { name, args } });
 
     const refused = await runHook(asAgent, home, toolCommand(home), call("run_command", { CommandLine: "open report.html", Cwd: checkout }));

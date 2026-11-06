@@ -1429,10 +1429,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
       dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
     },
-    listHerdrProfiles() {
+    listMachineProfiles() {
       dispatch({ schema_version: 2, kind: "herdr_profiles_list", payload: {} });
     },
-    connectHerdrProfile(profileId: string) {
+    connectMachineProfile(profileId: string) {
       dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
     /** The Devices step went away: the sign-ins its own Connect started end, as a closed screen's do (B8). */

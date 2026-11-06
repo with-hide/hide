@@ -17,16 +17,16 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
 
 /** A private HOME with `programs` in `~/.local/bin` (which the kit searches), `folders` made, and `files` written. */
 async function start(label: string, programs: string[], folders: string[], files: Record<string, string>) {
-  const herdr = await startEngine();
-  const home = path.join(fs.mkdtempSync(path.join(herdr.root, "fh-")), "home");
+  const engine = await startEngine();
+  const home = path.join(fs.mkdtempSync(path.join(engine.root, "fh-")), "home");
   for (const folder of [".local/bin", ...folders]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   for (const program of programs) fs.writeFileSync(path.join(home, ".local", "bin", program), "#!/bin/sh\n", { mode: 0o755 });
   for (const [file, text] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(home, file)), { recursive: true });
     fs.writeFileSync(path.join(home, file), text);
   }
-  const daemon = await startHided(herdr, label, home, {}, true);
-  return { herdr, daemon, home };
+  const daemon = await startHided(engine, label, home, {}, true);
+  return { engine, daemon, home };
 }
 
 async function openAgents(page: Page, daemon: Daemon) {
@@ -58,7 +58,7 @@ const OLD_STUB = `---\nname: hide-browser\ndescription: Read and drive a browser
 
 test("a Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces and lists no Gemini row", async ({ page }) => {
   const sessions = ".gemini/tmp/project/chats/session-1.json";
-  const { herdr, daemon, home } = await start("follow-gemini", ["claude", "gemini"], [".claude"], {
+  const { engine, daemon, home } = await start("follow-gemini", ["claude", "gemini"], [".claude"], {
     ".gemini/settings.json": GEMINI_SETTINGS,
     ".gemini/oauth_creds.json": '{"token":"synthetic"}',
     [sessions]: '{"messages":[]}',
@@ -89,6 +89,6 @@ test("a Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces a
     await screenshot(page, "agents-after-gemini-retired");
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

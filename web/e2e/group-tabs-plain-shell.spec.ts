@@ -92,7 +92,7 @@ async function typesInto(page: Page, daemon: Daemon, pane: string, suffix = "INP
   expect(output).toContain("fixture $ ");
 }
 
-async function agentRunning(page: Page, daemon: Daemon, herdr: AgentFixture, pane: string, prompt: string) {
+async function agentRunning(page: Page, daemon: Daemon, engine: AgentFixture, pane: string, prompt: string) {
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.agent_kind === "claude" || undefined, `a Claude agent in ${pane}`, 30_000));
   await expect.poll(async () => paneText(page, pane), { timeout: 30_000 }).toContain(prompt);
 }
@@ -150,19 +150,19 @@ for (const scenario of [
 ]) {
   test(scenario.name, async ({ page }) => {
     test.skip(!fs.existsSync(scenario.shell), `This regression requires ${scenario.shell}`);
-    const herdr = await startFixture({ agents: false });
+    const engine = await startFixture({ agents: false });
     let daemon: Daemon | null = null;
     let failure: unknown;
     try {
       // The panes read the HOME the fixture made.
-      const home = herdr.home!;
+      const home = engine.home!;
       fs.mkdirSync(path.join(home, ".hide"), { recursive: true });
-      const shellEnv = privateShellEnv(home, herdr.fixturePath);
+      const shellEnv = privateShellEnv(home, engine.fixturePath);
       const blocked = path.join(home, ".hide", "shell-integration");
       if (scenario.blockIntegration) fs.writeFileSync(blocked, "integration directory deliberately unavailable\n");
-      daemon = await startHided(herdr, "group-plain-shell", home, { SHELL: scenario.shell, ...shellEnv });
+      daemon = await startHided(engine, "group-plain-shell", home, { SHELL: scenario.shell, ...shellEnv });
       // The panes read the daemon's HOME, whose login files the daemon's start rewrote.
-      privateShellEnv(home, herdr.fixturePath);
+      privateShellEnv(home, engine.fixturePath);
       await open(page, daemon);
       await createGroup(page, "Plain terminal");
       const pane = await startTerminal(page);
@@ -174,19 +174,19 @@ for (const scenario of [
         effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell), binding: { pane_id: pane, identity: actual } },
       });
       const tab = (await stripTabs(page).getAttribute("data-tab"))!;
-      const originalTabs = await tabsHeld(herdr, daemon);
+      const originalTabs = await tabsHeld(engine, daemon);
       // D-01 removes Add agent. Exercise the preserved start lifecycle
       // through its public event instead of inventing another UI entry.
       const group = await selector(page).getAttribute("data-agent-group-selector");
       const prompt = "Plain shell added agent prompt";
-      await sendEvent(page, daemon, "agent_start_in_checkout", { checkout_path: path.join(herdr.root, "fixture"), provider: "claude", model: "opus", prompt, request_id: "start-plain-add", target: { group_id: group, area_id: "a1", tab_id: tab, add_pane: true } });
+      await sendEvent(page, daemon, "agent_start_in_checkout", { checkout_path: path.join(engine.root, "fixture"), provider: "claude", model: "opus", prompt, request_id: "start-plain-add", target: { group_id: group, area_id: "a1", tab_id: tab, add_pane: true } });
       await expect(page.locator("[data-pane-view]")).toHaveCount(2);
       await expect(page.locator(`[data-pane-view="${pane}"]`)).toBeVisible();
       await expect(stripTabs(page)).toHaveAttribute("data-tab", tab);
       const added = (await page.locator("[data-pane-view]").evaluateAll(panes => panes.map(pane => pane.getAttribute("data-pane-view")!))).find(id => id !== pane)!;
-      await agentRunning(page, daemon, herdr, added, prompt);
+      await agentRunning(page, daemon, engine, added, prompt);
       expect(await shellIdentity(daemon, pane)).toEqual(actual);
-      expect((await tabsHeld(herdr, daemon)).sort()).toEqual(originalTabs.sort());
+      expect((await tabsHeld(engine, daemon)).sort()).toEqual(originalTabs.sort());
       await typesInto(page, daemon, pane, "AFTER_AGENT_ADD");
       await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === added)).toMatchObject({
         state: "ready",
@@ -194,7 +194,7 @@ for (const scenario of [
       });
       if (!scenario.blockIntegration) {
         await createGroup(page, "First plain agent");
-        await createLegacyDraft(page, daemon!, path.join(herdr.root, "fixture"));
+        await createLegacyDraft(page, daemon!, path.join(engine.root, "fixture"));
         await expect(blank(page)).toHaveAttribute("data-agent-tab-start", /^draft:/);
         const draft = await blank(page).getAttribute("data-agent-tab-start");
         const firstPrompt = "Plain shell first draft agent prompt";
@@ -204,8 +204,8 @@ for (const scenario of [
         await expect(page.locator("[data-pane-view]")).toHaveCount(1);
         await expect(selector(page)).toContainText("First plain agent");
         const first = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
-        await agentRunning(page, daemon, herdr, first, firstPrompt);
-        expect(await tabsHeld(herdr, daemon)).toHaveLength(originalTabs.length + 1);
+        await agentRunning(page, daemon, engine, first, firstPrompt);
+        expect(await tabsHeld(engine, daemon)).toHaveLength(originalTabs.length + 1);
         await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === first)).toMatchObject({
           state: "ready",
           effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell) },
@@ -213,6 +213,6 @@ for (const scenario of [
       }
       if (scenario.blockIntegration) expect(fs.statSync(blocked).isFile()).toBe(true);
     } catch (error) { failure = error; }
-    finally { await cleanup(failure, [() => daemon?.stop(), () => herdr.stop()]); }
+    finally { await cleanup(failure, [() => daemon?.stop(), () => engine.stop()]); }
   });
 }

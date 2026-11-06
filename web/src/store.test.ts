@@ -15,7 +15,7 @@ describe("snapshot merge", () => {
       usage: null,
       agents: [],
       focusedPaneId: null,
-      herdrState: null,
+      engineState: null,
       find: null,
       listings: {},
       pathRefusal: null,
@@ -161,7 +161,7 @@ describe("snapshot merge", () => {
     const state = useShellStore.getState();
     expect(state.agents).toHaveLength(1);
     expect(state.focusedPaneId).toBe("p1");
-    expect(state.herdrState).toBe("unconfigured");
+    expect(state.engineState).toBe("unconfigured");
   });
 
   it("draws unknown enum rows without stalling", () => {

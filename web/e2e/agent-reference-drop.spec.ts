@@ -33,10 +33,10 @@ function dragRowOnto(page: Page, row: string, pane: string): Promise<void> {
 test("an agent row dropped on another terminal types its reference there and nothing on its own pane", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   // Both fixture panes run the fake agent, whose input log is what its PTY received.
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "agent-reference-drop").catch((error) => { herdr.stop(); throw error; });
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "agent-reference-drop").catch((error) => { engine.stop(); throw error; });
   try {
-    const [target, agent] = herdr.panes;
+    const [target, agent] = engine.panes;
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: daemon.origin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -53,7 +53,7 @@ test("an agent row dropped on another terminal types its reference there and not
     const reference = await copied();
 
     const read = (log: string) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
-    const [targetLog, agentLog] = herdr.inputLogs.map((log) => ({ log, before: read(log).length }));
+    const [targetLog, agentLog] = engine.inputLogs.map((log) => ({ log, before: read(log).length }));
     // A drag with the real pointer: the mouse events around it must not end it early.
     await page.locator(`nav[data-sidebar] [data-agent-open="${agent}"]`).dragTo(page.locator(`[data-pane-view="${target}"] [data-terminal-host]`));
     await expect.poll(() => read(targetLog!.log).slice(targetLog!.before)).toContain(`${reference} `);
@@ -69,21 +69,21 @@ test("an agent row dropped on another terminal types its reference there and not
     await expect(page.locator(`[data-pane-view="${target}"]`)).toHaveAttribute("data-focused", "true");
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("a pane's @ lists the other agents and types the chosen one's reference into that pane", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "agent-reference-mention").catch((error) => { herdr.stop(); throw error; });
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "agent-reference-mention").catch((error) => { engine.stop(); throw error; });
   try {
-    const [target, agent] = herdr.panes;
+    const [target, agent] = engine.panes;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expect(page.locator(`nav[data-sidebar] [data-agent-open="${agent}"]`)).toBeVisible({ timeout: 30_000 });
     const read = (log: string) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
-    const [targetLog, agentLog] = herdr.inputLogs.map((log) => ({ log, before: read(log).length }));
+    const [targetLog, agentLog] = engine.inputLogs.map((log) => ({ log, before: read(log).length }));
 
     const mention = page.locator(`[data-pane-mention="${target}"]`);
     const list = page.locator(`[data-pane-mention-list="${target}"]`);
@@ -147,6 +147,6 @@ test("a pane's @ lists the other agents and types the chosen one's reference int
     await expect(otherList).toHaveCount(0);
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

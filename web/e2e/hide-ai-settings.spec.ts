@@ -19,8 +19,8 @@ type Stored = { enabled?: boolean; provider?: string; fallback?: { provider: str
 const stored = (daemon: Daemon): Stored => JSON.parse(fs.readFileSync(aiSettingsFile(daemon.home), "utf8")) as Stored;
 
 /** Programs the machine does not have, standing in for the agents Hide AI can name. */
-function standIns(herdr: AgentFixture): string {
-  const dir = path.join(herdr.root, "stand-ins");
+function standIns(engine: AgentFixture): string {
+  const dir = path.join(engine.root, "stand-ins");
   // `grok models` lists the account's models, one per line, `*` marking the default.
   fixtureProgram(dir, "grok", `const args = process.argv.slice(2);\nif (args[0] === "models") { console.log("* grok-fixture (default)\\n- grok-fixture-mini"); process.exit(0); }\nprocess.exit(1);\n`);
   // `pi --list-models` lists `provider/model` references; a Pi that lists any has a provider set up.
@@ -28,15 +28,15 @@ function standIns(herdr: AgentFixture): string {
   // OpenCode can be named but not yet used (no way to keep its call read-only): it only has to exist.
   fixtureProgram(dir, "opencode", "process.exit(0);\n");
   // A retired CLI can still be installed. Finding it must never probe or run it.
-  fixtureProgram(dir, "gemini", `require("node:fs").writeFileSync(${JSON.stringify(path.join(herdr.root, "gemini-invoked"))}, "unexpected invocation"); process.exit(1);\n`);
+  fixtureProgram(dir, "gemini", `require("node:fs").writeFileSync(${JSON.stringify(path.join(engine.root, "gemini-invoked"))}, "unexpected invocation"); process.exit(1);\n`);
   return dir;
 }
 
 async function start(label: string, agents: boolean) {
-  const herdr = await startFixture();
-  const extra = agents ? { PATH: `${standIns(herdr)}${path.delimiter}${herdr.fixturePath}` } : {};
-  const daemon = await startHided(herdr, label, undefined, extra);
-  return { herdr, daemon };
+  const engine = await startFixture();
+  const extra = agents ? { PATH: `${standIns(engine)}${path.delimiter}${engine.fixturePath}` } : {};
+  const daemon = await startHided(engine, label, undefined, extra);
+  return { engine, daemon };
 }
 
 async function openHideAi(page: Page, daemon: Daemon) {
@@ -49,7 +49,7 @@ async function openHideAi(page: Page, daemon: Daemon) {
 }
 
 test("Use Hide AI dims the rest and keeps its values, and Runs on shows the signed-in agent with its models", async ({ page }) => {
-  const { herdr, daemon } = await start("hide-ai-use", false);
+  const { engine, daemon } = await start("hide-ai-use", false);
   try {
     const tab = await openHideAi(page, daemon);
     const runsOn = tab.locator('[data-settings-group="hide-ai-runs-on"]');
@@ -95,12 +95,12 @@ test("Use Hide AI dims the rest and keeps its values, and Runs on shows the sign
     await screenshot(page, "hide-ai-on");
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Add agent offers the agents Hide AI can use, dims the one it cannot, and the list keeps the order they were added in", async ({ page }) => {
-  const { herdr, daemon } = await start("hide-ai-fallback", true);
+  const { engine, daemon } = await start("hide-ai-fallback", true);
   try {
     const tab = await openHideAi(page, daemon);
     const group = tab.locator('[data-settings-group="hide-ai-fallback"]');
@@ -160,13 +160,13 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     expect(stored(daemon).fallback ?? []).toEqual([]);
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("a saved retired Gemini choice stays unchosen, preserves model data and never invokes its installed CLI", async ({ page }) => {
-  const herdr = await startFixture();
-  const home = path.join(herdr.root, "retired-ai-home");
+  const engine = await startFixture();
+  const home = path.join(engine.root, "retired-ai-home");
   const settings = aiSettingsFile(home);
   fs.mkdirSync(path.dirname(settings), { recursive: true });
   fs.writeFileSync(settings, JSON.stringify({
@@ -174,7 +174,7 @@ test("a saved retired Gemini choice stays unchosen, preserves model data and nev
     models: { "gemini-cli": "saved-gemini", antigravity: "gemini-3.8-flash-high" },
     fallback: [{ provider: "gemini-cli" }, { provider: "grok", model: "grok-fixture-mini" }],
   }));
-  const daemon = await startHided(herdr, "hide-ai-retired", home, { PATH: `${standIns(herdr)}${path.delimiter}${herdr.fixturePath}` });
+  const daemon = await startHided(engine, "hide-ai-retired", home, { PATH: `${standIns(engine)}${path.delimiter}${engine.fixturePath}` });
   try {
     const tab = await openHideAi(page, daemon);
     // The kit has no switched-on agent here, so the normal first-run rule makes no replacement choice.
@@ -184,7 +184,7 @@ test("a saved retired Gemini choice stays unchosen, preserves model data and nev
     await expect(page.getByRole("option", { name: /Grok/ })).toBeVisible();
     await expect(page.getByRole("option", { name: /Gemini/ })).toHaveCount(0);
     await page.keyboard.press("Escape");
-    expect(fs.existsSync(path.join(herdr.root, "gemini-invoked"))).toBe(false);
+    expect(fs.existsSync(path.join(engine.root, "gemini-invoked"))).toBe(false);
 
     // A settings write must not persist the internal default as a choice or erase the retired model.
     await tab.locator("[data-ai-use]").click();
@@ -199,16 +199,16 @@ test("a saved retired Gemini choice stays unchosen, preserves model data and nev
     await expect.poll(() => stored(daemon).provider).toBe("grok");
     await expect(tab.locator("[data-ai-provider]")).toContainText("Grok");
     expect(stored(daemon).fallback).toEqual([]);
-    expect(fs.existsSync(path.join(herdr.root, "gemini-invoked"))).toBe(false);
+    expect(fs.existsSync(path.join(engine.root, "gemini-invoked"))).toBe(false);
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Hide AI reads without sideways scrolling in all four languages, light and dark, on a narrow window", async ({ page }) => {
   // B65: the sheet shrinks with its window; the longest lines (the stand-in line, the fallback note, the dimmed reasons) wrap, not clip.
-  const { herdr, daemon } = await start("hide-ai-narrow", true);
+  const { engine, daemon } = await start("hide-ai-narrow", true);
   try {
     const tab = await openHideAi(page, daemon);
     // The smallest window (PRD settings-left-nav B13): the list keeps its width beside the page.
@@ -244,6 +244,6 @@ test("Hide AI reads without sideways scrolling in all four languages, light and 
     }
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

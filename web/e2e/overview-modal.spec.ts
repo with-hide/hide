@@ -6,10 +6,10 @@ import { chord, held } from "./chords";
 
 test("shared Overview preserves work, returns the keyboard and has direct sidebar commands", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await asFirstRun(await startHided(herdr, "overview-modal"));
+    daemon = await asFirstRun(await startHided(engine, "overview-modal"));
     const sent = countSent(page);
     await page.goto("about:blank");
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
@@ -117,6 +117,6 @@ test("shared Overview preserves work, returns the keyboard and has direct sideba
     await screenshot(page, "overview-modal-narrow-dark");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

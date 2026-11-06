@@ -1975,10 +1975,10 @@ export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
 export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
-export type HerdrProfileRefusal = "no_consent" | "invalid_target" | "discovery_pending" | "device_limit";
+export type MachineProfileRefusal = "no_consent" | "invalid_target" | "discovery_pending" | "device_limit";
 
 /** A machine the first-run Devices step offers: an ssh config Host, or this PC's WSL. */
-export type HerdrProfile = {
+export type MachineProfile = {
   id: string; label: string; target: string;
   /** The ssh config Host the row is. */
   ssh_host: string | null;
@@ -1989,9 +1989,9 @@ export type HerdrProfile = {
   added_as: string | null; problem: string | null; device_id: string | null;
   connect_state: string;
   /** Why Hide declined to connect it (`herdr_profile_refusal`); a tried connection that failed has none. */
-  connect_refusal: HerdrProfileRefusal | null;
+  connect_refusal: MachineProfileRefusal | null;
 };
-export type HerdrProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: HerdrProfile[]; truncated: boolean };
+export type MachineProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: MachineProfile[]; truncated: boolean };
 
 /** The flow version this build draws; the core keeps the same number (`FIRST_RUN_VERSION`). */
 export const FIRST_RUN_VERSION = 1;
@@ -2164,7 +2164,7 @@ export type DeviceCatalog = {
   refused: { path: string; message: string }[];
 };
 
-export type HerdrStatus = {
+export type EngineStatus = {
   state?: string;
   socket_path?: string | null;
   message?: string | null;
@@ -3277,7 +3277,7 @@ export type SnapshotRest = {
   };
   status?: {
     server_discovery?: { loading: boolean; failure: string | null };
-    herdr?: HerdrStatus;
+    herdr?: EngineStatus;
     /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
     herdr_import?: HerdrImport | null;
     /** What each device of Hide's own engine offers, each naming its `device` (B18). */
@@ -3290,7 +3290,7 @@ export type SnapshotRest = {
     ssh_hosts?: SshHosts;
     /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
-    herdr_profiles?: HerdrProfiles;
+    herdr_profiles?: MachineProfiles;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
     /** Bounded read-only hover text; never an attachment or a focus request. */

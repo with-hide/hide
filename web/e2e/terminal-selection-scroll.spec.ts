@@ -20,12 +20,12 @@ test("a selection stays on the text it covers when the wheel scrolls the pane", 
   const lastSent = new Map<string, Record<string, unknown>>();
   const sent = countSent(page, lastSent);
   await page.setViewportSize({ width: 1680, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
     const rows = Array.from({ length: 160 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`).join("\n");
-    daemon = await startHided(herdr, "selection-scroll");
-    const [pane] = herdr.panes;
+    daemon = await startHided(engine, "selection-scroll");
+    const [pane] = engine.panes;
     await withControl(daemon, async (control) => sendKeys(control, pane, `${rows}\n`));
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -107,6 +107,6 @@ test("a selection stays on the text it covers when the wheel scrolls the pane", 
     await expect.poll(() => selection(page, pane)).toBeNull();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

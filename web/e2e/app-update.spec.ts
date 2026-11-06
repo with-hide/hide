@@ -114,10 +114,10 @@ async function load(page: Page, daemon: Daemon): Promise<void> {
 
 test("the desktop app shows every update state in About and nothing beside Help until one is ready; a browser tab shows none", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "app-update");
+    daemon = await startHided(engine, "app-update");
     const trigger = page.locator("[data-help-menu-trigger]");
     const dot = trigger.locator("[data-help-update-dot]");
     const row = page.locator("[data-settings-update]");
@@ -188,16 +188,16 @@ test("the desktop app shows every update state in About and nothing beside Help 
     await screenshot(page, "app-update-about-ready");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("a ready update shows the ↑ button, opens its card once per version, and leads Help", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "app-update-ready");
+    daemon = await startHided(engine, "app-update-ready");
     const trigger = page.locator("[data-help-menu-trigger]");
     const dot = trigger.locator("[data-help-update-dot]");
     await desktopBridge(page);
@@ -272,6 +272,6 @@ test("a ready update shows the ↑ button, opens its card once per version, and 
     await expect(page.locator('[data-update-card="0.5.1"]')).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

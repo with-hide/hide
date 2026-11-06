@@ -2,13 +2,13 @@
 // the core or the daemon reported, and what the copied diagnostics carry.
 // Nothing here reads the store, so every rule is tested without a browser.
 
-import { herdrStateText } from "./coreError";
+import { engineStateText } from "./coreError";
 import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { AccentName } from "./theme";
 import { kitWhyText } from "./kitWhy";
-import type { AgentRow, CoreDiagnostic, Device, DeviceHost, DeviceProblem, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
+import type { AgentRow, CoreDiagnostic, Device, DeviceHost, DeviceProblem, EnvironmentStatus, GithubFailureCategory, EngineStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
 import { GH_REFUSAL_KEY, isGhRefusal } from "./githubFailure";
 import { registeredName } from "./screenMachine";
@@ -195,11 +195,11 @@ export function environmentTone(state: string, required: boolean): "ok" | "warn"
 }
 
 /** One line for the terminal engine's connection, from the core's own state words. */
-export function herdrLine(herdr: HerdrStatus | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "error" } {
-  const state = herdr?.state;
+export function engineLine(engine: EngineStatus | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "error" } {
+  const state = engine?.state;
   if (!state) return { text: t("settings.unavailable"), tone: "warn" };
   if (state === "connected") return { text: t("common.connected"), tone: "ok" };
-  return { text: herdrStateText(state, t), tone: "warn" };
+  return { text: engineStateText(state, t), tone: "warn" };
 }
 
 /**
@@ -534,7 +534,7 @@ export function draftExported(exported: ReadonlyMap<string, string>, current: (t
 export type DiagnosticsInput = {
   daemon: DaemonInfo | null;
   connection: string;
-  herdr: HerdrStatus | undefined;
+  engine: EngineStatus | undefined;
   environment: EnvironmentStatus[];
   diagnostics: CoreDiagnostic[];
   lastError: { kind: string; message: string } | null | undefined;
@@ -545,12 +545,12 @@ export type DiagnosticsInput = {
  * Copy diagnostics' input from what the stores hold, the same for Settings'
  * About and the sidebar's Help menu (PRD sidebar-titlebar-refresh D-12).
  */
-export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connection: string; rest: { status?: { herdr?: HerdrStatus; environment?: EnvironmentStatus[]; diagnostics?: CoreDiagnostic[]; last_error?: { kind: string; message: string } | null } } | null }, userAgent: string): DiagnosticsInput {
+export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connection: string; rest: { status?: { herdr?: EngineStatus; environment?: EnvironmentStatus[]; diagnostics?: CoreDiagnostic[]; last_error?: { kind: string; message: string } | null } } | null }, userAgent: string): DiagnosticsInput {
   const status = state.rest?.status;
   return {
     daemon: state.daemon,
     connection: state.connection,
-    herdr: status?.herdr,
+    engine: status?.herdr,
     environment: status?.environment ?? [],
     diagnostics: status?.diagnostics ?? [],
     lastError: status?.last_error,
@@ -572,7 +572,7 @@ export function diagnosticsText(input: DiagnosticsInput): string {
   const daemon = input.daemon;
   lines.push(`daemon: ${daemon ? `hided ${daemon.version} pid ${daemon.pid} schema ${daemon.schema_version}` : "unavailable"}`);
   lines.push(`state: ${shown(daemon?.core_state_path)}`);
-  lines.push(`engine: ${shown(input.herdr?.state)}`);
+  lines.push(`engine: ${shown(input.engine?.state)}`);
   lines.push(`connection: ${input.connection}`);
   lines.push(`browser: ${input.userAgent}`);
   for (const row of input.environment) lines.push(`env ${row.key}: ${row.state}${row.message ? ` - ${row.message}` : ""}`);

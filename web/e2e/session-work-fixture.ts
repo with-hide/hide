@@ -40,8 +40,8 @@ export const NEXT_GOAL = "놓친 일 이슈 생성과 검색 검증";
 export const CHILD_GOAL = "자식 세션 결과물 연결 검증";
 export const MISSED = "좁은 열에서 긴 한국어 요청의 줄바꿈을 확인해야 합니다";
 
-export function workFixture(herdr: Pick<EngineServer, "root" | "fixturePath">, uncertainCreate = false) {
-  const cwd = path.join(herdr.root, "fixture");
+export function workFixture(engine: Pick<EngineServer, "root" | "fixturePath">, uncertainCreate = false) {
+  const cwd = path.join(engine.root, "fixture");
   const git = (args: string[]) => execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd });
   // Match the GitHub fixture's head branch on every system, regardless of
   // the account's init.defaultBranch; its open PR keeps the session active.
@@ -50,13 +50,13 @@ export function workFixture(herdr: Pick<EngineServer, "root" | "fixturePath">, u
   git(["add", "README.md"]);
   git(["commit", "-m", "initial"]);
   git(["remote", "add", "origin", "https://github.com/acme/repo.git"]);
-  const bin = path.join(herdr.root, "gh-bin");
-  const calls = path.join(herdr.root, "gh-calls.jsonl");
-  const contexts = path.join(herdr.root, "gh-contexts.jsonl");
-  const issue = path.join(herdr.root, "created-issue.json");
-  const repositoryUnavailable = path.join(herdr.root, "repository-unavailable");
-  const repositoryGate = path.join(herdr.root, "repository-gate");
-  const clock = path.join(herdr.root, "work-clock.json");
+  const bin = path.join(engine.root, "gh-bin");
+  const calls = path.join(engine.root, "gh-calls.jsonl");
+  const contexts = path.join(engine.root, "gh-contexts.jsonl");
+  const issue = path.join(engine.root, "created-issue.json");
+  const repositoryUnavailable = path.join(engine.root, "repository-unavailable");
+  const repositoryGate = path.join(engine.root, "repository-gate");
+  const clock = path.join(engine.root, "work-clock.json");
   fs.writeFileSync(clock, JSON.stringify({ first: Date.now(), next: Date.now() }));
   fixtureProgram(bin, "gh", `
 const fs = require("node:fs");
@@ -112,7 +112,7 @@ if(a==="api"&&b==="graphql") {
 if(a==="search") {out([]);process.exit(0);}
 process.stderr.write("unsupported fixture gh arguments\\n");process.exit(1);
 `);
-  const env = { PATH: `${bin}${path.delimiter}${herdr.fixturePath}` };
+  const env = { PATH: `${bin}${path.delimiter}${engine.fixturePath}` };
   const setClock = (first: number, next: number) => fs.writeFileSync(clock, JSON.stringify({ first, next }));
   return { env, calls, contexts, issue, repositoryUnavailable, repositoryGate, clock: setClock };
 }

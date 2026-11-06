@@ -128,10 +128,10 @@ async function playEveryChapter(practice: Page, chapters: number, press: GuidePr
 /** Opens the practice window from the shell's Help menu of an isolated stack, runs `journey` on it, and stops the stack. */
 async function withPractice(page: Page, journey: (practice: Page, chapters: Locator) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "practice");
+    daemon = await startHided(engine, "practice");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("nav[data-sidebar]")).toHaveAttribute("data-sidebar", "projects", { timeout: 20_000 });
 
@@ -157,7 +157,7 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
     expect(await practice.evaluate(() => (window as unknown as { clipboardCalls: string[] }).clipboardCalls)).toEqual([]);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 }
 
@@ -325,16 +325,16 @@ test("the chapter list leads back to Hide, and a finished chapter stops on its e
 /** An isolated stack's shell, signed in, for `journey`; the stack stops after it. */
 async function withShell(page: Page, journey: (origin: string) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "practice-invite");
+    daemon = await startHided(engine, "practice-invite");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("nav[data-sidebar]")).toHaveAttribute("data-sidebar", "projects", { timeout: 20_000 });
     await journey(daemon.origin);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 }
 

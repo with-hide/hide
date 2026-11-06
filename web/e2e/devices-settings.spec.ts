@@ -26,10 +26,10 @@ async function openDevices(page: Page, daemon: Daemon) {
 
 test("a device row is one line with Test and a menu, Add device is one button, and Remove asks first", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "devices-settings");
+    daemon = await startHided(engine, "devices-settings");
     writeSshHost(daemon, ALIAS);
     const sent = countSent(page);
     const sheet = await openDevices(page, daemon);
@@ -106,16 +106,16 @@ test("a device row is one line with Test and a menu, Add device is one button, a
     expect(sent.get("remove_device")).toBe(1);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("the Add dialog lists the account's Hosts, fills the name from the chosen one, and has no field for a username, port or key", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "devices-add-dialog");
+    daemon = await startHided(engine, "devices-add-dialog");
     const sheet = await openDevices(page, daemon);
 
     // B52: with no Host in the config the dialog is only what to add, and there is no form.
@@ -151,6 +151,6 @@ test("the Add dialog lists the account's Hosts, fills the name from the chosen o
     await screenshot(page, "add-device-host");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

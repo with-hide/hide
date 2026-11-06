@@ -20,7 +20,7 @@ import { enterWorkspace } from "./wire";
 test.skip(process.platform === "win32", "the OpenCode plugin is not written on Windows");
 test.describe.configure({ timeout: 120_000 });
 
-type Stack = { herdr: AgentFixture; daemon: Daemon; home: string; sender: Host; recipient: Host };
+type Stack = { engine: AgentFixture; daemon: Daemon; home: string; sender: Host; recipient: Host };
 
 /**
  * A private HOME that has OpenCode (its program and its configuration folder) and a kit record with OpenCode
@@ -28,11 +28,11 @@ type Stack = { herdr: AgentFixture; daemon: Daemon; home: string; sender: Host; 
  * the kit has written the plugin.
  */
 async function start(label: string): Promise<Stack> {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const home = path.join(herdr.root, "home");
-    const git = (...args: string[]) => execFileSync("git", ["-C", path.join(herdr.root, "fixture"), ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" } });
+    const home = path.join(engine.root, "home");
+    const git = (...args: string[]) => execFileSync("git", ["-C", path.join(engine.root, "fixture"), ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" } });
     git("init", "-q", "-b", "main");
     git("commit", "-q", "--allow-empty", "-m", "fixture");
     fs.mkdirSync(path.join(home, ".config", "opencode"), { recursive: true });
@@ -40,26 +40,26 @@ async function start(label: string): Promise<Stack> {
     fs.writeFileSync(path.join(home, ".local", "bin", "opencode"), "#!/bin/sh\n", { mode: 0o755 });
     fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
     fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [], agents: { "claude-code": false, codex: false, opencode: true } }));
-    daemon = await startHided(herdr, label, home, {}, true);
+    daemon = await startHided(engine, label, home, {}, true);
     const plugin = path.join(home, ".config", "opencode", "plugins", "hide.js");
     await expect.poll(() => fs.existsSync(plugin), { message: "the kit wrote Hide's OpenCode plugin", timeout: 60_000 }).toBe(true);
     // B1: the plugin names this build's helper, the bundle's.
     expect(fs.readFileSync(plugin, "utf8")).toContain(JSON.stringify(bundledExecutable("hide-agent-hooks")));
-    const dir = path.join(herdr.root, "opencode");
-    installOpenCodeHost(path.join(herdr.root, "bin"), { stateDir: daemon.stateDir, plugin, dir });
-    await withControl(daemon, async (control) => { for (const pane of herdr.panes) sendKeys(control, pane, "opencode\r"); });
-    const [sender, recipient] = await Promise.all(herdr.panes.map((pane) => openCodeHost(dir, pane)));
-    return { herdr, daemon, home, sender: sender!, recipient: recipient! };
+    const dir = path.join(engine.root, "opencode");
+    installOpenCodeHost(path.join(engine.root, "bin"), { stateDir: daemon.stateDir, plugin, dir });
+    await withControl(daemon, async (control) => { for (const pane of engine.panes) sendKeys(control, pane, "opencode\r"); });
+    const [sender, recipient] = await Promise.all(engine.panes.map((pane) => openCodeHost(dir, pane)));
+    return { engine, daemon, home, sender: sender!, recipient: recipient! };
   } catch (error) {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
 
 function stop(stack: Stack): void {
   stack.daemon.stop();
-  stack.herdr.stop();
+  stack.engine.stop();
 }
 
 /** `hide <args>` run inside `host`'s pane, as its agent would run it, parsed. */
@@ -77,7 +77,7 @@ test("a letter rides the recipient's next prompt and is confirmed only once Open
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
 
-    const sent = await hide(stack.sender, "request", "send", stack.herdr.panes[1], "--intent", "e2e-opencode-letter", "--body", "E2E-LETTER-BODY");
+    const sent = await hide(stack.sender, "request", "send", stack.engine.panes[1], "--intent", "e2e-opencode-letter", "--body", "E2E-LETTER-BODY");
     expect(sent.ok, JSON.stringify(sent)).toBe(true);
     const id = String(sent.result?.id);
 
@@ -126,7 +126,7 @@ test("a shell call that hands a result to the system opener is refused with the 
 test("child sessions of the prompted root session move the pane's subagent counts in the snapshot", async ({ page }) => {
   const stack = await start("opencode-counts");
   try {
-    const pane = stack.herdr.panes[1];
+    const pane = stack.engine.panes[1];
     // The hook reports to the core, so the counts are what the core puts in the pane's row.
     const counts = snapshotCounts(page, pane);
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
