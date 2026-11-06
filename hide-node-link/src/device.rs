@@ -803,7 +803,7 @@ pub struct NodeReady {
     pub hello: crate::protocol::Hello,
     /// The device's terminals inside this link, when its node started its
     /// terminal service, or why it has none (its node speaks an older
-    /// protocol, or its Herdr could not be found).
+    /// protocol, or its pane holders could not start).
     pub terminals: Result<std::sync::Arc<dyn crate::terminal::TerminalNode>, String>,
 }
 
@@ -817,9 +817,8 @@ pub struct Established {
     pub helper_path: String,
     /// How the build's files reached the device on this connection.
     pub upload: Upload,
-    /// The automatic kit pass completed before starting Herdr-dependent
-    /// services when Herdr was unreadable. A normal connection leaves it
-    /// to the core after helper readiness.
+    /// The kit pass a connection ran itself, if it did. A normal connection
+    /// leaves it to the core after helper readiness.
     pub kit: Option<Result<Box<hide_kit::KitReport>, String>>,
 }
 

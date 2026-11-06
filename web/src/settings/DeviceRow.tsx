@@ -40,8 +40,8 @@ export type DeviceRowHandlers = {
 export type DeviceRowPlace = { name: string; core: boolean; own: boolean; windowIsNode: boolean; connected: boolean; coreName: string };
 
 /**
- * One device (PRD settings-cleanup B54, B55): its name, alias, platform, Herdr
- * version and connection state on one line with Test and the ⋯ menu. A line
+ * One device (PRD settings-cleanup B54, B55): its name, alias, platform
+ * and connection state on one line with Test and the ⋯ menu. A line
  * grows under it only when something needs the operator: a refused connection,
  * a helper that is not allowed or not running, a part of Hide's kit that
  * failed, or the result of a test they asked for.
@@ -189,8 +189,8 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   const signIn = remote ? (device.sign_in ?? null) : null;
   const host = device.host;
   const needsAllow = host !== undefined && (host.consent !== "granted" || host.state === "identity_changed");
-  // Consent starts the helper that installs or updates Herdr, including
-  // when Herdr cannot yet supply a readable session. A failed helper kit
+  // Consent starts the helper that installs or updates Hide's kit, including
+  // when the engine cannot yet supply a readable session. A failed helper kit
   // must keep its reason and Retry visible before that session connects.
   // An unsupported platform keeps its reason visible too, without a Retry.
   // The helper is the link, so an ssh failure, an unsupported system ssh

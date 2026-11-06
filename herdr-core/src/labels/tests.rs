@@ -1275,7 +1275,7 @@ fn an_agent_listed_before_its_pane_is_still_read_and_named() {
     harness.backend.answer("새 창 에이전트 작업", "done", "");
     let idle = agent(&path, "idle", 1);
 
-    // Herdr's agent list already has the pane; its pane list does not yet.
+    // The engine's agent list already has the pane; its pane list does not yet.
     let panes_without_it = HashSet::new();
     worker.observe(
         std::slice::from_ref(&idle),
@@ -1335,7 +1335,7 @@ fn a_turn_that_ran_between_two_looks_ends_the_question() {
     settle(&mut worker, &woken);
     assert!(shown(&worker, &asking).unwrap().question);
 
-    // Herdr went working and then done inside one burst: only the done and
+    // The engine went working and then done inside one burst: only the done and
     // its sequence two changes on are seen.
     let finished = agent(&path, "done", 5);
     worker.observe(std::slice::from_ref(&finished), None, Instant::now(), 2_000);
@@ -1345,7 +1345,7 @@ fn a_turn_that_ran_between_two_looks_ends_the_question() {
     assert_eq!(label.task.as_deref(), Some("배포 방식 결정 작업"));
 }
 
-/// #901. Herdr drops a finished pane from `done` to `idle` at the same
+/// #901. The engine drops a finished pane from `done` to `idle` at the same
 /// sequence when it marks the pane's tab seen. No turn ran, so the question
 /// or the block the turn ended on is still the turn's answer.
 #[test]
@@ -4082,7 +4082,7 @@ fn a_devices_worker_keeps_no_sightings() {
 
 /// A Codex rollout under the harness home whose last turn ran in plan mode,
 /// proposed a plan and finished (PRD codex-plan-approval-hold D-03), and the
-/// agent Herdr lists for it.
+/// agent the engine lists for it.
 fn codex_plan_session(harness: &Harness, status: &str, seq: u64) -> (PathBuf, ObservedAgent) {
     let id = "0199a000-0000-7000-8000-0000000000b2";
     let folder = harness.home.path().join(".codex/sessions/2026/10/07");
@@ -4130,7 +4130,7 @@ fn codex_event(kind: &str, turn: &str, extra: Value) -> Value {
 
 /// What the overlay says the agent waits for, and whether its row carries
 /// the approval wait (`None` when no read of its session is laid at all),
-/// for the agent as Herdr lists it now.
+/// for the agent as the engine lists it now.
 fn waits(worker: &LabelWorker, agent: &ObservedAgent) -> (Option<Waiting>, Option<bool>) {
     let (kind, value) = agent.reference.clone().unwrap();
     let mut payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [{
@@ -4532,7 +4532,7 @@ fn failed_native_reread(kind: &str) {
     assert_eq!(harness.backend.calls(), 0);
 }
 
-/// D-02, D-06: the wait is read without any AI, and it holds for the Herdr
+/// D-02, D-06: the wait is read without any AI, and it holds for the engine
 /// state it was read under only; a newer state is not known until read.
 #[test]
 fn a_codex_plan_wait_is_known_only_for_the_state_it_was_read_under() {
@@ -4548,7 +4548,7 @@ fn a_codex_plan_wait_is_known_only_for_the_state_it_was_read_under() {
     );
     assert_eq!(harness.backend.calls(), 0, "no analysis was asked");
 
-    // Herdr moves on before the read of the new state lands.
+    // The engine moves on before the read of the new state lands.
     let working = ObservedAgent {
         status: Some("working".to_owned()),
         state_change_seq: 6,
@@ -4678,7 +4678,7 @@ fn native_question_snapshot_is_current_without_ai_and_clears_after_answer() {
     assert_eq!(answered["demand"], "none");
 }
 
-/// A native question asked in the middle of a turn: Herdr reads the open
+/// A native question asked in the middle of a turn: the engine reads the open
 /// form as blocked while the label still carries the turn start's progress,
 /// and the turn end's verdict takes seconds. The row says what is asked from
 /// the moment the read lands, and the label's reply replaces it once made.
@@ -4853,7 +4853,7 @@ fn a_failed_same_state_follow_up_forgets_structured_question_without_ai() {
             std::fs::write(&path, format!("{invalid}\n")).unwrap();
         }
         worker.tick(Instant::now() + Duration::from_secs(4));
-        // A rejected reread must announce removal even though Herdr did not move.
+        // A rejected reread must announce removal even though the engine did not move.
         woken.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(worker.drain(Instant::now(), 100));
         assert_eq!(waits(&worker, &current), (None, Some(false)));
@@ -4888,7 +4888,7 @@ fn a_failed_same_state_follow_up_forgets_structured_question_without_ai() {
     }
 }
 
-/// B5: a default-mode turn whose end Codex has not written yet, when Herdr
+/// B5: a default-mode turn whose end Codex has not written yet, when the engine
 /// already reads done, waits for nothing; only a plan-mode turn could wait.
 #[test]
 fn a_default_turn_not_yet_ended_in_the_file_waits_for_nothing() {
@@ -4964,7 +4964,7 @@ fn a_restart_keeps_the_plan_wait_and_reads_a_record_without_one_once() {
     assert_eq!(source.reads.load(Ordering::SeqCst), 1);
     // That read resumes at the person's message, after the turn's start, so
     // the turn's mode is not read: the wait stays not known (the bell holds)
-    // until Herdr's next state is read.
+    // until the engine's next state is read.
     assert_eq!(waits(&worker, &done), (None, Some(false)));
 }
 
@@ -5036,7 +5036,7 @@ fn a_device_codex_plan_wait_comes_through_its_helper_and_an_older_helper_is_not_
         Arc::new(HelperWithoutTurns(harness.home.path().to_path_buf()));
     let (mut worker, woken) = harness.device_worker(Box::new(move || Ok(Arc::clone(&older))));
     worker.set_summaries(false, Instant::now());
-    // Herdr's next state, so this worker reads whatever the first one saved.
+    // The engine's next state, so this worker reads whatever the first one saved.
     let next = ObservedAgent {
         state_change_seq: 6,
         ..done.clone()
@@ -5080,7 +5080,7 @@ fn a_codex_session_not_found_is_not_known_until_a_later_state_reads_it() {
     );
 }
 
-/// A pane Herdr lists before its agent has written the session file (Claude
+/// A pane the engine lists before its agent has written the session file (Claude
 /// writes it with the first message) is read again on its own, so a child
 /// started by another agent is not left on the provider name until its first
 /// turn ends.
@@ -5198,7 +5198,7 @@ fn claude_background_session(harness: &Harness, name: &str, id: &str) -> PathBuf
     path
 }
 
-/// The row's activity for the agent as Herdr lists it now, after the overlay
+/// The row's activity for the agent as the engine lists it now, after the overlay
 /// is laid on it: what every group, mark and notification is decided from.
 fn activity_shown(worker: &LabelWorker, agent: &ObservedAgent) -> String {
     let (kind, value) = agent.reference.clone().unwrap();
@@ -5215,7 +5215,7 @@ fn activity_shown(worker: &LabelWorker, agent: &ObservedAgent) -> String {
         .activity
 }
 
-/// #902: the turn ends, Herdr reports the stop, and the read of the session
+/// #902: the turn ends, the engine reports the stop, and the read of the session
 /// that says whether a background task will wake the agent has not landed.
 /// Until it does the row is not a stop: nothing yet says it has finished, and
 /// a Done announced in that gap is taken back when the read lands.
@@ -5352,7 +5352,7 @@ fn a_read_that_fails_releases_the_turn_end_and_says_so() {
     assert_eq!(unread[0]["state_change_seq"], 5);
 }
 
-/// A stop that is not a turn just ended owes no read: Herdr marking a finished
+/// A stop that is not a turn just ended owes no read: the engine marking a finished
 /// row seen, a daemon that restarts and finds its record read, and an agent
 /// whose session cannot report background tasks.
 #[test]
@@ -5439,7 +5439,7 @@ fn held_turn_end(
     (path, done)
 }
 
-/// #902: the hold ends with the pane it is owed for. An agent that Herdr stops
+/// #902: the hold ends with the pane it is owed for. An agent that engine stops
 /// listing (a sleep, a close of its process) and a pane that is gone leave no
 /// hold behind for a pane or session that returns.
 #[test]
@@ -5449,7 +5449,7 @@ fn a_hold_on_a_turn_end_ends_with_the_agent_and_the_pane() {
     worker.set_summaries(false, Instant::now());
     let (_, done) = held_turn_end(&harness, &mut worker, &woken, "gone");
 
-    // Herdr no longer lists the agent, though the pane is still there.
+    // The engine no longer lists the agent, though the pane is still there.
     let live = HashSet::from([done.pane_id.clone()]);
     worker.observe(&[], Some(&live), Instant::now(), 2_000);
     // It is listed again in the same state: nothing is owed for it any more.
@@ -5474,7 +5474,7 @@ fn a_hold_on_a_turn_end_ends_with_the_agent_and_the_pane() {
 }
 
 /// A session file that cannot be read fails the read at once, and the row is a
-/// stop as Herdr reports it.
+/// stop as the engine reports it.
 #[test]
 fn a_session_file_that_cannot_be_read_releases_the_turn_end() {
     let harness = Harness::new();

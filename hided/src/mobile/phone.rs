@@ -53,6 +53,10 @@ const SILENT_LIMIT: Duration = Duration::from_secs(45);
 /// whose buffer is full would otherwise block the loop, and with it the
 /// ping, the silent limit and a close for eviction or revoke.
 const SEND_LIMIT: Duration = Duration::from_secs(10);
+// The list frames' budget is the relay's message limit (herdr-core names it
+// without linking the relay crate).
+const _: () =
+    assert!(herdr_core::agent_state::phone::FRAME_LIMIT == hide_relay_protocol::noise::MAX_MESSAGE);
 
 /// Sends one message; false when the socket failed or stalled past
 /// `SEND_LIMIT`, and the connection should end.
@@ -221,23 +225,43 @@ pub fn is_phone(first: &Value) -> bool {
     first.get("client_kind").and_then(Value::as_str) == Some("phone")
 }
 
-fn agents_frame(projection: &Projection) -> Value {
-    json!({
+/// The list frame and how many agents it left out to fit one relay message
+/// (`Projection::wire`), which the phone shows as a line under the list.
+fn agents_frame(projection: &Projection) -> (Value, usize) {
+    let wire = projection.wire();
+    let frame = json!({
         "type": "agents",
-        "groups": projection.groups,
+        "groups": wire.groups,
+        "omitted": wire.omitted,
         // The Mac and the devices it reaches, for the header and the device sheet.
         "devices": projection.devices,
         // The core's language as stored, or null to follow the phone's own.
         "interface_language": projection.interface_language,
         // The operator's palette; the phone keeps its own light or dark.
         "color_theme": projection.color_theme,
-    })
+    });
+    (frame, wire.omitted)
+}
+
+/// Records when a connection's list first leaves agents out, not on every
+/// change while it stays over (the count is in the frame).
+fn note_agents_omitted(phone_id: &str, before: &mut usize, omitted: usize) {
+    if omitted > 0 && *before == 0 {
+        herdr_core::diagnostic!(json!({
+            "component": "mobile_phone", "kind": "agents.capped", "phone_id": phone_id,
+            "omitted": omitted, "budget": herdr_core::agent_state::phone::LIST_BUDGET,
+        }));
+    }
+    *before = omitted;
 }
 
 /// The missions the phone lists (PRD mobile-companion-ui B28, B31-B36): the
 /// record's trimmed projection, republished when it changes.
 fn missions_frame(missions: &PhoneMissions) -> Value {
-    json!({"type": "missions", "items": missions.items, "failed": missions.failed})
+    json!({
+        "type": "missions", "items": missions.items, "failed": missions.failed,
+        "omitted": missions.omitted,
+    })
 }
 
 /// The pull requests the phone lists (PRD mobile-companion-ui B37-B45): the
@@ -446,7 +470,7 @@ fn conversation_failed(message: &str) {
 
 /// One pass over the pane's conversation: open its transcript and send the
 /// newest page, or send what the agent appended. The transcript comes back
-/// `None` when the pane has no conversation to show. A failed Herdr read
+/// `None` when the pane has no conversation to show. A failed pane read
 /// keeps an open transcript, so a slow answer does not flip the phone to
 /// the terminal.
 async fn conversation_step(
@@ -513,7 +537,7 @@ async fn conversation_step(
 }
 
 /// Reads the open pane's rows and answers only when their text or the asked
-/// line count changed. Herdr's read `revision` counts pane state, not output,
+/// line count changed. The engine's read `revision` counts pane state, not output,
 /// so it cannot say that new rows arrived.
 #[derive(Default)]
 struct RowsReader {
@@ -548,7 +572,7 @@ impl RowsReader {
                 let frame = json!({
                     "type": "rows", "device_id": key.device_id, "pane_id": key.pane_id,
                     "state": "ok", "text": rows.text, "lines": asked,
-                    // Herdr says whether it cut older rows off this read.
+                    // The engine says whether it cut older rows off this read.
                     "more": asked < pane::MAX_LINES && rows.truncated,
                 });
                 self.last = Some((rows.text, asked));
@@ -707,10 +731,13 @@ async fn run(
             _ => "unasked",
         },
     });
+    let mut agents_omitted = 0;
+    let (agents, omitted) = agents_frame(&projection.borrow_and_update());
+    note_agents_omitted(phone_id, &mut agents_omitted, omitted);
     let first = [
         hello,
         meta_frame(&meta.borrow_and_update()),
-        agents_frame(&projection.borrow_and_update()),
+        agents,
         missions_frame(&missions.borrow_and_update()),
         prs_frame(&prs.borrow_and_update()),
     ];
@@ -728,7 +755,8 @@ async fn run(
             }
             changed = projection.changed() => {
                 if changed.is_err() { return; }
-                let frame = agents_frame(&projection.borrow_and_update());
+                let (frame, omitted) = agents_frame(&projection.borrow_and_update());
+                note_agents_omitted(phone_id, &mut agents_omitted, omitted);
                 if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = missions.changed() => {
@@ -1089,16 +1117,24 @@ async fn look_open(
 
 /// `look_seen`: the phone showed the View, so it is seen, on the phone and on
 /// the desktop (B24). Repeating it changes nothing.
+/// The dispatch waits on the core's owner thread, so it runs on a blocking
+/// thread like every other dispatch here.
 async fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projection: &Projection) {
     if let Ok((_, view)) = look_target(mobile, phone_id, message, projection).await {
-        mobile.mark_seen(&view);
+        let mobile = Arc::clone(mobile);
+        if let Err(error) = tokio::task::spawn_blocking(move || mobile.mark_seen(&view)).await {
+            herdr_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "look.seen_unrecorded",
+                "message": error.to_string(),
+            }));
+        }
     }
 }
 
 /// The answer to a phone's `ping`: its own number back, so the phone knows
 /// hided is there. The page cannot see the protocol-level ping hided sends, so
 /// this is how a phone learns that a Mac gone to sleep stopped answering. It
-/// reads one in-memory record and nothing else: no core lock, no Herdr call.
+/// reads one in-memory record and nothing else: no core lock, no engine call.
 /// A phone no longer let in is told why instead, as it is when its socket is
 /// closed, and a ping without a number is refused and recorded.
 fn liveness(message: &Value, admitted: Result<(), &'static str>, phone_id: &str) -> Option<Value> {
@@ -1151,9 +1187,6 @@ async fn sleeping_session(
     }
 }
 
-/// The most a phone's written answer may hold, in characters (`missions::ANSWER_LIMIT`).
-const ANSWER_LIMIT: usize = herdr_core::missions::ANSWER_LIMIT;
-
 /// What a phone's `answer_mission` asks, once it names a listed mission and a
 /// well-formed answer: the one `mission_answer` event the desktop's decision
 /// banner sends (`Event::MissionAnswer`), nothing else.
@@ -1192,10 +1225,7 @@ fn mission_answer_event(
     match (resend, option, text) {
         (true, None, None) => {}
         (false, Some(_), None) => {}
-        (false, None, Some(text))
-            if !text.trim().is_empty()
-                && text.chars().count() <= ANSWER_LIMIT
-                && !text.chars().any(char::is_control) => {}
+        (false, None, Some(text)) if herdr_core::missions::answer_text(text).is_some() => {}
         _ => return Err("invalid_request"),
     }
     Ok(json!({
@@ -1467,7 +1497,7 @@ async fn input(
         return answer(false, Some(problem));
     }
     // One claim per request id, taken before writing: a repeat that arrives
-    // while the first is still being written, or after Herdr's answer was
+    // while the first is still being written, or after the engine's answer was
     // lost, is answered from the claim and never written again (B27).
     match mobile.reserve_input(phone_id, request_id) {
         Reservation::Write => {}
@@ -1576,6 +1606,7 @@ async fn input(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use herdr_core::missions::ANSWER_LIMIT;
 
     #[test]
     fn a_look_request_names_an_agent_and_a_view_id_and_nothing_a_path_could_ride_in() {
@@ -2154,14 +2185,17 @@ mod tests {
         let mut projection = Projection::default();
         assert_eq!(
             agents_frame(&projection),
-            json!({"type": "agents", "groups": [], "devices": [], "interface_language": null, "color_theme": null})
+            (
+                json!({"type": "agents", "groups": [], "omitted": 0, "devices": [], "interface_language": null, "color_theme": null}),
+                0
+            )
         );
         projection.interface_language = Some("ko".to_owned());
-        let frame = agents_frame(&projection);
+        let (frame, _) = agents_frame(&projection);
         assert_eq!(frame["interface_language"], "ko");
         assert_eq!(frame["type"], "agents");
         projection.color_theme = Some("neutral".to_owned());
-        assert_eq!(agents_frame(&projection)["color_theme"], "neutral");
+        assert_eq!(agents_frame(&projection).0["color_theme"], "neutral");
     }
 
     /// The list frame is the tree the core decided: a group's rows are tagged
@@ -2186,7 +2220,7 @@ mod tests {
             ]}}),
             "test-node",
         );
-        let frame = agents_frame(&projection);
+        let (frame, _) = agents_frame(&projection);
         let row = &frame["groups"][0]["rows"][0];
         assert_eq!(
             (row["kind"].as_str(), row["pane_id"].as_str()),
@@ -2283,10 +2317,16 @@ mod tests {
                 "{body}"
             );
         }
-        // The limit counts characters, so a full line of Korean is taken.
+        // The limit counts characters, so a full line of Korean is taken,
+        // and as the core counts them, after the spaces around the line go
+        // (`missions::answer_text`): the core takes this one too.
         let full = "가".repeat(ANSWER_LIMIT);
         assert!(
             mission_answer_event(&mission_message("r", json!({"text": full})), &missions).is_ok()
+        );
+        let padded = format!("  {full} \n");
+        assert!(
+            mission_answer_event(&mission_message("r", json!({"text": padded})), &missions).is_ok()
         );
     }
 

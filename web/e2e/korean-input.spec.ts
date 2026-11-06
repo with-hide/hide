@@ -1,5 +1,5 @@
-// Korean typed through the browser's input-method path, on an isolated pinned
-// Herdr and hided: a pane's program reads the syllables before a ⇧↩ pressed
+// Korean typed through the browser's input-method path, on an isolated
+// engine and hided: a pane's program reads the syllables before a ⇧↩ pressed
 // right after them, and an Escape the input method answers while a dialog's
 // field is composing leaves that dialog open.
 
@@ -19,7 +19,7 @@ function heard(log: string, from: number): string {
   return fs.readFileSync(log).subarray(from).toString("utf8");
 }
 
-// @platform: Hangul bytes reach the agent's PTY through the platform's Herdr.
+// @platform: Hangul bytes reach the agent's PTY through the platform's engine.
 test("⇧↩ right after a Hangul syllable reaches the program after that syllable", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const herdr = await startFixture();
@@ -29,7 +29,7 @@ test("⇧↩ right after a Hangul syllable reaches the program after that syllab
     const [agent] = herdr.panes;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    // Herdr focused this pane when the fixture made it; a click would send
+    // This pane was focused when the fixture made it; a click would send
     // the agent a mouse report, so the pane is not clicked.
     const view = page.locator(`[data-pane-view="${agent}"]`);
     await expect(view).toHaveAttribute("data-focused", "true", { timeout: 20_000 });

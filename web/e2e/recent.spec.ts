@@ -1,6 +1,6 @@
-// Recent navigation on an isolated pinned Herdr and hided
+// Recent navigation on an isolated engine and hided
 // (docs/UI_BEHAVIOR.md, Recent navigation): explicitly bound global Recent Panels
-// walks one order over Herdr tabs and View displays across checkouts and
+// walks one order over tabs and View displays across checkouts and
 // commits one event on releasing ⌥; Recent Projects (⌥Tab) brings the
 // previous project back on the surface it was last used on. Outside a View
 // area ⌥` walks the Agent panes the keyboard has been in, across projects;

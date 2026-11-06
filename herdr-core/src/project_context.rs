@@ -376,7 +376,7 @@ fn add_to_group(
 /// session and a newly derived one compare like with like.
 /// The checkout a device session's folds treat as in front: the window's
 /// selection when it is one of the session's checkouts, as a local
-/// project's folds read it, else the device Herdr's own focus.
+/// project's folds read it, else the device the engine's own focus.
 pub(crate) fn device_fold_focus(
     window: Option<&str>,
     session: &crate::model::RemoteSessionSnapshot,

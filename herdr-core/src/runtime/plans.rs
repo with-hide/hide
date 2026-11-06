@@ -50,7 +50,7 @@ pub(crate) struct PlanRuntime {
     /// The book's edit and the panes' fingerprint the view was made at.
     made_at: Option<(u64, u64)>,
     /// The review questions laid on the rows shown, by pane, so a review
-    /// that moved is lifted from those rows without waiting for Herdr to
+    /// that moved is lifted from those rows without waiting for the engine to
     /// send them again. Bounded by the rows shown.
     laid: BTreeMap<String, Laid>,
     /// The core's questions the rows shown were last laid with: a book
@@ -805,7 +805,7 @@ impl Runtime {
     /// word in their own language. The agent's own question comes first,
     /// and a working agent asks nothing.
     pub(super) fn lay_plan_reviews(&mut self, device: &str, agents: &mut [SidebarAgentSnapshot]) {
-        // Rows Herdr just sent carry nothing laid.
+        // Rows the engine just sent carry nothing laid.
         for agent in agents.iter() {
             self.plans.laid.remove(&agent.pane_id);
         }

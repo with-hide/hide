@@ -141,7 +141,7 @@ type PaneMenuId =
 
 /**
  * What the pane header offers about this pane (B16, B18): its relatives,
- * each opened only by choosing it, its reference (name and Herdr id) to copy, and closing it. Opening
+ * each opened only by choosing it, its reference (name and engine pane id) to copy, and closing it. Opening
  * the menu moves no focus and marks nothing read.
  */
 /** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다시 볼 것에서 빼기. */

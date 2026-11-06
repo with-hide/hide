@@ -32,9 +32,9 @@ pub struct GraphProjectKey {
     pub workspace_id: String,
 }
 
-/// A session as the map names it: its machine, its Herdr pane, and the
+/// A session as the map names it: its machine, its engine pane, and the
 /// digest of its native session (or the native id where no digest is known),
-/// so a pane Herdr reuses for another session is not taken for this one.
+/// so a pane that later hosts another session is not taken for this one.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphSessionKey {

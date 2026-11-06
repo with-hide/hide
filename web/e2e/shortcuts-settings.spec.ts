@@ -1,4 +1,4 @@
-// Settings, Shortcuts on an isolated pinned Herdr and hided (PRD settings-cleanup
+// Settings, Shortcuts on an isolated engine and hided (PRD settings-cleanup
 // B60-B63, B66): the chip is the control and a chord applies as it is pressed,
 // Escape cancels, restore and clear show on hover or keyboard focus, the eight
 // area commands fold into one line, and the sheet no longer carries the

@@ -1,4 +1,4 @@
-// The weekly usage chips and popover on an isolated pinned Herdr and hided
+// The weekly usage chips and popover on an isolated engine and hided
 // (#153). The daemon's PATH carries a `claude` that answers `/usage` with a
 // fixed reading once the test releases it, so its row is first loading and
 // then available with a Fable bucket; this HOME has no Codex login, so that

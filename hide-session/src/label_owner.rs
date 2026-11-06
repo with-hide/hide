@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-/// A compact, path-free token that consumers can compare with Herdr's current
+/// A compact, path-free token that consumers can compare with the engine's current
 /// native reference. Unsupported or unreported references prove nothing.
 pub fn label_reference_token(provider: &str, kind: &str, value: &str) -> Option<String> {
     reference_token(Agent::from_kind(provider)?, kind, value)

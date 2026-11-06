@@ -37,8 +37,8 @@ Usage: holder-restart-check.py --bin <folder with holder_node and hide-holder>
 On Windows the binaries folder also holds the pinned ConPTY runtime a holder
 runs on, in `holder-conpty` (`scripts/fetch-conpty.py --out
 <folder>/holder-conpty`), where the node finds it beside its holder as hided
-does in the app. Herdr is
-never started. Each CLI is found on PATH, where
+does in the app. No engine is
+started. Each CLI is found on PATH, where
 scripts/install-agent-clis.py put it.
 """
 

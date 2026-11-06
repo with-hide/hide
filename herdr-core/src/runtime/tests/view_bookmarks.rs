@@ -11,8 +11,8 @@ use crate::workspace_control::{Action, Query, checkout_caller_id, gateway_caller
 
 const TABS: [&str; 3] = ["w-order:t1", "w-order:t2", "w-order:t3"];
 
-/// A checkout of a real directory with a live Herdr context, so a tab choice
-/// leaves for Herdr and waits for its answer as it does in the daemon.
+/// A checkout of a real directory with a live engine context, so a tab choice
+/// leaves for the engine and waits for its answer as it does in the daemon.
 fn live_checkout(name: &str) -> (Runtime, String, PathBuf) {
     let folder = scratch_dir(&format!("hide-bookmark-{name}-"));
     let directory = folder.path().canonicalize().expect("a real checkout path");
@@ -91,7 +91,7 @@ fn herdr_splits_first_tab(runtime: &mut Runtime, directory: &Path) {
     runtime.sync_workspace_view();
 }
 
-/// A session snapshot of the three tabs with Herdr focused on `active`.
+/// A session snapshot of the three tabs with the engine focused on `active`.
 fn herdr_focuses(runtime: &mut Runtime, directory: &Path, active: &str) {
     runtime.ingest_session(Ok(tab_order_payload(
         &directory.to_string_lossy(),
@@ -255,7 +255,7 @@ fn agent_act(runtime: &mut Runtime, directory: &Path, mut payload: serde_json::V
     runtime.dispatch_json(&explorer_event("agent_layout", payload));
 }
 
-/// The operator's tab choice, then Herdr's answer that it took the focus.
+/// The operator's tab choice, then the engine's answer that it took the focus.
 fn focus_tab(runtime: &mut Runtime, checkout_id: &str, directory: &Path, tab_id: &str) {
     dispatch_focus_tab(runtime, checkout_id, tab_id);
     herdr_focuses(runtime, directory, tab_id);
@@ -718,7 +718,7 @@ fn a_background_select_moves_nothing_and_a_repeat_converges() {
     );
 }
 
-/// B10, D-14: a tab that leaves Herdr without a close Hide asked for takes
+/// B10, D-14: a tab that leaves the engine without a close Hide asked for takes
 /// its bookmark and nothing else: the Views it opened stay in the list, a
 /// clean document stays open and a draft keeps its protection. Only Hide's
 /// own close or archive closes a session's Views (PRD session-files D-14).
@@ -1335,7 +1335,7 @@ fn listed(runtime: &Runtime, caller: &str) -> Vec<String> {
 // PRD session-files: the Files strip shows the Views the session whose pane
 // has the keyboard opened, and the operator's own.
 
-/// The three tabs with Herdr focused on `active`: the first two panes run a
+/// The three tabs with the engine focused on `active`: the first two panes run a
 /// Codex agent each, in terminal `term-<pane>` with session
 /// `session-<tab>`, and the third is a plain shell in its own terminal.
 fn sessions_focus(runtime: &mut Runtime, directory: &Path, active: &str) {
@@ -1584,7 +1584,7 @@ fn a_closed_sessions_views_close_and_shared_or_unsaved_ones_stay() {
 }
 
 /// D-14: a pane close Hide asks for names the pane's session, and its Views
-/// close only once Herdr confirmed the close.
+/// close only once the engine confirmed the close.
 #[test]
 fn a_pane_close_takes_its_sessions_views_once_it_completes() {
     let (mut runtime, checkout, directory) = setup("session-pane-close");

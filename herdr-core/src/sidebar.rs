@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::model::{AgentStatusCode, PaneLayoutDirection, SidebarAgentSnapshot};
 
-/// Event provenance belongs to the local replica, not the external wire.
+/// Event provenance belongs to the local session, not the external wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionTabFocus {
     pub generation: u64,
@@ -23,16 +23,16 @@ pub struct SessionTabFocus {
     pub creation: bool,
 }
 
-/// How many tab moves are kept on each side: the replica's latest Herdr
+/// How many tab moves are kept on each side: the latest engine
 /// moves and the core's sent, unanswered tab requests. One value, so any
 /// burst the request list can hold is one the moves can answer.
 pub(crate) const TAB_FOCUS_LIMIT: usize = 16;
 
-/// The tabs Herdr focused, one `tab_focused` event each, in the order it
+/// The tabs the engine focused, one `tab_focused` event each, in the order it
 /// applied them. A session folds several events into one state, and a state
-/// that ends on t2 cannot say whether Herdr went t2 or t2, t3, t2; the moves
+/// that ends on t2 cannot say whether the engine went t2 or t2, t3, t2; the moves
 /// can. Only the latest `TAB_FOCUS_LIMIT` are kept; `applied` counts all of
-/// this replica's, so a reader that consumed `n` knows which are new and
+/// the engine's, so a reader that consumed `n` knows which are new and
 /// whether any it has not seen were dropped.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionTabMoves {
@@ -67,14 +67,14 @@ impl SessionTabMoves {
 pub struct SessionSnapshotPayload {
     #[serde(skip)]
     pub tab_focus: Option<SessionTabFocus>,
-    /// Herdr's tab moves, present on a session the event replica published.
-    /// A snapshot read on its own has no place in Herdr's event order.
+    /// The engine's tab moves, present on a session the engine published.
+    /// A snapshot read on its own has no place in the engine's event order.
     #[serde(skip)]
     pub tab_moves: Option<SessionTabMoves>,
     #[serde(default)]
     pub focused_pane_id: Option<String>,
-    /// The Herdr workspace that holds Herdr's keyboard. Its active tab is the
-    /// only tab Herdr can be said to have focused; every other workspace's
+    /// The engine workspace that holds the engine's keyboard. Its active tab is the
+    /// only tab the engine can be said to have focused; every other workspace's
     /// `active_tab_id` is that workspace's memory of where it was last.
     #[serde(default)]
     pub focused_workspace_id: Option<String>,
@@ -96,13 +96,12 @@ pub struct SessionWorkspacePayload {
     pub workspace_id: String,
     #[serde(default)]
     pub label: String,
-    /// The tab Herdr reports as active in this workspace. It is the only
+    /// The tab the engine reports as active in this workspace. It is the only
     /// authority for which tab is active; the navigator never falls back to a
     /// position.
     #[serde(default)]
     pub active_tab_id: Option<String>,
-    /// Workspace metadata is the live purpose authority. Herdr caps token
-    /// values at 80 characters before they reach this boundary.
+    /// Workspace metadata is the live purpose authority.
     #[serde(default)]
     pub tokens: BTreeMap<String, Value>,
 }
@@ -174,7 +173,7 @@ pub struct AgentLabel {
     #[serde(default)]
     pub question: bool,
     /// The agent stopped and named what stopped it (`end: blocked`). This is
-    /// the label's block, not Herdr's `blocked` lifecycle, which is an
+    /// the label's block, not the engine's `blocked` lifecycle, which is an
     /// approval prompt.
     #[serde(default)]
     pub blocked: bool,
@@ -183,18 +182,18 @@ pub struct AgentLabel {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionAgentPayload {
     /// The query failed while its topology subscription is still live.
-    /// Internal provenance, never supplied by Herdr or a shell client.
+    /// Internal provenance, never supplied by the engine or a shell client.
     #[serde(skip)]
     pub(crate) telemetry_stale: bool,
-    /// The pane's terminal failed to restore (Herdr's `restore_error`): no
-    /// process runs behind this agent, whatever Herdr's `agent_status` says.
-    /// Laid on from the pane by [`project_agents`], never supplied by Herdr.
+    /// The pane's terminal failed to restore (the engine's `restore_error`): no
+    /// process runs behind this agent, whatever the engine's `agent_status` says.
+    /// Laid on from the pane by [`project_agents`], never supplied by the engine.
     #[serde(skip)]
     pub(crate) terminal_failed: bool,
     #[serde(default)]
     pub id: Option<String>,
-    /// The name Herdr knows the agent by (`agent.start --name`, `agent
-    /// rename`); absent when it was given none.
+    /// The name the engine knows the agent by (`agent.start --name`);
+    /// absent when it was given none.
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -207,13 +206,13 @@ pub struct SessionAgentPayload {
     pub agent: Option<String>,
     #[serde(default)]
     pub agent_status: Option<String>,
-    /// Herdr's record of the conversation this agent is running, when it has
+    /// The engine's record of the conversation this agent is running, when it has
     /// one. `kind` says whether `value` is an id or a path; only an id can be
     /// handed to an agent's own fork command.
     #[serde(default)]
     pub agent_session: Option<SessionAgentSessionPayload>,
     /// The pane this agent was spawned from, as hcoord's `parent_pane` token
-    /// declares it (Herdr records no lineage). `wire.rs` leaves it empty when
+    /// declares it (the engine records no lineage). `wire.rs` leaves it empty when
     /// the child's own session no longer matches the one the token was
     /// written for.
     #[serde(default)]
@@ -233,11 +232,11 @@ pub struct SessionAgentPayload {
     pub lineage_session: Option<String>,
     #[serde(default)]
     pub state_change_seq: Option<u64>,
-    /// Herdr's record that the agent's current stop finished work, which its
+    /// The engine's record that the agent's current stop finished work, which a
     /// tab-scoped seen does not clear (`agent_state::agent_completed`).
     #[serde(default)]
     pub completion_seq: Option<u64>,
-    /// Herdr still holds open the start it made of this agent
+    /// The engine still holds open the start it made of this agent
     /// (`agent.start`). With no state reported yet it is the starting state
     /// (`agent_state::agent_starting`).
     #[serde(default)]
@@ -251,7 +250,7 @@ pub struct SessionAgentPayload {
     #[serde(default)]
     pub changed_at_unix_ms: Option<u64>,
     /// What the label worker read of the current session, if proven; laid
-    /// on by the label overlay, never read from Herdr.
+    /// on by the label overlay, never read from the engine.
     #[serde(skip)]
     pub(crate) facts: Option<crate::request_view::RowFacts>,
     /// The label worker still owes the stopped turn its final judgment.
@@ -263,7 +262,7 @@ pub struct SessionAgentPayload {
     #[serde(skip)]
     pub(crate) record: Option<crate::labels::record::RecordBinding>,
     /// The turn the pane's own session's hook last reported; laid on by the
-    /// core's hook facts, never read from Herdr (`agent_hooks::facts`).
+    /// core's hook facts, never read from the engine (`agent_hooks::facts`).
     #[serde(skip)]
     pub(crate) hook: Option<hide_node_link::panes::HookTurn>,
 }
@@ -290,7 +289,7 @@ pub struct SessionPanePayload {
     pub tokens: BTreeMap<String, Value>,
     #[serde(default)]
     pub cwd: Option<String>,
-    /// The name the user gave this pane in Herdr, when they gave it one.
+    /// The name the user gave this pane, when they gave it one.
     #[serde(default)]
     pub label: Option<String>,
     /// What the program running in the pane set the terminal title to.
@@ -406,7 +405,7 @@ pub fn project_agents(payload: SessionSnapshotPayload) -> AgentProjection {
         }
     }
 
-    // Rows stay in the order Herdr sent them. Ordering is a function of the
+    // Rows stay in the order the engine sent them. Ordering is a function of the
     // group, and the group is a function of the read axis, which is decided
     // in `apply_read_state` where the pane read record lives.
     for agent in &mut agents {
@@ -461,7 +460,7 @@ pub fn project_pane_children(
         },
         status.as_ref(),
     );
-    // Pane children come from the lineage, which Herdr reports directly, so
+    // Pane children come from the lineage, which the engine reports directly, so
     // they are known whether or not the hook is installed. Only the
     // in-process count depends on instrumentation (PRD D-24).
     let chips = agent
@@ -619,7 +618,7 @@ fn pane_connection(
     use crate::model::{PaneConnectionReason, PaneConnectionSnapshot};
     use hide_agent_hooks::AgentRuntime;
     use hide_agent_hooks::diagnosis::UninstrumentedReason as Reason;
-    // Reopen restarts a Claude Code or Codex session on this Mac's Herdr, so
+    // Reopen restarts a Claude Code or Codex session on this Mac's engine, so
     // another agent, a pane on another device, a missing hook and an agent
     // too old are not its to fix.
     let reopens = agent.runtime.is_some() && !crate::address::is_device_scoped(pane_id);
@@ -716,7 +715,7 @@ pub fn project_lineage_path(
 }
 
 /// The name of an agent kind as a person says it: the two providers Hide
-/// starts by their product names, any other kind exactly as Herdr reports it.
+/// starts by their product names, any other kind exactly as the engine reports it.
 pub(crate) fn provider_name(kind: Option<&str>) -> String {
     match non_empty(kind) {
         Some(kind) => hide_agent_adapter::adapter(kind)
@@ -758,7 +757,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
 
     let agent_kind = non_empty(agent.agent.as_deref()).unwrap_or("unknown");
     // Every surface uses one title order, from proven facts
-    // alone. Herdr's workspace and control names never enter this ladder.
+    // alone. The engine's workspace and control names never enter this ladder.
     let native_title = agent
         .facts
         .as_ref()
@@ -929,7 +928,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
 }
 
 /// The ordering key: when the core saw the agent change state, as thirteen
-/// digits, or Herdr's own state change sequence padded to twenty when the
+/// digits, or the engine's own state change sequence padded to twenty when the
 /// core has not observed it.
 fn projected_last_activity(agent: &SessionAgentPayload, pane_id: &str) -> Result<String, String> {
     match (agent.changed_at_unix_ms, agent.state_change_seq) {
@@ -1029,7 +1028,7 @@ pub(crate) fn owned_label_fixture<T: serde::de::DeserializeOwned>(
                 .iter()
                 .any(|key| tokens.remove(*key).is_some_and(|value| !value.is_null()));
             let activity = text(tokens, "activity").and_then(|value| value.parse::<u64>().ok());
-            // The plugin mirrored Herdr's lifecycle into a status token; a
+            // The Herdr plugin mirrored its lifecycle into a status token; a
             // fixture that gave only the token meant that lifecycle.
             let present = |name: &str| {
                 [name.to_owned(), format!("{name}_new")]
@@ -1455,7 +1454,7 @@ mod tests {
 
     /// AC1. A question comes only from the core's label and outranks the
     /// approval a blocked pane shows; a label without one leaves the demand
-    /// to Herdr's lifecycle.
+    /// to the engine's lifecycle.
     #[test]
     fn a_labels_question_is_the_only_question_demand() {
         let label = |question: bool| json!({"task": "작업", "question": question});
@@ -1483,7 +1482,7 @@ mod tests {
         assert_eq!(axes["blocked"], ("approval", "unknown", RowMark::Turn));
     }
 
-    /// AC1. Herdr's own lifecycle words, with no plugin token at all. Blocked
+    /// AC1. The engine's own lifecycle words, with no plugin token at all. Blocked
     /// is an approval, and `done` and `idle` produce the same activity. They
     /// differ on completion evidence: an idle agent is merely ready, while a
     /// done agent has a result to review. Neither lifecycle decides Hide's
@@ -1539,7 +1538,7 @@ mod tests {
             .iter()
             .find(|agent| agent.pane_id == "done")
             .expect("completed agent");
-        // Herdr's `done` with no label read: a stop to read, not a finish.
+        // The engine's `done` with no label read: a stop to read, not a finish.
         assert_eq!(done.group, "done");
         assert_eq!(done.status_code, AgentStatusCode::Stopped);
         assert_eq!(done.mark, RowMark::Unread);
@@ -1583,8 +1582,8 @@ mod tests {
     }
 
     /// D-9. The turn the session's own hook reported decides the axes ahead of
-    /// Herdr's state, in both directions, until that session reports again;
-    /// without a hook turn Herdr's state still decides.
+    /// the engine's state, in both directions, until that session reports again;
+    /// without a hook turn the engine's state still decides.
     #[test]
     fn a_hook_turn_decides_the_axes_ahead_of_herdrs_state() {
         use hide_node_link::panes::HookTurn;
@@ -1603,7 +1602,7 @@ mod tests {
         };
         let stopped = AgentActivity::Stopped;
         let working = AgentActivity::Working;
-        // Herdr reads a command waited on in the background as finished (#348).
+        // A `done` lifecycle reads a command waited on in the background as finished (#348).
         assert_eq!(
             axes("done", Some(HookTurn::Working)),
             (working, false, false)
@@ -1621,7 +1620,7 @@ mod tests {
             axes("working", Some(HookTurn::Idle)),
             (stopped, false, false)
         );
-        // A hook that reported the turn answers Herdr's blocked prompt too.
+        // A hook that reported the turn answers the engine's blocked prompt too.
         assert_eq!(
             axes("blocked", Some(HookTurn::Working)),
             (working, false, false)
@@ -1918,7 +1917,7 @@ mod tests {
     }
 
     /// AC5. Two rows in the same group with the same activity keep the order
-    /// Herdr sent them in, because the sort is stable and reads no third key.
+    /// the engine sent them in, because the sort is stable and reads no third key.
     #[test]
     fn group_order_keeps_snapshot_order_for_equal_activity() {
         let same = |pane_id: &str| {
@@ -1938,8 +1937,8 @@ mod tests {
     }
 
     /// PRD D-01, checkout-workspace-binding D-09: the rolling task is the
-    /// title and the provider is the fallback. Herdr's agent name, the
-    /// retired `name` token and the Herdr workspace label (`home-graph`,
+    /// title and the provider is the fallback. The engine's agent name, the
+    /// retired `name` token and the engine workspace label (`home-graph`,
     /// another checkout's name as often as this one's) are never titles.
     #[test]
     fn identity_ladder_uses_task_then_provider_and_ignores_names_and_workspace_labels() {
@@ -2285,10 +2284,10 @@ mod tests {
         project_agents(payload(agents)).agents
     }
 
-    /// The mark of the one Herdr server most read tests run on.
+    /// The mark of the one engine run most read tests use.
     const SERVER: &str = "server-1";
 
-    /// A connection to that server, whose panes carry no mark yet, so a state
+    /// A connection to that run, whose panes carry no mark yet, so a state
     /// read on it names `SERVER`.
     fn connection() -> ReadConnection {
         ReadConnection::new(SERVER.to_owned())
@@ -2307,7 +2306,7 @@ mod tests {
 
     /// AC2, SC1. Three panes finish in one tab. Focusing one clears that one
     /// and leaves the other two unread, which is the whole reason Hide keeps a
-    /// pane-level record instead of reading Herdr's tab-scoped seen.
+    /// pane-level record instead of reading a tab-scoped seen.
     #[test]
     fn read_record_clears_one_pane_of_a_finished_tab() {
         let mut agents = projected(json!([
@@ -2335,7 +2334,7 @@ mod tests {
         assert_eq!(groups["c"], (true, "done"));
     }
 
-    /// AC2. Herdr reporting the whole tab as seen, by dropping every pane from
+    /// AC2. A tab-scoped seen reporting the whole tab as seen, by dropping every pane from
     /// `done` to `idle` and bumping its sequence, does not read anything. Only
     /// Hide's own record does.
     #[test]
@@ -2358,7 +2357,7 @@ mod tests {
         );
     }
 
-    /// #901. Herdr marks the pane's tab seen when it focuses it, which drops a
+    /// #901. A tab-scoped seen marks the pane's tab seen when it focuses it, which drops a
     /// finished pane from `done` to `idle` without moving its sequence. A
     /// demand the operator already read stays read through that, even when it
     /// lands after the operator's focus has left the pane: the completion going
@@ -2391,10 +2390,10 @@ mod tests {
     }
 
     /// #901. What does turn a read demand unread again: the agent working
-    /// again, a turn between two looks (Herdr's sequence moved), a new session
+    /// again, a turn between two looks (the engine's sequence moved), a new session
     /// in the pane, and a completion that appears after the operator read the
     /// pane, including one that appears at the sequence the read was made at.
-    /// Herdr's seen keeps the completion (`completion_seq`), so it is not one
+    /// The tab-scoped seen keeps the completion (`completion_seq`), so it is not one
     /// going away and coming back.
     #[test]
     fn a_read_demand_turns_unread_again_only_for_news() {
@@ -2477,7 +2476,7 @@ mod tests {
         assert_eq!(later[0].group, "needs_you");
     }
 
-    /// AC3. The axes alone can move without Herdr's sequence moving, so a
+    /// AC3. The axes alone can move without the engine's sequence moving, so a
     /// demand appearing at an unchanged sequence still counts as a change.
     #[test]
     fn read_record_notices_an_axis_change_at_the_same_sequence() {
@@ -2546,7 +2545,7 @@ mod tests {
     }
 
     /// PRD sidebar-context-menus D-06: an agent row carries the session id
-    /// Herdr recorded, which Copy session id reads, and none when it recorded
+    /// the engine recorded, which Copy session id reads, and none when it recorded
     /// none or recorded a path.
     #[test]
     fn an_agent_row_carries_the_session_id_herdr_recorded() {
@@ -2569,7 +2568,7 @@ mod tests {
         assert!(wire("c").get("session_id").is_none());
     }
 
-    /// One pane as a Herdr server reports it, running session `session`.
+    /// One pane as the engine reports it, running session `session`.
     fn pane(
         pane_id: &str,
         status: &str,
@@ -2611,11 +2610,11 @@ mod tests {
         agents
     }
 
-    /// A restored Herdr server lists a pane at sequence 0, then `unknown`,
-    /// then settled at a sequence of its own (measured on the pinned 0.9.3).
+    /// A restored engine lists a pane at sequence 0, then `unknown`,
+    /// then settled at a sequence of its own (Herdr 0.9.3 did, as measured).
     /// A pane the operator read stays read through each step, keeps the
-    /// completion the restored server no longer reports, and is judged on
-    /// the new server's sequence from then on.
+    /// completion the restored engine no longer reports, and is judged on
+    /// the new run's sequence from then on.
     #[test]
     fn a_read_pane_stays_read_through_a_restored_servers_steps() {
         let mut saved = Saved::default();
@@ -2813,8 +2812,8 @@ mod tests {
         }
     }
 
-    /// Hide restarting while its Herdr server keeps running finds its own
-    /// mark on the pane, so the server's sequence still compares: a turn
+    /// Hide reconnecting to an engine run it already marked finds its own
+    /// mark on the pane, so the run's sequence still compares: a turn
     /// that ran while Hide was away is news. Without the mark the record
     /// would be carried over and that turn absorbed.
     #[test]
@@ -2903,7 +2902,7 @@ mod tests {
         assert!(root.unread, "a new question from the child is news");
     }
 
-    /// The ordering key falls back to Herdr's own sequence, zero padded to the
+    /// The ordering key falls back to the engine's own sequence, zero padded to the
     /// activity token's width, when no label worker timestamp came.
     #[test]
     fn last_activity_falls_back_to_the_herdr_sequence() {

@@ -2,7 +2,7 @@
 //! asked each agent, what came of it, and what is theirs to do now.
 //!
 //! Everything here is derived from facts the core already holds, with no AI:
-//! the session's own words the label worker read (`labels::facts`), Herdr's
+//! the session's own words the label worker read (`labels::facts`), the engine's
 //! state and Hide's read and demand axes on the row, the lineage, and the
 //! pull requests GitHub reported. The verb is computed in `agent_state::turn`;
 //! association and duty belong to `agent_state::work`. This module assembles the block.
@@ -61,18 +61,18 @@ pub struct RowFacts {
     /// empty while summaries are off.
     pub(crate) recent_turns: Vec<RecentTurn>,
     /// The session's last turn proposed a plan and waits for the operator to
-    /// approve it, as read for the agent's current Herdr state (PRD
+    /// approve it, as read for the agent's current engine state (PRD
     /// codex-plan-approval-hold D-05).
     pub(crate) awaiting_operator: bool,
     /// A native unanswered question or plan, proven for this current session
-    /// and Herdr state. Absence conveys no invented question text.
+    /// and the engine state. Absence conveys no invented question text.
     pub(crate) user_turn: Option<hide_session::turns::UserTurnFact>,
     /// How many background tasks the session read proves are still running
     /// and will wake the agent when they end, as read for the agent's current
-    /// Herdr state. Zero is "none proven", which for an agent whose session
+    /// the engine state. Zero is "none proven", which for an agent whose session
     /// cannot report them is every case.
     pub(crate) wake_devices: u32,
-    /// The turn that just ended in the agent's current Herdr state has not
+    /// The turn that just ended in the agent's current engine state has not
     /// had its session read yet, so whether a background task will wake the
     /// agent is not known. The row is not yet a stop (#902).
     pub(crate) turn_end_unread: bool,
@@ -80,12 +80,12 @@ pub struct RowFacts {
     /// has begun since (B16).
     pub(crate) wake_vanished: bool,
     /// How the session's last turn ended, as read for the agent's current
-    /// Herdr state; `None` while it runs or the read does not settle it. It
+    /// the engine state; `None` while it runs or the read does not settle it. It
     /// ends a hook's turn that began before that state
     /// (`agent_hooks::facts`).
     pub(crate) turn_ended: Option<hide_session::turns::TurnEnded>,
     /// The keys of the session's last tool calls that have a result, as
-    /// read for the agent's current Herdr state: a hook's wait on one of
+    /// read for the agent's current engine state: a hook's wait on one of
     /// them that began before that state is over (`agent_hooks::facts`).
     pub(crate) answered_calls: Vec<String>,
 }
@@ -327,7 +327,7 @@ pub(crate) fn apply<'a>(
 
 /// Drops the verb records of the panes `gone` names. The caller names
 /// only panes an authoritative topology no longer has, so a list that is
-/// empty for a moment (a Herdr reconnect, before the first session) never
+/// empty for a moment (an engine reconnect, before the first session) never
 /// restarts every wait. Returns whether any went.
 pub(crate) fn prune_verbs(
     verbs: &mut BTreeMap<String, VerbRecord>,

@@ -87,7 +87,7 @@ export function underHome(path: string, home: string | null): string {
 /**
  * What Continue changes on this Mac: for each agent left on, the files and
  * folders its pieces are written to (the hook file or its plugin or
- * extension, the skill, Herdr's integration), one row per place, so a skill
+ * extension, the skill), one row per place, so a skill
  * folder agents share is one row naming them all; then the `hide` command's
  * link. Each place is where the kit reports it, with the account home as `~`
  * (B11, D-26). A piece the agent does not have here (`absent`) writes nothing.

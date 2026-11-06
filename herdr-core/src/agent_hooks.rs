@@ -34,7 +34,7 @@ impl PaneHookTokens {
     }
 }
 
-/// The runtime behind an agent kind Herdr detected.
+/// The runtime behind an agent kind the engine detected.
 ///
 /// `None` is an agent Hide has no adapter for. It is the honest answer, and
 /// it lands on the single fallback reason rather than being guessed into one

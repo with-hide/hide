@@ -591,7 +591,7 @@ fn unread_panes(runtime: &Runtime) -> Vec<String> {
 }
 
 /// Three finished panes side by side in one tab, the shape the operator
-/// reported. `focused` is the pane Herdr names as that tab's focus, which
+/// reported. `focused` is the pane the engine names as that tab's focus, which
 /// is a tab-scoped verdict Hide's read axis must not follow.
 fn finished_tab_payload(panes: &[(&str, u64)], focused: &str) -> SessionSnapshotPayload {
     let agents = panes
@@ -776,8 +776,8 @@ pub(super) fn workspace(
     }
 }
 
-/// One Herdr workspace whose tabs each hold one pane inside
-/// `checkout_path`. `tab_order` is the order Herdr reports its tabs in and
+/// One engine workspace whose tabs each hold one pane inside
+/// `checkout_path`. `tab_order` is the order the engine reports its tabs in and
 /// `layout_order` is the order the layouts arrive in, so a test can hand
 /// the two orders apart and see which one the navigator follows.
 fn tab_order_payload(
@@ -816,7 +816,7 @@ fn tab_order_payload(
             })
         })
         .collect::<Vec<_>>();
-    // Herdr's keyboard is in the workspace, on the active tab's pane,
+    // The engine's keyboard is in the workspace, on the active tab's pane,
     // which is what a live `session.snapshot` reports.
     crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": [],
@@ -834,10 +834,10 @@ fn tab_order_payload(
     .expect("ordered session payload")
 }
 
-/// Two or more Herdr workspaces whose tabs all sit in `checkout_path`, so
+/// Two or more engine workspaces whose tabs all sit in `checkout_path`, so
 /// the path-keyed navigator folds them into one checkout. Each entry is
 /// `(workspace_id, tab_ids, active_tab_id)`; `focused_workspace_id` is
-/// the one holding Herdr's keyboard, on its active tab's pane. Panes are
+/// the one holding the engine's keyboard, on its active tab's pane. Panes are
 /// named `<tab>:p`.
 fn split_checkout_payload(
     checkout_path: &str,
@@ -956,7 +956,7 @@ fn checkout_active_tab_id(runtime: &Runtime, checkout_id: &str) -> Option<String
         .clone()
 }
 
-/// A [`tab_order_runtime`] with a live Herdr context, so a view-state
+/// A [`tab_order_runtime`] with a live engine context, so a view-state
 /// notification actually leaves and a wait is armed.
 fn live_tab_order_runtime(checkout_path: &str) -> (Runtime, String) {
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
@@ -990,8 +990,8 @@ fn correlated_pane_focus_event(pane_id: &str, request_id: &str) -> Vec<u8> {
     .expect("correlated pane focus event")
 }
 
-/// Herdr's event stream as the replica publishes it: each session carries
-/// the tab moves Herdr has made, so a test states which moves a session
+/// The engine's event stream as the engine publishes it: each session carries
+/// the tab moves the engine has made, so a test states which moves a session
 /// comes after instead of leaving the core to infer them from its state.
 struct HerdrMoves(crate::sidebar::SessionTabMoves);
 
@@ -1003,7 +1003,7 @@ impl HerdrMoves {
         })
     }
 
-    /// The stream of a new replica, built after a reconnect: its count
+    /// The stream of a new engine, built after a reconnect: its count
     /// starts again.
     fn reconnected(&self) -> Self {
         Self(crate::sidebar::SessionTabMoves {
@@ -1012,8 +1012,8 @@ impl HerdrMoves {
         })
     }
 
-    /// `payload` as the session published after Herdr moved to each of
-    /// `moves`, in order. Like the replica, it names the last move as the
+    /// `payload` as the session published after the engine moved to each of
+    /// `moves`, in order. Like the engine, it names the last move as the
     /// session's focus event unless the test set one.
     fn after(
         &mut self,
@@ -1045,7 +1045,7 @@ impl HerdrMoves {
     }
 }
 
-/// The tabs of the moves sent to Herdr and not yet answered, oldest first.
+/// The tabs of the moves sent to the engine and not yet answered, oldest first.
 fn sent_tab_moves(runtime: &Runtime) -> Vec<String> {
     runtime
         .tab_focus_requests
@@ -1135,7 +1135,7 @@ fn strip_checkout(name: &str) -> (Runtime, String, PathBuf) {
 
 /// #400: a tab Hide created belongs to the checkout it was created for while
 /// its pane still reports the cwd it was born with, whether the session or
-/// Herdr's acknowledgment arrives first; a tab made outside Hide with the same
+/// the engine's acknowledgment arrives first; a tab made outside Hide with the same
 /// cwd follows its pane, and a created tab's record leaves with the tab.
 #[test]
 fn a_created_tab_joins_its_requested_checkout_while_an_external_tab_follows_its_pane_cwd() {
@@ -1231,7 +1231,7 @@ fn a_created_tab_joins_its_requested_checkout_while_an_external_tab_follows_its_
         ["w-order:t1", "w-order:t4"]
     );
 
-    // Losing Herdr drops every record, because the next server numbers its
+    // Losing the engine drops every record, because the next server numbers its
     // own tabs.
     runtime.ingest_session(Err(SessionFetchError::SocketMissing(
         "herdr went away".to_owned(),
@@ -1270,7 +1270,7 @@ fn open_file(runtime: &mut Runtime, checkout_id: &str, path: &Path) {
 }
 
 /// A repository with one linked worktree, both holding panes of the same
-/// Herdr workspace, which is how a workspace comes to span two checkouts.
+/// engine workspace, which is how a workspace comes to span two checkouts.
 /// Returns the runtime, the repository's checkout id, and both directories.
 fn split_workspace_checkouts(name: &str) -> (Runtime, String, PathBuf, PathBuf) {
     let folder = scratch_dir(&format!("hide-split-{name}-"));
@@ -1323,8 +1323,8 @@ fn split_workspace_checkouts(name: &str) -> (Runtime, String, PathBuf, PathBuf) 
     (runtime, checkout_id, repository, worktree)
 }
 
-/// A session payload for one Herdr workspace whose tabs are split across
-/// two directories, in Herdr's own order.
+/// A session payload for one engine workspace whose tabs are split across
+/// two directories, in the engine's own order.
 fn split_workspace_payload(
     tab_order: &[(&str, &str)],
     active_tab_id: &str,

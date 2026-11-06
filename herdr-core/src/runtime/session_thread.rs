@@ -6,7 +6,7 @@
 //! read where the session runs, by that machine's node (`Call::SessionThread`),
 //! on a worker outside the lock; the answer comes back under a short lock.
 //! The newest page is read once and kept; what the session writes after it
-//! is read forward from where that page ended, again when Herdr reports the
+//! is read forward from where that page ended, again when the engine reports the
 //! agent's state moved and, while it works, when a once-a-second look at the
 //! session's file size and time says it wrote. A forward read that fills
 //! becomes a kept page and the next one starts where it ended, so a working
@@ -14,7 +14,7 @@
 //!
 //! Input goes only to the pane the thread was opened for, while it still
 //! runs that session, as the phone's reply does: the node's input permit,
-//! the sleep gate, then the engine's `submit_text` (Herdr's
+//! the sleep gate, then the engine's `submit_text` (the engine's
 //! `pane.send_input` with Enter).
 
 use super::*;
@@ -314,7 +314,7 @@ impl Runtime {
         true
     }
 
-    /// Follows the open thread's pane in a Herdr session read of `device`:
+    /// Follows the open thread's pane in an engine session read of `device`:
     /// whether it still runs the session, and whether its agent's state
     /// moved, which reads the record again.
     pub(super) fn follow_session_thread(
@@ -955,7 +955,7 @@ fn input_problem(text: &str, paths: &[String]) -> Option<&'static str> {
     if text.len() > INPUT_LIMIT_BYTES {
         return Some("too_long");
     }
-    // A new line stays inside Herdr's bracketed paste and submits nothing;
+    // A new line stays inside the engine's bracketed paste and submits nothing;
     // any other control character could act on the agent's screen.
     if text
         .chars()
@@ -1265,7 +1265,7 @@ mod tests {
         runtime
     }
 
-    /// Herdr's session read of this machine: one Claude pane in terminal
+    /// The engine's session read of this machine: one Claude pane in terminal
     /// `terminal`, its session reported or not.
     fn observe(runtime: &mut Runtime, status: &str, seq: u64, terminal: &str, session: bool) {
         let mut agent = json!({"id": "worker", "pane_id": "w1:p1", "agent": "claude",
@@ -1363,7 +1363,7 @@ mod tests {
         assert_eq!(tail.updates.len(), 1);
         assert!(Arc::ptr_eq(&kept, &history(&runtime)));
 
-        // A Herdr read in which nothing about the agent moved reads nothing.
+        // An engine read in which nothing about the agent moved reads nothing.
         observe(&mut runtime, "working", 2, "t1", true);
         assert!(node.asked().is_empty());
     }
@@ -1538,8 +1538,8 @@ mod tests {
         );
     }
 
-    /// A pane Herdr no longer knows refuses the words as gone; once the core
-    /// has seen the pane close, nothing is typed and Herdr is not asked.
+    /// A pane the engine no longer knows refuses the words as gone; once the core
+    /// has seen the pane close, nothing is typed and the engine is not asked.
     #[test]
     fn input_to_a_gone_pane_is_refused_as_pane_gone_and_a_closed_pane_is_never_asked() {
         let node = Arc::new(ScriptedNode::default());
@@ -1570,12 +1570,12 @@ mod tests {
         };
         let gone = Some((ThreadInputState::Refused, Some("pane_gone".to_owned())));
 
-        // The core still sees the pane, Herdr does not.
+        // The core still sees the pane, the engine does not.
         send(&mut runtime);
         assert_eq!(herdr.calls_of("submit_text").len(), 1);
         assert_eq!(refusal(&runtime), gone);
 
-        // Herdr's next read has no such pane.
+        // The engine's next read has no such pane.
         let payload: SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [], "panes": []})).unwrap();
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
@@ -1686,7 +1686,7 @@ mod tests {
         );
     }
 
-    /// A device thread's words go to that device's Herdr, addressed by the
+    /// A device thread's words go to that device's engine, addressed by the
     /// pane id the device knows, and never to this machine's.
     #[test]
     fn input_to_a_device_thread_reaches_the_pane_on_that_device() {

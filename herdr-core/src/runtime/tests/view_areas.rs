@@ -1997,7 +1997,7 @@ fn receipt(runtime: &Runtime, request_id: &str) -> crate::model::BrowserOpenRece
         .clone()
 }
 
-/// A Herdr session with one tab in the checkout, and the id of its pane.
+/// An engine session with one tab in the checkout, and the id of its pane.
 fn with_pane(runtime: &mut Runtime, directory: &Path) -> String {
     let tabs = ["w-order:t1"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
@@ -3302,7 +3302,7 @@ fn an_outside_file_opens_once_per_grant_and_its_log_names_no_file() {
         runtime.snapshot.browser_views.is_empty(),
         "an image is not a page"
     );
-    // Pages are listed for the checkouts of a live Herdr.
+    // Pages are listed for the checkouts of a live engine.
     runtime.snapshot.status.herdr.state = "connected".to_owned();
     assert!(external_open(
         &mut runtime,

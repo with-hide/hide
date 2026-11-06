@@ -1,6 +1,6 @@
 //! PRD mission-worker-sleep through the runtime: a letter to an agent Hide
 //! put to sleep, the wake a `request` or `block` asks for, a finished
-//! mission's agents put to sleep, and `hide agent sleep`. The Herdr workers
+//! mission's agents put to sleep, and `hide agent sleep`. The engine workers
 //! are not run (the live context's runtime is gone, so nothing they do comes
 //! back); what they hand back is fed in through the calls a worker makes.
 
@@ -94,7 +94,7 @@ fn session(front: &str, worker: Option<&str>) -> SessionSnapshotPayload {
     payload
 }
 
-/// A live runtime showing `session`, with Herdr's agents observed for
+/// A live runtime showing `session`, with the engine's agents observed for
 /// delivery and registrations `agent-1` (the lead) and `agent-2` (the
 /// worker, the lead's child).
 fn live(session: SessionSnapshotPayload) -> Runtime {
@@ -781,7 +781,7 @@ fn a_child_still_ending_its_sleep_holds_its_place_against_a_waking_letter() {
 
 /// One life in every answer: a registered agent Hide put to sleep reads
 /// `asleep` with no connection in `hide agent show`, `hide agent list` and
-/// `hide ps` alike; while its end still runs, and again once Herdr lists an
+/// `hide ps` alike; while its end still runs, and again once the engine lists an
 /// agent in its pane, it reads `running`; an ended registration reads
 /// `ended`, not asleep, even while its pane keeps the sleep record.
 #[test]
@@ -899,7 +899,7 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
         ("running", "connected")
     );
     assert_ne!(state, Some(PsState::Asleep));
-    // Asleep again, then woken: Herdr lists an agent in the pane.
+    // Asleep again, then woken: the engine lists an agent in the pane.
     lives(
         &runtime,
         Some(SleepPhase::Sleeping),
@@ -989,7 +989,7 @@ fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
             effort: Some("high".into()),
         })
     };
-    // The worker's row as Herdr lists it under the spawn's name, before and
+    // The worker's row as the engine lists it under the spawn's name, before and
     // after its first turn reports the session.
     let named = |session_shown: bool| {
         let mut payload = session("w-order:t1", Some("idle"));

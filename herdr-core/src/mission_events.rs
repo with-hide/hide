@@ -54,7 +54,7 @@ pub enum EventKind {
     Answered,
     /// An answer from the banner that did not reach the Conductor (D-30).
     AnswerUndelivered,
-    /// An answer from the banner typed without Herdr confirming it arrived.
+    /// An answer from the banner typed without the engine confirming it arrived.
     AnswerUnconfirmed,
     Reported,
     Cancelled,

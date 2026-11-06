@@ -85,7 +85,7 @@ pub use catalog::{
     SessionCatalogError, SessionFilter, SessionStoreRefusal,
 };
 
-/// Number of recent day directories used when Herdr has not reported a Codex
+/// Number of recent day directories used when the engine has not reported a Codex
 /// session identity yet.
 pub const CODEX_FALLBACK_DAYS: usize = 7;
 /// Number of newest files considered by the usage fallback.
@@ -357,7 +357,7 @@ impl Agent {
     }
 }
 
-/// A session identity reported by Herdr.
+/// A session identity reported by the engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionIdentity {
     Id(String),
@@ -746,7 +746,7 @@ pub struct CursorCheckpoint {
     pub pending: Vec<u8>,
 }
 
-/// Resolve Herdr's session identity and working directory to local files.
+/// Resolve the engine's session identity and working directory to local files.
 pub struct SessionLocator {
     home: PathBuf,
     resolved: HashMap<String, PathBuf>,
@@ -787,7 +787,7 @@ impl SessionLocator {
                 &mut DiscoveryBudget::default(),
             );
         }
-        // A session Herdr reported for this pane is that pane's session, full
+        // A session the engine reported for this pane is that pane's session, full
         // stop, and a reported session whose file does not exist yet is a
         // session that has not started, not a reason to read another one.
         // Both fallbacks to the newest file in the cwd were tried and both

@@ -15,7 +15,7 @@ import { agent, applyDesk, deskSnapshot, keyText, shellScreen, typed, withLineag
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 
-/** The panes, named the way Herdr names them, since a copied pane ID is one of these. */
+/** The panes, named the way the engine names them, since a copied pane ID is one of these. */
 export const LEAD = "w1:p1";
 export const DOCS = "w1:p2";
 export const SIGNUP = "w1:p3";

@@ -62,7 +62,7 @@ export type WorkspaceView = {
   resumed?: boolean;
   /** The View areas (S7); absent only from a core that predates them. */
   layout?: ViewLayoutSnapshot;
-  /** Null on a device this core dials, whose Herdr shows one tab. */
+  /** Null on a device this core dials, whose engine shows one tab. */
   agent_layout?: import("./agentLayout").AgentLayout | null;
   /** The operator's comments on this checkout's Views; absent while there are none and no Send to say. */
   feedback?: import("./snapshot").ViewFeedback;
@@ -346,7 +346,7 @@ export function workspaceViewOf(rest: SnapshotRest | null): WorkspaceView | null
   return (rest?.workspace_view as WorkspaceView | undefined) ?? null;
 }
 
-/** Herdr tabs: the Agent area's strip, in the core's order. */
+/** Engine tabs: the Agent area's strip, in the core's order. */
 export function agentEntries(checkout: Checkout): StripTab[] {
   return checkout.strip.filter((entry) => entry.kind === "herdr");
 }

@@ -1,7 +1,7 @@
 // A fixture process belongs to the Playwright worker that started it. A test
 // that fails still runs its own `finally`, but a worker that dies first (an
 // unhandled error event, the runner stopping it) skips every one of them, and
-// the private Herdr server or hided it started lives on under launchd with its
+// the private hided it started lives on under launchd with its
 // temporary directory. Every stop registered here also runs when the worker
 // exits, so nothing a worker started outlives it.
 

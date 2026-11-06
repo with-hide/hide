@@ -171,7 +171,7 @@ struct Pen {
 type Cells = Vec<(char, Pen)>;
 
 impl Composer {
-    /// Judges a screen Herdr read with styling (`pane.read`, format `ansi`,
+    /// Judges a screen read with styling (`pane.read`, format `ansi`,
     /// rows separated by newlines).
     pub fn judge(&self, screen: &str) -> Verdict {
         self.explain(screen)
@@ -316,7 +316,7 @@ fn barred(lines: &[Cells], side: char, close: char) -> Option<Vec<Cells>> {
         .collect()
 }
 
-/// Whether a row of a screen Herdr read with styling (as [`Composer::judge`]
+/// Whether a row of a screen read with styling (as [`Composer::judge`]
 /// reads one) shows `text`, whatever its pen.
 pub fn screen_shows(screen: &str, text: &str) -> bool {
     screen
@@ -409,7 +409,7 @@ fn strip_side(line: &Cells, side: char, closed: bool) -> Option<Cells> {
 
 /// One row of a styled screen as characters with their pen. Only SGR
 /// sequences change the pen; every other escape is dropped, and a carriage
-/// return ends nothing, since Herdr separates rows with newlines.
+/// return ends nothing, since the engine separates rows with newlines.
 fn cells(row: &str) -> Cells {
     let mut pen = Pen::default();
     let mut out = Vec::new();

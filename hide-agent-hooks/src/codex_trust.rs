@@ -20,9 +20,10 @@
 //!
 //! One other tool's entries join that list, and only through the kit's record
 //! (PRD codex-herdr-hook-trust): the entries Herdr's own `herdr integration
-//! install codex` added when the kit ran it ([`HookEntry`], learned by
-//! [`learn_herdr_entries`] from what Herdr wrote, never typed here). They are
-//! matched the same way, byte for byte, by the same [`select_targets`].
+//! install codex` added when an earlier build ran it ([`HookEntry`], learned by
+//! [`learn_herdr_entries`] from what Herdr wrote, never typed here), until the
+//! kit retires them ([`remove_herdr_entries`]). They are matched the same
+//! way, byte for byte, by the same [`select_targets`].
 //!
 //! The app-server is one short child per check, owned by [`Session`]: it is
 //! started through the one spawn helper, bounded by one deadline and by the

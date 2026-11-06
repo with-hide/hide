@@ -182,7 +182,7 @@ fn work_is_current(context: &LiveContext, work: &DormantWork) -> bool {
 }
 
 /// Shell readiness and topology reads may block. Check the exact saved
-/// intent again at every request, once Herdr is reached and just before the
+/// intent again at every request, once the engine is reached and just before the
 /// request is written, rather than only at worker entry. The check is
 /// released before I/O and never holds the runtime mutex over it.
 #[derive(Clone)]
@@ -198,7 +198,7 @@ fn wake_gate(context: &LiveContext, work: &DormantWork) -> Gate<'static> {
 }
 
 /// A saved close goes on only while its sleeping session still holds it and
-/// the session's route is confirmed, checked before Herdr is reached; and
+/// the session's route is confirmed, checked before the engine is reached; and
 /// only while the close is still the current intent, checked again before
 /// each request is written.
 pub(crate) fn dormant_close_gate(
@@ -249,7 +249,7 @@ fn close_route_confirmed(context: &LiveContext, key: &str) -> Result<(), EngineE
 }
 
 /// A superseded intent stops the request as its write would have failed:
-/// nothing reached Herdr, and the caller reads the result as unknown.
+/// nothing reached the engine, and the caller reads the result as unknown.
 fn still_current(context: &LiveContext, intent: &CurrentIntent) -> Result<(), EngineError> {
     if intent_is_current(context, intent) {
         Ok(())
@@ -271,7 +271,7 @@ fn intent_is_current(context: &LiveContext, intent: &CurrentIntent) -> bool {
 }
 
 /// The name a dormant session wakes under. One that held a registration
-/// wakes under the name Herdr knew it by, so the registration the wake
+/// wakes under the name the engine knew it by, so the registration the wake
 /// continues still names its agent; one that held none is a new execution of
 /// the conversation, named as a fork.
 pub(crate) fn wake_name(work: &DormantWork) -> String {
@@ -317,7 +317,7 @@ fn start_dormant(
     };
     let correlation = format!("hide:{}:resume", work.id.as_str());
     let answer_timeout = Duration::from_millis(AGENT_START_TIMEOUT_MS + 5_000);
-    // The old pane closed a moment ago, and Herdr refuses its agent's name
+    // The old pane closed a moment ago, and the engine refuses its agent's name
     // until it has forgotten that agent.
     let started = if work.record.registration.is_some() {
         crate::agent_start::start_at_shell_reusing_name(
@@ -341,7 +341,7 @@ fn start_dormant(
         )
     };
     match started {
-        // An answer in a shape the start does not promise is still Herdr
+        // An answer in a shape the start does not promise is still the engine
         // taking the start.
         Ok(_) | Err(StartError::Herdr(EngineError::Answer(_))) => {
             match super::report_resumed_session(

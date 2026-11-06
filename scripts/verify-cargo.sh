@@ -36,8 +36,7 @@ export CARGO_TARGET_DIR="$PWD/target"
 # A Herdr pane carries the socket and identity of the Herdr that opened it,
 # and a test daemon that reads them from its environment follows the
 # operator's live Herdr and labels its agents from the operator's
-# conversations. No test may reach that server; each one that needs Herdr
-# names its own. Retirement fixtures must also ignore an inherited legacy
+# conversations. No test may reach that server. Retirement fixtures must also ignore an inherited legacy
 # coordination-home override so no private kit pass follows operator state.
 for name in $(compgen -e); do
     case "$name" in HERDR_*|HCOORD_*) unset "$name" ;; esac

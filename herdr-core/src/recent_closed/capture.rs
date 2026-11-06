@@ -162,7 +162,7 @@ fn capture_close_item(
     engine: &dyn Engine,
     request: &CloseCaptureRequest,
 ) -> Result<CloseCaptureOutcome, String> {
-    // A terminal Herdr could not recreate has no live layout to export.
+    // A terminal the engine could not recreate has no live layout to export.
     // Keep the close intent, but do not promise an undo that cannot restore it.
     let targets = match &request.target {
         CloseCaptureTarget::Pane { pane_id } => vec![pane_id.as_str()],
@@ -304,7 +304,7 @@ fn marked_shells_in_tab(
     Ok(owned)
 }
 
-/// A lost or malformed answer can follow a split Herdr made, so a failed
+/// A lost or malformed answer can follow a split the engine made, so a failed
 /// split reads the tab once more for the marked pane a retry would adopt.
 fn split_shell_in_tab(
     engine: &dyn Engine,

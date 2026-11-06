@@ -549,7 +549,7 @@ fn rest_fields(rest: &Value) -> std::collections::BTreeMap<String, Value> {
 }
 
 /// Settings reads the daemon from this frame: what it is, where its state
-/// lives and which Herdr it attaches with. The token never travels back.
+/// lives and which core state it opens. The token never travels back.
 #[tokio::test]
 async fn the_daemon_describes_itself_before_the_first_snapshot() {
     let (dir, running) = start().await;

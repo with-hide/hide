@@ -290,7 +290,7 @@ pub fn worktree_facts(state_dir: &Path) -> PathBuf {
 
 /// The moves of this machine's own Herdr server onto the app's Herdr that
 /// failed, by server process and pin, at most 16 (PRD herdr-takeover D-23);
-/// its owner is the daemon's takeover (`hided::herdr_handoff`).
+/// an earlier build's daemon kept it, and no build writes it now.
 pub fn herdr_takeover_record(state_dir: &Path) -> PathBuf {
     state_dir.join("herdr-handoff.json")
 }
@@ -411,7 +411,7 @@ pub fn holder_dir(home: &Path, name: &str) -> PathBuf {
 
 /// The folder of the core's own engine in a state folder (PRD
 /// engine-bundle-3-core-owns D-6): what that engine's session is keyed by,
-/// as a Herdr session is by its socket.
+/// as a Herdr session was by its socket.
 pub fn engine_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("engine")
 }

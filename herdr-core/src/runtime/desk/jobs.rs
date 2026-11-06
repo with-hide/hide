@@ -2151,7 +2151,7 @@ mod tests {
         assert!(read(&runtime));
     }
 
-    /// A sidebar row for `pane` with the agent status Herdr reports.
+    /// A sidebar row for `pane` with the agent status the engine reports.
     fn row(pane: &str, status: &str) -> crate::model::SidebarAgentSnapshot {
         let payload: crate::sidebar::SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [

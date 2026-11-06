@@ -298,9 +298,9 @@ fn snapshot(created: bool) -> Value {
     }})
 }
 
-/// Herdr names a new pane's folder from its process, which is the server's
-/// own until the shell has started: the snapshot the close ingests must still
-/// place the replacement at the checkout it was created for.
+/// A snapshot can name a new pane's folder from its process, which is not the
+/// checkout's until the shell has started (it was the Herdr server's own): the snapshot the close
+/// ingests must still place the replacement at the checkout it was created for.
 #[test]
 fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect() {
     let mut marker = String::new();
@@ -358,8 +358,8 @@ fn closing_agent() -> CloseCaptureTarget {
         pane_id: "w1:p1".into(),
     }
 }
-/// The named tab w1:t1 as Herdr reads it: the agent's pane, and once split
-/// the shell beside it, whose folder Herdr still names as the server's.
+/// The named tab w1:t1 as the engine reads it: the agent's pane, and once split
+/// the shell beside it, whose folder the snapshot still names as the process's.
 fn named_tab_snapshot(shell: bool) -> Value {
     let pane = |id: &str, cwd: &str| {
         json!({"workspace_id":"w1","tab_id":"w1:t1","pane_id":id,"terminal_id":format!("{id}-terminal"),
@@ -497,7 +497,7 @@ fn a_named_tab_whose_shell_cannot_be_made_closes_nothing() {
     );
 }
 
-/// A split Herdr made whose answer was lost still leaves its shell in the
+/// A split the engine made whose answer was lost still leaves its shell in the
 /// tab; the failure names it by its marker so the retry closes beside it.
 #[test]
 fn a_named_tabs_shell_whose_split_answer_is_lost_is_named_by_its_marker() {

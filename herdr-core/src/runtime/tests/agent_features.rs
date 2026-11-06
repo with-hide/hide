@@ -57,7 +57,7 @@ fn retired_history_keeps_conversation_mode_without_restoring_active_capabilities
     );
 }
 
-/// The kind Herdr names an agent by, from the kit adapter's id.
+/// The kind the engine names an agent by, from the kit adapter's id.
 fn herdr_kind(adapter: &hide_kit::AgentAdapter) -> &'static str {
     hide_agent_adapter::adapter(adapter.id).unwrap().herdr.name
 }

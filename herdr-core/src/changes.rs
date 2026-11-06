@@ -4,8 +4,8 @@
 //! The read is `hide_host::git` behind the checkout's `NodeLink`: this
 //! machine's in process, a device's through its helper, so a local and a
 //! device checkout answer one contract. It runs on a reader thread, never
-//! under the runtime mutex and never on a Herdr session's coordinator: a
-//! device's History does not depend on this machine running Herdr.
+//! under the runtime mutex and never on an engine session's coordinator: a
+//! device's History does not depend on this machine running the engine.
 //! [`ChangesPump`] drives [`ChangesReader`], which recomputes only when the
 //! request changes or the refresh window lapses, and reads nothing at all
 //! while neither Changes nor Explorer is visible and no diff tab needs it.
@@ -185,7 +185,7 @@ impl Default for ChangesReader {
 }
 
 /// The one thread that keeps History current for the checkout in front,
-/// whichever device holds it. It lives with the core, not with a Herdr
+/// whichever device holds it. It lives with the core, not with an engine
 /// session, so a hided that serves only devices still reads their History.
 pub(crate) struct ChangesPump {
     stop: mpsc::Sender<()>,

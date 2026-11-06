@@ -1,10 +1,6 @@
 // Agent pane scroll beside another client, Cmd+F in the focused pane, and
 // the lane staying on its tree when its last view closes (PRD
-// web-pane-scroll-find-areas, right-lane B12). The scroll test needs another
-// client on the pane and so runs on the pinned Herdr only: a plain `herdr
-// terminal session control` started before hided holds control the way another
-// client does on the operator's server, and hided then falls back to
-// observing. Find and the lane run on either engine.
+// web-pane-scroll-find-areas, right-lane B12).
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";

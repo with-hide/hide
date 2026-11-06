@@ -1,10 +1,10 @@
 //! Searching a pane's whole scrollback.
 //!
-//! Herdr renders the pane and keeps its history, so the terminal view the
+//! The engine renders the pane and keeps its history, so the terminal view the
 //! shell draws holds only the rows currently on screen. Searching that view
 //! can only ever find what is already visible, and a counter built from it
 //! reports "1/1" while the buffer holds seven matches. The buffer lives in
-//! Herdr, so the search has to ask Herdr for it.
+//! the engine, so the search has to ask the engine for it.
 //!
 //! Everything here is pure: [`find_matches`] searches text, and
 //! [`viewport_anchor`] locates the visible rows inside the whole buffer so a

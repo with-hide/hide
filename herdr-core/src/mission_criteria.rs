@@ -489,14 +489,12 @@ impl Criterion {
     /// started it. On one head the first failure gets one rerun: the next
     /// answer after it is that rerun, a pass counting it and a failure
     /// spending it; a failure after the rerun passed spends it too. Spending
-    /// it sends the node back to work, once per head.
-    pub(crate) fn read_ci(
-        &mut self,
-        head: &str,
-        checks: crate::model::PullRequestChecks,
-        now: u64,
-    ) -> Effect {
-        use crate::model::PullRequestChecks as Checks;
+    /// it sends the node back to work, once per head. A failure is read only
+    /// once nothing on the head runs (`PullRequestSnapshot::ci_end`), the
+    /// moment the Conductor's CI letter is sent.
+    pub(crate) fn read_ci(&mut self, head: &str, end: crate::model::CiEnd, now: u64) -> Effect {
+        use crate::missions::CiResult;
+        use crate::model::CiEnd;
         let same = self
             .commit
             .as_deref()
@@ -521,8 +519,8 @@ impl Criterion {
         }
         let mut spent = false;
         if self.skip.is_none() {
-            match checks {
-                Checks::Passing => {
+            match end {
+                CiEnd::Ended(CiResult::Passed) => {
                     let after_failure = self.state == CriterionState::Fail || self.rerunning;
                     if after_failure && self.reruns < RERUN_LIMIT {
                         self.reruns += 1;
@@ -530,13 +528,13 @@ impl Criterion {
                     self.rerunning = false;
                     self.state = CriterionState::Pass;
                 }
-                Checks::Pending => {
+                CiEnd::Running => {
                     // A run after a failure is the rerun; the line is open
                     // while it is queued or running.
                     self.rerunning |= self.state == CriterionState::Fail;
                     self.state = CriterionState::Open;
                 }
-                Checks::Failed => {
+                CiEnd::Ended(CiResult::Failed | CiResult::Cancelled) => {
                     let rerun_failed = self.rerunning;
                     let after_rerun =
                         !self.rerunning && self.state != CriterionState::Fail && self.reruns > 0;
@@ -548,7 +546,7 @@ impl Criterion {
                     self.rerunning = false;
                     self.state = CriterionState::Fail;
                 }
-                Checks::None | Checks::Unknown => {}
+                CiEnd::NoChecks | CiEnd::Unread => {}
             }
         }
         let changed = before
@@ -713,7 +711,8 @@ mod tests {
             pull: None,
         }
     }
-    use crate::model::PullRequestChecks;
+    use crate::missions::CiResult;
+    use crate::model::CiEnd;
 
     fn by(role: Role) -> Recorded {
         Recorded {
@@ -957,11 +956,11 @@ mod tests {
     #[test]
     fn a_ci_line_is_open_while_a_run_after_its_failure_has_not_finished() {
         let mut line = Criterion::new("ci", CriterionKind::Ci);
-        line.read_ci(A, PullRequestChecks::Failed, 1);
-        line.read_ci(A, PullRequestChecks::Pending, 2);
+        line.read_ci(A, CiEnd::Ended(CiResult::Failed), 1);
+        line.read_ci(A, CiEnd::Running, 2);
         assert_eq!((line.state, line.rerunning), (CriterionState::Open, true));
         assert!(
-            line.read_ci(A, PullRequestChecks::Failed, 3).spent,
+            line.read_ci(A, CiEnd::Ended(CiResult::Failed), 3).spent,
             "its rerun failed"
         );
     }
@@ -969,17 +968,17 @@ mod tests {
     #[test]
     fn a_ci_fail_then_pass_on_one_head_counts_its_rerun() {
         let mut line = Criterion::new("ci", CriterionKind::Ci);
-        line.read_ci(A, PullRequestChecks::Failed, 1);
-        line.read_ci(A, PullRequestChecks::Pending, 2);
+        line.read_ci(A, CiEnd::Ended(CiResult::Failed), 1);
+        line.read_ci(A, CiEnd::Running, 2);
         assert!(line.rerunning);
-        line.read_ci(A, PullRequestChecks::Passing, 3);
+        line.read_ci(A, CiEnd::Ended(CiResult::Passed), 3);
         assert_eq!((line.state, line.reruns), (CriterionState::Pass, 1));
         // A failure on a rerun sends the node back; a new head starts over.
         let mut again = Criterion::new("ci", CriterionKind::Ci);
-        again.read_ci(A, PullRequestChecks::Failed, 1);
-        again.read_ci(A, PullRequestChecks::Pending, 2);
-        assert!(again.read_ci(A, PullRequestChecks::Failed, 3).spent);
-        again.read_ci(B, PullRequestChecks::Pending, 4);
+        again.read_ci(A, CiEnd::Ended(CiResult::Failed), 1);
+        again.read_ci(A, CiEnd::Running, 2);
+        assert!(again.read_ci(A, CiEnd::Ended(CiResult::Failed), 3).spent);
+        again.read_ci(B, CiEnd::Running, 4);
         assert_eq!((again.state, again.reruns), (CriterionState::Open, 0));
     }
 
@@ -990,25 +989,25 @@ mod tests {
     #[test]
     fn a_ci_gets_one_rerun_per_head_and_follows_the_last_run_after_it() {
         let mut line = Criterion::new("ci", CriterionKind::Ci);
-        line.read_ci(A, PullRequestChecks::Failed, 1);
-        line.read_ci(A, PullRequestChecks::Pending, 2);
-        assert!(line.read_ci(A, PullRequestChecks::Failed, 3).spent);
-        line.read_ci(A, PullRequestChecks::Pending, 4);
-        assert!(line.read_ci(A, PullRequestChecks::Passing, 5).changed);
+        line.read_ci(A, CiEnd::Ended(CiResult::Failed), 1);
+        line.read_ci(A, CiEnd::Running, 2);
+        assert!(line.read_ci(A, CiEnd::Ended(CiResult::Failed), 3).spent);
+        line.read_ci(A, CiEnd::Running, 4);
+        assert!(line.read_ci(A, CiEnd::Ended(CiResult::Passed), 5).changed);
         assert_eq!(line.state, CriterionState::Pass);
-        let again = line.read_ci(A, PullRequestChecks::Failed, 6);
+        let again = line.read_ci(A, CiEnd::Ended(CiResult::Failed), 6);
         assert!(again.changed && !again.spent, "the node was sent back once");
         assert_eq!(line.state, CriterionState::Fail);
         // A pass on its rerun, then another failure on the same head,
         // spends it as well, and a later pass is still read.
         let mut passed = Criterion::new("ci", CriterionKind::Ci);
-        passed.read_ci(A, PullRequestChecks::Failed, 1);
-        passed.read_ci(A, PullRequestChecks::Passing, 2);
-        passed.read_ci(A, PullRequestChecks::Pending, 3);
-        assert!(passed.read_ci(A, PullRequestChecks::Failed, 4).spent);
-        passed.read_ci(A, PullRequestChecks::Passing, 5);
+        passed.read_ci(A, CiEnd::Ended(CiResult::Failed), 1);
+        passed.read_ci(A, CiEnd::Ended(CiResult::Passed), 2);
+        passed.read_ci(A, CiEnd::Running, 3);
+        assert!(passed.read_ci(A, CiEnd::Ended(CiResult::Failed), 4).spent);
+        passed.read_ci(A, CiEnd::Ended(CiResult::Passed), 5);
         assert_eq!(passed.state, CriterionState::Pass);
-        passed.read_ci(B, PullRequestChecks::Passing, 6);
+        passed.read_ci(B, CiEnd::Ended(CiResult::Passed), 6);
         assert_eq!((passed.state, passed.reruns), (CriterionState::Pass, 0));
     }
 

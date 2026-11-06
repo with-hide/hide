@@ -151,7 +151,7 @@ impl Runtime {
         for error in errors {
             self.push_diagnostic("agent_layout.placement_refused", error);
         }
-        // A tab that left Herdr takes its View bookmark with it (D-11).
+        // A tab that left the engine takes its View bookmark with it (D-11).
         let listed: Vec<&str> = topology.iter().map(|(id, _)| id.as_str()).collect();
         // Not `||`: the prune must run whether or not the layout changed.
         Ok(self.prune_view_callers(key, &listed) | changed)
@@ -744,7 +744,7 @@ impl Runtime {
     }
 
     /// Clears a local checkout's previous canvas without forwarding devices
-    /// or issuing Herdr focus; a result follows with its ordered pane focus.
+    /// or issuing engine focus; a result follows with its ordered pane focus.
     pub(super) fn clear_agent_workspace_pane(&mut self, checkout_id: &str) {
         self.visible_tab_ids.remove(checkout_id);
         if let Some(checkout) = self
@@ -801,7 +801,7 @@ impl Runtime {
         }
     }
 
-    /// Asks a node's Herdr to bring `tab_id` forward, unless it already has.
+    /// Asks a node's engine to bring `tab_id` forward, unless it already has.
     fn focus_node_tab(&mut self, device: &str, tab_id: String, stamp: u64) {
         let in_front = self
             .snapshot
@@ -825,7 +825,7 @@ impl Runtime {
     }
 
     /// The tab the front Workspace shows and whether it is delegated: Hide's
-    /// choice on this machine, the node Herdr's own on a node.
+    /// choice on this machine, the one the node's engine has in front on a node.
     fn front_visible_tab(&self, key: &WorkspaceKey) -> Option<(String, bool)> {
         if key.0 == self.node.as_str() {
             let tab_id = self.focused_visible_tab_id()?;
@@ -867,7 +867,7 @@ impl Runtime {
     }
 
     /// The tabs a node's front Workspace shows in its Agent areas, whose
-    /// panes attach as the tab its Herdr has in front does; none while
+    /// panes attach as the tab its engine has in front does; none while
     /// another machine is in front.
     pub(super) fn node_shown_agent_tabs(&self, device: &str) -> Option<Vec<String>> {
         if device == self.node.as_str() || !self.arranges_agent_areas(device) {
@@ -1131,7 +1131,7 @@ impl Runtime {
     /// What a Workspace's Agent areas show: the stored layout less every tab
     /// a local close is taking away (`PendingClose::leaving_tab`), so its chip
     /// leaves when the close is approved and each area shows what it will show
-    /// once Herdr confirms. The stored layout keeps the tab, so a close that
+    /// once the engine confirms. The stored layout keeps the tab, so a close that
     /// does not happen puts it back where it stood. Nothing is cloned while
     /// no close is running.
     pub(super) fn shown_agent_layout<'a>(

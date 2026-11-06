@@ -3,7 +3,7 @@
 //! The coordinator takes one overlay from its worker each time it publishes
 //! and the runtime keeps the last one, so a projection that reaches the
 //! runtime by another path (a workspace created or an agent closed, each
-//! with its own fresh Herdr projection) keeps the same labels and elapsed
+//! with its own fresh engine projection) keeps the same labels and elapsed
 //! times instead of drawing provider names until the next publish. Each
 //! label still carries the session it was proven for and is laid only while
 //! the pane's current reference proves it (D-04), so a stale overlay can
@@ -37,7 +37,7 @@ struct OverlayPane {
     notice_owed: Option<u64>,
     notice_finalized: Option<u64>,
     /// `None` while this daemon does not generate labels (another daemon on
-    /// the same Herdr holds the generator role, D-10): only elapsed time is
+    /// the same engine holds the generator role, D-10): only elapsed time is
     /// laid.
     label: Option<ProvenLabel>,
 }
@@ -53,17 +53,17 @@ struct ProvenLabel {
     summary: Option<Summary>,
     facts: RowFacts,
     /// What the session's last complete read says the agent waits for, with
-    /// the Herdr state it was read under.
+    /// the engine state it was read under.
     turn: Option<(u64, Option<Waiting>)>,
     user_turn: Option<(u64, hide_session::turns::UserTurnFact)>,
-    /// How the session's last turn ended, with the Herdr state it was read
+    /// How the session's last turn ended, with the engine state it was read
     /// under.
     turn_ended: Option<(u64, hide_session::turns::TurnEnded)>,
     answered_calls: Option<(u64, Vec<String>)>,
     /// The expiries of the background tasks the session read proves alive,
-    /// with the Herdr state it was read under.
+    /// with the engine state it was read under.
     wake: Option<(u64, WakeRead)>,
-    /// The Herdr state whose turn end the session read still owes.
+    /// The engine state whose turn end the session read still owes.
     turn_end_owed: Option<u64>,
 }
 
@@ -140,7 +140,7 @@ impl LabelOverlay {
         self
     }
 
-    /// What the agent waits for in its current Herdr state, as its session
+    /// What the agent waits for in its current engine state, as its session
     /// read says (PRD codex-plan-approval-hold D-06, D-07): `None` when no
     /// read of the session it runs now was made for that state, or the
     /// records read do not settle it. The caller decides what not knowing
@@ -380,7 +380,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
 impl ProvenLabel {
     /// The native session this label proves for `kind`, and the reference a
     /// lifecycle proof of it takes: the one its reader names, a file reader's
-    /// proven path or the id Herdr reported (OpenCode's session, agy's
+    /// proven path or the id the engine reported (OpenCode's session, agy's
     /// conversation, which agy's reader finds its transcript by).
     fn native(
         &self,
@@ -422,7 +422,7 @@ impl ProvenLabel {
 mod tests {
     use super::*;
 
-    /// A proven label's row, for `kind` reported by Herdr as `reported`.
+    /// A proven label's row, for `kind` reported by the engine as `reported`.
     fn proven_row(kind: &str, reported: (&str, &str)) -> SessionAgentPayload {
         let id = "13cffb10-48e7-4642-b333-c4f57952b637";
         let record = PaneRecord {

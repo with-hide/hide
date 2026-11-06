@@ -24,8 +24,8 @@ pub(crate) struct Observation {
     /// post-tool event can name it. A freshness TTL alone proves no identity.
     pub observed_since_unix_ms: u64,
     pub terminal_id: Option<String>,
-    /// Herdr's own `agent_status`, read only as a gate on input: whether
-    /// Herdr knows the agent's state, holds it at its blocked prompt (where
+    /// The engine's own `agent_status`, read only as a gate on input: whether
+    /// the engine knows the agent's state, holds it at its blocked prompt (where
     /// `agent.prompt` refuses), and the clocks of a draft and of the quiet
     /// period. Whether the agent works or waits is `projected`, never this.
     pub status: String,
@@ -87,7 +87,7 @@ pub(crate) struct Observation {
     pub turn: Turn,
     /// The turn the core decides for the agent (`agent_state::turn_projection`),
     /// laid where the hook's and the session read's facts are laid
-    /// (`lay_delivery_turns`). It stands only for the Herdr state it was laid
+    /// (`lay_delivery_turns`). It stands only for the engine state it was laid
     /// under ([`Self::projected_turn`]).
     pub projected: Option<ProjectedTurn>,
     /// The observe pass that last saw the pane (`observe_delivery`). The same
@@ -115,14 +115,14 @@ pub(super) struct ObservedPass(u64);
 /// The core's turn for an agent, as laid on its observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectedTurn {
-    /// Herdr's `state_change_seq` of the agent the turn was decided from.
+    /// The engine's `state_change_seq` of the agent the turn was decided from.
     pub seq: Option<u64>,
     pub turn: crate::agent_state::TurnProjection,
     /// The observe pass whose facts the turn was laid from
     /// ([`Observation::observed_generation`]).
     pub generation: u64,
     /// When the core's activity last changed on this pane; `None` while it
-    /// is the one first laid, whose start Herdr's own clocks say.
+    /// is the one first laid, whose start the engine's own clocks say.
     pub changed_at_unix_ms: Option<u64>,
 }
 
@@ -133,7 +133,7 @@ impl ProjectedTurn {
             .unwrap_or(observation.entered_working_at_unix_ms)
     }
 
-    /// The last change of the pane's state, Herdr's or the core's turn, which
+    /// The last change of the pane's state, the engine's or the core's turn, which
     /// the quiet period counts from.
     pub(crate) fn changed_at(&self, observation: &Observation) -> u64 {
         observation
@@ -167,7 +167,7 @@ impl Observation {
     /// while the read is stale, and none when that pass laid no turn for
     /// the pane (a pane a move this machine runs draws as it was before it,
     /// `overlay_pane_moves`), since an earlier pass's turn may stand for
-    /// facts this one moved (a question read while Herdr's state stays the
+    /// facts this one moved (a question read while the engine's state stays the
     /// same).
     pub(crate) fn projected_turn(&self) -> Option<&ProjectedTurn> {
         self.projected.as_ref().filter(|projected| {
@@ -178,7 +178,7 @@ impl Observation {
     }
 
     /// The name the agent answers to, apart from where it sits: an agent
-    /// Herdr gave no name is called by its pane id (`actor.name` restates
+    /// the engine gave no name is called by its pane id (`actor.name` restates
     /// the pane), and a pane id is per machine, so it is no name that a
     /// caller on another machine could mean.
     pub(crate) fn given_name(&self) -> Option<&str> {
@@ -434,8 +434,8 @@ impl Runtime {
     }
 
     /// A device coordinator's pass, in one step under the lock: observes the
-    /// device's `payload` for delivery as its Herdr listed it, draws the
-    /// sleeping agents that Herdr no longer lists, lays the pass's label
+    /// device's `payload` for delivery as its engine listed it, draws the
+    /// sleeping agents that the engine no longer lists, lays the pass's label
     /// `overlay` and the hook's facts on it, and lays each observed pane's
     /// turn from them. Answers each agent pane's hook tokens, by the device's
     /// own pane id. Memory work only; the session's projection is built
@@ -451,7 +451,7 @@ impl Runtime {
         if let Some(overlay) = overlay {
             overlay.apply(payload);
         }
-        // The device's hooks report to the core, never to its Herdr, so their
+        // The device's hooks report to the core, never to its engine, so their
         // facts are laid here the way the labels are (`agent_hooks::facts`).
         let tokens = self
             .hook_facts
@@ -512,7 +512,7 @@ impl Runtime {
     }
 
     /// Continue a registration only when this host still reports its terminal
-    /// incarnation and native session. Public pane ids may change when Herdr
+    /// incarnation and native session. Public pane ids may change when the engine
     /// moves a pane between its workspaces. The saved terminal also lets the
     /// first read after a daemon restart establish that continuity.
     fn continue_moved_registrations(
@@ -648,7 +648,7 @@ impl Runtime {
         }
     }
 
-    /// A host's session sync is about to ask Herdr for a fresh snapshot.
+    /// A host's session sync is about to ask the engine for a fresh snapshot.
     /// Until that snapshot publishes, the host's panes are unknown and no
     /// registration on it is ended.
     pub(crate) fn begin_delivery_pane_read(&mut self, device: &str) {
@@ -831,9 +831,9 @@ impl Runtime {
 
     /// Every machine other than this core's own that holds agents, with
     /// whether a letter can reach it now: the core holds a connection to its
-    /// Herdr and its link has not ended (PRD core-host-node-move B13). A
+    /// the engine and its link has not ended (PRD core-host-node-move B13). A
     /// letter to an agent there counts its delivery deadline only while it
-    /// is reachable. A node's link ends here at once; the Herdr connection
+    /// is reachable. A node's link ends here at once; the engine connection
     /// it carried reads as gone only at the next sync (`ingest_host_closed`).
     pub(crate) fn delivery_reach(&self) -> crate::delivery::ledger::Reach {
         self.snapshot
@@ -859,7 +859,7 @@ impl Runtime {
     /// A key, paste or phone write hide routed to a pane: a draft may have
     /// grown there, so the quiet period restarts. No key ends a draft, not
     /// even Enter: a built-in picker (`/model`, `/resume`) is opened with
-    /// Enter and reads `done` to Herdr, so only a prompt hook of the pane's
+    /// Enter and reads `done` to the engine, so only a prompt hook of the pane's
     /// own session, a phone reply, or the pane entering work proves the
     /// composer was sent.
     ///
@@ -998,7 +998,7 @@ impl Runtime {
     /// newer draft is still there, and the turn's own entry to `working`
     /// already covers whatever was typed before it.
     ///
-    /// Herdr can report the turn `working` before the hook that started it
+    /// The engine can report the turn `working` before the hook that started it
     /// reaches the core. A hook within `HOOK_AFTER_WORK_MS` of that entry,
     /// with no key since it, is that turn's own prompt, so it marks the
     /// moment an agent version's composer is checked at (`composer_check_due`)
@@ -1114,7 +1114,7 @@ impl Runtime {
         })
     }
 
-    /// Whether a pane takes a composer read: Herdr reports a current resting
+    /// Whether a pane takes a composer read: the engine reports a current resting
     /// or working state, and neither a key nor
     /// a change of status came in the quiet period.
     fn composer_quiet(observation: &Observation, now: u64) -> bool {
@@ -1279,8 +1279,8 @@ impl Runtime {
         hint: Option<&str>,
         mut command: Command,
     ) -> Result<Prepared, String> {
-        // Herdr numbers panes per machine and an agent learns the numbers from
-        // its own machine's Herdr, so a bare pane id names a pane on the
+        // The engine numbers panes per machine and an agent learns the numbers from
+        // its own machine's engine, so a bare pane id names a pane on the
         // caller's machine; the core's panes are observed under their bare ids
         // and a device's under `remote:<device>:pane:<id>`. A key already
         // already scoped to a device is a full address and stays as it is.
@@ -1320,7 +1320,7 @@ impl Runtime {
         // A prompt hook's digest is the agent's own record of the prompt it
         // took, and confirms a brief a spawn typed into this pane. Judged
         // before the native identity: Codex reports its session on the very
-        // turn the brief starts, and Herdr may not show it yet.
+        // turn the brief starts, and the engine may not show it yet.
         if let Command::Pull {
             prompt_digest: Some(digest),
             point: hide_node_link::panes::PullPoint::Prompt,
@@ -2109,7 +2109,7 @@ impl Runtime {
                     },
                 };
                 // The target's own row, while its pane still runs the watched
-                // session: stopped on a question, or held at a Herdr-blocked
+                // session: stopped on a question, or held at an engine-blocked
                 // prompt. A blocked one also raises the child to the operator
                 // (Delegated escalation); a working one, such as Codex's async
                 // question, has not stopped.
@@ -2273,7 +2273,7 @@ pub(crate) struct CoordinationContext {
     /// The 권한 of each agent on the machine (`agent_permission`), read as
     /// the spawn asked for it.
     pub(crate) permissions: crate::agent_permission::AgentPermissions,
-    /// The machine is the core's own node, whose Herdr the core reaches directly.
+    /// The machine is the core's own node, whose engine the core reaches directly.
     pub(crate) on_node: bool,
     /// The machine's node, which a start with a long line asks whether the
     /// pane's shell is reading; none for a device whose helper is not
@@ -2441,7 +2441,7 @@ pub(crate) mod tests {
 
     /// Puts the fixture's recipient at rest in native session `native`, idle
     /// with no key and no change of status for long past the quiet period,
-    /// and makes `herdr` the Herdr this machine's panes are reached through.
+    /// and makes `herdr` the engine this machine's panes are reached through.
     /// The agent rows the sidebar shows on this machine.
     pub(crate) fn show_agents(runtime: &mut Runtime, payload: SessionSnapshotPayload) {
         runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
@@ -2552,7 +2552,7 @@ pub(crate) mod tests {
     }
 
     /// The pane as the core observes it working since `since`, confirmed by
-    /// Herdr, with no key typed since.
+    /// the engine, with no key typed since.
     pub(crate) fn observe_working_since(runtime: &mut Runtime, pane: &str, since: u64) {
         let observation = runtime.delivery_observations.get_mut(pane).unwrap();
         observation.entered_working_at_unix_ms = since;
@@ -2574,7 +2574,7 @@ pub(crate) mod tests {
         observation.status_changed_at_unix_ms = hook + 2;
     }
 
-    /// The pane's turn ends at `at`: Herdr reports it idle from then on.
+    /// The pane's turn ends at `at`: the engine reports it idle from then on.
     pub(crate) fn end_turn(runtime: &mut Runtime, pane: &str, at: u64) {
         let observation = runtime.delivery_observations.get_mut(pane).unwrap();
         observation.status_changed_at_unix_ms = at;
@@ -2618,7 +2618,7 @@ pub(crate) mod tests {
     }
 
     /// A hook report of `hook` for `pane`'s session, at `at`, laid by the
-    /// next ingest while Herdr's state stays as observed: the turn moves on
+    /// next ingest while the engine's state stays as observed: the turn moves on
     /// the hook alone.
     pub(crate) fn lay_hook(runtime: &mut Runtime, pane: &str, hook: HookTurn, at: u64) {
         let observation = &runtime.delivery_observations[pane];
@@ -2655,9 +2655,9 @@ pub(crate) mod tests {
 
     impl Observation {
         /// The pane with the turn the session ingest lays on it: the core's
-        /// projection of an agent in the pane's Herdr state, with `hook` the
+        /// projection of an agent in the pane's engine state, with `hook` the
         /// turn its session's hook reported and `wait` what its session read
-        /// says for that state, laid first, so Herdr's clocks say when it
+        /// says for that state, laid first, so the engine's clocks say when it
         /// began.
         pub(crate) fn laid(mut self, hook: Option<HookTurn>, wait: Option<Waiting>) -> Self {
             let mut agent: crate::sidebar::SessionAgentPayload = serde_json::from_value(json!({
@@ -2688,7 +2688,7 @@ pub(crate) mod tests {
             self
         }
 
-        /// Herdr reports `status` and the ingest lays the turn again.
+        /// The engine reports `status` and the ingest lays the turn again.
         pub(crate) fn herdr(&mut self, status: &str) {
             self.status = status.into();
             *self = self.clone().laid(None, None);
@@ -2786,7 +2786,7 @@ pub(crate) mod tests {
         clocks(&mut guard, "recipient", true);
         clocks(&mut guard, "sender", true);
 
-        // `/model` and Enter: the picker is open and Herdr reads the pane
+        // `/model` and Enter: the picker is open and the engine reads the pane
         // `done`, so the bell must keep holding on a draft.
         // The node reports `/model`, Esc and Esc-Return as typing and the
         // Return as a submit; none of them is a delivery submit.
@@ -3045,7 +3045,7 @@ pub(crate) mod tests {
     }
 
     /// The overlay a label worker would publish for a Codex pane whose
-    /// session read, under Herdr state `seq`, found a finished plan turn.
+    /// session read, under engine state `seq`, found a finished plan turn.
     fn plan_overlay(pane: &str, native: &str, seq: u64) -> LabelOverlay {
         use hide_session::turns::TurnMark;
         let turn = Some("turn-1".to_owned());
@@ -3064,7 +3064,7 @@ pub(crate) mod tests {
         )
     }
 
-    /// The overlay for a Codex pane whose session read, under Herdr state
+    /// The overlay for a Codex pane whose session read, under engine state
     /// `seq`, found these records.
     fn read_overlay(
         pane: &str,
@@ -3159,7 +3159,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// B5: Herdr can read Codex done before its session file records the end
+    /// B5: the engine can read Codex done before its session file records the end
     /// of the turn. Only a plan-mode turn can end waiting for approval, so an
     /// ordinary turn still running in the file rings as before; an unfinished
     /// plan-mode turn is not known and holds until the next state is read.
@@ -3188,7 +3188,7 @@ pub(crate) mod tests {
             observation.last_input_at_unix_ms = long_ago;
             observation.last_submit_at_unix_ms = long_ago;
             observation.status_changed_at_unix_ms = long_ago;
-            // The turn changed from the fixture's work with Herdr's state.
+            // The turn changed from the fixture's work with the engine's state.
             if let Some(projected) = observation.projected.as_mut() {
                 projected.changed_at_unix_ms = Some(long_ago);
             }
@@ -3993,7 +3993,7 @@ pub(crate) mod tests {
             guard.prepare_delivery(device, caller, &context, None, command)
         };
 
-        // The device's agent writes `w1:p2`, the number its own Herdr shows,
+        // The device's agent writes `w1:p2`, the number its own engine shows,
         // and the core has a different agent under the same number.
         let result = prepare("device", &device_caller, report_to("w1:p2", "from-device"))
             .unwrap()
@@ -4258,7 +4258,7 @@ pub(crate) mod tests {
         drop(worker);
     }
 
-    /// Two agents in panes `lead` and `child` on this machine's Herdr at
+    /// Two agents in panes `lead` and `child` on this machine's engine at
     /// `scope`, each registered, with `lead` watching `child`.
     fn registered_pair(runtime: &mut Runtime) -> Ledger {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
@@ -4469,7 +4469,7 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    /// Herdr closing a registered agent's pane ends its registration and the
+    /// The engine closing a registered agent's pane ends its registration and the
     /// watches on it in the durable ledger, and frees its name; the agent
     /// whose pane is still open stays registered.
     #[test]
@@ -4586,8 +4586,8 @@ pub(crate) mod tests {
         assert!(crate::coordination::resolve_actor(&persisted, &child.name).is_none());
     }
 
-    /// A pane read ends only this Herdr's registrations it can vouch for:
-    /// none made after its snapshot was asked for, none on another Herdr or
+    /// A pane read ends only this engine's registrations it can vouch for:
+    /// none made after its snapshot was asked for, none on another engine or
     /// device, and never a Factory's code-owned one, all of whose panes the
     /// snapshot lacks; a registration made before it whose pane it lacks
     /// does end.

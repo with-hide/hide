@@ -41,7 +41,7 @@ export type TeamNode = Node<{ path: string; width: number; height: number; selec
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
 export type SessionNode = Node<{ row: GraphAgent; root: boolean; branch: string | null; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 /** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
-/** A line's letters and Herdr inputs, summed over both directions, and its hint saying them per direction. */
+/** A line's letters and typed inputs, summed over both directions, and its hint saying them per direction. */
 export type ExchangeBadge = { letters: number; label: string };
 export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number; exchange?: ExchangeBadge }, "line">;
 

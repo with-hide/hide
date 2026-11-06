@@ -1,6 +1,6 @@
 //! The keys Hide presses in a pane by its own names (`hide pane send
 //! --key`). They are Hide's, never the engine's: each engine names them in
-//! its own terms (`herdr::herdr_key`), so another engine presses the same
+//! its own terms, so another engine presses the same
 //! keys for the same names.
 
 use schemars::JsonSchema;

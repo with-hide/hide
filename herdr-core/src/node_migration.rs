@@ -5,7 +5,7 @@
 //! holding that word names whichever machine reads it, so a folder copied to
 //! another machine would point at the wrong one without an error. Each key
 //! that names this machine is rewritten once to its node id; the keys that
-//! name it only by being unqualified (a raw Herdr pane or tab id, a path) are
+//! name it only by being unqualified (a raw engine pane or tab id, a path) are
 //! covered instead by `node.json`, the folder's statement of which node owns
 //! every unqualified key in it. `KEYS` lists both kinds for every store.
 //!
@@ -110,10 +110,10 @@ pub enum Moves {
     /// A machine id: the new owner's old id becomes its node id, the old
     /// owner's node id becomes the id the result gives it.
     Device,
-    /// A Herdr pane id: unqualified for the owner, `remote:<id>:pane:` for
+    /// An engine pane id: unqualified for the owner, `remote:<id>:pane:` for
     /// any other machine.
     Pane,
-    /// A Herdr tab id, the same way.
+    /// An engine tab id, the same way.
     Tab,
     /// A registered project's id (`workspace:` for the owner,
     /// `remote:<id>:project:` otherwise), through the source's id table.
@@ -604,7 +604,7 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Whole,
     ),
-    // The names the operator gave tabs of the owner's own Herdr, by tab id.
+    // The names the operator gave tabs of the owner's own engine, by tab id.
     (
         CORE_STATE,
         "/operator_tab_names/{key}",
@@ -2077,7 +2077,7 @@ mod tests {
         assert_eq!(read(&legacy.state.join(MARKER_FILE))["node"], NODE);
     }
 
-    /// The fields of the core state that hold no machine id, no Herdr id and
+    /// The fields of the core state that hold no machine id, no engine id and
     /// no digest of one: the operator's own appearance and layout choices,
     /// whichever machine runs the core.
     const CORE_STATE_NAMES_NO_MACHINE: &[&str] = &[
@@ -2122,7 +2122,7 @@ mod tests {
     ];
 
     /// A core state gains a field often, and a field that names a machine
-    /// (a device id, a Herdr pane or tab, a digest of either) must move with
+    /// (a device id, an engine pane or tab, a digest of either) must move with
     /// the core or its move stops (`reown`). A field the core saves is
     /// therefore either a row of `KEYS` or listed above with the fact that it
     /// names no machine, so a new one cannot reach a move unclassified.

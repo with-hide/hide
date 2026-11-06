@@ -1,9 +1,9 @@
-//! The row and the letter doorbell read one turn: when the hook, Herdr and
+//! The row and the letter doorbell read one turn: when the hook, the engine and
 //! the session read disagree, what the screen shows and why a letter waits
 //! come from the same decision (`agent_state::turn_projection`), while
 //! whether the pane takes input stays its own gate (`docs/delivery.md`, Safe
 //! intake). Each case is driven through the path the core takes in a sync
-//! pass: the hook's report, the delivery observation of Herdr's list, then
+//! pass: the hook's report, the delivery observation of the engine's list, then
 //! the session ingest that lays the hook's and the session read's facts.
 //! The expected answers are the documented ranks (`docs/status-model.md`,
 //! Where each axis comes from), not the projector's output.
@@ -16,12 +16,12 @@ use hide_session::turns::{ToolTurnMark, TurnMark, TurnMode};
 const PANE: &str = "w1:p1";
 const NATIVE: &str = "native-1";
 
-/// What one pane shows Herdr, its hook and its session read.
+/// What one pane shows the engine, its hook and its session read.
 struct Witnesses {
     kind: &'static str,
     herdr: &'static str,
     hook: Option<HookTurn>,
-    /// The session read's records, for the Herdr state the pane is in.
+    /// The session read's records, for the engine state the pane is in.
     session: &'static [Read],
 }
 
@@ -82,7 +82,7 @@ struct Seen {
 }
 
 /// One sync pass over `witnesses`, then an hour with no key and no change
-/// of Herdr's state; the runtime and the pane's agent as the ledger names it.
+/// of the engine's state; the runtime and the pane's agent as the ledger names it.
 fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
     let mut runtime = runtime();
     if let Some(turn) = witnesses.hook {
@@ -103,10 +103,10 @@ fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
             .expect("the report is recorded");
     }
     let (payload, overlay) = sync_inputs(witnesses);
-    // A sync pass's ingest observes Herdr's list for delivery and lays the
+    // A sync pass's ingest observes the engine's list for delivery and lays the
     // facts and the turn in the same step.
     let _ = runtime.ingest_observed_session(payload, None, None, Some(overlay));
-    // Nobody has typed for an hour and Herdr's state is old news.
+    // Nobody has typed for an hour and the engine's state is old news.
     let long_ago = unix_milliseconds() - 3_600_000;
     let observation = runtime
         .delivery_observations
@@ -124,8 +124,8 @@ fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
     (runtime, actor)
 }
 
-/// Herdr's list and the session read's overlay one sync pass reads for
-/// `witnesses`, at Herdr's state sequence 4.
+/// The engine's list and the session read's overlay one sync pass reads for
+/// `witnesses`, at the engine's state sequence 4.
 fn sync_inputs(
     witnesses: &Witnesses,
 ) -> (SessionSnapshotPayload, crate::labels::overlay::LabelOverlay) {
@@ -221,9 +221,9 @@ fn pass(witnesses: &Witnesses) -> Seen {
     }
 }
 
-/// Mission-23 disagreement 1: the hook says the turn ended while Herdr still
+/// Mission-23 disagreement 1: the hook says the turn ended while the engine still
 /// reads the screen as working. The row is stopped, so a letter is rung at
-/// rest instead of waiting out five minutes of work Herdr no longer does.
+/// rest instead of waiting out five minutes of work the engine no longer does.
 #[test]
 fn a_turn_the_hook_ended_while_herdr_reads_work_is_stopped_and_rings_at_rest() {
     let seen = pass(&Witnesses {
@@ -236,7 +236,7 @@ fn a_turn_the_hook_ended_while_herdr_reads_work_is_stopped_and_rings_at_rest() {
     assert_eq!(seen.fresh, Ok(()));
 }
 
-/// Mission-23 disagreement 2 (#348): the hook's turn runs while Herdr reads
+/// Mission-23 disagreement 2 (#348): the hook's turn runs while the engine reads
 /// a quiet screen. The row works, and a letter waits for the mid-turn wait
 /// rather than being rung as if the agent rested.
 #[test]
@@ -253,8 +253,8 @@ fn a_hook_turn_herdr_reads_as_a_stop_works_and_holds_a_fresh_letter_as_working()
 }
 
 /// Mission-23 disagreement 3: a hook that reported the turn outranks
-/// Herdr's blocked prompt on the screen, yet Herdr refuses input there, so
-/// the letter waits on Herdr's readiness, named apart from the turn.
+/// the engine's blocked prompt on the screen, yet the engine refuses input there, so
+/// the letter waits on the engine's readiness, named apart from the turn.
 #[test]
 fn herdr_blocked_under_a_reported_turn_shows_no_approval_and_holds_as_not_ready() {
     let seen = pass(&Witnesses {
@@ -267,7 +267,7 @@ fn herdr_blocked_under_a_reported_turn_shows_no_approval_and_holds_as_not_ready(
     assert_eq!(seen.fresh, Err(Hold::NotReady));
 }
 
-/// With no hook turn, Herdr's blocked prompt is the approval on both sides.
+/// With no hook turn, the engine's blocked prompt is the approval on both sides.
 #[test]
 fn herdr_blocked_with_no_hook_turn_is_an_approval_on_the_row_and_for_the_letter() {
     let seen = pass(&Witnesses {
@@ -280,7 +280,7 @@ fn herdr_blocked_with_no_hook_turn_is_an_approval_on_the_row_and_for_the_letter(
     assert_eq!(seen.waited, Err(Hold::Blocked));
 }
 
-/// The hook's permission wait outranks Herdr's stop on both sides.
+/// The hook's permission wait outranks the engine's stop on both sides.
 #[test]
 fn a_hook_permission_wait_herdr_reads_as_a_stop_is_an_approval_on_both_sides() {
     let seen = pass(&Witnesses {
@@ -294,7 +294,7 @@ fn a_hook_permission_wait_herdr_reads_as_a_stop_is_an_approval_on_both_sides() {
 }
 
 /// A question the agent asked and worked past stays the operator's on the
-/// row, and the letter waits for it, whatever the hook and Herdr say of the
+/// row, and the letter waits for it, whatever the hook and the engine say of the
 /// work.
 #[test]
 fn an_open_async_question_under_a_working_hook_is_a_question_and_holds_the_letter() {
@@ -335,12 +335,12 @@ fn a_plan_approval_read_under_a_working_hook_is_over_on_both_sides() {
     assert_eq!(seen.waited, Err(Hold::AwaitingOperator));
 }
 
-/// Disagreement 1 rings a pane Herdr still reads as working, so the gates
-/// that keep the operator's composer whole are Herdr's and Hide's own
+/// Disagreement 1 rings a pane the engine still reads as working, so the gates
+/// that keep the operator's composer whole are the engine's and Hide's own
 /// clocks, never the turn: a key routed since the last submission and since
-/// Herdr's start of work holds the letter as a draft, a change of Herdr's
+/// the engine's start of work holds the letter as a draft, a change of the engine's
 /// state within the quiet period holds it as quiet, and a kind that takes
-/// letters at its tools is not rung while Herdr reads work, since Herdr
+/// letters at its tools is not rung while the engine reads work, since the engine
 /// reads Grok's plan review as work.
 #[test]
 fn a_stop_the_hook_reports_under_herdrs_work_still_keeps_the_draft_quiet_and_tool_gates() {
@@ -372,7 +372,7 @@ fn a_stop_the_hook_reports_under_herdrs_work_still_keeps_the_draft_quiet_and_too
     assert_eq!(verdict(&runtime, &actor, now, now), Err(Hold::Working));
 }
 
-/// The turn the core decides stands only for the Herdr state it was laid
+/// The turn the core decides stands only for the engine state it was laid
 /// under, and the pass that observes a newer state lays its turn in the same
 /// step: the letter never meets that observation without a turn
 /// (`turn_unprojected`), and what holds it then is the session read, which
@@ -414,7 +414,7 @@ fn a_newer_state_is_observed_and_laid_in_one_step() {
     );
 }
 
-/// Review of #1954, P1: a question read in a sync pass while Herdr's state
+/// Review of #1954, P1: a question read in a sync pass while the engine's state
 /// and sequence stay the same must not ring on the turn the previous pass
 /// laid, which had no question. The pass that read it observes the pane and
 /// lays the question's turn in one step, so no letter, a due and a forced
@@ -447,7 +447,7 @@ fn a_question_read_under_an_unchanged_herdr_state_never_rings_on_the_last_turn()
     assert_eq!(observation.observed_generation, last.observed_generation);
     assert_eq!(observation.projected, last.projected);
     let _ = runtime.ingest_observed_session(payload, None, None, Some(overlay));
-    // Herdr's state and sequence did not move: only the pass's own turn
+    // The engine's state and sequence did not move: only the pass's own turn
     // shows the question.
     let observation = &runtime.delivery_observations[PANE];
     assert_eq!(

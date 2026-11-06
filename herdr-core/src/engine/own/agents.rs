@@ -31,7 +31,7 @@ use crate::engine::answers::PaneSessionKind;
 
 /// How long a start the engine typed may take to show its program in the
 /// pane's foreground before it is taken as a start that did not happen:
-/// the deadline Hide gives Herdr's starts.
+/// the deadline Hide gave Herdr's starts.
 pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT_START_DEADLINE;
 
 /// How long after its start an agent the engine started is first taken as
@@ -164,9 +164,8 @@ pub(super) fn screen_rules(definition: &Definition) -> Option<ScreenRules> {
 }
 
 /// The words a start of `definition` types: its program, its `[start]`
-/// arguments, then the caller's. The program is the file `file` names, with
-/// the words before its arguments, when the node read it for this program's
-/// name (`AgentLaunch::program`), else the program's name.
+/// arguments, then the caller's, the program named as [`named_by_file`]
+/// says.
 pub(super) fn start_argv(
     definition: &Definition,
     file: Option<&crate::engine::StartProgram>,
@@ -176,19 +175,34 @@ pub(super) fn start_argv(
         .executables
         .first()
         .ok_or_else(|| format!("the {} definition names no program", definition.id))?;
-    let head = match file {
-        Some(file) if file.name.eq_ignore_ascii_case(program) => {
+    Ok(named_by_file(
+        std::iter::once(program.clone())
+            .chain(definition.start_args.iter().cloned())
+            .chain(args)
+            .collect(),
+        file,
+    ))
+}
+
+/// `argv` with its program, its first word, replaced by the file `file`
+/// names and the words before its arguments, when the node read that file
+/// for this program's name (`AgentLaunch::program`,
+/// `start_prompt::start_program`); else `argv` as it is, the program named
+/// by its name. On Windows PowerShell finds npm's `.ps1` by the name, and
+/// Windows PowerShell 5.1 drops the quotes inside an argument it hands on.
+pub(super) fn named_by_file(
+    argv: Vec<String>,
+    file: Option<&crate::engine::StartProgram>,
+) -> Vec<String> {
+    match (argv.split_first(), file) {
+        (Some((program, args)), Some(file)) if file.name.eq_ignore_ascii_case(program) => {
             std::iter::once(file.program.clone())
                 .chain(file.leading.iter().cloned())
+                .chain(args.iter().cloned())
                 .collect()
         }
-        _ => vec![program.clone()],
-    };
-    Ok(head
-        .into_iter()
-        .chain(definition.start_args.iter().cloned())
-        .chain(args)
-        .collect())
+        _ => argv,
+    }
 }
 
 /// The words a resume of `definition` types: its `[resume] session` with
@@ -1259,6 +1273,37 @@ mod tests {
                 })
                 .changed
         );
+    }
+
+    #[test]
+    fn a_line_names_the_file_its_node_read_for_that_program_and_else_the_name() {
+        let words = |words: &[&str]| -> Vec<String> {
+            words.iter().map(|word| (*word).to_owned()).collect()
+        };
+        let file = crate::engine::StartProgram {
+            name: "claude".into(),
+            program: "C:\\npm\\node.exe".into(),
+            leading: words(&["C:\\npm\\node_modules\\claude\\cli.js"]),
+        };
+        let resume = words(&["Claude", "--settings", "{\"a\": \"b c\"}"]);
+        assert_eq!(
+            named_by_file(resume.clone(), Some(&file)),
+            words(&[
+                "C:\\npm\\node.exe",
+                "C:\\npm\\node_modules\\claude\\cli.js",
+                "--settings",
+                "{\"a\": \"b c\"}",
+            ])
+        );
+        // An answer for another program, or none (macOS, Linux, a launcher
+        // that is not npm's), leaves the program named by its name.
+        let codex = crate::engine::StartProgram {
+            name: "codex".into(),
+            ..file
+        };
+        assert_eq!(named_by_file(resume.clone(), Some(&codex)), resume);
+        assert_eq!(named_by_file(resume.clone(), None), resume);
+        assert!(named_by_file(Vec::new(), Some(&codex)).is_empty());
     }
 
     #[test]

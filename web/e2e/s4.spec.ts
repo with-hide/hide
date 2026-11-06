@@ -1,5 +1,5 @@
-// S4's checkout-scoped History and read-only diff through an isolated pinned
-// Herdr, hided and browser. The fixture is disposable and never uses an
+// S4's checkout-scoped History and read-only diff through an isolated
+// engine, hided and browser. The fixture is disposable and never uses an
 // operator checkout, socket or app.
 
 import { expect, test } from "@playwright/test";

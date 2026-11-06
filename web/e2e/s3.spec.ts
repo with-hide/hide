@@ -1,9 +1,9 @@
-// S3 Explorer and editor flows on an isolated pinned Herdr (PRD
+// S3 Explorer and editor flows on an isolated engine (PRD
 // web-shell-pivot-s3 B1, B3, B4, B5): a real git checkout listed lazily in the
 // Explorer, a folder expanded through the core's ui state, a file opened into
 // the checkout's preview tab, then edited, saved, and saved again after the
 // disk changed underneath it. Every command runs against a private server; the
-// operator's Herdr is never touched.
+// operator's engine is never touched.
 
 import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";

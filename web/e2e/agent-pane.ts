@@ -1,9 +1,8 @@
 // A pane that runs a listed Claude Code agent whose `hide` commands come
-// from inside the agent's own process, as a real agent's do, on either
-// engine: the fixture `claude` execs the spawn-provider shim, which reports
-// its native session the way the pane's engine learns one (Herdr's
-// integration report on Herdr, Hide's SessionStart hook on the core's own
-// engine) and, on each `!` typed into the pane, runs a small driver that
+// from inside the agent's own process, as a real agent's do: the fixture
+// `claude` execs the spawn-provider shim, which reports its native session
+// the way the pane's engine learns one (Hide's SessionStart hook) and, on
+// each `!` typed into the pane, runs a small driver that
 // reads the next command from a file. Hide binds such a command to the
 // agent's pane, so what it opens carries that agent as its opener.
 
@@ -27,7 +26,7 @@ export type HideAnswer = { status: number; out: string };
  */
 export type AgentRun = { program?: string; input?: string; env?: Record<string, string>; hook?: boolean };
 
-/** What a pane's agent runner needs of its fixture: its root, and on Herdr the CLI a session is reported with; the own engine has none. */
+/** What a pane's agent runner needs of its fixture: its root; the own engine needs no CLI to report a session with. */
 export type AgentPaneFixture = Pick<EngineServer, "root"> & { bin?: string };
 
 /** Types `text` into `pane` as the operator's keys, through the daemon whose state folder is `stateDir`. */

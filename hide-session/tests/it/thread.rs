@@ -958,7 +958,7 @@ fn a_record_past_the_tail_size_is_a_forward_page_and_a_replaced_file_refuses_its
     );
 }
 
-/// A pane's session is named as Herdr reports it; the read proves its owner
+/// A pane's session is named as the engine reports it; the read proves its owner
 /// the way the label read does and answers the same page.
 #[test]
 fn a_pane_thread_is_read_by_the_session_reference_herdr_reports() {

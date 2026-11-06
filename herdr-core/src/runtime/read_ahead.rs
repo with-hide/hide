@@ -1,15 +1,15 @@
-//! Panes a read of Herdr's own session showed before Herdr's event stream did
+//! Panes a read of the engine's own session showed before the engine's event stream did
 //! (with-hide/hide-private#464).
 //!
-//! A worker that changed Herdr can read the session itself and hand that read
+//! A worker that changed the engine can read the session itself and hand that read
 //! to the core (a project's creation does), and the read can be ahead of the
 //! event stream: the stream has no ordering cursor against it, so the next
-//! session the stream publishes can still describe Herdr from before the read.
+//! session the stream publishes can still describe the engine from before the read.
 //! A workspace held back while its first layout settles, or not announced yet,
 //! is simply absent there. That absence is not a close. A pane the read laid
 //! out and the stream has not keeps its terminal, the size its view reported
 //! and its held keys until the stream first lays it out, a later read of its
-//! own no longer does, the bound passes, or the connection to Herdr is lost;
+//! own no longer does, the bound passes, or the connection to the engine is lost;
 //! only then does its absence retire it.
 //!
 //! A session the sync published carries its tab moves
@@ -95,7 +95,7 @@ impl ReadAhead {
         self.panes.iter().any(|(held, _)| held == pane_id)
     }
 
-    /// Herdr's pane ids are its own server's, and a later connection may hand
+    /// The engine's pane ids are its own server's, and a later connection may hand
     /// one to a pane no read showed.
     pub(super) fn clear(&mut self) {
         self.panes.clear();

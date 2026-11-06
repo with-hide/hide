@@ -791,7 +791,7 @@ fn cross_machine_lineage_updates_agent_tab_placement_in_every_arrival_order() {
 // A close takes its tab out of the Agent areas when it is approved and puts
 // it back when it does not happen (docs/UI_BEHAVIOR.md, Agent areas).
 
-/// `setup` with a Herdr connection whose workers cannot report back, so each
+/// `setup` with an engine connection whose workers cannot report back, so each
 /// close result reaches the runtime only when the test hands it over.
 fn live_setup() -> (Runtime, String) {
     let (runtime, checkout) = live_tab_order_runtime("/agent-groups");
@@ -856,8 +856,8 @@ fn two_areas_on_t1() -> (Runtime, String) {
             serde_json::json!({"action":"focus","tab_id":tab}),
         );
     }
-    // Herdr never answers this fixture, so the focuses above wait until they
-    // expire; a settled session has none, and a later Herdr move must not
+    // The engine never answers this fixture, so the focuses above wait until they
+    // expire; a settled session has none, and a later engine move must not
     // read as their late answer.
     runtime.expire_pending_view_focus(unix_milliseconds() + 3_600_000);
     assert_eq!(
@@ -877,7 +877,7 @@ fn close_tab(runtime: &mut Runtime, tab_id: &str) {
     ));
 }
 
-/// Herdr's answer to the close's `layout.export`, which captures the tab as
+/// The engine's answer to the close's `layout.export`, which captures the tab as
 /// a reopen item, and then to its close.
 fn answer_close(runtime: &mut Runtime, result: Result<(), crate::engine::EngineError>) {
     let effect = capture_close(runtime);
@@ -925,8 +925,8 @@ fn capture_close(runtime: &mut Runtime) -> crate::recent_closed::capture::CloseE
     effect.clone()
 }
 
-/// The keyboard follows the area, not Herdr's tab order: t2 is next in
-/// Herdr's order but sits in the other area.
+/// The keyboard follows the area, not the engine's tab order: t2 is next in
+/// the engine's order but sits in the other area.
 #[test]
 fn a_closing_tab_leaves_its_area_at_once_and_a_refusal_puts_it_and_the_operator_back() {
     let (mut runtime, checkout) = two_areas_on_t1();
@@ -971,7 +971,7 @@ fn a_closing_tab_leaves_its_area_at_once_and_a_refusal_puts_it_and_the_operator_
     );
 }
 
-/// Herdr focuses the closed tab's neighbour on its own; that move arrives
+/// The engine focuses the closed tab's neighbour on its own; that move arrives
 /// while Hide's focus on the area's next tab is unanswered, so it is read as
 /// the answer and the operator stays where the screen went.
 #[test]
@@ -1032,7 +1032,7 @@ fn closing_a_tab_in_the_background_takes_its_chip_and_leaves_the_operator_in_pla
 
 /// A close that must open a replacement shell first keeps its tab, so the
 /// area never stands empty while that shell is made.
-/// Herdr refused to close a primary workspace that had linked worktrees, so
+/// The engine refused to close a primary workspace that had linked worktrees, so
 /// Hide once opened a shell first; the core's own engine closes it like any
 /// other, and a tab the operator closes does not come back.
 #[test]
@@ -1084,7 +1084,7 @@ pub(super) fn register_folder(runtime: &mut Runtime, name: &str) -> String {
     workspace::checkout_id_for_path(&id, Path::new(&path))
 }
 
-/// Adds Herdr workspace `w-else`, holding the one tab `w-else:t1` in
+/// Adds engine workspace `w-else`, holding the one tab `w-else:t1` in
 /// /elsewhere, to a session.
 pub(super) fn add_elsewhere_tab(payload: &mut SessionSnapshotPayload) {
     let elsewhere: SessionSnapshotPayload =
@@ -1129,7 +1129,7 @@ fn resumed(runtime: &mut Runtime) -> (String, bool) {
     (view.path, view.resumed)
 }
 
-/// /agent-groups holding `tabs` in Herdr workspace w-order, beside
+/// /agent-groups holding `tabs` in engine workspace w-order, beside
 /// /elsewhere's one tab.
 fn session_with_elsewhere(tabs: &[&str]) -> SessionSnapshotPayload {
     let mut payload = tab_order_payload("/agent-groups", tabs, tabs, "w-order:t1");
@@ -1165,7 +1165,7 @@ fn refuse_close(runtime: &mut Runtime) {
 
 /// Closing the last tab of the checkout in front is leaving it: the screen
 /// goes back to the checkout the operator was in before, in the frame the
-/// close is approved, and a reload opens there. A refusal, even after Herdr
+/// close is approved, and a reload opens there. A refusal, even after the engine
 /// has reported its session again meanwhile, brings the tab back, and the
 /// operator back to it.
 #[test]
@@ -1280,7 +1280,7 @@ fn reopen(runtime: &mut Runtime) {
     runtime.dispatch_json(&explorer_event("reopen_closed", serde_json::json!({})));
 }
 
-/// The chip is gone before Herdr confirms the close, so a reopen pressed at
+/// The chip is gone before the engine confirms the close, so a reopen pressed at
 /// once is offered, waits for that close, and starts when it is confirmed.
 #[test]
 fn a_reopen_pressed_while_the_close_settles_starts_once_herdr_confirms_the_close() {
@@ -1380,11 +1380,11 @@ fn a_reopen_waiting_for_a_refused_close_is_dropped_and_never_reopens_an_older_cl
     assert_eq!(runtime.snapshot().recent_closed.count, 1);
 }
 
-/// Herdr makes a reopened tab inside a seed tab it then replaces
+/// The engine makes a reopened tab inside a seed tab it then replaces
 /// (`workspace.create`, then `layout.apply`), and the seed's focus can reach
 /// the core after the reopen's own answer, when it is followed like any move
-/// of Herdr's. When the seed goes, the keyboard stays on the restored tab the
-/// checkout shows, never on the other area's tab Herdr's keyboard names
+/// of the engine's. When the seed goes, the keyboard stays on the restored tab the
+/// checkout shows, never on the other area's tab the engine's keyboard names
 /// (#425, `agent-tab-groups.spec.ts` "New tab and Reopen use the
 /// requested area").
 #[test]
@@ -1402,11 +1402,11 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
         &mut runtime,
         serde_json::json!({"action":"focus","tab_id":"w-order:t2"}),
     );
-    // This fixture's Herdr never answers, so its lane never moves on by
-    // itself; it is moved on here as Herdr's answer would, so the click
+    // This fixture's engine never answers, so its lane never moves on by
+    // itself; it is moved on here as the engine's answer would, so the click
     // leaves, and only a request that has left is confirmed.
     let _ = runtime.advance_lane();
-    // Herdr confirms the click on the right area's tab.
+    // The engine confirms the click on the right area's tab.
     runtime.ingest_session(Ok(herdr.after(
         &["w-order:t2"],
         tab_order_payload("/agent-groups", &after_close, &after_close, "w-order:t2"),
@@ -1458,7 +1458,7 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
         "the seed's focus was followed"
     );
 
-    // The seed goes and the restored tab arrives, with Herdr's keyboard back
+    // The seed goes and the restored tab arrives, with the engine's keyboard back
     // on the right area's tab.
     let restored = ["w-order:t1", "w-order:t2", "w-order:t4"];
     runtime.ingest_session(Ok(herdr.after(
@@ -1604,7 +1604,7 @@ fn input_state(runtime: &Runtime, request_id: &str) -> Option<InputRequestState>
 }
 
 // PRD fork-operator-root B2: `Fork agent` puts the fork's tab right of the
-// source's tab, whether Herdr's session or the worker's answer comes first.
+// source's tab, whether the engine's session or the worker's answer comes first.
 #[test]
 fn a_fork_tab_lands_right_of_its_source_whichever_answer_comes_first() {
     let all = ["w-order:t1", "w-order:t2", "w-order:t3", "w-order:t4"];
@@ -1626,7 +1626,7 @@ fn a_fork_tab_lands_right_of_its_source_whichever_answer_comes_first() {
             .is_empty()
     );
 
-    // Herdr's session first: the appended tab moves next to its source.
+    // The engine's session first: the appended tab moves next to its source.
     let (mut runtime, _) = setup();
     pending_fork(&mut runtime, "w-order:t2:p", None);
     ingest(&mut runtime, &all);
@@ -1646,7 +1646,7 @@ fn a_fork_tab_lands_right_of_its_source_whichever_answer_comes_first() {
 }
 
 // PRD fork-operator-root B1, B4, B5, B7: the fork takes the keyboard when
-// Herdr makes its pane, and what was typed meanwhile reaches its agent once
+// the engine makes its pane, and what was typed meanwhile reaches its agent once
 // it has started; a view chosen after the press keeps the keyboard, and a
 // failed fork drops the keys, its placement, and gives the source back.
 #[test]
@@ -1761,7 +1761,7 @@ fn a_second_fork_of_a_pane_still_forking_is_refused_whichever_item_asked() {
 
 // PRD fork-operator-root D-10: one fork's keyboard move is not the operator
 // choosing a view, so of two forks starting at once the later press keeps the
-// keyboard, whichever pane Herdr makes first.
+// keyboard, whichever pane the engine makes first.
 #[test]
 fn of_two_forks_starting_at_once_the_later_press_keeps_the_keyboard() {
     for later_first in [false, true] {
@@ -1822,7 +1822,7 @@ fn a_fork_tab_the_full_agent_area_cannot_show_does_not_take_the_keyboard() {
     );
 }
 
-// A pane the replaced Herdr made is neither placed nor focused on the
+// A pane the replaced engine made is neither placed nor focused on the
 // connection that replaced it.
 #[test]
 fn a_fork_pane_from_a_replaced_herdr_is_not_placed_or_focused() {
@@ -1852,7 +1852,7 @@ fn a_fork_pane_from_a_replaced_herdr_is_not_placed_or_focused() {
     );
 }
 
-/// /agent-groups holding `tabs` with Herdr's keyboard on `focused`'s tab,
+/// /agent-groups holding `tabs` with the engine's keyboard on `focused`'s tab,
 /// beside /elsewhere's one tab, `w-else:t1`, which can hold it too; `split`
 /// puts a second pane right of t1's.
 fn fork_session(tabs: &[&str], focused: &str, split: Option<&str>) -> SessionSnapshotPayload {
@@ -1918,7 +1918,7 @@ fn fork_on_screen(runtime: &Runtime) -> (Option<String>, Option<String>, Option<
 
 /// The operator in /elsewhere, or in /agent-groups when `from_elsewhere` is
 /// false, presses Fork agent (`tab`) or Fork agent to the side (`side`) on
-/// t1's pane and Herdr answers with the fork's pane, before its layout.
+/// t1's pane and the engine answers with the fork's pane, before its layout.
 fn forked(from_elsewhere: bool, tab: bool) -> (Runtime, String, &'static str) {
     let (mut runtime, checkout, elsewhere) = entered_from_elsewhere(&["w-order:t1", "w-order:t2"]);
     if from_elsewhere {
@@ -1954,8 +1954,8 @@ fn keys_held_for(runtime: &Runtime, pane: &str) -> bool {
         })
 }
 
-// A fork's pane is the checkout's it was made in from Herdr's answer, before
-// Herdr's layout lists it, so the keyboard brings that checkout forward even
+// A fork's pane is the checkout's it was made in from the engine's answer, before
+// the engine's layout lists it, so the keyboard brings that checkout forward even
 // when a focus on the pane, the fork's own or a second one (the journey's),
 // comes before the catalog does. Its own tab is drawn as a created tab is and
 // a split as a split Hide asked for is, so the projection never waits on it.
@@ -2017,15 +2017,15 @@ fn a_fork_brings_its_checkout_forward_before_herdr_lists_its_pane() {
     }
 }
 
-// Herdr's layout of a fork made with another checkout in front, its keyboard
-// on the fork's tab, is not a focus Herdr moved: Hide stays on the fork's
+// The engine's layout of a fork made with another checkout in front, its keyboard
+// on the fork's tab, is not a focus the engine moved: Hide stays on the fork's
 // pane rather than following the front checkout's own pane (the journey's
 // Grok fork on Windows: `Herdr focused pane w1:p1; Hide was on w8:p3`).
 #[test]
 fn herdrs_layout_of_a_fork_is_not_read_as_herdr_moving_the_keyboard() {
     for tab in [true, false] {
         let (mut runtime, checkout, pane) = forked(true, tab);
-        // Herdr confirms the fork's focus in milliseconds, before its layout
+        // The engine confirms the fork's focus in milliseconds, before its layout
         // reaches Hide, so nothing Hide asked for is pending any more.
         let control = runtime
             .pane_focus_in_flight
@@ -2050,10 +2050,10 @@ fn herdrs_layout_of_a_fork_is_not_read_as_herdr_moving_the_keyboard() {
         } else {
             (&["w-order:t1", "w-order:t2"], "w-order:t1", Some(pane))
         };
-        // A session read before Herdr moved still has it on /elsewhere; Herdr
+        // A session read before the engine moved still has it on /elsewhere; the engine
         // then reaches the fork's tab through its workspace's active tab, the
         // source's, and a session can carry that step. Both are on the way to
-        // Hide's own request, not a tab Herdr chose: a local journey run
+        // Hide's own request, not a tab the engine chose: a local journey run
         // showed the step taking the keyboard to the source for one frame.
         let steps: [(&[&str], &str); 3] = [
             (&["w-order:t1", "w-order:t2"], "w-else:t1"),
@@ -2084,7 +2084,7 @@ fn herdrs_layout_of_a_fork_is_not_read_as_herdr_moving_the_keyboard() {
 }
 
 // What is drawn for a fork's pane lasts as long as any drawing ahead of
-// Herdr: a split Herdr has not laid out by then is the unknown result a split
+// the engine: a split the engine has not laid out by then is the unknown result a split
 // Hide asked for is, after which its pane is waited on as any missing pane
 // is, and a fork whose agent never started takes back what was drawn for the
 // pane its worker closed.
@@ -2190,7 +2190,7 @@ fn a_fork_the_operator_did_not_press_stays_behind() {
     }
 }
 
-// A device's pane is drawn by the device that holds it, never ahead of Herdr
+// A device's pane is drawn by the device that holds it, never ahead of the engine
 // on this machine.
 #[test]
 fn a_fork_of_a_device_pane_draws_nothing_here() {
@@ -2210,7 +2210,7 @@ fn focus_pane(runtime: &mut Runtime, pane: &str) {
     ));
 }
 
-// Herdr can report the fork's tab with its keyboard on it before the worker's
+// The engine can report the fork's tab with its keyboard on it before the worker's
 // answer reaches the core, the order the journey's Grok fork on Windows was
 // first read as: that report is not followed into a checkout not in front,
 // and the answer then brings the checkout forward with the fork.
@@ -2313,7 +2313,7 @@ fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
 }
 
 /// A checkout nobody has opened yet, such as a project just added, keeps the
-/// tab Herdr opened for it when the saved Workspaces are at their cap: the
+/// tab the engine opened for it when the saved Workspaces are at their cap: the
 /// cap forgets the stalest saved Workspace, not the one made for it. Ranked
 /// by its unset choice stamp alone, each such Workspace was forgotten as the
 /// next was made, and the screen showed the empty start over a live terminal.

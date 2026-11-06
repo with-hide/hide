@@ -91,11 +91,11 @@ pub struct Snapshot {
     pub connection: ConnectionSnapshot,
     pub zoomed: Option<String>,
     pub focused: FocusedSnapshot,
-    /// Every tab's layout in the local Herdr session, keyed by the tab id
+    /// Every tab's layout in the local engine session, keyed by the tab id
     /// each one carries. The shell draws the entry whose tab is active, so a
     /// tab switch is a lookup rather than a wait: nothing here is emptied to
-    /// mark a switch in progress, and the geometry drawn is always one Herdr
-    /// has already applied.
+    /// mark a switch in progress, and the geometry drawn is always one the
+    /// engine has already applied.
     pub pane_layouts: Vec<PaneLayoutSnapshot>,
     pub terminal: TerminalSnapshot,
     pub editor: EditorSnapshot,
@@ -347,7 +347,7 @@ pub struct WorkspaceViewSnapshot {
     pub layout: ViewLayoutSnapshot,
     /// The Agent areas, for a Workspace whose tabs the core arranges (this
     /// machine's and a node's that dialed in); `None` on a device this core
-    /// dials, whose Herdr shows one tab.
+    /// dials, whose engine shows one tab.
     pub agent_layout: Option<AgentLayoutSnapshot>,
     /// The operator's comments on this checkout's Views (PRD
     /// view-opener-feedback); absent while there are none and no Send to say.
@@ -824,7 +824,7 @@ pub struct PaneFindSnapshot {
     /// 1-based position of the current match, or 0 when there is none.
     pub index: usize,
     pub total: usize,
-    /// Herdr capped the history it returned, so `total` counts what was
+    /// The engine capped the history it returned, so `total` counts what was
     /// searched rather than everything the pane has ever printed.
     pub truncated: bool,
     pub unavailable_reason: Option<String>,
@@ -848,7 +848,7 @@ pub struct PaneFindOpened {
 pub enum PaneFindRoute {
     /// The agent's own search is open in the pane and takes the typing.
     Agent,
-    /// Herdr holds the pane's history, or the agent's search could not be
+    /// The engine holds the pane's history, or the agent's search could not be
     /// opened (`unavailable_reason` says why), so Hide's find bar opens.
     Bar,
 }
@@ -882,7 +882,7 @@ pub struct NavigatorSnapshot {
     pub agents: Vec<SidebarAgentSnapshot>,
     /// The checkouts Hide AI started an agent in, by device and path. A list
     /// beside the checkouts, not a field on them, because a checkout row is
-    /// rebuilt from Git and Herdr at several places and would lose a value
+    /// rebuilt from Git and the engine at several places and would lose a value
     /// laid on it; the shell joins it by `(device_id, path)`.
     pub hide_ai_checkouts: Vec<HideAiCheckoutSnapshot>,
     /// Durable absent-pane sessions are not live agents or pane addresses.
@@ -1422,7 +1422,7 @@ impl DeviceProblem {
 /// What a device's connection attempt waits on, as its row shows it.
 pub type DeviceSignInSnapshot = hide_node_link::device::ShownSignIn;
 
-/// One staged connection test of an SSH device: SSH, authentication, Herdr,
+/// One staged connection test of an SSH device: SSH, authentication,
 /// protocol, PTY and Git, each with the host's answer.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeviceTestSnapshot {
@@ -1519,12 +1519,12 @@ pub struct SidebarAgentSnapshot {
     /// A delayed telemetry read leaves the last confirmed read fingerprint intact.
     #[serde(skip)]
     pub(crate) telemetry_stale: bool,
-    /// Where the agent stands in the start Herdr made of it: while it is
+    /// Where the agent stands in the start the engine made of it: while it is
     /// starting its activity is unknown, yet it has run nothing but the first
     /// prompt its start may carry (`agent_state::AgentStart`).
     #[serde(skip)]
     pub(crate) start: crate::agent_state::AgentStart,
-    /// Raw Herdr session bound to destructive close approval, never a label fallback.
+    /// Raw engine session bound to destructive close approval, never a label fallback.
     #[serde(skip_serializing)]
     pub close_session: Option<crate::sidebar::SessionAgentSessionPayload>,
     pub state: crate::agent_state::RowState,
@@ -1554,14 +1554,14 @@ pub struct SidebarAgentSnapshot {
     #[serde(skip_serializing)]
     pub descendant_line: Option<String>,
     pub id: String,
-    /// The name someone gave the agent in Herdr (`hide agent spawn --name`,
-    /// `herdr agent rename`), which ⌘K also finds it by; absent when it has
+    /// The name someone gave the agent (`hide agent spawn --name`), which ⌘K
+    /// also finds it by; absent when it has
     /// none or only one Hide made up from its pane (`fork::hide_made_name`).
     /// `id` falls back to the pane id and a device's row replaces it, so it
     /// cannot stand in for this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub herdr_name: Option<String>,
-    /// The name Herdr reports the agent by, a name Hide made up included,
+    /// The name the engine reports the agent by, a name Hide made up included,
     /// which a pane's launch record is matched by (`runtime::agent_choice`).
     /// Never on the wire.
     #[serde(skip_serializing)]
@@ -1584,21 +1584,21 @@ pub struct SidebarAgentSnapshot {
     pub checkout_label: Option<String>,
     pub agent_kind: String,
     /// What the agent needs from the operator: `question`, `approval`, `error`,
-    /// or `none`. Herdr's `blocked` lifecycle is an approval.
+    /// or `none`. The engine's `blocked` lifecycle is an approval.
     pub demand: String,
     /// Whether the agent is running: `working`, `stopped`, or `unknown`.
-    /// Herdr's `done` and `idle` are the same activity. Completion and Hide's
+    /// The engine's `done` and `idle` are the same activity. Completion and Hide's
     /// pane-level read state remain separate axes.
     pub activity: String,
-    /// Whether Herdr reported a completed turn. A newly
+    /// Whether the engine reported a completed turn. A newly
     /// opened agent can be stopped while it waits for its first instruction;
     /// that ready state is not a completion and must not appear as Done.
     #[serde(skip_serializing)]
     pub completed: bool,
     /// Whether this pane has changed since the operator last had it focused.
-    /// Owned by Hide per pane, never by Herdr's tab-scoped seen.
+    /// Owned by Hide per pane, never by a tab-scoped seen.
     pub unread: bool,
-    /// An approval prompt waits on this pane right now: Herdr reports one, or
+    /// An approval prompt waits on this pane right now: the engine reports one, or
     /// the agent's session says its plan waits for the operator's approval.
     /// It holds the row in Needs You whether or not the operator has read it.
     pub blocked: bool,
@@ -1668,22 +1668,22 @@ pub struct SidebarAgentSnapshot {
     pub last_prompt_at_unix_ms: Option<u64>,
     /// The later of the latest request and the latest reply in this proven
     /// session, in epoch milliseconds: what idle-agent sleep counts its
-    /// hours from, because a relaunch or a Herdr handoff moves no line of
+    /// hours from, because a relaunch moves no line of
     /// the conversation. `None` until a session read proves one.
     #[serde(skip_serializing)]
     pub last_conversation_at_unix_ms: Option<u64>,
     /// The ordering key: `changed_at_unix_ms` as thirteen digits when the
-    /// core has it, otherwise Herdr's state change sequence zero-padded.
+    /// core has it, otherwise the engine's state change sequence zero-padded.
     pub last_activity: String,
-    /// Herdr's own state change sequence, one of the three inputs to a pane's
+    /// The engine's own state change sequence, one of the three inputs to a pane's
     /// read record.
     #[serde(skip_serializing)]
     pub state_change_seq: Option<u64>,
-    /// The conversation id this agent is running, kept only when Herdr recorded
+    /// The conversation id this agent is running, kept only when the engine recorded
     /// the session as an id. A session recorded as a path is dropped here,
     /// because neither agent's fork command takes one. The agent row's Copy
     /// session id reads it (PRD sidebar-context-menus D-06); absent from the
-    /// wire when Herdr recorded none.
+    /// wire when the engine recorded none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// The agent has its own search over its whole conversation, so ⌘F on its
@@ -1691,7 +1691,7 @@ pub struct SidebarAgentSnapshot {
     /// than opening Hide's find bar (`agent_find.rs`).
     pub own_find: bool,
     /// The pane this agent was spawned from, as the `parent_pane` token its
-    /// spawner declared (Herdr records no lineage). It is a claim that holds
+    /// spawner declared (the engine records no lineage). It is a claim that holds
     /// only while both panes still host the sessions it was written for:
     /// `wire.rs` checks the child's, `crate::agent_state::apply_lineage` the parent's and
     /// clears the claim when either moved on, so an agent that took over a
@@ -1714,7 +1714,7 @@ pub struct SidebarAgentSnapshot {
     #[serde(skip_serializing)]
     pub lineage_session: Option<String>,
     /// Hide's server mark as the pane carries it (`wire::SERVER_MARK_TOKEN`):
-    /// which Herdr server a saved `state_change_seq` for this pane can be
+    /// which run of the engine a saved `state_change_seq` for this pane can be
     /// compared on.
     #[serde(skip_serializing)]
     pub server_mark: Option<String>,
@@ -1729,7 +1729,7 @@ pub struct SidebarAgentSnapshot {
     /// back to the person (PRD D-52).
     pub delegated: bool,
     /// The pane that spawned this one, when that pane's agent is still in the
-    /// list. `spawned_from_pane_id` records what Herdr said; this records
+    /// list. `spawned_from_pane_id` records what the engine said; this records
     /// which row it actually resolved to, so a breadcrumb never points at a
     /// pane that is not there.
     pub lineage_parent_pane_id: Option<String>,
@@ -1918,7 +1918,7 @@ pub enum AgentActionRefusal {
     WaitingForYou,
     /// Hide cannot tell what the agent is doing.
     UnknownActivity,
-    /// Herdr has not reported the agent's conversation yet.
+    /// The engine has not reported the agent's conversation yet.
     NoConversation,
 }
 
@@ -1965,13 +1965,13 @@ pub struct WorkspaceSnapshot {
     pub branches: Vec<String>,
     pub registered: bool,
     pub temporary: bool,
-    /// The Herdr workspaces whose panes sit in this project, in Herdr order.
-    /// Project identity is the repository path, not a Herdr workspace id, so
-    /// Herdr dropping its workspace when the last pane closes leaves the row
+    /// The engine workspaces whose panes sit in this project, in engine order.
+    /// Project identity is the repository path, not an engine workspace id, so
+    /// the engine dropping its workspace when the last pane closes leaves the row
     /// and the persisted focus in place. Commands that need any workspace use
     /// the first entry; purpose projection and persistence use the last
     /// checkout occupant because that is the token whose value wins. An empty
-    /// list means Herdr has none here yet. Commands may reuse an entry only
+    /// list means the engine has none here yet. Commands may reuse an entry only
     /// while no other project also contains it.
     pub session_workspace_ids: Vec<String>,
     /// The newest activity anywhere in this project, in Unix milliseconds:
@@ -2005,8 +2005,8 @@ pub struct WorkspaceSnapshot {
     /// D-02, D-03, D-20).
     pub agent_presence: ProjectAgentPresenceSnapshot,
     /// What `Remove project…` would close, counted by the core so the
-    /// confirmation names the same panes the close will send to Herdr
-    /// (D-10). Both are zero for a project Herdr has no pane in, which is
+    /// confirmation names the same panes the close will send to the engine
+    /// (D-10). Both are zero for a project the engine has no pane in, which is
     /// the registration-only removal.
     #[serde(default)]
     pub removal: WorkspaceRemovalGateSnapshot,
@@ -2181,7 +2181,7 @@ pub struct CheckoutSnapshot {
     /// own value: see `head_sha`.
     #[serde(skip_serializing)]
     pub head_oid: Option<String>,
-    /// The repository Herdr reports the checkout it attached a device's
+    /// The repository the engine reports the checkout it attached a device's
     /// workspace to in (`workspace.worktree.repo_root`), on that device's raw
     /// row. Core only: the device's grouping places a folder its helper can
     /// no longer read by it (`device_catalog::recorded_place`).
@@ -2194,7 +2194,7 @@ pub struct CheckoutSnapshot {
     pub label: String,
     pub path: String,
     pub branch: Option<String>,
-    /// One line chosen in this order: Herdr workspace token, branch
+    /// One line chosen in this order: engine workspace token, branch
     /// description, representative agent title, pull-request title.
     pub purpose: Option<CheckoutPurposeSnapshot>,
     pub is_worktree: bool,
@@ -2202,7 +2202,7 @@ pub struct CheckoutSnapshot {
     pub is_primary: bool,
     pub exists: bool,
     pub temporary: bool,
-    /// Whether Herdr has a pane here. A worktree earns a row from git rather
+    /// Whether the engine has a pane here. A worktree earns a row from git rather
     /// than from a pane, so the row needs this to draw the ones with no
     /// terminal dimmed and offer to start one.
     pub has_panes: bool,
@@ -2228,27 +2228,27 @@ pub struct CheckoutSnapshot {
     /// carries.
     pub landed: bool,
     pub tabs: Vec<TabSnapshot>,
-    /// The tab Herdr reports as active in this checkout, or `None` when the
+    /// The tab the engine reports as active in this checkout, or `None` when the
     /// workspace's active tab lives in a sibling checkout. A checkout never
-    /// substitutes its first tab for a missing one; an active id Herdr names
+    /// substitutes its first tab for a missing one; an active id the engine names
     /// but the navigator cannot place is reported as a diagnostic instead.
     pub active_tab_id: Option<String>,
-    /// The one ordered tab strip for this checkout: Herdr tabs and file tabs
+    /// The one ordered tab strip for this checkout: engine tabs and file tabs
     /// in the order the operator sees them, which the shell draws as it is
     /// given rather than joining two lists of its own.
     pub strip: Vec<StripTabSnapshot>,
-    /// The label the next Herdr tab created here should carry. Decided by the
-    /// core from Herdr's raw labels, next to the function that formats them,
+    /// The label the next engine tab created here should carry. Decided by the
+    /// core from the engine's raw labels, next to the function that formats them,
     /// so the shell never has to read a number back out of a label it was
     /// given to draw.
     pub next_tab_label: String,
-    /// The host's own id of the Herdr workspace that owns this checkout, where
+    /// The host's own id of the engine workspace that owns this checkout, where
     /// every tab Hide creates here goes (`checkout_owner`); `None` while no
     /// owner is open. Read from the session Hide already holds, never sent to
     /// the shell.
     #[serde(skip_serializing)]
     pub owner_workspace_id: Option<String>,
-    /// A device's raw row only: its Herdr workspace's `hide_owner` token,
+    /// A device's raw row only: its engine workspace's `hide_owner` token,
     /// which the grouping checks against the checkout's folder
     /// (`device_catalog::group`).
     #[serde(skip_serializing)]
@@ -2271,18 +2271,18 @@ pub struct StripTabSnapshot {
     /// Strip-wide identity, unique across kinds.
     pub id: String,
     pub kind: StripTabKind,
-    /// The Herdr tab id or editor tab id this entry stands for.
+    /// The engine tab id or editor tab id this entry stands for.
     pub source_id: String,
     pub label: String,
     /// Whether this editor entry is the checkout's replaceable preview tab,
-    /// which the strip titles in italic. A Herdr entry is never one. It rides
+    /// which the strip titles in italic. An engine entry is never one. It rides
     /// the strip rather than only the editor tab because promotion and
     /// replacement change the slot itself, and both happen once per tab, not
     /// per keystroke.
     pub preview: bool,
     /// The one agent this tab holds, when it holds exactly one, drawn as the
     /// tab's identity where a tab is named: the Recent Panels switcher shows
-    /// its name and mark instead of the Herdr label, which for an unnamed tab
+    /// its name and mark instead of the engine label, which for an unnamed tab
     /// is only a number (PRD D-16). A shell-only tab and a tab with several
     /// agents carry `None` and keep their label.
     pub agent_identity: Option<AgentChipSnapshot>,
@@ -2357,14 +2357,14 @@ impl StripTabSnapshot {
         }
     }
 
-    /// The Herdr half of a strip, in the order the tabs are given.
+    /// The engine half of a strip, in the order the tabs are given.
     ///
     /// A tab with no id has no identity to key a strip entry by, so it is
     /// dropped rather than given a placeholder. Both the local strip and the
-    /// remote projection build their Herdr entries here, so the rule that
+    /// remote projection build their engine entries here, so the rule that
     /// decides which tabs earn a slot and what an unlabelled one reads as has
     /// one implementation to change.
-    /// The Herdr tabs a checkout draws in its strip.
+    /// The engine tabs a checkout draws in its strip.
     ///
     /// A tab holding only delegated children is left out: the canvas keeps
     /// one pane, and a strip slot for every child would put the pile back
@@ -2489,7 +2489,7 @@ pub enum AgentStatusCode {
     Done,
     Idle,
     Unknown,
-    /// Herdr is still starting the agent and it has reported nothing yet
+    /// The engine is still starting the agent and it has reported nothing yet
     /// (`agent_state::AgentStart::Starting`).
     Starting,
     /// Waiting: on delegated children, a background job, a reply or a pull
@@ -2560,17 +2560,17 @@ impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
     }
 }
 
-/// The label to give the next Herdr tab created in a checkout.
+/// The label to give the next engine tab created in a checkout.
 ///
-/// Reads Herdr's raw labels, never the ones `display_tab_label` has already
+/// Reads the engine's raw labels, never the ones `display_tab_label` has already
 /// formatted. The two are one convention: that function decides how a tab's
 /// number is shown, this one decides which number is free. Deriving the free
 /// number from formatted text instead would write the convention down a second
 /// time, on the far side of the FFI boundary, where a change to either half
 /// breaks the other silently.
 ///
-/// A tab Herdr labels with a bare number, or with the `Tab N` this function
-/// hands out and Herdr stores verbatim, holds that number; a tab labelled
+/// A tab the engine labels with a bare number, or with the `Tab N` this function
+/// hands out and the engine stores verbatim, holds that number; a tab labelled
 /// anything else holds none. The answer is the lowest number no tab holds.
 /// Counting only bare numbers made every created tab `Tab 2`.
 pub fn next_tab_label<'a>(raw_labels: impl IntoIterator<Item = &'a str>) -> String {
@@ -2679,7 +2679,7 @@ pub struct PaneSnapshot {
     /// Stable terminal incarnation shared by close approval and pane relocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_id: Option<String>,
-    /// Herdr could not restore this terminal. Never inferred from its cwd or agent.
+    /// The engine could not restore this terminal. Never inferred from its cwd or agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_terminal_id: Option<String>,
     pub id: String,
@@ -2709,7 +2709,7 @@ pub struct PaneSnapshot {
     /// Address-preserving listener endpoints from the same port sample.
     pub servers: Vec<ServerEndpointSnapshot>,
     /// What this pane's agent delegated, or why that is unknown. `None` on a
-    /// pane Herdr detected no agent in: a shell, an editor or a log gets
+    /// pane the engine detected no agent in: a shell, an editor or a log gets
     /// neither chips nor an uninstrumented mark, because there is no agent
     /// there to have children (PRD B22, D-30).
     pub children: Option<PaneChildrenSnapshot>,
@@ -2765,7 +2765,7 @@ pub enum PaneReopenSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaneReopenFailure {
-    /// Herdr or the agent could not start the session again.
+    /// The engine or the agent could not start the session again.
     StartRefused,
     /// The pane or its session id is gone.
     SessionGone,
@@ -2775,7 +2775,7 @@ pub enum PaneReopenFailure {
     /// The agent is working or waiting for the operator, so ending it to
     /// start it again would lose what it is doing.
     AgentBusy,
-    /// The agent did not hand the terminal back to its shell, or Herdr
+    /// The agent did not hand the terminal back to its shell, or the engine
     /// refused the end; nothing was started.
     EndRefused,
 }
@@ -2864,7 +2864,7 @@ pub struct AgentChipSnapshot {
 /// How many live descendants of a row are in each state the badge draws.
 ///
 /// Every count is a real count over rows the projection holds; a descendant
-/// whose activity Herdr reports as unknown is in none of them, because a
+/// whose activity the engine reports as unknown is in none of them, because a
 /// badge that cannot say what a child is doing has nothing to claim, and the
 /// exclusion goes to the diagnostic log instead (PRD B7).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -2874,7 +2874,7 @@ pub struct DescendantCountsSnapshot {
     pub question: u32,
     pub working: u32,
     pub done: u32,
-    /// Descendants Herdr cannot classify. Not drawn; the log carries it.
+    /// Descendants the engine cannot classify. Not drawn; the log carries it.
     #[serde(skip_serializing)]
     pub unknown: u32,
 }
@@ -2965,7 +2965,7 @@ pub struct ForkSourceSnapshot {
 
 /// What the pane header needs to know about forking this pane.
 ///
-/// Both facts come from Herdr: whether the pane runs an agent whose own fork
+/// Both facts come from the engine: whether the pane runs an agent whose own fork
 /// command can take its recorded session, and whether this pane is itself the
 /// result of such a fork.
 ///
@@ -3041,7 +3041,7 @@ pub struct PaneLayoutSnapshot {
 impl Snapshot {
     /// The layout being drawn: the one belonging to the tab that holds the
     /// selected pane. Every tab's layout is carried, so this is a lookup and
-    /// never waits for Herdr to name the visible tab again.
+    /// never waits for the engine to name the visible tab again.
     pub fn active_pane_layout(&self) -> Option<&PaneLayoutSnapshot> {
         let pane_id = self.terminal.pane_id.as_deref()?;
         self.pane_layouts
@@ -3108,8 +3108,8 @@ pub struct InputRequestSnapshot {
     pub held_for: Option<String>,
 }
 
-/// Where keys sent against a creation request stand: kept until Herdr
-/// answers, following the pane Herdr named, or dropped.
+/// Where keys sent against a creation request stand: kept until the engine
+/// answers, following the pane the engine named, or dropped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputRequestState {
@@ -3130,7 +3130,7 @@ pub struct TerminalPaneSnapshot {
     pub transport_last_attempt_at_unix_ms: Option<u64>,
     pub transport_exit_category: Option<String>,
     pub transport_retry_decision: String,
-    /// This client only observes the pane and Herdr did not move its view
+    /// This client only observes the pane and the engine did not move its view
     /// for the last wheel: another client holds the pane's scrolling. Absent
     /// from the wire while false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -3257,7 +3257,7 @@ pub struct FirstRun {
 #[serde(rename_all = "snake_case")]
 pub enum FirstRunStep {
     /// Also a step an earlier build saved as `herdr`, which moved an older
-    /// Herdr server first; there is no Herdr to move, so it opens on Agents.
+    /// Herdr server first; there is no Herdr to move now, so it opens on Agents.
     #[serde(alias = "herdr")]
     Agents,
     Devices,
@@ -3775,7 +3775,7 @@ pub enum MemoryStartFailureCode {
     /// The agent's start ended at the shell without the agent, twice.
     AgentNotStarted,
     CardNotProcessed,
-    /// Any other answer: the device, the lock, Herdr's refusal.
+    /// Any other answer: the device, the lock, the engine's refusal.
     Other,
 }
 
@@ -4377,8 +4377,7 @@ pub struct UiStateSnapshot {
     /// Absence is the default folded state, so a row with children starts
     /// folded and shows its descendant badge until the operator opens it.
     /// The set is keyed by pane id and lives as long as the pane does: a
-    /// Herdr restart mints new ids, so it starts folded again (PRD D-06,
-    /// D-11).
+    /// pane made new has a new id, so it starts folded (PRD D-06, D-11).
     #[serde(default)]
     pub expanded_agent_pane_ids: Vec<String>,
     /// Agent panes whose children the operator opened in the sidebar's
@@ -4421,8 +4420,8 @@ pub struct UiStateSnapshot {
     pub selected_path: Option<String>,
     pub selected_pane_id: Option<String>,
     /// Set by a core move's rekey (`node_migration::reown`): the machine the
-    /// core now runs on kept its selection only in its own Herdr while the
-    /// other core ran, so the first local session opens on Herdr's focus
+    /// core now runs on kept its selection only in its own engine while the
+    /// other core ran, so the first local session opens on the engine's focus
     /// (`consume_restore_hint`). Core only, and kept in the store until that
     /// session takes it.
     #[serde(skip)]
@@ -4531,7 +4530,7 @@ pub struct UiStateSnapshot {
     /// default scale is absent rather than present at 1.0, so the map stays
     /// the size of what the user actually changed.
     ///
-    /// Every key here is a pane id Herdr reports, which is what lets a pane
+    /// Every key here is a pane id the engine reports, which is what lets a pane
     /// that goes away take its entry with it. Nothing else may be stored here.
     #[serde(default)]
     pub pane_text_scales: BTreeMap<String, f32>,
@@ -4555,16 +4554,16 @@ pub struct UiStateSnapshot {
     /// What the operator had already seen on each pane, keyed by pane id.
     ///
     /// This is Hide's own record and the only authority for the read axis.
-    /// Herdr marks every pane in a tab seen the moment that tab is focused, so
-    /// three finished agents side by side would clear together; a pane-level
-    /// record is what keeps them separate. It rides the existing store rather
+    /// A tab-level seen would mark every pane in a tab read the moment that tab
+    /// is focused, so three finished agents side by side would clear together;
+    /// a pane-level record is what keeps them separate. It rides the existing store rather
     /// than a second file (engineering rule 7), and a store written before it
     /// existed loads with an empty record, which reads as everything unread.
     // The store owns persistence; the shell only reads the derived unread axis.
     #[serde(default, skip_serializing)]
     pub pane_read_records: BTreeMap<String, PaneReadRecord>,
     /// The panes whose last stop finished work, keyed by pane id, so a
-    /// completion a restored Herdr server no longer reports is still shown
+    /// completion a restored engine no longer reports is still shown
     /// (`agent_state::apply_completions`). The store owns it.
     #[serde(default, skip_serializing)]
     pub pane_completions: BTreeMap<String, PaneCompletion>,
@@ -4636,7 +4635,7 @@ pub struct UiStateSnapshot {
     pub recent_pane_ids: Vec<String>,
     /// The names the operator gave tabs through Rename, by tab id, at most
     /// `OPERATOR_TAB_NAME_LIMIT`: a tab is named, and outlives its agents,
-    /// only while its label is still the name recorded here (Herdr keeps tab
+    /// only while its label is still the name recorded here (the engine keeps tab
     /// ids through a restore). A spawn's name, or one given before this was
     /// recorded, is not the operator's. Persisted and never on the wire.
     #[serde(default, skip_serializing)]
@@ -4679,7 +4678,7 @@ pub struct RecentCheckout {
 ///
 /// A pane is unread when its current state does not match this record, so a
 /// missing record means unread. The session id distinguishes a new agent in a
-/// reused pane from the same agent restored by a new Herdr server.
+/// reused pane from the same agent restored by a new engine run.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PaneReadRecord {
     #[serde(default)]
@@ -4689,7 +4688,7 @@ pub struct PaneReadRecord {
     pub demand: String,
     pub activity: String,
     /// Part of the pane-level fingerprint so an idle-to-completed transition
-    /// becomes unread even when Herdr's process-local sequence does not move.
+    /// becomes unread even when the engine's process-local sequence does not move.
     #[serde(default)]
     pub completed: bool,
     /// The descendant demands and completions the operator had seen when this
@@ -4699,15 +4698,15 @@ pub struct PaneReadRecord {
     /// works and finishes a second time (PRD B5, B6, B8).
     #[serde(default)]
     pub descendant_signals: BTreeSet<DescendantSignal>,
-    /// The server mark (`wire::SERVER_MARK_TOKEN`) of the Herdr server
-    /// `state_change_seq` was read on. Herdr's sequence restarts with its
-    /// server, so the record is compared with the pane only on that server;
+    /// The server mark (`wire::SERVER_MARK_TOKEN`) of the engine run
+    /// `state_change_seq` was read on. The sequence restarts with the engine,
+    /// so the record is compared with the pane only on that run;
     /// none means no server can be named, as for a record saved before marks.
     #[serde(default)]
     pub server: Option<String>,
     /// The pane no longer matched this record when Hide last judged it, and
     /// the operator has not read it since. Saved whenever it changes, so a
-    /// restart that loses Herdr's sequence carries the verdict over rather
+    /// restart that loses the engine's sequence carries the verdict over rather
     /// than judging the pane again from numbers that no longer compare.
     #[serde(default)]
     pub unread: bool,
@@ -4718,15 +4717,15 @@ pub struct PaneReadRecord {
     pub checks_ended: Option<ChecksEnded>,
 }
 
-/// A pane whose last stop finished work, as Hide last saw it. Herdr's
-/// restored server can report such a pane as only ready (it does for a
+/// A pane whose last stop finished work, as Hide last saw it. A
+/// restored engine can report such a pane as only ready (it does for a
 /// restored Claude), and this is what keeps its completion through that.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PaneCompletion {
     /// The digest of the session that finished (`wire::session_digest`).
     #[serde(default)]
     pub session: Option<String>,
-    /// The server mark and Herdr sequence the completion was last seen at.
+    /// The server mark and engine sequence the completion was last seen at.
     #[serde(default)]
     pub server: Option<String>,
     #[serde(default)]
@@ -4737,17 +4736,17 @@ pub struct PaneCompletion {
 /// started it with.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PaneLaunch {
-    /// The agent kind, in Herdr's spelling.
+    /// The agent kind, in the engine's spelling.
     pub kind: String,
-    /// The Herdr name Hide started the agent under (a task's, a wake's, a
-    /// fork's, a reopen's, or `hide agent spawn --name`). Herdr keeps a name
+    /// The engine name Hide started the agent under (a task's, a wake's, a
+    /// fork's, a reopen's, or `hide agent spawn --name`). The engine keeps a name
     /// unique among its live agents, and an agent started in the pane by hand,
-    /// or one Herdr gives the pane's id to again, has another name or none,
+    /// or one the engine gives the pane's id to again, has another name or none,
     /// so the record never describes it.
     pub name: String,
     pub choice: hide_agent_adapter::LaunchChoice,
     /// The conversation the named agent last reported, so the same agent
-    /// still matches when it comes back from a Herdr restart without its
+    /// still matches when it comes back from an engine restart without its
     /// name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
@@ -6153,6 +6152,38 @@ impl PullRequestSnapshot {
     pub(crate) fn checks_unfinished(&self) -> bool {
         self.checks == PullRequestChecks::Pending || self.work.checks_running
     }
+
+    /// Where its head's CI stands, by the one rule a mission's ci line and
+    /// its Conductor's CI letter both read: it has ended only when nothing
+    /// on the head still runs (`checks_unfinished`), so a failure beside a
+    /// running workflow is not the end yet.
+    pub(crate) fn ci_end(&self) -> CiEnd {
+        use crate::missions::CiResult;
+        match self.checks {
+            PullRequestChecks::None => CiEnd::NoChecks,
+            PullRequestChecks::Unknown => CiEnd::Unread,
+            _ if self.checks_unfinished() => CiEnd::Running,
+            PullRequestChecks::Passing => CiEnd::Ended(CiResult::Passed),
+            PullRequestChecks::Failed if self.work.checks_cancelled => {
+                CiEnd::Ended(CiResult::Cancelled)
+            }
+            PullRequestChecks::Failed => CiEnd::Ended(CiResult::Failed),
+            // Unreachable: pending is unfinished.
+            PullRequestChecks::Pending => CiEnd::Running,
+        }
+    }
+}
+
+/// Where a pull request head's CI stands ([`PullRequestSnapshot::ci_end`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CiEnd {
+    /// GitHub reports no checks on the head.
+    NoChecks,
+    /// Its checks could not be read.
+    Unread,
+    /// Something on the head is queued or still runs.
+    Running,
+    Ended(crate::missions::CiResult),
 }
 
 impl Serialize for PullRequestSnapshot {
@@ -6259,6 +6290,12 @@ impl GithubReadOutcome {
 }
 
 impl GithubProjectSnapshot {
+    /// Its pull request list answers for now: the last read listed them and
+    /// is not stale.
+    pub(crate) fn pulls_current(&self) -> bool {
+        !self.status.stale && self.pull_requests_read
+    }
+
     pub fn read_outcome(&self) -> GithubReadOutcome {
         if self.status.failure_category == Some(GithubFailureCategory::NoGithubRemote) {
             GithubReadOutcome::NoRemote
@@ -6480,7 +6517,7 @@ pub struct WorktreeDiscard {
 }
 
 /// The accepted deletion, measured before any pane closes and executed by
-/// the worker only after Herdr confirms every pane is gone.
+/// the worker only after the engine confirms every pane is gone.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WorktreeRemovalSnapshot {
     pub id: u64,
@@ -6521,14 +6558,14 @@ pub enum WorktreeRemovalNotice {
         stop: hide_node_link::worktrees::RemovalStop,
         panes_closed: bool,
     },
-    /// Herdr closed the panes, and these programs still run in the folder,
+    /// The engine closed the panes, and these programs still run in the folder,
     /// which the operator can end before deleting again.
     StillRunning { programs: Vec<RunningProgram> },
     /// A pane appeared in the worktree while the panes were closing.
     PaneAppeared,
     /// The worktree or its deletion gate changed while the panes closed.
     ChangedWhileClosing,
-    /// The panes could not be closed, or Herdr did not confirm it.
+    /// The panes could not be closed, or the engine did not confirm it.
     CloseFailed,
     /// The repository's host could not be asked (`reason`: a `host.*` or
     /// `link.*` code, `node_access::link_failure_code`), or stopped it
@@ -6576,7 +6613,7 @@ pub struct TaskOperationSnapshot {
     pub failure: Option<String>,
     /// How starting `agent_kind` in the created pane went, kept apart from
     /// the creation itself: `starting`, `started`, `failed`, or `unknown`
-    /// when Herdr did not answer and the pane has to be looked at. `None`
+    /// when the engine did not answer and the pane has to be looked at. `None`
     /// when the task started no agent.
     pub agent_phase: Option<String>,
     /// Why the agent did not start, when `agent_phase` is `failed` or
@@ -6592,7 +6629,7 @@ pub struct TaskOperationSnapshot {
     pub request_id: Option<String>,
     /// The task came from a surface that is not the operator's own screen
     /// (a phone start): its tab is made without taking the screen, the
-    /// keyboard or Herdr's focus. The core's own fact; no shell reads it.
+    /// keyboard or the engine's focus. The core's own fact; no shell reads it.
     #[serde(skip)]
     pub stays_behind: bool,
 }
@@ -6795,7 +6832,7 @@ pub struct StatusSnapshot {
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
-    /// authoritative Herdr event. Keeping these beside status lets every
+    /// authoritative engine event. Keeping these beside status lets every
     /// surface show the same bounded, target-scoped state.
     pub async_operations: Vec<AsyncOperationSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -7182,7 +7219,7 @@ pub struct AgentHooksSnapshot {
     /// counted on those rows' `sessions` and named on each pane's
     /// `children.connection` (PRD settings-cleanup D-23: one per-session
     /// warning list that grew with every session is gone).
-    /// The sentence describing the last hook report Herdr did not take, when
+    /// The sentence describing the last hook report the engine did not take, when
     /// the most recent report failed. It is what separates "installed but
     /// every report is refused" from the restart advice above: with it on
     /// screen, a restart is not the fix and the sentence says what is.
@@ -7278,10 +7315,10 @@ pub struct RemoteStatusSnapshot {
 
 /// How far a device's projects are confirmed by its helper (PRD S5.5 B3,
 /// B4). `resolving`: the helper is being asked; `ready`: every directory the
-/// device's Herdr names has the helper's answer; `unavailable`: the helper
+/// device's engine names has the helper's answer; `unavailable`: the helper
 /// cannot be asked now, and why goes to the `device_catalog` diagnostics, not
 /// the wire (the web words the state). A directory the helper has not
-/// answered for is shown as its Herdr workspace alone, never grouped by a
+/// answered for is shown as its engine workspace alone, never grouped by a
 /// guess and never read on this machine.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DeviceCatalogSnapshot {
@@ -7349,7 +7386,7 @@ pub struct RemoteSessionSnapshot {
     /// (`Runtime::derive_device_session`), so they are not sent to the shell.
     #[serde(skip)]
     pub pane_hook_tokens: BTreeMap<String, crate::agent_hooks::PaneHookTokens>,
-    /// The issue tokens of the device's Herdr: a workspace's by its Herdr
+    /// The issue tokens of the device's engine: a workspace's by its engine
     /// id, a pane's by its remote pane id. The core reads a node checkout's
     /// issue link from them (`Runtime::project_node_issues`), so they are not
     /// sent to the shell either.

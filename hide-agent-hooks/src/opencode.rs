@@ -9,11 +9,11 @@
 //! plugin that does nothing, and the `hide-opencode` folder beside it: one
 //! shared server runs every session of the machine, so its half
 //! (`server.js`) asks the terminal showing the session (`tui.js`), which runs
-//! in that session's Herdr pane, to run the helper for it.
+//! in that session's pane, to run the helper for it.
 
 use crate::plugin::{Plugin, PluginFile};
 
-/// OpenCode's global configuration folder as Herdr's integration finds it,
+/// OpenCode's global configuration folder as Herdr's integration found it,
 /// `~/.config/opencode` on every system, so Hide's plugin sits beside Herdr's:
 /// the folder OpenCode's declaration names (`hide_agent_adapter`).
 /// OpenCode itself reads `$XDG_CONFIG_HOME/opencode` when that is set; such a

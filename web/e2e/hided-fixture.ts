@@ -162,7 +162,7 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     HIDE_PORT: port,
     HIDED_UI_DIR: path.resolve("dist"),
     // Catalog discovery probes every provider on hided's PATH, so use the
-    // same controlled shim and system tools as the private Herdr server.
+    // same controlled shim and system tools as the engine fixture.
     // Specs adding a shim prepend it to this path through extraEnv.
     PATH: herdr.fixturePath,
     // `open_external` must not launch a GUI application on the runner.
@@ -188,9 +188,9 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     child.once("close", () => log.end());
   }
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  // Panes Herdr started under the home keep their working folders locked on
-  // Windows until its server's processes are gone, so the daemon's directory
-  // (the home is inside it) is removed by Herdr's stop, after them.
+  // Panes started under the home keep their working folders locked on
+  // Windows until their processes are gone, so the daemon's directory
+  // (the home is inside it) is removed by the engine fixture's stop, after them.
   const removeDir = () => {
     // The daemon may still be writing its state file (and, with S3, staged
     // files) as it dies; removing the directory under it fails with ENOTEMPTY.
@@ -207,7 +207,7 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     fs.rmSync(dir, { recursive: true, force: true });
   };
   // A killed daemon on Windows keeps the folders it holds open (the checkouts
-  // it watches) until it is gone, and Herdr's stop deletes the fixture root
+  // it watches) until it is gone, and the engine fixture's stop deletes the fixture root
   // next. So its tree is listed while it runs, then ended, and this returns
   // once none of it is left.
   const end = () => {

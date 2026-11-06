@@ -1,16 +1,16 @@
 import type { TFunction } from "i18next";
-import { ChevronRightIcon, HistoryIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, HistoryIcon } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
+import { MapPanel, MapPanelHead } from "./components/map-page";
 import { PlanChecklist } from "./components/plan-checklist";
 import { SummaryRow } from "./components/mission-summary";
 import { StepNumber } from "./components/step-number";
 import { Button } from "./components/ui/button";
-import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { MissionDevice, useMissionDeviceName } from "./missionParts";
-import { childNow, childPlanOf, childReachable, evidenceWords, planCount, stepDelegationWord } from "./plans";
+import { childNow, childPlanOf, childReachable, evidenceWords, planCount, stepLeft, stepStatusWord } from "./plans";
 import type { PlanDelegation, PlanStep, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -27,28 +27,25 @@ export function PlanStepPanel({ plan, step, number, onClose, openPane }: { plan:
   const { t } = useInterfaceTranslation();
   const delegation = step.delegation;
   const open = step.status === "planned" || step.status === "working";
-  const status = step.status !== "done" && delegation ? t(`plan.delegation.state.${delegation.state}`) : stepDelegationWord(step) === "pending" ? t("plan.delegation.pending") : t(`plan.status.${step.status}`);
   const child = useShellStore((s) => childPlanOf(s.rest, step));
   const now = delegation ? childNow(child) : null;
   const nowLine = delegation ? (now ? `${now.step} ${now.progress}` : step.line) : step.line;
+  const left = stepLeft(step);
   const nothing = t("plan.panel.nothing");
   return (
-    <div className="@container/mission-panel flex min-w-0 flex-col gap-md px-md pb-sm text-body" data-plan-step-detail={step.key}>
-      <section className="sticky top-0 z-10 -mx-md flex min-w-0 flex-col gap-xxs bg-background px-md pb-xs pt-sm" data-panel-part="head">
-        <div className="flex min-w-0 items-start gap-xs">
-          <StepNumber number={number} status={step.status} className="mt-xxs" />
-          <h3 className="min-w-0 flex-1 break-words text-subhead font-semibold [word-break:keep-all]" data-panel-title="true">{step.title}</h3>
-          <Hint label={t("plan.closeStep")}>
-            <Button variant="ghost" size="icon-sm" className="-mr-xs shrink-0 text-muted-foreground" aria-label={t("plan.closeStep")} onClick={onClose} data-panel-close="true">
-              <XIcon />
-            </Button>
-          </Hint>
-        </div>
-        <p className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption text-muted-foreground" data-panel-meta="true">
-          <span className="tabular-nums">{t("plan.panel.of", { number, total: plan.steps.length })}</span>
-          <span data-panel-status={step.status}>{status}</span>
-        </p>
-      </section>
+    <MapPanel data={{ "data-plan-step-detail": step.key }}>
+      <MapPanelHead
+        mark={<StepNumber number={number} status={step.status} />}
+        title={step.title}
+        close={t("plan.closeStep")}
+        onClose={onClose}
+        facts={
+          <>
+            <span className="tabular-nums">{t("plan.panel.of", { number, total: plan.steps.length })}</span>
+            <span data-panel-status={step.status}>{stepStatusWord(step, t)}</span>
+          </>
+        }
+      />
       <dl className="flex min-w-0 flex-col gap-md">
         {open ? (
           <SummaryRow name={t("plan.field.line")} field="now">
@@ -60,10 +57,10 @@ export function PlanStepPanel({ plan, step, number, onClose, openPane }: { plan:
         </SummaryRow>
         {step.status !== "dropped" ? (
           <SummaryRow name={t("plan.side.left")} field="left">
-            {step.evidence ? (
-              <span className="min-w-0 truncate font-mono text-caption text-mission-done" title={step.evidence.kind === "file" ? step.evidence.path : undefined} data-plan-side-evidence={step.evidence.kind}>{evidenceWords(step.evidence)}</span>
+            {left?.kind === "evidence" ? (
+              <span className="min-w-0 truncate font-mono text-caption text-mission-done" title={left.evidence.kind === "file" ? left.evidence.path : undefined} data-plan-side-evidence={left.evidence.kind}>{evidenceWords(left.evidence)}</span>
             ) : (
-              <Quiet value={step.status === "done" && delegation ? t("plan.delegation.report") : null} nothing={nothing} />
+              <Quiet value={left?.kind === "report" ? t("plan.delegation.report") : null} nothing={nothing} />
             )}
           </SummaryRow>
         ) : null}
@@ -81,7 +78,7 @@ export function PlanStepPanel({ plan, step, number, onClose, openPane }: { plan:
           </SummaryRow>
         ) : null}
       </dl>
-    </div>
+    </MapPanel>
   );
 }
 

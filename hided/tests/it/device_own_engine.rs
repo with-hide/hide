@@ -4,7 +4,7 @@
 //! a pane whose node ended with its link runs on under its holder, so the
 //! next link's node finds it with the same process. A caller in one of its
 //! panes is proved by that pane's holder record, as a caller in a Herdr
-//! pane is by its Herdr (D-9), so `hide` works there with no Herdr.
+//! pane was by its Herdr (D-9), so `hide` works there with no Herdr.
 #![cfg(unix)]
 
 use std::path::PathBuf;

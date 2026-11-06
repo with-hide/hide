@@ -1,7 +1,7 @@
 //! Every worktree of every open repository, with the counts the sidebar row
 //! and the summary card show.
 //!
-//! A worktree earns a row because git lists it, not because Herdr has a pane
+//! A worktree earns a row because git lists it, not because the engine has a pane
 //! in it: that is the whole point of the projects tree, and it is why this
 //! reader exists rather than the catalog forking `git` itself. Each read runs
 //! on a worker thread ([`crate::reader::BackgroundRead`]), so a repository

@@ -9,11 +9,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 /// What an agent needs from the operator.
 ///
 /// A question is the core label's verdict on the agent's last message;
-/// Herdr's `blocked` lifecycle is an approval. `Error` is the label's block
+/// the engine's `blocked` lifecycle is an approval. `Error` is the label's block
 /// (`end: blocked`): the agent stopped and named what stopped it, which is
 /// the operator's to clear. It keeps the wire name it had when it was a
 /// failure, so every consumer of the value reads one meaning, and it is not
-/// Herdr's `blocked` lifecycle. Whether the operator has read any of them is
+/// the engine's `blocked` lifecycle. Whether the operator has read any of them is
 /// Hide's own judgment (`apply_read_state`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentDemand {
@@ -36,8 +36,8 @@ impl AgentDemand {
 
 /// Whether an agent is running.
 ///
-/// Herdr's `done` and `idle` are the same underlying stopped state. Completion
-/// is recorded on its own axis; Herdr's tab-scoped seen judgment never becomes
+/// The engine's `done` and `idle` are the same underlying stopped state. Completion
+/// is recorded on its own axis; the engine's tab-scoped seen judgment never becomes
 /// Hide's pane-level read state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentActivity {
@@ -407,7 +407,7 @@ fn turn_read_finished(agent: &SidebarAgentSnapshot) -> bool {
 
 /// Whether the row moves its own work on: running with nothing asked of
 /// anyone, or stopped on a background task its session proves. A demand
-/// waits on someone else, and one whose activity Herdr cannot classify is
+/// waits on someone else, and one whose activity the engine cannot classify is
 /// not vouched for, so neither is progress.
 fn progressing(agent: &SidebarAgentSnapshot) -> bool {
     let (demand, activity, _) = axes_of(agent);
@@ -646,10 +646,10 @@ pub fn demand_of(agent: &SidebarAgentSnapshot) -> AgentDemand {
 }
 
 /// The prefix every pane id on a remote target carries. A pane id without it
-/// belongs to the local Herdr server.
+/// belongs to the local engine.
 /// Which slice of the read record ledger a pass is allowed to prune.
 ///
-/// The ledger holds records for several Herdr servers. A pass that pruned
+/// The ledger holds records for several engines (this machine's and each device's). A pass that pruned
 /// every key its own authoritative topology did not claim would drop a remote
 /// pane's record on the next local sync and the reverse, so a stopped remote
 /// pane the operator had already read came back as `Done` and demanded a close
@@ -658,7 +658,7 @@ pub fn demand_of(agent: &SidebarAgentSnapshot) -> AgentDemand {
 pub enum ReadRecordScope<'a> {
     /// Prune nothing. The caller has no authoritative pane topology.
     Retain,
-    /// The caller holds the local server's full pane topology. Remote records
+    /// The caller holds the local engine's full pane topology. Remote records
     /// are left alone, and so is what this machine's import record keeps of
     /// the Herdr panes not moved yet (PRD engine-bundle-4-herdr-removal D-25).
     Local(&'a crate::herdr_import::Held),
@@ -692,22 +692,22 @@ pub struct ReadRecordChange {
     pub evicted: bool,
 }
 
-/// One connection to a Herdr server, as the read axis needs to know it.
+/// One connection to an engine, as the read axis needs to know it.
 ///
-/// Herdr's `state_change_seq` restarts with its server, and a restored
-/// server reports each pane in steps: first with sequence 0, then `unknown`
-/// while it detects the agent again, then settled (measured on the pinned
-/// 0.9.3 across a live handoff and a cold restore). A sequence saved on one
-/// server says nothing about one read on another, so a saved state names the
-/// server it was read on (`PaneReadRecord::server`), and the pane says which
-/// server it is on through Hide's mark (`wire::SERVER_MARK_TOKEN`), which
-/// Herdr drops with its server.
+/// The engine's `state_change_seq` restarts with the engine, and a restored
+/// engine can report each pane in steps: first with sequence 0, then `unknown`
+/// while it detects the agent again, then settled (Herdr did, measured on the
+/// pinned 0.9.3 across a live handoff and a cold restore). A sequence saved on
+/// one run says nothing about one read on another, so a saved state names the
+/// run it was read on (`PaneReadRecord::server`), and the pane says which
+/// run it is on through Hide's mark (`wire::SERVER_MARK_TOKEN`), which
+/// the engine drops when it restores.
 #[derive(Clone, Debug)]
 pub struct ReadConnection {
     /// The mark this connection writes on a pane that carries none, once a
     /// state saved for the pane names it.
     pub mark: String,
-    /// The panes Herdr has reported settled since this connection began. A
+    /// The panes the engine has reported settled since this connection began. A
     /// pane is judged against a state saved on another server once, the
     /// first time it is settled here.
     pub settled: HashSet<String>,
@@ -745,8 +745,8 @@ impl ReadConnection {
     }
 }
 
-/// Whether Herdr has settled this pane: it knows what the agent is doing and
-/// has numbered that state on this server. A restored server lists a pane
+/// Whether the engine has settled this pane: it knows what the agent is doing and
+/// has numbered that state on this server. A restored engine can list a pane
 /// at sequence 0 and then `unknown` before it does.
 fn settled(agent: &SidebarAgentSnapshot) -> bool {
     agent.state_change_seq != Some(0) && axes_of(agent).1 != AgentActivity::Unknown
@@ -840,7 +840,7 @@ fn restored_is_news(record: &PaneReadRecord, agent: &SidebarAgentSnapshot) -> bo
     another_session || new_demand || agent.activity != record.activity
 }
 
-/// Shows each finished pane's completion through a Herdr server that no
+/// Shows each finished pane's completion through an engine that no
 /// longer reports it, and saves which panes finished. Runs before the
 /// lineage, which hands a completion up to the pane's ancestors.
 ///
@@ -947,19 +947,19 @@ pub fn prune_completions(
 /// an agent list is not a pane list during server restoration.
 ///
 /// This is the whole read authority. `operator_pane_id` is the pane the
-/// operator chose to look at, never the pane Herdr happens to report focused:
-/// Herdr marks every pane in a tab seen the moment the tab is focused, so
-/// nothing here reads Herdr's `done` or `idle` or a token's `_new` suffix to
+/// operator chose to look at, never the pane the engine happens to report focused:
+/// A tab-scoped seen would mark every pane in a tab seen the moment the tab is focused, so
+/// nothing here reads the engine's `done` or `idle` or a token's `_new` suffix to
 /// decide it. Running it twice over the same agents and the same pane changes
 /// nothing the second time (engineering rule 11).
 ///
-/// A record saved on another Herdr server, or while its pane was still being
+/// A record saved on another engine, or while its pane was still being
 /// restored, is carried over rather than compared: until the pane settles on
 /// this server it keeps the verdict it was saved with, and when it settles a
 /// read record is moved onto this server unless the pane shows something new
 /// (`restored_is_news`).
 /// The verdict a record holds is saved whenever it changes, so a restart
-/// that loses Herdr's numbers cannot turn an unread pane read or the reverse.
+/// that loses the engine's numbers cannot turn an unread pane read or the reverse.
 pub fn apply_read_state(
     agents: &mut [SidebarAgentSnapshot],
     records: &mut BTreeMap<String, PaneReadRecord>,
@@ -1102,7 +1102,7 @@ pub(crate) fn agent_demand(agent: &SessionAgentPayload) -> AgentDemand {
 
 /// The turn the pane's own session's hook last reported: the first rank of
 /// every axis below (PRD engine-bundle-1 D-9). It stands until that session's
-/// next hook event; Herdr's state decides only an agent whose session has
+/// next hook event; the engine's state decides only an agent whose session has
 /// reported no turn (`agent_hooks::facts`).
 fn hook_turn(agent: &SessionAgentPayload) -> Option<HookTurn> {
     agent.hook
@@ -1110,18 +1110,18 @@ fn hook_turn(agent: &SessionAgentPayload) -> Option<HookTurn> {
 
 /// Whether the agent waits for the operator's approval: its hook saying it
 /// asks for a permission or an answer first; then a plan approval its session
-/// read holds, which no hook reports; then Herdr's blocked prompt. A wait read
+/// read holds, which no hook reports; then the engine's blocked prompt. A wait read
 /// from how the last turn ended cannot hold an agent that is already working
 /// again; one an agent kind reads from its session's current state can,
-/// because Herdr keeps that kind `working` while it waits.
+/// because the engine keeps that kind `working` while it waits.
 pub(crate) fn agent_blocked(agent: &SessionAgentPayload) -> bool {
     approval_prompt(agent) || session_wait(agent)
 }
 
 /// A permission prompt or dialog holds the pane: the hook's `waiting` turn,
-/// or, for a session whose hook has reported no turn, Herdr's blocked
+/// or, for a session whose hook has reported no turn, the engine's blocked
 /// prompt. A hook that reported the turn has said whether it waits on a
-/// permission, so Herdr's blocked prompt is no longer the answer for it.
+/// permission, so the engine's blocked prompt is no longer the answer for it.
 fn approval_prompt(agent: &SessionAgentPayload) -> bool {
     if reports_nothing(agent) {
         return false;
@@ -1132,7 +1132,7 @@ fn approval_prompt(agent: &SessionAgentPayload) -> bool {
     }
 }
 
-/// A native question or plan approval the session read holds for Herdr's
+/// A native question or plan approval the session read holds for the engine's
 /// current state, while the activity axis does not say the agent went on
 /// working past it (a kind that waits while it works excepted).
 fn session_wait(agent: &SessionAgentPayload) -> bool {
@@ -1149,7 +1149,7 @@ fn session_wait(agent: &SessionAgentPayload) -> bool {
                 .is_some_and(hide_session::Agent::waits_while_working))
 }
 
-/// The agent's own native question, read from its session for Herdr's
+/// The agent's own native question, read from its session for the engine's
 /// current state. It holds whatever the activity, since an asynchronous
 /// question stays open while the agent works (Codex
 /// `request_user_input_async`), and the demand axis shows it so.
@@ -1163,11 +1163,11 @@ fn native_question(agent: &SessionAgentPayload) -> bool {
 }
 
 /// The turn and approval the core decides for one agent, from the same ranks
-/// the row's axes use: the hook first, then the session read, then Herdr.
+/// the row's axes use: the hook first, then the session read, then the engine.
 /// The screen's axes, the letter doorbell and the tool-letter handover read
 /// this one answer, so a row shown at rest and a letter held as working
 /// cannot disagree (`docs/status-model.md`, Where each axis comes from).
-/// Whether the pane takes input now (Herdr's own blocked prompt, its
+/// Whether the pane takes input now (the engine's own blocked prompt, its
 /// readiness, a draft in the composer) is not a turn and is decided apart
 /// from it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1178,7 +1178,7 @@ pub(crate) struct TurnProjection {
     /// The agent's own native question or a plan approval waits for the
     /// operator (`native_question`, `session_wait`).
     pub operator_wait: bool,
-    /// The activity is the turn the agent's own hook reported, not Herdr's
+    /// The activity is the turn the agent's own hook reported, not the engine's
     /// reading of its screen: proof the agent itself started or ended it.
     pub reported: bool,
 }
@@ -1192,14 +1192,14 @@ pub(crate) fn turn_projection(agent: &SessionAgentPayload) -> TurnProjection {
     }
 }
 
-/// The activity axis: the hook's turn first, then Herdr's `agent_status`. A
-/// state Herdr does not name is reported as unknown rather than folded into
+/// The activity axis: the hook's turn first, then the engine's `agent_status`. A
+/// state the engine does not name is reported as unknown rather than folded into
 /// idle (engineering rule 4). A turn that just ended whose session read has
 /// not landed is not a stop yet: whether a background task will wake the
 /// agent is not known, and a row announced as finished there is taken back
 /// when the read lands (#902). It goes on as it was. A pane whose terminal
 /// failed to restore runs no process, so its agent is stopped with nothing to
-/// interrupt, never unknown: Herdr reports it `unknown` for good, and reading
+/// interrupt, never unknown: the engine reports it `unknown` for good, and reading
 /// that as an unread activity would ask for a status check nothing can give.
 pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
     if agent.terminal_failed {
@@ -1266,10 +1266,10 @@ pub(crate) fn agent_starting(agent: &SessionAgentPayload) -> bool {
 }
 
 /// Whether this stopped pane has actually completed work: its hook saying the
-/// turn ended, or, without a hook's turn, Herdr's `done`, or its `idle` with
+/// turn ended, or, without a hook's turn, the engine's `done`, or its `idle` with
 /// the completion it keeps (`completion_seq`) after its tab-scoped seen turned
 /// `done` into `idle`. A ready pane has no completion. It is deliberately
-/// separate from activity and read state; Herdr's tab-scoped seen value never
+/// separate from activity and read state; the engine's tab-scoped seen value never
 /// decides Hide's pane-level read axis.
 pub(crate) fn agent_completed(agent: &SessionAgentPayload) -> bool {
     if reports_nothing(agent) {

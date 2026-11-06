@@ -6,7 +6,7 @@
 #[derive(serde::Serialize)]
 pub struct JourneyAdapter {
     pub id: &'static str,
-    /// The agent kind `hide agent spawn --kind` takes and Herdr reports.
+    /// The agent kind `hide agent spawn --kind` takes and the engine reports.
     pub herdr_kind: &'static str,
     /// The agent's own folder in its HOME, whose presence tells the kit the
     /// agent is set up there, as a CLI that has run once leaves it.
@@ -164,7 +164,7 @@ pub struct JourneyCells {
     pub launch_brief: bool,
     /// The first turn's reply, read by Hide's conversation reader.
     pub reply: bool,
-    /// Herdr's own integration reports the session.
+    /// Hide's own hook integration reports the session.
     pub integration: bool,
     /// The start guidance and Memory reach the first turn.
     pub guidance_memory: bool,

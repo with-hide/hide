@@ -257,7 +257,7 @@ pub(super) fn run(
             &claim,
         ) {
             Ok(tab) => acknowledged = Some(tab),
-            // Herdr took the layout; its answer only goes unread.
+            // The engine took the layout; its answer only goes unread.
             Err(EngineError::Answer(_)) => {}
             Err(error) => {
                 let failure = mutation_failure("layout.apply")(error);

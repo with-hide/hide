@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CellRow } from "./selection";
 import { linkCandidates, osc8Target, parseToken, TOKEN_CANDIDATES, type LinkCandidate } from "./terminalLinks";
 
-/** A row of `width` cells holding `text`, padded with written spaces the way a Herdr frame draws it. */
+/** A row of `width` cells holding `text`, padded with written spaces the way a pane holder's frame draws it. */
 function row(text: string, width: number): CellRow {
   const cells: CellRow = [];
   for (const char of text) {

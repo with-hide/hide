@@ -14,12 +14,11 @@
 //! answer (B29).
 
 use crate::missions::{
-    AttentionReason, Delivery, FixReason, Mission, MissionNode, MissionScope, MissionStatus,
-    NodeKind, NodeStatus, WarningKind, cause_key,
+    AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionScope,
+    MissionStatus, NodeKind, NodeStatus, WarningKind, cause_key,
 };
 use crate::model::{
-    GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestChecks, PullRequestSnapshot,
-    ReviewDecision,
+    CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
 };
 
 /// A node's worker as its registration stands (`coordination::life`).
@@ -460,10 +459,15 @@ fn find(pulls: &GithubProjectSnapshot, number: u32) -> Option<&PullRequestSnapsh
         .find(|pull| pull.number == number)
 }
 
-/// What an open pull request needs from its worker (D-13).
+/// What an open pull request needs from its worker (D-13): a CI failure
+/// only once its CI ended (`PullRequestSnapshot::ci_end`), the rule its ci
+/// line and its Conductor's letter read.
 fn needs(pull: &PullRequestSnapshot) -> Vec<FixReason> {
     let mut out = Vec::new();
-    if pull.checks == PullRequestChecks::Failed {
+    if matches!(
+        pull.ci_end(),
+        CiEnd::Ended(CiResult::Failed | CiResult::Cancelled)
+    ) {
         out.push(FixReason::CiFailed);
     }
     if pull.work.merge_state == MergeState::Dirty {
@@ -482,8 +486,8 @@ fn pr_ready(pull: &PullRequestSnapshot) -> bool {
         || (!pull.badge.is_settled()
             && !pull.is_draft
             && matches!(
-                pull.checks,
-                PullRequestChecks::Passing | PullRequestChecks::None
+                pull.ci_end(),
+                CiEnd::Ended(CiResult::Passed) | CiEnd::NoChecks
             )
             && pull.review == Some(ReviewDecision::Approved))
 }
@@ -611,6 +615,7 @@ mod tests {
     use super::*;
     use crate::missions::tests::{mission, node, plan};
     use crate::missions::{Attention, Woken, apply_plan};
+    use crate::model::PullRequestChecks;
 
     /// A running merge-scope mission of `keys`, each a change at work on
     /// branch `feat/<key>` by `agent-<key>`.
@@ -947,6 +952,12 @@ mod tests {
         let mut failing = open.clone();
         failing.checks = PullRequestChecks::Failed;
         assert!(!waits_on_others(&failing));
+        // A failure beside a check that still runs is not the CI's end yet:
+        // the worker is not woken for it and still waits on CI.
+        let mut still_running = failing.clone();
+        still_running.work.checks_running = true;
+        assert!(needs(&still_running).is_empty());
+        assert!(waits_on_others(&still_running));
         let mut draft = open;
         draft.is_draft = true;
         assert!(!waits_on_others(&draft));

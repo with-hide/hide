@@ -74,6 +74,39 @@ class Matching(unittest.TestCase):
         self.assertTrue(r.tracks({"body": "`hide-platform::ipc a_burst` flakes"}, test))
         self.assertFalse(r.tracks({"body": "`hide-platform::ipc another`"}, test))
 
+    FILE = "web/e2e/session-work-ledger.spec.ts"
+    LEDGER = "@platform a native session keeps its tasks and missed work through search"
+
+    def filed(self, file, name):
+        return {"body": r.new_issue({"file": file, "name": name, "error": ""}, "Linux", {"marker": "m", "run": "u", "change": "c", "sha": "s"}, TODAY)["body"]}
+
+    def test_an_issue_the_script_filed_tracks_only_the_test_it_names_whole(self):
+        issue = self.filed(self.FILE, self.LEDGER)
+        self.assertTrue(r.tracks(issue, {"file": self.FILE, "name": self.LEDGER, "error": ""}))
+
+    def test_a_sibling_that_starts_the_same_way_is_not_tracked_by_a_filed_issue(self):
+        issue = self.filed(self.FILE, self.LEDGER)
+        for name in ("@platform a native session also keeps its drafts", self.LEDGER + " off"):
+            self.assertFalse(r.tracks(issue, {"file": self.FILE, "name": name, "error": ""}), name)
+
+    def test_a_renamed_test_is_not_tracked_by_the_issue_of_its_old_title(self):
+        issue = self.filed(self.FILE, self.LEDGER)
+        renamed = {"file": self.FILE, "name": "@platform a native session's record groups its requests", "error": ""}
+        self.assertFalse(r.tracks(issue, renamed))
+
+    def test_a_filed_issue_of_another_file_is_not_tracked(self):
+        issue = self.filed("web/e2e/other.spec.ts", self.LEDGER)
+        self.assertFalse(r.tracks(issue, {"file": self.FILE, "name": self.LEDGER, "error": ""}))
+
+    def test_a_filed_rust_issue_does_not_track_a_test_whose_name_it_contains(self):
+        issue = self.filed(None, "hide-platform::ipc a_burst_more")
+        self.assertTrue(r.tracks(issue, {"file": None, "name": "hide-platform::ipc a_burst_more", "error": ""}))
+        self.assertFalse(r.tracks(issue, {"file": None, "name": "hide-platform::ipc a_burst", "error": ""}))
+
+    def test_a_hand_written_issue_still_tracks_a_test_by_file_and_start_of_name(self):
+        body = f"- Test: `{self.FILE}:62` › {self.LEDGER[:30]}... flakes"
+        self.assertTrue(r.tracks({"body": body}, {"file": self.FILE, "name": self.LEDGER, "error": ""}))
+
 
 class Filing(unittest.TestCase):
     def setUp(self):
@@ -224,8 +257,8 @@ class Filing(unittest.TestCase):
 
 class Workflows(unittest.TestCase):
     def test_every_e2e_log_upload_keeps_a_flaky_run_as_it_keeps_a_failed_one(self):
-        # A flaky run passed, but its first attempt failed, and the daemon,
-        # Herdr and input logs of that attempt are the only evidence its issue
+        # A flaky run passed, but its first attempt failed, and the daemon
+        # and input logs of that attempt are the only evidence its issue
         # gets. Each job that reports flaky Playwright tests and keeps those
         # logs reads the output of its own report.
         uploads = 0

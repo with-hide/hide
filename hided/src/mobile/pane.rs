@@ -25,7 +25,7 @@ pub enum PaneError {
     Gone,
     /// The SSH device that owns it is not connected.
     DeviceUnreachable,
-    /// This Mac's Herdr did not answer.
+    /// This Mac's engine did not answer.
     Unavailable(String),
     /// The agent is ending, asleep or waking, and what is under it is its shell.
     Asleep,
@@ -68,7 +68,7 @@ pub fn read(engine: &EngineHandle, pane_id: &str, lines: u32) -> Result<Rows, Pa
     })
 }
 
-/// The keys a phone may send, as Herdr key-combo strings.
+/// The keys a phone may send, as key-combo strings.
 pub fn herdr_key(key: &str) -> Option<&'static str> {
     match key {
         "enter" => Some("enter"),
@@ -80,7 +80,7 @@ pub fn herdr_key(key: &str) -> Option<&'static str> {
     }
 }
 
-/// Why a reply was not sent; checked before anything reaches Herdr.
+/// Why a reply was not sent; checked before anything reaches the engine.
 pub fn reply_problem(text: &str) -> Option<&'static str> {
     if text.trim().is_empty() {
         return Some("empty");
@@ -106,10 +106,10 @@ pub fn wait_for_input(
     input: &Input<'_>,
 ) -> Result<(), PaneError> {
     let bytes = match &input {
-        // Reserve payload plus Enter; Herdr's bracketed-paste wrapper is
+        // Reserve payload plus Enter; the bracketed-paste wrapper is
         // protocol framing and is not part of this held payload budget.
         Input::Reply(text) => text.len() + 1,
-        // Herdr's supported quick keys encode as one byte or a three-byte
+        // The supported quick keys encode as one byte or a three-byte
         // cursor sequence (CSI/SS3), not the length of their logical name.
         Input::Key("up" | "down") => 3,
         Input::Key("enter" | "esc" | "ctrl+c") => 1,

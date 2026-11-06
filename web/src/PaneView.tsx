@@ -39,8 +39,8 @@ import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, paste
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
- * the header. An observed pane (another client holds Herdr's control) streams
- * too, and its wheel moves Herdr's viewport.
+ * the header. An observed pane (another client holds the engine's control) streams
+ * too, and its wheel moves the engine's viewport.
  */
 const LIVE_STATES = new Set(["connected", "controlling", "observing", "idle"]);
 

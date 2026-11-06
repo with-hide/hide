@@ -8,7 +8,7 @@
 // core answers with the last number it applied (`focused.operator_focus` in
 // the snapshot), and the page follows the snapshot's pane only once that
 // answer has caught up with what it sent. After that, a different pane is a
-// real move (the core followed Herdr, or refused the click and kept its own
+// real move (the core followed the engine, or refused the click and kept its own
 // value) and is followed as before. No time window is involved.
 
 import type { SnapshotRest } from "./snapshot";

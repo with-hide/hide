@@ -399,7 +399,7 @@ fn catch_up_that_cannot_start_shows_failed_until_head_moves() {
     let mut runtime = runtime();
     let target = target(&runtime, 1);
     header_with(&mut runtime, &target, behind('a', 0, 5));
-    // The test runtime has no live Herdr connection to run it with.
+    // The test runtime has no live engine connection to run it with.
     assert!(press(&mut runtime, 'a'));
     assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Failed));
     runtime.ingest_checkout_git((target.clone(), Ok(behind('a', 0, 5))), Instant::now());

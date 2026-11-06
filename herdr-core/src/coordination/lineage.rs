@@ -211,7 +211,7 @@ impl Writer {
     }
 
     /// Plans and queues the token writes this server's panes still need:
-    /// each registration's lineage keys and, from `marks` (Herdr pane id to
+    /// each registration's lineage keys and, from `marks` (the engine pane id to
     /// mark), the read axis's server mark (`wire::SERVER_MARK_TOKEN`); and
     /// settles each wait for an agent's session that `agents` answers, with
     /// `pane_exists` saying which panes the server still has.
@@ -512,7 +512,7 @@ fn plan(
         }
     }
     // Lineage patches are bounded by the registrations; marks only by the
-    // panes Herdr lists. The rest are planned again once this batch is
+    // panes the engine lists. The rest are planned again once this batch is
     // acknowledged.
     patches.truncate(super::AGENT_LIMIT);
     patches
@@ -706,7 +706,7 @@ mod tests {
     fn a_fork_that_is_woken_in_another_pane_names_its_source_there() {
         let source = record("agent-1", "w1:p1", "source", None);
         let mut fork = fork("agent-2", "w2:p1", "fork", &source);
-        // The wake continues the registration in a pane Herdr just made, which
+        // The wake continues the registration in a pane the engine just made, which
         // carries none of the tokens the closed pane held.
         fork.pane = "w3:p1".into();
         fork.actor.pane_id = "w3:p1".into();

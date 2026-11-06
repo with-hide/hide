@@ -23,7 +23,7 @@ pub fn push_bounded(stack: &mut VecDeque<ClosedItem>, mut item: ClosedItem) -> O
 pub struct ClosedContext {
     pub workspace_id: String,
     pub workspace_label: String,
-    /// Herdr identities present before the close. A retry inspects only later
+    /// The engine identities present before the close. A retry inspects only later
     /// identities for Hide's exact reopen-intent marker; being new, having the
     /// same label, or sharing a cwd never proves ownership by itself.
     pub workspace_ids_before_close: Vec<String>,
@@ -34,7 +34,7 @@ pub struct ClosedContext {
     pub tab_id: String,
     pub tab_label: String,
     pub tab_index: usize,
-    /// Hide-owned area and insertion position, independent of Herdr order.
+    /// Hide-owned area and insertion position, independent of the engine order.
     pub agent_area: Option<(String, usize)>,
     #[serde(default)]
     pub agent_group: Option<String>,
@@ -45,7 +45,7 @@ pub struct ClosedContext {
     #[serde(default)]
     pub replacement_in_tab: bool,
     /// The name the operator gave the tab, the only label a reopen or a
-    /// wake sends Herdr: Herdr keeps any label it is sent as the tab's name,
+    /// wake sends the engine: the engine keeps any label it is sent as the tab's name,
     /// so sending `tab_label`, the label Hide displays, would name a tab the
     /// operator never named.
     #[serde(default)]
@@ -70,8 +70,8 @@ pub enum ClosedTabName {
 }
 
 impl ClosedContext {
-    /// The label a reopen or a wake sends Herdr; none for a tab nobody
-    /// named, so Herdr keeps or picks the tab's own.
+    /// The label a reopen or a wake sends the engine; none for a tab nobody
+    /// named, so the engine keeps or picks the tab's own.
     pub(crate) fn herdr_tab_label(&self) -> Option<&str> {
         match &self.tab_name {
             ClosedTabName::Named(name) | ClosedTabName::Labeled(name) => Some(name),
@@ -263,7 +263,7 @@ impl ClosedItem {
     }
 
     /// The device whose surface can reopen this item. Hide records a pane or
-    /// tab close only on this machine's Herdr, the core's `node`.
+    /// tab close only on this machine's engine, the core's `node`.
     pub fn device_id<'a>(&'a self, node: &'a str) -> &'a str {
         match self {
             Self::Pane { .. } | Self::Tab { .. } | Self::Tree { .. } => node,
@@ -366,7 +366,7 @@ impl ClosedLayoutNode {
                         neighbor_pane_id: first.direct_pane_id(),
                         parent_path: path.clone(),
                         direction: *direction,
-                        // Herdr's pane.split ratio always describes the first
+                        // The engine's pane.split ratio always describes the first
                         // child's share. The later swap restores which side the
                         // reopened pane occupied, so complementing here would
                         // invert the original geometry.
@@ -627,7 +627,7 @@ mod tests {
         }
     }
 
-    /// Herdr keeps a label it is sent as the tab's name, so a reopen or a
+    /// The engine keeps a label it is sent as the tab's name, so a reopen or a
     /// wake sends only the operator's, and the choice survives being saved;
     /// a record from before the name was kept sends what it always did.
     #[test]

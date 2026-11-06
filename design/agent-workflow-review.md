@@ -115,7 +115,7 @@ Git loading or failure appears above the file tree and never erases usable file 
 Public static acceptance runs `node scripts/check-design-contract.mjs`.
 Original board consistency is checked with the separately maintained authoring tools.
 Code acceptance runs the required Rust and web commands from the implementation worktree (`bash scripts/verify-cargo.sh test`, `bash scripts/verify-web.sh`).
-Manual acceptance in the desktop app uses exactly one identified candidate Hide app and one isolated Herdr server.
+Manual acceptance in the desktop app uses exactly one identified candidate Hide app and one isolated state folder.
 Screenshots must compare the approved v6/v9 baselines with candidate Sessions and pane-header surfaces in Light and Dark, including long Korean titles, narrow widths, child navigation, shown/focus distinction and terminal geometry.
 Idle and driven observations must record their load and must not turn one bounded run into a universal performance claim.
 

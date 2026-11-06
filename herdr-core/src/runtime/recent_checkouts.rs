@@ -5,7 +5,7 @@
 //! own. One pass, `track_recent_checkouts`, records a visit. It runs inside
 //! `sync_workspace_view`, which follows every event that can move the screen
 //! and precedes every snapshot read, so a checkout that comes forward by any
-//! path (the sidebar, ⌥1-9, ⌘K, Herdr's own focus, a device's focus) is
+//! path (the sidebar, ⌥1-9, ⌘K, the engine's own focus, a device's focus) is
 //! recorded in the frame it appears in, and the list never depends on which
 //! of those paths moved it (D-09). With the front unchanged the pass compares
 //! borrowed strings with the head of the list and writes nothing.
@@ -15,7 +15,7 @@
 //!
 //! A record leaves the list only when its checkout is removed on purpose (a
 //! project unregistered, a worktree removed, a device removed). A catalog
-//! that is merely empty or still resolving, as after a Herdr restart or a
+//! that is merely empty or still resolving, as after an engine restart or a
 //! device reconnecting, proves nothing about a checkout, so it prunes
 //! nothing; the shell leaves out a record a connected catalog does not list.
 

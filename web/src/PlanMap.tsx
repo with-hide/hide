@@ -4,8 +4,9 @@ import { AgentMark } from "./AgentMark";
 import { markWords } from "./agentRow";
 import { formatElapsed, useElapsed } from "./components/elapsed";
 import { OWNER_ROW } from "./components/mission-conductor-row";
+import { MapPage, MapSplit } from "./components/map-page";
 import { SummaryRow } from "./components/mission-summary";
-import { ProgressCells, WorkPill } from "./components/mission-tone";
+import { PILL_TONE, ProgressCells, WorkPill } from "./components/mission-tone";
 import { ChildTag, DelegationWord } from "./components/plan-checklist";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
@@ -17,7 +18,7 @@ import { usePaneAgents } from "./PaneHeaderBand";
 import { useMapPick } from "./mapPick";
 import { PlanGraph } from "./PlanGraph";
 import { PlanStepPanel } from "./PlanStepPanel";
-import { evidenceWords, planCells, planOfSession, planProposed, stepDelegationWord, stepOf } from "./plans";
+import { evidenceWords, planCells, planOfSession, planProposed, stepDelegationWord, stepLeft, stepOf, stepStatusWord } from "./plans";
 import type { PlanStep, PlanView, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -41,9 +42,9 @@ export type PlanState = "review" | "finished" | "running";
 
 /** A plan's state pill: `검토` in the warning colour while it waits for review, a grey `✓ 끝남` once finished, else `진행 중` as a running mission's. */
 export const PLAN_PILL: Record<PlanState, { key: MessageKey; tone: string }> = {
-  review: { key: "plan.review", tone: "bg-mission-hold/15 text-mission-hold" },
-  finished: { key: "mission.pill.done", tone: "bg-muted text-muted-foreground" },
-  running: { key: "mission.pill.running", tone: "bg-mission-working/15 text-mission-working" },
+  review: { key: "plan.review", tone: PILL_TONE.hold },
+  finished: { key: "mission.pill.done", tone: PILL_TONE.quiet },
+  running: { key: "mission.pill.running", tone: PILL_TONE.working },
 };
 
 export function planState(plan: PlanView): PlanState {
@@ -116,41 +117,46 @@ function PlanBody({ plan, actions }: { plan: PlanView; actions: Actions }) {
   );
   const step = selected ? plan.steps.find((one) => one.key === selected)! : null;
   return (
-    <div className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-plan={plan.pane_id} data-plan-review={plan.review} data-plan-finished={plan.progress.finished || undefined} onKeyDown={onKeyDown}>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-plan-scroll="true">
-        <PlanHead plan={plan} />
-        {proposed ? (
-          <div className="mx-md mb-sm flex min-w-0 items-center gap-sm rounded-md border border-mission-hold px-sm py-xs" data-plan-banner="review">
-            <StatusMark mark="turn" />
-            <span className="min-w-0 flex-1 truncate text-body text-warning" title={plan.ask ?? undefined}>
-              {t("plan.reviewBanner")}
-            </span>
-            <Button size="sm" variant="secondary" onClick={() => actions.openAgent(plan.pane_id)} data-plan-conversation="true">
-              {t("plan.toConversation")}
-            </Button>
-          </div>
-        ) : null}
-        {proposed && plan.ask ? <p className="px-md pb-sm text-caption text-muted-foreground" data-plan-ask="true">{plan.ask}</p> : null}
-        <PlanOwner plan={plan} actions={actions} />
-        <div className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:flex-1 mission-wide:flex-row">
-          <div className="min-w-0 px-md pb-md pt-sm mission-wide:min-h-0 mission-wide:flex-1 mission-wide:overflow-auto" onClick={onMapClick} data-plan-map="true">
+    <MapPage
+      data={{ "data-plan": plan.pane_id, "data-plan-review": plan.review, "data-plan-finished": plan.progress.finished || undefined }}
+      scrollData={{ "data-plan-scroll": "true" }}
+      onKeyDown={onKeyDown}
+    >
+      <PlanHead plan={plan} />
+      {proposed ? (
+        <div className="mx-md mb-sm flex min-w-0 items-center gap-sm rounded-md border border-mission-hold px-sm py-xs" data-plan-banner="review">
+          <StatusMark mark="turn" />
+          <span className="min-w-0 flex-1 truncate text-body text-warning" title={plan.ask ?? undefined}>
+            {t("plan.reviewBanner")}
+          </span>
+          <Button size="sm" variant="secondary" onClick={() => actions.openAgent(plan.pane_id)} data-plan-conversation="true">
+            {t("plan.toConversation")}
+          </Button>
+        </div>
+      ) : null}
+      {proposed && plan.ask ? <p className="px-md pb-sm text-caption text-muted-foreground" data-plan-ask="true">{plan.ask}</p> : null}
+      <PlanOwner plan={plan} actions={actions} />
+      <MapSplit
+        onMapClick={onMapClick}
+        mapData={{ "data-plan-map": "true" }}
+        map={
+          // A plan's map has no zoom of its own: its box scrolls while the page is wide.
+          <div className="min-w-0 px-md pb-md pt-sm mission-wide:min-h-0 mission-wide:flex-1 mission-wide:overflow-auto">
             <PlanGraph plan={plan} selected={selected} onSelect={(key) => select(selected === key ? null : key)} />
           </div>
-          {/* The column beside the map: a pick's panel, else the plan's summary. */}
-          <div
-            ref={panel}
-            className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:w-(--size-mission-side) mission-wide:shrink-0 mission-wide:overflow-auto mission-wide:border-l mission-wide:border-t-0"
-            data-plan-panel={step?.key}
-          >
-            {step ? (
-              <PlanStepPanel plan={plan} step={step} number={plan.steps.indexOf(step) + 1} onClose={() => select(null)} openPane={openPane} />
-            ) : (
-              <PlanSide plan={plan} openPane={openPane} />
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+        }
+        sideRef={panel}
+        sideData={{ "data-plan-panel": step?.key }}
+        side={
+          /* The column beside the map: a pick's panel, else the plan's summary. */
+          step ? (
+            <PlanStepPanel plan={plan} step={step} number={plan.steps.indexOf(step) + 1} onClose={() => select(null)} openPane={openPane} />
+          ) : (
+            <PlanSide plan={plan} openPane={openPane} />
+          )
+        }
+      />
+    </MapPage>
   );
 }
 
@@ -164,7 +170,10 @@ function PlanSide({ plan, openPane }: { plan: PlanView; openPane: (paneId: strin
   const { t } = useInterfaceTranslation();
   const now = plan.progress.finished ? null : stepOf(plan, plan.progress.current);
   const next = plan.progress.finished ? null : stepOf(plan, plan.progress.next);
-  const left = plan.steps.flatMap((step) => (step.status === "done" && step.evidence ? [{ step, evidence: step.evidence }] : []));
+  const left = plan.steps.flatMap((step) => {
+    const what = stepLeft(step);
+    return what?.kind === "evidence" ? [{ step, evidence: what.evidence }] : [];
+  });
   const handed = plan.steps.filter((step) => step.delegation && step.status !== "dropped");
   return (
     <section aria-label={t("mission.summary")} className="flex min-w-0 flex-col px-md py-sm" data-plan-side="summary">
@@ -212,7 +221,7 @@ function HandedRow({ step, openPane }: { step: PlanStep; openPane: (paneId: stri
           <DelegationWord word={word} />
         ) : (
           <span className={cn("text-micro", step.status === "done" ? "text-mission-done" : "text-mission-working")}>
-            {step.status === "done" ? t("plan.status.done") : t("plan.delegation.state.working")}
+            {stepStatusWord(step, t)}
           </span>
         )}
       </span>

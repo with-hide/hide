@@ -103,7 +103,7 @@ pub struct CleanupSnapshot {
     pub main_head: Option<String>,
     pub rows: Vec<CleanupRow>,
     pub message: Option<String>,
-    /// Why "in use" could not be read (no Herdr connection, a pane or port
+    /// Why "in use" could not be read (no engine connection, a pane or port
     /// read failed). While it stands nothing may be chosen.
     pub usage_error: Option<String>,
     /// The in-use reads are in, so build caches and dependencies may be chosen
@@ -162,7 +162,7 @@ pub struct CleanupRow {
     /// How many live panes of the checkout close with it, which are the
     /// panes of finished agents and shells that nothing here is using.
     pub pane_count: u32,
-    /// The panes a confirmed removal closes first, by Herdr's ids.
+    /// The panes a confirmed removal closes first, by the engine's ids.
     #[serde(skip)]
     pub pane_ids: Vec<String>,
     /// `removed`, `skipped` (a recheck found it changed or busy) or `failed`
@@ -204,7 +204,7 @@ pub(crate) struct CheckoutFacts {
     /// Agents of the checkout holding a question, an approval or a blocked
     /// prompt: they wait for the operator and the work is not finished.
     pub agent_waiting: usize,
-    /// Agents of the checkout whose activity Herdr does not report, which is
+    /// Agents of the checkout whose activity the engine does not report, which is
     /// never read as idle.
     pub agent_unknown: usize,
     /// Live descendants of the checkout's agents, running anywhere, that are
@@ -268,7 +268,7 @@ pub(crate) struct CleanupPlace {
 }
 
 impl CleanupPlace {
-    /// This machine's project: its Herdr and the core's own node.
+    /// This machine's project: its engine and the core's own node.
     pub(crate) fn local(
         context: crate::live::LiveContext,
         github: Result<GhPlace, String>,
@@ -282,7 +282,7 @@ impl CleanupPlace {
         }
     }
 
-    /// A node's project: the node's Herdr and its link.
+    /// A node's project: the node's engine and its link.
     pub(crate) fn node(
         control: &crate::live::RemoteControlContext,
         node: Arc<dyn NodeLink>,
@@ -305,13 +305,13 @@ pub(crate) struct CellChoice {
     pub layer: Layer,
 }
 
-/// How many terminal panes one review asks Herdr about. A project past it
+/// How many terminal panes one review asks the engine about. A project past it
 /// cannot be judged, and says so instead of guessing.
 const PANE_READ_LIMIT: usize = 256;
 
 pub(crate) type InUseMap = HashMap<PathBuf, InUse>;
 
-/// What the runtime and Herdr said about each checkout: whether it is in use,
+/// What the runtime and the engine said about each checkout: whether it is in use,
 /// and the panes that close with it.
 #[derive(Clone, Debug, Default)]
 struct Usage {
@@ -415,7 +415,7 @@ pub(crate) fn read_in_use(
     Ok(in_use)
 }
 
-/// The in-use read against the live Herdr and the machine's listening ports.
+/// The in-use read against the live engine and the machine's listening ports.
 fn live_in_use(context: &CleanupPlace, checkouts: &[CheckoutFacts]) -> Result<InUseMap, String> {
     let ports = crate::ports::read_now(context.node.as_ref());
     let ports = match ports.unavailable_reason {
@@ -571,7 +571,7 @@ fn listed(node: &dyn NodeLink, root: &Path) -> Result<Vec<CleanupRow>, String> {
         .collect())
 }
 
-/// Each live pane's id with a folder it stands in, from Herdr.
+/// Each live pane's id with a folder it stands in, from the engine.
 type PanePaths = Vec<(String, PathBuf)>;
 
 fn pane_paths(context: &CleanupPlace) -> Result<PanePaths, String> {
@@ -1659,7 +1659,7 @@ fn panes_to_close(
 pub(crate) struct GoneCheckout {
     /// The project the checkout is a row of.
     pub workspace_id: String,
-    /// The Herdr workspaces whose tabs stand in the checkout, for the log.
+    /// The engine workspaces whose tabs stand in the checkout, for the log.
     pub herdr_workspace_ids: Vec<String>,
     pub path: String,
     /// The checkout's panes as the runtime listed them.
@@ -1684,10 +1684,10 @@ fn close_gone_checkout(
     }
 }
 
-/// Starts the close of one gone checkout's panes off the runtime lock. Herdr
+/// Starts the close of one gone checkout's panes off the runtime lock. The engine
 /// closes a workspace with its last pane, so a workspace that held only
 /// this checkout goes with them. The answer is the diagnostic log's: the row
-/// leaves the sidebar when Herdr reports the panes gone, and a checkout kept
+/// leaves the sidebar when the engine reports the panes gone, and a checkout kept
 /// stays a row the operator can still remove.
 pub(crate) fn spawn_gone_checkout_close(
     context: CleanupPlace,
@@ -1764,7 +1764,7 @@ pub fn spawn_confirm(
             let common = common_dir(node, &root);
             let mut ours = std::collections::BTreeSet::new();
             // Worktrees first: each is rechecked against what is on disk and
-            // in Herdr right now, just before its own removal, and removed
+            // in the engine right now, just before its own removal, and removed
             // without force.
             let refresh = |path: &str| {
                 let (in_use, panes) =
@@ -2981,7 +2981,7 @@ mod tests {
                 .err()
                 .map(|refusal| (refusal.outcome, refusal.code))
         };
-        // A pane opened since the review, in the core's view or only in Herdr's.
+        // A pane opened since the review, in the core's view or only in the engine's.
         assert_eq!(
             refused(&["p1"], &["p1", "p9"], &stands),
             Some(("skipped", "changed"))

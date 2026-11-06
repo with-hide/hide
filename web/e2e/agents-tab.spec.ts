@@ -1,4 +1,4 @@
-// Settings > Agents on an isolated pinned Herdr and a hided that runs the install kit (PRD settings-cleanup
+// Settings > Agents on an isolated engine and a hided that runs the install kit (PRD settings-cleanup
 // B8 to B20): the seven supported agents of this Mac, the ones whose program the private HOME holds under
 // Installed and the rest folded under Not installed, a switch that writes and removes Hide's own entries,
 // the Partial popover from its chip by keyboard, and a hook the operator removed shown on its row with

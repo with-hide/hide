@@ -28,7 +28,7 @@ import { useUiStore } from "./ui";
 import { useInterfaceTranslation } from "./i18n/client";
 
 const SharedAgentTree = createAreaTree<AgentItem>("agent");
-/** `remoteBody` draws a device tab's panes: the tab an area shows, or `null` for the one its Herdr has in front. */
+/** `remoteBody` draws a device tab's panes: the tab an area shows, or `null` for the one its engine has in front. */
 export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checkout: Checkout; actions: Actions; deviceId?: string; remoteBody?: (tabId: string | null) => React.ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -48,7 +48,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     root: { area: { id: "a1", active: checkout.active_tab_id, displays: agentEntries(checkout).map((entry) => ({ id: entry.source_id })) } },
     active_area: "a1", canvases: {}, limits: { areas: 1, depth: 0, displays: 64 }, display_count: agentEntries(checkout).length,
   }), [checkout]);
-  // A device this core dials shows the one tab its Herdr has in front; a
+  // A device this core dials shows the one tab its engine has in front; a
   // node that dialed in arranges its tabs as this machine does, and the core
   // publishes its Agent areas only then.
   const single = remote && !saved;

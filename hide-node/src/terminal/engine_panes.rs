@@ -41,7 +41,7 @@ pub enum PaneShell {
     /// The account's shell with Hide's shell integration, prepared for each
     /// pane as the node prepares it for a tab Hide opens
     /// (`hide_host::shell_integration::prepare`): a pane on the core's own
-    /// engine has no Herdr to read its folder from its process, so its shell
+    /// engine learns its folder from its shell, which
     /// says it on the screen.
     Account { home: PathBuf, user: UserShell },
     /// This command line, with no integration (the engine contract's).

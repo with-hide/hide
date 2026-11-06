@@ -2,7 +2,7 @@
 //! Desk D-53, D-79).
 //!
 //! The list is Hide's catalog (`hide_agent_adapter::ADAPTERS`, the agents
-//! Hide can start), each named by its Herdr name, so an agent the catalog
+//! Hide can start), each named by its agent name, so an agent the catalog
 //! gains is Desk's once its ACP route and ask mode are declared here; the
 //! match below is exhaustive, so a new agent cannot be added without that
 //! decision. Each speaks ACP one of two ways:
@@ -58,7 +58,7 @@ use serde_json::{Value, json};
 use crate::permission::Row;
 
 /// One of the catalog's agents Desk speaks ACP with, named on the wire and in
-/// Desk's store by its Herdr name (`claude`, `codex`, `pi`, `opencode`,
+/// Desk's store by its agent name (`claude`, `codex`, `pi`, `opencode`,
 /// `omp`, `agy`, `grok`).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AdapterId(AgentId);

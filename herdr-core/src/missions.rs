@@ -70,6 +70,18 @@ const OPTION_TEXT_LIMIT: usize = 120;
 /// The longest answer the operator writes in the banner (B27), counted in
 /// characters as the banner counts them.
 pub const ANSWER_LIMIT: usize = 500;
+
+/// The operator's written answer as a Conductor receives it: one line without
+/// the spaces around it, not empty and at most `ANSWER_LIMIT` characters, or
+/// `None`. The one judgement the core and a phone's request both make, so the
+/// two cannot take different answers.
+pub fn answer_text(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()
+        && text.chars().count() <= ANSWER_LIMIT
+        && !text.chars().any(char::is_control))
+    .then(|| text.to_owned())
+}
 const READ_CAP: u64 = 8 * 1024 * 1024;
 /// The size a change may bring the saved book to: under the read cap with
 /// room for the file's own framing, so what is written is always read back.
@@ -618,7 +630,7 @@ pub struct Answer {
     /// decision (`settle_typed_answers`), so it is never typed again.
     #[serde(default, skip_serializing)]
     pub delivered: bool,
-    /// Typing it may have reached the conversation without Herdr saying so:
+    /// Typing it may have reached the conversation without the engine saying so:
     /// it is not typed again until the operator sends it again (B26).
     #[serde(default)]
     pub unconfirmed: bool,
@@ -798,7 +810,7 @@ pub struct MissionNode {
 pub struct NodeLaunch {
     /// The worker's registration the launch was proven for.
     pub agent_id: String,
-    /// The agent kind, in Herdr's spelling.
+    /// The agent kind, in the engine's spelling.
     pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -2899,6 +2911,25 @@ impl MissionStore {
 pub(crate) mod tests {
     use super::*;
 
+    #[test]
+    fn a_written_answer_is_judged_after_the_spaces_around_it_go() {
+        let full = "가".repeat(ANSWER_LIMIT);
+        assert_eq!(answer_text(&format!("  {full} \n")), Some(full.clone()));
+        assert_eq!(
+            answer_text(" merge after lunch\t"),
+            Some("merge after lunch".into())
+        );
+        for refused in [
+            String::new(),
+            " \n ".into(),
+            "two\nlines".into(),
+            "bell\u{7}".into(),
+            format!("{full}가"),
+        ] {
+            assert_eq!(answer_text(&refused), None, "{refused:?}");
+        }
+    }
+
     fn actor(pane: &str) -> Actor {
         Actor {
             pane_id: pane.into(),
@@ -3410,11 +3441,11 @@ pub(crate) mod tests {
             .iter_mut()
             .find(|line| line.key == "ci")
             .expect("the ci line");
-        line.read_ci(&head, crate::model::PullRequestChecks::Passing, 1);
-        line.read_ci(&head, crate::model::PullRequestChecks::Pending, 2);
+        line.read_ci(&head, crate::model::CiEnd::Ended(CiResult::Passed), 1);
+        line.read_ci(&head, crate::model::CiEnd::Running, 2);
         assert!(
             !line
-                .read_ci(&head, crate::model::PullRequestChecks::Failed, 3)
+                .read_ci(&head, crate::model::CiEnd::Ended(CiResult::Failed), 3)
                 .spent
         );
     }

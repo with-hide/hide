@@ -152,7 +152,7 @@ fn a_registration_that_fails_is_the_receipt_s_refusal() {
         })
     );
 
-    // With no Herdr to open the project's first tab in, the add is refused at once.
+    // With no engine to open the project's first tab in, the add is refused at once.
     let mut offline = super::runtime();
     let node = offline.node.as_str().to_owned();
     offline
@@ -189,7 +189,7 @@ fn every_receipt_still_waiting_refuses_one_more_request() {
 /// A path the daemon admitted only as one inside a registered checkout is
 /// never registered by the core: when no registered checkout holds it by
 /// the time the core reads it (its registration was removed in between, or
-/// the checkout was Herdr's alone), the open is refused, so a folder outside
+/// the checkout was the engine's alone), the open is refused, so a folder outside
 /// home is never added without the question Add a project asks.
 #[test]
 fn a_folder_admitted_as_a_checkout_s_is_refused_rather_than_registered_when_none_holds_it() {

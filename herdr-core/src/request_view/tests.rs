@@ -1,5 +1,5 @@
 //! The request view's verb and pull request rules (PRD overview-request-view
-//! B9-B16, B48, B54, B56), on rows projected the way Herdr's agents are.
+//! B9-B16, B48, B54, B56), on rows projected the way the engine's agents are.
 
 use super::*;
 use crate::labels::facts::{Request, Requester};

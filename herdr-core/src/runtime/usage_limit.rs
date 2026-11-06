@@ -52,7 +52,7 @@ impl Runtime {
             .as_ref()
             .map(hide_ai::AiSettings::machines_by_provider)
             .unwrap_or_default();
-        // The usage rows are keyed by the agent's Herdr name, the provider
+        // The usage rows are keyed by the agent's engine name, the provider
         // by the kit's adapter id; `agy` and `antigravity` are one agent.
         hide_agent_adapter::ADAPTERS
             .iter()

@@ -90,7 +90,7 @@ pub(super) enum HostPhase {
 const HOST_RETRY_FIRST_MS: u64 = 2_000;
 const HOST_RETRY_MAX_MS: u64 = 60_000;
 
-/// Whether the device's Herdr session answering again has already moved this
+/// Whether the device's engine session answering again has already moved this
 /// outage's helper retry forward. It does so once, so a session that flaps
 /// cannot turn the schedule's cap into a dial every few seconds; the link
 /// reaching ready ends the outage and its record.
@@ -883,7 +883,7 @@ impl Runtime {
         }
     }
 
-    /// The device's Herdr session answers again, so the machine is reachable:
+    /// The device's engine session answers again, so the machine is reachable:
     /// the helper link's retry is due now, without waiting out a wait that
     /// grew while the machine was away. The delay after it keeps doubling,
     /// and this happens once per outage: a session that flaps while the
@@ -1111,7 +1111,7 @@ impl Runtime {
                         windows_drives: node.hello.windows_drives.clone(),
                     },
                 );
-                // The device's Herdr rides this link, an SSH device's as a WSL
+                // The device's engine rides this link, an SSH device's as a WSL
                 // distribution's (PRD system-ssh-device-link): its session
                 // reads again now rather than at its next reconnect, which
                 // the attempts before the link backed off to seconds away.

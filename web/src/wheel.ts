@@ -1,8 +1,8 @@
 // The wheel policy behind pane scrolling (PRD S2 B19): whole rows per
 // event with the pixel remainder
-// carried, and Herdr's crossterm modifier bitset.
+// carried, and the crossterm modifier bitset.
 
-/** The crossterm modifier bitset Herdr documents for terminal.scroll, and the core reads for a click. */
+/** The crossterm modifier bitset the engine's terminal.scroll takes, and the core reads for a click. */
 export function pointerModifiers(event: { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }): number {
   return (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
 }

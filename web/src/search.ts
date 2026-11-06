@@ -193,9 +193,9 @@ function agentStatus(agent: Pick<AgentRow, "state" | "status_code">, t: TFunctio
 }
 
 /**
- * An agent row: titled by the name every surface calls it, with its Herdr
- * name (`agent start --name`, `agent rename`), its place and its state
- * sentence under it, so a query finds it by any of them. A Herdr name the
+ * An agent row: titled by the name every surface calls it, with its engine
+ * name (`hide agent spawn --name`), its place and its state
+ * sentence under it, so a query finds it by any of them. An engine name the
  * title already reads as is not drawn twice.
  */
 export function agentEntry(scope: SearchDevice, agent: AgentRow, place: string | null, front: string, t: TFunction<"translation">): SearchEntry {
@@ -428,7 +428,7 @@ function agentHasPr(entry: SearchEntry, number: number): boolean {
   return entry.kind === "agent" && (entry.agent?.request?.pull_requests ?? []).some((pr) => pr.number === number);
 }
 
-/** The agents whose pane's Herdr id holds `query`, in its case since Herdr tells `pB` from `pb`, the shortest id (the whole one) first. */
+/** The agents whose pane's engine id holds `query`, in its case since the engine tells `pB` from `pb`, the shortest id (the whole one) first. */
 function paneIdMatches(entries: SearchEntry[], query: string): SearchEntry[] {
   return entries
     .flatMap((entry) => (entry.kind === "agent" && entry.devicePaneId !== undefined ? [{ entry, id: entry.devicePaneId }] : []))
@@ -439,7 +439,7 @@ function paneIdMatches(entries: SearchEntry[], query: string): SearchEntry[] {
 
 /**
  * The entries matching `query`, best first. A query holding `:`, as every
- * Herdr pane id does (`w9J:p52`, as `$HERDR_PANE_ID` gives it or Copy name
+ * engine pane id does (`w9J:p52`, as `$HERDR_PANE_ID` gives it or Copy name
  * and ID carries it), puts the agents whose id holds it ahead of everything, on every device;
  * a name with a colon (`fix: bug`) is held by no id, and without a colon no id
  * matches, so a name or a number never finds a pane by its id. A number (`273`, or with a hash) puts the

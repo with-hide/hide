@@ -15,7 +15,7 @@ import type { AgentFixture, EngineServer } from "./engine-fixture";
 
 export type AgentState = "working" | "blocked" | "idle";
 
-/** Whether `row` reads as `state`: `idle` is a rest, seen or not (Herdr's idle and done). */
+/** Whether `row` reads as `state`: `idle` is a rest, seen or not (the idle and done states). */
 function reads(row: AgentRow | undefined, state: AgentState): boolean {
   if (!row) return false;
   if (state === "blocked") return row.blocked === true;

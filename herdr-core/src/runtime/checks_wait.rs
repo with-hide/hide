@@ -89,7 +89,7 @@ impl Runtime {
                 })
             })
             .collect();
-        // A row fresh from Herdr has no lineage yet; the duty goes to the row
+        // A row fresh from the engine has no lineage yet; the duty goes to the row
         // nearest its root, so the depth the last projection knew stands in.
         let depths: HashMap<&str, usize> = self
             .snapshot

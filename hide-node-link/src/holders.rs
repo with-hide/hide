@@ -456,7 +456,7 @@ pub trait PaneHolders: Send + Sync {
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError>;
     /// Tells `ended`, from now on, the id of each pane whose program exits
     /// on its own while the node holds its screen, so the engine closes it
-    /// as Herdr closes a pane whose program ends. A pane ended by
+    /// as Herdr closed a pane whose program ends. A pane ended by
     /// [`PaneHolders::terminate`] is not told.
     fn watch_ends(&self, ended: PaneEnded);
     /// Tells `sink`, from now on, each pane's facts whenever they change,

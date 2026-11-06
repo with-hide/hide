@@ -103,6 +103,34 @@ export function stepDelegationWord(step: PlanStep): StepMarkWord | null {
   return null;
 }
 
+/**
+ * A step's state in one word, as its card names it and its panel says it: a
+ * handed step not done says where its child stands (`작업 중`, `보고 옴`,
+ * `막힘`, `닫힘`), a step still to be handed `맡길 예정`, every other step its
+ * own status.
+ */
+export function stepStatusWord(step: PlanStep, t: TFunction<"translation">): string {
+  if (step.status !== "done" && step.delegation) return t(`plan.delegation.state.${step.delegation.state}`);
+  if (stepDelegationWord(step) === "pending") return t("plan.delegation.pending");
+  return t(`plan.status.${step.status}`);
+}
+
+/**
+ * What a finished step left (B13, B26), the one answer its card, its
+ * checklist row and its panel draw: the evidence it recorded, else, for a
+ * handed step that was to leave nothing, its child's report. A step that was
+ * to leave a pull request or a file and has none recorded left nothing yet,
+ * handed or not, since a report does not stand in for the output it owes.
+ */
+export type StepLeft = { kind: "evidence"; evidence: PlanEvidence } | { kind: "report" };
+
+export function stepLeft(step: PlanStep): StepLeft | null {
+  if (step.status !== "done") return null;
+  if (step.evidence) return { kind: "evidence", evidence: step.evidence };
+  if (step.delegation && (!step.output || step.output === "none")) return { kind: "report" };
+  return null;
+}
+
 /** What a finished step left, as its tail says it: `#n` or the file's name (B26). */
 export function evidenceWords(evidence: PlanEvidence): string {
   if (evidence.kind === "pr") return `#${evidence.number}`;

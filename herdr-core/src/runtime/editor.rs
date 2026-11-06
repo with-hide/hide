@@ -21,7 +21,7 @@ pub(super) enum PreparedFileTab {
 
 impl Runtime {
     /// The projection can admit a failed terminal close; the effect must still
-    /// prove this incarnation and failure against Herdr immediately before closing.
+    /// prove this incarnation and failure against the engine immediately before closing.
     pub(super) fn failed_terminal_id(&self, pane_id: &str) -> Option<&str> {
         self.snapshot
             .navigator
@@ -517,7 +517,7 @@ impl Runtime {
             .ok_or_else(|| {
                 "The editor tab's project or checkout is no longer available".to_owned()
             })?;
-        // A device's focus is its Herdr session's, which the core follows;
+        // A device's focus is its engine session's, which the core follows;
         // showing one of its files moves nothing on this machine.
         if device_id != self.node.as_str() {
             return self.activate_editor_tab(tab_id);
@@ -1199,8 +1199,8 @@ impl Runtime {
         }
         if let Some(checkout_id) = restore.checkout_id.as_deref() {
             match restore.before.visible_tab_id.clone() {
-                // The close moved the operator, and Herdr with them, to
-                // another tab; going back tells Herdr too.
+                // The close moved the operator, and the engine with them, to
+                // another tab; going back tells the engine too.
                 Some(tab_id) if restore.after.visible_tab_id.as_ref() != Some(&tab_id) => {
                     self.focus_close_alternative(checkout_id, tab_id);
                 }
@@ -1497,7 +1497,7 @@ impl Runtime {
     /// Keeps the operator on a confirmed alternative as soon as a close is
     /// approved, and only when the closing item is the one in use. The
     /// alternative is chosen from the existing projection, so this never
-    /// invents geometry or follows a global Herdr focus change. When the
+    /// invents geometry or follows a global engine focus change. When the
     /// close leaves the checkout with no tab at all and `may_leave_checkout`
     /// says it is the operator's own, the alternative is the checkout they
     /// were in before (`leave_emptied_checkout`).
@@ -1644,7 +1644,7 @@ impl Runtime {
         self.agent_sleep_visit(prior.as_deref());
     }
 
-    /// Puts the operator on a tab the way a click on its chip does, so Herdr
+    /// Puts the operator on a tab the way a click on its chip does, so the engine
     /// is told: its own choice of tab after the close then reads as the
     /// answer to this focus rather than as a move to follow.
     fn focus_close_alternative(&mut self, checkout_id: &str, tab_id: String) {
@@ -2235,7 +2235,7 @@ impl Runtime {
     }
 
     /// Starts one read for all currently unknown local closes. All of those
-    /// reservations share the same Herdr session, so a status check is a
+    /// reservations share the same engine session, so a status check is a
     /// single authoritative snapshot with a fan-out result rather than one
     /// request per pane or tab.
     pub(super) fn start_close_status_checks(&mut self, requested_keys: &[String]) -> bool {
@@ -2574,7 +2574,7 @@ impl Runtime {
         {
             // The tab already left the screen, so a reopen pressed right
             // after the close is the operator's intent, not a mistake: it
-            // waits for that close and runs when Herdr confirms it.
+            // waits for that close and runs when the engine confirms it.
             if operation.settling() {
                 crate::diagnostic!(serde_json::json!({
                     "component": "recent_closed",
@@ -3112,7 +3112,7 @@ impl Runtime {
     /// registered through the close exactly as an ordinary close does.
     ///
     /// The operator's own close (`may_queue`) of one pane among several waits
-    /// in its tab's line while an operation there is still with Herdr
+    /// in its tab's line while an operation there is still with the engine
     /// (PRD instant-pane-topology D-10); a tree close and the line's own turn
     /// start at once.
     pub(super) fn close_local_pane(

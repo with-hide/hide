@@ -1,4 +1,4 @@
-// Settings > Hide AI on an isolated pinned Herdr and hided (PRD settings-cleanup B33 to B39, B64):
+// Settings > Hide AI on an isolated engine and hided (PRD settings-cleanup B33 to B39, B64):
 // the Use Hide AI switch and what it stores, Runs on from the agent the fixture shim answers for, and the
 // fallback list built with Add agent from stand-in `grok`, `pi` and `opencode` programs (the machine has
 // none of them): selectable agents are offered, an installed agent Hide AI cannot use is dimmed with its

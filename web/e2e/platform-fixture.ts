@@ -1,6 +1,6 @@
 // Native spellings for the isolated e2e homes and tools. The home/state
-// contract is hide-platform::host; Herdr accepts a filesystem socket path
-// on every OS and maps that path to a named pipe on Windows.
+// contract is hide-platform::host; a filesystem socket path is accepted
+// on every OS and mapped to a named pipe on Windows.
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -28,9 +28,9 @@ export function fixturePrograms(bin: string): string {
 }
 
 /**
- * Where a client reaches the local stream Herdr names by `socket`: the path
+ * Where a client reaches the local stream a `socket` path names: the path
  * itself on Unix, the pipe `\\.\pipe\<path>` on Windows (hide-platform's
- * `ipc` makes the same mapping, so a fixture standing in front of Herdr
+ * `ipc` makes the same mapping, so a fixture standing in front of that stream
  * listens and connects there).
  */
 export const localEndpoint = (socket: string): string => (process.platform === "win32" ? `\\\\.\\pipe\\${socket}` : socket);
@@ -143,7 +143,7 @@ export function fixtureOpenCommand(root?: string, privateRoot?: string): string 
   if (process.platform !== "win32") return "/usr/bin/true";
   if (!root && !privateRoot) throw new Error("Windows fixture opener needs a private root");
   const command = path.join((root ?? privateRoot)!, "bin", fixtureExecutable("hide-open"));
-  // Unit/private-home fixtures need no Herdr server. Give those homes the
+  // Unit/private-home fixtures need no engine. Give those homes the
   // same native no-op without falling back to an account's GUI opener.
   if (!root) {
     fs.mkdirSync(path.dirname(command), { recursive: true });
@@ -215,7 +215,7 @@ export function windowsProcessTree(pid: number): WindowsProcess[] {
  * compiler and linker start that telemetry helper and leave it running after
  * a build, still naming as its parent a linker that has exited; Windows
  * reuses that pid, and a pane shell that gets it has the helper for a child,
- * so Herdr 0.9.1, which counts a shell's children by parent pid alone, refuses
+ * so Herdr 0.9.1, which counted a shell's children by parent pid alone, refused
  * `agent start` there for as long as the helper runs. Throws naming the
  * survivors after five seconds.
  */
@@ -240,8 +240,8 @@ const FIRST_START_MS = 120_000;
  * first test, for both e2e entry points (`web/e2e/global-setup.ts`,
  * `desktop/e2e/global-setup.ts`); returns the lines to print.
  *
- * First it pays the job's first Windows PowerShell start the way the pinned
- * Herdr starts an agent from a cmd.exe pane: `powershell.exe -NoLogo
+ * First it pays the job's first Windows PowerShell start, shaped like the
+ * start Herdr made of an agent from a cmd.exe pane before #2069: `powershell.exe -NoLogo
  * -NoProfile -EncodedCommand` of `& '<name>'`, a program found by its bare
  * name on `PATH` (Herdr's `interactive_shell_command`). That first start reads
  * PowerShell from a cold runner disk: the desktop lane ran no PowerShell

@@ -1,7 +1,7 @@
 //! The core's own engine on devices (PRD engine-bundle-3-core-owns D-22,
 //! B35, engine-bundle-4-herdr-removal D-10): a device (one the core dials
 //! over SSH, a WSL distribution of this PC, or a node that dials the core)
-//! runs no Herdr; its node runs pane holders, and the core keeps the
+//! runs no engine; its node runs pane holders, and the core keeps the
 //! device's session itself, in an engine of its own for that device, as it
 //! keeps this machine's.
 //!
@@ -86,7 +86,7 @@ impl Runtime {
             .collect();
         let launches = Arc::new(launches);
         let device = device_id.to_owned();
-        // The device's Herdr save is looked at before its engine opens, by
+        // The device's engine save is looked at before its engine opens, by
         // its node (B18); a device whose machine the core cannot name is
         // not, since its registrations could not be told apart.
         let local = self.herdr_import_local();

@@ -117,7 +117,7 @@ pub enum ThreadRead {
     From(ThreadCursor),
 }
 
-/// A page of the session an agent pane runs, named the way Herdr reports
+/// A page of the session an agent pane runs, named the way the engine reports
 /// the pane's session (`agent_session.kind` and its value), as the label
 /// read names it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

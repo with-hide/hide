@@ -3,9 +3,7 @@
 //! coordinator once its topology changed, and the coordinator reads the
 //! whole session again ([`crate::engine::Engine::session`]) and publishes
 //! it as it is. [`PulledSession`] keeps only the last session read; nothing
-//! is replayed, so none of the Herdr event replica (`replica.rs`) or its
-//! subscription runs for such an engine, and deleting them with Herdr
-//! leaves this path whole.
+//! is replayed, so no event replica or subscription runs for such an engine.
 
 use super::*;
 

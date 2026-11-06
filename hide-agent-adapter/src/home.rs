@@ -21,8 +21,7 @@ pub enum HomeScope {
     /// sign-in, its usage records): an override the agent honours moves it.
     Read,
     /// Installing Hide's integration (hooks, a plugin, folder trust): the
-    /// account's default folder, where Herdr's integration for the agent goes
-    /// too, whatever the launching shell exported. An agent run with its
+    /// account's default folder, whatever the launching shell exported. An agent run with its
     /// variable pointing elsewhere reads neither (docs/agent-hooks.md, Folder
     /// trust for the worktrees Hide makes).
     Install,
@@ -91,7 +90,7 @@ impl AgentAdapter {
 
 /// agy's own app folder, `~/.gemini/antigravity-cli`: its settings and
 /// trust list, logs and conversations. A vendor location apart from agy's
-/// declared folder (`~/.gemini/config`, where Hide and Herdr install), kept
+/// declared folder (`~/.gemini/config`, where Hide installs), kept
 /// here so every reader names it once.
 pub fn antigravity_app_data(account_home: &Path) -> PathBuf {
     account_home.join(".gemini").join("antigravity-cli")

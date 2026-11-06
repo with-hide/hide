@@ -241,7 +241,7 @@ pub(super) struct RenameTabPayload {
 pub(super) struct ReorderTabPayload {
     pub(super) workspace_id: String,
     pub(super) checkout_id: String,
-    /// The strip entry being moved, by its strip id, not the Herdr tab id:
+    /// The strip entry being moved, by its strip id, not the engine tab id:
     /// the strip is what the operator dragged in and it holds both kinds.
     pub(super) tab_id: String,
     /// Where the entry ends up, as its index in the resulting strip.
@@ -454,9 +454,9 @@ pub(super) enum RemoteControlRequest {
         pane_id: String,
         confirmed: bool,
     },
-    /// `checkout_id` names the Herdr workspace on the host: a device's
+    /// `checkout_id` names the engine workspace on the host: a device's
     /// project can hold several (`device_catalog`). Without it,
-    /// `workspace_id` must itself be a Herdr workspace's row.
+    /// `workspace_id` must itself be an engine workspace's row.
     FocusWorkspace {
         workspace_id: String,
         #[serde(default)]
@@ -881,7 +881,7 @@ pub(super) struct OverviewOpenSectionPayload {
     pub(super) section: String,
 }
 
-/// `agent_start_in_checkout`: a new tab in the checkout's Herdr workspace
+/// `agent_start_in_checkout`: a new tab in the checkout's engine workspace
 /// with the checkout as its cwd, and the provider the shell then starts in
 /// it. `terminal` means the tab alone.
 #[derive(Debug, Deserialize)]
@@ -922,7 +922,7 @@ pub(super) struct AgentStartInCheckoutPayload {
     pub(super) resume_session_path: Option<String>,
     /// The start comes from a surface that is not the operator's own screen
     /// (the phone): the tab is made and listed, but the desktop's visible
-    /// tab, keyboard focus and Herdr's focus stay where they are.
+    /// tab, keyboard focus and the engine's focus stay where they are.
     #[serde(default)]
     pub(super) stay_behind: bool,
 }
@@ -1008,7 +1008,7 @@ pub(super) struct MissionAnswerPayload {
     pub(super) option: Option<u8>,
     #[serde(default)]
     pub(super) text: Option<String>,
-    /// Types an answer again that was typed without Herdr confirming it.
+    /// Types an answer again that was typed without the engine confirming it.
     #[serde(default)]
     pub(super) resend: bool,
 }
@@ -2182,7 +2182,7 @@ impl Runtime {
     pub(super) fn apply(&mut self, event: Event) -> bool {
         // A creation that carries the shell's key request id must leave that
         // request with an answer: one the core refused before it reached
-        // Herdr is recorded as discarded here, so keys typed for it are
+        // the engine is recorded as discarded here, so keys typed for it are
         // dropped and the shell stops sending them (PRD instant-pane-topology
         // D-11).
         let creation_request = match &event {
@@ -2836,9 +2836,9 @@ impl Runtime {
                 };
                 let checkout_path = checkout.path.clone();
                 // Hide owns the visible tab, so the active mark moves here,
-                // on the frame the operator asked for it, and Herdr is told
+                // on the frame the operator asked for it, and the engine is told
                 // afterwards. Focusing a tab still does not reorder the
-                // strip: Herdr owns the order, and moving the tab here made
+                // strip: the engine owns the order, and moving the tab here made
                 // every switch look like a reorder until the next catalog
                 // rebuild undid it.
                 let already_visible = checkout.active_tab_id.as_deref() == Some(&payload.tab_id);
@@ -2849,7 +2849,7 @@ impl Runtime {
                     .map(|pane| pane.id.clone());
                 // Return to the pane the operator last had in that tab. Its
                 // layout is already here, so the tab's own focused pane is
-                // known without asking Herdr for it.
+                // known without asking the engine for it.
                 let next_pane_id = self.tab_focus_pane_id(&payload.tab_id, first_pane_id);
                 self.snapshot.navigator.focused_workspace_id = Some(payload.workspace_id);
                 self.snapshot.navigator.focused_checkout_id = Some(payload.checkout_id.clone());
@@ -2860,7 +2860,7 @@ impl Runtime {
                     .insert(payload.checkout_id.clone(), payload.tab_id.clone());
                 // Nothing is cleared here. The tab being selected already has
                 // its layout in the snapshot, so the canvas draws it on this
-                // frame instead of showing an empty canvas until Herdr
+                // frame instead of showing an empty canvas until the engine
                 // answers.
                 self.select_terminal_pane(next_pane_id.clone());
                 self.sync_active_tab_projection();
@@ -2877,7 +2877,7 @@ impl Runtime {
                 }
                 // A first visit attaches the tab's panes now. Waiting for the
                 // next session update to do it left the canvas empty until
-                // Herdr happened to emit something, up to the catalog window.
+                // the engine happened to emit something, up to the catalog window.
                 if self.live.is_some() {
                     let pane_ids = self
                         .snapshot
@@ -2898,7 +2898,7 @@ impl Runtime {
                 }
                 // Rule 11: reaching for the tab already showing, with nothing
                 // in flight, converges on the state it is already in and
-                // sends Herdr no second notification.
+                // sends the engine no second notification.
                 if already_visible
                     && self.view_focus_settled_on(ViewFocusSlot::Tab, &payload.tab_id)
                 {
@@ -2914,7 +2914,7 @@ impl Runtime {
                 }
                 // A tab focus still waiting on the lane is replaced there by
                 // this one; one already sent is answered anyway, and its
-                // answer is told from Herdr's own moves by the order the
+                // answer is told from the engine's own moves by the order the
                 // requests left in (`tab_focus.rs`).
                 if let Err(message) = self.submit_local_control(RemoteControlAction::FocusTab {
                     tab_id: payload.tab_id,
@@ -3343,7 +3343,7 @@ impl Runtime {
                     &format!("{}-{}", self.fork_sequence, unix_milliseconds()),
                 );
                 // A fork's tab is named as a new tab is, so the strip calls it
-                // by its agent rather than by the Herdr name it starts under.
+                // by its agent rather than by the engine name it starts under.
                 let (cwd, tab_label) = self
                     .snapshot
                     .navigator
@@ -3527,7 +3527,7 @@ impl Runtime {
                     self.set_error("editor.focus_failed", message, false);
                     return true;
                 }
-                // A device's focus is its Herdr session's, which the core
+                // A device's focus is its engine session's, which the core
                 // follows; showing one of its files moves nothing here.
                 if device_id != self.node.as_str() {
                     return true;
@@ -3746,7 +3746,7 @@ impl Runtime {
                 },
             }),
             Event::TerminalClick(payload) => {
-                // D8 explicitly chooses Herdr's detected agent as the policy
+                // D8 explicitly chooses the engine's detected agent as the policy
                 // boundary until its frame protocol carries mouse mode.
                 // Do not infer it from titles, output, or a session id.
                 let agent = self
@@ -3771,7 +3771,7 @@ impl Runtime {
                     // lowercase m for release. No newline or Enter is sent.
                     let column = u32::from(payload.column) + 1;
                     let row = u32::from(payload.row) + 1;
-                    // The shell sends crossterm's bitset, the one Herdr's
+                    // The shell sends crossterm's bitset, the one the engine's
                     // terminal.scroll takes. SGR has bits for shift, alt and
                     // control only, so command (bit 8) is dropped here on
                     // purpose: a TUI has no way to receive it.
@@ -3794,7 +3794,7 @@ impl Runtime {
                     );
                     return true;
                 }
-                // Herdr owns the pane's history, so the wheel is a request it
+                // The engine owns the pane's history, so the wheel is a request it
                 // answers with a fresh frame rather than a local buffer move.
                 let lines =
                     i32::from(payload.lines) * if payload.direction == "up" { 1 } else { -1 };
@@ -3821,7 +3821,7 @@ impl Runtime {
                 let previous = self.terminal_sizes.insert(payload.pane_id.clone(), size);
                 // A view reporting the size the pane is already running at is
                 // the common case right after an attach. Sending it on would
-                // make Herdr answer with a second full frame for a size that
+                // make the engine answer with a second full frame for a size that
                 // never changed.
                 // A pane's first size is what the next launch attaches with,
                 // so it is written now. Later sizes ride the next UI-state
@@ -3831,12 +3831,12 @@ impl Runtime {
                     self.persist_ui_state();
                 }
                 // The grid follows the drawn rectangle the moment the view
-                // reports it, whether or not Herdr has confirmed the layout
+                // reports it, whether or not the engine has confirmed the layout
                 // behind it (PRD grid-ahead-of-herdr D-03): the PTY size is
                 // the controller's, so a size sent on a prediction is right
-                // whenever the prediction is, and a layout Herdr draws
+                // whenever the prediction is, and a layout the engine draws
                 // differently makes the view report once more.
-                // The node asks Herdr for a new view's whole screen itself
+                // The node asks the engine for a new view's whole screen itself
                 // when its grid did not change, so an unchanged size goes
                 // nowhere.
                 if previous != Some(size) {
@@ -3852,7 +3852,7 @@ impl Runtime {
                     self.snapshot.find = PaneFindSnapshot::default();
                     return true;
                 }
-                // A device's pane is searched through that device's Herdr; one
+                // A device's pane is searched through that device's engine; one
                 // that cannot be reached says why in the bar.
                 let route = match self.pane_api_route(&payload.pane_id) {
                     Ok(route) => route,
@@ -4419,7 +4419,7 @@ impl Runtime {
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the
                     // core's: it moves them on the event that asks for the
-                    // move and tells Herdr. A whole-state save carries the
+                    // move and tells the engine. A whole-state save carries the
                     // shell's last copy of them, which a newer choice can
                     // already have overtaken, so it moves none of them.
                     selected_pane_id: current.selected_pane_id,

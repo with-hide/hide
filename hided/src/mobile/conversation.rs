@@ -1,9 +1,9 @@
 //! An agent's conversation on the phone: the 대화 half of its detail.
 //!
-//! Claude Code and Codex draw in the terminal's alternate screen, so Herdr
-//! keeps no scrollback for their panes and `pane.read` holds only the screen.
+//! Claude Code and Codex draw in the terminal's alternate screen, so the terminal
+//! keeps no scrollback for their panes and a read of the pane holds only the screen.
 //! The whole conversation is in the agent's own transcript, found from the
-//! session Herdr reports for the pane and read through `hide-session`, on
+//! session the engine reports for the pane and read through `hide-session`, on
 //! this Mac only: an SSH device's transcript is on that device, so its detail
 //! shows the terminal alone. A pane with no reported session shows the
 //! terminal too, because the newest transcript in its folder may be a
@@ -99,7 +99,7 @@ pub struct Page {
     pub before: Option<u64>,
 }
 
-/// Which transcript a pane's agent writes, as Herdr reports it.
+/// Which transcript a pane's agent writes, as the engine reports it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Source {
     agent: Agent,

@@ -1,7 +1,7 @@
 //! The contract between the core and a node (PRD core-host-node D-21).
 //!
 //! The core decides and keeps state; a node does the work on its machine:
-//! files, git, processes, its Herdr server. The two speak only through
+//! files, git, processes, its pane holders. The two speak only through
 //! [`NodeLink`], whatever carries it: a call inside one process for the
 //! core's own machine, or a channel to another machine. This crate holds
 //! that contract and the shapes that cross it, and nothing that touches a

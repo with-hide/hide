@@ -9,7 +9,7 @@
 //! A pane runs more than one session's hooks when the operator's own hook
 //! starts `claude -p` in the pane's environment; that session gets a record
 //! of its own, so it never resets the pane's. Which record is the pane's
-//! agent is the core's to say, from the session Herdr reports for the pane.
+//! agent is the core's to say, from the session recorded for the pane.
 
 use std::collections::HashSet;
 use std::fs;
@@ -142,8 +142,8 @@ pub fn state_directory(home: &Path) -> PathBuf {
     crate::route::pane_records(home).join("panes")
 }
 
-/// A pane id is Herdr's (`w7B:pM`), so it is folded into a file name rather
-/// than used as one.
+/// A pane id is in Herdr's shape (`w7B:pM`, `h7B:pM`), so it is folded into
+/// a file name rather than used as one.
 fn record_path(home: &Path, pane_id: &str) -> PathBuf {
     let safe: String = pane_id
         .chars()
@@ -420,8 +420,8 @@ pub fn records(home: &Path, pane_id: &str) -> Vec<SessionRecord> {
 /// Every pane's records, oldest first, by the pane id its file is named for
 /// (`w7B_pM.json` for `w7B:pM`), at most `limit` panes. A core that has no
 /// facts of its own yet reads them once, so a pane whose agent last reported
-/// to Herdr keeps its connection after the hooks start reporting to the core.
-/// A pane of a workspace Herdr made (`w`) and one the core's own engine made
+/// before the hooks reported to the core keeps its connection.
+/// A pane of a workspace moved from Herdr (`w`) and one the core's own engine made
 /// (`h`, PRD engine-bundle-4-herdr-removal D-26) are both read: the hook
 /// reads only the shape of the file's name and never the engine's ids, since
 /// a pane is named by its record, not by its id. A file whose name no pane id
@@ -817,7 +817,7 @@ pub fn forget(home: &Path, pane_id: &str) -> io::Result<()> {
 
 /// Drops every record whose pane no longer exists, and reports how many went.
 ///
-/// A pane that Herdr has stopped listing cannot be running a session, so its
+/// A pane that the engine has stopped listing cannot be running a session, so its
 /// counts belong to one that is over and nothing can ask for them again (PRD
 /// B31, D-53). Panes are the key rather than agents because the record is
 /// written by `SessionStart`, which can run before the agent is listed;
@@ -1503,7 +1503,7 @@ mod tests {
     }
 
     // B44: a core that starts with no facts file of its own takes the
-    // records of a Herdr pane and of a pane its own engine made alike.
+    // records of a pane moved from Herdr and of a pane its own engine made alike.
     #[test]
     fn every_pane_reads_the_records_of_herdr_and_engine_panes_alike() {
         let root = home("both-engines");

@@ -476,7 +476,7 @@ int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "auth") == 0) { puts("{\"loggedIn\":true}"); return 0; }
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--json-schema") == 0) return 1;
   initialize_runner();
-  // Exercise this exact supervisor without a terminal or a Herdr server.
+  // Exercise this exact supervisor without a terminal or an engine.
   if (argc > 4 && strcmp(argv[1], "--run-child") == 0) {
     char *end;
     unsigned long within_ms = strtoul(argv[2], &end, 10);
@@ -495,7 +495,7 @@ int main(int argc, char **argv) {
   snprintf(session, sizeof session, "fixture-%d", process_id());
   for (int i = 1; i + 1 < argc; i++)
     if (strcmp(argv[i], "--resume") == 0) snprintf(session, sizeof session, "%s", argv[i + 1]);
-  /* Run under another agent's name (a Grok pane's), the pane is that agent's, which Herdr reads from the
+  /* Run under another agent's name (a Grok pane's), the pane is that agent's, which the engine reads from the
      program; only the Claude Code stand-in reports a session of its own. */
   const char *base = argv[0];
   for (const char *at = argv[0]; *at; at++) if (*at == '/' || *at == '\\') base = at + 1;

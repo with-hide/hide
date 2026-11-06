@@ -1,8 +1,8 @@
 //! The one spelling of an id the core scopes to a device.
 //!
-//! The core names a device's Herdr objects by prefixing the device's own id:
+//! The core names a device's objects by prefixing the device's own id:
 //! pane `w1:p2` of device `mini` is `remote:mini:pane:w1:p2`, its tab
-//! `remote:mini:tab:w1:t1`, and so on. The core's own node keeps Herdr's ids
+//! `remote:mini:tab:w1:t1`, and so on. The core's own node keeps the engine's ids
 //! as they are. Every place that builds or reads that form does it here, so
 //! the device, the kind and the device's own id are split one way only; the
 //! terminal router a node runs reads the same form, which is why this lives
@@ -65,7 +65,7 @@ pub fn device_id_is_unambiguous(device: &str) -> bool {
 }
 
 /// Whether `id` is spelled as one the core scoped to a device, of any kind.
-/// No Herdr id starts with the prefix, so an id without it is the core's own
+/// No engine id starts with the prefix, so an id without it is the core's own
 /// node's. This is the cheap test for a hot filter; [`Scoped::parse`] and
 /// [`PaneAddress::parse`] say what the id names.
 pub fn is_device_scoped(id: &str) -> bool {
@@ -86,7 +86,7 @@ pub fn device_of(id: &str) -> Option<&str> {
 pub struct Scoped<'a> {
     pub device: &'a str,
     pub kind: Kind,
-    /// The device's own id for it, as its Herdr (or its catalog) names it.
+    /// The device's own id for it, as its engine (or its catalog) names it.
     pub id: &'a str,
 }
 
@@ -125,8 +125,8 @@ impl fmt::Display for Scoped<'_> {
     }
 }
 
-/// A pane as the core names it: a pane of its own node by Herdr's id, or a
-/// pane of a device by that device and the id the device's Herdr gives it.
+/// A pane as the core names it: a pane of its own node by the engine's id, or a
+/// pane of a device by that device and the id the device's engine gives it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum PaneAddress<'a> {
     Node(&'a str),
@@ -148,7 +148,7 @@ impl std::error::Error for NotAPane {}
 
 impl<'a> PaneAddress<'a> {
     /// Pane `pane` of `device`, where `node` is the core's own node: the
-    /// node's pane keeps Herdr's id.
+    /// node's pane keeps the engine's id.
     pub fn on(node: &str, device: &'a str, pane: &'a str) -> Self {
         if device == node {
             Self::Node(pane)
@@ -191,7 +191,7 @@ impl<'a> PaneAddress<'a> {
         }
     }
 
-    /// The id the pane's own Herdr gives it (`w1:p2`), on whichever machine.
+    /// The id the pane's own engine gives it (`w1:p2`), on whichever machine.
     pub fn device_pane_id(self) -> &'a str {
         match self {
             Self::Node(pane) | Self::Device { pane, .. } => pane,
@@ -212,13 +212,13 @@ impl fmt::Display for PaneAddress<'_> {
     }
 }
 
-/// The id `device`'s own Herdr gives the pane `id` names, when `id` is one
+/// The id `device`'s own engine gives the pane `id` names, when `id` is one
 /// of `device`'s panes as the core scopes them.
 pub fn pane_of<'a>(id: &'a str, device: &str) -> Option<&'a str> {
     Scoped::strip(id, device, Kind::Pane)
 }
 
-/// The id `device`'s own Herdr gives the tab `id` names, when `id` is one of
+/// The id `device`'s own engine gives the tab `id` names, when `id` is one of
 /// `device`'s tabs as the core scopes them.
 pub fn tab_of<'a>(id: &'a str, device: &str) -> Option<&'a str> {
     Scoped::strip(id, device, Kind::Tab)
@@ -272,7 +272,7 @@ pub fn pane_id_on(node: &str, device: &str, pane: &str) -> String {
 }
 
 /// The core's id for the pane a caller named on `device`, where `node` is
-/// the core's own node. Herdr numbers panes per machine, so a bare id is a
+/// the core's own node. The engine numbers panes per machine, so a bare id is a
 /// pane of the caller's machine; an id already scoped to a device is a full
 /// address and stands as it is.
 pub fn named_pane_id(node: &str, device: &str, id: &str) -> String {
@@ -284,7 +284,7 @@ pub fn named_pane_id(node: &str, device: &str, id: &str) -> String {
 }
 
 /// Whether two ids named on `device` are the same pane: a bare id is a pane
-/// of `device` and a full address names its own device, so the same Herdr
+/// of `device` and a full address names its own device, so the same engine
 /// id on two devices is never one pane.
 pub fn same_pane(node: &str, device: &str, a: &str, b: &str) -> bool {
     a == b
@@ -294,7 +294,7 @@ pub fn same_pane(node: &str, device: &str, a: &str, b: &str) -> bool {
         )
 }
 
-/// The machine a pane id is on and the id that machine's Herdr gives it: a
+/// The machine a pane id is on and the id that machine's engine gives it: a
 /// device's pane splits into its device and own id, and any other id is a
 /// pane of `machine` (the core's own node, or the caller's machine for a
 /// bare id a caller typed).
@@ -310,7 +310,7 @@ pub fn pane_device(id: &str) -> Option<&str> {
     PaneAddress::parse(id).ok().and_then(PaneAddress::device)
 }
 
-/// `id` of `kind` on `device` as the core names it: Herdr's own id on the
+/// `id` of `kind` on `device` as the core names it: the engine's own id on the
 /// core's own `node`, the device-scoped id on any other device.
 pub fn id_on(node: &str, device: &str, kind: Kind, id: &str) -> String {
     if device == node {
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn a_device_pane_splits_at_the_first_separator() {
-        // A Herdr id that itself holds `:pane:` stays the device's own id.
+        // An engine id that itself holds `:pane:` stays the device's own id.
         assert_eq!(
             PaneAddress::parse("remote:mini:pane:w1:pane:p2"),
             Ok(PaneAddress::Device {

@@ -788,7 +788,7 @@ fn publish_session(
         return false;
     };
     // The unsequenced stream can still contain a layout from an older focus.
-    // A focus that differs from Hide's is read back from Herdr, but the
+    // A focus that differs from Hide's is read back from the engine, but the
     // update itself is not held for that answer: it is ingested now with
     // the differing focus left alone, and the read runs on its own worker
     // outside the lock.
@@ -850,7 +850,7 @@ fn paths_to_build_from(
     }
 }
 
-/// The worker that reads Herdr's focus for a stream move, outside the runtime
+/// The worker that reads the engine's focus for a stream move, outside the runtime
 /// lock. It owns the runtime's one readback slot from its start to its last
 /// answer, and the guard frees the slot on any other way out.
 fn spawn_focus_readback(
@@ -897,7 +897,7 @@ fn spawn_focus_readback(
         .map_err(|error| format!("focus readback worker could not be started: {error}"))
 }
 
-/// The label worker for this coordinator's Herdr server, built on the
+/// The label worker for this coordinator's engine, built on the
 /// core's shared label services. `None` when the core has none (tests) or
 /// the worker could not start, which is logged: the rows then show
 /// provider names.
@@ -1032,7 +1032,7 @@ fn take_session_rereads(context: &SessionSyncContext, worker: &mut LabelWorker) 
     !panes.is_empty() && worker.read_again(&panes)
 }
 
-/// Hands the worker the agents and the complete pane topology the replica
+/// Hands the worker the agents and the complete pane topology the session
 /// publishes. Per publish this is one pass over the agents and the panes.
 fn observe_labels(worker: &mut LabelWorker, state: &ProjectionState) {
     let agents: Vec<ObservedAgent> = state
@@ -1085,7 +1085,7 @@ fn begin_read_connection(context: &SessionSyncContext, snapshot_started_at: Inst
 /// What the lineage writer reads from the runtime in one lock: the delivery
 /// ledger and the panes that should carry this connection's mark.
 /// Hands a pulled engine's agents to the lineage writer, as the event path
-/// hands it each agent list Herdr answers: the writer settles the
+/// hands it each agent list the engine answers: the writer settles the
 /// registrations Hide owes an agent once its session shows (a fork, a spawn
 /// given no prompt) and writes each registration's lineage tokens on its
 /// pane. Without it no fork on the core's own engine is ever registered.

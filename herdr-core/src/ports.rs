@@ -6,7 +6,7 @@
 //! tested without a server to point it at.
 //!
 //! System reads happen on the reader's own worker thread, never on the
-//! session-sync coordinator thread that applies Herdr's events (PRD
+//! session-sync coordinator thread that applies the engine's events (PRD
 //! instant-pane-topology D-13), never while the runtime mutex is held and
 //! never on a per-event path. Unix uses `lsof`; Windows uses the platform's
 //! bounded native listener observation. [`PortsReader::read_if_due`] starts a

@@ -14,11 +14,12 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{AgentKey, Projection};
+use super::{AgentKey, LIST_BUDGET, Projection, wire_len};
 use crate::missions::Question;
 
 /// How many open and how many closed missions one frame carries, the newest
 /// first; the rest are counted in `omitted` and logged (engineering #15).
+/// The frame's bytes are capped too (`LIST_BUDGET`): see `fit`.
 pub const MAX_OPEN: usize = 24;
 pub const MAX_CLOSED: usize = 24;
 /// The longest title or name kept, in characters.
@@ -33,6 +34,14 @@ pub struct PhoneMissions {
     /// Missions past the caps, which no frame carries.
     #[serde(skip_serializing_if = "is_zero")]
     pub omitted: usize,
+}
+
+impl PhoneMissions {
+    /// The steps of finished missions the frame left out to stay within its
+    /// budget, summed over the missions it carries.
+    pub fn nodes_omitted(&self) -> usize {
+        self.items.iter().map(|mission| mission.nodes_omitted).sum()
+    }
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -53,6 +62,10 @@ pub struct PhoneMission {
     pub answer_failed: Option<String>,
     pub conductor: PhoneConductor,
     pub nodes: Vec<PhoneNode>,
+    /// The steps a finished mission left behind on the Mac because the frame
+    /// had no room for them; `nodes` and `landing_order` are empty then.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub nodes_omitted: usize,
     pub landing_order: Vec<String>,
     pub created_at_unix_ms: u64,
     pub started_at_unix_ms: Option<u64>,
@@ -275,17 +288,18 @@ impl PhoneMissions {
                     .unwrap_or(mission.created_at_unix_ms),
             )
         });
-        let omitted = open.len().saturating_sub(MAX_OPEN) + closed.len().saturating_sub(MAX_CLOSED);
+        let mut omitted =
+            open.len().saturating_sub(MAX_OPEN) + closed.len().saturating_sub(MAX_CLOSED);
         open.truncate(MAX_OPEN);
         closed.truncate(MAX_CLOSED);
         let labels = device_labels(rest);
-        let items = open
-            .into_iter()
-            .chain(closed)
-            .map(|mission| phone_mission(mission, node, &labels, &raw, agents))
-            .collect();
+        let project = |mission| phone_mission(mission, node, &labels, &raw, agents);
+        let mut open: Vec<PhoneMission> = open.into_iter().map(project).collect();
+        let mut closed: Vec<PhoneMission> = closed.into_iter().map(project).collect();
+        omitted += fit(&mut open, &mut closed, LIST_BUDGET);
+        open.append(&mut closed);
         Self {
-            items,
+            items: open,
             failed,
             omitted,
         }
@@ -294,6 +308,51 @@ impl PhoneMissions {
     pub fn find(&self, id: &str) -> Option<&PhoneMission> {
         self.items.iter().find(|mission| mission.id == id)
     }
+}
+
+/// Keeps the missions within `budget` bytes of JSON items, `open` and
+/// `closed` each newest first, and answers how many missions it dropped. What
+/// matters least goes first: the steps of finished missions, the oldest first
+/// (the row stays, with `nodes_omitted`), then finished missions, then open
+/// ones, the oldest first. A step of an open mission is never dropped alone,
+/// because its progress cells and its decision read every step.
+fn fit(open: &mut Vec<PhoneMission>, closed: &mut Vec<PhoneMission>, budget: usize) -> usize {
+    let sizes = |items: &[PhoneMission]| items.iter().map(wire_len).collect::<Vec<_>>();
+    let (open_sizes, mut closed_sizes) = (sizes(open), sizes(closed));
+    // Every item and the comma before it; the brackets are the frame's.
+    let mut total: usize = open_sizes
+        .iter()
+        .chain(&closed_sizes)
+        .map(|size| size + 1)
+        .sum();
+    for (mission, size) in closed.iter_mut().zip(&mut closed_sizes).rev() {
+        if total <= budget {
+            return 0;
+        }
+        if mission.nodes.is_empty() {
+            continue;
+        }
+        mission.nodes_omitted = mission.nodes.len();
+        mission.nodes.clear();
+        mission.landing_order.clear();
+        let stripped = wire_len(mission);
+        total -= *size - stripped;
+        *size = stripped;
+    }
+    let mut kept_closed = closed.len();
+    while total > budget && kept_closed > 0 {
+        kept_closed -= 1;
+        total -= closed_sizes[kept_closed] + 1;
+    }
+    let mut kept_open = open.len();
+    while total > budget && kept_open > 0 {
+        kept_open -= 1;
+        total -= open_sizes[kept_open] + 1;
+    }
+    let dropped = (closed.len() - kept_closed) + (open.len() - kept_open);
+    closed.truncate(kept_closed);
+    open.truncate(kept_open);
+    dropped
 }
 
 fn phone_mission(
@@ -365,6 +424,7 @@ fn phone_mission(
         answer_failed: mission.answer_failed,
         conductor,
         nodes,
+        nodes_omitted: 0,
         landing_order: mission.landing_order,
         created_at_unix_ms: mission.created_at_unix_ms,
         started_at_unix_ms: mission.started_at_unix_ms,
@@ -658,6 +718,108 @@ mod tests {
         assert!(
             missions.find("o0").is_none() && missions.find("c0").is_none(),
             "the oldest of each are the ones left out"
+        );
+    }
+
+    /// A mission with `nodes` steps whose titles are as long as the frame
+    /// keeps them, in a script of three bytes a character.
+    fn full(id: &str, created: u64, status: &str, nodes: usize) -> Value {
+        let long = "가".repeat(TEXT_CHARS);
+        let mut value = mission(
+            id,
+            created,
+            status,
+            (0..nodes)
+                .map(|at| {
+                    node(
+                        &format!("n{at}"),
+                        json!({"title": long, "pane_id": "w1:p2"}),
+                    )
+                })
+                .collect(),
+        );
+        value["title"] = json!(long);
+        value
+    }
+
+    #[test]
+    fn the_most_missions_with_the_most_steps_fit_one_relay_message_and_what_is_left_out_is_counted()
+    {
+        let missions: Vec<Value> = (0..MAX_OPEN as u64)
+            .map(|at| full(&format!("o{at}"), 1_000 + at, "running", 64))
+            .chain((0..MAX_CLOSED as u64).map(|at| full(&format!("c{at}"), 100 + at, "done", 64)))
+            .collect();
+        let rest = rest(missions, json!({}));
+        let projected = projected(&rest);
+        let frame = json!({"type": "missions", "items": projected.items, "failed": projected.failed, "omitted": projected.omitted});
+        let bytes = frame.to_string().len();
+        assert!(bytes <= super::super::FRAME_LIMIT, "{bytes} bytes");
+        let carried = projected.items.len();
+        assert_eq!(carried + projected.omitted, MAX_OPEN + MAX_CLOSED);
+        assert!(
+            projected.omitted > 0,
+            "64 steps of 48 missions cannot all fit"
+        );
+        assert!(
+            projected
+                .items
+                .iter()
+                .all(|mission| mission.status == "running"),
+            "every finished mission goes before an open one"
+        );
+        assert_eq!(
+            projected.items[0].id,
+            format!("o{}", MAX_OPEN - 1),
+            "the newest open mission stays"
+        );
+        assert!(
+            projected
+                .items
+                .iter()
+                .all(|mission| mission.nodes.len() == 64),
+            "an open mission keeps every step"
+        );
+    }
+
+    #[test]
+    fn finished_missions_lose_their_steps_oldest_first_before_any_mission_is_left_out() {
+        // Two open missions of the longest steps take about half the budget.
+        let missions: Vec<Value> = (0..2u64)
+            .map(|at| full(&format!("o{at}"), 1_000 + at, "running", 64))
+            .chain((0..MAX_CLOSED as u64).map(|at| full(&format!("c{at}"), 100 + at, "done", 64)))
+            .collect();
+        let projected = projected(&rest(missions, json!({})));
+        assert_eq!(projected.omitted, 0, "every mission stays listed");
+        assert_eq!(projected.items.len(), 2 + MAX_CLOSED);
+        let newest = projected.find(&format!("c{}", MAX_CLOSED - 1)).unwrap();
+        let oldest = projected.find("c0").unwrap();
+        assert_eq!((newest.nodes.len(), newest.nodes_omitted), (64, 0));
+        assert_eq!((oldest.nodes.len(), oldest.nodes_omitted), (0, 64));
+        assert!(oldest.landing_order.is_empty());
+        assert_eq!(projected.nodes_omitted() % 64, 0);
+        assert!(projected.nodes_omitted() > 0);
+        let sent = serde_json::to_value(oldest).unwrap();
+        assert_eq!(sent["nodes_omitted"], 64);
+        assert!(
+            serde_json::to_value(newest)
+                .unwrap()
+                .get("nodes_omitted")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_frame_within_the_budget_leaves_nothing_out() {
+        let missions: Vec<Value> = (0..3u64)
+            .map(|at| full(&format!("c{at}"), 100 + at, "done", 8))
+            .collect();
+        let projected = projected(&rest(missions, json!({})));
+        assert_eq!((projected.omitted, projected.nodes_omitted()), (0, 0));
+        assert!(
+            projected
+                .items
+                .iter()
+                .all(|mission| mission.nodes.len() == 8)
         );
     }
 

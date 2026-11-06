@@ -946,6 +946,93 @@ fn a_ci_letter_waits_for_every_workflow_on_the_head_to_end() {
     );
 }
 
+/// One rule decides a head's CI end for the finish line and the letter
+/// alike: a failed check while another still runs leaves the ci line open,
+/// spends no rerun and sends no letter; the end closes both together.
+#[test]
+fn a_failure_beside_a_running_check_keeps_the_ci_line_open_like_the_letter() {
+    use crate::mission_criteria::{CriterionKind, CriterionState};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    let ci = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        let fix = mission.nodes.iter().find(|node| node.key == "fix").unwrap();
+        let line = fix
+            .criteria
+            .iter()
+            .find(|line| line.kind == CriterionKind::Ci)
+            .unwrap()
+            .clone();
+        (line.state, line.reruns)
+    };
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    assert!(
+        runtime
+            .note_mission_pulls(node, &failed_running("b2", true, &["static-design"]))
+            .is_empty()
+    );
+    assert_eq!(ci(&runtime), (CriterionState::Open, 0), "verify still runs");
+    assert_eq!(
+        runtime
+            .note_mission_pulls(node, &failed_running("b2", false, &["static-design"]))
+            .len(),
+        1
+    );
+    assert_eq!(ci(&runtime), (CriterionState::Fail, 0));
+}
+
+/// A CI letter the Conductor's full queue refuses is not told: the next
+/// read after the queue has room tells it, once.
+#[test]
+fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
+    use crate::missions::{PENDING_WAKE_LIMIT, PendingWake, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.wakes = (0..PENDING_WAKE_LIMIT)
+        .map(|at| PendingWake {
+            seq: at as u64 + 1,
+            node: "docs".into(),
+            pr: None,
+            event: WakeEvent::NewHead,
+            head: None,
+            to: None,
+            reason: None,
+            why: None,
+            action: None,
+            warning: None,
+            ci: None,
+            key: Some(format!("filler:{at}")),
+        })
+        .collect();
+    let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
+    assert!(
+        runtime.note_mission_pulls(node, &failed).is_empty(),
+        "the queue is full"
+    );
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .wakes
+        .clear();
+    assert_eq!(
+        runtime.note_mission_pulls(node, &failed),
+        vec!["mission:mission-1:ci:fix:7:b2:failed:sender"],
+        "told once there is room"
+    );
+    assert!(
+        runtime.note_mission_pulls(node, &failed).is_empty(),
+        "told once"
+    );
+}
+
 /// A pull request whose CI already ended when Hide first reads it, as when
 /// it was named before the list held it, is told: only a merge or a review
 /// starts from the first answer (with-hide/hide#2089 review 2).
@@ -2579,7 +2666,7 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     assert!(!runtime.mission_answer_event("mission-1", 1, None, None, true));
     assert_eq!(runtime.mission_answers_due().len(), 1);
     // The prompt is asked: the answer reads as sending, and the book already
-    // holds it as unconfirmed, so a stop before Herdr's reply never types it
+    // holds it as unconfirmed, so a stop before the engine's reply never types it
     // again after a restart.
     runtime.mission_answer_typing("mission-1", 1);
     runtime.refresh_missions();
@@ -2608,7 +2695,7 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
             .unwrap()
             .unconfirmed
     );
-    // Herdr's reply to the prompt timed out: the answer may be in the conversation.
+    // The engine's reply to the prompt timed out: the answer may be in the conversation.
     runtime.mission_answer_sent(
         "mission-1",
         1,
@@ -5071,7 +5158,7 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
     assert_eq!(conductor_shown(&mut runtime).ask_subject, None);
 }
 
-/// A decision a Herdr sync laid before any refresh read it, cleared before
+/// A decision an engine sync laid before any refresh read it, cleared before
 /// the next refresh, still leaves the row (needs-you-cleanup B3).
 #[test]
 fn a_decision_laid_by_a_sync_and_cleared_before_the_next_refresh_leaves_the_row() {
@@ -5086,7 +5173,7 @@ fn a_decision_laid_by_a_sync_and_cleared_before_the_next_refresh_leaves_the_row(
         json!({"op": "decide", "line": "Skip the check line?"}),
     )
     .unwrap();
-    // Herdr sends the row again before the next pull reads the books.
+    // The engine sends the row again before the next pull reads the books.
     let mut synced = std::mem::take(&mut runtime.snapshot.navigator.agents);
     runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut synced);
     assert!(synced[0].ask_subject.is_some());
@@ -6630,7 +6717,7 @@ fn a_node_that_cannot_remember_a_cause_does_not_raise_it() {
 const DEVICE: &str = "mini";
 const DEVICE_ROOT: &str = "/Users/example/fixture";
 
-/// `DEVICE`'s link in `state`, its Herdr session showing `workspaces`.
+/// `DEVICE`'s link in `state`, its engine session showing `workspaces`.
 fn device_status(
     state: &str,
     workspaces: Vec<WorkspaceSnapshot>,

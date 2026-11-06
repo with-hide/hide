@@ -149,6 +149,45 @@ it("says there are no missions when the record is empty, and draws nothing for a
   }
 });
 
+it("says under the list how many missions and, on a finished mission's page, how many steps the Mac left out of the frame", async () => {
+  const stripped = mission("c-old", { status: "done", created_at_unix_ms: 100, closed_at_unix_ms: 200, nodes: [], nodes_omitted: 64 });
+  const { container, click, serve, unmount } = await connect([mission("m-run", { nodes: [node("a", "working")] }), stripped]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    expect(container.querySelector("[data-phone-missions-omitted]")).toBeNull();
+    await serve({ type: "missions", items: [mission("m-run", { nodes: [node("a", "working")] }), stripped], failed: false, omitted: 3 });
+    expect(container.querySelector("[data-phone-missions-omitted]")!.textContent).toBe("3 more missions are not shown here · see them on the desktop");
+    await click('[data-phone-mission-state="closed"]');
+    expect(container.querySelector("[data-phone-mission-steps-omitted]")!.getAttribute("data-phone-mission-steps-omitted")).toBe("64");
+    // No count of steps the page does not hold.
+    expect(container.querySelector("[data-phone-mission-conductor]")!.textContent).not.toContain("/");
+  } finally {
+    await unmount();
+  }
+});
+
+it("opens a step's worker only when the phone's list holds that row", async () => {
+  const listed = { device_id: "local", pane_id: "w1:p2" };
+  const cut = { device_id: "local", pane_id: "w1:p9" };
+  const { container, click, serve, socket, unmount } = await connect([mission("m-run", { conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: "claude", agent: cut }, nodes: [node("a", "working", { agent: listed }), node("b", "working", { agent: cut })] })]);
+  try {
+    const row = {
+      kind: "agent" as const, ...listed, root_pane_id: listed.pane_id, group: "working" as const, mark: "going" as const, wait: null, descendants_working: 0, agent_kind: "claude",
+      title: "worker", place: null, device_label: null, changed_at_unix_ms: null, line: null, status_code: "working" as const, demand: "none", emphasized: false, holds_notification: false,
+    };
+    await serve({ type: "agents", groups: [{ group: "working", count: 2, rows: [row] }], omitted: 1, devices: [], interface_language: "en", color_theme: null });
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-run"]');
+    expect(container.querySelector('[data-phone-step="a"] [data-phone-step-open]')).not.toBeNull();
+    expect(container.querySelector('[data-phone-step="b"] [data-phone-step-open]')).toBeNull();
+    expect(container.querySelector("[data-phone-mission-chat]"), "the Conductor's row was left out too").toBeNull();
+    await click('[data-phone-step="a"] [data-phone-step-open]');
+    expect(socket.sent.filter((message) => message.type === "open").map((message) => message.pane_id)).toEqual(["w1:p2"]);
+  } finally {
+    await unmount();
+  }
+});
+
 it("answers a decision with one request, and the same press again reuses that request id", async () => {
   const { container, click, answers, connection, unmount } = await connect([deciding()]);
   try {

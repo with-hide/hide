@@ -1,7 +1,6 @@
-// The seven active agents use the pinned Herdr's integrations (PRD agent-list-follows-herdr, B31 retirement):
-// omp is a row like Pi whose switch installs Herdr's real omp integration into `~/.omp/agent` and the shared
-// skill, and a Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces on the first run and
-// lists no Gemini row. Every step runs against the pinned Herdr binary and a hided that runs the install kit.
+// A Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces on the first run and
+// lists no Gemini row (PRD agent-list-follows-herdr, B31 retirement). Every step runs against the core's own
+// engine and a hided that runs the install kit.
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";

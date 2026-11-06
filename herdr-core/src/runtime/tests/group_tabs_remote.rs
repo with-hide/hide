@@ -876,7 +876,7 @@ fn a_repeated_focus_after_its_answer_waits_for_the_existing_tab_move() {
     super::session_navigation::finish_running_pane_focus(&mut runtime, Ok(()));
     let notifications = diagnostic_count(&runtime, "pane.focus.requested");
 
-    // The successful control arrived before its tab_focused stream event.
+    // The successful control arrived before its tab move in the stream.
     // A repeated click shares that move, even after an unchanged old header.
     for stale_header in [false, true] {
         if stale_header {
@@ -1343,7 +1343,7 @@ fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
         .workspace_registrations
         .extend(local.snapshot.ui_state.workspace_registrations.clone());
     runtime.rebuild_catalog();
-    // A registration alone has no Herdr owner. Publish the local checkout
+    // A registration alone has no engine owner. Publish the local checkout
     // before asking an immediate result to bring it in front of the device.
     let mut local_session =
         tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1");

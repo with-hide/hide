@@ -204,7 +204,7 @@ export type PendingTrash = {
   inode: string | null;
   /**
    * The checkout and device the prompt was opened for. A device's front
-   * checkout follows its own Herdr focus and can move while the prompt is
+   * checkout follows its own engine focus and can move while the prompt is
    * open, so the confirmation goes to this target, not the one in front then (B34).
    */
   target: { root: string; device_id?: string };

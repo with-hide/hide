@@ -429,7 +429,7 @@ function deskProject({ place, model }: PracticeDesk, nowMs: number): Workspace {
 /**
  * The snapshot the core would send for `desks`, listed in that order, with
  * `front` the project in front, on this machine with the left sidebar on its
- * Projects list. Pane ids are unique across the desks, as Herdr's are.
+ * Projects list. Pane ids are unique across the desks, as the engine's are.
  */
 export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowMs: number): WorldSnapshot {
   const shownDesk = desks.find((desk) => desk.place.project === front);
