@@ -5,7 +5,7 @@
 // the groups and the line are `missionList.ts`'s rules; this draws them.
 
 import { CheckIcon, ChevronRightIcon, Loader2Icon, XIcon } from "lucide-react";
-import { ProgressCells, STATE_PILL_TONE } from "../components/mission-tone";
+import { PILL_TONE, ProgressCells, STATE_PILL_TONE } from "../components/mission-tone";
 import { useElapsed } from "../components/elapsed";
 import { RowButton } from "../components/ui/row-button";
 import { Button } from "../components/ui/button";
@@ -111,7 +111,7 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
     >
       <span className="flex w-full min-w-0 items-center gap-sm">
         <span
-          className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", first ? "bg-mission-hold/15 text-mission-hold" : STATE_PILL_TONE[mission.status])}
+          className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", first ? PILL_TONE.hold : STATE_PILL_TONE[mission.status])}
           data-phone-mission-pill={first?.kind ?? mission.status}
         >
           {first ? <span aria-hidden="true">!</span> : null}

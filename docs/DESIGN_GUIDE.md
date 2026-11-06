@@ -57,6 +57,8 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | An agent's status | `StatusMark` (`status-mark.tsx`); a project's mark counts are `StatusBadge` |
 | A session as a row (태스크 줄) | `SessionRowBody` (`session-row.tsx`), the marks, title line and lines under it, which the sidebar's `SidebarAgentRow`, the session record's children (`size="record"`) and `SessionRow` all draw; `SessionRow` is the pressable list item of it |
 | A plan's steps | `PlanChecklist` (`plan-checklist.tsx`) |
+| A map page, a mission's or a plan's | `MapPage`, `MapSplit` (the map with the column beside it), and in that column `MapPanel` with `MapPanelHead` for the picked card (`map-page.tsx`); what a step's card, row and panel say comes from `plans.ts` (`stepStatusWord`, `stepLeft`) |
+| A state pill's colour | `PILL_TONE` and `STATE_PILL_TONE` (`mission-tone.tsx`) |
 | A letter | `letter-mark.tsx`: `LetterTag` at the head of a letter's line, `RowLetterMark` on a sidebar row, `PaneLetterButton` in a pane header |
 | A mission a session conducts | `MissionChip` (`mission-chip.tsx`), reading the store; `MissionChipView` draws one from values a caller holds |
 | An `@name` in a line of words | `MentionChip` (`mention-chip.tsx`), `kind` `session` or `project`; `lead` (a project's ⌂) replaces `@` on the same colour; Desk draws a project through `DeskMentionChip` in its messages, threads and the composer's chips, and a session there as `SessionChip` |

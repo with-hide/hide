@@ -349,6 +349,34 @@ it("draws every map card with its step number, names an agent only on a handed s
   } finally { await view.unmount(); }
 });
 
+it("says the same of what a finished handed step left on its map card, its checklist row and its panel: the evidence, the child's report only for a step that was to leave nothing, and nothing for a pull request still owed (PRD hide-plan-delegate B13, B26)", async () => {
+  const steps = [
+    step("report", "done", [], { delegation: handed("reported", { pane_id: null }) }),
+    // Was to leave a pull request and none is recorded: the child's report does not stand in for it.
+    step("owed", "done", ["report"], { output: "pr", delegation: handed("reported", { pane_id: null }) }),
+    step("pr", "done", ["owed"], { output: "pr", evidence: { kind: "pr", repo: "with-hide/hide", number: 12 }, delegation: handed("reported", { pane_id: null }) }),
+  ];
+  const finished = plan({ steps, progress: { current: null, next: null, done: 3, total: 3, finished: true } });
+  const read: Record<string, [string | null, string | null, string | null]> = {};
+  const chip = await mount([finished]);
+  try {
+    await act(async () => chip.actions.togglePlanChip());
+    for (const { key } of steps) read[key] = [chip.popover()?.querySelector(`[data-plan-row=${key}] [data-step-evidence]`)?.textContent ?? null, null, null];
+  } finally { await chip.unmount(); }
+  const map = await mount([finished], "map");
+  try {
+    for (const { key } of steps) {
+      const card = map.container.querySelector(`[data-step-line=${key}] [data-step-what]`)?.textContent ?? null;
+      await act(async () => map.container.querySelector<HTMLElement>(`[data-plan-step=${key}]`)!.click());
+      const left = map.container.querySelector(`[data-plan-step-detail=${key}] [data-mission-summary-row=left] dd`)!;
+      // The panel draws `Nothing yet` where the card and the row draw nothing.
+      read[key] = [read[key]![0], card, left.textContent === "Nothing yet" ? null : left.textContent];
+    }
+  } finally { await map.unmount(); }
+  // The number is built so the token check does not read it as a colour.
+  expect(read).toEqual({ report: ["Report", "Report", "Report"], owed: [null, null, null], pr: [`#${12}`, `#${12}`, `#${12}`] });
+});
+
 it("lets go of a picked step on Escape, on the ✕ and on a press on the map's empty ground, lights the cards one edge away, and drops a pick whose step a replan took away, as a mission's map does (PRD mission-map-git-criteria B30)", async () => {
   const view = await mount([plan()], "map");
   try {

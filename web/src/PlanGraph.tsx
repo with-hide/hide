@@ -12,7 +12,7 @@ import { usePaneAgents } from "./PaneHeaderBand";
 import { DelegationWord } from "./components/plan-checklist";
 import { MissionDevice, useMissionDeviceName } from "./missionParts";
 import { neighbours } from "./missions";
-import { childNow, childPlanOf, evidenceWords, planGraph, stepDelegationWord, waitingOn } from "./plans";
+import { childNow, childPlanOf, evidenceWords, planGraph, stepDelegationWord, stepLeft, stepStatusWord, waitingOn } from "./plans";
 import type { PlanStep, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -66,10 +66,9 @@ export function PlanGraph({ plan, selected, onSelect }: { plan: PlanView; select
  */
 function StepCard({ plan, step, number, selected, dimmed, onSelect }: { plan: PlanView; step: PlanStep; number: number; selected: boolean; dimmed: boolean; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
-  const delegation = step.delegation;
   const word = stepDelegationWord(step);
   const current = plan.progress.current === step.key && !plan.progress.finished;
-  const status = step.status !== "done" && delegation ? t(`plan.delegation.state.${delegation.state}`) : word === "pending" ? t("plan.delegation.pending") : t(`plan.status.${step.status}`);
+  const status = stepStatusWord(step, t);
   return (
     <button
       type="button"
@@ -106,7 +105,7 @@ function StepCard({ plan, step, number, selected, dimmed, onSelect }: { plan: Pl
         {word && word !== "pending" ? (
           <DelegationWord word={word} />
         ) : current ? (
-          <span className="shrink-0 text-micro font-semibold text-agent-working">{t("plan.current")}</span>
+          <span className="shrink-0 text-micro font-semibold text-mission-working">{t("plan.current")}</span>
         ) : step.output && step.output !== "none" ? (
           <span className="shrink-0 font-mono text-micro text-muted-foreground" data-step-output={step.output}>{t(step.output === "pr" ? "plan.output.pr" : "plan.output.file")}</span>
         ) : null}
@@ -132,16 +131,14 @@ function CardLine({ plan, step }: { plan: PlanView; step: PlanStep }) {
   const delegation = step.delegation;
   const device = useMissionDeviceName(delegation?.session?.device_id);
   const pending = stepDelegationWord(step) === "pending";
+  const left = stepLeft(step);
   const what = (() => {
     if (pending) {
       const waits = waitingOn(plan, step).map((other) => other.title);
       return waits.length > 0 ? t("plan.delegation.waits", { steps: waits.join("·") }) : null;
     }
     if (step.status === "dropped") return null;
-    if (step.status === "done") {
-      if (step.evidence) return evidenceWords(step.evidence);
-      return delegation && (!step.output || step.output === "none") ? t("plan.delegation.report") : null;
-    }
+    if (step.status === "done") return left ? (left.kind === "evidence" ? evidenceWords(left.evidence) : t("plan.delegation.report")) : null;
     if (delegation) {
       const now = childNow(child);
       if (now) return `${now.step} ${now.progress}`;
@@ -166,7 +163,7 @@ function CardLine({ plan, step }: { plan: PlanView; step: PlanStep }) {
       {device ? <MissionDevice name={device} className="max-w-[calc(var(--size-mission-node)/3)] shrink-0" /> : null}
       {what && (pending || delegation) ? <span aria-hidden="true">·</span> : null}
       {what ? (
-        <span className={cn("min-w-0 truncate", step.evidence && step.status === "done" && "font-mono text-mission-done")} title={what} data-step-what="true">
+        <span className={cn("min-w-0 truncate", left?.kind === "evidence" && "font-mono text-mission-done")} title={what} data-step-what="true">
           {what}
         </span>
       ) : null}
