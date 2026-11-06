@@ -305,6 +305,11 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     assert_eq!(first.identity.user, USER);
     assert_eq!(first.identity.machine_id, Some(format!("wsl:{id}")));
     println!("upload={:?}", first.upload);
+    // A distribution is a pipe on this PC, not a link packing pays for:
+    // its kit goes as it is.
+    assert!(first.upload.bytes > 0, "{:?}", first.upload);
+    assert_eq!(first.upload.wire, first.upload.bytes, "{:?}", first.upload);
+    assert_eq!(first.upload.pack_ms, 0, "{:?}", first.upload);
     // The device's panes run in pane holders its node started.
     assert!(
         first.node.terminals.is_ok(),
