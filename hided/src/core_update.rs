@@ -300,7 +300,7 @@ mod tests {
             // What the root's `current` leads to (`hide_kit::current`).
             for beside in ["hide", "hide-agent-hooks"] {
                 let name = format!("{beside}{}", std::env::consts::EXE_SUFFIX);
-                std::fs::write(program.with_file_name(name), "").unwrap();
+                std::fs::write(program.with_file_name(name), version).unwrap();
             }
             program
         };
@@ -352,10 +352,12 @@ mod tests {
         );
         assert!(refused.contains("not started again"), "{refused}");
         assert_eq!(*starts.started.borrow(), std::slice::from_ref(&new));
-        assert!(hide_kit::current::leads_to(
-            &root.path().join("builds"),
-            "bbbbbbbbbbbbbbbb"
-        ));
+        let hide = format!("hide{}", std::env::consts::EXE_SUFFIX);
+        let current = root.path().join("builds").join(hide_kit::CURRENT);
+        assert_eq!(
+            std::fs::read(current.join(hide)).unwrap(),
+            b"bbbbbbbbbbbbbbbb"
+        );
 
         starts.failing.borrow_mut().clear();
         let retried = update_with(&args, &new, || Ok(&starts)).unwrap();

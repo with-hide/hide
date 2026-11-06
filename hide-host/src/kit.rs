@@ -715,11 +715,21 @@ mod tests {
 
     /// Writes each of `programs` into `folder` as this system names a
     /// program, and answers the path of the first.
+    /// Whether the `hide` that `<root>/current` leads to is build
+    /// `version`'s, as a pane or a hook running it finds.
+    fn current_runs(root: &Path, version: &str) -> bool {
+        let hide = format!("hide{}", std::env::consts::EXE_SUFFIX);
+        std::fs::read(root.join(hide_kit::CURRENT).join(&hide)).ok()
+            == Some(std::fs::read(root.join(version).join(&hide)).unwrap())
+    }
+
     fn programs(folder: &Path, programs: &[&str]) -> PathBuf {
         std::fs::create_dir_all(folder).unwrap();
         for program in programs {
             let file = folder.join(format!("{program}{}", std::env::consts::EXE_SUFFIX));
-            std::fs::write(file, b"program").unwrap();
+            // Each folder's copy is its own, so a test can tell which
+            // build `current` leads to by what its programs hold.
+            std::fs::write(file, folder.file_name().unwrap().as_encoded_bytes()).unwrap();
         }
         folder.join(format!("{}{}", programs[0], std::env::consts::EXE_SUFFIX))
     }
@@ -820,10 +830,7 @@ mod tests {
             }),
             "{report:?}"
         );
-        assert!(hide_kit::current::leads_to(
-            &placement.root,
-            &placement.version
-        ));
+        assert!(current_runs(&placement.root, &placement.version));
         assert!(
             placement
                 .root
@@ -860,10 +867,7 @@ mod tests {
         point_current(&placement.root, &placement.version).unwrap();
         remove_other_builds(&placement.root, &placement.version);
 
-        assert!(hide_kit::current::leads_to(
-            &placement.root,
-            "bbbbbbbbbbbbbbbb"
-        ));
+        assert!(current_runs(&placement.root, "bbbbbbbbbbbbbbbb"));
         assert!(!placement.root.join(&older.version).exists());
         assert!(
             placement
@@ -895,7 +899,7 @@ mod tests {
         let refusal = report.refused.expect("the pass stops before anything");
         assert_eq!(refusal.cause, hide_kit::RefusalCause::Record);
         assert_eq!(refusal.path.as_deref(), ledger.to_str());
-        assert!(hide_kit::current::leads_to(&placement.root, &older.version));
+        assert!(current_runs(&placement.root, &older.version));
         assert!(placement.root.join(&older.version).is_dir());
         assert_eq!(std::fs::read_to_string(ledger).unwrap(), bytes);
         assert!(!placement.home.join(".hide/kit").exists());
@@ -910,7 +914,7 @@ mod tests {
             programs(&root.join(build), &["hide", "hide-agent-hooks"]);
         }
         adopt_build(root, "cccccccccccccccc", "bbbbbbbbbbbbbbbb").unwrap();
-        assert!(hide_kit::current::leads_to(root, "cccccccccccccccc"));
+        assert!(current_runs(root, "cccccccccccccccc"));
         let mut left: Vec<String> = std::fs::read_dir(root)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -996,10 +1000,7 @@ mod tests {
         )
         .unwrap();
         assert!(!folder.exists());
-        assert!(hide_kit::current::leads_to(
-            &placement.root,
-            &placement.version
-        ));
+        assert!(current_runs(&placement.root, &placement.version));
     }
 
     /// A process running the copy `program` of this test binary, once it

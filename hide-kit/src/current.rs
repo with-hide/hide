@@ -38,7 +38,8 @@ pub fn remove(root: &Path) -> io::Result<()> {
 
 /// Whether `<root>/current` leads to the build `version`'s programs: on
 /// Windows a folder of their copies, or the junction an earlier build made.
-pub fn leads_to(root: &Path, version: &str) -> bool {
+#[cfg(test)]
+fn leads_to(root: &Path, version: &str) -> bool {
     sys::leads_to(root, version)
 }
 
@@ -69,6 +70,7 @@ mod sys {
         link::replace_link(Path::new(version), &current)
     }
 
+    #[cfg(test)]
     pub(super) fn leads_to(root: &Path, version: &str) -> bool {
         link::is_link_to(&root.join(CURRENT), Path::new(version))
     }
@@ -103,7 +105,8 @@ mod sys {
     const PROGRAMS: [&str; 2] = ["hide.exe", "hide-agent-hooks.exe"];
 
     /// The file in a `current` folder naming the build its programs are a
-    /// copy of, written once every program is in place.
+    /// copy of, removed before any program is replaced and written once
+    /// every program is in place.
     const MARKER: &str = ".hide-current";
 
     /// The start of the name of a `current` folder being filled, and of an
@@ -155,6 +158,14 @@ mod sys {
                     remove_set_aside(&current);
                     return Ok(());
                 }
+                // A pass that ends between the two programs leaves no marker,
+                // so a later pass pointing back at the marked build copies
+                // both again rather than trusting a folder holding one of each.
+                if let Err(error) = fs::remove_file(current.join(MARKER))
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(error);
+                }
                 for program in PROGRAMS {
                     let copy = current.join(unique(&format!(".{program}.staged-")));
                     fs::copy(build.join(program), &copy)?;
@@ -194,6 +205,7 @@ mod sys {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn leads_to(root: &Path, version: &str) -> bool {
         let current = root.join(CURRENT);
         holds(&current, version) || link::is_link_to(&current, Path::new(version))
@@ -339,6 +351,31 @@ mod tests {
         assert!(std::fs::symlink_metadata(root.join(CURRENT)).is_err());
         assert_eq!(hide_in(&root.join("bbbbbbbbbbbbbbbb")), b"second");
         remove(root).unwrap();
+    }
+
+    /// A pass that replaced `hide` and then could not replace
+    /// `hide-agent-hooks` leaves `current` naming no build, so a core
+    /// update going back to the previous build puts its `hide` back.
+    #[test]
+    fn a_pass_that_ends_between_the_programs_leaves_current_for_the_previous_build_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        build(root, "aaaaaaaaaaaaaaaa", b"first");
+        build(root, "bbbbbbbbbbbbbbbb", b"second");
+        point(root, "aaaaaaaaaaaaaaaa").unwrap();
+        // The new build's second program cannot be copied.
+        std::fs::remove_file(
+            root.join("bbbbbbbbbbbbbbbb")
+                .join(format!("hide-agent-hooks{EXE}")),
+        )
+        .unwrap();
+
+        let broken = point(root, "bbbbbbbbbbbbbbbb");
+        // On macOS and Linux `current` is one link, replaced in one step.
+        assert_eq!(broken.is_err(), cfg!(windows), "{broken:?}");
+        point(root, "aaaaaaaaaaaaaaaa").unwrap();
+        assert!(leads_to(root, "aaaaaaaaaaaaaaaa"));
+        assert_eq!(hide_in(&root.join(CURRENT)), b"first");
     }
 
     /// A pane or a hook still running the `current` copy of an earlier

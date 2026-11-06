@@ -208,7 +208,7 @@ class Selection(unittest.TestCase):
             "hide-platform/src/wsl.rs", "hide-node/src/ssh/wsl.rs", "hide-node-link/src/device.rs",
             "hide-host/src/serve.rs", "hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs",
             "hided/tests/it/windows_ssh_device.rs", ".github/workflows/wsl-device.yml",
-            "hide-kit/src/cli_windows.rs",
+            "hide-kit/src/cli_windows.rs", "hide-kit/src/current.rs",
         ):
             with self.subTest(path=path):
                 self.assertIn("windows-wsl", plan(path)["lanes"])
@@ -216,6 +216,7 @@ class Selection(unittest.TestCase):
         # the web shell and documentation do not reach the link.
         for path in (
             "herdr-core/src/runtime/hosts.rs", "hided/src/lib.rs", "web/src/settings/AddDevice.tsx", "docs/TESTING.md",
+            "hide-kit/src/agents.rs",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("windows-wsl", plan(path)["lanes"])
