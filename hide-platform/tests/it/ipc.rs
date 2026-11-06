@@ -761,6 +761,33 @@ fn an_answer_written_just_before_the_end_is_dropped_arrives_whole() {
     answering.join().unwrap();
 }
 
+/// A listener may answer a connection for one exchange and close it before
+/// the connecting side is back from its connect, as a pane holder past its
+/// opening bound does: the connect still hands back the stream, which reads
+/// the answer and then the end. macOS refuses every socket option once the
+/// peer has closed, so a connect that set one after the system's connect
+/// answered `EINVAL` (with-hide/hide-private#616). When the close lands is
+/// the system's, so each round is one chance at that moment.
+#[test]
+fn a_connect_the_listener_answers_and_closes_at_once_reads_the_answer_and_the_end() {
+    const ROUNDS: usize = 300;
+    let (_folder, path) = endpoint();
+    let listener = LocalListener::bind(&path).unwrap();
+    let answering = thread::spawn(move || {
+        for _ in 0..ROUNDS {
+            listener.accept().unwrap().write_all(b"full\n").unwrap();
+        }
+    });
+    for round in 0..ROUNDS {
+        let mut client =
+            LocalStream::connect_until(&path, Instant::now() + Duration::from_secs(10))
+                .unwrap_or_else(|error| panic!("round {round}: {error:?}"));
+        assert_eq!(read_line(&mut client), "full\n", "round {round}");
+        assert_eq!(client.read(&mut [0_u8; 1]).unwrap(), 0, "round {round}");
+    }
+    answering.join().unwrap();
+}
+
 /// The answer is the same when the close lands before the accept blocks, so
 /// a slow thread can make this pass without blocking but never fail.
 #[test]
