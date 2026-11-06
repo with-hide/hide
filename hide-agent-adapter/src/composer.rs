@@ -24,6 +24,68 @@ pub struct Composer {
     /// What may stand in an empty composer besides spaces. Every line that
     /// is not blank must be one of these for the composer to read empty.
     pub empty: &'static [Placeholder],
+    /// The one mark the agent draws in place of a paste of many lines, when
+    /// it draws one with the paste's line count; `None` for an agent that
+    /// shows the pasted text itself (Codex) or a mark with no count (omp).
+    pub pasted: Option<PasteMark>,
+}
+
+/// The mark an agent draws in its composer for a paste it keeps as one
+/// unit, such as Claude Code's `[Pasted text #1 +11 lines]`, which stands
+/// for the paste until it is submitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PasteMark {
+    /// The mark's words, with `{n}` for the paste's own number, any digits,
+    /// and `{count}` for its size in [`PasteMark::count`]'s unit.
+    pub words: &'static str,
+    pub count: LineCount,
+}
+
+/// How an agent counts the lines of a paste in its mark.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LineCount {
+    /// The lines of text, a last line break ending the last line rather
+    /// than starting another (OpenCode, Pi, Grok, Antigravity).
+    Lines,
+    /// The line breaks (Claude Code).
+    Breaks,
+}
+
+impl LineCount {
+    fn of(self, text: &str) -> usize {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        match self {
+            Self::Lines => text.lines().count(),
+            Self::Breaks => text.matches('\n').count(),
+        }
+    }
+}
+
+impl PasteMark {
+    /// Whether `shown` is this mark for a paste of `text`.
+    fn stands_for(&self, shown: &str, text: &str) -> bool {
+        let words = self
+            .words
+            .replace("{count}", &self.count.of(text).to_string());
+        let mut parts = words.split("{n}");
+        let Some(head) = parts.next() else {
+            return false;
+        };
+        let Some(mut rest) = shown.strip_prefix(head) else {
+            return false;
+        };
+        for part in parts {
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            if digits == 0 {
+                return false;
+            }
+            let Some(after) = rest[digits..].strip_prefix(part) else {
+                return false;
+            };
+            rest = after;
+        }
+        rest.is_empty()
+    }
 }
 
 /// The lines of the screen that make up the composer, found from the bottom
@@ -198,11 +260,20 @@ impl Composer {
     /// it that was never submitted. Whitespace is ignored, since a terminal
     /// wraps and indents pasted lines; a composer declared as one line
     /// (`Region::Line`) shows only the text's first line, which has to be
-    /// that line whole.
+    /// that line whole. A paste the agent keeps as one mark shows as that
+    /// mark alone, with `text`'s line count ([`Composer::pasted`]).
     pub fn holds(&self, screen: &str, text: &str) -> bool {
         let Ok(region) = self.content(screen) else {
             return false;
         };
+        if let Some(mark) = &self.pasted {
+            let mut shown = region.iter().filter(|line| !blank(line));
+            if let (Some(line), None) = (shown.next(), shown.next())
+                && mark.stands_for(visible(line).trim(), text)
+            {
+                return true;
+            }
+        }
         let shown: String = region
             .iter()
             .flat_map(|line| line.iter().map(|(c, _)| *c))

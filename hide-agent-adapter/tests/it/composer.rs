@@ -351,6 +351,62 @@ fn omp_holds_a_brief_left_unsubmitted_by_its_first_line() {
     assert!(!composer.holds(&held, "Another brief.\nJOURNEY-31FD51C1"));
 }
 
+/// A paste the agent keeps as one mark shows in its composer as that mark
+/// alone, with the paste's line count in the agent's own unit: twelve lines
+/// pasted (the captures above) are held, any other count is another paste,
+/// and an agent whose mark has no count, or that shows the text, holds it
+/// only as text.
+#[test]
+fn a_composer_holds_a_paste_by_the_agents_mark_with_its_line_count() {
+    let twelve: String = (1..=12)
+        .map(|n| format!("composer check line {n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let thirteen = format!("{twelve}\ncomposer check line 13");
+    for (agent, name) in [
+        (AgentId::ClaudeCode, "claude"),
+        (AgentId::ClaudeCode, "claude-2.1.314-labelled"),
+        (AgentId::Grok, "grok"),
+        (AgentId::Grok, "grok-legacy"),
+        (AgentId::OpenCode, "opencode"),
+        (AgentId::Pi, "pi"),
+        (AgentId::Antigravity, "agy"),
+    ] {
+        let composer = agent.adapter().composer.supported().expect(name);
+        let pasted = screen(&format!("{name}-3-pasted"));
+        assert!(composer.holds(&pasted, &twelve), "{name}");
+        assert!(!composer.holds(&pasted, &thirteen), "{name}: another count");
+        assert!(
+            !composer.holds(&screen(&format!("{name}-5-cleared")), &twelve),
+            "{name}: cleared"
+        );
+    }
+    let omp = AgentId::Omp.adapter().composer.supported().unwrap();
+    assert!(
+        !omp.holds(&screen("omp-3-pasted"), &twelve),
+        "no count to match"
+    );
+}
+
+/// OpenCode 2.0.29 on Windows kept a spawn's eighteen-line brief as its
+/// paste mark, the Enter that would submit it lost while its model loaded
+/// (agent journey run 41951563729): the mark is that brief, so it gets its
+/// Enter, and a brief of another length is not it.
+#[test]
+fn opencode_holds_a_brief_left_as_its_paste_mark() {
+    let composer = AgentId::OpenCode.adapter().composer.supported().unwrap();
+    let held = screen("opencode-2.0.29-windows-brief-pasted");
+    let notes: Vec<String> = (1..=12)
+        .map(|n| format!("- Note {n}: keep `hide agent show` and `--brief-file` as they are."))
+        .collect();
+    let brief = format!(
+        "# Journey brief\n\n## Notes\n{}\n\n## Request\nReply with exactly JOURNEY-1\n",
+        notes.join("\n")
+    );
+    assert!(composer.holds(&held, &brief));
+    assert!(!composer.holds(&held, &format!("{brief}One more line.\n")));
+}
+
 /// `hide pane send --paste` goes only to an agent the composer cell
 /// measured taking a paste whole: every measured agent on every system but
 /// Grok on Windows, which sends a paste partway (docs/INSTALL.md).
