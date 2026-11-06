@@ -56,3 +56,12 @@ debug = false
 # took longer than the remote mailbox lane waits for a ready device.
 [profile.dev.package.sha2]
 opt-level = 3
+
+# The same install packs each file with gzip when the device unpacks it
+# (with-hide/hide-private#582). Unoptimized, packing one 276 MiB debug `hided`
+# took 10.6 s against 0.8 s optimized, past the remote mailbox lane's wait.
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
