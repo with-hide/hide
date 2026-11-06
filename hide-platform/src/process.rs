@@ -1267,7 +1267,10 @@ pub fn descends_from(pid: u32, ancestor: u32) -> bool {
 }
 
 /// When `pid` started, as a number only comparable with another start time of
-/// the same system. `NotFound` when `pid` does not exist.
+/// the same system. `NotFound` when `pid` does not exist, which is never
+/// while [`is_alive`] still counts it: a process this no longer answers for
+/// has let go of everything it held. A Unix zombie keeps its start time until
+/// it is reaped.
 pub fn start_time(pid: u32) -> io::Result<u64> {
     sys::start_time(pid)
 }
@@ -3678,48 +3681,13 @@ mod sys {
     /// `ps` reads it.
     #[cfg(target_os = "macos")]
     fn is_zombie(pid: u32) -> bool {
-        // The head of `struct extern_proc` (`sys/proc.h`) through `p_stat`:
-        // libc declares no `kinfo_proc` for Apple targets.
-        #[repr(C)]
-        struct ExternProcHead {
-            p_un: [usize; 2],
-            p_vmspace: usize,
-            p_sigacts: usize,
-            p_flag: libc::c_int,
-            p_stat: libc::c_char,
+        match mac::listed(pid) {
+            // A process reaped between the caller's signal 0 and this read
+            // is no longer listed, and has ended too.
+            Ok(None) => true,
+            Ok(Some(listed)) => listed.p_stat as u32 == libc::SZOMB,
+            Err(_) => false,
         }
-        // `sizeof(struct kinfo_proc)` on 64-bit macOS.
-        const KINFO_PROC: usize = 648;
-        let Ok(pid) = libc::c_int::try_from(pid) else {
-            return false;
-        };
-        let mut name = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
-        let mut buffer = [0u64; KINFO_PROC / 8];
-        let mut size = KINFO_PROC;
-        // SAFETY: the name is four ints, and the buffer is valid and aligned
-        // for `size` bytes and read only after `sysctl` fills all of them.
-        let read = unsafe {
-            libc::sysctl(
-                name.as_mut_ptr(),
-                name.len() as libc::c_uint,
-                buffer.as_mut_ptr().cast(),
-                &mut size,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        // A process reaped between the caller's signal 0 and this read is
-        // no longer listed, and has ended too.
-        if read == 0 && size == 0 {
-            return true;
-        }
-        if read != 0 || size != KINFO_PROC {
-            return false;
-        }
-        // SAFETY: the buffer holds a whole `kinfo_proc`, which starts with the
-        // `extern_proc` this head is a prefix of.
-        let head = unsafe { &*buffer.as_ptr().cast::<ExternProcHead>() };
-        head.p_stat as u32 == libc::SZOMB
     }
 
     /// Whether the system lists `pid` as ended and waiting to be reaped
@@ -3745,6 +3713,75 @@ mod sys {
     #[cfg(target_os = "macos")]
     mod mac {
         use super::*;
+
+        /// The head of `struct extern_proc` (`sys/proc.h`) through `p_stat`:
+        /// libc declares no `kinfo_proc` for Apple targets. `p_un` is a
+        /// union whose `p_starttime` (a `timeval`) is what a listed process
+        /// keeps of its start.
+        #[repr(C)]
+        pub(in super::super) struct Listed {
+            p_un: [usize; 2],
+            p_vmspace: usize,
+            p_sigacts: usize,
+            p_flag: libc::c_int,
+            pub(in super::super) p_stat: libc::c_char,
+        }
+
+        impl Listed {
+            /// When the process started, in microseconds, as
+            /// `proc_pidinfo`'s `pbi_start_tvsec` and `pbi_start_tvusec`
+            /// say it: both are the kernel's `p_start`.
+            pub(in super::super) fn started(&self) -> u64 {
+                let seconds = self.p_un[0] as u64;
+                // `tv_usec` is a 32-bit `suseconds_t` at the start of the
+                // second word.
+                let micros = u64::from(self.p_un[1] as u32);
+                seconds * 1_000_000 + micros
+            }
+        }
+
+        /// `pid`'s entry in the process table, which lists a process from
+        /// its start until it is reaped, through its end: `proc_pidinfo`
+        /// stops answering once its task is gone, while the process is still
+        /// on its way out and holds what it held (with-hide/hide-private#585).
+        /// `None` when the table no longer lists it.
+        pub(in super::super) fn listed(pid: u32) -> io::Result<Option<Listed>> {
+            // `sizeof(struct kinfo_proc)` on 64-bit macOS.
+            const KINFO_PROC: usize = 648;
+            let pid = libc::c_int::try_from(pid)
+                .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+            let mut name = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+            let mut buffer = [0u64; KINFO_PROC / 8];
+            let mut size = KINFO_PROC;
+            // SAFETY: the name is four ints, and the buffer is valid and
+            // aligned for `size` bytes and read only after `sysctl` fills all
+            // of them.
+            let read = unsafe {
+                libc::sysctl(
+                    name.as_mut_ptr(),
+                    name.len() as libc::c_uint,
+                    buffer.as_mut_ptr().cast(),
+                    &mut size,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            if read != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if size == 0 {
+                return Ok(None);
+            }
+            if size != KINFO_PROC {
+                return Err(io::Error::other(format!(
+                    "the process table answered {size} bytes for process {pid}, not a kinfo_proc's {KINFO_PROC}"
+                )));
+            }
+            // SAFETY: the buffer holds a whole `kinfo_proc`, which starts
+            // with the `extern_proc` this head is a prefix of, and is aligned
+            // for its words.
+            Ok(Some(unsafe { buffer.as_ptr().cast::<Listed>().read() }))
+        }
 
         pub(in super::super) fn error_for_missing_info() -> io::Error {
             let error = io::Error::last_os_error();
@@ -3993,7 +4030,9 @@ mod sys {
 
     #[cfg(target_os = "macos")]
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
-        mac::bsd_info(pid).map(|info| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+        mac::listed(pid)?
+            .map(|listed| listed.started())
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
     }
 
     #[cfg(target_os = "macos")]
@@ -4859,9 +4898,10 @@ mod sys {
     use std::os::windows::process::CommandExt;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ALREADY_EXISTS, FILETIME,
-        GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-        STILL_ACTIVE, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED,
+        ERROR_ALREADY_EXISTS, FILETIME, GetHandleInformation, GetLastError, HANDLE,
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, STILL_ACTIVE, SetHandleInformation,
+        WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Console::{
         GetConsoleCP, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
@@ -4930,18 +4970,79 @@ mod sys {
         Ok(Owned(handle))
     }
 
-    /// Like [`open`], but a process that has exited is `NotFound` even while
-    /// some handle keeps its object alive: it is gone for every purpose of the
-    /// caller, as a reaped Unix process is.
+    /// Like [`open`], but a process that has ended ([`ended`]) is `NotFound`
+    /// even while some handle keeps its object: it is gone for every purpose
+    /// of the caller, as a reaped Unix process is. It is the end
+    /// [`is_alive`] reads, so a process that answers here counts as alive
+    /// there: between setting a process's exit code and signalling its
+    /// object the system closes the handles it held, and a caller told it
+    /// had ended by the exit code met its socket still held
+    /// (with-hide/hide-private#585).
     fn open_live(pid: u32, access: u32) -> io::Result<Owned> {
-        let process = open(pid, access | PROCESS_QUERY_LIMITED_INFORMATION)?;
-        let mut code = 0u32;
-        // SAFETY: the handle is open and `code` is writable.
-        let read = unsafe { GetExitCodeProcess(process.0, &mut code) };
-        if read != 0 && code != STILL_ACTIVE as u32 {
+        let process = open_waitable(pid, access)?;
+        if ended(&process)? {
             return Err(io::ErrorKind::NotFound.into());
         }
         Ok(process)
+    }
+
+    /// `pid` opened with `access`, the query right and the right to wait on
+    /// it; a process that refuses the wait, as one of another account may,
+    /// is opened without it, and [`ended`] reads its exit code.
+    fn open_waitable(pid: u32, access: u32) -> io::Result<Owned> {
+        match open(
+            pid,
+            access | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+        ) {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                open(pid, access | PROCESS_QUERY_LIMITED_INFORMATION)
+            }
+            opened => opened,
+        }
+    }
+
+    /// Whether the process behind `process` has ended: its object is
+    /// signalled. The system ends a process after `TerminateProcess`
+    /// returns, sets its exit code, closes its handles, and signals its
+    /// object last, and Microsoft documents the wait on it as the way to be
+    /// sure; a test told by the exit code that a process had ended was
+    /// refused a folder it had used (with-hide/hide-private#327). Only a
+    /// handle without the right to wait ([`open_waitable`]) is read by its
+    /// exit code. A wait or a read that fails is the error.
+    fn ended(process: &Owned) -> io::Result<bool> {
+        match signalled(process) {
+            Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => {
+                end_begun(process)
+            }
+            answer => answer,
+        }
+    }
+
+    /// Whether the process behind `process` has begun to end: its exit code
+    /// is set. It has then been told to end and will, though it may still
+    /// hold what it held ([`ended`]).
+    fn end_begun(process: &Owned) -> io::Result<bool> {
+        let mut code = 0u32;
+        // SAFETY: the handle is open and `code` is writable.
+        if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(code != STILL_ACTIVE as u32)
+    }
+
+    /// Ends the process behind `process`. One whose end has begun has what
+    /// was asked: the system refuses to end it again with access denied.
+    fn end(process: &Owned) -> io::Result<()> {
+        // SAFETY: the handle is open with the access the call needs.
+        if unsafe { TerminateProcess(process.0, 1) } != 0 {
+            return Ok(());
+        }
+        // The refusal is the answer unless the exit code says the end began.
+        let error = io::Error::last_os_error();
+        if matches!(end_begun(process), Ok(true)) {
+            return Ok(());
+        }
+        Err(error)
     }
 
     /// The job a child lives in. Closing it ends everything still in it.
@@ -5931,12 +6032,7 @@ mod sys {
     }
 
     pub(super) fn terminate(pid: u32) -> io::Result<()> {
-        let process = open_live(pid, PROCESS_TERMINATE)?;
-        // SAFETY: the handle is open with the access the call needs.
-        if unsafe { TerminateProcess(process.0, 1) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        end(&open_live(pid, PROCESS_TERMINATE)?)
     }
 
     /// Windows keeps no process group: a terminal's foreground job is named
@@ -5987,18 +6083,9 @@ mod sys {
             })
         }
 
-        /// Ends the process; one that has already ended has what was asked.
+        /// Ends the process; one whose end has begun has what was asked.
         fn end(&self) -> io::Result<()> {
-            // SAFETY: the handle is open with the access the call needs.
-            if unsafe { TerminateProcess(self.process.0, 1) } != 0 {
-                return Ok(());
-            }
-            // An ended process refuses the call with access denied.
-            let error = io::Error::last_os_error();
-            if running(&self.process) {
-                return Err(error);
-            }
-            Ok(())
+            end(&self.process)
         }
     }
 
@@ -6066,14 +6153,6 @@ mod sys {
         Ok((members, left))
     }
 
-    /// Whether the process behind `process` has not yet ended.
-    fn running(process: &Owned) -> bool {
-        let mut code = 0u32;
-        // SAFETY: the handle is open and `code` is writable.
-        let read = unsafe { GetExitCodeProcess(process.0, &mut code) };
-        read == 0 || code == STILL_ACTIVE as u32
-    }
-
     /// When the process behind `process` started.
     fn started_at(process: &Owned) -> io::Result<u64> {
         let zero = FILETIME {
@@ -6091,49 +6170,23 @@ mod sys {
         Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
 
-    /// A process has ended once its object is signalled: the system ends a
-    /// process after `TerminateProcess` returns, closes its handles, and
-    /// signals its object last, and Microsoft documents the wait on it as the
-    /// way to be sure. A test told by the exit code that a process had ended
-    /// was refused a folder it had used (with-hide/hide-private#327). Only a
-    /// process that refuses to be waited on is read by its exit code. A wait
-    /// or a read that fails confirms nothing, so the process still counts and
-    /// the failure is logged.
+    /// A process counts until it has ended ([`ended`]), as [`open_live`]
+    /// reads it. A wait or a read that fails confirms nothing, so the
+    /// process still counts and the failure is logged.
     pub(super) fn is_alive(pid: u32) -> bool {
-        match open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) {
-            Ok(process) => signalled(&process).map_or_else(
+        match open_waitable(pid, 0) {
+            Ok(process) => ended(&process).map_or_else(
                 |error| {
                     diagnose(&format!(
-                        "process.alive_unconfirmed pid={pid} step=wait error={error}\n"
+                        "process.alive_unconfirmed pid={pid} error={error}\n"
                     ));
                     true
                 },
                 |ended| !ended,
             ),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
-                    Ok(process) => still_active(pid, &process),
-                    // A process of another account refuses the query and exists.
-                    Err(error) => error.kind() == io::ErrorKind::PermissionDenied,
-                }
-            }
-            Err(_) => false,
+            // A process of another account refuses the query and exists.
+            Err(error) => error.kind() == io::ErrorKind::PermissionDenied,
         }
-    }
-
-    /// Whether the exit code `process` reads says it has not ended; one
-    /// that cannot be read says nothing, so the process still counts.
-    fn still_active(pid: u32, process: &Owned) -> bool {
-        let mut code = 0u32;
-        // SAFETY: the handle is open and `code` is writable.
-        if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 {
-            let error = io::Error::last_os_error();
-            diagnose(&format!(
-                "process.alive_unconfirmed pid={pid} step=exit_code error={error}\n"
-            ));
-            return true;
-        }
-        code == STILL_ACTIVE as u32
     }
 
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
@@ -6165,7 +6218,7 @@ mod sys {
     pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
         let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
         let argv = crate::windows_process::argv(process.0)?;
-        if !running(&process) {
+        if ended(&process)? {
             return Err(io::ErrorKind::NotFound.into());
         }
         Ok(argv)
