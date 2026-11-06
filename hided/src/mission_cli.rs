@@ -614,11 +614,15 @@ pub fn run(env: &Env, command: MissionCli) -> Result<(), String> {
                 && let Ok(answer) = &answer
                 && answer["ok"] == true
             {
-                print!(
-                    "{}",
-                    crate::mission_show::draw(&answer["result"], crate::cli::unix_ms())
-                );
-                return Ok(());
+                // A value this build cannot draw is printed as the JSON line
+                // it came in, with the reason on stderr, never drawn short.
+                match crate::mission_show::draw(&answer["result"], crate::cli::unix_ms()) {
+                    Ok(text) => {
+                        print!("{text}");
+                        return Ok(());
+                    }
+                    Err(reason) => eprintln!("hide mission show: cannot draw as text: {reason}"),
+                }
             }
             return print_answer(answer);
         }

@@ -6,14 +6,16 @@
 //! each node is one line; `show <node>` is that node in full.
 
 use crate::session_cli::{age, one_line};
+use herdr_core::missions::{AttentionTo, WaitingOn};
 use serde_json::Value;
 use std::fmt::Write as _;
 
 /// A node's warning shown beside the fact it warns of.
 const WARN: &str = "⚠";
 
-/// The core's answer to `show` as text, read at `now`.
-pub fn draw(result: &Value, now: u64) -> String {
+/// The core's answer to `show` as text, read at `now`; refused when a
+/// node's `waiting_on` is not one this build reads.
+pub fn draw(result: &Value, now: u64) -> Result<String, String> {
     let result = one_line(result);
     if result["node"].is_object() {
         draw_node(&result, now)
@@ -164,45 +166,42 @@ fn pr_words(node: &Value) -> Option<String> {
     Some(words)
 }
 
-/// What the node waits on, as the core decided it (`waiting_on`).
-fn waits_on(node: &Value) -> Option<String> {
-    let waiting = &node["waiting_on"];
-    let words = match waiting["kind"].as_str()? {
-        "attention" => {
-            let who = if waiting["to"] == "operator" {
-                "운영자"
-            } else {
-                "지휘자"
-            };
-            return Some(format!("! {who}: {}", reason_word(&waiting["reason"])));
-        }
-        "nodes" => {
-            let keys: Vec<&str> = waiting["keys"]
-                .as_array()?
-                .iter()
-                .filter_map(Value::as_str)
-                .collect();
-            return Some(format!("기다림 {}", keys.join(", ")));
-        }
-        "decision" => "기다림 운영자 결정",
-        "blocked" => "막힘 앞 노드 빠짐",
-        "start" => "시작 전",
-        "worker" => "기다림 작업자",
-        "review" => "기다림 리뷰",
-        "verify" => "기다림 검증",
-        "ci" => "기다림 CI",
-        "merge" => "기다림 머지",
-        "conductor" => "기다림 지휘자",
-        _ => "-",
+/// What the node waits on, as the core decided it (`waiting_on`); a
+/// value this build cannot read is refused rather than drawn as nothing.
+fn waits_on(node: &Value) -> Result<Option<String>, String> {
+    let waiting: Option<WaitingOn> = serde_json::from_value(node["waiting_on"].clone())
+        .map_err(|error| format!("node {} waiting_on: {error}", text(node, "key")))?;
+    let Some(waiting) = waiting else {
+        return Ok(None);
     };
-    Some(words.to_owned())
+    let words = match waiting {
+        WaitingOn::Attention { to, reason } => {
+            let who = match to {
+                AttentionTo::Operator => "운영자",
+                AttentionTo::Conductor => "지휘자",
+            };
+            let reason = serde_json::to_value(reason).unwrap_or(Value::Null);
+            format!("! {who}: {}", reason_word(&reason))
+        }
+        WaitingOn::Nodes { keys } => format!("기다림 {}", keys.join(", ")),
+        WaitingOn::Decision => "기다림 운영자 결정".to_owned(),
+        WaitingOn::Blocked => "막힘 앞 노드 빠짐".to_owned(),
+        WaitingOn::Start => "시작 전".to_owned(),
+        WaitingOn::Worker => "기다림 작업자".to_owned(),
+        WaitingOn::Review => "기다림 리뷰".to_owned(),
+        WaitingOn::Verify => "기다림 검증".to_owned(),
+        WaitingOn::Ci => "기다림 CI".to_owned(),
+        WaitingOn::Merge => "기다림 머지".to_owned(),
+        WaitingOn::Conductor => "기다림 지휘자".to_owned(),
+    };
+    Ok(Some(words))
 }
 
 fn warning_count(node: &Value) -> usize {
     node["warnings"].as_array().map_or(0, Vec::len)
 }
 
-fn draw_mission(mission: &Value, now: u64) -> String {
+fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
     let nodes = mission["nodes"].as_array().cloned().unwrap_or_default();
     let count = |status: &str| nodes.iter().filter(|node| node["status"] == status).count();
     let dropped = count("dropped");
@@ -245,11 +244,11 @@ fn draw_mission(mission: &Value, now: u64) -> String {
         fields.extend(review_words(node));
         fields.extend(push_words(node, now));
         fields.extend(pr_words(node));
-        fields.extend(waits_on(node));
+        fields.extend(waits_on(node)?);
         let mark = if warning_count(node) > 0 { WARN } else { " " };
         let _ = writeln!(out, "{mark} {}", fields.join(" · "));
     }
-    out
+    Ok(out)
 }
 
 fn worker_words(node: &Value) -> Option<String> {
@@ -335,7 +334,7 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
     }
 }
 
-fn draw_node(result: &Value, now: u64) -> String {
+fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     let node = &result["node"];
     let mut out = format!(
         "{} · {} · {}\n",
@@ -353,7 +352,7 @@ fn draw_node(result: &Value, now: u64) -> String {
     }
     // Its attention has a line of its own.
     if node["waiting_on"]["kind"] != "attention" {
-        state.extend(waits_on(node));
+        state.extend(waits_on(node)?);
     }
     let _ = writeln!(out, "상태 {}", state.join(" · "));
     if let Some(worker) = worker_words(node) {
@@ -443,7 +442,7 @@ fn draw_node(result: &Value, now: u64) -> String {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -502,7 +501,7 @@ mod tests {
     #[test]
     fn a_mission_reads_as_its_head_and_one_line_per_node() {
         assert_eq!(
-            draw(&mission(), NOW),
+            draw(&mission(), NOW).unwrap(),
             "mission-33 · Show summary · 진행 중 · 끝 1/4 · 빠짐 1 · 열린 결정 1 · 경고 2\n\
              결정 · Merge order?\n\
              ⚠ show · 작업 중 · ⚠리뷰 FAIL 2연속 · ⚠push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
@@ -543,20 +542,24 @@ mod tests {
         ] {
             let mut value = mission();
             value["mission"]["nodes"][1]["waiting_on"] = waiting;
-            let text = draw(&value, NOW);
+            let text = draw(&value, NOW).unwrap();
             assert!(text.contains(&format!(" · CI 통과 · {words}\n")), "{text}");
         }
         let mut value = mission();
         let node = &mut value["mission"]["nodes"][1];
         node["pushed_at_unix_ms"] = Value::Null;
         node["pr"] = Value::Null;
-        let text = draw(&value, NOW);
+        let text = draw(&value, NOW).unwrap();
         assert!(
             text.contains("  ci · 작업 중 · push 없음 · 기다림 운영자 결정\n"),
             "{text}"
         );
         value["mission"]["nodes"][1]["asks_push"] = json!(false);
-        assert!(draw(&value, NOW).contains("  ci · 작업 중 · 기다림 운영자 결정\n"));
+        assert!(
+            draw(&value, NOW)
+                .unwrap()
+                .contains("  ci · 작업 중 · 기다림 운영자 결정\n")
+        );
     }
 
     /// A title cannot draw a line of its own.
@@ -564,7 +567,7 @@ mod tests {
     fn a_title_or_a_line_cannot_draw_a_line_of_its_own() {
         let mut value = mission();
         value["mission"]["title"] = json!("Show\n⚠ forged · 끝");
-        let text = draw(&value, NOW);
+        let text = draw(&value, NOW).unwrap();
         assert_eq!(text.lines().count(), 7, "{text}");
     }
 
@@ -592,7 +595,7 @@ mod tests {
         let answer = json!({"mission_id": "mission-33", "node": node, "letters": [
             {"at_unix_ms": NOW - 3 * MINUTE, "from": "w", "to": "lead", "kind": "progress", "line": "pushed the fix"}]});
         assert_eq!(
-            draw(&answer, NOW),
+            draw(&answer, NOW).unwrap(),
             "mission-33 · show · Summarize show\n\
              상태 작업 중 · change · PR로 · 기다림 작업자\n\
              작업자 claude opus · agent-2 · pane w1:p2 · 깨어 있음\n\
@@ -611,6 +614,47 @@ mod tests {
              \x20 3분 전 · w → lead · progress · pushed the fix\n"
         );
         let unread = json!({"mission_id": "mission-33", "node": {"key": "x", "status": "planned"}, "letters": null});
-        assert!(draw(&unread, NOW).ends_with("최근 편지 · 읽지 못함\n"));
+        assert!(
+            draw(&unread, NOW)
+                .unwrap()
+                .ends_with("최근 편지 · 읽지 못함\n")
+        );
+    }
+
+    /// A node read alone says what the core decided it waits on, as its
+    /// line in the list does: the nodes before a planned one, and the
+    /// operator's decision that stopped one.
+    #[test]
+    fn a_node_read_alone_waits_on_the_nodes_before_it_and_the_decision() {
+        let mut planned = mission()["mission"]["nodes"][3].clone();
+        planned["title"] = json!("Later");
+        let alone = |node: &Value| {
+            draw(
+                &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+                NOW,
+            )
+            .unwrap()
+        };
+        let text = alone(&planned);
+        assert!(
+            text.contains("상태 계획 · research · 기다림 show\n"),
+            "{text}"
+        );
+        let decided = mission()["mission"]["nodes"][1].clone();
+        let text = alone(&decided);
+        assert!(
+            text.contains("상태 작업 중 · change · PR로 · 기다림 운영자 결정\n"),
+            "{text}"
+        );
+    }
+
+    /// A `waiting_on` this build does not read refuses the text, so the
+    /// command prints the answer as JSON instead of drawing the node short.
+    #[test]
+    fn a_wait_this_build_cannot_read_refuses_the_text() {
+        let mut value = mission();
+        value["mission"]["nodes"][1]["waiting_on"] = json!({"kind": "landing"});
+        let refused = draw(&value, NOW).unwrap_err();
+        assert!(refused.contains("node ci waiting_on"), "{refused}");
     }
 }

@@ -9407,7 +9407,7 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_attention_reason", &reasons);
             checked.insert("mission_attention_reason");
-            use crate::runtime::missions::AttentionTo;
+            use crate::missions::AttentionTo;
             let whom = [AttentionTo::Conductor, AttentionTo::Operator];
             for variant in whom {
                 match variant {
