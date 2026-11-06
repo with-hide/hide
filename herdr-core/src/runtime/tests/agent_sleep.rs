@@ -130,10 +130,7 @@ fn an_agent_a_restore_left_resting_is_kept_asleep_in_its_conversation() {
     let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
     runtime.ingest_session(Ok(session(None)));
     let resting = session(Some(0)).agents;
-    assert_eq!(
-        runtime.adopt_resting(resting.clone(), None),
-        vec![SLEEPER.to_owned()]
-    );
+    assert!(runtime.adopt_resting(resting.clone(), None));
     runtime.ingest_session(Ok(session(None)));
     assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
     assert_eq!(pane(&runtime)["sleep"]["state"], "sleeping");
@@ -149,16 +146,31 @@ fn an_agent_a_restore_left_resting_is_kept_asleep_in_its_conversation() {
         "any agent listed there is new"
     );
 
-    // Named again before the engine heard it was taken: the record stays as
-    // it is, and the pane is taken again.
-    assert_eq!(
-        runtime.adopt_resting(resting, None),
-        vec![SLEEPER.to_owned()]
-    );
+    // The engine names it until an agent shows in the pane: the record
+    // stays as it is.
+    assert!(!runtime.adopt_resting(resting, None));
     assert_eq!(
         runtime.snapshot().ui_state.agent_sleep.records[SLEEPER],
         record
     );
+}
+
+// A row keeps a session only once its labels prove it. An agent that may
+// sleep without one (agy) would otherwise be kept with none and wake into a
+// new conversation; it keeps the one the restore would have resumed.
+#[test]
+fn a_resting_agent_with_no_proven_session_keeps_the_one_its_restore_named() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(None)));
+    let resting: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents": [{
+        "id": SLEEPER, "pane_id": SLEEPER, "agent": "antigravity",
+        "agent_status": "idle", "state_change_seq": 0, "cwd": CHECKOUT,
+        "agent_session": {"kind": "id", "value": "agy-conversation-1"}
+    }]}))
+    .unwrap();
+    assert!(runtime.adopt_resting(resting.agents, None));
+    let record = &runtime.snapshot().ui_state.agent_sleep.records[SLEEPER];
+    assert_eq!(record.session_id.as_deref(), Some("agy-conversation-1"));
 }
 
 // The engine can still list the agent when its sleep ends, and its

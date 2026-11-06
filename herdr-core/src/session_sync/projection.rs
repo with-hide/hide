@@ -104,9 +104,9 @@ pub(crate) struct ProjectionState {
     pub(crate) layouts: Vec<SessionLayoutPayload>,
     pub(crate) agents: Vec<ProjectedAgent>,
     /// The agents a restore left resting in their panes rather than start
-    /// again, each until the core keeps it as a sleeping agent
-    /// (`Runtime::adopt_resting`) and says so (`Engine::rested`). None is
-    /// running, so none is among `agents`.
+    /// again, until an agent shows in the pane; the core keeps each as a
+    /// sleeping agent (`Runtime::adopt_resting`). None is running, so none
+    /// is among `agents`.
     pub(crate) resting: Vec<ProjectedAgent>,
     /// The next moment an agent start this read has pending (`launch_pending`)
     /// can end with nothing the engine reports changing: its settle passing

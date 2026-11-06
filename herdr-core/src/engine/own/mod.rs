@@ -1461,12 +1461,6 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(cut.get(pane) == Some(&definition.id) && cut.remove(pane).is_some())
     }
 
-    fn rested(&self, panes: &[String]) {
-        if !panes.is_empty() {
-            self.topology().rested(panes);
-        }
-    }
-
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
         self.check()?;
         let catalog = self.shared.definitions.get();
@@ -5178,8 +5172,6 @@ mod tests {
             Some("s-2")
         );
         assert_eq!(holders.typed(&resting), "", "nothing is typed into it");
-        next.rested(std::slice::from_ref(&resting));
-        assert!(next.session(WAIT).unwrap().resting.is_empty());
 
         assert!(next.hook_session(&working, "claude", "s-1").unwrap());
         assert!(

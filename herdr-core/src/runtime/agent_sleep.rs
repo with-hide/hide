@@ -787,20 +787,27 @@ impl Runtime {
     }
 
     /// Keeps each agent a restore left resting in its pane (the engine's
-    /// `ProjectionState::resting`) as a sleeping agent, and answers the
-    /// panes taken, which the engine is told so it stops naming them
-    /// (`Engine::rested`). Nothing runs in the pane, so nothing is ended:
-    /// the record is made from the row the agent would have had, with this
-    /// pass's labels laid on it, and is sleeping from the start; a visit or
-    /// a letter wakes it as it wakes any sleeper. A pane that already has a
-    /// record is taken as it is.
+    /// `ProjectionState::resting`) as a sleeping agent, and answers whether
+    /// it kept any. Nothing runs in the pane, so nothing is ended: the record
+    /// is made from the row the agent would have had, with this pass's
+    /// labels laid on it, and is sleeping from the start; a visit or a
+    /// letter wakes it as it wakes any sleeper. The engine names a resting
+    /// agent until an agent shows in its pane, so a pane that already has a
+    /// record costs this pass nothing.
     pub(crate) fn adopt_resting(
         &mut self,
-        resting: Vec<crate::sidebar::SessionAgentPayload>,
+        mut resting: Vec<crate::sidebar::SessionAgentPayload>,
         overlay: Option<&crate::labels::overlay::LabelOverlay>,
-    ) -> Vec<String> {
+    ) -> bool {
+        let records = &self.snapshot.ui_state.agent_sleep.records;
+        resting.retain(|agent| {
+            agent
+                .pane_id
+                .as_ref()
+                .is_some_and(|pane| !records.contains_key(pane))
+        });
         if resting.is_empty() {
-            return Vec::new();
+            return false;
         }
         let mut payload = SessionSnapshotPayload {
             tab_focus: None,
@@ -815,23 +822,19 @@ impl Runtime {
         };
         overlay.unwrap_or(&self.label_overlay).apply(&mut payload);
         let now = unix_milliseconds();
-        let mut taken = Vec::new();
         let mut kept = false;
         for agent in payload.agents {
             let Some(pane_id) = agent.pane_id.clone() else {
                 continue;
             };
-            taken.push(pane_id.clone());
-            if self
-                .snapshot
-                .ui_state
-                .agent_sleep
-                .records
-                .contains_key(&pane_id)
-            {
-                continue;
-            }
             let cwd = agent.cwd.clone();
+            // The conversation the restore would have resumed. A row keeps a
+            // session only once its labels prove it, and one an agent may
+            // sleep without would otherwise wake into a new conversation.
+            let session = agent
+                .agent_session
+                .as_ref()
+                .map(|session| session.value.clone());
             let record = crate::sidebar::project_agent(agent).ok().and_then(|row| {
                 let mut record = SleepRecord::ending(&row, cwd, now)?;
                 record.launch = self.launch_choice_of(&row);
@@ -846,6 +849,7 @@ impl Runtime {
                 continue;
             };
             record.phase = SleepPhase::Sleeping;
+            record.session_id = record.session_id.or(session);
             // No agent of this engine ran it: any agent the pane lists later
             // is a new one, and wakes the record.
             record.state_change_seq = None;
@@ -873,7 +877,7 @@ impl Runtime {
             self.sync_terminal_intents();
             self.persist_ui_state();
         }
-        taken
+        kept
     }
 
     /// Draws a record's new phase on the rows of the machine the pane is on.
