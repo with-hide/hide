@@ -1,5 +1,5 @@
 //! A mission's merged worktrees (operator decision 2026-11-02): while
-//! Settings › Mission's `머지되면 작업 공간 정리` is on, a done node whose pull
+//! Settings › Mission's `머지되면 워크트리 정리` is on, a done node whose pull
 //! requests GitHub says are merged has the worktree of each merged branch
 //! retired, through the one retire Hide AI's attempts use
 //! (`worktree_retire::retire_worktree`): removed with its build cache when

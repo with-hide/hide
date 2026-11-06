@@ -61,14 +61,14 @@ async function mount(settings: ConductorSettings) {
   };
 }
 
-it("offers one verification strength and the other-company toggle beside the candidates, and says what the chosen strength has the Conductor do", async () => {
+it("offers one verification strength and the other-company toggle beside the candidates, and says what the chosen strength has the mission do", async () => {
   const tab = await mount(DEFAULT_CONDUCTOR);
   try {
     const group = tab.verification();
     expect(group.querySelector("h3")?.textContent).toBe("Verification");
     // Two controls: the strength's three choices and the switch, nothing else.
     expect(tab.strengths().map((option) => [option.textContent, option.getAttribute("data-state")])).toEqual([["Fast", "off"], ["Normal", "on"], ["Thorough", "off"]]);
-    expect([...group.querySelectorAll('[role="switch"]')].map((toggle) => [toggle.getAttribute("aria-label"), toggle.getAttribute("aria-checked")])).toEqual([["Checks use a different kind of agent than the worker (Codex for Claude)", "true"]]);
+    expect([...group.querySelectorAll('[role="switch"]')].map((toggle) => [toggle.getAttribute("aria-label"), toggle.getAttribute("aria-checked")])).toEqual([["Verification uses a different kind of agent than the worker (Codex for Claude)", "true"]]);
     expect(group.querySelectorAll('[role="combobox"], input')).toHaveLength(0);
     expect(group.querySelector("[data-conductor-strength-terms]")?.textContent).toContain("At most twice, only what changed");
     expect(group.textContent).toContain("A change applies from the next mission.");
@@ -100,7 +100,7 @@ it("puts the merged-worktree cleanup switch right under the cap and the scope, o
     expect(rows.slice(-1)[0]).toBe(cleanup);
     expect(rows.length).toBe(3);
     expect(cleanup.textContent).toContain("Clean up a worktree once merged");
-    expect(cleanup.textContent).toContain("Removes the worktree and build cache of a node whose PR merged. One that still holds files you were changing, or is in use, stays.");
+    expect(cleanup.textContent).toContain("Removes the worktree and build cache of a branch whose PR merged. One that still holds files you were changing, or is in use, stays.");
     const toggle = cleanup.querySelector<HTMLElement>('[role="switch"]')!;
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     await act(async () => toggle.click());
