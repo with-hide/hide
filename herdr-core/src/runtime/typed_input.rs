@@ -43,8 +43,9 @@ pub(crate) struct InputWork {
     pub observation: Observation,
     pub notice: Option<Notice>,
     /// A brief whose agent's composer is to be read: still showing the
-    /// brief, it gets its Enter; empty, the brief is typed again once
-    /// someone answered the screen.
+    /// brief, or the agent's mark for it as a paste, it gets its Enter;
+    /// empty, the brief is typed again when nothing moved since its typing
+    /// or someone answered the screen (`typed::retype_due`).
     pub resubmit: Option<Resubmit>,
     /// The agent recorded the brief (`"session"`: among its session's
     /// person messages; `"turn"`: by starting a turn after its typing,
@@ -61,9 +62,10 @@ pub(crate) struct Resubmit {
     pub attempts: u8,
     /// Typings are left, so an Enter or a typing may be spent.
     pub left: bool,
-    /// Someone answered the agent's screen since the last typing and the
-    /// agent's record has a source, so an empty composer is typed into.
-    pub answered: bool,
+    /// An empty composer is typed into: the agent's record has a source,
+    /// and nothing moved on its pane since the last typing or someone
+    /// answered its screen (`typed::retype_due`).
+    pub retype: bool,
 }
 
 /// Where an unconfirmed input stands with the fresh session read asked
@@ -164,6 +166,7 @@ impl Runtime {
         let mut open = std::collections::BTreeSet::new();
         let mut verdicts = BTreeMap::new();
         let mut turn_started = Vec::new();
+        let mut spent = Vec::new();
         let unconfirmed: BTreeMap<&str, u8> = ledger
             .spawns
             .iter()
@@ -287,6 +290,20 @@ impl Runtime {
                 Reread::Wait => continue,
             }
             let source = self.input_source(&spawn.kind, &observation.actor.pane_id);
+            // Every typing spent with no record: the brief never reached
+            // its agent, which its parent is told as a failure and the log
+            // records once.
+            let undelivered = input.attempts >= typed::INPUT_ATTEMPTS
+                && source.is_ok()
+                && input.route == typed::SendRoute::Typed;
+            if undelivered {
+                spent.push((
+                    spawn.id.clone(),
+                    observation.actor.pane_id.clone(),
+                    spawn.kind.clone(),
+                    input.attempts,
+                ));
+            }
             let notice = typed::notice_due(input)
                 .then(|| self.notice_to(&spawn.parent, ledger))
                 .flatten()
@@ -299,6 +316,7 @@ impl Runtime {
                         None,
                         source,
                         input.route,
+                        undelivered,
                     ),
                     attempt: input.attempts,
                     target,
@@ -314,7 +332,7 @@ impl Runtime {
                 brief: brief.clone(),
                 attempts: input.attempts,
                 left: input.attempts < typed::INPUT_ATTEMPTS,
-                answered: source.is_ok() && typed::retype_due(input, observation, now),
+                retype: source.is_ok() && typed::retype_due(input, observation, now),
             });
             if notice.is_some() || resubmit.is_some() {
                 work.push(InputWork {
@@ -382,6 +400,8 @@ impl Runtime {
                         Some(&letter.id),
                         self.input_source(&letter.recipient.kind, &observation.actor.pane_id),
                         input.route,
+                        // A letter's own state says when it went undelivered.
+                        false,
                     ),
                     attempt: input.attempts,
                     target,
@@ -401,6 +421,15 @@ impl Runtime {
         }
         self.plans.input_reread.retain(|id, _| open.contains(id));
         self.plans.input_held.retain(|id, _| open.contains(id));
+        self.plans.input_undelivered.retain(|id| open.contains(id));
+        for (id, pane, kind, attempts) in spent {
+            if self.plans.input_undelivered.insert(id.clone()) {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "delivery", "kind": "input.undelivered", "spawn": id,
+                    "pane_id": pane, "agent": kind, "attempts": attempts, "reason": "not_recorded",
+                }));
+            }
+        }
         for (id, attempts, pane) in rereads {
             self.plans.input_reread.insert(id, (attempts, now));
             self.queue_session_reread(pane);
@@ -817,7 +846,7 @@ pub(crate) mod tests {
 
     /// [`spawned_as`] with `brief` typed, or with `launched`, carried by the
     /// start's prompt argument.
-    fn spawned_with(
+    pub(crate) fn spawned_with(
         kind: &str,
         brief: &str,
         handoff: bool,
@@ -844,6 +873,8 @@ pub(crate) mod tests {
         let child = runtime.delivery_observations.get_mut("child").unwrap();
         child.status_changed_at_unix_ms = 0;
         child.last_input_at_unix_ms = 0;
+        // Seen, as a spawned pane is, before its brief was typed.
+        child.entered_working_at_unix_ms = 0;
         let parent = Actor {
             pane_id: "sender".into(),
             name: "sender".into(),
@@ -1085,7 +1116,7 @@ pub(crate) mod tests {
         runtime.snapshot.navigator.agents.push(row);
     }
 
-    fn input_of(runtime: &Runtime, spawn: &str) -> TypedInput {
+    pub(crate) fn input_of(runtime: &Runtime, spawn: &str) -> TypedInput {
         let ledger = runtime.delivery_ledger.as_ref().unwrap();
         ledger
             .spawns
@@ -1098,11 +1129,11 @@ pub(crate) mod tests {
     }
 
     /// A brief the child never recorded owes its parent one notice naming
-    /// the child's pane once the child rested past the record wait; it is
-    /// typed again only after input reached the pane and went quiet, and the
-    /// operator's row shows it only after the parent's grace.
+    /// the child's pane once the child rested past the record wait; with
+    /// nothing moved on its pane since the typing it is typed again, and
+    /// the operator's row shows it only after the parent's grace.
     #[test]
-    fn an_unrecorded_brief_tells_the_parent_then_waits_for_its_screen_to_be_answered() {
+    fn an_unrecorded_brief_tells_the_parent_and_is_typed_again_when_nothing_moved() {
         // Typed well after the pane's last input, so its composer is readable
         // at rest.
         const T: u64 = 100_000;
@@ -1129,7 +1160,10 @@ pub(crate) mod tests {
             "worker has not confirmed its brief: read its screen with `hide pane read child`."
         ));
         let resubmit = work[0].resubmit.as_ref().expect("its composer is read");
-        assert!(!resubmit.answered, "nobody answered the screen");
+        assert!(
+            resubmit.retype,
+            "nothing took it: an empty composer gets it again"
+        );
         assert!(resubmit.left);
         assert!(
             runtime.input_asks(at).is_empty(),
@@ -1144,7 +1178,7 @@ pub(crate) mod tests {
             "nothing is read while someone types there"
         );
         let resubmit = runtime.typed_input_work(quiet)[0].resubmit.clone().unwrap();
-        assert!(resubmit.answered);
+        assert!(resubmit.retype);
         assert_eq!(resubmit.brief, BRIEF);
 
         // Told, the parent has its grace before the operator sees the row.
@@ -1185,6 +1219,109 @@ pub(crate) mod tests {
         assert_eq!(input_of(&runtime, &spawn).attempts, 1);
     }
 
+    /// A child whose state moved after its brief was typed, with no record
+    /// of it, may have had the text taken by a screen of its own: an empty
+    /// composer is typed into only once someone answered that screen. One
+    /// that worked since the typing took the brief, so nothing types it
+    /// again on its own: a brief that landed is not entered twice.
+    #[test]
+    fn an_unrecorded_brief_whose_pane_moved_waits_for_an_answer() {
+        use crate::delivery::INPUT_QUIET_MS;
+        const T: u64 = 100_000;
+        let unconfirmed = |runtime: &mut Runtime, from: u64| {
+            runtime.typed_input_work(from + RECORD_WAIT_MS);
+            let at = from + RECORD_WAIT_MS + REREAD_WAIT_MS;
+            let work = runtime.typed_input_work(at);
+            (at, work[0].resubmit.clone().expect("its composer is read"))
+        };
+
+        // The engine read a question after the typing that is gone now.
+        let (_root, mut runtime, _) = spawned(false, T);
+        child_reads(&mut runtime, "idle", None, T + 1_000);
+        let (at, resubmit) = unconfirmed(&mut runtime, T + 1_000);
+        assert!(!resubmit.retype, "moved and nobody answered");
+        runtime.note_delivery_key_at("child", at + 1_000);
+        let quiet = at + 1_000 + INPUT_QUIET_MS;
+        assert!(
+            runtime.typed_input_work(quiet)[0]
+                .resubmit
+                .clone()
+                .unwrap()
+                .retype
+        );
+
+        // The engine read it working after the typing, its turn now over.
+        let (_root, mut runtime, _) = spawned(false, T);
+        child_reads(&mut runtime, "working", None, T + 1_000);
+        child_reads(&mut runtime, "idle", None, T + 2_000);
+        let (_, resubmit) = unconfirmed(&mut runtime, T + 2_000);
+        assert!(!resubmit.retype, "it worked on the brief");
+
+        // Only the engine's first read of work moved after the typing, its
+        // state and the core's turn as they were: that work alone keeps it.
+        let (_root, mut runtime, _) = spawned(false, T);
+        runtime
+            .delivery_observations
+            .get_mut("child")
+            .unwrap()
+            .entered_working_at_unix_ms = T + 1_000;
+        let (_, resubmit) = unconfirmed(&mut runtime, T);
+        assert!(!resubmit.retype, "it worked on the brief");
+    }
+
+    /// A brief typed three times with no record of any never reached its
+    /// agent: its parent's notice for the last typing says the delivery
+    /// failed, Hide does not type it again, and `input.undelivered` is
+    /// logged once, however many passes judge it.
+    #[test]
+    fn a_brief_whose_typings_are_spent_tells_its_parent_it_failed_and_logs_it_once() {
+        const T: u64 = 100_000;
+        let (_root, mut runtime, spawn) = spawned(false, T);
+        let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+        let input = Actor::hide(typed::INPUT_ROLE, TEST_NODE);
+        let briefed = || Mutation::Briefed {
+            id: spawn.clone(),
+            route: typed::SendRoute::Typed,
+        };
+        for mutation in [
+            Mutation::BriefTyping { id: spawn.clone() },
+            briefed(),
+            Mutation::BriefTyping { id: spawn.clone() },
+            briefed(),
+        ] {
+            crate::coordination::apply(&mut ledger, &input, &mutation, T).unwrap();
+        }
+        runtime.publish_delivery(Arc::new(ledger), false);
+        assert_eq!(input_of(&runtime, &spawn).attempts, typed::INPUT_ATTEMPTS);
+        let at = T + RECORD_WAIT_MS + REREAD_WAIT_MS;
+        let (work, logged) = crate::diagnostics::capture(|| {
+            runtime.typed_input_work(T + RECORD_WAIT_MS);
+            runtime.take_session_rereads();
+            let work = runtime.typed_input_work(at);
+            runtime.typed_input_work(at + 1_000);
+            work
+        });
+        let notice = work[0].notice.as_ref().expect("the parent is told");
+        assert_eq!(notice.intent, format!("input-unconfirmed:{spawn}:3"));
+        assert!(
+            notice.body.starts_with(
+                "worker did not get its brief: Hide tried 3 times and the agent recorded \
+                 none of them, so Hide does not type it again.\nRead its screen with \
+                 `hide pane read child`;"
+            ),
+            "{}",
+            notice.body
+        );
+        assert!(!work[0].resubmit.as_ref().unwrap().left);
+        let undelivered: Vec<_> = logged
+            .iter()
+            .filter(|record| record["kind"] == "input.undelivered")
+            .collect();
+        assert_eq!(undelivered.len(), 1, "{logged:?}");
+        assert_eq!(undelivered[0]["reason"], "not_recorded");
+        assert_eq!(undelivered[0]["attempts"], 3);
+    }
+
     /// An agent Hide has no source for its record of the brief, here a Pi
     /// whose session Hide has not read, is not judged to have lost it: its
     /// parent hears that it cannot be confirmed, and an answered screen does
@@ -1202,7 +1339,7 @@ pub(crate) mod tests {
         let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
         let resubmit = runtime.typed_input_work(quiet)[0].resubmit.clone().unwrap();
         assert!(
-            !resubmit.answered,
+            !resubmit.retype,
             "only a composer still showing it gets its Enter"
         );
     }
@@ -1261,7 +1398,7 @@ pub(crate) mod tests {
     /// The child's pane as one pass lays it: the engine reporting `herdr` since
     /// `at`, the hook of its session having reported `hook`, and the core's
     /// turn decided from both at `at`.
-    fn child_reads(runtime: &mut Runtime, herdr: &str, hook: Option<HookTurn>, at: u64) {
+    pub(crate) fn child_reads(runtime: &mut Runtime, herdr: &str, hook: Option<HookTurn>, at: u64) {
         let child = runtime.delivery_observations.get_mut("child").unwrap();
         child.status = herdr.into();
         child.status_changed_at_unix_ms = at;
@@ -1312,7 +1449,7 @@ pub(crate) mod tests {
         runtime.note_delivery_key_at("child", at + 1_000);
         let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
         let resubmit = runtime.typed_input_work(quiet)[0].resubmit.clone().unwrap();
-        assert!(resubmit.answered);
+        assert!(resubmit.retype);
     }
 
     /// A child whose record of the brief never matches, but whose hook

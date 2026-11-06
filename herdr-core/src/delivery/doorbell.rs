@@ -730,9 +730,9 @@ impl Doorbell {
 
     /// Typed input whose agent never recorded it (`typed.rs`): tells the
     /// agent that typed it, or wrote the letter, with the child's pane and
-    /// how to read and answer its screen, and types a brief again once
-    /// someone answered that screen, the agent is ready and its composer
-    /// reads empty. Each typing is reserved in the ledger first and the
+    /// how to read and answer its screen, and types a brief again once the
+    /// agent is ready and its composer reads empty, when nothing moved on
+    /// its pane since the typing or someone answered its screen. Each typing is reserved in the ledger first and the
     /// record is checked again right before, so a late record never brings
     /// a second copy.
     fn inputs(&mut self, owner: &Mutex<Runtime>, stop: &AtomicBool, now: u64, count: &mut usize) {
@@ -962,17 +962,24 @@ fn record_brief(owner: &Mutex<Runtime>, id: &str, by: &str) {
 /// What a composer read for an unconfirmed brief did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Resubmitted {
-    /// The composer still showed the brief: Enter submitted it.
+    /// The composer still showed the brief, or the agent's mark for it as
+    /// a paste: Enter submitted it.
     Entered,
-    /// The composer was empty after someone answered the screen: the brief
-    /// was typed again.
+    /// The composer was empty with nothing moved since the typing, or after
+    /// someone answered the screen: the brief was typed again.
     Retyped,
 }
 
-/// Reads the composer of spawn `id`'s pane once the engine reports the same agent
-/// ready for input: still showing the brief, it gets the Enter it lost; empty
-/// after someone answered the screen, the brief is typed again; anything else
-/// holds. Either spends one of the brief's typings, reserved in the ledger
+/// Why an empty composer is not typed into: the agent's state moved since
+/// the typing and nobody answered its screen, so the text may have answered
+/// a screen of its own (`typed::retype_due`).
+const MOVED_UNANSWERED: &str = "moved_unanswered";
+
+/// Reads the composer of spawn `id`'s pane once the engine reports the same
+/// agent ready for input: still showing the brief, or the agent's mark for it
+/// as a paste, it gets the Enter it lost; empty with nothing moved since the
+/// typing, or after someone answered the screen, the brief is typed again;
+/// anything else holds. Either spends one of the brief's typings, reserved in the ledger
 /// first; a refusal before the reservation sends nothing and says why. Text
 /// and Enter on a choice screen can pick an option, which a composer read
 /// showing exactly the brief rules out.
@@ -1016,8 +1023,8 @@ fn resubmit_brief(
     }
     let action = match shows {
         super::composer::Shows::Typed => Resubmitted::Entered,
-        super::composer::Shows::Empty if resubmit.answered => Resubmitted::Retyped,
-        super::composer::Shows::Empty => return Err("unanswered"),
+        super::composer::Shows::Empty if resubmit.retype => Resubmitted::Retyped,
+        super::composer::Shows::Empty => return Err(MOVED_UNANSWERED),
         super::composer::Shows::Other => return Err(super::composer::NOT_EMPTY),
     };
     if !resubmit.left {
@@ -3923,6 +3930,89 @@ mod tests {
         }
         for kind in ["opencode", "pi", "cursor", "gemini", "amp", ""] {
             assert!(!bell_target(kind), "{kind}");
+        }
+    }
+
+    /// A brief that an agent's composer reads empty, with nothing on its
+    /// pane moved since the typing, was dropped by a program still
+    /// starting: it is typed again once, as the second of its typings. One
+    /// the agent holds as its own paste mark of the brief's line count got
+    /// the text and lost only its Enter, so it gets the Enter and nothing
+    /// is typed: a brief that landed is never entered twice.
+    #[test]
+    fn a_brief_a_starting_agent_dropped_is_typed_again_and_one_it_holds_as_a_paste_gets_its_enter()
+    {
+        use crate::delivery::typed::{RECORD_WAIT_MS, REREAD_WAIT_MS};
+        use crate::engine::fake::{FakeEngine, delivery_agent, reply};
+        use crate::runtime::typed_input::tests::{input_of, spawned_with};
+        const CODEX_EMPTY: &str =
+            include_str!("../../../hide-agent-adapter/tests/fixtures/composer/codex-0-empty.ansi");
+        const CLAUDE_PASTED: &str = include_str!(
+            "../../../hide-agent-adapter/tests/fixtures/composer/claude-3-pasted.ansi"
+        );
+        const T: u64 = 100_000;
+        let twelve: String = (1..=12)
+            .map(|n| format!("composer check line {n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for (kind, brief, screen, typed, entered, action) in [
+            (
+                "codex",
+                "Node api: add the call.\nReport by letter.",
+                CODEX_EMPTY,
+                1,
+                0,
+                Resubmitted::Retyped,
+            ),
+            (
+                "claude",
+                twelve.as_str(),
+                CLAUDE_PASTED,
+                0,
+                1,
+                Resubmitted::Entered,
+            ),
+        ] {
+            let (root, mut runtime, spawn) = spawned_with(kind, brief, false, T, false);
+            let screen = screen.to_owned();
+            let fake = FakeEngine::start(move |method, _| match method {
+                "delivery_agent" => reply(delivery_agent(&json!({
+                    "pane_id": "child", "agent": kind, "agent_status": "idle",
+                    "interactive_ready": true, "launch_pending": false,
+                }))),
+                "read_screen" => reply(crate::engine::PaneText {
+                    text: screen.clone(),
+                    truncated: false,
+                }),
+                "prompt_agent" | "send_keys" => reply(()),
+                other => panic!("{kind}: a resubmit reads and types, got {other}"),
+            });
+            crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+            runtime.typed_input_work(T + RECORD_WAIT_MS);
+            runtime.take_session_rereads();
+            let work = runtime.typed_input_work(T + RECORD_WAIT_MS + REREAD_WAIT_MS);
+            let item = work.into_iter().next().expect(kind);
+            let resubmit = item.resubmit.expect("its composer is read");
+            let owner = Arc::new(Mutex::new(runtime));
+            let (_worker, client) = crate::delivery::worker::Worker::store(
+                Arc::downgrade(&owner),
+                crate::handle::ChangeNotifier::noop(),
+                root.path().join("delivery.json"),
+            )
+            .unwrap();
+            owner.lock().unwrap().install_delivery_client(client);
+            assert_eq!(
+                resubmit_brief(&owner, &spawn, &item.observation, &resubmit),
+                Ok(action),
+                "{kind}"
+            );
+            assert_eq!(fake.calls_of("prompt_agent").len(), typed, "{kind}");
+            assert_eq!(fake.calls_of("send_keys").len(), entered, "{kind}");
+            assert_eq!(
+                input_of(&owner.lock().unwrap(), &spawn).attempts,
+                2,
+                "{kind}"
+            );
         }
     }
 }
