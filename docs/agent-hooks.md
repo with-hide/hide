@@ -1158,7 +1158,7 @@ The current marker also captures the daemon state route; the shell guards and qu
 The Grok PowerShell fixture proves event intake through the opener guard's `daemon.unreachable` line.
 Antigravity's `agys_windows_session_hook_reads_its_input_and_injects_guidance`, `agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails` and `agys_windows_guard_preserves_korean_and_non_bmp_hook_answers` cover its cmd boundary, guidance, fallback and Unicode answers.
 Version 6 is the first guarded command, so an older entry reads outdated and the next launch or connection replaces it.
-The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` link on a device, which each new build of the helper points at itself, as a moved core does at the build it runs.
+The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` on a device (a link to the build on macOS and Linux, a folder of the build's two programs on Windows; [ARCHITECTURE.md](ARCHITECTURE.md#the-install-kit)), which each new build of the helper points at itself, as a moved core does at the build it runs.
 
 A `hided` outside a desktop package and outside a build Hide placed in the account's helper root installs nothing, and This machine's row in Settings says the packaged app is where the kit comes from.
 `hide_kit::bundled_kit_dir` decides the package from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder; a build is `~/.hide/host-helper/<16 hex>/` in the account's own home, holding `hide` and `hide-agent-hooks` beside `hided`, the folder a core move and a core update make (`KitPlace::of_program`, held by `a_core_installs_from_its_package_or_a_placed_build_and_never_from_another_copy`).
@@ -1199,7 +1199,7 @@ A pass judges, installs and takes out only its own entries: those that name its 
 A device helper's first pass takes out the plugin files its earlier build wrote under the app's names.
 Codex trusts an exact command, so each installation's pass trusts its own entries.
 
-A pane holder's pane names the installation that started it (`HIDE_INSTALL`) and that installation's own `hide` (`HIDE_INSTALL_CLI`, its `current` link for a helper root).
+A pane holder's pane names the installation that started it (`HIDE_INSTALL`) and that installation's own `hide` (`HIDE_INSTALL_CLI`, the `hide` in its `current` for a helper root, which a Windows device pane also finds first on its `PATH`).
 An entry another installation wrote exits at once in such a pane, with nothing to say and no report: Cursor's permission hook answers allow and agy's tool hook ask, as when the helper is gone, and a plugin's helper call prints nothing, which the script reads as nothing to do.
 Each event therefore also starts the other installation's helper once, which ends before it reads its input.
 Claude Code and Codex start an event's matching hooks together, so that costs little time: on a Windows PC, where each entry starts `powershell.exe`, the other installation's entry added about 50 ms to a 1.6 s Stop event at the median (2026-11-04), and on a Mac the helper alone takes about 5 ms.

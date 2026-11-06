@@ -1,25 +1,173 @@
 //! A user command using the same `.cmd` convention as npm's Windows shims.
-//! The shim is ASCII and uses a relative junction, so cmd's code page never
-//! changes a Unicode package path. Folder junctions need no Developer Mode.
+//! The shim is ASCII and names `hide.exe` relative to its own folder
+//! (`%~dp0`, which cmd expands without passing it through its code page),
+//! so a Unicode path never sits in the batch file's bytes.
+//!
+//! The desktop app's shim reaches its package's resources through a
+//! `.hide-kit` directory junction beside it, made without Developer Mode. A
+//! helper root's shim names the root's `current` folder by a relative path
+//! and makes no link: Windows' OpenSSH turns the redirection guard on for
+//! `sshd.exe`, and every process of an ssh session then refuses a junction
+//! no administrator made (with-hide/hide-private#501).
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use hide_platform::fs::{Access, atomic, link};
 
 use super::{held_by_another, hides_own, link_path, other_install, wanted};
 use crate::{KitTarget, Observed, RemoveOutcome};
 
-const SHIM: &[u8] = b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0.hide-kit\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
+/// The shim's bytes before and after the folder it names, relative to its
+/// own: Hide wrote a shim of exactly this form, whatever folder it names.
+const SHIM_START: &[u8] =
+    b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0";
+const SHIM_END: &[u8] = b"\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
+
+/// The junction beside the desktop app's shim, and the folder its shim names.
+const JUNCTION: &str = ".hide-kit";
+
+/// The shim that runs the `hide.exe` in `folder`, relative to the shim's own.
+fn shim(folder: &str) -> Vec<u8> {
+    [SHIM_START, folder.as_bytes(), SHIM_END].concat()
+}
+
+/// The folder a shim Hide wrote names; `None` for any other file.
+fn shim_folder(bytes: &[u8]) -> Option<String> {
+    let folder = bytes.strip_prefix(SHIM_START)?.strip_suffix(SHIM_END)?;
+    let folder = std::str::from_utf8(folder).ok()?;
+    spellable(folder).then(|| folder.to_owned())
+}
+
+/// Whether a shim can name `folder`: ASCII, so cmd's code page never changes
+/// it, and nothing cmd would expand inside the quotes.
+fn spellable(folder: &str) -> bool {
+    !folder.is_empty()
+        && folder.chars().all(|letter| {
+            (letter.is_ascii_graphic() || letter == ' ') && !matches!(letter, '%' | '"')
+        })
+}
 
 fn junction(target: &KitTarget) -> PathBuf {
-    target.cli_dir.join(".hide-kit")
+    target.cli_dir.join(JUNCTION)
+}
+
+/// How this installation's shim reaches its `hide.exe`.
+enum Form {
+    /// Through the junction beside it: the desktop app's.
+    Junction,
+    /// By this folder, relative to the shim's: a helper root's `current`.
+    Relative(String),
+}
+
+/// The form this installation's shim takes, or why it cannot take one.
+fn form(target: &KitTarget) -> Result<Form, crate::Reason> {
+    if target.install == hide_agent_hooks::route::APP_INSTALL {
+        return Ok(Form::Junction);
+    }
+    relative(&target.cli_dir, &target.kit_dir)
+        .map(Form::Relative)
+        .ok_or_else(|| {
+            crate::Reason::with(
+                crate::PartCause::Unsupported,
+                target.kit_dir.display().to_string(),
+                format!(
+                    "a command in {} cannot name {}: they are on different drives, or the path between them is not plain ASCII",
+                    target.cli_dir.display(),
+                    target.kit_dir.display()
+                ),
+            )
+        })
+}
+
+/// `to` as a shim in `from` names it: up out of `from` and down into `to`,
+/// comparing names as Windows does, without case. `None` when the two are
+/// on different drives or the way between them cannot be spelled.
+fn relative(from: &Path, to: &Path) -> Option<String> {
+    let names = |path: &Path| -> Option<Vec<String>> {
+        path.components()
+            .map(|part| match part {
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                    part.as_os_str().to_str().map(str::to_owned)
+                }
+                Component::CurDir | Component::ParentDir => None,
+            })
+            .collect()
+    };
+    let (from, to) = (names(from)?, names(to)?);
+    let shared = from
+        .iter()
+        .zip(&to)
+        .take_while(|(left, right)| left.eq_ignore_ascii_case(right))
+        .count();
+    // Less in common than a drive and its root is two drives.
+    if shared < 2 {
+        return None;
+    }
+    let way: Vec<&str> = std::iter::repeat_n("..", from.len() - shared)
+        .chain(to[shared..].iter().map(String::as_str))
+        .collect();
+    let way = way.join("\\");
+    spellable(&way).then_some(way)
+}
+
+/// `path` with every `..` taken back out of the folder before it.
+fn lexical(path: &Path) -> PathBuf {
+    let mut plain = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                plain.pop();
+            }
+            Component::CurDir => {}
+            other => plain.push(other),
+        }
+    }
+    plain
+}
+
+/// The `hide.exe` the command folder's `hide` reaches now: the one its shim
+/// names, through the junction for the desktop app's form, or the one a
+/// junction left without a shim leads to.
+fn reached(target: &KitTarget) -> Option<PathBuf> {
+    let named = std::fs::read(link_path(target))
+        .ok()
+        .and_then(|bytes| shim_folder(&bytes));
+    match named {
+        Some(folder) if folder != JUNCTION => {
+            Some(lexical(&target.cli_dir.join(folder)).join("hide.exe"))
+        }
+        _ => Some(std::fs::read_link(junction(target)).ok()?.join("hide.exe")),
+    }
 }
 
 /// The command another live installation on this account reaches through
-/// the junction, which that installation's own pass keeps.
+/// the shim, which that installation's own pass keeps. This installation's
+/// own command is known by the file it is, not by how the way to it is
+/// spelled: an installation is named by its root's spelling
+/// (`install_of_root`), which a path rebuilt from the shim, or read back
+/// from a junction, need not repeat.
 fn another_installs(target: &KitTarget) -> Option<PathBuf> {
-    let destination = std::fs::read_link(junction(target)).ok()?.join("hide.exe");
-    held_by_another(target, &destination).then_some(destination)
+    reached(target).filter(|destination| {
+        !same_file(destination, &wanted(target)) && held_by_another(target, destination)
+    })
+}
+
+/// Whether the junction beside the shim is this installation's own: one an
+/// earlier build of it made, leading to its command by the file or by the
+/// installation its folder names. Another installation's junction, such as
+/// one the desktop app's pass left before it wrote its shim, is not.
+fn own_junction(target: &KitTarget) -> bool {
+    std::fs::read_link(junction(target)).is_ok_and(|destination| {
+        let destination = destination.join("hide.exe");
+        same_file(&destination, &wanted(target))
+            || super::install_at(&destination).as_deref() == Some(target.install.as_str())
+    })
+}
+
+/// Whether two paths lead to one file.
+fn same_file(left: &Path, right: &Path) -> bool {
+    use hide_platform::fs::identity::file_id;
+    matches!((file_id(left), file_id(right)), (Ok(left), Ok(right)) if left == right)
 }
 
 /// Both names are ours or absent. An exact shim alone does not authorize
@@ -47,7 +195,7 @@ fn owned_or_missing(target: &KitTarget) -> Result<(), String> {
     match std::fs::symlink_metadata(&shim) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
             match std::fs::read(&shim) {
-                Ok(bytes) if bytes == SHIM => {}
+                Ok(bytes) if shim_folder(&bytes).is_some() => {}
                 Ok(_) => {
                     return Err(format!(
                         "{} is another program's file; Hide left it",
@@ -75,8 +223,12 @@ fn owned_or_missing(target: &KitTarget) -> Result<(), String> {
     match std::fs::symlink_metadata(&pointer) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             let destination = std::fs::read_link(&pointer)
-                .map_err(|error| format!("{} could not be read: {error}", pointer.display()))?;
-            if !hides_own(target, &destination.join("hide.exe")) {
+                .map_err(|error| format!("{} could not be read: {error}", pointer.display()))?
+                .join("hide.exe");
+            // A junction reads back in its verbatim `\\?\` spelling, which no
+            // root's prefix matches; one that leads to this build's own
+            // command is this installation's whatever its spelling.
+            if !same_file(&destination, &wanted(target)) && !hides_own(target, &destination) {
                 return Err(format!(
                     "{} is another program's link; Hide left it",
                     pointer.display()
@@ -117,15 +269,25 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
     if let Err(reason) = owned_or_missing(target) {
         return Observed::Blocked(crate::Reason::new(crate::PartCause::OtherProgram, reason));
     }
-    if !link_path(target).is_file() {
+    let form = match form(target) {
+        Ok(form) => form,
+        Err(reason) => return Observed::Blocked(reason),
+    };
+    let Ok(bytes) = std::fs::read(link_path(target)) else {
         return Observed::Missing;
-    }
-    if link::is_link_to(&junction(target), &target.kit_dir) {
+    };
+    let current = match &form {
+        Form::Junction => {
+            bytes == shim(JUNCTION) && link::is_link_to(&junction(target), &target.kit_dir)
+        }
+        Form::Relative(folder) => bytes == shim(folder) && !own_junction(target),
+    };
+    if current {
         Observed::Current
     } else {
         Observed::Stale(crate::Reason::new(
             crate::PartCause::OtherBuild,
-            "Hide's command junction is missing or points at an older package",
+            "Hide's command leads to an older package or the way an older build reached it",
         ))
     }
 }
@@ -138,12 +300,32 @@ pub(crate) fn install(target: &KitTarget) -> Result<(), String> {
         ));
     }
     owned_or_missing(target)?;
+    let form = form(target).map_err(|reason| reason.text)?;
     std::fs::create_dir_all(&target.cli_dir)
         .map_err(|error| format!("{} could not be created: {error}", target.cli_dir.display()))?;
-    link::replace_link(&target.kit_dir, &junction(target))
-        .map_err(|error| format!("Hide's command junction could not be written: {error}"))?;
-    atomic::write_file(&link_path(target), SHIM, Access::Private)
-        .map_err(|error| format!("Hide's command shim could not be written: {error}"))?;
+    match form {
+        Form::Junction => {
+            link::replace_link(&target.kit_dir, &junction(target)).map_err(|error| {
+                format!("Hide's command junction could not be written: {error}")
+            })?;
+            atomic::write_file(&link_path(target), &shim(JUNCTION), Access::Private)
+                .map_err(|error| format!("Hide's command shim could not be written: {error}"))?;
+        }
+        Form::Relative(folder) => {
+            atomic::write_file(&link_path(target), &shim(&folder), Access::Private)
+                .map_err(|error| format!("Hide's command shim could not be written: {error}"))?;
+            // The junction an earlier build of this installation made: the
+            // shim no longer passes it. Another installation's stays.
+            if own_junction(target) {
+                link::remove_link(&junction(target)).map_err(|error| {
+                    format!(
+                        "the junction an earlier build left, {}, could not be removed: {error}",
+                        junction(target).display()
+                    )
+                })?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -246,10 +428,145 @@ mod tests {
             assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign");
             std::fs::remove_file(foreign).unwrap();
         }
-        std::fs::write(link_path(&target), SHIM).unwrap();
+        std::fs::write(link_path(&target), shim(JUNCTION)).unwrap();
         link::create_link(dir.path(), &junction(&target)).unwrap();
         assert!(matches!(observe(&target), Observed::Blocked(_)));
         assert!(matches!(remove(&target), RemoveOutcome::Kept { .. }));
         assert!(link::is_link_to(&junction(&target), dir.path()));
+    }
+
+    /// A device's helper root as `hided node serve` makes it under `home`:
+    /// the build `version` holding a `hide.exe` that is a copy of cmd.exe,
+    /// `current` pointed at it, and the device kit's target for it.
+    fn device(home: &Path, version: &str) -> KitTarget {
+        let root = crate::layout::helper_root(home);
+        let build = root.join(version);
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::copy(
+            PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe"),
+            build.join("hide.exe"),
+        )
+        .unwrap();
+        std::fs::write(build.join("hide-agent-hooks.exe"), b"").unwrap();
+        crate::current::point(&root, version).unwrap();
+        crate::device_target(
+            &root,
+            home,
+            &home.join(".local").join("bin"),
+            Default::default(),
+        )
+    }
+
+    /// A device's command names its `current` folder by a relative path and
+    /// makes no link, under a home whose name cmd's code page cannot spell;
+    /// it passes arguments and the exit code through, and a junction an
+    /// earlier build of the device made goes when it is installed.
+    #[test]
+    fn a_device_command_reaches_its_current_folder_without_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("한글 홈");
+        let target = device(&home, "0123456789abcdef");
+        assert!(matches!(observe(&target), Observed::Missing));
+        install(&target).unwrap();
+        assert!(matches!(observe(&target), Observed::Current));
+        assert!(std::fs::symlink_metadata(junction(&target)).is_err());
+        assert_eq!(
+            std::fs::read(link_path(&target)).unwrap(),
+            shim(r"..\..\.hide\host-helper\current")
+        );
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c"])
+            .arg(link_path(&target))
+            .args(["/d", "/c", "exit", "/b", "23"])
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(23));
+
+        // What an earlier build of the device left: the junction form.
+        std::fs::write(link_path(&target), shim(JUNCTION)).unwrap();
+        link::create_link(&target.kit_dir, &junction(&target)).unwrap();
+        assert!(matches!(observe(&target), Observed::Stale(_)));
+        install(&target).unwrap();
+        assert!(matches!(observe(&target), Observed::Current));
+        assert!(std::fs::symlink_metadata(junction(&target)).is_err());
+        assert!(matches!(remove(&target), RemoveOutcome::Removed));
+        assert!(target.kit_dir.join("hide.exe").is_file());
+    }
+
+    /// The desktop app and a device helper on one account: whichever holds
+    /// the command keeps it while its `hide.exe` is there, and the other
+    /// leaves it alone, in either form.
+    #[test]
+    fn the_app_and_a_device_each_leave_the_command_the_other_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = target(dir.path(), &dir.path().join("package/resources"));
+        let device = device(dir.path(), "0123456789abcdef");
+        install(&app).unwrap();
+        assert!(matches!(observe(&device), Observed::Absent(_)));
+        assert!(install(&device).is_err());
+        assert!(matches!(remove(&device), RemoveOutcome::Kept { .. }));
+        assert!(link::is_link_to(&junction(&app), &app.kit_dir));
+
+        assert!(matches!(remove(&app), RemoveOutcome::Removed));
+        install(&device).unwrap();
+        assert!(matches!(observe(&app), Observed::Absent(_)));
+        assert!(install(&app).is_err());
+        assert!(std::fs::symlink_metadata(junction(&app)).is_err());
+
+        // The app's junction, left by a pass of the app that ended before its
+        // shim, beside the device's shim: the device's pass leaves it.
+        link::create_link(&app.kit_dir, &junction(&app)).unwrap();
+        assert!(matches!(observe(&device), Observed::Current));
+        install(&device).unwrap();
+        assert!(link::is_link_to(&junction(&app), &app.kit_dir));
+    }
+
+    /// A shim can name a folder only by a relative way of plain ASCII on the
+    /// same drive.
+    #[test]
+    fn a_shim_names_a_folder_only_by_a_plain_relative_way() {
+        assert_eq!(
+            relative(
+                Path::new(r"C:\work\한글\.local\bin"),
+                Path::new(r"c:\WORK\한글\.hide\host-helper\current")
+            )
+            .as_deref(),
+            Some(r"..\..\.hide\host-helper\current")
+        );
+        assert_eq!(
+            relative(Path::new(r"C:\bin"), Path::new(r"D:\hide\current")),
+            None
+        );
+        assert_eq!(
+            relative(
+                Path::new(r"C:\work\me\bin"),
+                Path::new(r"C:\work\me\100%\current")
+            ),
+            None
+        );
+        assert_eq!(
+            relative(
+                Path::new(r"C:\work\me\bin"),
+                Path::new(r"C:\work\me\설치\current")
+            ),
+            None
+        );
+        assert_eq!(shim_folder(&shim(r"..\x")).as_deref(), Some(r"..\x"));
+        assert_eq!(shim_folder(b"@echo off\r\nfoo.exe %*\r\n"), None);
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let mut device = device(&home, "0123456789abcdef");
+        device.cli_dir = dir.path().join("100% bin");
+        // Climbing out of the command folder spells no name of it.
+        assert!(matches!(observe(&device), Observed::Missing));
+        device.kit_dir = dir.path().join("현재");
+        std::fs::create_dir_all(&device.kit_dir).unwrap();
+        std::fs::copy(
+            home.join(".hide/host-helper/current/hide.exe"),
+            device.kit_dir.join("hide.exe"),
+        )
+        .unwrap();
+        assert!(matches!(observe(&device), Observed::Blocked(_)));
+        assert!(install(&device).is_err());
     }
 }
