@@ -244,6 +244,10 @@ READERS = (
     # its tests run in the desktop unit suite; `classify` plans hide-node's
     # lanes for it.
     (DEVICE_KIT_CONTRACT, {"checks", "windows-check"}, set()),
+    # hide-node's kit contract test holds the Windows kit's runtime to the
+    # pinned ConPTY files, so a pin that changes them fails in the pull
+    # request, not in a release's kit.
+    ("contracts/conpty.json", {"rust"}, {"hide-node"}),
 )
 
 

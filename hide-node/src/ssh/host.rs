@@ -263,12 +263,12 @@ impl Payload {
     }
 }
 
-/// A package keeps the mode bits it has here, which the device's copy gets.
-/// A system without mode bits (Windows, which carries the Linux device kit
-/// for its WSL distributions) has nothing to give it: there a package is
-/// executable exactly when it is one of the kit's programs, by the kit's
-/// contract, never by a guess from the file.
-fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
+/// A package for a device of `os`/`arch` keeps the mode bits it has here,
+/// which the device's copy gets. A system without mode bits (Windows, which
+/// carries the Linux device kit for its WSL distributions) has nothing to
+/// give it: there a package is executable exactly when that device's kit
+/// contract names it a program, never by a guess from the file.
+fn read_package(relative: &str, path: &Path, os: &str, arch: &str) -> Result<Package, String> {
     use std::io::Read;
     let unreadable = |error: std::io::Error| {
         format!("The package {} could not be read: {error}", path.display())
@@ -282,7 +282,7 @@ fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
         .unix_mode()
     {
         Some(mode) => mode & 0o111 != 0,
-        None => program_by_contract(relative).ok_or_else(|| {
+        None => program_by_contract(os, arch, relative).ok_or_else(|| {
             format!(
                 "The package {} has no file mode on this system to install it with",
                 path.display()
@@ -299,56 +299,16 @@ fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
     })
 }
 
-/// Whether the kit part at `relative` is a program, for a system whose
-/// files carry no mode; `None` for a name the kit does not define. A Windows
-/// device's programs carry their `.exe`, and the ConPTY runtime's programs
-/// are its `.exe` files.
-fn program_by_contract(relative: &str) -> Option<bool> {
-    if let Some(runtime) = relative
-        .strip_prefix(hide_kit::holders::CONPTY_SOURCE)
-        .and_then(|rest| rest.strip_prefix('/'))
-    {
-        return Some(runtime.ends_with(".exe"));
-    }
-    match relative.strip_suffix(".exe").unwrap_or(relative) {
-        HELPER_NAME | CLI_NAME | HOOKS_NAME | HOLDER_NAME => Some(true),
-        _ => None,
-    }
-}
-
-/// Every file under the folder `dir`, as packages under `relative`, in name
-/// order; anything but a file or a folder in it is refused.
-fn read_folder(relative: &str, dir: &Path) -> Result<Vec<Package>, String> {
-    let unreadable =
-        |error: std::io::Error| format!("The package {} could not be read: {error}", dir.display());
-    let mut entries = std::fs::read_dir(dir)
-        .map_err(unreadable)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(unreadable)?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    let mut packages = Vec::new();
-    for entry in entries {
-        let name = entry.file_name();
-        let name = name.to_str().ok_or_else(|| {
-            format!(
-                "The package {} names a file that is not UTF-8",
-                dir.display()
-            )
-        })?;
-        let child = format!("{relative}/{name}");
-        let kind = entry.file_type().map_err(unreadable)?;
-        if kind.is_dir() {
-            packages.extend(read_folder(&child, &entry.path())?);
-        } else if kind.is_file() {
-            packages.push(read_package(&child, &entry.path())?);
-        } else {
-            return Err(format!(
-                "The package {} is not a file or a folder",
-                entry.path().display()
-            ));
-        }
-    }
-    Ok(packages)
+/// Whether the file at `relative` in the kit for `os`/`arch` is a program,
+/// as `contracts/device-kits.json` names it, for a system whose files carry
+/// no mode; `None` for a file that kit does not name.
+fn program_by_contract(os: &str, arch: &str, relative: &str) -> Option<bool> {
+    let contract = &*kit::contract::CONTRACT;
+    contract
+        .kit(os, arch)?
+        .files(&contract.programs)
+        .get(relative)
+        .copied()
 }
 
 fn platform_label(os: &str) -> &str {
@@ -2867,8 +2827,9 @@ mod tests {
     /// A folder laid out as this system's package lays out its resources
     /// (`desktop/scripts/package.mjs`, and the Windows runtime copy made from
     /// it): each program under its system's name, `hided.exe` on Windows, and
-    /// on Windows the holder's ConPTY runtime in the folder `holder-conpty`.
-    fn own_package(folder: &Path) {
+    /// on Windows the holder's ConPTY runtime in the folder `holder-conpty`,
+    /// whose files it answers.
+    fn own_package(folder: &Path) -> Vec<(String, bool)> {
         for name in [HELPER_NAME, CLI_NAME, HOOKS_NAME, HOLDER_NAME] {
             write(
                 &folder.join(device_program(name, std::env::consts::OS)),
@@ -2877,10 +2838,30 @@ mod tests {
             );
         }
         if cfg!(windows) {
-            let conpty = folder.join(hide_kit::holders::CONPTY_SOURCE);
-            write(&conpty.join("conpty.dll"), b"dll", 0o644);
-            write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
+            conpty_runtime(&folder.join(hide_kit::holders::CONPTY_SOURCE))
+        } else {
+            Vec::new()
         }
+    }
+
+    /// The holder's ConPTY runtime folder `conpty` as `scripts/fetch-conpty.py`
+    /// writes it, with every file the Windows kit names, which it answers as
+    /// a payload lists them.
+    fn conpty_runtime(conpty: &Path) -> Vec<(String, bool)> {
+        let prefix = format!("{}/", hide_kit::holders::CONPTY_SOURCE);
+        let kit = kit::contract::CONTRACT.kit("windows", "x86_64").unwrap();
+        kit.runtime
+            .iter()
+            .map(|(path, &program)| {
+                let mode = if program { 0o755 } else { 0o644 };
+                write(
+                    &conpty.join(path.strip_prefix(&prefix).unwrap()),
+                    path.as_bytes(),
+                    mode,
+                );
+                (path.clone(), program)
+            })
+            .collect()
     }
 
     /// A core gives a device of its own system the programs its own package
@@ -2890,7 +2871,7 @@ mod tests {
     #[test]
     fn a_core_finds_its_own_programs_by_their_exe_name_and_its_conpty_folder_bare() {
         let directory = tempfile::tempdir().unwrap();
-        own_package(directory.path());
+        let runtime = own_package(directory.path());
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         assert_eq!(
@@ -2902,12 +2883,7 @@ mod tests {
         let mut expected = [HELPER_NAME, CLI_NAME, HOOKS_NAME, HOLDER_NAME]
             .map(|name| (device_program(name, os), true))
             .to_vec();
-        if cfg!(windows) {
-            expected.extend([
-                ("holder-conpty/conpty.dll".to_owned(), false),
-                ("holder-conpty/x64/OpenConsole.exe".to_owned(), true),
-            ]);
-        }
+        expected.extend(runtime);
         expected.sort();
         assert_eq!(relative(&payload), expected);
     }
@@ -3025,7 +3001,9 @@ mod tests {
     }
 
     /// A Windows device gets its programs under their `.exe` names, the
-    /// holder and the ConPTY runtime the holder loads.
+    /// holder and each file of the ConPTY runtime the holder loads as the
+    /// kit contract names them, the same files its release kit carries, and
+    /// nothing else in the runtime folder.
     #[cfg(unix)]
     #[test]
     fn a_windows_device_gets_its_programs_and_the_conpty_runtime() {
@@ -3051,30 +3029,30 @@ mod tests {
             "{}-windows-x86_64",
             hide_kit::holders::CONPTY_SOURCE
         ));
-        std::fs::create_dir_all(conpty.join("x64")).unwrap();
-        write(&conpty.join("conpty.dll"), b"dll", 0o644);
-        write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
+        let runtime = conpty_runtime(&conpty);
+        write(&conpty.join("notes.txt"), b"not the runtime's", 0o644);
         let own = packages.payload_for("windows", "x86_64").unwrap();
-        assert_eq!(
-            own.files
-                .iter()
-                .map(|file| (file.relative.as_str(), file.executable))
-                .collect::<Vec<_>>(),
-            [
-                ("hided.exe", true),
-                ("hide.exe", true),
-                ("hide-agent-hooks.exe", true),
-                ("hide-holder.exe", true),
-                ("holder-conpty/conpty.dll", false),
-                ("holder-conpty/x64/OpenConsole.exe", true),
-            ]
-        );
-        assert_eq!(program_by_contract("hide-holder.exe"), Some(true));
-        assert_eq!(program_by_contract("holder-conpty/conpty.dll"), Some(false));
-        assert_eq!(
-            program_by_contract("holder-conpty/x64/OpenConsole.exe"),
-            Some(true)
-        );
+        let mut expected = [
+            "hided.exe",
+            "hide.exe",
+            "hide-agent-hooks.exe",
+            "hide-holder.exe",
+        ]
+        .map(|name| (name.to_owned(), true))
+        .to_vec();
+        expected.extend(runtime.iter().cloned());
+        expected.sort();
+        assert_eq!(relative(&own), expected);
+
+        // A runtime short of one of its files runs no pane either, and the
+        // refusal names the file.
+        let (gone, _) = &runtime[0];
+        std::fs::remove_file(conpty.join(gone.split_once('/').unwrap().1)).unwrap();
+        let Err(EstablishError::Unsupported(reason)) = packages.payload_for("windows", "x86_64")
+        else {
+            panic!("a ConPTY runtime short of {gone} was sent");
+        };
+        assert!(reason.contains(gone.as_str()), "{reason}");
     }
 
     /// Any change to any part is a new version folder on the device, so a
