@@ -187,8 +187,17 @@ async function buildLinux(app, version, work, type) {
         icon: path.join(resources, "hide.icns"),
         artifactName: `hide-v${version}-linux-x64.\${ext}`,
       },
-      deb: scripts,
-      rpm: scripts,
+      // electron-builder's default lists lack libraries the app links that a
+      // minimal system (a WSL distribution, a container) does not have, so
+      // apt or dnf installed it and it then failed to load. Setting `depends`
+      // replaces the default list, so each repeats it and adds what is
+      // missing: on a deb libgbm1 and ALSA, named libasound2t64 from Ubuntu
+      // 24.04 on and libasound2 before it; on an rpm GBM, expat and ALSA, by
+      // library name so every rpm system's own package answers. The package
+      // lane installs each into a bare image and checks that every program
+      // in it finds its libraries (desktop/scripts/smoke-package.mjs).
+      deb: { ...scripts, depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "libgbm1", "libasound2t64 | libasound2"] },
+      rpm: { ...scripts, depends: ["gtk3", "libnotify", "nss", "libXScrnSaver", "(libXtst or libXtst6)", "xdg-utils", "at-spi2-core", "(libuuid or libuuid1)", "libgbm.so.1()(64bit)", "libexpat.so.1()(64bit)", "libasound.so.2()(64bit)"] },
     },
   });
 }
