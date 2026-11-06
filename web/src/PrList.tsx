@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Hint } from "./components/ui/tooltip";
 import { Elapsed } from "./components/elapsed";
 import { useInterfaceTranslation } from "./i18n/client";
+import { GH_REFUSAL_KEY, type GhRefusal } from "./githubFailure";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { holdsCommandKey } from "./host";
 import { cn } from "./lib/utils";
@@ -296,12 +297,12 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   );
 }
 
-/** `gh` is not installed or not signed in: one line and where to fix it (B42). */
-function GithubLine({ category, actions }: { category: "not_installed" | "not_logged_in"; actions: Actions }) {
+/** `gh` is not installed, too old or not signed in: one line and where to fix it (B42). */
+function GithubLine({ category, actions }: { category: GhRefusal; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-prs-view="blocked" data-prs-gh={category}>
-      <p>{t(category === "not_installed" ? "issueSettings.ghNotInstalled" : "issueSettings.ghNotLoggedIn")}</p>
+      <p>{t(GH_REFUSAL_KEY[category])}</p>
       <Button variant="secondary" size="sm" onClick={() => actions.openSettings("github")} data-prs-open-settings="true">{t("work.gh.settings")}</Button>
     </div>
   );

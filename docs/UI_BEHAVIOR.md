@@ -2530,7 +2530,7 @@ The page reuses the settings group, row and switch parts; loading is an ellipsis
 
 GitHub is the GitHub row: its description, whether `gh` is signed in, and Check again, which asks the core to read GitHub again for the registered projects (PRD settings-left-nav B8).
 The core reads GitHub with its own machine's `gh`, so in a window on another machine a signed-out `gh` is named on the core's machine ("Not signed in to gh on Mac mini") with the command that fixes it there (Run on Mac mini, `gh auth login`, with Copy) in place of `gh`'s own reason; on the core's own machine the row says it plainly ("Not signed in to gh") with the same command under Run in a terminal (PRD core-host-node-move B15, B1).
-`gh`'s own reason stays in the core's log on every machine; a missing `gh` has no one command that installs it on every system, so its row names the state only.
+`gh`'s own reason stays in the core's log on every machine; a missing `gh` has no one command that installs it on every system, so its row names the state only, and so does a `gh` older than Hide's commands need (`gh가 오래됐어요. 업데이트하세요`), which the PR list and the phone's PR screen say in the same words.
 Hide has no GitHub sign-in of its own, so there is no connect or reconnect action beyond that read.
 
 ### About

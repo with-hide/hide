@@ -259,6 +259,7 @@ impl ReadTools for NodeReads {
             ReadRefused::Unavailable(
                 match error.category {
                     Category::NotInstalled => "github_not_installed",
+                    Category::Outdated => "github_outdated",
                     Category::NotLoggedIn => "github_not_logged_in",
                     Category::NoGithubRemote => "github_no_remote",
                     Category::NetworkOrRateLimit => "github_unreachable",

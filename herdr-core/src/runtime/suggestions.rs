@@ -617,6 +617,7 @@ impl Runtime {
         match catalog.and_then(|project| project.status.failure_category) {
             Some(
                 GithubFailureCategory::NotInstalled
+                | GithubFailureCategory::Outdated
                 | GithubFailureCategory::NotLoggedIn
                 | GithubFailureCategory::NoGithubRemote,
             ) => SuggestionsGithub::Missing,
