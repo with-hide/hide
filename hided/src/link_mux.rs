@@ -297,7 +297,7 @@ impl Shared {
             }
         }
         lock(&self.pings).clear();
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "link_mux",
             "kind": "mux.ended",
             "side": format!("{:?}", self.side),
@@ -602,7 +602,7 @@ fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: LocalStream) 
                 };
                 if let Err(error) = sent {
                     if matches!(error, mpsc::TrySendError::Full(_)) {
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "link_mux",
                             "kind": "stream.fell_behind",
                             "side": format!("{:?}", shared.side),
@@ -648,7 +648,7 @@ fn addresses(payload: &[u8]) -> Option<Vec<SocketAddr>> {
 /// it lands.
 fn open(shared: &Arc<Shared>, stream: u32, payload: &[u8]) {
     let refuse = |reason: &str| {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "link_mux",
             "kind": "stream.refused",
             "stream": stream,
@@ -818,7 +818,7 @@ impl Mux {
                         continue;
                     };
                     if let Err(error) = mux.carry(socket, &to) {
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "link_mux",
                             "kind": "forward.refused",
                             "reason": error.to_string(),

@@ -8,7 +8,7 @@
 //! not leave the probe running, so the daemon owns the flag and each
 //! connection only owns its own demand.
 
-use herdr_core::links::ledger::BacklogOriginIdentity;
+use hide_core::links::ledger::BacklogOriginIdentity;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 

@@ -5,7 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use herdr_core::product_analytics::{Event, Sink};
+use hide_core::product_analytics::{Event, Sink};
 use serde_json::json;
 
 const ENDPOINT: &str = "https://us.i.posthog.com/i/v0/e/";
@@ -179,7 +179,7 @@ fn run(client: Arc<Client>, id: String, token: String, endpoint: String) {
             .send(body.as_bytes())
         {
             Ok(response) if response.status().is_success() => {}
-            Ok(response) => herdr_core::diagnostic!(json!({
+            Ok(response) => hide_core::diagnostic!(json!({
                 "component": "product_analytics", "kind": "http_refused",
                 "status": response.status().as_u16()
             })),
@@ -254,7 +254,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn diagnostic(kind: &str) {
-    herdr_core::diagnostic!(json!({ "component": "product_analytics", "kind": kind }));
+    hide_core::diagnostic!(json!({ "component": "product_analytics", "kind": kind }));
 }
 
 #[cfg(test)]
@@ -326,10 +326,10 @@ mod tests {
             Worker::spawn(id.clone(), "phc_fixture_public_token".into(), endpoint).unwrap();
         worker.client.set_enabled(true);
         worker.client.capture(Event::MissionStarted {
-            nodes: herdr_core::product_analytics::MissionSize::TwoToThree,
+            nodes: hide_core::product_analytics::MissionSize::TwoToThree,
         });
         let first = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
-        use herdr_core::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform};
+        use hide_core::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform};
         let ready = Event::DeviceConnected {
             outcome: DeviceOutcome::Ready,
             platform: DevicePlatform::LinuxAarch64,
@@ -347,7 +347,7 @@ mod tests {
         let second = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         worker.client.capture(Event::AgentStarted {
             agent: hide_session::Agent::OpenCode,
-            source: Some(herdr_core::product_analytics::AgentSource::Mission),
+            source: Some(hide_core::product_analytics::AgentSource::Mission),
         });
         release.send(()).unwrap();
         let third = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -363,7 +363,7 @@ mod tests {
         });
         release.send(()).unwrap();
         let sixth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
-        use herdr_core::product_analytics::{
+        use hide_core::product_analytics::{
             MissionOutcome, PhoneRoute, PracticeChapter, PracticeStage,
         };
         worker.client.capture(Event::MissionEnded {

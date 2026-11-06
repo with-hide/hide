@@ -29,15 +29,15 @@ worker_readers=(changes worktrees github github_poll disk ai usage)
 #    module it calls synchronously while holding it, execute no subprocess at
 #    all. The test module at the end of each file is exempt: its fixtures build
 #    git repositories in a temporary directory with no runtime and no mutex.
-runtime_sources=(herdr-core/src/runtime.rs)
-for source in herdr-core/src/runtime/*.rs; do
+runtime_sources=(hide-core/src/runtime.rs)
+for source in hide-core/src/runtime/*.rs; do
     [[ -f "$source" ]] || continue
     # This file is the parent `#[cfg(test)] mod tests` body. Its fixtures
     # intentionally create temporary repositories and are not runtime code.
-    [[ "$source" == herdr-core/src/runtime/tests.rs ]] && continue
+    [[ "$source" == hide-core/src/runtime/tests.rs ]] && continue
     runtime_sources+=("$source")
 done
-for source in "${runtime_sources[@]}" herdr-core/src/files.rs; do
+for source in "${runtime_sources[@]}" hide-core/src/files.rs; do
     boundary="$(awk '$0 == "#[cfg(test)]" {print NR; exit}' "$source")"
     forks="$(awk -v boundary="${boundary:-0}" \
         'boundary > 0 && NR >= boundary { exit } /Command::new/ { print FILENAME ":" NR ": " $0 }' \
@@ -49,7 +49,7 @@ for source in "${runtime_sources[@]}" herdr-core/src/files.rs; do
 done
 
 for reader in "${readers[@]}"; do
-    module="herdr-core/src/${reader}.rs"
+    module="hide-core/src/${reader}.rs"
     if [[ ! -f "$module" ]]; then
         printf '%s is missing; the reader it asserts no longer exists\n' "$module" >&2
         exit 1
@@ -65,16 +65,16 @@ for reader in "${readers[@]}"; do
     callers="$(
         while IFS= read -r source; do
             [[ "$source" == "$module" ]] && continue
-            [[ "$source" == herdr-core/src/runtime/tests.rs ]] && continue
-            [[ "$source" == herdr-core/src/runtime/tests/* ]] && continue
+            [[ "$source" == hide-core/src/runtime/tests.rs ]] && continue
+            [[ "$source" == hide-core/src/runtime/tests/* ]] && continue
             awk -v reader="$reader" '
                 /^#\[cfg\(test\)\]/ { exit }
                 $0 ~ reader "::.*Reader|" reader "_reader" { found = 1 }
                 END { if (found) print FILENAME }
             ' "$source"
-        done < <(find herdr-core/src -name '*.rs' -type f | sort)
+        done < <(find hide-core/src -name '*.rs' -type f | sort)
     )"
-    driver="herdr-core/src/session_sync/coordinator.rs"
+    driver="hide-core/src/session_sync/coordinator.rs"
     [[ "$reader" == changes ]] && driver=""
     if [[ "$callers" != "$driver" ]]; then
         printf 'the %s reader is driven from outside %s:\n%s\n' \
@@ -91,7 +91,7 @@ for reader in "${readers[@]}"; do
 done
 
 for reader in "${worker_readers[@]}"; do
-    module="herdr-core/src/${reader}.rs"
+    module="hide-core/src/${reader}.rs"
 
     # 4. The slow readers hand their subprocess to a worker thread rather than
     #    running it on the thread that applies every engine event.
@@ -102,8 +102,8 @@ for reader in "${worker_readers[@]}"; do
 done
 
 # 5. The changes pump is started by the core, once, and nowhere else.
-pump_starts="$(grep -rl 'ChangesPump::spawn' herdr-core/src --include='*.rs' | sort | tr '\n' ' ')"
-if [[ "$pump_starts" != "herdr-core/src/handle.rs " ]]; then
+pump_starts="$(grep -rl 'ChangesPump::spawn' hide-core/src --include='*.rs' | sort | tr '\n' ' ')"
+if [[ "$pump_starts" != "hide-core/src/handle.rs " ]]; then
     printf 'the changes pump is started from %s, not only by the core in handle.rs\n' "${pump_starts:-nowhere}" >&2
     exit 1
 fi
@@ -115,7 +115,7 @@ for request in read_worktrees_request read_github_request read_github_poll_reque
     # than the request - so what is asserted is that the request is read out of
     # a `let Some(...)` before the reader runs, not the exact binding shape.
     if ! grep -qE "let Some\([^=]*request[^=]*\) = ${request}\(" \
-        herdr-core/src/session_sync/coordinator.rs; then
+        hide-core/src/session_sync/coordinator.rs; then
         printf 'the coordinator no longer reads %s before running its subprocess\n' "$request" >&2
         exit 1
     fi

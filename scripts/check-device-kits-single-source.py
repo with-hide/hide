@@ -13,7 +13,7 @@ Tests may name platforms as data: `*_tests.rs`, a crate's `tests.rs` and
 everything from the first `mod tests` on. Workflow files are not covered yet:
 the release producers that build each kit derive their matrix from the
 contract in a later change. Product analytics keeps its own enumerated
-vocabulary (herdr-core/src/product_analytics.rs) and is not kit code.
+vocabulary (hide-core/src/product_analytics.rs) and is not kit code.
 
 Searches use `git grep`, never `rg`: ripgrep is not on the CI runner.
 """

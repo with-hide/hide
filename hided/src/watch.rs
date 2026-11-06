@@ -118,15 +118,14 @@ impl Target {
 
 /// Reads the same watch scope from retained typed state, independently of
 /// which semantic fields were included on another reader's transport frame.
-pub fn device_target_from_rest(rest: &herdr_core::RestSections, node: &str) -> Option<Target> {
+pub fn device_target_from_rest(rest: &hide_core::RestSections, node: &str) -> Option<Target> {
     let device = rest
         .navigator
         .focused_device_id
         .as_deref()
         .filter(|device| *device != node)?;
     let ui = &rest.ui_state;
-    if !ui.right_panel_visible || ui.right_panel_section != herdr_core::RightPanelSection::Explorer
-    {
+    if !ui.right_panel_visible || ui.right_panel_section != hide_core::RightPanelSection::Explorer {
         return None;
     }
     if rest
@@ -622,7 +621,7 @@ pub(crate) mod tests {
         assert_eq!(stamped(&watcher), Some(target("/other")));
     }
 
-    pub(crate) fn remote_snapshot() -> herdr_core::Snapshot {
+    pub(crate) fn remote_snapshot() -> hide_core::Snapshot {
         let directory = tempfile::tempdir().unwrap();
         let path = directory
             .path()
@@ -634,16 +633,16 @@ pub(crate) mod tests {
             "schema_version": 2, "node_id": "test-node", "app_state_path": ""
         }))
         .unwrap();
-        let mut snapshot = herdr_core::Snapshot::initial(&options);
-        let index = herdr_core::workspace::PathIndex::ask(
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        let index = hide_core::workspace::PathIndex::ask(
             &hide_node::Local::of_process(),
             std::collections::BTreeSet::from([path.clone()]),
         )
         .unwrap();
-        let mut workspaces = herdr_core::workspace::build_catalog(
-            &herdr_core::node::NodeId::parse("test-node").unwrap(),
+        let mut workspaces = hide_core::workspace::build_catalog(
+            &hide_core::node::NodeId::parse("test-node").unwrap(),
             &[],
-            &[herdr_core::workspace::SessionSpace {
+            &[hide_core::workspace::SessionSpace {
                 checkout: None,
                 id: "fixture".into(),
                 label: "fixture".into(),
@@ -663,7 +662,7 @@ pub(crate) mod tests {
         snapshot.navigator.devices.push(device);
         snapshot.navigator.focused_device_id = Some("mac".into());
         snapshot.ui_state.right_panel_visible = true;
-        snapshot.ui_state.right_panel_section = herdr_core::RightPanelSection::Explorer;
+        snapshot.ui_state.right_panel_section = hide_core::RightPanelSection::Explorer;
         snapshot.ui_state.device_expanded_paths.insert(
             "mac".into(),
             paths(&["/r/src", "/elsewhere/x", "/r/src/deep"]),
@@ -671,11 +670,11 @@ pub(crate) mod tests {
         snapshot
             .status
             .remote
-            .push(herdr_core::RemoteStatusSnapshot {
+            .push(hide_core::RemoteStatusSnapshot {
                 target_id: "mac".into(),
                 state: "connected".into(),
                 message: None,
-                session: Some(herdr_core::RemoteSessionSnapshot {
+                session: Some(hide_core::RemoteSessionSnapshot {
                     focused_checkout_id: Some(workspaces[0].checkouts[0].id.clone()),
                     workspaces,
                     agents: Vec::new(),
@@ -688,7 +687,7 @@ pub(crate) mod tests {
                     issue_tokens: Default::default(),
                     issue_links: Default::default(),
                 }),
-                files: herdr_core::RemoteFileListSnapshot::idle(),
+                files: hide_core::RemoteFileListSnapshot::idle(),
                 catalog: Default::default(),
                 unreachable_since_unix_ms: None,
             });
@@ -700,7 +699,7 @@ pub(crate) mod tests {
     #[test]
     fn a_device_explorer_is_watched_only_while_it_shows_on_a_ready_helper() {
         let original = remote_snapshot();
-        let initial = herdr_core::RestSections::capture(&original, None, 1);
+        let initial = hide_core::RestSections::capture(&original, None, 1);
         let target = Some(Target {
             node: "mac".into(),
             root: "/r".into(),
@@ -708,7 +707,7 @@ pub(crate) mod tests {
             pinned: None,
         });
         assert_eq!(device_target_from_rest(&initial, "test-node"), target);
-        let mut transitions: Vec<herdr_core::Snapshot> = Vec::new();
+        let mut transitions: Vec<hide_core::Snapshot> = Vec::new();
         macro_rules! refusal {
             ($change:expr) => {{
                 let mut s = original.clone();
@@ -717,35 +716,35 @@ pub(crate) mod tests {
             }};
         }
         refusal!(
-            |s: &mut herdr_core::Snapshot| s.ui_state.right_panel_section =
-                herdr_core::RightPanelSection::Changes
+            |s: &mut hide_core::Snapshot| s.ui_state.right_panel_section =
+                hide_core::RightPanelSection::Changes
         );
-        refusal!(|s: &mut herdr_core::Snapshot| s.ui_state.right_panel_visible = false);
+        refusal!(|s: &mut hide_core::Snapshot| s.ui_state.right_panel_visible = false);
         refusal!(
-            |s: &mut herdr_core::Snapshot| s.navigator.devices[1].host.state = "connecting".into()
+            |s: &mut hide_core::Snapshot| s.navigator.devices[1].host.state = "connecting".into()
         );
-        refusal!(|s: &mut herdr_core::Snapshot| {
+        refusal!(|s: &mut hide_core::Snapshot| {
             s.navigator.devices.pop();
         });
         refusal!(
-            |s: &mut herdr_core::Snapshot| s.navigator.focused_device_id = Some("test-node".into())
+            |s: &mut hide_core::Snapshot| s.navigator.focused_device_id = Some("test-node".into())
         );
-        refusal!(|s: &mut herdr_core::Snapshot| s.navigator.focused_device_id = None);
-        refusal!(|s: &mut herdr_core::Snapshot| s.status.remote.clear());
-        refusal!(|s: &mut herdr_core::Snapshot| s.status.remote[0].session = None);
-        refusal!(|s: &mut herdr_core::Snapshot| s.status.remote[0]
+        refusal!(|s: &mut hide_core::Snapshot| s.navigator.focused_device_id = None);
+        refusal!(|s: &mut hide_core::Snapshot| s.status.remote.clear());
+        refusal!(|s: &mut hide_core::Snapshot| s.status.remote[0].session = None);
+        refusal!(|s: &mut hide_core::Snapshot| s.status.remote[0]
             .session
             .as_mut()
             .unwrap()
             .focused_checkout_id = None);
-        refusal!(|s: &mut herdr_core::Snapshot| s.status.remote[0]
+        refusal!(|s: &mut hide_core::Snapshot| s.status.remote[0]
             .session
             .as_mut()
             .unwrap()
             .workspaces
             .clear());
         for (n, snapshot) in transitions.iter().enumerate() {
-            let current = herdr_core::RestSections::capture(snapshot, Some(&initial), n as u64 + 2);
+            let current = hide_core::RestSections::capture(snapshot, Some(&initial), n as u64 + 2);
             assert_eq!(
                 device_target_from_rest(&current, "test-node"),
                 None,
@@ -753,7 +752,7 @@ pub(crate) mod tests {
             );
             assert_eq!(device_target_from_rest(&initial, "test-node"), target);
             let restored =
-                herdr_core::RestSections::capture(&original, Some(&current), n as u64 + 20);
+                hide_core::RestSections::capture(&original, Some(&current), n as u64 + 20);
             assert_eq!(device_target_from_rest(&restored, "test-node"), target);
         }
     }

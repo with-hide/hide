@@ -1,7 +1,7 @@
 //! Moving this machine's Herdr session into the core's own engine (PRD
 //! engine-bundle-4-herdr-removal D-3 to D-8, D-25 to D-27), the daemon's
 //! half. The record, the conversion and the handover of Hide's state are the
-//! core's (`herdr_core::herdr_import`); this half decides whose Herdr runs on
+//! core's (`hide_core::herdr_import`); this half decides whose Herdr runs on
 //! this machine's socket, stops Hide's own when its session moves, and has
 //! the supervisor start the core role again, so the engine opens with what
 //! moved: the one path a Herdr session takes into the engine (D-7).
@@ -16,12 +16,12 @@
 //!
 //! The start, the unasked move and the core's looks and moves read and
 //! write the same record; each change is made under the record's own lock
-//! (`herdr_core::herdr_import`).
+//! (`hide_core::herdr_import`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use herdr_core::herdr_import::{self, Asked, Look, Seen, Take, Taken};
+use hide_core::herdr_import::{self, Asked, Look, Seen, Take, Taken};
 use hide_host::herdr_save;
 use serde_json::json;
 
@@ -58,7 +58,7 @@ fn log(kind: &str, fields: serde_json::Value) {
     if let (Some(record), serde_json::Value::Object(fields)) = (record.as_object_mut(), fields) {
         record.extend(fields);
     }
-    herdr_core::diagnostic!(record);
+    hide_core::diagnostic!(record);
 }
 
 /// Before the core starts: the move asked for is made, the moved panes'
@@ -392,7 +392,7 @@ pub(crate) fn cli_answer(
     let asked = match (yes, action) {
         (true, Some(action)) => {
             let event = json!({
-                "schema_version": herdr_core::SCHEMA_VERSION,
+                "schema_version": hide_core::SCHEMA_VERSION,
                 "kind": "herdr_import",
                 "payload": { "action": action },
             });
@@ -408,7 +408,7 @@ pub(crate) fn cli_answer(
 mod tests {
     use super::*;
     use futures_util::FutureExt;
-    use herdr_core::herdr_import::Machine;
+    use hide_core::herdr_import::Machine;
 
     /// A machine whose Herdr save is a real Herdr 0.9.5 save in `dir`, with
     /// no server on its socket; nothing here reaches this host's Herdr.
@@ -417,7 +417,7 @@ mod tests {
         std::fs::create_dir_all(&config).unwrap();
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../herdr-core/tests/fixtures/herdr-session/herdr-0.9.5.json"),
+                .join("../hide-core/tests/fixtures/herdr-session/herdr-0.9.5.json"),
             config.join("session.json"),
         )
         .unwrap();
@@ -436,7 +436,7 @@ mod tests {
 
     /// Hide registered an agent of `node` in pane `w1:p1` on `socket`.
     fn registered(state: &Path, node: &str, socket: &Path) {
-        let ledger = herdr_core::delivery::ledger::from_bytes(
+        let ledger = hide_core::delivery::ledger::from_bytes(
             json!({
                 "version": 1, "next_id": 2, "letters": [], "watches": [],
                 "agents": [{
@@ -456,7 +456,7 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        herdr_core::delivery::ledger::save(&hide_kit::layout::delivery_ledger(state), &ledger)
+        hide_core::delivery::ledger::save(&hide_kit::layout::delivery_ledger(state), &ledger)
             .unwrap();
     }
 
@@ -488,7 +488,7 @@ mod tests {
         );
         assert_eq!(herdr_import::kept_save(&engine_dir).unwrap(), None);
         let ledger =
-            herdr_core::delivery::ledger::load(&hide_kit::layout::delivery_ledger(&state)).unwrap();
+            hide_core::delivery::ledger::load(&hide_kit::layout::delivery_ledger(&state)).unwrap();
         assert_eq!(
             (
                 ledger.agents[0].host_scope.as_str(),
@@ -554,7 +554,7 @@ mod tests {
             ["w1".to_owned(), "w2".to_owned()].into()
         );
         let ledger =
-            herdr_core::delivery::ledger::load(&hide_kit::layout::delivery_ledger(&state)).unwrap();
+            hide_core::delivery::ledger::load(&hide_kit::layout::delivery_ledger(&state)).unwrap();
         assert_eq!(
             (
                 ledger.agents[0].host_scope.as_str(),

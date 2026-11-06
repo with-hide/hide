@@ -1,5 +1,5 @@
 // Production components over fixed, invented wire values. These examples
-// compare typography and geometry; runtime policy is tested in herdr-core.
+// compare typography and geometry; runtime policy is tested in hide-core.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TaskLens } from "../TaskLens";

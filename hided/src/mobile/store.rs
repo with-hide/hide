@@ -178,7 +178,7 @@ pub fn read<T: DeserializeOwned + Default>(path: &Path) -> T {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(value) => value,
             Err(error) => {
-                herdr_core::diagnostic!(serde_json::json!({
+                hide_core::diagnostic!(serde_json::json!({
                     "component": "mobile_store",
                     "kind": "store.unreadable",
                     "path": path.display().to_string(),
@@ -189,7 +189,7 @@ pub fn read<T: DeserializeOwned + Default>(path: &Path) -> T {
         },
         Err(error) if error.kind() == io::ErrorKind::NotFound => T::default(),
         Err(error) => {
-            herdr_core::diagnostic!(serde_json::json!({
+            hide_core::diagnostic!(serde_json::json!({
                 "component": "mobile_store",
                 "kind": "store.unreadable",
                 "path": path.display().to_string(),
@@ -221,7 +221,7 @@ pub fn write_logged<T: Serialize>(path: &Path, value: &T) -> bool {
     match write(path, value) {
         Ok(()) => true,
         Err(error) => {
-            herdr_core::diagnostic!(serde_json::json!({
+            hide_core::diagnostic!(serde_json::json!({
                 "component": "mobile_store",
                 "kind": "store.write_failed",
                 "path": path.display().to_string(),

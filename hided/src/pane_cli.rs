@@ -1,10 +1,10 @@
 //! `hide pane read|send|open`, `hide agent read` and `hide workspace
 //! purpose`: an agent's reads of and input to the panes of its machine, and
 //! its checkout's purpose, through Hide rather than Herdr (PRD
-//! engine-bundle-1 D-5). The daemon runs them (`herdr_core::pane_command`).
+//! engine-bundle-1 D-5). The daemon runs them (`hide_core::pane_command`).
 
-use herdr_core::engine::keys::PaneKey;
-use herdr_core::pane_command::{DEFAULT_LINES, PaneCommand};
+use hide_core::engine::keys::PaneKey;
+use hide_core::pane_command::{DEFAULT_LINES, PaneCommand};
 use serde_json::json;
 
 use crate::env::Env;
@@ -197,7 +197,7 @@ pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
     };
     let refused = |code: String, message: &str| refused_with(code, message, &json!({}));
     if let Err(code) = cli.command.check() {
-        let message = herdr_core::pane_command::next_action(code).unwrap_or_default();
+        let message = hide_core::pane_command::next_action(code).unwrap_or_default();
         return refused(code.to_owned(), message);
     }
     let raw = matches!(
@@ -228,7 +228,7 @@ pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
                 .to_owned();
             let message = answer["next_action"]
                 .as_str()
-                .or_else(|| herdr_core::pane_command::next_action(&code))
+                .or_else(|| hide_core::pane_command::next_action(&code))
                 .unwrap_or("Retry; the reason is in Hide's diagnostic log")
                 .to_owned();
             refused_with(code, &message, &answer)

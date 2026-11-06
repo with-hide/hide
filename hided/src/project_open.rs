@@ -1,4 +1,4 @@
-//! `hide <path>` in the daemon (`herdr_core::project_open`): one request
+//! `hide <path>` in the daemon (`hide_core::project_open`): one request
 //! names a folder on the caller's machine; it comes forward as a project,
 //! registered first through the same `create_workspace` the Add a project
 //! dialog sends, and every window of this machine is asked to come forward
@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use herdr_core::project_open::{ProjectOpenReceipt, Unheld, next_action, valid_path};
+use hide_core::project_open::{ProjectOpenReceipt, Unheld, next_action, valid_path};
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 

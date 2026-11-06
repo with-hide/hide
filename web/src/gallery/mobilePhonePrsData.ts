@@ -3,7 +3,7 @@
 // working on, one waiting for CI, one with a failed check and one nobody was
 // asked to review. Names, numbers and times are fixtures, never operator data.
 // Each row stands for the reason the core's board would give it
-// (`herdr-core/src/agent_state/work/board.rs`): a merge-ready row has no agent
+// (`hide-core/src/agent_state/work/board.rs`): a merge-ready row has no agent
 // beside it, because a finished agent is not listed on a pull request.
 
 import { card, keyOf, pr, project } from "../mobile/prFixture";

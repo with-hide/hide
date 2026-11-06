@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use herdr_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy};
+use hide_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy};
 use hide_node::ssh::session::SshTarget;
 use hide_node::ssh::transfer::FileCopy;
 use hide_node::ssh::upstream::Upstream;
@@ -230,7 +230,7 @@ pub fn inspect(remote: &Remote, ai: &[(String, String)]) -> Result<Inspected, Mo
 /// report them to the new core. The device registers this machine by
 /// `MoveSource::own_label`.
 pub fn forward_change(
-    source: &herdr_core::MoveSource,
+    source: &hide_core::MoveSource,
     home: &Path,
     host_name: Option<&str>,
     own_engine_socket: String,
@@ -277,7 +277,7 @@ pub fn forward_change(
 /// projects resolved on its disk, another machine's by the path it
 /// reported as its root.
 pub fn project_roots(
-    projects: &[herdr_core::MoveProject],
+    projects: &[hide_core::MoveProject],
     own_node: &str,
     home: &Path,
 ) -> Vec<PathBuf> {
@@ -295,7 +295,7 @@ pub fn project_roots(
                 // A folder that is gone is grouped by its own path, as this
                 // machine's node answers for it.
                 Err(error) => {
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "core_move",
                         "kind": "staging.root_unresolved",
                         "project": project.id,
@@ -330,7 +330,7 @@ pub fn stage(
         }
     })?;
     let outcome = node_migration::reown(&staging, &journal.change, &journal.ids).map_err(failed)?;
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "core_move",
         "kind": "staging.reowned",
         "intent": journal.intent,
@@ -437,7 +437,7 @@ pub fn send(
         },
         || differing(remote, journal, manifest),
     )?;
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "core_move",
         "kind": "copy.sent",
         "intent": journal.intent,
@@ -674,7 +674,7 @@ pub fn abandon_target(remote: &Remote, intent: &str) -> Result<Abandoned, MoveFa
 
 /// The peer this machine moves its core to, from the core's facts and the
 /// peer's own answer.
-pub fn peer(source: &herdr_core::MoveSource, inspected: &Inspected) -> Peer {
+pub fn peer(source: &hide_core::MoveSource, inspected: &Inspected) -> Peer {
     Peer {
         device: source.device.clone(),
         alias: source.ssh_alias.clone(),

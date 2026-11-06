@@ -4,7 +4,7 @@
 //! without a shell, through the pane capability a delivery command uses.
 
 use crate::env::Env;
-use herdr_core::missions::{
+use hide_core::missions::{
     Checks, MissionCommand, MissionEnd, MissionScope, NodePatch, NodeStatus, PlanInput, Verdict,
     next_action,
 };
@@ -174,7 +174,7 @@ fn read_flags<'a>(
 }
 
 fn key(value: &str) -> Result<String, String> {
-    if !value.starts_with('-') && herdr_core::missions::valid_key(value) {
+    if !value.starts_with('-') && hide_core::missions::valid_key(value) {
         Ok(value.to_owned())
     } else {
         Err(format!("{value} is not a mission or node key"))
@@ -217,7 +217,7 @@ fn checks(value: &str) -> Result<Checks, String> {
 }
 
 fn commit(flag: &str, value: &str) -> Result<String, String> {
-    if herdr_core::missions::valid_commit(value) {
+    if hide_core::missions::valid_commit(value) {
         Ok(value.to_owned())
     } else {
         Err(format!("{flag} takes a commit: 7 to 64 hexadecimal digits"))
@@ -831,10 +831,7 @@ mod tests {
             .and_then(|rest| rest.split("```").next())
             .expect("the guide shows a plan");
         let plan = plan_input(example).unwrap();
-        assert_eq!(
-            plan.strength,
-            Some(herdr_core::missions::Strength::Thorough)
-        );
+        assert_eq!(plan.strength, Some(hide_core::missions::Strength::Thorough));
         assert!(plan.strength_why.is_some());
         // The nodes show the steps the guide asks for, within the limits the core holds them to.
         let steps: Vec<_> = plan
@@ -844,7 +841,7 @@ mod tests {
             .collect();
         assert!(steps.len() >= 2, "the guide shows steps on its nodes");
         for step in steps.into_iter().flatten() {
-            assert!(step.chars().count() <= herdr_core::missions::STEP_CHARS);
+            assert!(step.chars().count() <= hide_core::missions::STEP_CHARS);
         }
     }
 

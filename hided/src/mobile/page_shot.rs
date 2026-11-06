@@ -18,8 +18,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use herdr_core::LookView;
-use herdr_core::workspace_control::{Query, checkout_caller_id};
+use hide_core::LookView;
+use hide_core::workspace_control::{Query, checkout_caller_id};
 use serde_json::json;
 
 use super::{Mobile, now_ms};
@@ -63,7 +63,7 @@ pub async fn take(mobile: &Arc<Mobile>, view: &LookView, image_cap: u64) -> Resu
             device_id: mobile.node().as_str().to_owned(),
         }),
         Err(reason) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "look.page_unavailable",
                 "view_id": view.display_id, "reason": reason,
             }));
@@ -133,8 +133,8 @@ mod tests {
     fn the_phones_reads_run_as_a_checkout_caller_the_core_resolves_by_path() {
         let id = checkout_caller_id(CALLER_KEY, "/repo");
         assert!(matches!(
-            herdr_core::workspace_control::Caller::parse(&id),
-            herdr_core::workspace_control::Caller::Checkout {
+            hide_core::workspace_control::Caller::parse(&id),
+            hide_core::workspace_control::Caller::Checkout {
                 key: "phone",
                 path: "/repo",
                 gateway: false

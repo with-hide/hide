@@ -156,7 +156,7 @@ pub fn logins_failing(home: &Path, ai: Option<&str>, programs: &Programs) -> Vec
     let asks = ai.map(serde_json::from_str::<Vec<(String, String)>>);
     let ready = match asks {
         None => Ok(()),
-        Some(Ok(asks)) => herdr_core::hide_ai_ready_here(&asks),
+        Some(Ok(asks)) => hide_core::hide_ai_ready_here(&asks),
         Some(Err(error)) => Err(format!("--ai is not a list of agents: {error}")),
     };
     if let Err(detail) = ready {

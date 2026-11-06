@@ -1,7 +1,7 @@
 //! `hide ps`: the live panes and agents as one tree, project > checkout >
 //! tab > pane, with each delegated agent under the agent that delegated it.
 //!
-//! The core answers flat rows (`herdr_core::delivery::answer::Ps`); the tree
+//! The core answers flat rows (`hide_core::delivery::answer::Ps`); the tree
 //! is drawn here. Every pane is printed exactly once: a delegated agent's
 //! pane is printed under its parent, with where it lives when that is not
 //! the parent's tab, and not again in its own tab.

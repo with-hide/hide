@@ -1,6 +1,6 @@
 //! Small typed command surface for the core-owned durable mailbox.
 
-use herdr_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS, Command};
+use hide_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS, Command};
 
 use crate::env::Env;
 
@@ -30,7 +30,7 @@ pub fn parse<'a>(
                             prompt_digest = Some(
                                 args.next()
                                     .filter(|digest| {
-                                        herdr_core::delivery::valid_prompt_digest(digest)
+                                        hide_core::delivery::valid_prompt_digest(digest)
                                     })
                                     .ok_or(USAGE)?
                                     .clone(),
@@ -39,7 +39,7 @@ pub fn parse<'a>(
                         "--session" if session.is_none() => {
                             session = Some(
                                 args.next()
-                                    .filter(|id| herdr_core::delivery::valid_session(id))
+                                    .filter(|id| hide_core::delivery::valid_session(id))
                                     .ok_or(USAGE)?
                                     .clone(),
                             );
@@ -92,7 +92,7 @@ pub fn parse<'a>(
                 "--approval"
                     if approval.is_none()
                         && verb == Some("assign")
-                        && herdr_core::delivery::watch::valid_approval(value) =>
+                        && hide_core::delivery::watch::valid_approval(value) =>
                 {
                     approval = Some(value.clone());
                 }
@@ -257,7 +257,7 @@ mod tests {
             Command::Inbox { bundle: true }
         );
         assert!(parse_line(&["inbox", "wait"]).is_err());
-        let digest = herdr_core::delivery::prompt_digest("prompt");
+        let digest = hide_core::delivery::prompt_digest("prompt");
         assert_eq!(
             parse_line(&["inbox", "--hook"]).unwrap(),
             Command::Pull {
@@ -468,7 +468,7 @@ mod tests {
             ])
             .is_err()
         );
-        assert!(!herdr_core::delivery::watch::valid_approval(
+        assert!(!hide_core::delivery::watch::valid_approval(
             &"x".repeat(257)
         ));
     }

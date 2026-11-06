@@ -2,7 +2,7 @@
 
 `snapshot-wire-enums.json` lists, for every string enum the core serializes into the shell snapshot, the exact values it emits.
 The core is the writer of those strings.
-`herdr-core/src/model.rs`'s `wire_enum_tests` pins the writing side: it fails to compile until a new variant is matched there, and then fails the test until that variant is added to this file.
+`hide-core/src/model.rs`'s `wire_enum_tests` pins the writing side: it fails to compile until a new variant is matched there, and then fails the test until that variant is added to this file.
 
 Nothing in this repository checks an incoming wire value against this file from the reading side.
 The web shell (`web/src/snapshot.ts`) types these fields with TypeScript, which is a compile-time check only and does not reject an unrecognized value at runtime; a field the core stops emitting, or emits a new value for, is not caught by a test today.

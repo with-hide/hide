@@ -11,7 +11,7 @@ What it needs from the operator, whether it is running, whether it has reported 
 - Read: read, unread.
 - Ownership: operator, delegated, or Hide AI's, for work a Hide-started agent does for a screen that owns it.
 
-`herdr-core/src/agent_state/axes.rs` is the single owner of all five.
+`hide-core/src/agent_state/axes.rs` is the single owner of all five.
 `agent_state/turn.rs` derives the group, request verb, close and rest gates from them; `sidebar.rs` assembles the snapshot rows.
 It also derives everything a view draws from them - the group, the mark, whether the row is emphasized, the status word, the descendant mark, and whether closing the pane needs a confirmation or a fresh status check - so no surface decides any of it a second time.
 
@@ -42,7 +42,7 @@ A row has one line; its second line is the agent's ask or its block's cause, the
 Entering Needs You notifies once, as for an operator row, and a turn changing inside it does not notify again, because the notification state machine follows the group and not the word.
 Only a live agent has a row: an attempt with no agent (a failure with no pull request, an open pull request after the operator closed the pane) shows in the 제안 tab alone (D-15).
 The shell words the turn and opens the home from the row (the Hide AI tool's 제안 tab with the target's row open); the phone opens the agent's detail.
-Regression owners: `a_hide_started_row_follows_its_attempts_pull_request_into_and_out_of_needs_you` and `a_home_owned_row_is_listed_only_while_the_operator_has_something_to_do` in `herdr-core/src/runtime/tests/`, `the_home_turn_follows_the_pull_request_and_the_agent` in `memory_promotion.rs`, and `a_home_owned_row_notifies_once_on_entering_needs_you_and_not_on_a_turn_change` in `hided/src/mobile/push.rs`.
+Regression owners: `a_hide_started_row_follows_its_attempts_pull_request_into_and_out_of_needs_you` and `a_home_owned_row_is_listed_only_while_the_operator_has_something_to_do` in `hide-core/src/runtime/tests/`, `the_home_turn_follows_the_pull_request_and_the_agent` in `memory_promotion.rs`, and `a_home_owned_row_notifies_once_on_entering_needs_you_and_not_on_a_turn_change` in `hided/src/mobile/push.rs`.
 
 ### A held Memory card is no status
 
@@ -196,7 +196,7 @@ An ancestor that reads the View through its own pane, with `hide view status <vi
 An ancestor that opens the View again from its own pane becomes its opener, so its own row has it to look at (D-21, B24).
 `hide view list` says which Views the operator has not looked at (`unseen`), and a report letter lists the Views its sender opened and whether each was seen.
 
-Regression owners: `herdr-core/src/runtime/tests/unseen_views.rs`, `a_seen_record_that_does_not_read_is_unseen_and_a_missing_one_is_seen` in `view_layout.rs`, and the look line in `web/src/agentRow.test.ts`.
+Regression owners: `hide-core/src/runtime/tests/unseen_views.rs`, `a_seen_record_that_does_not_read_is_unseen_and_a_missing_one_is_seen` in `view_layout.rs`, and the look line in `web/src/agentRow.test.ts`.
 
 ## A quiet row that waits
 
@@ -283,7 +283,7 @@ The hold ends on every path of the read and has no timer of its own: the read la
 A session no read has proved yet carries no facts, so its first turn end is not held.
 The wait before the label's own verdict (`stopped_unfinished`) is not this gap: that verdict comes from an AI request that takes seconds, and holding the row for it would delay every Done.
 
-Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_read_that_finds_no_task_releases_the_turn_end_and_publishes_it`, `a_read_that_fails_releases_the_turn_end_and_says_so`, `a_stop_that_is_not_a_turn_just_ended_is_not_held`, `a_turn_ending_with_a_background_task_is_never_announced_done` and `a_turn_read_as_done_is_announced_done_past_the_background_task_it_left`, then `a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply`, `a_quiet_root_waits_in_working_while_a_descendant_works_and_not_on_one_that_asks`, `a_root_with_finished_children_draws_its_own_state_past_a_request_a_stopped_child_took_in`, `a_child_asking_its_stopped_parent_by_letter_leaves_neither_row_waiting`, `a_letter_to_a_disconnected_device_holds_no_reply_wait`, `a_proven_background_task_keeps_a_stopped_claude_row_waiting`, `a_reply_is_awaited_until_answered_overdue_or_from_another_session`, the adapter contract `adapters::wake_devices` in `hide-session/tests/it` (the stop pairing, the discarded record that may carry a device, the one that cannot and the call too large to keep), the two `wake_devices.*` diagnostics in `herdr-core/src/labels/tests.rs`, and the web `agentRow.test.ts`.
+Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_read_that_finds_no_task_releases_the_turn_end_and_publishes_it`, `a_read_that_fails_releases_the_turn_end_and_says_so`, `a_stop_that_is_not_a_turn_just_ended_is_not_held`, `a_turn_ending_with_a_background_task_is_never_announced_done` and `a_turn_read_as_done_is_announced_done_past_the_background_task_it_left`, then `a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply`, `a_quiet_root_waits_in_working_while_a_descendant_works_and_not_on_one_that_asks`, `a_root_with_finished_children_draws_its_own_state_past_a_request_a_stopped_child_took_in`, `a_child_asking_its_stopped_parent_by_letter_leaves_neither_row_waiting`, `a_letter_to_a_disconnected_device_holds_no_reply_wait`, `a_proven_background_task_keeps_a_stopped_claude_row_waiting`, `a_reply_is_awaited_until_answered_overdue_or_from_another_session`, the adapter contract `adapters::wake_devices` in `hide-session/tests/it` (the stop pairing, the discarded record that may carry a device, the one that cannot and the call too large to keep), the two `wake_devices.*` diagnostics in `hide-core/src/labels/tests.rs`, and the web `agentRow.test.ts`.
 
 ## Where each axis comes from
 
@@ -368,7 +368,7 @@ The lists the operator reads to answer, the 태스크 list's 내 차례 in 상�
 
 An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.
 A resolved row rests in every list, so its mark is counted on no checkout badge either (`sync_checkout_agent_summaries`), as the 태스크 list's Needs You, the raised lists and the phone's list already leave it out.
-The one list that still draws it is the sidebar's 프로젝트 tree: a resolved root with a live pane stays under its tab, dimmed whole with `해결됨 · ` leading its hover, and numbered by the digit shortcuts, while `shown`, `more`, `needs_you` and `turn_kind` of the tree are computed from the unresolved roots alone (`sidebar_tree` in `herdr-core/src/agent_state/tally/lineage.rs`; PRD sidebar-every-tab-line).
+The one list that still draws it is the sidebar's 프로젝트 tree: a resolved root with a live pane stays under its tab, dimmed whole with `해결됨 · ` leading its hover, and numbered by the digit shortcuts, while `shown`, `more`, `needs_you` and `turn_kind` of the tree are computed from the unresolved roots alone (`sidebar_tree` in `hide-core/src/agent_state/tally/lineage.rs`; PRD sidebar-every-tab-line).
 It stands only in the 태스크 list's `보관됨` fold and its record, with its archive state (archiving, resuming, could not resume, deleting, unknown) as words; a member that came back is an ordinary row again, and a member still archived while its root is live is listed in that root's record, not as a row.
 While a member is archived, its delivery registration and the watches on it are held as a sleeping session's are (`docs/delivery.md`), so its pane's absence does not end its work's ownership; resuming continues them.
 
@@ -426,7 +426,7 @@ The record lives in the daemon's memory only, so a daemon restart inside the few
 A `hide agent spawn` brief is not a first prompt: it is submitted after the agent is ready, and a close before then refuses it back to its sender as `brief_not_submitted`.
 A pane the engine restored carries no pending start and may hold running work, so it still needs the status check, as does a starting agent whose list was not confirmed.
 A pane whose terminal failed to restore is not unknown: no process runs there, so it is stopped and needs no status check (Where each axis comes from, above).
-Regression owners: `an_agent_still_starting_closes_without_a_status_check` and `an_unknown_agent_that_is_not_starting_still_needs_a_status_check` in `herdr-core/src/session_sync/tests.rs`, `a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prompt` and `an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests` in `herdr-core/src/runtime/tests/projects.rs`, and the starting case of `web/src/agentRow.test.ts`.
+Regression owners: `an_agent_still_starting_closes_without_a_status_check` and `an_unknown_agent_that_is_not_starting_still_needs_a_status_check` in `hide-core/src/session_sync/tests.rs`, `a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prompt` and `an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests` in `hide-core/src/runtime/tests/projects.rs`, and the starting case of `web/src/agentRow.test.ts`.
 The shell presents that remedy as the existing read-only `Check status` action and keeps the destructive close confirmation separate from it.
 An unknown row still belongs to Seen for sidebar grouping, so close safety never changes the read or ownership axes.
 
@@ -435,7 +435,7 @@ A row with live descendants also carries `close_descendant_pane_ids`: every live
 A pane or tab close asks about the subtree only when some agent that closes lists a pane outside what closes (PRD close-agent-subtree D-16), and the status check above applies to each listed descendant: an unknown one keeps `모두 닫기` disabled, while `이것만 닫기` stays available.
 Closing a parent alone does not close its children: they lose their parent on the next projection and become the operator's roots with their own state.
 A subtree close is undone by one Reopen closed: the parent and its descendants come back as the same registrations in their new panes, so the lineage tokens name the new parent pane and each child is delegated again under it, its descendants and the children left open included ([ARCHITECTURE.md: Reopening locally closed work](ARCHITECTURE.md#reopening-locally-closed-work)).
-Regression owners: `each_row_lists_its_live_descendants_deepest_first_and_a_leaf_lists_none`, `a_descendant_on_a_disconnected_device_is_never_listed_for_a_close`, and the tree-close tests in `herdr-core/src/runtime/tests/tree_close.rs`.
+Regression owners: `each_row_lists_its_live_descendants_deepest_first_and_a_leaf_lists_none`, `a_descendant_on_a_disconnected_device_is_never_listed_for_a_close`, and the tree-close tests in `hide-core/src/runtime/tests/tree_close.rs`.
 
 Needs You and Done belong to operator-owned roots.
 A delegated row stays Working or Seen; under the seven conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
@@ -495,7 +495,7 @@ The token is display-only metadata and dies with the pane, so a closed child lea
 
 Fork regression owners: `a_fork_registers_as_a_root_whose_origin_is_its_source` (`coordination/mod.rs`), `a_fork_names_its_source_under_fork_keys_and_never_as_a_parent` and `a_fork_that_is_woken_in_another_pane_names_its_source_there` (`coordination/lineage.rs`), `a_fork_names_its_source_and_stays_the_operators_own_work` (`runtime/tests/lineage.rs`), `a_fork_whose_session_arrives_late_registers_as_the_operators_root_from_its_source` and `a_fork_whose_pane_closes_or_agent_ends_before_its_session_ends_its_wait` (`runtime/tests/fork_registration.rs`), the decisions in `coordination/identity_wait.rs`, and `web/e2e/agent-fork.spec.ts`.
 
-Regression owners: `a_parent_declared_as_a_pane_token_is_the_lineage`, `a_child_whose_pane_now_hosts_another_session_declares_no_parent` and the `lineage_sessions` tests in `herdr-core/src/session_sync/tests.rs`, `a_parent_pane_on_another_machine_reused_by_another_agent_adopts_no_local_child`, `a_sleeping_child_stays_under_its_parent_only_while_its_record_can_prove_it`, and `web/e2e/lineage-session.spec.ts`.
+Regression owners: `a_parent_declared_as_a_pane_token_is_the_lineage`, `a_child_whose_pane_now_hosts_another_session_declares_no_parent` and the `lineage_sessions` tests in `hide-core/src/session_sync/tests.rs`, `a_parent_pane_on_another_machine_reused_by_another_agent_adopts_no_local_child`, `a_sleeping_child_stays_under_its_parent_only_while_its_record_can_prove_it`, and `web/e2e/lineage-session.spec.ts`.
 
 ## The descendant mark and the tree popover
 
@@ -548,7 +548,7 @@ A read, non-blocked demand belongs to Seen unless the core places its running ac
 Disconnected presentation overrides the retained mark and text on every affected surface without modifying demand, activity, read records, or the last known group: the row draws no mark, is dimmed, and its line names the device (`<기기> 연결 끊김`).
 Unavailable-server tooltips describe the connection problem rather than presenting retained counts as current work.
 
-A sleeping agent of a kind that sleeps in its pane (Claude Code, Codex, Antigravity) keeps its row, name, place, lineage and badge while the engine no longer lists it: the core draws the row from its own sleep record (`herdr-core/src/agent_sleep.rs`), because the engine lists an agent only while its program runs in the pane.
+A sleeping agent of a kind that sleeps in its pane (Claude Code, Codex, Antigravity) keeps its row, name, place, lineage and badge while the engine no longer lists it: the core draws the row from its own sleep record (`hide-core/src/agent_sleep.rs`), because the engine lists an agent only while its program runs in the pane.
 Only a stopped agent of a kind that sleeps, on any machine (the core's, a node that dials it, or a device it dials; a kind that closes its pane on the core's machine only), with no demand and a reported conversation can sleep; the hours rule also wants it seen and off screen, a finished mission node's agents and `hide agent sleep` want it off screen, and the pane menu wants neither ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)); a delegated child sleeps by the same rule as its parent and keeps its place under it.
 A `request` or `block` letter wakes a sleeping agent exactly as Wake agent does, and its row passes from the moon through waking back to its own mark.
 Each such letter wakes it once: one that already rang or already woke it does not wake it again after a later sleep, and its hour runs through that sleep.
@@ -563,7 +563,7 @@ A Cursor wake needs no session hook from Cursor: the core reports the resumed se
 The Wake action is available only when this build declares the provider's resume capability.
 A record an older build saved names no checkout owner ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)), so its Wake is offered only while the project list shows its checkout; until then the row has no Wake and its reason says to open Hide on that computer and add the project if it is missing, and the Wake returns once the checkout is listed.
 A record this build saved wakes from the owner it kept, whatever the list shows.
-Regression owners: `a_sleep_keeps_its_checkouts_owner_for_the_wake`, `a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows_it`, `a_sleeping_session_wakes_in_its_checkout_while_no_list_shows_it`, `a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_is_listed` and `a_sleeping_session_offers_wake_only_over_a_connection` in `herdr-core/src/runtime/tests/agent_sleep.rs`, and `a_kept_owner_names_its_repository_by_an_absolute_path` in `herdr-core/src/agent_sleep/dormant.rs`.
+Regression owners: `a_sleep_keeps_its_checkouts_owner_for_the_wake`, `a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows_it`, `a_sleeping_session_wakes_in_its_checkout_while_no_list_shows_it`, `a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_is_listed` and `a_sleeping_session_offers_wake_only_over_a_connection` in `hide-core/src/runtime/tests/agent_sleep.rs`, and `a_kept_owner_names_its_repository_by_an_absolute_path` in `hide-core/src/agent_sleep/dormant.rs`.
 A retained unsupported sleeping record stays visible without a Wake action or a loading spinner; only an active transition or status check spins.
 Unknown work survives restart without replaying external effects; an intent saved before close admission can be released without touching a pane.
 `agent_sleep/dormant.rs` owns the bounded archive and row values, while `runtime/agent_sleep/dormant.rs` owns its transitions and exact save/connection/execution fences.
@@ -673,7 +673,7 @@ After a turn-off that answered `stop_failed`, only a read that says no daemon an
 A kit read happens at launch and on each device connection, on a Reinstall, when a Settings tab showing the kit opens and on this Mac every 5 seconds while it stays open, and in the answer to a turn-off request.
 Nothing else polls for a daemon, so one that another app starts later reaches the pane's reason at the next of those reads, not live.
 
-Reopen is one event, `pane_reopen { pane_id }`, and reuses the session-sleep path rather than a second one: the agent is ended the way sleep ends it and started again in the same pane with its own resume arguments, a Codex with `--no-daemon` first (`herdr-core/src/pane_reopen.rs`).
+Reopen is one event, `pane_reopen { pane_id }`, and reuses the session-sleep path rather than a second one: the agent is ended the way sleep ends it and started again in the same pane with its own resume arguments, a Codex with `--no-daemon` first (`hide-core/src/pane_reopen.rs`).
 Everything knowable before the agent is touched is refused before it is touched, so a refusal known at that point leaves the pane as it was: an agent that is working or waiting (`agent_busy`), a session no id was ever reported for or one with no resume arguments (`session_gone`), a Codex whose capability was never read (`codex_unread`), and a folder that is gone (`start_refused`).
 The agent is read again just before it is signalled, because the list the decision used can be a second old: one that has started working or is waiting since is `agent_busy` too, with nothing signalled.
 Any other end the engine or the agent refuses is `end_refused`, and a start the engine refuses after the end is `start_refused`.
@@ -815,7 +815,7 @@ A mark dims while GitHub cannot be read again, and its tooltip says when it was 
 
 ### Pull request groups
 
-The PR list (`docs/tasks-and-pr-list.md` in with-hide/hide-private, The PR list and the PR card) lists pull requests in groups the core decides, in `herdr-core/src/agent_state/work/board.rs`, from GitHub values the five-minute read carries and from facts only Hide holds: the link record's sessions and the agents' own state.
+The PR list (`docs/tasks-and-pr-list.md` in with-hide/hide-private, The PR list and the PR card) lists pull requests in groups the core decides, in `hide-core/src/agent_state/work/board.rs`, from GitHub values the five-minute read carries and from facts only Hide holds: the link record's sessions and the agents' own state.
 A pull request body's headings and a repository's own scripts decide nothing, so the same rules hold in every repository, and Hide AI never changes a group or a reason.
 The result is the `prs` board of each project's `agent_scope`: rows (group, fold, reason, agents, the pane a reason is about, the checkouts it is the work of, its issue), the groups with their numbers in draw order, and the count of `needs_you` rows that are not folded.
 

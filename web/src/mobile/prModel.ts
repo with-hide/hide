@@ -1,7 +1,7 @@
 // The phone's PR tab rules (PRD mobile-companion-ui B37-B45, D-12, D-13): the
 // four groups the open pull requests stand in, what the tab reads while GitHub
 // does not answer, which buttons a page offers and why Merge is off. The core
-// decided each row's reason (`herdr-core/src/agent_state/work/board.rs`) and
+// decided each row's reason (`hide-core/src/agent_state/work/board.rs`) and
 // hided only trimmed the desktop's list and cards; the groups here only sort
 // that reason into the phone's four, and the merge rules are the desktop
 // card's own (`prCardModel.ts`), called and never copied. Pure, so every rule

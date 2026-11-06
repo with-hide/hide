@@ -102,7 +102,7 @@ fn parse(args: &[OsString]) -> Result<Args, String> {
 pub fn run(args: &[OsString]) -> Result<(), String> {
     let args = parse(args)?;
     let outcome = update(&args).unwrap_or_else(|reason| Outcome::Refused { reason });
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "core_update",
         "kind": "update.answered",
         "intent": args.intent,
@@ -200,7 +200,7 @@ fn update_with<S: Starter>(
             // again: its Herdr would restore what moved (PRD
             // engine-bundle-4-herdr-removal D-13, D-27).
             let engine_dir = hide_kit::layout::engine_dir(&args.state_dir);
-            if herdr_core::herdr_import::committed(&engine_dir) {
+            if hide_core::herdr_import::committed(&engine_dir) {
                 log(
                     &args.intent,
                     "rollback.refused",
@@ -230,7 +230,7 @@ fn update_with<S: Starter>(
 fn adopt(running: &Build, other: &str) {
     if let Err(error) = hide_host::kit::adopt_build(&running.root, &running.version, other) {
         // The core runs either way; the kit's next pass points it again.
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "core_update",
             "kind": "current.failed",
             "reason": error.to_string(),
@@ -243,7 +243,7 @@ fn log(intent: &str, kind: &str, fields: Value) {
     if let (Some(record), Value::Object(fields)) = (record.as_object_mut(), fields) {
         record.extend(fields);
     }
-    herdr_core::diagnostic!(record);
+    hide_core::diagnostic!(record);
 }
 
 #[cfg(test)]
@@ -342,7 +342,7 @@ mod tests {
      {
         let root = tempfile::tempdir().unwrap();
         let (args, new) = install(root.path());
-        herdr_core::herdr_import::commit(&hide_kit::layout::engine_dir(&args.state_dir)).unwrap();
+        hide_core::herdr_import::commit(&hide_kit::layout::engine_dir(&args.state_dir)).unwrap();
         let starts = Starts::default();
         starts.failing.borrow_mut().push(new.clone());
         let refused = update_with(&args, &new, || Ok(&starts)).unwrap_err();

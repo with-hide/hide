@@ -192,7 +192,7 @@ impl HeldLine {
     fn drop_for(self, cause: Unsent, unsent: &UnsentNotices) {
         match self.teller() {
             Some(connection) => not_sent(connection, cause, unsent),
-            None => herdr_core::diagnostic!(json!({
+            None => hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "terminals.redraw_dropped",
                 "connection": self.connection,
@@ -257,7 +257,7 @@ impl Drop for InFlight<'_> {
 }
 
 fn not_sent(connection: u64, cause: Unsent, unsent: &UnsentNotices) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_daemon",
         "kind": match cause {
             Unsent::CutOff => "terminals.held_unsent",
@@ -294,7 +294,7 @@ impl ScreenTerminals {
         let mut held = lock(&self.held);
         if !held.lines.is_empty() && held.bytes + text.len() > HELD_BYTES {
             drop(held);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "terminals.held_full",
                 "connection": connection,
@@ -442,7 +442,7 @@ pub(super) async fn keep_terminals_relay(
             continue;
         };
         let ended = terminals_relay(&link, &mut live, &hub, &terminals).await;
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_daemon",
             "kind": "terminals.relay_ended",
             "generation": link.generation,

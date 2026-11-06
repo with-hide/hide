@@ -7,7 +7,7 @@ use crate::support::remote_delivery as fixture;
 
 use anyhow::{Context, Result, ensure};
 use fixture::{Fixture, quote, wait_for};
-use herdr_core::delivery::ledger::State;
+use hide_core::delivery::ledger::State;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

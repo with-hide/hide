@@ -12,7 +12,7 @@
 //! commit the card showed, a method the card offered, and a checkout that
 //! already holds the branch.
 
-use herdr_core::agent_state::phone::{PhonePr, PhonePrs};
+use hide_core::agent_state::phone::{PhonePr, PhonePrs};
 use serde_json::{Value, json};
 
 use super::start;
@@ -39,7 +39,7 @@ fn open(pr: &PhonePr) -> Result<(), &'static str> {
 }
 
 fn event(kind: &str, payload: Value) -> Value {
-    json!({"schema_version": herdr_core::SCHEMA_VERSION, "kind": kind, "payload": payload})
+    json!({"schema_version": hide_core::SCHEMA_VERSION, "kind": kind, "payload": payload})
 }
 
 fn bytes(event: Value) -> Vec<u8> {
@@ -150,7 +150,7 @@ pub fn delegate(message: &Value, prs: &PhonePrs, request_id: &str) -> Result<Val
 
 #[cfg(test)]
 pub(super) mod fixture {
-    use herdr_core::agent_state::phone::{PhonePrs, project};
+    use hide_core::agent_state::phone::{PhonePrs, project};
     use serde_json::{Value, json};
 
     pub const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";

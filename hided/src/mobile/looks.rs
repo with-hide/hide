@@ -25,7 +25,7 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use herdr_core::{ChangedFileStatus, DisplayKind, LookChange, LookView, LookViews};
+use hide_core::{ChangedFileStatus, DisplayKind, LookChange, LookView, LookViews};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
@@ -306,13 +306,13 @@ async fn changed_files(
     // Git read runs here, on the blocking pool.
     let read = tokio::task::spawn_blocking(move || {
         core.prepare_checkout_changes(&device, &checkout, committed)
-            .and_then(herdr_core::PreparedChanges::read)
+            .and_then(hide_core::PreparedChanges::read)
     })
     .await;
     let files = match read {
         Ok(Ok(files)) => files,
         Ok(Err(reason)) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "look.changes_unavailable",
                 "view_id": view.display_id, "reason": reason,
             }));
@@ -323,7 +323,7 @@ async fn changed_files(
             });
         }
         Err(error) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "look.changes_failed",
                 "view_id": view.display_id, "message": error.to_string(),
             }));
@@ -450,7 +450,7 @@ async fn read(
                             .map(str::to_owned)
                     })
                     .unwrap_or_default();
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_phone", "kind": "look.read_refused",
                     "view_id": view.display_id, "reason": reason,
                 }));
@@ -476,7 +476,7 @@ async fn read(
 /// nothing.
 fn link_state(link: Result<(), String>, view_id: &str) -> Option<&'static str> {
     let reason = link.err()?;
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_phone", "kind": "look.device_unreachable",
         "view_id": view_id, "reason": reason,
     }));

@@ -1890,7 +1890,7 @@ mod tests {
     /// a renamed field or a dropped step shows the routed address.
     #[tokio::test]
     async fn a_snapshot_of_a_device_page_prints_the_address_the_core_keeps() {
-        let views = vec![herdr_core::workspace_control::View {
+        let views = vec![hide_core::workspace_control::View {
             area_id: "area-a".into(),
             view_id: "browser-1".into(),
             kind: "browser",

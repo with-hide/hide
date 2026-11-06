@@ -154,14 +154,14 @@ impl LastLook {
     fn look(&mut self, state_dir: &Path) -> bool {
         let outcome = set_core_log_aside(state_dir);
         if let Ok(true) = outcome {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "login_item",
                 "kind": "core_log.rotated",
             }));
         }
         let failure = outcome.as_ref().err().map(ToString::to_string);
         if failure.is_some() && failure != self.failure {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "login_item",
                 "kind": "core_log.rotate_failed",
                 "message": failure,
@@ -194,7 +194,7 @@ fn keep_core_log_within_limit(state_dir: PathBuf) {
         .name("core-log".to_owned())
         .spawn(looks)
     {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "login_item",
             "kind": "core_log.watch_failed",
             "message": error.to_string(),

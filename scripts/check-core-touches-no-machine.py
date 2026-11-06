@@ -2,7 +2,7 @@
 """The core decides and keeps state; it never touches a machine (PRD
 core-host-node D-21). Files, processes, the Herdr socket and session files
 are a node's, reached through `NodeLink`; this check fails when production
-code under `herdr-core/src` reaches one directly.
+code under `hide-core/src` reaches one directly.
 
 Test code is exempt: test-only files, a module file its parent declares
 behind `#[cfg(test)]`, and every item behind `#[cfg(test)]`. The core's own
@@ -20,7 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import rust_scan  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CORE = ROOT / "herdr-core" / "src"
+CORE = ROOT / "hide-core" / "src"
 
 
 def scanned() -> list:
@@ -63,7 +63,7 @@ BANNED = [
 # with it (PRD core-host-node D-10), never a fact of the machine it runs on.
 # Each entry is the number of machine touches the file has and why.
 STORES = {
-    "herdr-core/src/persistence.rs": (
+    "hide-core/src/persistence.rs": (
         13,
         "the core's UI state file, including durable directory/write receipts "
         "with the durable writer's own access type, the state folder's identity "
@@ -71,43 +71,43 @@ STORES = {
         "write-error variants before sleeping-session effects, and a moved copy "
         "of it read to name what this build cannot read",
     ),
-    "herdr-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
-    "herdr-core/src/delivery/ledger.rs": (
+    "hide-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
+    "hide-core/src/delivery/ledger.rs": (
         20,
         "the core's delivery ledger, written with the durable writer's own access type",
     ),
-    "herdr-core/src/labels/store.rs": (3, "the core's agent label store"),
-    "herdr-core/src/labels/import.rs": (1, "reads the core's own earlier label store once"),
-    "herdr-core/src/links/store.rs": (6, "the core's link graph store"),
-    "herdr-core/src/suggestions/store.rs": (
+    "hide-core/src/labels/store.rs": (3, "the core's agent label store"),
+    "hide-core/src/labels/import.rs": (1, "reads the core's own earlier label store once"),
+    "hide-core/src/links/store.rs": (6, "the core's link graph store"),
+    "hide-core/src/suggestions/store.rs": (
         4,
         "the core's suggestion store (records, notebooks, settings), set aside "
         "and rebuilt when it cannot be read",
     ),
-    "herdr-core/src/usage_ledger/store.rs": (1, "the core's usage ledger and retained daily totals"),
-    "herdr-core/src/local_issues.rs": (5, "the core's local issue store"),
-    "herdr-core/src/mission_events.rs": (
+    "hide-core/src/usage_ledger/store.rs": (1, "the core's usage ledger and retained daily totals"),
+    "hide-core/src/local_issues.rs": (5, "the core's local issue store"),
+    "hide-core/src/mission_events.rs": (
         4,
         "the core's per-mission event logs beside missions.json, which a core move "
         "copies; its folder is made, each log written, and an ended mission's log "
         "deleted or swept; the same writer then writes missions.json itself, after "
         "the logs it goes with",
     ),
-    "herdr-core/src/latest_file.rs": (
+    "hide-core/src/latest_file.rs": (
         6,
         "the write and read of a core store that keeps only its latest value "
         "(the saved GitHub answers, the panes held as a draft, the missions), "
         "and the one copy a store keeps of the file a schema conversion read",
     ),
-    "herdr-core/src/diagnostics.rs": (7, "the core's own log file"),
-    "herdr-core/src/engine/own/store.rs": (
+    "hide-core/src/diagnostics.rs": (7, "the core's own log file"),
+    "hide-core/src/engine/own/store.rs": (
         8,
         "the core's own engine's saved layout beside the core's state file "
         "(PRD engine-bundle-3-core-owns D-6): read, written with the durable "
         "writer's own access type, and a file it cannot use moved into its "
         "backups folder, the newest three kept",
     ),
-    "herdr-core/src/herdr_import.rs": (
+    "hide-core/src/herdr_import.rs": (
         10,
         "the core's record of a Herdr session's move beside the engine's saved "
         "layout (PRD engine-bundle-4-herdr-removal D-25) and the save a "
@@ -116,22 +116,22 @@ STORES = {
         "delivery ledger, whose registrations the move hands over before the "
         "core runs",
     ),
-    "herdr-core/src/labels/mod.rs": (
+    "hide-core/src/labels/mod.rs": (
         1,
         "reads the operator's AI choice, a core store beside the core's "
         "state file (`hide_ai::settings`)",
     ),
-    "herdr-core/src/session_sync/coordinator.rs": (
+    "hide-core/src/session_sync/coordinator.rs": (
         2,
         "reads and writes the operator's AI choice, a core store beside the "
         "core's state file (`hide_ai::settings`)",
     ),
-    "herdr-core/src/node_migration.rs": (
+    "hide-core/src/node_migration.rs": (
         15,
         "converts the core's own stores to node ids once, where they were "
         "written, before any link exists (PRD core-host-node D-10)",
     ),
-    "herdr-core/src/node_migration/copy.rs": (
+    "hide-core/src/node_migration/copy.rs": (
         61,
         "copies, places and sets aside the core's own stores for a move of "
         "the core (PRD core-host-node-move), run by the hided whose state "
@@ -140,7 +140,7 @@ STORES = {
         "settings (PRD overview-device-tasks D-20), and a global instruction "
         "kept through a link moves as the text the core reads through it",
     ),
-    "herdr-core/src/node_migration/reown.rs": (
+    "hide-core/src/node_migration/reown.rs": (
         4,
         "converts a moved copy of the core's own link and Project "
         "Memory stores to the receiving node's ids, before a core starts on "
@@ -148,12 +148,12 @@ STORES = {
         "the retired session-search store's retention to them (PRD "
         "overview-device-tasks D-20)",
     ),
-    "herdr-core/src/memory_hook.rs": (
+    "hide-core/src/memory_hook.rs": (
         1,
         "looks whether the core's Memory store exists before asking a node, "
         "a core store beside the core's state file",
     ),
-    "herdr-core/src/global_instruction.rs": (
+    "hide-core/src/global_instruction.rs": (
         16,
         "the Hide global instruction beside the core's state file, which a "
         "core move carries (`MOVES_WITH_CORE`): read as a regular file, a link "

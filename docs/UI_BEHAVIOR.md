@@ -3,7 +3,7 @@
 This document owns what Hide's UI does: the rules for how each screen and control behaves, independent of any platform's exact pixel values.
 It replaces the behavioral content of the retired `DESIGN.md`.
 Public component authority lives in `web/src/components/ui` and `web/src/components`, described in [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md); numeric authority lives in `design/tokens.json`.
-Each rule below names the code that owns it: a web owner in `web/src/` and, where the behavior is core-decided, a core owner in `herdr-core/src/`.
+Each rule below names the code that owns it: a web owner in `web/src/` and, where the behavior is core-decided, a core owner in `hide-core/src/`.
 Interface wording is written here as the shipped Korean copy where that is what the screen carried when the rule was written (`요청`, `정리`, `맡기기`); every language, English included, reads its own text from the catalogs in `web/src/i18n/resources/`, and [LOCALIZATION.md](LOCALIZATION.md) owns that boundary.
 
 ## Web Workspace
@@ -22,14 +22,14 @@ A ref lock left by the operator's own Git skips that turn; a lock still held on 
 The detail opens even at 0/0 and names the tracking ref and when the remote was last checked (`N분 전 확인`), or `아직 확인 안 함` before Hide's first successful fetch.
 A failed fetch keeps the last counts dimmed and says since when they are old; a credential or network failure waits for the window to come forward, any other failure retries after 1, 2, 5 and then 15 minutes, and the failure goes to the diagnostic log once.
 With the background fetch turned off in Project settings the project is not fetched and the detail shows the last `FETCH_HEAD` time, the operator's own fetch.
-`herdr-core/src/runtime/fetch.rs` owns the schedule, `herdr-core/src/fetch.rs` runs it, and `hide-host/src/worktrees.rs` (`fetch_remote`) is the node's fetch.
+`hide-core/src/runtime/fetch.rs` owns the schedule, `hide-core/src/fetch.rs` runs it, and `hide-host/src/worktrees.rs` (`fetch_remote`) is the node's fetch.
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
 While the branch has commits to receive and none to send, the detail ends with `받기`, which moves the branch and its files to the tracking branch as Hide last fetched it, on the machine that holds the checkout: fast-forward only, with no fetch, merge commit, rebase or push, and only from the HEAD the detail showed.
 While it runs the button reads `받는 중` and stays until the Git read shows the new HEAD (once the node has moved it, a failed Git read ends the wait too); then the counts are what changed, and no message says it worked.
 When uncommitted, untracked or ignored files would be overwritten, nothing moves and the detail says `커밋 안 한 파일 N개가 겹쳐서 못 받았어요` with `다시 받기`; a checkout partway through a merge, rebase, cherry-pick or revert says `진행 중인 머지나 리베이스를 먼저 끝내야 받을 수 있어요`; any other failure says `받지 못했어요` with the same button, and its reason goes to the diagnostic log.
 When the branch also has commits to send, the detail has no button and says `양쪽에 커밋이 있어 직접 합쳐야 해요`, because choosing between a merge and a rebase is the operator's.
 A failing fetch leaves the button, which then takes the tracking branch as last received.
-`herdr-core/src/runtime/checkout_git.rs` owns the run, and `hide-host/src/branch_merge.rs` (`catch_up`) is the node's fast-forward.
+`hide-core/src/runtime/checkout_git.rs` owns the run, and `hide-host/src/branch_merge.rs` (`catch_up`) is the node's fast-forward.
 At the right, the current HEAD's subject and relative age open a compact history popover directly below that trigger, with up to five newest commits from the captured HEAD; no commit is invented for an unborn branch.
 Above them, dimmed and marked `들어올 커밋`, sit up to five of the tracking branch's commits not yet in HEAD, with `+N개 더` when more are behind; while the fetch fails they are the ones last received and the list says since when.
 A local commit no remote has is marked `푸시하지 않음` when `origin` is on GitHub.
@@ -38,7 +38,7 @@ A commit GitHub can show, one some remote already has or an incoming one, opens 
 Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
 Its associated CI result sits at the right of that second line; commits with no CI omit the result.
 The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown and unavailable.
-The header's Git read, each CI result and the remote check share one observed shape (PRD git-freshness D-09, `herdr-core/src/observed.rs`): the last value read stays, with when it was read and whether it is fresh, stale or behind a failed read.
+The header's Git read, each CI result and the remote check share one observed shape (PRD git-freshness D-09, `hide-core/src/observed.rs`): the last value read stays, with when it was read and whether it is fresh, stale or behind a failed read.
 A CI read that fails, or ages past 90 seconds, keeps each commit's last result dimmed, not openable, with `GitHub 읽기 실패 · N분 전 기준` or `N분 전 기준` in its hint (B22); a commit GitHub never answered for reads unavailable.
 A Git read that fails keeps the ↑/↓ counts dimmed with `Git 읽기 실패 · N분 전 기준` instead of hiding them.
 Its trigger opens the same history below itself, with initial focus on the content so no CI hint covers the first item; Tab reaches the CI links and their read-time hints.
@@ -50,7 +50,7 @@ On narrow widths the relative age disappears before the subject, then the subjec
 Compact commit and CI buttons keep their own icon and text footprint even when the open sidebar leaves less space than the window width; they never overflow into Overview or Open server.
 When the shell disconnects, retained upstream claims disappear until the connection is live again, and a conflict count's accessible name identifies the total changed records before the conflicted subset.
 Home and ordinary folders carry no Git header.
-Web owners: `WorkspaceTitleBar` in `web/src/WorkspaceScreen.tsx` and `web/src/CheckoutGitHeader.tsx`; core owner: `herdr-core/src/runtime/checkout_git.rs`, read by `herdr-core/src/checkout_git.rs` on the existing Changes pump.
+Web owners: `WorkspaceTitleBar` in `web/src/WorkspaceScreen.tsx` and `web/src/CheckoutGitHeader.tsx`; core owner: `hide-core/src/runtime/checkout_git.rs`, read by `hide-core/src/checkout_git.rs` on the existing Changes pump.
 Its right end holds two tool icons, in this order: Overview and `Open server`; the lane's tools are on the rail (see The right lane).
 `Open server` (a globe): one known listener opens directly as a page among the lane's documents, and multiple listeners open a compact keyboard picker.
 Its accessible name carries how many listeners are known (`Open server, 2 running`), so a screen reader tells a globe that opens a page at once from one that opens the picker; while the count is unknown (a remote Workspace, no connection, a discovery that is still reading or failed) the name is `Open server`, and the tooltip always says `Open server`.
@@ -411,7 +411,7 @@ The checkout keeps at most 32 Views in its six View areas and depth three.
 An open that would add the 33rd View first closes the View looked at longest ago in the checkout, the way closing its last View closes a file (Reopen Closed brings it back); a View in front of any area and a document with unsaved work never close.
 Only when nothing can close is the open refused, with the View notice, and existing content stays as it was.
 Web owner: the shell draws the snapshot projection, the strip already filtered, and asks the unsaved question in `web/src/Overlays.tsx` (`ConfirmViewsClose`) from the projection's `session_drafts`.
-Core owner: `herdr-core/src/runtime/{view_sessions,view_callers,view_areas,workspace_control,workspace_view}.rs` and `herdr-core/src/workspace_views.rs`.
+Core owner: `hide-core/src/runtime/{view_sessions,view_callers,view_areas,workspace_control,workspace_view}.rs` and `hide-core/src/workspace_views.rs`.
 Regression owners are `runtime/tests/view_bookmarks.rs`, `runtime/view_sessions.rs`, `web/e2e/{view-bookmarks,right-lane}.spec.ts` and `desktop/e2e/browser.spec.ts`.
 
 ### Opening, preview, and Open to the side
@@ -509,7 +509,7 @@ Its hint, above the toolbar mark, says the agent's name, `Opened this · <produc
 Opening, waiting and unavailable Views retain a path toolbar with the same opener, and a missing or unknown opener creates no invented identity.
 Pressing it brings the agent's pane forward with the keyboard, leaving the View selected; an agent whose pane closed is found again by its session in another pane, and one found nowhere draws its mark dimmed with `(closed)` in the hint and goes nowhere.
 A pane whose agent opened Views that are open shows `N views` after its PR mark, a list of each View's kind mark, name, address or path and unsent comment count, counted once however many tabs show it; a row brings that View forward.
-Two tabs are the same View when they show the same file, the same diff, a page at the same address or the same outside file, which has no path and is told apart by its grant (`Shown` in `herdr-core/src/view_layout.rs`, which Desk's outputs compare too); a page that names no address yet is the same as no other tab.
+Two tabs are the same View when they show the same file, the same diff, a page at the same address or the same outside file, which has no path and is told apart by its grant (`Shown` in `hide-core/src/view_layout.rs`, which Desk's outputs compare too); a page that names no address yet is the same as no other tab.
 A View the operator has not looked at since the agent opened it ends its row with the `볼 것` mark, an eye in the warning badge, whose hover says `볼 것` (PRD unseen-agent-views B10); such rows lead the list, and a row stands for every tab of its View, so it keeps the mark while any of them is unseen and its press then brings that unseen tab forward.
 While any of them is unseen, the icon of `N views` carries a warning dot, so the list need not be opened to know one waits; it is a dot and not a second eye, because the agent's own mark already shows the eye.
 That eye, in the pane header's first row, is a button of its own beside the record button (`LookButton` in `web/src/components/status-mark.tsx`): pressing it does what pressing the agent's row does, bringing the pane and its newest View to look at forward, so no surface draws an eye that does nothing.
@@ -532,7 +532,7 @@ Send N sends every unsent comment for that agent, from every View, as one letter
 A View the operator opened opens its Send as `Send N comments to…`, a choice of agent.
 After Send the comments leave the View and the line says `Sent N to <agent> · delivered when it rests` with Go to pane for a moment, or that it is delivered when its device is back; a Send that could not go keeps the comments and says why with Retry, which sends again to the same agent and the same Views that Send asked for (`This view only` stays one View), and a letter that expired brings its comments back marked `Not delivered` with Send again.
 
-Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/editor/comments.ts`, `web/src/editor/useLineComments.tsx`; core owner: `herdr-core/src/runtime/view_feedback.rs`; test owners: `web/src/viewFeedback.test.ts`, `web/e2e/view-feedback.spec.ts`; original visual boards are maintained separately.
+Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/editor/comments.ts`, `web/src/editor/useLineComments.tsx`; core owner: `hide-core/src/runtime/view_feedback.rs`; test owners: `web/src/viewFeedback.test.ts`, `web/e2e/view-feedback.spec.ts`; original visual boards are maintained separately.
 
 ### Narrow windows
 
@@ -613,7 +613,7 @@ The request is a button the keyboard reaches: a press or focus on it opens the t
 With the card open, Tab from the request or the title moves the keyboard into the card to `기록 열기`, the card stays open while focus is in it, Shift+Tab before its start goes back to the trigger, Tab past its end and Esc in the card close it and return focus to the trigger, which keeps it closed until the pointer or focus comes anew; only Tab moves focus in, so the pointer never takes the terminal's keyboard, and a card the pointer only shows is no Escape layer, so Esc reaches the terminal.
 The card reads the session as one conversation top to bottom on a rail: up to two earlier turns first, oldest first and dimmed, each ringed in how it ended (the warning colour for a question or a block, the success colour for done); then who sent the request (`나` or the sender) over a bubble with the request's summary and its own first two lines, and who sent a later request under it; then the agent's half, the answer's verb as a pill in its state's colour (warning while it asks, the working colour while it works, success when finished) with the label's words for the turn, never the agent's own words, which the record keeps and which could still be the previous turn's while a new one starts; and `기록 열기`, which shows the session record in the lane; a part with nothing to say is not drawn (`web/src/PaneTurnCard.tsx`).
 The second row is absent when there is no turn to show and no child button; a pane whose terminal is not live has no ask, request or progress on it, because its body says why.
-The core publishes the ask (`herdr-core/src/agent_state/header.rs`, `Header.band`): the pane's own Approval, Answer or unread Blocked first, the lead raised descendant next, then the pane's own read Blocked and Stopped, which is work left.
+The core publishes the ask (`hide-core/src/agent_state/header.rs`, `Header.band`): the pane's own Approval, Answer or unread Blocked first, the lead raised descendant next, then the pane's own read Blocked and Stopped, which is work left.
 A pull request's verb (Fix, Review, Merge) is the header PR mark's colour and a finished turn is the status mark's dot to read, so neither draws a row; the PR mark carries no review word either.
 An ask stays until it is answered: once the operator has had the pane focused it dims to `--opacity-read-status`, as its row's request line does, and a question the operator read but did not answer keeps its row (`Band.read`).
 The pane's own question or approval says only what is asked, in the warning colour, and the stable wait, with no verb, since the rail and the colour say whose turn it is; a block starts with `막힘`; an Approval names no command, since the core reads none, and shows the ask's own default words.
@@ -695,7 +695,7 @@ Web owners: `web/src/components/sleeping-session-row.tsx`, `web/src/sleeping-ses
 
 The sidebar is one list of operator-owned roots under projects and checkouts, with Needs You (`내 차례`) and Unread (`읽을 것`) raised above it.
 A root whose descendant is raised enters Needs You itself, at any depth, and the raised descendant never appears there on its own row; its second line is what to do, with no verb, name, count, PR or path.
-A mission whose node waits on the operator with no Conductor or worker row to carry it is its own Needs You row above the agent rows: the mission's title, `<node> · <why>` (`외 N건` for its other such nodes), and under it `이어받기` and the node's choices for its cause (`끝으로`, `노드 제외`, `노드에 붙이기`/`그대로 두기`); the row opens the mission's map. The Overview's `나를 기다리는 것` lists the same mission first with the same line and buttons, also when the map draws no session; a map narrowed to one project lists and counts that project's missions only, and the whole map every one the scope names. The device's Needs You number (the sidebar's `내 차례 · N`, `개요 · 내 차례 N` and the device rail) counts it once with the agents, from the device scope's `mission_asks`; which raises the mission carries is the core's one rule (`item`: waits on the operator, no row carries it, the mission still asks, the node is not dropped), read by the count and the list alike, so a cancelled mission keeps its record and leaves both (`web/src/components/sidebar-mission-row.tsx`, `web/src/OverviewGraph.tsx`; core owners `herdr-core/src/runtime/missions.rs` `on_row`, `item` and `publish_mission_asks`, `herdr-core/src/agent_state/tally/scope.rs`; PRD mission-node-simple D-19).
+A mission whose node waits on the operator with no Conductor or worker row to carry it is its own Needs You row above the agent rows: the mission's title, `<node> · <why>` (`외 N건` for its other such nodes), and under it `이어받기` and the node's choices for its cause (`끝으로`, `노드 제외`, `노드에 붙이기`/`그대로 두기`); the row opens the mission's map. The Overview's `나를 기다리는 것` lists the same mission first with the same line and buttons, also when the map draws no session; a map narrowed to one project lists and counts that project's missions only, and the whole map every one the scope names. The device's Needs You number (the sidebar's `내 차례 · N`, `개요 · 내 차례 N` and the device rail) counts it once with the agents, from the device scope's `mission_asks`; which raises the mission carries is the core's one rule (`item`: waits on the operator, no row carries it, the mission still asks, the node is not dropped), read by the count and the list alike, so a cancelled mission keeps its record and leaves both (`web/src/components/sidebar-mission-row.tsx`, `web/src/OverviewGraph.tsx`; core owners `hide-core/src/runtime/missions.rs` `on_row`, `item` and `publish_mission_asks`, `hide-core/src/agent_state/tally/scope.rs`; PRD mission-node-simple D-19).
 A root whose agent opened a View the operator has not looked at is in Needs You with the `볼 것` mark, an eye in the warning badge, and the line `볼 것 · <newest View>`, ending with ` · 외 N` for the others so a long name never cuts the count; pressing it brings its pane and that View forward, the lane showing the documents, and the mark goes once the operator looks at every such View, or each is closed (PRD unseen-agent-views B1-B3, B9, B13).
 A question, approval or block on the same row keeps its mark and line, which ends with `볼 것 N`, and the row stays in Needs You after it is answered while a View is still to look at (B11).
 `볼 것` counts with the operator's turns on badges and the rail and sends no push, notice or sound (B12).
@@ -757,7 +757,7 @@ A worktree that is dirty or in use stays and is named in the diagnostic log, and
 A kind of Hide AI task this build does not know, or a record with no task, shows its agent as an operator's row naming its task (`Hide AI` alone for none) and leaves the rest of the ledger alone.
 A feature that makes Hide AI start a new kind of agent names the kind's home in code, and chooses what its turn and cleanup are, before it has a row.
 A connected device's agents follow the same rules, and they hold across a restart of hided because the ledger is persisted.
-Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line, whether a tree draws a checkout, where a row opens), `web/src/AgentMark.tsx` (the owl, the badge and the pane header's mark), `web/src/AgentRowMark.tsx` (the row's mark by view mode), `web/src/sidebar.tsx` and `web/src/components/sidebar-agent-row.tsx` (the rows), `web/src/TaskLens.tsx` (the 태스크 row) and `openListedAgent` in `web/src/actions.ts`; core owners: `herdr-core/src/coordination/started.rs`, `herdr-core/src/agent_state/axes.rs` and `herdr-core/src/runtime/memory_promotion.rs`.
+Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line, whether a tree draws a checkout, where a row opens), `web/src/AgentMark.tsx` (the owl, the badge and the pane header's mark), `web/src/AgentRowMark.tsx` (the row's mark by view mode), `web/src/sidebar.tsx` and `web/src/components/sidebar-agent-row.tsx` (the rows), `web/src/TaskLens.tsx` (the 태스크 row) and `openListedAgent` in `web/src/actions.ts`; core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs` and `hide-core/src/runtime/memory_promotion.rs`.
 
 ### Agent logo view mode
 
@@ -777,7 +777,7 @@ Search, overlays, Overview, a Project's conversation list, the graph, Task board
 While hidden, holding the Agents key (⌥, or Alt) draws the same logos for as long as the number keycaps show: the peek is the existing hold state, with its 0.15 second delay, its end on any other key, on a window that loses focus and while a layer is open, and it adds no key listener.
 Shown, the same hold shows only the keycaps.
 Changing the mode or peeking never changes a row's height, the scroll position or the selection.
-Web owners: `web/src/components/view-menu.tsx`, `web/src/agentLogoMode.ts` (the one rule), `web/src/AgentRowMark.tsx`, `web/src/TabBar.tsx`, `web/src/TaskLens.tsx`, `web/src/components/sidebar-agent-row.tsx` and `web/src/components/sleeping-session-row.tsx`; core owner: `herdr-core/src/runtime/events.rs`.
+Web owners: `web/src/components/view-menu.tsx`, `web/src/agentLogoMode.ts` (the one rule), `web/src/AgentRowMark.tsx`, `web/src/TabBar.tsx`, `web/src/TaskLens.tsx`, `web/src/components/sidebar-agent-row.tsx` and `web/src/components/sleeping-session-row.tsx`; core owner: `hide-core/src/runtime/events.rs`.
 
 ### Pane turn row mode
 
@@ -791,7 +791,7 @@ It shapes the second row of every agent pane ([Agent panes and the Agents explor
 
 The choice is a core preference, `ui_state.pane_turn_row_mode` (`one_line`, `two_lines` or `off`, `one_line` when never chosen), changed only by `pane_turn_row_mode_set`; `ui_state_update` never changes it, an unknown stored value opens one line with the `ui_state.pane_turn_row_mode_unknown` diagnostic, and it survives a restart.
 The mode never changes the terminal's viewport or its PTY grid, because the row overlays the terminal.
-Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`; core owner: `herdr-core/src/runtime/events.rs`.
+Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`; core owner: `hide-core/src/runtime/events.rs`.
 
 ### Subagent count
 
@@ -847,7 +847,7 @@ A member that fails to come back stays in the entry together with every member u
 While the tree is still closing, ⇧⌘T waits with `The latest close is still being confirmed.` rather than reopening an older item.
 A device's close leaves no entry, as before.
 Every entry to a pane or tab close uses this: ⌘W or ⌥W, ⌘⇧W or ⌥⇧W, the desktop menu's commands, a tab's ×, the tab menu's `Close tab…`, the pane header's ×, the pane menu's `Close pane`, and the agent row menu's `Close tab…`; closing a View, the phone app and the Overview are unchanged.
-Web owner: `web/src/close.ts` (which sheet, which panes and descendants, and their states), `web/src/Overlays.tsx` (both sheets), `web/src/components/subtree-list.tsx` (the list both the sheet and the removal dialogs draw); core owner: `herdr-core/src/runtime/tree_close.rs`.
+Web owner: `web/src/close.ts` (which sheet, which panes and descendants, and their states), `web/src/Overlays.tsx` (both sheets), `web/src/components/subtree-list.tsx` (the list both the sheet and the removal dialogs draw); core owner: `hide-core/src/runtime/tree_close.rs`.
 
 ### Terminal links
 
@@ -897,11 +897,11 @@ The operating system opens only a plain document (text, source, a PDF, an image,
 A program's OSC 8 link takes the same routes with no confirmation dialog: `file://` and `vscode://file/` addresses are paths, any other scheme is not opened, and a refused link goes to the diagnostic log.
 A pane on an SSH device, and a page outside the desktop app, links URLs only, because its paths name files this Mac cannot check.
 A path with a space in it is a link only where the program marks it (OSC 8), since plain text gives no way to tell where it ends.
-Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider.ts` (the check and the routes), `web/src/terminals.ts` (pointer-to-cell lookup), `web/src/PaneRelations.tsx` (target-specific menu), `web/src/actions.ts` (`openLink`, `openTerminalPath`), `web/src/editor/lineRequest.ts` (the line), `web/src/externalFiles.ts` and `web/src/ExternalDisplay.tsx` (an outside file's tab); desktop owner: `desktop/src/main/localPath.ts`, `desktop/src/main/externalFiles.ts`; daemon owner for an agent's open: `hided/src/outside_open.rs`; core owner: `herdr-core/src/runtime/view_areas.rs` (`external_open`, `external_grants`) and `herdr-core/src/runtime/workspace_control.rs` (`open_external`).
+Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider.ts` (the check and the routes), `web/src/terminals.ts` (pointer-to-cell lookup), `web/src/PaneRelations.tsx` (target-specific menu), `web/src/actions.ts` (`openLink`, `openTerminalPath`), `web/src/editor/lineRequest.ts` (the line), `web/src/externalFiles.ts` and `web/src/ExternalDisplay.tsx` (an outside file's tab); desktop owner: `desktop/src/main/localPath.ts`, `desktop/src/main/externalFiles.ts`; daemon owner for an agent's open: `hided/src/outside_open.rs`; core owner: `hide-core/src/runtime/view_areas.rs` (`external_open`, `external_grants`) and `hide-core/src/runtime/workspace_control.rs` (`open_external`).
 
 ## The Project tool
 
-Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table, 남은 것 and 작업 비용 in the 보기 slot); core owners: `herdr-core/src/agent_state/tally/project_status.rs` (the counts and 흘린 것), `herdr-core/src/runtime/strays.rs` (마무리 맡기기, 놔두기 and 되돌리기), `herdr-core/src/usage_ledger/project_cost.rs` (each session's spend) and `herdr-core/src/usage_ledger/tasks.rs` (the tasks and the week).
+Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table, 남은 것 and 작업 비용 in the 보기 slot); core owners: `hide-core/src/agent_state/tally/project_status.rs` (the counts and 흘린 것), `hide-core/src/runtime/strays.rs` (마무리 맡기기, 놔두기 and 되돌리기), `hide-core/src/usage_ledger/project_cost.rs` (each session's spend) and `hide-core/src/usage_ledger/tasks.rs` (the tasks and the week).
 The Project tool is the rail's first tool and is about the project of the checkout in front (PRD lane-two-columns D-14, B26).
 Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column.
 The left of the screen is state and the middle is work under way; this column is what came of it (PRD project-panel-results D-01), so it holds no list of what waits on the operator, which the sidebar's 태스크 and PR list already show.
@@ -981,7 +981,7 @@ A mission record that cannot be read is one line, `미션 기록을 읽지 못�
 
 ## Terminal image attachment boundary
 
-Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDrag.ts`, `web/src/terminals.ts`. Core owner: `herdr-core/src/runtime/attachments.rs`; device staging `hide-host/src/attachments.rs`.
+Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDrag.ts`, `web/src/terminals.ts`. Core owner: `hide-core/src/runtime/attachments.rs`; device staging `hide-host/src/attachments.rs`.
 
 Dragging an Explorer file onto a terminal focuses that pane and inserts the original absolute path as quoted text, without submitting it.
 Image files instead read through the checkout's existing bounded file-bytes stream and enter the same binary attachment flow as an external image drop, retaining their original format and filename.
@@ -1010,7 +1010,7 @@ Reintroducing a shared attachment shelf requires a supported provider contract f
 
 ## Session thread
 
-Core owner: `herdr-core/src/runtime/session_thread.rs`; reader `hide-session/src/thread/`; web store `web/src/store.ts` (`sessionThread`, `sessionThreadHistory`), actions `openThread`, `readOlderThread`, `closeThread` in `web/src/actions.ts`, input `submitThreadInput` in `web/src/attachments.ts`.
+Core owner: `hide-core/src/runtime/session_thread.rs`; reader `hide-session/src/thread/`; web store `web/src/store.ts` (`sessionThread`, `sessionThreadHistory`), actions `openThread`, `readOlderThread`, `closeThread` in `web/src/actions.ts`, input `submitThreadInput` in `web/src/attachments.ts`.
 Screen: `web/src/components/desk/thread-panel.tsx` connects a Desk job's thread to the store and draws it with `thread-view.tsx`; `web/src/threadView.ts` turns the sections into its lines and Hide parts, and `web/src/desk.ts` owns the line and turn rules.
 
 A thread shows one agent pane's session as a conversation: what the operator and Hide said to the agent, what the agent said and thought, its tool calls with their input, diffs and output, and its plans, newest last (B25).
@@ -1037,7 +1037,7 @@ The words stay in the box until the pane took them, so a refused send loses noth
 ## Overview
 
 Web owner: `web/src/Overview.tsx` (the modal and the page, the title and the device switch), `web/src/MainScreen.tsx` (the tab row with its counts and controls, the unreachable device, the Home with no project, the side panel), `web/src/overviewTasks.ts` (a device's tasks as the record and the backlog read them), `web/src/OverviewRecord.tsx` (a session's record beside the tabs at Home), `web/src/BacklogTab.tsx` and `web/src/overviewBacklog.ts` (백로그), `web/src/ProjectsTab.tsx` and `web/src/overviewProjects.ts` (Projects), `web/src/QuickAdd.tsx` and `web/src/quickAddChoice.ts` (the quick add), `web/src/issueMarks.tsx` (an issue's glyph and labels), `web/src/IssueDialogs.tsx` and `web/src/issueStart.ts` (Start).
-Core owner: `herdr-core/src/agent_state/tally/tasks.rs` (the tasks), `herdr-core/src/runtime/backlog.rs` (the backlog's add, retry, undo and origin), `herdr-core/src/runtime/disk_sweep.rs` (the Projects tab's disk), `herdr-core/src/tasks.rs` and `herdr-core/src/local_issues.rs` (issue sources).
+Core owner: `hide-core/src/agent_state/tally/tasks.rs` (the tasks), `hide-core/src/runtime/backlog.rs` (the backlog's add, retry, undo and origin), `hide-core/src/runtime/disk_sweep.rs` (the Projects tab's disk), `hide-core/src/tasks.rs` and `hide-core/src/local_issues.rs` (issue sources).
 The Overview has five tabs in this order: Work, Projects, Backlog, History and Usage (PRD overview-redesign).
 Work and the sidebar's 태스크 list share canonical agent facts; Work adds their explicit delegation and delivery relationships without replacing the sidebar.
 Projects opens a project home, Backlog combines source-qualified issues, and History searches retained operator requests.
@@ -1192,7 +1192,7 @@ The saved Issue source choice (Auto, GitHub or Local) remains the default for ol
 Local issues remain in `local-issues.json`, numbered per project; GitHub issues are read and written through the owning machine's `gh`.
 An open Issue source menu follows the core's stored choice as it arrives, including an acknowledgement received after the menu reopened; selecting an item does not create a second, optimistic choice in the shell.
 A project's source defaults to GitHub when its repository reads as a GitHub repository and to Local otherwise (a folder, a repository with no GitHub remote, or `gh` not installed); a project of a device the core dials has no source, while a project of a node that dials the core keeps its source, its issues and its Start as it had them before the core moved (PRD core-host-node-move D-29).
-The core hands the web a source-neutral task (the id the source shows, URL, title, open or closed, labels, when it was made and last changed), so no view reads a GitHub shape, and a new source is one more adapter in `herdr-core/src/tasks.rs`.
+The core hands the web a source-neutral task (the id the source shows, URL, title, open or closed, labels, when it was made and last changed), so no view reads a GitHub shape, and a new source is one more adapter in `hide-core/src/tasks.rs`.
 A GitHub project can therefore keep Local issues beside its GitHub issues.
 
 Above the projects, while the device has open missed work and Hide AI's summaries are on, one folded line `놓친 일 N ›` in the warning colour gathers it (PRD sidebar-task-lens D-52, B52).
@@ -1301,7 +1301,7 @@ Moved to a private document: `docs/tasks-and-pr-list.md` in with-hide/hide-priva
 
 ## Explorer file management
 
-Web owner: `web/src/ExplorerTree.tsx`, `web/src/explorer.ts`. Core owner: `herdr-core/src/changes.rs`.
+Web owner: `web/src/ExplorerTree.tsx`, `web/src/explorer.ts`. Core owner: `hide-core/src/changes.rs`.
 
 A row reads as it does in VS Code: one indent per level with a hairline under each ancestor's chevron, a chevron on a folder that turns down while it is open, the item's mark, then its name.
 The mark is the one the Material Icon Theme draws for that name (`web/src/fileIcons.ts`): a whole file name such as `package.json` first, then its longest extension, then a plain file; a folder has its own mark, open or closed, and a plain folder one otherwise.
@@ -1419,7 +1419,7 @@ Switching Workspaces replaces the decoration root, and no per-row, hover, select
 
 ## Editor preview tab
 
-Core owner: `herdr-core/src/runtime/editor.rs` (`place_editor_tab`, `promote_editor_tab`), `EditorTabSnapshot.preview`. The web Workspace's one-preview-per-View-area model is the same idea applied per area; see [Web Workspace](#web-workspace).
+Core owner: `hide-core/src/runtime/editor.rs` (`place_editor_tab`, `promote_editor_tab`), `EditorTabSnapshot.preview`. The web Workspace's one-preview-per-View-area model is the same idea applied per area; see [Web Workspace](#web-workspace).
 
 A single click on an Explorer file other than HTML, or a History row, opens it in the checkout's one preview tab (VS Code's model): the strip draws the title in italic, and the next single click replaces the tab in the same slot instead of adding one.
 The core owns the preview flag and decides replacement and promotion; the shell only says what the click meant.
@@ -1498,7 +1498,7 @@ The text that results is ordinary Markdown, with nothing hidden or special in it
 
 ## Projects and checkout context
 
-Core owner: `herdr-core/src/sidebar.rs`, `herdr-core/src/project_context.rs`, `herdr-core/src/worktrees.rs`, `herdr-core/src/disk.rs` (measured on the node by `hide-host/src/disk.rs` and `hide-host/src/disk_layers.rs`), `herdr-core/src/worktree_cleanup.rs`, `herdr-core/src/runtime/projects.rs`, `herdr-core/src/runtime/gone_worktrees.rs`. Web owner: `web/src/sidebar.tsx`, `web/src/projects.ts`.
+Core owner: `hide-core/src/sidebar.rs`, `hide-core/src/project_context.rs`, `hide-core/src/worktrees.rs`, `hide-core/src/disk.rs` (measured on the node by `hide-host/src/disk.rs` and `hide-host/src/disk_layers.rs`), `hide-core/src/worktree_cleanup.rs`, `hide-core/src/runtime/projects.rs`, `hide-core/src/runtime/gone_worktrees.rs`. Web owner: `web/src/sidebar.tsx`, `web/src/projects.ts`.
 
 ### Sidebar type, rows and width
 
@@ -1714,7 +1714,7 @@ The top row's Overview button opens [Overview](#overview), `Work · Projects · 
 
 ### Disk allocation and cleanup
 
-Web owner: `web/src/DiskCleanupSheet.tsx`, `web/src/diskCleanup.ts`; core owner: `herdr-core/src/disk.rs`, `herdr-core/src/worktree_cleanup.rs`; node owner: `hide-host/src/disk.rs`, `hide-host/src/disk_layers.rs`, `hide-host/src/cleanup.rs`.
+Web owner: `web/src/DiskCleanupSheet.tsx`, `web/src/diskCleanup.ts`; core owner: `hide-core/src/disk.rs`, `hide-core/src/worktree_cleanup.rs`; node owner: `hide-host/src/disk.rs`, `hide-host/src/disk_layers.rs`, `hide-host/src/cleanup.rs`.
 Allocated-on-disk sums main, linked worktree folders, and the shared Git directory once; nested roots belong to the longest matching root, hard links share one inode allocation, and descendant symlinks are not followed.
 Each checkout is measured under its own limit of one million entries and 30 seconds, so a checkout that exceeds it or cannot be read is the only row that has no size; the reason is in the diagnostic log.
 An incomplete measurement has no total, and allocated blocks are not a promise of reclaimable space, so the result states only the volume's free space before and after.
@@ -1741,7 +1741,7 @@ A checkout is in use while an agent there is working or waiting on the operator 
 A finished or idle agent and a shell prompt are not use: a pane that is merely open blocks neither a cache nor the worktree.
 A worktree cell can be chosen only for a linked checkout that is merged into the repository's default branch, clean, is not the checkout in front, is not locked and holds no nested git repository, and has no live pane that is not one of its own; otherwise it is disabled and its tooltip says which.
 The default branch is the base branch chosen in Project Settings, else the one GitHub names, else what `origin/HEAD` names (PRD git-freshness D-07), else, in a repository with no remote at all (none in its config and nothing under `refs/remotes`), the branch its main worktree has out once it holds a commit, which is what a clone of it would take as its default; never a branch the code assumes, and in a repository with a remote the main worktree's branch never counts (`hide_project::git::Repository::own_default_branch`, shared with the base branch protection's Auto).
-Merged is the one judgment the sidebar's landed mark also reads (`worktrees::merged` in `herdr-core/src/worktrees.rs`, D-06): HEAD is in the local default branch or in its `origin/` copy as of the last fetch (the review never fetches; the background fetch keeps that copy current), or a pull request GitHub merged into the default branch has exactly this HEAD as its head; a squash or rebase merge needs that last proof, and it needs no merge commit in a local ref.
+Merged is the one judgment the sidebar's landed mark also reads (`worktrees::merged` in `hide-core/src/worktrees.rs`, D-06): HEAD is in the local default branch or in its `origin/` copy as of the last fetch (the review never fetches; the background fetch keeps that copy current), or a pull request GitHub merged into the default branch has exactly this HEAD as its head; a squash or rebase merge needs that last proof, and it needs no merge commit in a local ref.
 GitHub's answer is the pull request list the project's read already holds, the last one kept while a read fails; that list holds only the 200 newest pull requests, so the review asks GitHub by branch for a HEAD the list does not name, and a worktree whose lookup fails is unverified rather than not merged, and a device's project, whose pull requests this core does not read, always asks by branch; with no GitHub answer only the ancestry counts.
 A head the review proved by branch is kept by the core for that project and default branch (at most 1024, `review_merge_proofs`) and joined to the list the sidebar's landed mark reads, so the row is marked landed when the review offers it (B17); before any review the sidebar knows only the list.
 A HEAD that moved past its merged pull request's head is not merged, a pull request merged into another branch proves nothing until that branch is in the default branch, and with no known default branch, or neither it nor its `origin/` copy present, the sheet judges no worktree.
@@ -1772,8 +1772,8 @@ The Host selector lists this Mac and every registered device, and starts on the 
 This Mac here is the machine the window runs on, which on a window of a machine whose core runs elsewhere is not the core's (`hostWays` in `web/src/addProject.ts`).
 On this Mac the primary `Browse folder` row holds the keyboard, so Enter activates it; it opens macOS's own folder picker as a sheet on the window, which can also make a new folder, and a cancelled pick leaves the dialog as it was.
 The chosen folder is registered with one `create_workspace`; the dialog closes when the project appears, and says `Adding <folder>…` until then.
-A project added on this machine, whichever way below and from the first-run wizard too, opens in front on the one terminal tab its registration starts there (`spawn_workspace_creation` in `herdr-core/src/live.rs`), never on the empty start screen, however many checkouts Hide has remembered before (`WorkspaceViews::entry` in `herdr-core/src/workspace_views.rs`).
-A project added on a device opens on one terminal tab there once that device's helper has confirmed the folder, the terminal New tab opens; a folder whose checkout already has a tab there keeps what it has, and a terminal that cannot be opened leaves the project registered on its start screen with no notice, the reason going to the diagnostic log (`open_registration_terminals` in `herdr-core/src/runtime/device_catalog.rs`).
+A project added on this machine, whichever way below and from the first-run wizard too, opens in front on the one terminal tab its registration starts there (`spawn_workspace_creation` in `hide-core/src/live.rs`), never on the empty start screen, however many checkouts Hide has remembered before (`WorkspaceViews::entry` in `hide-core/src/workspace_views.rs`).
+A project added on a device opens on one terminal tab there once that device's helper has confirmed the folder, the terminal New tab opens; a folder whose checkout already has a tab there keeps what it has, and a terminal that cannot be opened leaves the project registered on its start screen with no notice, the reason going to the diagnostic log (`open_registration_terminals` in `hide-core/src/runtime/device_catalog.rs`).
 A refusal stays inside the dialog as an alert naming the folder, and the dialog stays open for another pick: `already_registered` from the shell's own registrations, before anything is sent, and `outside_home`, `home_root`, `not_found`, `not_a_directory` or `invalid_path` from hided's `$HOME` line, or the core's own error.
 A folder in a Git repository that holds the whole home folder (dotfiles kept in `~/.git`), on this machine or a device, has its own line, `홈 폴더 전체를 담은 Git 저장소 안의 폴더라 프로젝트로 추가할 수 없어요.` (`This folder is inside a Git repository that holds your whole home folder, so it can't be added as a project.`), from hided's `project_holds_home` or a helper's `workspace.create_refused.project_holds_home`, so it is not read as home itself.
 A folder outside home, picked or typed, on this machine or a device (PRD wsl-device B15, B21), is asked about once instead: hided's `needs_confirmation`, or a device helper's `workspace.create_refused.needs_confirmation`, shows `홈 밖 폴더예요. 이 폴더를 프로젝트로 추가할까요?` (`This folder is outside your home folder. Add it as a project?`) with the path of what would be added (the folder, or the root of the project outside home it belongs to, such as the repository a subfolder or a linked worktree is in, so the operator is asked once) and an `추가` button that holds the keyboard, and, when the folder is under the PC's C drive as WSL shows it (`/mnt/c`), the line `C드라이브 폴더는 WSL에서 조금 느릴 수 있어요.`; `추가` sends the path shown with its confirmation; the dialog closes when the project appears or keeps the folder's own refusal (`not_found`, `not_a_directory`, `home_root`, `outside_home` for a link under home that leads out of it) with the dialog open.
@@ -1793,7 +1793,7 @@ A folder holding nothing, or only `.git` and a Finder `.DS_Store`, is what a cre
 
 ### Opening a folder from a terminal
 
-CLI owner: `open_path` in `hided/src/cli.rs`; daemon owner: `hided/src/project_open.rs`; core owner: `herdr-core/src/runtime/project_open.rs`; page owner: `showProjectOpened` in `web/src/opening.ts`; desktop owner: the `hide:come-forward` channel in `desktop/src/main/host.ts`.
+CLI owner: `open_path` in `hided/src/cli.rs`; daemon owner: `hided/src/project_open.rs`; core owner: `hide-core/src/runtime/project_open.rs`; page owner: `showProjectOpened` in `web/src/opening.ts`; desktop owner: the `hide:come-forward` channel in `desktop/src/main/host.ts`.
 `hide .`, `hide <path>` and `hide open <path>` open a folder as a project from any terminal, the way `code .` opens VS Code.
 The path is read on the machine the command runs on, from that shell's working directory.
 A folder a registered checkout holds, the checkout itself or a folder inside it, brings that checkout in front, the deepest one when worktrees nest, and registers nothing.
@@ -1818,7 +1818,7 @@ A row the engine shows without a registration offers `Remove project…` too: it
 
 ## Home
 
-Core owner: `herdr-core/src/runtime/home.rs`, `hide-host/src/home.rs` (see ARCHITECTURE.md, Home). Web owner: `web/src/devices.ts`; the sidebar draws no Home row (see Sidebar hierarchy).
+Core owner: `hide-core/src/runtime/home.rs`, `hide-host/src/home.rs` (see ARCHITECTURE.md, Home). Web owner: `web/src/devices.ts`; the sidebar draws no Home row (see Sidebar hierarchy).
 
 Each device has one Home, `~/hide` in that account's home directory, for work that belongs to no project or to several.
 Nothing is made on a device until its Home is first used: the first agent or tab started there makes `~/hide` with one link per project registered on that device and Hide's `AGENTS.md` with a `CLAUDE.md` link to it, and a device whose Home was never used has no `~/hide`.
@@ -1836,7 +1836,7 @@ The wizard's existing agents, notifications and project steps carry their matchi
 The ready Home with no projects carries the ai owl.
 
 
-Core owner: `herdr-core/src/runtime/first_run.rs`, `herdr-core/src/runtime/kit.rs` (`apply_agent_onboarding`). Web owner: `web/src/FirstRunWizard.tsx`, `web/src/firstRun.ts`, `web/src/NotificationControls.tsx`, `web/src/agentNotices.ts`, `web/src/ScreenIntro.tsx`. Desktop owner: `desktop/src/main/notify.ts`, `desktop/src/main/notificationPermission.ts`, `desktop/src/main/host.ts` (`showBadge`, `openNotification`), `desktop/static/status.html`.
+Core owner: `hide-core/src/runtime/first_run.rs`, `hide-core/src/runtime/kit.rs` (`apply_agent_onboarding`). Web owner: `web/src/FirstRunWizard.tsx`, `web/src/firstRun.ts`, `web/src/NotificationControls.tsx`, `web/src/agentNotices.ts`, `web/src/ScreenIntro.tsx`. Desktop owner: `desktop/src/main/notify.ts`, `desktop/src/main/notificationPermission.ts`, `desktop/src/main/host.ts` (`showBadge`, `openNotification`), `desktop/static/status.html`.
 
 The desktop app shows `Starting Hide…` while it reaches Hide, and never the word hided; a failure shows its reason in one line with Retry and `Copy diagnostics`, which copies the app's build, the reason code and where the host log is, and shows the same text to select by hand when the clipboard refuses it (PRD first-run-onboarding B1, B2).
 On a machine whose kit has never run, the first-run wizard opens over the shell: Agents, Devices when this computer knows another machine, Notifications and how to start.
@@ -2170,7 +2170,7 @@ A browser tab and the phone have no button, card, dot or update line.
 
 ## Moving a Herdr session into Hide
 
-Core owner: `herdr-core/src/runtime/herdr_import.rs` (`status.herdr_import`, `status.herdr_import_devices`, the `herdr_import` event), `hided/src/herdr_transition.rs` (what is found and what a move or an import does on this machine), `herdr-core/src/herdr_import/device.rs` (on a device). Web owner: `web/src/HerdrImport.tsx`, `web/src/herdrImportRules.ts`, `web/src/i18n/resources/herdrImport.ts`.
+Core owner: `hide-core/src/runtime/herdr_import.rs` (`status.herdr_import`, `status.herdr_import_devices`, the `herdr_import` event), `hided/src/herdr_transition.rs` (what is found and what a move or an import does on this machine), `hide-core/src/herdr_import/device.rs` (on a device). Web owner: `web/src/HerdrImport.tsx`, `web/src/herdrImportRules.ts`, `web/src/i18n/resources/herdrImport.ts`.
 
 PRD engine-bundle-4-herdr-removal D-6 to D-8, D-10, B2 to B5, B11, B14 to B18; [ARCHITECTURE.md](ARCHITECTURE.md#moving-a-herdr-session-into-the-cores-own-engine) owns what a move and an import do.
 While Hide's own Herdr runs with something to move, a dialog asks `Herdr is running <n> tabs and <n> agents` (or `Herdr is running <n> tabs` with no agent), says `Moving ends the commands running in them, and the agents reopen where their conversations left off.`, and offers `Later` and a destructive `Move <n> agents` (or `Move <n> tabs`), with neither chosen beforehand, so Enter presses nothing; Escape and a press outside do not close it.
@@ -2289,7 +2289,7 @@ Bump a chapter's `version` when its steps change, so a learner's old progress re
 
 ## Search keyboard navigation
 
-Web owner: `web/src/SearchPalette.tsx` (⌘K), `web/src/search.ts`, `web/src/relations.ts`, `web/src/searchDetail.ts`, `web/src/searchGithub.ts`, `web/src/Palette.tsx` (⌘P and the diff palette), `web/src/components/sidebar-header.tsx`; core owner for the GitHub search: `herdr-core/src/runtime/issues.rs`.
+Web owner: `web/src/SearchPalette.tsx` (⌘K), `web/src/search.ts`, `web/src/relations.ts`, `web/src/searchDetail.ts`, `web/src/searchGithub.ts`, `web/src/Palette.tsx` (⌘P and the diff palette), `web/src/components/sidebar-header.tsx`; core owner for the GitHub search: `hide-core/src/runtime/issues.rs`.
 
 ⌘K goes to things; it runs no command except `에이전트 시작…` and `브라우저에서 URL 열기`.
 On the web, the sidebar's Search row, which shows `Search` and the bound chord, opens the same palette Command+K opens, and the query row carries an `Esc` keycap.

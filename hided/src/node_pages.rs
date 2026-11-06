@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use herdr_core::workspace_control::BrowserRouteSource;
+use hide_core::workspace_control::BrowserRouteSource;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::watch;
@@ -122,7 +122,7 @@ impl PageSources for NodePages {
                     .read_to_vec()
             });
         let bytes = answer.map_err(|error| {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_pages",
                 "kind": "source.failed",
                 "generation": link.generation,

@@ -63,7 +63,7 @@ class AScreenChangeMustShowItself(unittest.TestCase):
 
 class NoScreenNeedsNoScreenshot(unittest.TestCase):
     def test_a_change_outside_every_screen_passes(self):
-        ok, _ = CHECK.verdict(BODY, ['herdr-core/src/lib.rs', 'docs/UI_BEHAVIOR.md', 'scripts/ci-plan.py'])
+        ok, _ = CHECK.verdict(BODY, ['hide-core/src/lib.rs', 'docs/UI_BEHAVIOR.md', 'scripts/ci-plan.py'])
         self.assertTrue(ok)
 
     def test_tests_and_snapshots_are_not_a_screen(self):

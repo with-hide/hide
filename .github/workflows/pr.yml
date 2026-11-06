@@ -300,15 +300,15 @@ jobs:
       - name: Shell integration and agent start in real shells
         # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
         # fish read the user's files in their order, zsh gives ZDOTDIR back,
-        # and the mark comes after them. herdr-core's
+        # and the mark comes after them. hide-core's
         # engine/own/shell_line.rs: zsh, bash and fish run the resume line
-        # the core's own engine types after a reboot. herdr-core's
+        # the core's own engine types after a reboot. hide-core's
         # engine/contract.rs: the core's own engine over pane holders started
         # from the built holder meets the engine contract.
         # hide-node's ssh/bootstrap_tests.rs: the one remote command a device's
         # ssh runs starts the start script in zsh, bash, fish, tcsh and BSD csh
         # login shells.
-        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'herdr-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
+        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
         timeout-minutes: 15
         run: |
           sudo apt-get install -y --no-install-recommends zsh fish tcsh csh
@@ -317,7 +317,7 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-node --lib -E 'test(=ssh::host::bootstrap::tests::the_remote_command_starts_the_script_in_every_login_shell)' --run-ignored only --no-capture
           bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
           export HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p hide-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
       - name: Every gh command line on the oldest gh Hide supports
         # hide-host/src/gh.rs: each command line the node runs `gh` with
         # parses on `MINIMUM_VERSION` (hide-node-link/src/gh.rs), which
@@ -415,10 +415,10 @@ jobs:
       # picks its tests with `-E`, so cargo resolves features once and the
       # test binaries are built once, in `Build the Windows test binaries`.
       # When each step named only its own package, each resolved features
-      # differently and rebuilt the crates under it: herdr-core compiled three
+      # differently and rebuilt the crates under it: hide-core compiled three
       # times and compiling took about 6 of the job's 11 minutes (2026-10-05).
       TEST_TARGETS: >-
-        -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p herdr-core -p hide-ai
+        -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p hide-core -p hide-ai
         -p hide-agent-adapter -p hide-desk -p hide-shell
         --lib --bin hide-agent-hooks --test it
     steps:
@@ -475,13 +475,13 @@ jobs:
         timeout-minutes: 10
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-ai::it) & test(/^claude_cli::usage::/)'
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(zoneinfo::) | test(usage::tests))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(zoneinfo::) | test(usage::tests))'
       - name: Native session original repository paths
         # Windows agents record native separators; the owning node must
         # answer catalog-compatible paths without certifying old history.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=links::store::ledger::tests::native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling)'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=links::store::ledger::tests::native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling)'
       - name: Letters and agent sleep on the state folder's durable files
         # The ledger opens from a real state folder, making a missing chain
         # through the platform's directory flushes, and a letter goes from
@@ -490,7 +490,7 @@ jobs:
         # Windows refused both before hide-platform flushed folders there.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
       - name: Agent sleep ends the agent's process tree
         # Claude Code, Codex and Antigravity sleep (and Reopen) by ending the
         # pane's foreground job through the node, which Windows refused as
@@ -500,7 +500,7 @@ jobs:
         # pressed again only on what the agent shows (with-hide/hide-private#37).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=agent_sleep_engine::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started) | test(=agent_sleep_engine::tests::an_agent_that_asks_for_its_quit_key_again_gets_a_second_press) | test(=agent_sleep_engine::tests::an_agent_quitting_on_its_first_press_is_sent_no_second_one) | test(=agent_sleep_engine::tests::a_press_that_clears_a_draft_is_followed_by_the_quit))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=agent_sleep_engine::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started) | test(=agent_sleep_engine::tests::an_agent_that_asks_for_its_quit_key_again_gets_a_second_press) | test(=agent_sleep_engine::tests::an_agent_quitting_on_its_first_press_is_sent_no_second_one) | test(=agent_sleep_engine::tests::a_press_that_clears_a_draft_is_followed_by_the_quit))'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.
@@ -524,7 +524,7 @@ jobs:
         timeout-minutes: 5
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-host::it) & test(/^branch_merge::.*(catch|upstream)/)'
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/worktree_control::tests::a_(new_branch_starts|local_base_with_unpushed)/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(/worktree_control::tests::a_(new_branch_starts|local_base_with_unpushed)/)'
       - name: Agent folders from the one resolver and the callers that judge an override
         # hide_agent_adapter::AgentAdapter::home on Windows path forms (drive,
         # UNC and verbatim paths moving the folder; drive-relative and
@@ -533,7 +533,7 @@ jobs:
         # whatever the step above answered.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-adapter) & kind(lib) & test(/^home::/)) | (package(herdr-core) & kind(lib) & test(/^environment::/)) | (package(hide-desk) & kind(lib) & test(/^codex::/))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-adapter) & kind(lib) & test(/^home::/)) | (package(hide-core) & kind(lib) & test(/^environment::/)) | (package(hide-desk) & kind(lib) & test(/^codex::/))'
       - name: Install kit and its Windows command shim
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
@@ -557,14 +557,14 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
           python scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-conpty"
       - name: The core's own engine in Windows PowerShell
-        # herdr-core/src/engine/contract.rs: the core's own engine over pane
+        # hide-core/src/engine/contract.rs: the core's own engine over pane
         # holders meets the engine contract in Windows PowerShell.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.holder.outcome == 'success' }}
         timeout-minutes: 10
         env:
           HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}\target\debug\hide-holder.exe
           HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/^engine::contract::/)' --run-ignored only --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(/^engine::contract::/)' --run-ignored only --no-capture
       - name: Windows' own OpenSSH asks through Hide's askpass
         # hided/tests/it/system_ssh.rs (PRD system-ssh-device-link, B34): the
         # inbox ssh-keygen.exe reads a key's passphrase through `hide` as its
@@ -573,13 +573,13 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(=system_ssh::windows_inbox_openssh_asks_through_hides_askpass)' --run-ignored only --no-capture
       - name: A core's stop and a device's removal end a dial through Windows' own ssh
-        # herdr-core/src/handle.rs (with-hide/hide-private#75): ssh.exe dials a
+        # hide-core/src/handle.rs (with-hide/hide-private#75): ssh.exe dials a
         # loopback listener that never sends the SSH greeting, and the core
         # ends that ssh, which a job object owns on Windows, when it stops or
         # the device is removed.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=handle::tests::a_stopping_core_ends_a_dial_to_a_device_that_never_greets) | test(=handle::tests::removing_a_device_ends_its_dial_that_waits_for_a_greeting))' --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=handle::tests::a_stopping_core_ends_a_dial_to_a_device_that_never_greets) | test(=handle::tests::removing_a_device_ends_its_dial_that_waits_for_a_greeting))' --no-capture
       - name: Attribute a native listening port to its working directory
         # Cleanup must refuse an unreadable in-use check. This unchanged core
         # contract exposes the native read reason that a browser error lacks.
@@ -587,8 +587,8 @@ jobs:
         timeout-minutes: 5
         run: |
           status=0
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=ports::tests::a_real_listener_is_found_and_attributed_to_the_directory_it_runs_in)' --no-capture || status=$?
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=ports::tests::cleanup_keeps_a_checkout_in_use_when_a_listener_starts_through_another_spelling)' --no-capture || status=$?
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=ports::tests::a_real_listener_is_found_and_attributed_to_the_directory_it_runs_in)' --no-capture || status=$?
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=ports::tests::cleanup_keeps_a_checkout_in_use_when_a_listener_starts_through_another_spelling)' --no-capture || status=$?
           exit "$status"
       - uses: pnpm/action-setup@v6
         if: ${{ !cancelled() }}

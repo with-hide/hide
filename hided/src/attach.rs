@@ -416,7 +416,7 @@ pub async fn serve(
         // The folder admits only this account already; a peer the system
         // cannot name, or names as another account, is not taken either.
         if !stream.peer_is_this_account().unwrap_or(false) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.refused",
                 "reason": "other_account",
@@ -424,7 +424,7 @@ pub async fn serve(
             continue;
         }
         let Ok(permit) = Arc::clone(&limit).try_acquire_owned() else {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.busy",
                 "cap": MAX_ATTACHING,
@@ -460,7 +460,7 @@ fn accept_nodes(
             }
             Err(_) if closed.load(Ordering::SeqCst) => return,
             Err(error) => {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "node_link",
                     "kind": "attach.accept_failed",
                     "message": error.to_string(),
@@ -488,7 +488,7 @@ impl Drop for CloseOnDrop {
 }
 
 fn attach_stopped(message: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_link",
         "kind": "attach.stopped",
         "message": message,
@@ -540,7 +540,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
                 service
                     .moves
                     .release(&request.intent, &request.target, RELEASE_ANSWER_WITHIN);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "core_move",
                 "kind": "release.asked",
                 "intent": request.intent,
@@ -564,7 +564,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         }
     };
     let refuse = |writer: &mut LocalStream, reason: &str| {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_link",
             "kind": "attach.refused",
             "node": node.node,
@@ -685,7 +685,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         .core
         .accept_inbound_node(&node.node, &node.label, arrived)
     {
-        Ok(()) => herdr_core::diagnostic!(json!({
+        Ok(()) => hide_core::diagnostic!(json!({
             "component": "node_link",
             "kind": "attach.linked",
             "node": node.node,
@@ -695,7 +695,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         // The transport was dropped with the refusal, which closed the link.
         Err(reason) => {
             service.grants.revoke(&relay_token);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.refused",
                 "node": node.node,
@@ -724,7 +724,7 @@ fn standing_refusal(service: &AttachService, node: &str) -> Option<String> {
     match earlier.call(hide_node_link::protocol::Call::Hello, STALE_PROBE) {
         Ok(_) => Some(reason),
         Err(error) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.superseded",
                 "node": node,
@@ -737,7 +737,7 @@ fn standing_refusal(service: &AttachService, node: &str) -> Option<String> {
 }
 
 fn attach_failed(node: &str, message: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_link",
         "kind": "attach.failed",
         "node": node,

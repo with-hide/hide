@@ -220,7 +220,7 @@ impl Phase {
             } => (
                 "stopped",
                 None,
-                Some(herdr_core::DeviceProblem::of(failure.problem).code()),
+                Some(hide_core::DeviceProblem::of(failure.problem).code()),
             ),
             Self::Waiting { reason } => (
                 "waiting",
@@ -713,7 +713,7 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
         // A wait on the operator has no retry: only their connect ends it.
         let on_operator = reason.waits_for_operator();
         let wait = (!on_operator).then(|| backoff.failed());
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_role",
             "kind": "link.ended",
             "core": placement.node,
@@ -781,7 +781,7 @@ fn watch(shared: &Shared) {
                 (Phase::Live(_), Some(live)) => Some(live.core.alive(ANSWER_WITHIN)),
                 _ => None,
             };
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_role",
                 "kind": "machine.moved",
                 "moved": moved,
@@ -797,7 +797,7 @@ fn watch(shared: &Shared) {
             None => port.look(&phase, || false),
         };
         if came_back {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_role",
                 "kind": "core.reachable_again",
             }));
@@ -979,7 +979,7 @@ fn parked(shared: &Shared) -> bool {
     if set_phase(shared, Phase::Disconnected) {
         return true;
     }
-    herdr_core::diagnostic!(json!({"component": "node_role", "kind": "link.disconnected"}));
+    hide_core::diagnostic!(json!({"component": "node_role", "kind": "link.disconnected"}));
     let mut state = lock(&shared.state);
     while state.disconnected && !state.stopping {
         state = shared
@@ -1098,7 +1098,7 @@ fn update_core(
     let spent = lock(&shared.state).update.attempt();
     if let Err(Spent { reason, now }) = spent {
         if now {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_role",
                 "kind": "update.failed",
                 "core": placement.node,
@@ -1130,7 +1130,7 @@ fn update_core(
         {
             record.extend(fields);
         }
-        herdr_core::diagnostic!(record);
+        hide_core::diagnostic!(record);
     };
     let failed = |reason: String| {
         lock(&shared.state).update = Update::Failed(reason.clone());
@@ -1293,7 +1293,7 @@ fn serve_link(
                 }
             };
             if let Some(refused) = refused {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "node_role",
                     "kind": "link.build_refused",
                     "core": placement.node,
@@ -1336,7 +1336,7 @@ fn serve_link(
         .get_ref()
         .set_read_timeout(None)
         .map_err(|error| ended(error.to_string()))?;
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_role",
         "kind": "link.accepted",
         "core": placement.node,
@@ -1567,7 +1567,7 @@ mod tests {
             assert_eq!(frame["payload"]["phase"], "stopped");
             assert_eq!(
                 frame["payload"]["problem"],
-                herdr_core::DeviceProblem::of(problem).code()
+                hide_core::DeviceProblem::of(problem).code()
             );
         }
         for (error, _) in dial_outcomes() {

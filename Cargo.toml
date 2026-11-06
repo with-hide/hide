@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "hide-agent-adapter",
-    "herdr-core",
+    "hide-core",
     "hide-holder",
     "hide-holder-protocol",
     "hide-host",
@@ -43,7 +43,7 @@ strip = "symbols"
 # per worktree. See `Build Output Belongs To Its Worktree` in AGENTS.md.
 incremental = false
 # No debug info, for the workspace's crates and every dependency: it was most
-# of a debug build's size (65% of a dependency's objects, half of herdr-core's
+# of a debug build's size (65% of a dependency's objects, half of hide-core's
 # even at line tables only), and on macOS line tables also keep every linked
 # object file beside the test binaries. A panic still names its file and
 # line; a backtrace names functions only. docs/BUILD.md, "Debug builds carry

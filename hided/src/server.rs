@@ -346,7 +346,7 @@ async fn hide_ai_wake(
         return StatusCode::BAD_REQUEST.into_response();
     }
     let event = json!({
-        "schema_version": herdr_core::SCHEMA_VERSION,
+        "schema_version": hide_core::SCHEMA_VERSION,
         "kind": "hide_ai_wake",
         "payload": {"cause": request.cause},
     });
@@ -435,7 +435,7 @@ async fn run_browser_action(
     + Send
     + 'static,
 ) -> Response {
-    use herdr_core::workspace_control::{ActionPreparation, Query};
+    use hide_core::workspace_control::{ActionPreparation, Query};
     if !request.valid() {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -1111,7 +1111,7 @@ async fn screen_loop(
                     // A window that fell behind misses those notifications;
                     // the next change is announced as usual.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "desktop_notices", "kind": "agent_notice.lagged",
                             "connection": connection, "missed": missed,
                         }));
@@ -1298,11 +1298,11 @@ async fn screen_loop(
 
 /// What a refused delivery or agent command asks of its caller.
 pub(crate) fn delivery_next_action(code: &str) -> &'static str {
-    match herdr_core::coordination::split_refusal(code).0 {
+    match hide_core::coordination::split_refusal(code).0 {
         // A spawn that hands a plan step, or a letter that would wake a
         // plan's sleeping child, is refused as the plan words it (PRD
         // hide-plan-delegate B5, B6).
-        code if code.starts_with("plan_") => herdr_core::plans::next_action(code),
+        code if code.starts_with("plan_") => hide_core::plans::next_action(code),
         "agent_pane_required" => {
             "Run the command inside a pane where the agent is running; an agent on Codex's shared daemon needs a session started with --no-daemon"
         }
@@ -1421,7 +1421,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
 /// on this machine, so the page reports that address and the CLI names this
 /// one instead. `None` when the checkout has no such display.
 pub(crate) fn relay_facts(
-    views: &[herdr_core::workspace_control::View],
+    views: &[hide_core::workspace_control::View],
     display_id: &str,
 ) -> Option<Value> {
     let view = views.iter().find(|view| view.view_id == display_id)?;
@@ -1437,7 +1437,7 @@ pub(crate) fn relay_ready(display_id: &str, facts: &Value) -> Value {
 /// devices the caller could have used says so in its next action, and its
 /// reason stays the code.
 fn refusal_answer(reason: String, next_action: &'static str) -> (String, String) {
-    match herdr_core::coordination::split_refusal(&reason) {
+    match hide_core::coordination::split_refusal(&reason) {
         (code @ "shell_starting", Some(screen)) if !screen.is_empty() => (
             code.to_owned(),
             format!("{next_action}. Its screen ends with: {screen}"),
@@ -1478,10 +1478,10 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
 /// answer: a spawn's `spawn` (`{"id","pane"}`) and a pane send's `sent`
 /// (`{"text_sent","keys_sent","enter_sent"}`).
 fn refusal_field(reason: &str) -> Option<(&'static str, Value)> {
-    let (code, detail) = herdr_core::coordination::split_refusal(reason);
-    let name = if herdr_core::coordination::INCOMPLETE_SPAWN.contains(&code) {
+    let (code, detail) = hide_core::coordination::split_refusal(reason);
+    let name = if hide_core::coordination::INCOMPLETE_SPAWN.contains(&code) {
         "spawn"
-    } else if herdr_core::pane_command::PARTIAL.contains(&code) {
+    } else if hide_core::pane_command::PARTIAL.contains(&code) {
         "sent"
     } else {
         return None;
@@ -1499,27 +1499,27 @@ fn valid_caller_hint(value: &serde_json::Value) -> bool {
 }
 
 enum ScopedRequest {
-    Query(herdr_core::workspace_control::Query),
-    Action(herdr_core::workspace_control::Action),
+    Query(hide_core::workspace_control::Query),
+    Action(hide_core::workspace_control::Action),
     BrowserConnect(Option<String>),
     /// `hide browser` page commands: the same checks as a display
     /// connection, then this socket carries the CDP frames.
     BrowserRelay(String),
-    Delivery(Box<herdr_core::delivery::Command>, Option<String>),
+    Delivery(Box<hide_core::delivery::Command>, Option<String>),
     /// `hide links`: a read of the link record, which needs no shell.
-    Links(herdr_core::links::query::LinksQuery),
+    Links(hide_core::links::query::LinksQuery),
     /// `hide session list|record|read`: a read of the Project's sessions,
     /// which needs no shell.
-    Session(herdr_core::links::session_command::SessionCommand),
+    Session(hide_core::links::session_command::SessionCommand),
     /// `hide memory`: Project Memory's own store, which needs no shell.
-    Memory(herdr_core::memory_command::MemoryCommand),
+    Memory(hide_core::memory_command::MemoryCommand),
     /// `hide workspace memory`: a hook's Project Memory, which needs no
     /// shell.
-    MemoryHook(herdr_core::memory_hook::Ask),
+    MemoryHook(hide_core::memory_hook::Ask),
     /// `hide mission`: a Conductor's mission record, the core's own.
-    Mission(Box<herdr_core::missions::MissionCommand>),
+    Mission(Box<hide_core::missions::MissionCommand>),
     /// `hide task`: the caller's session's own plan, the core's record.
-    Plan(herdr_core::plans::PlanCommand),
+    Plan(hide_core::plans::PlanCommand),
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
     AgentCatalog(Option<String>),
@@ -1541,16 +1541,16 @@ enum ScopedRequest {
         actor: Option<String>,
     },
     /// `hide device`: the core's own device registrations.
-    Device(herdr_core::device_command::DeviceCommand),
+    Device(hide_core::device_command::DeviceCommand),
     /// `hide pane`, `hide agent read` and `hide workspace purpose`: run
     /// through the core's engine, which needs no shell.
-    Pane(herdr_core::pane_command::PaneCommand),
+    Pane(hide_core::pane_command::PaneCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
     /// (`project_open`).
     ProjectOpen(String),
     /// `hide workspace remove`: the delete dialog's removal of a worktree,
     /// run by the core, which needs no shell.
-    WorktreeRemove(herdr_core::worktree_command::WorktreeRemove),
+    WorktreeRemove(hide_core::worktree_command::WorktreeRemove),
 }
 
 impl ScopedRequest {
@@ -1613,10 +1613,10 @@ async fn scoped_client_loop(
                     let command = match value["type"].as_str() {
                         Some("workspace_query") => match value["query"].as_str() {
                             Some("info") => Some(ScopedRequest::Query(
-                                herdr_core::workspace_control::Query::Info,
+                                hide_core::workspace_control::Query::Info,
                             )),
                             Some("view_list") => Some(ScopedRequest::Query(
-                                herdr_core::workspace_control::Query::ViewList,
+                                hide_core::workspace_control::Query::ViewList,
                             )),
                             Some("browser_connect") => match value.get("display_id") {
                                 None | Some(Value::Null) => {
@@ -1636,25 +1636,25 @@ async fn scoped_client_loop(
                             _ => None,
                         },
                         Some("workspace_action") => {
-                            serde_json::from_value::<herdr_core::workspace_control::Action>(
+                            serde_json::from_value::<hide_core::workspace_control::Action>(
                                 value["command"].clone(),
                             )
                             .ok()
                             .map(ScopedRequest::Action)
                         }
                         Some("links") => serde_json::from_value::<
-                            herdr_core::links::query::LinksQuery,
+                            hide_core::links::query::LinksQuery,
                         >(value["query"].clone())
                         .ok()
                         .filter(|query| query.target.valid())
                         .map(ScopedRequest::Links),
                         Some("session") => serde_json::from_value::<
-                            herdr_core::links::session_command::SessionCommand,
+                            hide_core::links::session_command::SessionCommand,
                         >(value["command"].clone())
                         .ok()
                         .map(ScopedRequest::Session),
                         Some("delivery") => {
-                            herdr_core::delivery::Command::from_wire(value["command"].clone())
+                            hide_core::delivery::Command::from_wire(value["command"].clone())
                                 .ok()
                                 .filter(|_| valid_caller_hint(&value))
                                 .map(|command| {
@@ -1665,24 +1665,24 @@ async fn scoped_client_loop(
                                 })
                         }
                         Some("memory") => serde_json::from_value::<
-                            herdr_core::memory_command::MemoryCommand,
+                            hide_core::memory_command::MemoryCommand,
                         >(value["command"].clone())
                         .ok()
-                        .filter(herdr_core::memory_command::MemoryCommand::valid)
+                        .filter(hide_core::memory_command::MemoryCommand::valid)
                         .map(ScopedRequest::Memory),
-                        Some("memory_hook") => herdr_core::memory_hook::Ask::from_wire(&value)
+                        Some("memory_hook") => hide_core::memory_hook::Ask::from_wire(&value)
                             .map(ScopedRequest::MemoryHook),
                         Some("mission") => serde_json::from_value::<
-                            herdr_core::missions::MissionCommand,
+                            hide_core::missions::MissionCommand,
                         >(value["command"].clone())
                         .ok()
-                        .filter(herdr_core::missions::MissionCommand::valid)
+                        .filter(hide_core::missions::MissionCommand::valid)
                         .map(|command| ScopedRequest::Mission(Box::new(command))),
-                        Some("plan") => serde_json::from_value::<herdr_core::plans::PlanCommand>(
+                        Some("plan") => serde_json::from_value::<hide_core::plans::PlanCommand>(
                             value["command"].clone(),
                         )
                         .ok()
-                        .filter(herdr_core::plans::PlanCommand::valid)
+                        .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
                         Some("agent_catalog") => match value.get("machine") {
                             None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
@@ -1725,27 +1725,27 @@ async fn scoped_client_loop(
                             })
                         }
                         Some("device") => serde_json::from_value::<
-                            herdr_core::device_command::DeviceCommand,
+                            hide_core::device_command::DeviceCommand,
                         >(value["command"].clone())
                         .ok()
-                        .filter(herdr_core::device_command::DeviceCommand::valid)
+                        .filter(hide_core::device_command::DeviceCommand::valid)
                         .map(ScopedRequest::Device),
                         Some("pane") => serde_json::from_value::<
-                            herdr_core::pane_command::PaneCommand,
+                            hide_core::pane_command::PaneCommand,
                         >(value["command"].clone())
                         .ok()
                         .map(ScopedRequest::Pane),
                         Some("worktree_remove") => {
-                            serde_json::from_value::<herdr_core::worktree_command::WorktreeRemove>(
+                            serde_json::from_value::<hide_core::worktree_command::WorktreeRemove>(
                                 value["command"].clone(),
                             )
                             .ok()
-                            .filter(herdr_core::worktree_command::WorktreeRemove::valid)
+                            .filter(hide_core::worktree_command::WorktreeRemove::valid)
                             .map(ScopedRequest::WorktreeRemove)
                         }
                         Some("project_open") => value["path"]
                             .as_str()
-                            .filter(|path| herdr_core::project_open::valid_path(path))
+                            .filter(|path| hide_core::project_open::valid_path(path))
                             .map(|path| ScopedRequest::ProjectOpen(path.to_owned())),
                         _ => None,
                     };
@@ -1806,7 +1806,7 @@ async fn scoped_client_loop(
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
                                     }
                                     let result = core.workspace_query(&cap.context.device_id, &cap.pane_id,
-                                        herdr_core::workspace_control::Query::ViewList)
+                                        hide_core::workspace_control::Query::ViewList)
                                         .map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                     if result.context != cap.context {
                                         let (reason, next_action) = cap.changed_refusal();
@@ -1820,7 +1820,7 @@ async fn scoped_client_loop(
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
                                     }
                                     let result = core.workspace_query(&cap.context.device_id, &cap.pane_id,
-                                        herdr_core::workspace_control::Query::ViewList)
+                                        hide_core::workspace_control::Query::ViewList)
                                         .map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                     if result.context != cap.context {
                                         let (reason, next_action) = cap.changed_refusal();
@@ -1847,7 +1847,7 @@ async fn scoped_client_loop(
                                         "links_unavailable".to_owned(),
                                         "Retry; the reason is in Hide's diagnostic log",
                                     ))?;
-                                    herdr_core::links::query::run(&scope, &query, own.as_ref())
+                                    hide_core::links::query::run(&scope, &query, own.as_ref())
                                         .map_err(|(reason, next_action)| (reason.to_owned(), next_action))?
                                 }
                                 ScopedRequest::Session(command) => {
@@ -1855,13 +1855,13 @@ async fn scoped_client_loop(
                                         "links_unavailable".to_owned(),
                                         "Retry; the reason is in Hide's diagnostic log",
                                     ))?;
-                                    herdr_core::links::session_command::run(&scope, &command, core.as_ref())?
+                                    hide_core::links::session_command::run(&scope, &command, core.as_ref())?
                                 }
                                 ScopedRequest::Memory(command) => {
                                     core.prepare_memory(&cap.context.device_id, &cap.pane_id, &cap.context, command)
-                                        .and_then(herdr_core::memory_command::PreparedMemory::run)
+                                        .and_then(hide_core::memory_command::PreparedMemory::run)
                                         .map_err(|code| {
-                                            let next = herdr_core::memory_command::next_action(&code);
+                                            let next = hide_core::memory_command::next_action(&code);
                                             (code, next)
                                         })?
                                 }
@@ -1869,12 +1869,12 @@ async fn scoped_client_loop(
                                     // A take hands the former Conductor's
                                     // children to the caller's registration,
                                     // so the caller has one first (B43).
-                                    if matches!(*command, herdr_core::missions::MissionCommand::Take { .. }) {
+                                    if matches!(*command, hide_core::missions::MissionCommand::Take { .. }) {
                                         crate::hook_request::delivery(
                                             &core,
                                             &cap,
-                                            herdr_core::delivery::Command::Agents {
-                                                command: herdr_core::coordination::Command::RegisterSelf {
+                                            hide_core::delivery::Command::Agents {
+                                                command: hide_core::coordination::Command::RegisterSelf {
                                                     project: Some(cap.context.checkout_path.clone()),
                                                 },
                                             },
@@ -1883,8 +1883,8 @@ async fn scoped_client_loop(
                                     }
                                     core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, *command)
                                         .map_err(|code| {
-                                            let next = herdr_core::missions::next_action(
-                                                herdr_core::coordination::split_refusal(&code).0,
+                                            let next = hide_core::missions::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)
                                         })?
@@ -1892,8 +1892,8 @@ async fn scoped_client_loop(
                                 ScopedRequest::Plan(command) => {
                                     core.plan(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .map_err(|code| {
-                                            let next = herdr_core::plans::next_action(
-                                                herdr_core::coordination::split_refusal(&code).0,
+                                            let next = hide_core::plans::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)
                                         })?
@@ -1915,14 +1915,14 @@ async fn scoped_client_loop(
                                 ScopedRequest::AgentSleep { id, actor } => {
                                     core.agent_sleep(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
                                         .map_err(|code| {
-                                            let next = herdr_core::coordination::sleep_next_action(&code);
+                                            let next = hide_core::coordination::sleep_next_action(&code);
                                             (code, next)
                                         })?
                                 }
                                 ScopedRequest::AgentArchive { id, actor } => {
                                     core.agent_archive(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
                                         .map_err(|code| {
-                                            let next = herdr_core::coordination::archive_next_action(&code);
+                                            let next = hide_core::coordination::archive_next_action(&code);
                                             (code, next)
                                         })?
                                 }
@@ -1938,27 +1938,27 @@ async fn scoped_client_loop(
                                 ScopedRequest::WorktreeRemove(command) => {
                                     core.worktree_remove(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .map_err(|reason| {
-                                            let code = herdr_core::coordination::split_refusal(&reason).0;
-                                            let next = herdr_core::worktree_command::next_action(code)
+                                            let code = hide_core::coordination::split_refusal(&reason).0;
+                                            let next = hide_core::worktree_command::next_action(code)
                                                 .unwrap_or_else(|| crate::server::delivery_next_action(code));
                                             (reason, next)
                                         })?
                                 }
                                 ScopedRequest::Pane(command) => {
                                     let refusal = |reason: String| {
-                                        let code = herdr_core::coordination::split_refusal(&reason).0;
-                                        let next = herdr_core::pane_command::next_action(code)
+                                        let code = hide_core::coordination::split_refusal(&reason).0;
+                                        let next = hide_core::pane_command::next_action(code)
                                             .unwrap_or_else(|| crate::server::delivery_next_action(code));
                                         (reason, next)
                                     };
                                     core.prepare_pane(&cap.context.device_id, &cap.pane_id, &cap.context, command)
-                                        .and_then(herdr_core::pane_command::Prepared::run)
+                                        .and_then(hide_core::pane_command::Prepared::run)
                                         .map_err(refusal)?
                                 }
                                 ScopedRequest::Device(command) => {
                                     core.device_command(&cap.context.device_id, command)
                                         .map_err(|code| {
-                                            let next = herdr_core::device_command::next_action(&code);
+                                            let next = hide_core::device_command::next_action(&code);
                                             (code, next)
                                         })?
                                 }
@@ -2015,7 +2015,7 @@ async fn scoped_client_loop(
                                         }
                                         None => action,
                                     };
-                                    if matches!(action, herdr_core::workspace_control::Action::OpenBrowser { .. }) && desktop_renderers.load(Ordering::SeqCst) == 0 {
+                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && desktop_renderers.load(Ordering::SeqCst) == 0 {
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
                                     }
                                     let preparation = core
@@ -2028,14 +2028,14 @@ async fn scoped_client_loop(
                                         )
                                         .map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                     let material = match preparation {
-                                        herdr_core::workspace_control::ActionPreparation::Cached(result) => {
+                                        hide_core::workspace_control::ActionPreparation::Cached(result) => {
                                             let result = result.map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                             return serde_json::to_value(result).map_err(|_| {
                                                 ("result_encoding_failed".to_owned(), "Reconnect Hide and retry")
                                             });
                                         }
-                                        herdr_core::workspace_control::ActionPreparation::Ready => Ok(None),
-                                        herdr_core::workspace_control::ActionPreparation::Read(source) => {
+                                        hide_core::workspace_control::ActionPreparation::Ready => Ok(None),
+                                        hide_core::workspace_control::ActionPreparation::Read(source) => {
                                             source.read().map(Some)
                                         }
                                     };
@@ -2647,7 +2647,7 @@ fn stage_page_shot(
 ) {
     match attachments.stage_view_shot(png) {
         Ok(name) => event["payload"]["shot"] = json!({"node": node, "name": name}),
-        Err(error) => herdr_core::diagnostic!(json!({
+        Err(error) => hide_core::diagnostic!(json!({
             "component": "browser_comment",
             "kind": "shot.stage_failed",
             "display_id": event.pointer("/payload/display_id"),
@@ -2749,8 +2749,8 @@ fn device_listing(
         Ok(channel) => channel,
         Err(message) => return unavailable("not_ready", None, message),
     };
-    use herdr_core::node_access::LinkError;
-    match herdr_core::node_access::list_folder(channel.as_ref(), &root, &relative) {
+    use hide_core::node_access::LinkError;
+    match hide_core::node_access::list_folder(channel.as_ref(), &root, &relative) {
         Ok(listing) => {
             let base = folder.trim_end_matches('/');
             let entries: Vec<Value> = listing
@@ -2854,7 +2854,7 @@ impl Demand {
 fn close_backlog_origin(
     core: &CoreHandle,
     connection: u64,
-    owner: &herdr_core::links::ledger::BacklogOriginIdentity,
+    owner: &hide_core::links::ledger::BacklogOriginIdentity,
 ) {
     let event = json!({
         "schema_version": SCHEMA_VERSION,
@@ -2871,8 +2871,8 @@ fn close_backlog_origin(
 
 fn origin_identity(
     event: &Value,
-) -> Result<herdr_core::links::ledger::BacklogOriginIdentity, String> {
-    let owner: herdr_core::links::ledger::BacklogOriginIdentity = serde_json::from_value(
+) -> Result<hide_core::links::ledger::BacklogOriginIdentity, String> {
+    let owner: hide_core::links::ledger::BacklogOriginIdentity = serde_json::from_value(
         event
             .get("payload")
             .cloned()
@@ -3577,9 +3577,9 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
         let channel = core
             .node_link(&walk_device)
             .map_err(|message| log("link.not_connected", message))?;
-        herdr_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+        hide_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
             log(
-                &herdr_core::node_access::link_failure_code(&error),
+                &hide_core::node_access::link_failure_code(&error),
                 error.to_string(),
             )
         })
@@ -3700,7 +3700,7 @@ pub(crate) async fn stream_device_file_bytes(
             (device.to_owned(), root.clone(), relative.clone());
         let range = tokio::task::spawn_blocking(move || {
             let channel = core.node_link(&read_device)?;
-            herdr_core::node_access::read_bytes(
+            hide_core::node_access::read_bytes(
                 channel.as_ref(),
                 &read_root,
                 &read_relative,
@@ -4150,7 +4150,7 @@ fn send_grid(state: &AppState, pane: &str, size: GridSize) {
         "payload": {"pane_id": pane, "cols": size.cols, "rows": size.rows},
     });
     if let Err(error) = state.core.dispatch(event.to_string().into_bytes()) {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "pane_sizes",
             "kind": "pane_sizes.dispatch_failed",
             "pane_id": pane,
@@ -4524,7 +4524,7 @@ pub fn classify_frame(have_revision: u64, payload_revision: Option<u64>) -> Opti
 async fn read_delta(
     state: &AppState,
     have_revision: u64,
-) -> Result<herdr_core::SnapshotDeltaPayload, ()> {
+) -> Result<hide_core::SnapshotDeltaPayload, ()> {
     let core = Arc::clone(&state.core);
     tokio::task::spawn_blocking(move || core.snapshot(have_revision))
         .await
@@ -4568,7 +4568,7 @@ async fn send_snapshot(
         struct Envelope<'a> {
             #[serde(rename = "type")]
             kind: &'static str,
-            payload: herdr_core::SnapshotDeltaWire<'a>,
+            payload: hide_core::SnapshotDeltaWire<'a>,
         }
         serde_json::to_string(&Envelope {
             kind: match kind {
@@ -4576,9 +4576,9 @@ async fn send_snapshot(
                 FrameKind::Delta => "delta",
             },
             payload: if granular {
-                herdr_core::SnapshotDeltaWire::granular(&payload)
+                hide_core::SnapshotDeltaWire::granular(&payload)
             } else {
-                herdr_core::SnapshotDeltaWire::borrow(&payload)
+                hide_core::SnapshotDeltaWire::borrow(&payload)
             },
         })
     })
@@ -5021,7 +5021,7 @@ mod tests {
             refusal_field(&partial),
             Some(("sent", serde_json::from_str(sent).unwrap()))
         );
-        let next = herdr_core::pane_command::next_action("operator_typing").unwrap();
+        let next = hide_core::pane_command::next_action("operator_typing").unwrap();
         assert_eq!(
             refusal_answer(partial, next),
             ("operator_typing".to_owned(), next.to_owned())
@@ -5105,10 +5105,10 @@ mod tests {
             ("plan_node_unknown\u{1f}nope", "hide task show"),
             ("plan_delegate_full\u{1f}3", "do this step yourself"),
         ] {
-            let (code, detail) = herdr_core::coordination::split_refusal(reason);
+            let (code, detail) = hide_core::coordination::split_refusal(reason);
             let detail = detail.unwrap();
             for next in [
-                herdr_core::plans::next_action(code),
+                hide_core::plans::next_action(code),
                 delivery_next_action(reason),
             ] {
                 let (answered, text) = refusal_answer(reason.to_owned(), next);
@@ -5130,8 +5130,8 @@ mod tests {
         ] {
             let (answered, text) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(answered, code);
-            assert_eq!(text, herdr_core::plans::next_action(code));
-            assert_ne!(text, herdr_core::plans::next_action("other"), "{code}");
+            assert_eq!(text, hide_core::plans::next_action(code));
+            assert_ne!(text, hide_core::plans::next_action("other"), "{code}");
         }
     }
 
@@ -5338,28 +5338,28 @@ mod tests {
     /// with no shell open; every Workspace command still needs one.
     #[test]
     fn only_the_daemons_own_reads_answer_without_a_shell() {
-        use herdr_core::links::query::{LinksQuery, QueryTarget};
+        use hide_core::links::query::{LinksQuery, QueryTarget};
         let links = ScopedRequest::Links(LinksQuery {
             target: QueryTarget::Pr { number: 1 },
             all_projects: false,
         });
         assert!(!links.needs_renderer());
         assert!(
-            !ScopedRequest::Session(herdr_core::links::session_command::SessionCommand::Record {
+            !ScopedRequest::Session(hide_core::links::session_command::SessionCommand::Record {
                 id: "s-1".into()
             })
             .needs_renderer()
         );
         assert!(
-            !ScopedRequest::Memory(herdr_core::memory_command::MemoryCommand::Show { number: 1 })
+            !ScopedRequest::Memory(hide_core::memory_command::MemoryCommand::Show { number: 1 })
                 .needs_renderer()
         );
-        let hook = herdr_core::memory_hook::Ask::from_wire(&json!({
+        let hook = hide_core::memory_hook::Ask::from_wire(&json!({
             "event": "SessionStart", "runtime": "codex", "session": "s-1",
         }))
         .unwrap();
         assert!(!ScopedRequest::MemoryHook(hook).needs_renderer());
-        assert!(ScopedRequest::Query(herdr_core::workspace_control::Query::Info).needs_renderer());
+        assert!(ScopedRequest::Query(hide_core::workspace_control::Query::Info).needs_renderer());
         assert!(ScopedRequest::BrowserConnect(None).needs_renderer());
     }
 

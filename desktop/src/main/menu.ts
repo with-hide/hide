@@ -110,7 +110,7 @@ function commandItem(command: Command, send: (id: CommandId) => void, t: TFuncti
 
 // A reported set is the editable commands the operator rebound; anything past
 // these caps is not one. The core refuses a stored set past the same caps
-// (`BINDINGS_CAP` and `BINDING_TEXT_CAP` in herdr-core/src/runtime/events.rs);
+// (`BINDINGS_CAP` and `BINDING_TEXT_CAP` in hide-core/src/runtime/events.rs);
 // change them together. The cap holds every editable command with room to
 // spare: `menu.test.ts` fails when a new one would no longer fit.
 export const BINDINGS_CAP = 48;

@@ -2,7 +2,7 @@
 // state per screen the PRD names (hide-ai-suggestions B3, B10-B19, and
 // memory-self-improve B5-B11 for the Hide global instruction), for
 // review captures. Which rows exist, their groups and counts are the core's
-// and are tested in herdr-core.
+// and are tested in hide-core.
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { InterfaceLanguageBoundary } from "../i18n/client";

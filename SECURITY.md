@@ -10,7 +10,7 @@ Fixes ship as a normal release; the advisory is published once the release is ou
 
 ## What is in scope
 
-- The hide app: the Electron desktop host under `desktop/`, the web shell under `web/`, the daemon under `hided/`, and the Rust core under `herdr-core/`.
+- The hide app: the Electron desktop host under `desktop/`, the web shell under `web/`, the daemon under `hided/`, and the Rust core under `hide-core/`.
 - The build and release scripts under `scripts/` and the workflows under `.github/workflows/`.
 - The pane holder under `hide-holder/` and the terminal parser under `hide-vt/`, which run every pane on macOS, Linux and Windows.
 

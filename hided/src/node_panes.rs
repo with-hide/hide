@@ -292,7 +292,7 @@ impl NodePanes {
             // end and reports its daemon unavailable.
             streams.remove(&key);
             drop(streams);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_panes",
                 "kind": "stream.overflow",
                 "node": node,
@@ -520,7 +520,7 @@ fn issue(
 /// B30: a caller turned away, by the device's node or by this daemon, is a
 /// record with the node and the pane it named, never a screen state.
 fn record_refusal(node: &str, pane_id: Option<&str>, reason: &str, by: &str) {
-    herdr_core::diagnostic!(refusal_record(node, pane_id, reason, by));
+    hide_core::diagnostic!(refusal_record(node, pane_id, reason, by));
 }
 
 /// The record of one refusal. A device chooses the pane id a proof names and

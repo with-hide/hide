@@ -38,8 +38,8 @@ use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
 
 use crate::core::CoreHandle;
-use herdr_core::delivery::worker::{HumanNotice, HumanNoticeKind};
-use herdr_core::engine::EngineHandle;
+use hide_core::delivery::worker::{HumanNotice, HumanNoticeKind};
+use hide_core::engine::EngineHandle;
 use phones::{PairRefusal, Phones};
 use projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
 use store::{
@@ -173,7 +173,7 @@ pub struct Config {
     pub core: Arc<CoreHandle>,
     /// Asked at every write to a pane, so a reply never lands in the shell
     /// under an agent that is ending, asleep or waking.
-    pub input_gate: Arc<herdr_core::input_gate::PaneInputGate>,
+    pub input_gate: Arc<hide_core::input_gate::PaneInputGate>,
     /// Shell windows (desktop and web) on this daemon: "the app is open".
     pub renderers: Arc<AtomicUsize>,
     /// Which connections show a start surface; a phone's open start sheet is one.
@@ -222,7 +222,7 @@ pub struct Mobile {
 }
 
 fn record_transport_failure(failure: &CommandFailure, step: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_transport",
         "kind": "serve.failed",
         "step": step,
@@ -234,7 +234,7 @@ fn record_transport_failure(failure: &CommandFailure, step: &str) {
 
 impl Mobile {
     /// The core's own machine, whose agents the navigator lists.
-    pub fn node(&self) -> &herdr_core::node::NodeId {
+    pub fn node(&self) -> &hide_core::node::NodeId {
         self.config.core.node()
     }
 
@@ -258,7 +258,7 @@ impl Mobile {
                     Some(vapid)
                 }
                 Err(message) => {
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "vapid.unavailable", "message": message,
                     }));
                     None
@@ -745,7 +745,7 @@ impl Mobile {
             if let Some(record) = record
                 && let Err((step, message)) = self.remove_recorded(&program, &record).await
             {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.funnel_withdraw_failed",
                     "step": step, "message": message,
                 }));
@@ -819,7 +819,7 @@ impl Mobile {
             Ok(Ownership::Ours { .. }) | Ok(Ownership::Foreign { ours_too: true, .. }) => {
                 match tailscale::serve_remove(program).await {
                     Ok(()) => {
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "mobile_transport", "kind": "serve.removed",
                             "dns_name": record.dns_name, "port": record.port,
                         }));
@@ -838,7 +838,7 @@ impl Mobile {
                 Ok(())
             }
             Err(message) => {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.unreadable", "message": message,
                 }));
                 Err(("check", message))
@@ -865,7 +865,7 @@ impl Mobile {
         let funnel = |serve: &Value| {
             let on = tailscale::funnel_on(serve, dns_name);
             if on {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.funnel_on", "dns_name": dns_name,
                 }));
             }
@@ -893,7 +893,7 @@ impl Mobile {
                         Err(failure) => record_transport_failure(&failure, "remove"),
                     }
                 }
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.foreign", "target": target,
                 }));
                 return Err(Exposure::Foreign { target });
@@ -974,7 +974,7 @@ impl Mobile {
             }
             return Err(failure);
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "mobile_transport", "kind": "serve.added", "dns_name": dns_name, "port": port,
         }));
         Ok(())
@@ -1092,7 +1092,7 @@ impl Mobile {
         {
             Ok(notices) => notices,
             Err(code) => {
-                herdr_core::diagnostic!(
+                hide_core::diagnostic!(
                     json!({"component":"delivery","kind":"human.claim_failed","code":code})
                 );
                 return;
@@ -1111,7 +1111,7 @@ impl Mobile {
             // Its ledger claim remains consumed when the phone could not be
             // reached. A restart never becomes an external resend. The record
             // names the notice and the reason, never its text.
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "delivery", "kind": "human.channels_failed",
                 "notice": notice.kind.code(), "letter_id": notice.id, "push": push,
             }));
@@ -1236,7 +1236,7 @@ impl Mobile {
             .collect();
         let revoked = self.lock().phones.sweep(now_ms(), &connected);
         for phone in &revoked {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.revoked", "phone_id": phone.id,
                 "reason": "inactive_7_days", "had_subscription": phone.push.is_some(),
             }));
@@ -1282,7 +1282,7 @@ impl Mobile {
                 if !enabled {
                     self.close_phones("mobile_off");
                 }
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "mobile.switched", "enabled": enabled,
                 }));
                 self.publish();
@@ -1427,7 +1427,7 @@ impl Mobile {
             inner.phones.revoke(phone_id)
         };
         if let Some(phone) = removed {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.revoked", "phone_id": phone.id,
                 "reason": reason, "had_subscription": phone.push.is_some(),
             }));
@@ -1446,7 +1446,7 @@ impl Mobile {
     fn close_phones(&self, reason: &str) {
         let live = self.live();
         if !live.is_empty() {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phones.closed", "reason": reason, "count": live.len(),
             }));
         }
@@ -1459,7 +1459,7 @@ impl Mobile {
     /// code exists only while Mobile is exposed.
     pub fn pair(&self, code: &str, user_agent: &str) -> Result<(PhoneRecord, String), PairRefusal> {
         let (result, route) = {
-            use herdr_core::product_analytics::PhoneRoute;
+            use hide_core::product_analytics::PhoneRoute;
             let mut inner = self.lock();
             let route = match inner.exposure {
                 Exposure::Exposed { .. } => Some(PhoneRoute::Tailnet),
@@ -1475,16 +1475,16 @@ impl Mobile {
         };
         match &result {
             Ok((phone, _)) => {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_pairing", "kind": "phone.paired", "phone_id": phone.id, "name": phone.name,
                 }));
                 if let Some(route) = route {
                     self.config.core.capture_product_event(
-                        herdr_core::product_analytics::Event::PhonePaired { route },
+                        hide_core::product_analytics::Event::PhonePaired { route },
                     );
                 }
             }
-            Err(refusal) => herdr_core::diagnostic!(json!({
+            Err(refusal) => hide_core::diagnostic!(json!({
                 "component": "mobile_pairing", "kind": "pairing.refused", "reason": refusal.reason(),
             })),
         }
@@ -1528,7 +1528,7 @@ impl Mobile {
     pub fn admit_input(
         &self,
         pane_id: &str,
-    ) -> Result<herdr_core::input_gate::Admission, pane::PaneError> {
+    ) -> Result<hide_core::input_gate::Admission, pane::PaneError> {
         self.config
             .input_gate
             .admit(pane_id)
@@ -1581,7 +1581,7 @@ impl Mobile {
                 },
             );
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "mobile_phone", "kind": "phone.connected", "phone_id": phone_id,
         }));
         self.publish();
@@ -1594,7 +1594,7 @@ impl Mobile {
         let removed = self.live().remove(&connection);
         if let Some(phone) = removed {
             self.lock().phones.touch(&phone.phone_id, now_ms());
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.disconnected", "phone_id": phone.phone_id,
             }));
         }
@@ -1627,7 +1627,7 @@ impl Mobile {
             return json!({"type": "start_result", "ok": false, "reason": "invalid_request"});
         };
         if let Err(reason) = self.still_admitted(phone_id) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "start.refused", "phone_id": phone_id, "reason": reason,
             }));
             return refused(reason);
@@ -1675,14 +1675,14 @@ impl Mobile {
             return json!({"type": "start_result", "ok": false, "reason": "invalid_request"});
         };
         if let Err(reason) = self.still_admitted(phone_id) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "start.refused", "phone_id": phone_id, "reason": reason,
             }));
             return json!({"type": "start_result", "request_id": request_id, "ok": false, "reason": reason});
         }
         let event = prs::delegate(message, &self.prs(), request_id);
         if let Err(reason) = &event {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "scope.refused", "phone_id": phone_id,
                 "request": format!("delegate_pr:{reason}"),
             }));
@@ -1753,14 +1753,14 @@ impl Mobile {
 
     pub fn set_subscription(&self, phone_id: &str, push: PushSubscription) -> bool {
         if !push::subscription_valid(&push) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "subscription.refused", "phone_id": phone_id,
             }));
             return false;
         }
         let changed = self.lock().phones.set_subscription(phone_id, Some(push));
         if changed {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "subscription.stored", "phone_id": phone_id,
             }));
             self.publish();
@@ -1792,7 +1792,7 @@ impl Mobile {
             "payload": {"pane_id": pane_id},
         });
         if let Err(message) = self.config.core.dispatch(event.to_string().into_bytes()) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.submit_unrecorded", "message": message,
             }));
         }
@@ -1809,7 +1809,7 @@ impl Mobile {
             "payload": {"pane_id": pane_id},
         });
         if let Err(message) = self.config.core.dispatch(event.to_string().into_bytes()) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent_unrecorded", "message": message,
             }));
         }
@@ -1834,9 +1834,9 @@ impl Mobile {
     /// Marks a View the phone showed seen, with the event Desk sends when
     /// its lane shows an output (PRD mobile-companion-ui D-15, B24). Seen is
     /// the View's own state, so the desktop's eye and count follow at once.
-    pub fn mark_seen(&self, view: &herdr_core::LookView) {
+    pub fn mark_seen(&self, view: &hide_core::LookView) {
         if let Err(message) = self.config.core.dispatch(looks::seen_event(view)) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "look.seen_unrecorded",
                 "view_id": view.display_id, "message": message,
             }));
@@ -1962,13 +1962,13 @@ impl Mobile {
                         let left_out =
                             |missions: &PhoneMissions| missions.omitted + missions.nodes_omitted();
                         if left_out(&missions) > 0 && left_out(current) == 0 {
-                            herdr_core::diagnostic!(json!({
+                            hide_core::diagnostic!(json!({
                                 "component": "mobile_phone", "kind": "missions.capped",
                                 "omitted": missions.omitted,
                                 "steps_omitted": missions.nodes_omitted(),
-                                "open_cap": herdr_core::agent_state::phone::MAX_OPEN,
-                                "closed_cap": herdr_core::agent_state::phone::MAX_CLOSED,
-                                "budget": herdr_core::agent_state::phone::LIST_BUDGET,
+                                "open_cap": hide_core::agent_state::phone::MAX_OPEN,
+                                "closed_cap": hide_core::agent_state::phone::MAX_CLOSED,
+                                "budget": hide_core::agent_state::phone::LIST_BUDGET,
                             }));
                         }
                         *current = Arc::new(missions);
@@ -1982,11 +1982,11 @@ impl Mobile {
                         // Recorded when the list first goes over the cap, not on every
                         // change while it stays over (the count is in the frame).
                         if prs.omitted > 0 && current.omitted == 0 {
-                            herdr_core::diagnostic!(json!({
+                            hide_core::diagnostic!(json!({
                                 "component": "mobile_phone", "kind": "prs.capped",
                                 "omitted": prs.omitted,
-                                "open_cap": herdr_core::agent_state::phone::MAX_PRS,
-                                "settled_cap": herdr_core::agent_state::phone::MAX_SETTLED,
+                                "open_cap": hide_core::agent_state::phone::MAX_PRS,
+                                "settled_cap": hide_core::agent_state::phone::MAX_SETTLED,
                             }));
                         }
                         *current = Arc::new(prs);
@@ -2068,14 +2068,14 @@ impl Mobile {
         let mut jobs = Vec::new();
         for notice in notices {
             if !push::mode_allows(mode, renderers) {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.skipped", "reason": "mode",
                     "mode": mode.as_str(), "renderers": renderers,
                 }));
                 continue;
             }
             if self.viewed(&notice.key, projection) {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.skipped", "reason": "viewing",
                 }));
                 continue;
@@ -2088,7 +2088,7 @@ impl Mobile {
                     .unwrap_or_default();
                 match self.push_payload(&notice, &clear) {
                     Ok(payload) => jobs.push((phone_id.clone(), subscription.clone(), payload)),
-                    Err(reason) => herdr_core::diagnostic!(json!({
+                    Err(reason) => hide_core::diagnostic!(json!({
                         "component":"mobile_push", "kind":"push.failed", "reason":reason,
                     })),
                 }
@@ -2104,7 +2104,7 @@ impl Mobile {
             };
             for (phone_id, subscription, payload) in jobs {
                 match push::send(vapid, &subject, &subscription, &payload, now_ms() / 1000) {
-                    push::SendOutcome::Delivered => herdr_core::diagnostic!(json!({
+                    push::SendOutcome::Delivered => hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
                         "tag": payload.get("tag"),
                     })),
@@ -2113,13 +2113,13 @@ impl Mobile {
                             .lock()
                             .phones
                             .drop_subscription(&phone_id, &subscription.endpoint);
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "mobile_push", "kind": "subscription.dropped", "phone_id": phone_id,
                             "status": status,
                         }));
                         mobile.publish();
                     }
-                    push::SendOutcome::Failed(message) => herdr_core::diagnostic!(json!({
+                    push::SendOutcome::Failed(message) => hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
                         "message": message,
                     })),
@@ -2166,7 +2166,7 @@ fn judge_pass(
 mod tests {
     use super::*;
     use crate::desktop_notices::DesktopNotices;
-    use herdr_core::agent_state::phone::project;
+    use hide_core::agent_state::phone::project;
 
     fn projected(group: &str, demand: &str) -> Projection {
         project(

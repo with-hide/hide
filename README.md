@@ -174,7 +174,7 @@ hide device add workbox                                               # another 
 pane holders ─ one per pane: its PTY, program and parsed terminal
      │  terminal output + process facts
      ▼
-herdr-core (Rust) ─ the one owner of hide's state, with its own engine over the holders
+hide-core (Rust) ─ the one owner of hide's state, with its own engine over the holders
      │  typed events in, snapshot deltas out
      ▼
 hided ─ the daemon and the `hide` CLI: loopback HTTP + a token WebSocket
@@ -236,7 +236,7 @@ pnpm --dir desktop dev              # the desktop app, unpackaged, against this 
 | `desktop/` | The Electron desktop host, the app that ships |
 | `web/` | The React web shell |
 | `hided/` | The daemon and the `hide` CLI |
-| `herdr-core/` | The platform-neutral Rust runtime that owns hide's state |
+| `hide-core/` | The platform-neutral Rust runtime that owns hide's state |
 | `hide-platform/` | What differs between macOS, Windows and Linux, written once |
 | `hide-agent-hooks/` | The only code that writes an agent's configuration file |
 | `hide-ai/` | Background AI features on the operator's own agent CLIs |

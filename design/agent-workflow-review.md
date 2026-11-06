@@ -21,14 +21,14 @@ The current contract is the approved v6 Sessions panel and v9 pane header, mappe
 | Master | Code owner | Contract |
 | --- | --- | --- |
 | Agent identity `HXWFK` | `web/src/agentRow.ts`, `web/src/components/sidebar-agent-row.tsx`, `web/src/components/agent-row.tsx` | One provider artwork, title, canonical state, ownership, and instrumentation identity across live lists, search, relationship, and Overview. |
-| Tree row `n1zn1O`, lineage segment `N6BTh4` | `herdr-core/src/sidebar.rs`, `web/src/sidebar.tsx`, `web/src/lineage.ts` | Disclosure and selection remain separate, and lineage columns remain aligned through multiline rows. |
-| Workspace row `pPtY6` | `herdr-core/src/sidebar.rs`, `web/src/sidebar.tsx`, `web/src/projects.ts` | Workspace membership and agent delegation stay distinct, and expanding a Workspace changes no pane, tab, or read state. |
+| Tree row `n1zn1O`, lineage segment `N6BTh4` | `hide-core/src/sidebar.rs`, `web/src/sidebar.tsx`, `web/src/lineage.ts` | Disclosure and selection remain separate, and lineage columns remain aligned through multiline rows. |
+| Workspace row `pPtY6` | `hide-core/src/sidebar.rs`, `web/src/sidebar.tsx`, `web/src/projects.ts` | Workspace membership and agent delegation stay distinct, and expanding a Workspace changes no pane, tab, or read state. |
 | Focused pane `ZvLjg`, icon header `Z3BnL` | `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneRelations.tsx` | One quiet identity row, direct-child badge and one overlaid state band preserve shown wash, focus outline, zoom and overflow. |
 | Direct-child badge `PaMPI` | `web/src/PaneRelations.tsx`, `web/src/components/agent-children-popover.tsx` | Status counts open the shared direct-child list; All opens Overview Agents. |
 | Browser chrome `KUcQU`, address toolbar `eMlZD`, document toolbar `hxdu7` | `web/src/BrowserDisplay.tsx` (browser), `web/src/Editor.tsx`, `web/src/viewers/FileViewer.tsx` (document) | Browser, file, and diff surfaces keep their own controls and never inherit agent-only actions. |
-| Agent identity `HXWFK` in the direct-child popover | `web/src/PaneRelations.tsx`, `herdr-core/src/runtime.rs` | A child click or Enter navigates; unavailable targets retain their reason and All opens Overview Agents. |
-| Relationship action `p7Vim` | `web/src/PaneRelations.tsx`, `web/src/lineage.ts`, `herdr-core/src/runtime.rs` | One request ID carries Pending, Target unavailable, refusal and timeout outcomes across the popover, Return control, raised-child band and retained canvas. |
-| Explorer Git row `mSu8p`, panel `Wo6qx` | `web/src/ExplorerTree.tsx`, `web/src/explorer.ts`, `herdr-core/src/changes.rs` | A fixed status slot renders M, A, U, R, conflict, folder-changed, and clean states without changing file-tree interaction. |
+| Agent identity `HXWFK` in the direct-child popover | `web/src/PaneRelations.tsx`, `hide-core/src/runtime.rs` | A child click or Enter navigates; unavailable targets retain their reason and All opens Overview Agents. |
+| Relationship action `p7Vim` | `web/src/PaneRelations.tsx`, `web/src/lineage.ts`, `hide-core/src/runtime.rs` | One request ID carries Pending, Target unavailable, refusal and timeout outcomes across the popover, Return control, raised-child band and retained canvas. |
+| Explorer Git row `mSu8p`, panel `Wo6qx` | `web/src/ExplorerTree.tsx`, `web/src/explorer.ts`, `hide-core/src/changes.rs` | A fixed status slot renders M, A, U, R, conflict, folder-changed, and clean states without changing file-tree interaction. |
 
 ## Session scope and lineage
 

@@ -6,7 +6,7 @@
 //! each node is one line; `show <node>` is that node in full.
 
 use crate::session_cli::{age, one_line};
-use herdr_core::missions::{AttentionTo, WaitingOn};
+use hide_core::missions::{AttentionTo, WaitingOn};
 use serde_json::Value;
 use std::fmt::Write as _;
 

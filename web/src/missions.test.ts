@@ -283,7 +283,7 @@ describe("a card's look (PRD mission-node-simple D-01, B1)", () => {
   });
 
   it("tags finished work with what the core left before main, and nothing it could not read or that landed", () => {
-    // The core decides each node's landing (`herdr-core/src/runtime/mission_landing.rs`); the card only words it.
+    // The core decides each node's landing (`hide-core/src/runtime/mission_landing.rs`); the card only words it.
     expect(landingLeft(node("a", { status: "done", pr: 4, landing: { state: "left", action: "merge" } }))).toBe("merge");
     expect(landingLeft(node("b", { status: "done", delivery: "direct", branch: "feat/b", landing: { state: "left", action: "join" } }))).toBe("join");
     expect(landingLeft(node("c", { status: "done", delivery: "direct", branch: "feat/c", unread: true, landing: { state: "unread", action: "join" } }))).toBeNull();

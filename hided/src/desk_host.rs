@@ -1,13 +1,13 @@
 //! What hided gives Desk's process (PRD Desk 1차): a Workspace capability
 //! that acts as Hide's own `hide:desk` and holds only while that process
 //! runs, and the places it runs from. The core's Desk worker starts and owns
-//! the process (`herdr-core/src/runtime/desk.rs`); this side only issues,
+//! the process (`hide-core/src/runtime/desk.rs`); this side only issues,
 //! binds and ends its identity.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use herdr_core::desk::{DeskCredential, DeskPlaces, DeskPlatform};
+use hide_core::desk::{DeskCredential, DeskPlaces, DeskPlatform};
 
 use crate::pane_auth::Registry;
 
@@ -58,11 +58,7 @@ impl DeskPlatform for DeskHost {
         let nonce = hex::encode(bytes);
         let reference = self
             .registry
-            .issue_desk(
-                &nonce,
-                self.port,
-                herdr_core::desk::desk_context(&self.node),
-            )
+            .issue_desk(&nonce, self.port, hide_core::desk::desk_context(&self.node))
             .map_err(str::to_owned)?;
         Ok(DeskCredential { reference, nonce })
     }

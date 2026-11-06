@@ -1,6 +1,6 @@
 // The production lane on its Hide AI tool's Memory tab over invented wire values,
 // one state per document, for comparison with the v7 design exports (PRD
-// project-memory-v2 D-17, B19-B32). Runtime policy is tested in herdr-core.
+// project-memory-v2 D-17, B19-B32). Runtime policy is tested in hide-core.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { InterfaceLanguageBoundary } from "../i18n/client";

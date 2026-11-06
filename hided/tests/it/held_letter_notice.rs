@@ -85,7 +85,7 @@ fn seed_undelivered_letters(state: &Path, ids: &[&str]) {
     let ledger = json!({"version": 1, "next_id": 100, "letters": letters, "watches": []});
     // The seed is a valid ledger as the daemon's loader judges it, so a
     // refusal below names the seed and not the daemon.
-    serde_json::from_value::<herdr_core::delivery::ledger::Ledger>(ledger.clone())
+    serde_json::from_value::<hide_core::delivery::ledger::Ledger>(ledger.clone())
         .expect("the seed parses as a ledger")
         .validate()
         .expect("the seed is a valid ledger");

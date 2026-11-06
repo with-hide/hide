@@ -42,7 +42,7 @@ pub const MIN_FACTS_INTERVAL: Duration = Duration::from_millis(16);
 pub const LINE_EDITING_RECHECK: Duration = Duration::from_millis(100);
 
 /// How long after such a program takes the foreground the writer keeps
-/// asking: the deadline Hide gives an agent's start (`herdr-core`'s
+/// asking: the deadline Hide gives an agent's start (`hide-core`'s
 /// `AGENT_START_DEADLINE`), after which the start has ended either way and
 /// the mode is read again at the program's next output.
 pub const LINE_EDITING_RECHECK_FOR: Duration = Duration::from_secs(120);

@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn a_command_is_named_by_its_program_and_subcommand() {
-        assert_eq!(head("Bash", Some("cargo test -p herdr-core")), "cargo test");
+        assert_eq!(head("Bash", Some("cargo test -p hide-core")), "cargo test");
         assert_eq!(head("Bash", Some("cd web && pnpm build")), "pnpm build");
         assert_eq!(
             head("Bash", Some("RUST_LOG=1 /usr/bin/git push origin")),

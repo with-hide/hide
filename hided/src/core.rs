@@ -1,4 +1,4 @@
-//! Owner-thread wrapper around `herdr_core::Core`.
+//! Owner-thread wrapper around `hide_core::Core`.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -17,12 +17,12 @@ pub(crate) const PROJECT_OPEN_WAIT: std::time::Duration = std::time::Duration::f
 /// How often `hide <path>` reads its receipt again while it waits.
 const PROJECT_OPEN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
-use herdr_core::engine::EngineHandle;
-use herdr_core::node_access::NodeLink;
-use herdr_core::workspace_control::{
+use hide_core::engine::EngineHandle;
+use hide_core::node_access::NodeLink;
+use hide_core::workspace_control::{
     Action, ActionMaterial, ActionPreparation, ActionResult, Context, Query, QueryResult, Refusal,
 };
-use herdr_core::{Core, CoreOptions};
+use hide_core::{Core, CoreOptions};
 use hide_node::terminal::device::DeviceSink;
 use hide_node::terminal::engine_panes::LocalPanes;
 use hide_node::terminal::holder::{Holders, LocalTerminals};
@@ -32,19 +32,19 @@ use tokio::sync::broadcast;
 
 use crate::terminal_hub::TerminalHub;
 
-pub type SnapshotReply = herdr_core::SnapshotDeltaPayload;
+pub type SnapshotReply = hide_core::SnapshotDeltaPayload;
 
 type MoveSourceAnswer =
-    Result<(herdr_core::MoveSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
+    Result<(hide_core::MoveSource, serde_json::Value), hide_core::MoveSourceRefusal>;
 type ReleaseSourceAnswer =
-    Result<(herdr_core::ReleaseSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
+    Result<(hide_core::ReleaseSource, serde_json::Value), hide_core::MoveSourceRefusal>;
 
 enum Command {
     /// A usage event the daemon observed outside the core (a phone's
     /// pairing); the owner thread hands it to the statistics worker it owns.
-    ProductEvent(herdr_core::product_analytics::Event),
+    ProductEvent(hide_core::product_analytics::Event),
     DeliveryHuman {
-        reply: Sender<Result<herdr_core::delivery::worker::PreparedHuman, String>>,
+        reply: Sender<Result<hide_core::delivery::worker::PreparedHuman, String>>,
     },
     ReleaseEffects {
         reply: Sender<bool>,
@@ -54,28 +54,28 @@ enum Command {
         pane_id: String,
         expected: Context,
         hint: Option<String>,
-        command: herdr_core::delivery::Command,
-        reply: Sender<Result<herdr_core::delivery::worker::Prepared, String>>,
+        command: hide_core::delivery::Command,
+        reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
     },
     MemoryPrepare {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::memory_command::MemoryCommand,
-        reply: Sender<Result<herdr_core::memory_command::PreparedMemory, String>>,
+        command: hide_core::memory_command::MemoryCommand,
+        reply: Sender<Result<hide_core::memory_command::PreparedMemory, String>>,
     },
     PanePrepare {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::pane_command::PaneCommand,
-        reply: Sender<Result<herdr_core::pane_command::Prepared, String>>,
+        command: hide_core::pane_command::PaneCommand,
+        reply: Sender<Result<hide_core::pane_command::Prepared, String>>,
     },
     WorktreeRemove {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::worktree_command::WorktreeRemove,
+        command: hide_core::worktree_command::WorktreeRemove,
         reply: Sender<Result<u64, String>>,
     },
     WorktreeRemovalAnswer {
@@ -86,16 +86,16 @@ enum Command {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::missions::MissionCommand,
+        command: hide_core::missions::MissionCommand,
         reply: Sender<Result<serde_json::Value, String>>,
     },
     Plan {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::plans::PlanCommand,
-        proofs: herdr_core::plans::Proofs,
-        reply: Sender<Result<herdr_core::plans::PlanTurn, String>>,
+        command: hide_core::plans::PlanCommand,
+        proofs: hide_core::plans::Proofs,
+        reply: Sender<Result<hide_core::plans::PlanTurn, String>>,
     },
     PlanContext {
         device_id: String,
@@ -145,32 +145,32 @@ enum Command {
     },
     Device {
         device_id: String,
-        command: herdr_core::device_command::DeviceCommand,
+        command: hide_core::device_command::DeviceCommand,
         reply: Sender<Result<serde_json::Value, String>>,
     },
     ProjectOpen {
         device_id: String,
         path: String,
         request_id: String,
-        unheld: herdr_core::project_open::Unheld,
+        unheld: hide_core::project_open::Unheld,
         reply: Sender<Result<(), String>>,
     },
     ProjectOpenReceipt {
         request_id: String,
-        reply: Sender<Option<herdr_core::project_open::ProjectOpenReceipt>>,
+        reply: Sender<Option<hide_core::project_open::ProjectOpenReceipt>>,
     },
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
         reply: Sender<Result<(), String>>,
     },
     SetDesk {
-        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
+        platform: Arc<dyn hide_core::desk::DeskPlatform>,
     },
     SetHerdrImport {
-        machine: Arc<dyn herdr_core::herdr_import::Machine>,
+        machine: Arc<dyn hide_core::herdr_import::Machine>,
     },
     HerdrImportShown {
-        reply: Sender<Option<herdr_core::HerdrImportSnapshot>>,
+        reply: Sender<Option<hide_core::HerdrImportSnapshot>>,
     },
     Dispatch {
         event: Vec<u8>,
@@ -181,7 +181,7 @@ enum Command {
         reply: Sender<Result<Arc<dyn NodeLink>, String>>,
     },
     WorkspaceRemoteRoutes {
-        reply: Sender<Vec<herdr_core::WorkspaceRemoteRoute>>,
+        reply: Sender<Vec<hide_core::WorkspaceRemoteRoute>>,
     },
     DeviceEngine {
         device_id: String,
@@ -190,7 +190,7 @@ enum Command {
     /// The Views a pane's agent has open, for a phone's 볼 것 tab.
     AgentLooks {
         pane_id: String,
-        reply: Sender<herdr_core::LookViews>,
+        reply: Sender<hide_core::LookViews>,
     },
     /// A checkout's change-list read, prepared under the lock; the Git read
     /// runs where the caller runs it, never on the owner thread.
@@ -198,10 +198,10 @@ enum Command {
         device_id: String,
         checkout_path: String,
         committed: bool,
-        reply: Sender<Result<herdr_core::PreparedChanges, String>>,
+        reply: Sender<Result<hide_core::PreparedChanges, String>>,
     },
     InputGate {
-        reply: Sender<Arc<herdr_core::input_gate::PaneInputGate>>,
+        reply: Sender<Arc<hide_core::input_gate::PaneInputGate>>,
     },
     InboundRefusal {
         node: String,
@@ -218,7 +218,7 @@ enum Command {
     InboundNode {
         node: String,
         label: String,
-        arrived: herdr_core::remote::Arrived,
+        arrived: hide_core::remote::Arrived,
         reply: Sender<Result<(), String>>,
     },
     BrowserRouteSource {
@@ -226,7 +226,7 @@ enum Command {
         checkout_path: String,
         view_id: String,
         load: u64,
-        reply: Sender<Option<herdr_core::workspace_control::BrowserRouteSource>>,
+        reply: Sender<Option<hide_core::workspace_control::BrowserRouteSource>>,
     },
     WorkspaceQuery {
         device_id: String,
@@ -236,13 +236,13 @@ enum Command {
     },
     LinksScope {
         context: Context,
-        reply: Sender<Option<herdr_core::links::query::Scope>>,
+        reply: Sender<Option<hide_core::links::query::Scope>>,
     },
     /// `hide session`: the runtime's part, each asked once under its lock.
     Session(SessionAsk),
     MemoryScope {
         context: Context,
-        reply: Sender<Result<herdr_core::memory_hook::Scope, &'static str>>,
+        reply: Sender<Result<hide_core::memory_hook::Scope, &'static str>>,
     },
     WorkspaceAction {
         device_id: String,
@@ -270,7 +270,7 @@ enum Command {
 
 pub struct CoreHandle {
     /// The machine the core runs on, named in every key for this machine.
-    node: herdr_core::node::NodeId,
+    node: hide_core::node::NodeId,
     commands: Sender<Command>,
     pub notify: broadcast::Sender<()>,
     /// Every node's terminals: a screen's keys and views go here directly,
@@ -309,13 +309,13 @@ struct Running {
 
 impl CoreHandle {
     /// The machine the core runs on.
-    pub fn node(&self) -> &herdr_core::node::NodeId {
+    pub fn node(&self) -> &hide_core::node::NodeId {
         &self.node
     }
 
     /// Counts a usage event the daemon observed outside the core; the
     /// statistics worker drops it while usage statistics are off.
-    pub fn capture_product_event(&self, event: herdr_core::product_analytics::Event) {
+    pub fn capture_product_event(&self, event: hide_core::product_analytics::Event) {
         let _ = self.commands.send(Command::ProductEvent(event));
     }
 
@@ -326,7 +326,7 @@ impl CoreHandle {
 
     pub fn prepare_delivery_human(
         &self,
-    ) -> Result<herdr_core::delivery::worker::PreparedHuman, String> {
+    ) -> Result<hide_core::delivery::worker::PreparedHuman, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::DeliveryHuman { reply })
@@ -352,8 +352,8 @@ impl CoreHandle {
         pane: &str,
         expected: &Context,
         hint: Option<String>,
-        command: herdr_core::delivery::Command,
-    ) -> Result<herdr_core::delivery::worker::Prepared, String> {
+        command: hide_core::delivery::Command,
+    ) -> Result<hide_core::delivery::worker::Prepared, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::DeliveryPrepare {
@@ -377,8 +377,8 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::memory_command::MemoryCommand,
-    ) -> Result<herdr_core::memory_command::PreparedMemory, String> {
+        command: hide_core::memory_command::MemoryCommand,
+    ) -> Result<hide_core::memory_command::PreparedMemory, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::MemoryPrepare {
@@ -400,8 +400,8 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::pane_command::PaneCommand,
-    ) -> Result<herdr_core::pane_command::Prepared, String> {
+        command: hide_core::pane_command::PaneCommand,
+    ) -> Result<hide_core::pane_command::Prepared, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::PanePrepare {
@@ -426,7 +426,7 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::worktree_command::WorktreeRemove,
+        command: hide_core::worktree_command::WorktreeRemove,
     ) -> Result<serde_json::Value, String> {
         let unavailable = || "worktree_remove_worker_unavailable".to_owned();
         // Subscribed before the start, so the change that ends the removal
@@ -444,7 +444,7 @@ impl CoreHandle {
             })
             .map_err(|_| unavailable())?;
         let id = result.recv().map_err(|_| unavailable())??;
-        let deadline = std::time::Instant::now() + herdr_core::worktree_command::REMOVE_WAIT;
+        let deadline = std::time::Instant::now() + hide_core::worktree_command::REMOVE_WAIT;
         loop {
             let (reply, result) = mpsc::channel();
             self.commands
@@ -468,7 +468,7 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::missions::MissionCommand,
+        command: hide_core::missions::MissionCommand,
     ) -> Result<serde_json::Value, String> {
         let (reply, result) = mpsc::channel();
         self.commands
@@ -496,9 +496,9 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::plans::PlanCommand,
+        command: hide_core::plans::PlanCommand,
     ) -> Result<serde_json::Value, String> {
-        let mut proofs = herdr_core::plans::Proofs::default();
+        let mut proofs = hide_core::plans::Proofs::default();
         let mut owed = None;
         for _ in 0..3 {
             let (reply, result) = mpsc::channel();
@@ -513,8 +513,8 @@ impl CoreHandle {
                 })
                 .map_err(|_| "plan_unavailable".to_owned())?;
             match result.recv().map_err(|_| "plan_unavailable".to_owned())?? {
-                herdr_core::plans::PlanTurn::Answered { answer, .. } => return Ok(answer),
-                herdr_core::plans::PlanTurn::Prove(proof) => {
+                hide_core::plans::PlanTurn::Answered { answer, .. } => return Ok(answer),
+                hide_core::plans::PlanTurn::Prove(proof) => {
                     proof.run(&mut proofs);
                     owed = Some(proof);
                 }
@@ -694,9 +694,9 @@ impl CoreHandle {
         device: &str,
         path: &str,
         request_id: &str,
-        unheld: herdr_core::project_open::Unheld,
-    ) -> Result<herdr_core::project_open::ProjectOpenReceipt, String> {
-        use herdr_core::project_open::ProjectOpenReceipt;
+        unheld: hide_core::project_open::Unheld,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
+        use hide_core::project_open::ProjectOpenReceipt;
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::ProjectOpen {
@@ -740,7 +740,7 @@ impl CoreHandle {
     pub fn device_command(
         &self,
         device: &str,
-        command: herdr_core::device_command::DeviceCommand,
+        command: hide_core::device_command::DeviceCommand,
     ) -> Result<serde_json::Value, String> {
         let (reply, result) = mpsc::channel();
         self.commands
@@ -766,10 +766,7 @@ impl CoreHandle {
     }
 
     /// Starts Desk with the identity and places hided gives its process.
-    pub fn set_desk(
-        &self,
-        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
-    ) -> Result<(), String> {
+    pub fn set_desk(&self, platform: Arc<dyn hide_core::desk::DeskPlatform>) -> Result<(), String> {
         self.commands
             .send(Command::SetDesk { platform })
             .map_err(|_| "core owner thread is gone".to_owned())
@@ -779,7 +776,7 @@ impl CoreHandle {
     /// engine (PRD engine-bundle-4-herdr-removal D-6 to D-8).
     pub fn set_herdr_import(
         &self,
-        machine: Arc<dyn herdr_core::herdr_import::Machine>,
+        machine: Arc<dyn hide_core::herdr_import::Machine>,
     ) -> Result<(), String> {
         self.commands
             .send(Command::SetHerdrImport { machine })
@@ -787,7 +784,7 @@ impl CoreHandle {
     }
 
     /// What the core offers for this machine's Herdr save now (B17).
-    pub fn herdr_import_shown(&self) -> Result<Option<herdr_core::HerdrImportSnapshot>, String> {
+    pub fn herdr_import_shown(&self) -> Result<Option<hide_core::HerdrImportSnapshot>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::HerdrImportShown { reply })
@@ -813,7 +810,7 @@ impl CoreHandle {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (notify_tx, _) = broadcast::channel(32);
         let notify_for_thread = notify_tx.clone();
-        let (reports, terminal_reports) = herdr_core::terminal_reports::terminal_reports();
+        let (reports, terminal_reports) = hide_core::terminal_reports::terminal_reports();
         let reports: Arc<dyn ReportSink> = Arc::new(reports);
         let hub = TerminalHub::new();
         let outputs = crate::relay::ScreenOutputs::new(Arc::clone(&hub));
@@ -871,9 +868,9 @@ impl CoreHandle {
         Ok(handle)
     }
 
-    /// The core's input gate (`herdr_core::input_gate`), which a writer that
+    /// The core's input gate (`hide_core::input_gate`), which a writer that
     /// does not go through a node's terminal asks at the write.
-    pub fn input_gate(&self) -> Result<Arc<herdr_core::input_gate::PaneInputGate>, String> {
+    pub fn input_gate(&self) -> Result<Arc<hide_core::input_gate::PaneInputGate>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::InputGate { reply })
@@ -904,7 +901,7 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped device-channel reply".to_owned())?
     }
 
-    pub fn workspace_remote_routes(&self) -> Result<Vec<herdr_core::WorkspaceRemoteRoute>, String> {
+    pub fn workspace_remote_routes(&self) -> Result<Vec<hide_core::WorkspaceRemoteRoute>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::WorkspaceRemoteRoutes { reply })
@@ -924,7 +921,7 @@ impl CoreHandle {
     }
 
     /// The Views the agent in `pane_id` has open; see `Core::agent_looks`.
-    pub fn agent_looks(&self, pane_id: &str) -> Result<herdr_core::LookViews, String> {
+    pub fn agent_looks(&self, pane_id: &str) -> Result<hide_core::LookViews, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::AgentLooks {
@@ -943,7 +940,7 @@ impl CoreHandle {
         device_id: &str,
         checkout_path: &str,
         committed: bool,
-    ) -> Result<herdr_core::PreparedChanges, String> {
+    ) -> Result<hide_core::PreparedChanges, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::CheckoutChanges {
@@ -1020,7 +1017,7 @@ impl CoreHandle {
         &self,
         node: &str,
         label: &str,
-        arrived: herdr_core::remote::Arrived,
+        arrived: hide_core::remote::Arrived,
     ) -> Result<(), String> {
         let (reply, rx) = mpsc::channel();
         self.commands
@@ -1040,7 +1037,7 @@ impl CoreHandle {
         checkout_path: &str,
         view_id: &str,
         load: u64,
-    ) -> Result<Option<herdr_core::workspace_control::BrowserRouteSource>, String> {
+    ) -> Result<Option<hide_core::workspace_control::BrowserRouteSource>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::BrowserRouteSource {
@@ -1063,7 +1060,7 @@ impl CoreHandle {
         &self,
         context: &Context,
         deadline: std::time::Instant,
-    ) -> Result<herdr_core::memory_hook::Scope, &'static str> {
+    ) -> Result<hide_core::memory_hook::Scope, &'static str> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::MemoryScope {
@@ -1083,7 +1080,7 @@ impl CoreHandle {
     pub fn session_scope(
         &self,
         context: &Context,
-    ) -> Option<herdr_core::links::session_command::SessionScope> {
+    ) -> Option<hide_core::links::session_command::SessionScope> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Scope {
@@ -1096,7 +1093,7 @@ impl CoreHandle {
 
     /// The Projects a `hide links` read may answer from, as the core knows
     /// them now; the read itself runs on the caller's blocking task.
-    pub fn links_scope(&self, context: &Context) -> Option<herdr_core::links::query::Scope> {
+    pub fn links_scope(&self, context: &Context) -> Option<hide_core::links::query::Scope> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::LinksScope {
@@ -1324,7 +1321,7 @@ fn owner_loop(
     options: CoreOptions,
     (own_node, own_engine): (Arc<hide_node::Local>, EngineHandle),
     panes: hide_node::ssh::PaneEventsSlot,
-    (terminals, terminal_reports): (Arc<Router>, herdr_core::terminal_reports::TerminalReports),
+    (terminals, terminal_reports): (Arc<Router>, hide_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
     ready: Sender<Result<(), String>>,
     notify: broadcast::Sender<()>,
@@ -1374,7 +1371,7 @@ fn owner_loop(
         match crate::product_analytics::Worker::start(home.as_deref(), &state_dir, token) {
             Ok(worker) => worker,
             Err(reason) => {
-                herdr_core::diagnostic!(
+                hide_core::diagnostic!(
                     serde_json::json!({ "component": "product_analytics", "kind": reason })
                 );
                 None
@@ -1389,17 +1386,17 @@ fn owner_loop(
         terminals,
         terminal_reports,
         analytics.as_ref().map(|worker| {
-            Arc::clone(&worker.client) as Arc<dyn herdr_core::product_analytics::Sink>
+            Arc::clone(&worker.client) as Arc<dyn hide_core::product_analytics::Sink>
         }),
     ) else {
         let _ = ready.send(Err(
-            "herdr-core create failed (check schema_version and paths)".to_owned(),
+            "hide-core create failed (check schema_version and paths)".to_owned(),
         ));
         return;
     };
     // After the core opened its Logs file: the SSH transport's records land
     // there too.
-    hide_node::diagnostics::install(herdr_core::diagnostics::emit);
+    hide_node::diagnostics::install(hide_core::diagnostics::emit);
     core.on_change(move || {
         let _ = notify.send(());
     });
@@ -1415,7 +1412,7 @@ fn owner_loop(
             }
             Command::ProductEvent(event) => {
                 if let Some(worker) = &analytics {
-                    herdr_core::product_analytics::Sink::capture(&*worker.client, event);
+                    hide_core::product_analytics::Sink::capture(&*worker.client, event);
                 }
             }
             Command::MemoryPrepare {
@@ -1582,7 +1579,7 @@ fn owner_loop(
                 // This node holds the opened roots while the core pins their
                 // identities; the previous set closes once it is replaced.
                 let (held, identities) = hide_node::hold_roots(roots);
-                core.set_file_roots(herdr_core::FileRoots::from_identities(identities));
+                core.set_file_roots(hide_core::FileRoots::from_identities(identities));
                 _held_roots = held;
                 let _ = reply.send(Ok(()));
             }
@@ -1727,10 +1724,10 @@ impl CoreHandle {
     /// A core with no registered checkout.
     pub(crate) fn bare(directory: &std::path::Path) -> Self {
         Self::spawn(
-            herdr_core::CoreOptions {
+            hide_core::CoreOptions {
                 schema_version: crate::state_file::SCHEMA_VERSION,
                 home: None,
-                node_id: herdr_core::node::NodeId::parse("test-node").unwrap(),
+                node_id: hide_core::node::NodeId::parse("test-node").unwrap(),
                 app_state_path: directory.join("core-state.json").display().to_string(),
                 host_helper_root: None,
                 host_cli_dir: None,
@@ -1751,26 +1748,26 @@ impl CoreHandle {
 pub enum SessionAsk {
     Scope {
         context: Context,
-        reply: Sender<Option<herdr_core::links::session_command::SessionScope>>,
+        reply: Sender<Option<hide_core::links::session_command::SessionScope>>,
     },
     Agent {
         id: String,
-        reply: Sender<Option<herdr_core::links::ledger::SessionIdentity>>,
+        reply: Sender<Option<hide_core::links::ledger::SessionIdentity>>,
     },
     Facts {
-        sessions: Vec<herdr_core::links::ledger::SessionIdentity>,
-        reply: Sender<Vec<herdr_core::links::session_command::SessionFacts>>,
+        sessions: Vec<hide_core::links::ledger::SessionIdentity>,
+        reply: Sender<Vec<hide_core::links::session_command::SessionFacts>>,
     },
     Pulls {
-        record: Box<herdr_core::links::ledger::SessionRecord>,
-        reply: Sender<Box<herdr_core::links::ledger::SessionRecord>>,
+        record: Box<hide_core::links::ledger::SessionRecord>,
+        reply: Sender<Box<hide_core::links::ledger::SessionRecord>>,
     },
 }
 
 /// A `hide session` command's runtime part, asked of the core's owner
 /// thread from the caller's blocking task.
-impl herdr_core::links::session_command::SessionHost for CoreHandle {
-    fn agent_session(&self, id: &str) -> Option<herdr_core::links::ledger::SessionIdentity> {
+impl hide_core::links::session_command::SessionHost for CoreHandle {
+    fn agent_session(&self, id: &str) -> Option<hide_core::links::ledger::SessionIdentity> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Agent {
@@ -1783,8 +1780,8 @@ impl herdr_core::links::session_command::SessionHost for CoreHandle {
 
     fn facts(
         &self,
-        sessions: Vec<herdr_core::links::ledger::SessionIdentity>,
-    ) -> Option<Vec<herdr_core::links::session_command::SessionFacts>> {
+        sessions: Vec<hide_core::links::ledger::SessionIdentity>,
+    ) -> Option<Vec<hide_core::links::session_command::SessionFacts>> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Facts { sessions, reply }))
@@ -1794,8 +1791,8 @@ impl herdr_core::links::session_command::SessionHost for CoreHandle {
 
     fn lay_pulls(
         &self,
-        record: herdr_core::links::ledger::SessionRecord,
-    ) -> Option<herdr_core::links::ledger::SessionRecord> {
+        record: hide_core::links::ledger::SessionRecord,
+    ) -> Option<hide_core::links::ledger::SessionRecord> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Pulls {

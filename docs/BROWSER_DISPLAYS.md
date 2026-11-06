@@ -9,7 +9,7 @@ There is no Herdr browser pane and no chromux profile behind it, and nothing is 
 
 | Owner | Holds | Code |
 | --- | --- | --- |
-| The core | Browser View layout, requested address and load stamp, and the native page's reported loading state | `herdr-core/src/view_layout.rs`, `herdr-core/src/runtime/view_areas.rs`, `herdr-core/src/runtime/workspace_control.rs` |
+| The core | Browser View layout, requested address and load stamp, and the native page's reported loading state | `hide-core/src/view_layout.rs`, `hide-core/src/runtime/view_areas.rs`, `hide-core/src/runtime/workspace_control.rs` |
 | hided | The local `file:` event boundary, checkout-scoped Browser commands and gateway discovery, and native routes into connected devices over their node links and, on a node whose core runs on another machine, into the core's machine and the node's own window's gateway | `hided/src/server.rs`, `hided/src/file_url.rs`, `hided/src/workspace_cli.rs`, `hided/src/browser_control.rs`, `hided/src/browser_relay.rs`, `hided/src/browser_routes.rs`, `hided/src/page_forward.rs`, `hided/src/node_pages.rs`, `hided/src/node_browser.rs`, `hided/src/browser_assets.rs` |
 | The web shell | Where each page sits, since only it has the geometry, the toolbar, the overlay freeze, and the notice in a plain browser tab | `web/src/BrowserDisplay.tsx`, `web/src/browserViews.ts`, `web/src/host.ts` |
 | The desktop app | The pages: one `WebContentsView` per display it was asked to show, their navigation, route requests, and their lifetime, including when a hidden one is unloaded | `desktop/src/main/browser.ts`, `desktop/src/main/browserSync.ts`, `desktop/src/main/host.ts`, `desktop/src/preload/index.ts` |

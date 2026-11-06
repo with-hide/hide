@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use herdr_core::agent_state::phone::{DormantPhase, SleepId};
+use hide_core::agent_state::phone::{DormantPhase, SleepId};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -53,10 +53,10 @@ const SILENT_LIMIT: Duration = Duration::from_secs(45);
 /// whose buffer is full would otherwise block the loop, and with it the
 /// ping, the silent limit and a close for eviction or revoke.
 const SEND_LIMIT: Duration = Duration::from_secs(10);
-// The list frames' budget is the relay's message limit (herdr-core names it
+// The list frames' budget is the relay's message limit (hide-core names it
 // without linking the relay crate).
 const _: () =
-    assert!(herdr_core::agent_state::phone::FRAME_LIMIT == hide_relay_protocol::noise::MAX_MESSAGE);
+    assert!(hide_core::agent_state::phone::FRAME_LIMIT == hide_relay_protocol::noise::MAX_MESSAGE);
 
 /// Sends one message; false when the socket failed or stalled past
 /// `SEND_LIMIT`, and the connection should end.
@@ -64,13 +64,13 @@ async fn send(socket: &mut Socket, message: Message, phone_id: &str) -> bool {
     match tokio::time::timeout(SEND_LIMIT, socket.send(message)).await {
         Ok(Ok(())) => true,
         Ok(Err(())) => {
-            herdr_core::diagnostic!(
+            hide_core::diagnostic!(
                 json!({"component":"mobile_phone", "kind":"phone.send_failed", "phone_id":phone_id})
             );
             false
         }
         Err(_) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.stalled", "phone_id": phone_id,
             }));
             false
@@ -103,7 +103,7 @@ async fn send_frame(socket: &mut Socket, frame: &Value, phone_id: &str) -> bool 
     let messages = match encode(frame, session) {
         Ok(messages) => messages,
         Err(reason) => {
-            herdr_core::diagnostic!(
+            hide_core::diagnostic!(
                 json!({"component":"mobile_phone", "kind":"phone.encode_failed", "phone_id":phone_id, "reason":reason.to_string()})
             );
             return false;
@@ -188,7 +188,7 @@ impl Socket {
                     }
                     Ok(None) => {}
                     Err(reason) => {
-                        herdr_core::diagnostic!(
+                        hide_core::diagnostic!(
                             json!({"component":"mobile_relay", "kind":"phone.cipher_refused",
                             "connection":relay.connection, "reason":reason.to_string()})
                         );
@@ -201,7 +201,7 @@ impl Socket {
 }
 
 fn refusal_logged(kind: &str, phone_id: Option<&str>, reason: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_phone", "kind": kind, "phone_id": phone_id, "reason": reason,
     }));
 }
@@ -247,9 +247,9 @@ fn agents_frame(projection: &Projection) -> (Value, usize) {
 /// change while it stays over (the count is in the frame).
 fn note_agents_omitted(phone_id: &str, before: &mut usize, omitted: usize) {
     if omitted > 0 && *before == 0 {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "mobile_phone", "kind": "agents.capped", "phone_id": phone_id,
-            "omitted": omitted, "budget": herdr_core::agent_state::phone::LIST_BUDGET,
+            "omitted": omitted, "budget": hide_core::agent_state::phone::LIST_BUDGET,
         }));
     }
     *before = omitted;
@@ -379,7 +379,7 @@ fn spawn_detail(
         // Whether the phone was last told the pane has a conversation.
         let mut told: Option<bool> = None;
         // The Views the phone was last told the agent has open.
-        let mut told_looks: Option<herdr_core::LookViews> = None;
+        let mut told_looks: Option<hide_core::LookViews> = None;
         loop {
             let ask = *asks.borrow_and_update();
             let mut outgoing = Vec::new();
@@ -427,7 +427,7 @@ fn spawn_detail(
 
 /// The Views the agent in `pane_id` has open, asked of the core on a blocking
 /// thread: its owner thread answers, and no worker of the runtime waits for it.
-async fn agent_looks(mobile: &Arc<Mobile>, pane_id: &str) -> Result<herdr_core::LookViews, String> {
+async fn agent_looks(mobile: &Arc<Mobile>, pane_id: &str) -> Result<hide_core::LookViews, String> {
     let (core, pane_id) = (Arc::clone(mobile.core()), pane_id.to_owned());
     tokio::task::spawn_blocking(move || core.agent_looks(&pane_id))
         .await
@@ -439,7 +439,7 @@ async fn agent_looks(mobile: &Arc<Mobile>, pane_id: &str) -> Result<herdr_core::
 async fn looks_step(
     mobile: &Arc<Mobile>,
     key: &AgentKey,
-    told: &mut Option<herdr_core::LookViews>,
+    told: &mut Option<hide_core::LookViews>,
 ) -> Option<Value> {
     let looks = match agent_looks(mobile, &key.pane_id).await {
         Ok(looks) => looks,
@@ -457,13 +457,13 @@ async fn looks_step(
 }
 
 fn looks_failed(message: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_phone", "kind": "looks.read_failed", "message": message,
     }));
 }
 
 fn conversation_failed(message: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_phone", "kind": "conversation.read_failed", "message": message,
     }));
 }
@@ -585,7 +585,7 @@ impl RowsReader {
                 }
                 self.last_error = Some(error.reason());
                 if let PaneError::Unavailable(message) = &error {
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "mobile_phone", "kind": "pane.read_failed", "message": message,
                     }));
                 }
@@ -784,7 +784,7 @@ async fn run(
             }
             _ = ping.tick() => {
                 if heard.elapsed() >= SILENT_LIMIT {
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "mobile_phone", "kind": "phone.silent", "phone_id": phone_id,
                     }));
                     return;
@@ -1066,7 +1066,7 @@ async fn look_target(
     phone_id: &str,
     message: &Value,
     projection: &Projection,
-) -> Result<(String, herdr_core::LookView), Value> {
+) -> Result<(String, hide_core::LookView), Value> {
     let (key, request) = match look_scope(message, projection) {
         Ok(scope) => scope,
         Err(refusal) => {
@@ -1123,7 +1123,7 @@ async fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projec
     if let Ok((_, view)) = look_target(mobile, phone_id, message, projection).await {
         let mobile = Arc::clone(mobile);
         if let Err(error) = tokio::task::spawn_blocking(move || mobile.mark_seen(&view)).await {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "look.seen_unrecorded",
                 "message": error.to_string(),
             }));
@@ -1172,7 +1172,7 @@ async fn sleeping_session(
     if mobile.still_admitted(phone_id).is_err() {
         return answer(false, Some("unavailable"));
     }
-    let bytes = json!({"schema_version": herdr_core::SCHEMA_VERSION, "kind": event, "payload": {"sleep_id": id}})
+    let bytes = json!({"schema_version": hide_core::SCHEMA_VERSION, "kind": event, "payload": {"sleep_id": id}})
         .to_string()
         .into_bytes();
     let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
@@ -1225,11 +1225,11 @@ fn mission_answer_event(
     match (resend, option, text) {
         (true, None, None) => {}
         (false, Some(_), None) => {}
-        (false, None, Some(text)) if herdr_core::missions::answer_text(text).is_some() => {}
+        (false, None, Some(text)) if hide_core::missions::answer_text(text).is_some() => {}
         _ => return Err("invalid_request"),
     }
     Ok(json!({
-        "schema_version": herdr_core::SCHEMA_VERSION, "kind": "mission_answer",
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "mission_answer",
         "payload": {"mission": mission.id, "key": key, "option": option, "text": text, "resend": resend},
     })
     .to_string()
@@ -1433,7 +1433,7 @@ fn wake_action(message: &Value, projection: &Projection, key: &AgentKey) -> Opti
         return Some(Wake::Running);
     }
     let event = json!({
-        "schema_version": herdr_core::SCHEMA_VERSION, "kind": "agent_wake",
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "agent_wake",
         "payload": {"pane_id": key.pane_id, "fresh": fresh},
     });
     Some(Wake::Dispatch(event.to_string().into_bytes()))
@@ -1585,14 +1585,14 @@ async fn input(
     .unwrap_or_else(|error| (false, Err(PaneError::Unavailable(error.to_string()))));
     match result {
         Ok(()) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent", "phone_id": phone_id,
                 "device_id": key.device_id, "kind_of_input": if message.get("key").is_some() { "key" } else { "reply" },
             }));
             answer(true, None)
         }
         Err(error) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.failed", "phone_id": phone_id,
                 "reason": error.reason(),
                 "message": match &error { PaneError::Unavailable(message) => Some(message.clone()), _ => None },
@@ -1606,7 +1606,7 @@ async fn input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use herdr_core::missions::ANSWER_LIMIT;
+    use hide_core::missions::ANSWER_LIMIT;
 
     #[test]
     fn a_look_request_names_an_agent_and_a_view_id_and_nothing_a_path_could_ride_in() {
@@ -1701,7 +1701,7 @@ mod tests {
 
     fn mobile_with(
         directory: &std::path::Path,
-        gate: &Arc<herdr_core::input_gate::PaneInputGate>,
+        gate: &Arc<hide_core::input_gate::PaneInputGate>,
     ) -> Arc<Mobile> {
         let core = Arc::new(crate::core::CoreHandle::bare(directory));
         let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
@@ -1811,7 +1811,7 @@ mod tests {
             }
         }
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let (asked, mut pending) = tokio::sync::mpsc::unbounded_channel();
         mobile
@@ -1883,13 +1883,13 @@ mod tests {
     #[tokio::test]
     async fn a_page_with_no_desktop_window_cannot_be_shot() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
-        let view = herdr_core::LookView {
+        let view = hide_core::LookView {
             device_id: "test-node".to_owned(),
             checkout_path: "/repo".to_owned(),
             display_id: "browser-1".to_owned(),
-            kind: herdr_core::DisplayKind::Browser,
+            kind: hide_core::DisplayKind::Browser,
             label: "landing".to_owned(),
             path: String::new(),
             url: Some("http://localhost:5173/".to_owned()),
@@ -1911,7 +1911,7 @@ mod tests {
     #[tokio::test]
     async fn refused_permissions_allow_retry_and_waiting_permissions_do_not_block_sleep() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let (asked, mut pending) = tokio::sync::mpsc::unbounded_channel();
         mobile
@@ -1941,7 +1941,7 @@ mod tests {
                 gate.close("remote:mini:pane:w1:p1");
                 assert_eq!(
                     gate.wait_drained("remote:mini:pane:w1:p1", Duration::ZERO),
-                    herdr_core::input_gate::Drain::Drained
+                    hide_core::input_gate::Drain::Drained
                 );
                 permission(Ok(()));
             } else {
@@ -1967,7 +1967,7 @@ mod tests {
     #[tokio::test]
     async fn input_to_a_pane_whose_agent_is_ending_asleep_or_waking_is_refused_at_the_write() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let listed_awake = sleeping_projection(None);
 
@@ -2015,7 +2015,7 @@ mod tests {
     #[tokio::test]
     async fn a_repeated_request_keeps_its_recorded_answer_across_a_sleep() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let listed = sleeping_projection(None);
         for (id, state) in [
@@ -2345,7 +2345,7 @@ mod tests {
     #[tokio::test]
     async fn the_same_answer_request_is_answered_from_its_claim_and_reaches_the_core_once() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         mobile.missions.send_replace(Arc::new(deciding()));
         let phone = paired(&mobile);
@@ -2395,7 +2395,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_answer_claims_nothing_and_a_request_without_an_id_is_invalid() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         mobile.missions.send_replace(Arc::new(deciding()));
         let phone = paired(&mobile);
@@ -2441,7 +2441,7 @@ mod tests {
     async fn the_same_merge_request_is_answered_from_its_claim_and_reaches_the_core_once() {
         use super::super::prs::fixture::HEAD;
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         listing(&mobile, HEAD);
         let phone = paired(&mobile);
@@ -2494,7 +2494,7 @@ mod tests {
     async fn a_merge_for_a_moved_head_or_an_unlisted_pull_request_claims_nothing() {
         use super::super::prs::fixture::HEAD;
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         listing(&mobile, HEAD);
         let phone = paired(&mobile);
@@ -2538,7 +2538,7 @@ mod tests {
         use super::super::prs::fixture::HEAD;
         use super::super::start::Answer;
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         listing(&mobile, HEAD);
         let phone = paired(&mobile);
@@ -2597,7 +2597,7 @@ mod tests {
     #[tokio::test]
     async fn a_request_this_hide_predates_is_refused_by_name() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let (frames, _received) = mpsc::channel::<Value>(8);
         let mut open = Open::default();

@@ -39,21 +39,21 @@ Copyright 2025 herdr contributors.
 Licensed under the Apache License, Version 2.0.
 Hide changed them: each file says what it took and what changed.
 
-herdr-core/src/engine/own/ids.rs is derived from Herdr's src/workspace.rs
+hide-core/src/engine/own/ids.rs is derived from Herdr's src/workspace.rs
 (https://github.com/herdrdev/herdr, release v0.9.5, commit 2ecf19a).
 Copyright 2025 herdr contributors.
 Licensed under the Apache License, Version 2.0.
 Hide changed it: the file says what it took and what changed.
 
-Parts of herdr-core/src/engine/own/layout.rs are derived from Herdr's
+Parts of hide-core/src/engine/own/layout.rs are derived from Herdr's
 src/layout.rs and src/app/api/layouts.rs, and path_slug in
-herdr-core/src/engine/own/worktrees.rs from Herdr's src/worktree.rs
+hide-core/src/engine/own/worktrees.rs from Herdr's src/worktree.rs
 (https://github.com/herdrdev/herdr, release v0.9.5, commit 2ecf19a).
 Copyright 2025 herdr contributors.
 Licensed under the Apache License, Version 2.0.
 Hide changed them: each file says what it took and what changed.
 
-herdr-core/src/engine/own/shell_line.rs and the quoting extracted into
+hide-core/src/engine/own/shell_line.rs and the quoting extracted into
 hide-shell/src/quote.rs are derived from Herdr's
 src/platform/mod.rs, src/platform/macos.rs, src/platform/linux.rs,
 src/platform/windows.rs, src/agent_resume.rs and src/terminal/title.rs

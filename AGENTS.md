@@ -11,10 +11,10 @@ Before writing or changing a test, read `docs/TESTING.md` for which layer to tes
 
 ## Repository Layout
 
-- `hided/` - the product daemon and `hide` CLI. It links `herdr-core` on an owner thread, serves loopback HTTP (`/`, `/assets`, `/health`) and a token-gated WebSocket for dispatch and snapshot deltas.
+- `hided/` - the product daemon and `hide` CLI. It links `hide-core` on an owner thread, serves loopback HTTP (`/`, `/assets`, `/health`) and a token-gated WebSocket for dispatch and snapshot deltas.
 - `web/` - the React web shell (Vite, zustand, xterm.js). Build output is `web/dist/` inside this worktree and is gitignored.
 - `desktop/` - the Electron desktop host and the only shipped app: the web shell hided serves, in its own macOS window, attached through `hide connect`. The packaged `hide.app` carries `hided`, `hide`, `hide-agent-hooks`, `hide-holder` and the device helper flat in `Contents/Resources`, ad-hoc signed by `pnpm --dir desktop package` and, for a release, signed with the Developer ID certificate and notarized (`docs/BUILD.md`); quitting the host leaves hided running, while the bundled `hide connect` replaces a healthy daemon of another build in the same state folder and an unbundled `hide` refuses that mismatch. Build output is `desktop/dist/` and the app and archive under `desktop/out/`, all gitignored; see `docs/ARCHITECTURE.md`, The desktop host.
-- `herdr-core/` - platform-neutral Rust runtime, an rlib whose owner-thread handle (`herdr-core/src/handle.rs`) `hided` drives. It projects the engine's pane topology and owns Hide's UI state; the shell owns neither.
+- `hide-core/` - platform-neutral Rust runtime, an rlib whose owner-thread handle (`hide-core/src/handle.rs`) `hided` drives. It projects the engine's pane topology and owns Hide's UI state; the shell owns neither.
 - `hide-kit/` - the install kit and `hide_kit::layout`, the one place every hide-owned path under `~/.hide` is named; see `docs/INSTALL.md`, Where Hide keeps its files.
 - `hide-agent-hooks/` - the only code that writes a configuration file the operator owns (each agent runtime's hook file). A separate crate because a `settings.json` write must never sit behind the render lock; see `docs/agent-hooks.md`.
 - `hide-platform/` - the operating-system layer under every other crate: what differs between macOS, Linux and Windows is written here once and checked by contract tests that run on all three; today the local stream (`ipc`) that nodes, holders and hooks talk over, the processes (`process`: the one child-start helper and what the kernel says about a pid), the files (`fs`: private files and folders, locks, atomic replacement, links, file identity), and how a path is spelled between machines (`path`: `/` between names on every system, converted to a native path only on the machine that owns it). It has no hide dependencies and keeps no state of a caller's; the one thing it remembers is the login shell's `PATH` (`programs`), a fact about the account keyed by the shell and home it was read for, so the kit, Hide AI and a device helper share one answer instead of each starting the operator's shell; see `docs/ARCHITECTURE.md`, The platform layer.
@@ -23,11 +23,11 @@ Before writing or changing a test, read `docs/TESTING.md` for which layer to tes
 - `hide-shell/` - how a shell reads one command line (words, quotes, lists, redirections, heredoc bodies), in the syntax of a POSIX shell or of PowerShell (`Syntax`, the one type that names a shell's kind), shared by the hooks, which read a call before it runs, and `hide-session`, which reads the calls a session file recorded; it reads text only.
 - `hide-screen-rules/` - how an agent's state is read from its screen: Herdr's agent detection rule grammar, limits, compiler and evaluator, over rules a caller hands in (an agent definition's `[screen]`), never a download; the agent definition files themselves are `hide-agent-adapter/agents/*.toml`, read by `hide_agent_adapter::definition`. See `docs/ARCHITECTURE.md`, Agent definition files.
 - `hide-vt/` - the terminal parser the pane holder links: Herdr's libghostty-vt binding, renamed, built by Zig from inputs `scripts/prepare-vt-inputs.py` downloads once and checks against `hide-vt/build-inputs.json`. See `docs/BUILD.md`, The terminal parser and Zig, and `hide-vt/PATCHES.md`.
-- `hide-holder/` - a pane's holder: one resident program per pane that keeps its PTY, program and parsed terminal and serves one node connection at a time; `hide-holder-protocol/` is what a node and a holder say to each other, and the only holder crate a node links. The PTY comes from `vendor/portable-pty` (Herdr's patched copy plus Hide's changes, `PATCHES.md`); the version folders a holder runs from are `hide_kit::holders`. Every pane runs in one: every package carries `hide-holder` (and on Windows its pinned ConPTY runtime in `holder-conpty`), and every node starts and adopts them (`hide-node/src/terminal/holder.rs`) for the core's own engine (`herdr-core/src/engine/own/`), the engine every daemon runs. See `docs/ARCHITECTURE.md`, The pane holder and The core's own engine.
+- `hide-holder/` - a pane's holder: one resident program per pane that keeps its PTY, program and parsed terminal and serves one node connection at a time; `hide-holder-protocol/` is what a node and a holder say to each other, and the only holder crate a node links. The PTY comes from `vendor/portable-pty` (Herdr's patched copy plus Hide's changes, `PATCHES.md`); the version folders a holder runs from are `hide_kit::holders`. Every pane runs in one: every package carries `hide-holder` (and on Windows its pinned ConPTY runtime in `holder-conpty`), and every node starts and adopts them (`hide-node/src/terminal/holder.rs`) for the core's own engine (`hide-core/src/engine/own/`), the engine every daemon runs. See `docs/ARCHITECTURE.md`, The pane holder and The core's own engine.
 - `hide-relay-protocol/` - the shared mobile relay routing, device admission, Noise NK sessions and QR v2 contract, linked by native Rust and compiled to WASM for the phone; see `docs/RELAY_PROTOCOL.md`.
 - `hide-session/` - shared local Claude, Codex and OpenCode session location, incremental and backwards page reading, and conversation parsing used by the core's label worker, the core usage fallback and the phone's conversation, and every supported agent's session read as ACP session updates (`thread`); `tests/it/adapters.rs` is each agent reader's contract and `tests/it/thread.rs` each thread converter's.
-Agent registration, spawning and lineage are owned by the core, in `herdr-core/src/coordination/`; see `docs/delivery.md` and `docs/status-model.md`.
-Agent labels are made by the core, in `herdr-core/src/labels/`; see `docs/task-identity.md` in with-hide/hide-private.
+Agent registration, spawning and lineage are owned by the core, in `hide-core/src/coordination/`; see `docs/delivery.md` and `docs/status-model.md`.
+Agent labels are made by the core, in `hide-core/src/labels/`; see `docs/task-identity.md` in with-hide/hide-private.
 
 ## Every Agent And Feature On Every System
 
@@ -116,14 +116,14 @@ On 2026-09-27 one session replaced it with a build that predated a merged fix, d
 
 ## Runtime Architecture
 
-Read `docs/ARCHITECTURE.md` in full before changing anything under `herdr-core/`, `hided/` or `desktop/`; it owns the reasons behind these boundaries.
+Read `docs/ARCHITECTURE.md` in full before changing anything under `hide-core/`, `hided/` or `desktop/`; it owns the reasons behind these boundaries.
 
 - The core owns all state behind one `Mutex<Runtime>`; the shell dispatches typed events in and pulls one snapshot out when the notifier announces, and holds no authority of its own.
-- The engine (the core's own, `herdr-core/src/engine/own/`, over each pane's holder) owns pane existence, split geometry, zoom, cwd, agent lifecycle and the PTY; the core owns each checkout's visible tab, the keyboard focus pane, panel visibility and text scale, and changes those on the event that asked for it, telling the engine afterwards.
+- The engine (the core's own, `hide-core/src/engine/own/`, over each pane's holder) owns pane existence, split geometry, zoom, cwd, agent lifecycle and the PTY; the core owns each checkout's visible tab, the keyboard focus pane, panel visibility and text scale, and changes those on the event that asked for it, telling the engine afterwards.
   While that notification is pending, the engine's move is read as confirmation; with nothing pending, a move the engine makes on its own is followed and a diagnostic records it; a refusal or a timeout keeps the core's value and records a diagnostic.
   A zoom, split, resize, pane close or new tab Hide asked for is drawn before the engine's layout confirms it, and the engine's layout replaces the drawing; each terminal's grid follows the rectangle drawn for it at once, because the PTY size is the controller client's and never the engine layout's (`docs/ARCHITECTURE.md`, Drawn ahead of Herdr).
   Each tab runs one geometry operation at a time with at most eight waiting, and a refusal drops the line behind it; keys typed before a new pane exists are held by the node that holds the pane up to 64 KiB per holder and 3 s per key; fork input waits until the fork ends for up to 30 s and reported cap failures.
-- The notifier announces once per burst, and `herdr_core_snapshot` clears its latch **before** it takes the lock; clearing it after the read would swallow a change that landed during the read.
+- The notifier announces once per burst, and `Core::snapshot_delta_payload` (`hide-core/src/handle.rs`) clears its latch **before** it takes the lock; clearing it after the read would swallow a change that landed during the read.
   Launch creates the core once, after the runtime resolution has finished, and never replaces it.
 - A user action is one event, not a sequence: dispatch is fire-and-forget, so four events would arrive as four frames and a refusal partway would leave the screen half moved.
 - A path outside every registered checkout never reaches the core; the shell hands it to macOS and reveals rather than opens anything executable.
@@ -133,7 +133,7 @@ Read `docs/ARCHITECTURE.md` in full before changing anything under `herdr-core/`
 
 ## Herdr Source
 
-Hide no longer runs Herdr: the core's own engine (`herdr-core/src/engine/own/`, over each pane's holder) runs every pane.
+Hide no longer runs Herdr: the core's own engine (`hide-core/src/engine/own/`, over each pane's holder) runs every pane.
 When the own engine is stuck, or behaves differently from what Herdr did, read Herdr's source at its last pinned release ([herdrdev/herdr](https://github.com/herdrdev/herdr), tag `v0.9.5`) before designing a fix, and follow it where it fits; a pull request that goes another way says why in `Review`.
 Read it with `gh api` or a shallow clone under your own `agents/runs/`, and delete the clone when done.
 

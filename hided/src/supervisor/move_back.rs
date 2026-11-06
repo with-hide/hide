@@ -157,7 +157,7 @@ pub(super) async fn prepare_back(
         ..MoveView::default()
     });
     let fail = |check: CheckId, detail: String| vec![FailedCheck { check, detail }];
-    let own = herdr_core::node::NodeId::of_this_machine()
+    let own = hide_core::node::NodeId::of_this_machine()
         .map_err(|error| fail(CheckId::Connection, error))?;
     let placement = placement::read(&env.state_dir, own.as_str())
         .map_err(|error| fail(CheckId::Connection, error))?
@@ -268,13 +268,13 @@ pub(super) async fn prepare_back(
     // settings this machine kept; every agent they ask has to answer here,
     // with this machine's logins, as the forward move asks of its target.
     let asks = match &inspected.ai {
-        Ok(Some(theirs)) => herdr_core::hide_ai_asks_of_stored(theirs),
+        Ok(Some(theirs)) => hide_core::hide_ai_asks_of_stored(theirs),
         Ok(None) => Err("the core's machine holds no Hide AI settings".to_owned()),
         Err(reason) => Err(reason.clone()),
     };
     match asks {
         Ok(asks) => {
-            let ready = tokio::task::spawn_blocking(move || herdr_core::hide_ai_ready_here(&asks))
+            let ready = tokio::task::spawn_blocking(move || hide_core::hide_ai_ready_here(&asks))
                 .await
                 .map_err(|error| error.to_string())
                 .and_then(|ready| ready);
@@ -290,10 +290,7 @@ pub(super) async fn prepare_back(
             detail,
         }),
     }
-    let unlike = match (
-        &inspected.ai,
-        herdr_core::stored_hide_ai_settings(&env.home),
-    ) {
+    let unlike = match (&inspected.ai, hide_core::stored_hide_ai_settings(&env.home)) {
         (_, Ok(None)) => None,
         (Ok(Some(theirs)), Ok(Some(ours))) if *theirs == ours => None,
         (_, Ok(Some(_))) => Some("Hide AI settings unlike the core's".to_owned()),
@@ -415,7 +412,7 @@ pub(super) async fn back(env: &Env, seat: &seat::Seat, running: RunningNode) -> 
     let screen = MoveScreen::mount(&seat.parts(), env.vite_origin.as_deref());
     stop_node(running).await;
     let remote = Arc::new(remote);
-    let own = herdr_core::node::NodeId::of_this_machine()?;
+    let own = hide_core::node::NodeId::of_this_machine()?;
     let released = unless_stopped(
         &seat.stop,
         blocking({
@@ -456,7 +453,7 @@ pub(super) async fn back(env: &Env, seat: &seat::Seat, running: RunningNode) -> 
         blocking({
             let (state_dir, settings, remote, journal, moves) = (
                 env.state_dir.clone(),
-                herdr_core::hide_ai_settings_path(&env.home),
+                hide_core::hide_ai_settings_path(&env.home),
                 Arc::clone(&remote),
                 journal.clone(),
                 Arc::clone(&moves),
@@ -704,7 +701,7 @@ pub(super) async fn back_rollback(
     let undone = blocking({
         let (state_dir, settings, journal) = (
             env.state_dir.clone(),
-            herdr_core::hide_ai_settings_path(&env.home),
+            hide_core::hide_ai_settings_path(&env.home),
             journal.clone(),
         );
         move || back::unplace_here(&state_dir, &settings, &journal)

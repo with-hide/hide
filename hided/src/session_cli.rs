@@ -1,12 +1,12 @@
 //! `hide session list|record|read` (PRD agent-session-read): the core
-//! answers one JSON value (`herdr_core::links::session_command`); this draws
+//! answers one JSON value (`hide_core::links::session_command`); this draws
 //! it as text for an agent to read, or prints it with `--json`. Both forms
 //! carry the same sessions, request numbers, source marks and omission
 //! counts (B19): a record past [`RECORD_TEXT_BYTES`] has its oldest flows
 //! folded before either form is printed (B7).
 
 use crate::env::Env;
-use herdr_core::links::session_command::SessionCommand;
+use hide_core::links::session_command::SessionCommand;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 

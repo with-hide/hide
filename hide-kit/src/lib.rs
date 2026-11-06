@@ -195,7 +195,7 @@ pub struct KitReport {
     #[serde(default)]
     pub agents: Vec<AgentReport>,
     /// The machine's Codex has the shared daemon setting, so Hide starts it
-    /// with `--no-daemon` (`herdr-core`'s `codex_launch`); `Some(false)` is a
+    /// with `--no-daemon` (`hide-core`'s `codex_launch`); `Some(false)` is a
     /// Codex read to be older than the setting, `None` no Codex or a failed
     /// read. Hide reads it and never changes it (PRD settings-cleanup D-12).
     #[serde(default, skip_serializing_if = "Option::is_none")]

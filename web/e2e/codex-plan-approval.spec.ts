@@ -4,7 +4,7 @@
 // the session file. A rollout whose last plan-mode turn proposed a plan puts
 // the Codex row in Needs You with the approval mark, and the next turn's
 // record takes it out. That the row stays after it is read (B2) is the
-// core's rule, tested in `herdr-core/src/runtime/tests/labels.rs`.
+// core's rule, tested in `hide-core/src/runtime/tests/labels.rs`.
 //
 // The fixture Codex is the shim copied as `codex`. The engine reads its
 // screen as working while the title carries Codex's spinner and, once a title

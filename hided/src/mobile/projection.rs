@@ -4,7 +4,7 @@
 //! from the core's snapshot `rest` section and carries no files, no paths and
 //! nothing else of the snapshot.
 
-pub use herdr_core::agent_state::phone::{
+pub use hide_core::agent_state::phone::{
     AgentKey, PhoneAgent, PhoneMissions, PhonePrs, Projection, project,
 };
 use serde_json::Value;
@@ -14,7 +14,7 @@ use serde_json::Value;
 /// unrelated editor, layouts and terminal state never enter this follower.
 pub fn update_inputs(
     kept: &mut Value,
-    rest: &herdr_core::RestSections,
+    rest: &hide_core::RestSections,
     have: u64,
 ) -> Result<bool, serde_json::Error> {
     if have == 0 || !kept.is_object() {
@@ -69,7 +69,7 @@ pub fn update_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use herdr_core::agent_state::phone::{Group, GroupRow, Line};
+    use hide_core::agent_state::phone::{Group, GroupRow, Line};
     use serde_json::json;
 
     /// The agent at the top of a group at `at`, which is never a sleeping row.
@@ -82,12 +82,12 @@ mod tests {
 
     #[test]
     fn typed_projection_retains_omissions_and_reset_removes_old_phone_state() {
-        let options: herdr_core::CoreOptions = serde_json::from_value(json!({
+        let options: hide_core::CoreOptions = serde_json::from_value(json!({
             "schema_version": 2, "node_id": "test-node", "app_state_path": ""
         }))
         .unwrap();
-        let mut snapshot = herdr_core::Snapshot::initial(&options);
-        let first = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        let first = hide_core::RestSections::capture(&snapshot, None, 1);
         let mut fast = Value::Null;
         let mut slow = json!({"navigator": {"agents": [agent("old", "working", json!({}))]}});
         assert!(update_inputs(&mut fast, &first, 0).unwrap());
@@ -98,7 +98,7 @@ mod tests {
             project(&serde_json::to_value(&first).unwrap(), "local")
         );
         snapshot.zoomed = Some("fixture:p1".to_owned());
-        let selected = herdr_core::RestSections::capture(&snapshot, Some(&first), 2);
+        let selected = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
         let retained = fast.clone();
         assert!(!update_inputs(&mut fast, &selected, 1).unwrap());
         assert_eq!(fast, retained);
@@ -378,18 +378,18 @@ mod tests {
 
     #[test]
     fn the_color_theme_reaches_the_phone_and_a_change_makes_the_projection_differ() {
-        let options: herdr_core::CoreOptions = serde_json::from_value(json!({
+        let options: hide_core::CoreOptions = serde_json::from_value(json!({
             "schema_version": 2, "node_id": "test-node", "app_state_path": ""
         }))
         .unwrap();
-        let mut snapshot = herdr_core::Snapshot::initial(&options);
-        let first = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        let first = hide_core::RestSections::capture(&snapshot, None, 1);
         let mut kept = Value::Null;
         assert!(update_inputs(&mut kept, &first, 0).unwrap());
         let hide = project(&kept, "local");
         assert_eq!(hide.color_theme.as_deref(), Some("hide"), "the default");
         snapshot.ui_state.color_theme = serde_json::from_value(json!("neutral")).unwrap();
-        let neutral = herdr_core::RestSections::capture(&snapshot, Some(&first), 2);
+        let neutral = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
         assert!(update_inputs(&mut kept, &neutral, 1).unwrap());
         let projected = project(&kept, "local");
         assert_eq!(projected.color_theme.as_deref(), Some("neutral"));

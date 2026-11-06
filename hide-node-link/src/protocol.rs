@@ -909,7 +909,7 @@ pub enum Call {
     /// How a start of the agent CLI named `name` on the node carries its
     /// arguments, a [`StartForm`], or null when it is not on the node's
     /// `PATH`: asked before a pane is asked to start it, and before a prompt
-    /// rides that start (`herdr-core` `start_prompt`).
+    /// rides that start (`hide-core` `start_prompt`).
     AgentInstalled {
         name: String,
     },

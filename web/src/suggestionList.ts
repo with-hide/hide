@@ -137,7 +137,7 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
   no_change: "suggestions.failure.no_change",
 };
 
-/** Why Memory refused to start a press, by the code the core put on the row (`herdr-core/src/runtime/suggestion_memory.rs`, `Refusal`). */
+/** Why Memory refused to start a press, by the code the core put on the row (`hide-core/src/runtime/suggestion_memory.rs`, `Refusal`). */
 const START_REFUSAL_KEYS: Record<string, MessageKey> = {
   not_git: "suggestions.refusal.not_git",
   promotion_unavailable: "suggestions.refusal.promotion_unavailable",

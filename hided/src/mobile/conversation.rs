@@ -24,7 +24,7 @@ mod opencode;
 
 use std::path::{Path, PathBuf};
 
-use herdr_core::engine::{EngineHandle, PaneSessionKind};
+use hide_core::engine::{EngineHandle, PaneSessionKind};
 use hide_session::{
     Agent, EventKind, SessionError, SessionIdentity, SessionLocator, parse_events_at,
     read_page_before,
