@@ -688,10 +688,12 @@ pub mod phone {
         }
     }
 
-    /// Keeps `groups` within `room` bytes of JSON. What the phone shows last
-    /// goes first: folded top rows, then the children of the rows left, then
-    /// shown top rows, each the oldest first and group by group from the end
-    /// of the drawing order, so 내 차례 is the last to lose a row.
+    /// Keeps `groups` within `room` bytes of JSON. Every other group loses
+    /// its rows before 내 차례 loses one, since a row there waits on the
+    /// operator; inside each part, what the phone shows last goes first:
+    /// folded top rows, then the children of the rows left, then shown top
+    /// rows, each the oldest first and group by group from the end of the
+    /// drawing order.
     fn fit_groups(groups: &[Group], room: usize) -> WireGroups<'_> {
         let total = wire_len(groups);
         if total <= room {
@@ -703,29 +705,12 @@ pub mod phone {
         let mut groups = groups.to_vec();
         let mut over = total - room;
         let mut omitted = 0;
-        for group in groups.iter_mut().rev() {
-            shed(&mut group.more, &mut over, &mut omitted, GroupRow::agents);
-        }
-        for group in groups.iter_mut().rev() {
-            for row in group.rows.iter_mut().chain(&mut group.more).rev() {
-                if let GroupRow::Agent(agent) = row {
-                    shed(
-                        &mut agent.more_children,
-                        &mut over,
-                        &mut omitted,
-                        PhoneAgent::agents,
-                    );
-                    shed(
-                        &mut agent.children,
-                        &mut over,
-                        &mut omitted,
-                        PhoneAgent::agents,
-                    );
-                }
-            }
-        }
-        for group in groups.iter_mut().rev() {
-            shed(&mut group.rows, &mut over, &mut omitted, GroupRow::agents);
+        for asking in [false, true] {
+            let part = groups
+                .iter_mut()
+                .rev()
+                .filter(|group| (group.group == "needs_you") == asking);
+            shed_groups(part, &mut over, &mut omitted);
         }
         for group in &mut groups {
             group.more_asleep = group.more.iter().filter(|row| row.asleep()).count();
@@ -733,6 +718,30 @@ pub mod phone {
         WireGroups {
             groups: Cow::Owned(groups),
             omitted,
+        }
+    }
+
+    /// The three passes of `fit_groups` over one part of the groups, given
+    /// from the end of the drawing order.
+    fn shed_groups<'a>(
+        groups: impl Iterator<Item = &'a mut Group>,
+        over: &mut usize,
+        omitted: &mut usize,
+    ) {
+        let mut groups: Vec<&mut Group> = groups.collect();
+        for group in &mut groups {
+            shed(&mut group.more, over, omitted, GroupRow::agents);
+        }
+        for group in &mut groups {
+            for row in group.rows.iter_mut().chain(&mut group.more).rev() {
+                if let GroupRow::Agent(agent) = row {
+                    shed(&mut agent.more_children, over, omitted, PhoneAgent::agents);
+                    shed(&mut agent.children, over, omitted, PhoneAgent::agents);
+                }
+            }
+        }
+        for group in &mut groups {
+            shed(&mut group.rows, over, omitted, GroupRow::agents);
         }
     }
 
@@ -1282,6 +1291,49 @@ pub mod phone {
                 rows_of(&projection.groups),
                 total,
                 "the projection itself stays whole"
+            );
+        }
+
+        #[test]
+        fn every_other_row_goes_before_a_folded_row_that_waits_on_the_operator() {
+            // 300 asking roots, short enough to fit alone, and one working
+            // root whose 200 resting children push the list over.
+            let mut agents: Vec<Value> = (0..300)
+                .map(|at| {
+                    let mut row = agent(&format!("w1:n{at}"), "needs_you", 9_000 + at, json!({}));
+                    row["identity_label"] = json!(format!("ask {at}"));
+                    row["state"]["line"]["text"] = json!("?");
+                    row
+                })
+                .collect();
+            let kids: Vec<String> = (0..200).map(|at| format!("w1:k{at}")).collect();
+            agents.push(agent(
+                "w1:root",
+                "working",
+                8_999,
+                json!({"lineage_child_pane_ids": kids}),
+            ));
+            for (at, kid) in kids.iter().enumerate() {
+                agents.push(agent(kid, "seen", 1_000 + at as u64, json!({"delegated": true, "lineage_parent_pane_id": "w1:root", "lineage_child_pane_ids": []})));
+            }
+            let projection = project(&json!({"navigator": {"agents": agents}}), "local");
+            assert!(
+                wire_len(&projection.groups) > LIST_BUDGET,
+                "the fixture must overflow"
+            );
+            let wire = projection.wire();
+            let frame = json!({"type": "agents", "groups": wire.groups, "omitted": wire.omitted, "devices": projection.devices});
+            assert!(frame.to_string().len() <= FRAME_LIMIT);
+            assert!(wire.omitted > 0);
+            let asking = wire
+                .groups
+                .iter()
+                .find(|group| group.group == "needs_you")
+                .unwrap();
+            assert_eq!(
+                asking.rows.len() + asking.more.len(),
+                300,
+                "no row waiting on the operator is left out"
             );
         }
 
