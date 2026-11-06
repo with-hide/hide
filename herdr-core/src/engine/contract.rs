@@ -1202,6 +1202,260 @@ fn launched_input_reaches_npms_program(shell: &str) {
     }
 }
 
+/// After the machine went down, a restarted pane's agent resumes through
+/// the file its node starts the program from, as a start and a wake do,
+/// never by the program's name, and every word of its resume reaches that
+/// program whole (with-hide/hide-private#595). On Windows the node reads
+/// npm's own launcher as the program it runs (Node and the package's
+/// script), and the line runs in Windows PowerShell 5.1 and in PowerShell
+/// 7: by the name, PowerShell would pick npm's `.ps1`, and 5.1 drops the
+/// quotes inside an argument it hands on. Elsewhere the file is a script
+/// `/bin/sh` runs. The resume, from an operator's definition, holds a JSON
+/// argument (`"` and a space) and a session with both.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_restarted_agent_resumes_through_its_nodes_file_with_every_word_whole() {
+    resumes_through_the_nodes_file("/bin/sh");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_restarted_agent_resumes_through_npms_program_with_every_word_whole_in_windows_powershell() {
+    resumes_through_the_nodes_file("powershell.exe");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_restarted_agent_resumes_through_npms_program_with_every_word_whole_in_powershell_7() {
+    resumes_through_the_nodes_file("pwsh.exe");
+}
+
+/// A node that answers how the stand-in agent's program starts with `form`,
+/// as a node answers `Call::AgentInstalled`, and passes every other call to
+/// the machine's node.
+struct AnsweringStart {
+    node: std::sync::Arc<dyn hide_node_link::NodeLink>,
+    program: &'static str,
+    form: hide_node_link::protocol::StartForm,
+}
+
+impl hide_node_link::NodeLink for AnsweringStart {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<hide_node_link::LinkAnswer, hide_node_link::LinkError> {
+        match call {
+            hide_node_link::protocol::Call::AgentInstalled { name } if name == self.program => Ok(
+                hide_node_link::LinkAnswer::Parsed(serde_json::to_value(Some(&self.form)).unwrap()),
+            ),
+            other => self.node.call(other, timeout),
+        }
+    }
+
+    fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+        self.node.reader_features()
+    }
+
+    fn in_process(&self) -> bool {
+        self.node.in_process()
+    }
+}
+
+/// The stand-in's program as its node would answer for it, and the file it
+/// writes the words it was given into, one to a line.
+fn stand_in_start(
+    install: &std::path::Path,
+) -> (hide_node_link::protocol::StartForm, std::path::PathBuf) {
+    use hide_node_link::protocol::StartForm;
+    let given = install.join("argv");
+    #[cfg(unix)]
+    let form = {
+        let script = install.join("standin.sh");
+        std::fs::write(
+            &script,
+            "for word; do printf '%s\\n' \"$word\"; done > \"${0%/*}/argv\"\n",
+        )
+        .unwrap();
+        StartForm::Direct {
+            program: "/bin/sh".into(),
+            leading: vec![script.to_str().unwrap().to_owned()],
+        }
+    };
+    #[cfg(windows)]
+    let form = {
+        use hide_platform::programs::{self, Start};
+        // A local npm install whose script writes the words it was given
+        // beside it, under npm's own launcher.
+        let package = install.join("node_modules").join("@openai").join("codex");
+        std::fs::create_dir_all(package.join("bin")).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("bin").join("codex.js"),
+            format!(
+                "#!/usr/bin/env node\nrequire('fs').writeFileSync({}, process.argv.slice(2).map((word) => word + '\\n').join(''));\n",
+                serde_json::to_string(given.to_str().unwrap()).unwrap()
+            ),
+        )
+        .unwrap();
+        let bin = install.join("node_modules").join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let launcher = bin.join("codex.cmd");
+        std::fs::write(
+            &launcher,
+            include_str!("../../../hide-platform/tests/fixtures/launchers/npm-script.cmd"),
+        )
+        .unwrap();
+        // As a node answers `Call::AgentInstalled` (hide-host's
+        // `agent_start_form`), Node found on the runner's `PATH`.
+        let search = std::env::var_os("PATH").expect("the runner's PATH holds Node");
+        match programs::start(&launcher, &search) {
+            Start::Direct { program, leading } => StartForm::Direct {
+                program: program.into_os_string().into_string().unwrap(),
+                leading: leading
+                    .into_iter()
+                    .map(|word| word.into_string().unwrap())
+                    .collect(),
+            },
+            Start::Batch => panic!("npm's launcher is read as the program it runs"),
+        }
+    };
+    (form, given)
+}
+
+#[allow(clippy::disallowed_methods)] // polls the save and the holders' ends, bounded by a deadline
+fn resumes_through_the_nodes_file(shell: &str) {
+    use std::sync::Arc;
+
+    const SESSION: &str = "s \"1\" two";
+    let (_root, [home, state_dir, folder]) = holder_root();
+    // Dropped before the folder and after both nodes, on every exit.
+    let _processes = RecordedProcesses(state_dir.clone());
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    let engine_dir = hide_kit::layout::engine_dir(&state_dir);
+    let install = tempfile::tempdir().unwrap();
+    let (form, given) = stand_in_start(install.path());
+    // An operator's definition of an agent whose resume holds a JSON
+    // argument, as Claude Code's `--settings` takes one.
+    let definitions = Arc::new(hide_agent_adapter::definition::Catalog::read(vec![
+        hide_agent_adapter::definition::UserFile::Text {
+            name: "standin.toml".into(),
+            text: concat!(
+                "schema = 1\nid = \"standin\"\nname = \"Stand-in\"\n",
+                "executables = [\"standin\"]\nhooks = \"none\"\n\n[resume]\n",
+                "session = [\"--settings\", '{\"a\": \"b c\"}', \"--resume\", \"{session}\"]\n",
+            )
+            .into(),
+        },
+    ]));
+    assert!(
+        definitions.rejected.is_empty(),
+        "{:?}",
+        definitions.rejected
+    );
+    let open = || {
+        let (node, service) = built_node(&home, &state_dir, vec![shell.into()]);
+        let place = super::own::Place {
+            engine_dir: engine_dir.clone(),
+            home: hide_platform::path::to_wire(&home).unwrap(),
+            hooks_home: Some(home.clone()),
+            node: Arc::new(AnsweringStart {
+                node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
+                program: "standin",
+                form: form.clone(),
+            }),
+            windows: cfg!(windows),
+            definitions: Arc::clone(&definitions),
+            launches: Arc::default(),
+        };
+        let panes = super::own::link_panes(node);
+        let engine =
+            super::own::OwnEngine::open(Arc::clone(&panes), place).expect("the engine opens");
+        (engine, panes, service)
+    };
+    let record =
+        |pane: &str| hide_kit::layout::pane_record(&state_dir, &hide_kit::panes::holder_pane(pane));
+
+    let (first, first_panes, first_service) = open();
+    let (_, _, pane) = first
+        .create_workspace(WAIT, &folder, "resume", true, BTreeMap::new())
+        .unwrap();
+    prompted(&first, &pane);
+    let save = hide_kit::layout::engine_session_in(&engine_dir);
+    until("the save names the pane", || {
+        std::fs::read(&save)
+            .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).contains(&format!("\"{pane}\"")))
+    });
+    // The machine goes down with the agent running in the pane: the daemon
+    // and the pane's holder end, and the save says what the pane ran.
+    first.stop();
+    drop((first, first_panes, first_service));
+    let ran: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(record(&pane)).unwrap()).unwrap();
+    for process in ["holder", "program"] {
+        let pid = u32::try_from(ran[process]["pid"].as_u64().unwrap()).unwrap();
+        let started = ran[process]["started"].as_u64().unwrap();
+        hide_platform::process::kill_tree(pid).unwrap();
+        until("the pane's processes end", || {
+            hide_platform::process::start_time(pid).map_or(true, |now| now != started)
+        });
+    }
+    fn give_agent(value: &mut serde_json::Value, pane: &str) -> bool {
+        match value {
+            serde_json::Value::Object(object)
+                if object.get("id").and_then(|id| id.as_str()) == Some(pane)
+                    && object.contains_key("cwd") =>
+            {
+                object.insert(
+                    "agent".into(),
+                    serde_json::json!({"kind": "standin", "session": SESSION}),
+                );
+                true
+            }
+            serde_json::Value::Object(object) => {
+                object.values_mut().any(|value| give_agent(value, pane))
+            }
+            serde_json::Value::Array(values) => {
+                values.iter_mut().any(|value| give_agent(value, pane))
+            }
+            _ => false,
+        }
+    }
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&save).unwrap()).unwrap();
+    assert!(give_agent(&mut saved, &pane), "the save holds the pane");
+    std::fs::write(&save, serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    // The engine runs the restore and its resumes while it is held.
+    let (_next, next_panes, _next_service) = open();
+    let words = || -> Option<Vec<String>> {
+        let text = std::fs::read_to_string(&given).ok()?;
+        text.ends_with('\n')
+            .then(|| text.lines().map(str::to_owned).collect())
+    };
+    // The resume waits for the restarted shell, then is typed key by key.
+    until_within(
+        "the resumed program records its words",
+        Duration::from_secs(120),
+        || words().is_some(),
+    );
+    assert_eq!(
+        words().unwrap(),
+        ["--settings", "{\"a\": \"b c\"}", "--resume", SESSION],
+        "{shell} changed a word of the resume on its way"
+    );
+    next_panes
+        .terminate(&pane)
+        .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
+}
+
 /// PRD engine-bundle-3-core-owns B18's hook cells: on the core's own engine
 /// a Claude whose hook said its conversation is put to sleep in its pane by
 /// its own quit key and woken there resuming that conversation by id, the
