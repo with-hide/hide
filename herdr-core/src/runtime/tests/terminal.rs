@@ -1267,7 +1267,18 @@ fn find_opens_the_agents_own_search_only_where_herdr_holds_no_history() {
         })
     };
     let pane = "w1:p1";
-    let shared = observed_runtime(&herdr, pane);
+    let shared = SharedRuntime::new(runtime());
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.live = Some(live::LiveContext {
+            runtime: shared.weak(),
+            ..herdr.live()
+        });
+        runtime
+            .terminal_states
+            .insert(pane.to_owned(), terminal_state("controlling", 1));
+        runtime.ensure_terminal_pane(pane);
+    }
     shared.lock().unwrap().snapshot.navigator.agents = crate::sidebar::project_agents(
         serde_json::from_value(serde_json::json!({
             "agents": [{"pane_id": pane, "agent": "claude", "state_change_seq": 1}]

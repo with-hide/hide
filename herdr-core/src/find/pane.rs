@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 
-use crate::engine::{Engine, EngineError, PaneText, SharedEngine};
+use crate::engine::{Engine, PaneText, SharedEngine};
 
 use crate::agent_find::AgentFind;
 use crate::find::PaneFindOptions;
