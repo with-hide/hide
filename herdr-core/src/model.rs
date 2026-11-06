@@ -1907,8 +1907,6 @@ pub struct AgentSleepActionSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentActionRefusal {
-    /// An agent on another device.
-    Device,
     /// This agent's reader cannot sleep it.
     Unsupported,
     /// This agent sleeps only on the machine the core runs on.
@@ -1925,7 +1923,6 @@ pub enum AgentActionRefusal {
 impl AgentActionRefusal {
     pub fn detail(self) -> &'static str {
         match self {
-            Self::Device => "Agents on another device cannot sleep",
             Self::Unsupported => "This agent's reader does not support sleep",
             Self::CoreMachineOnly => "This agent sleeps only on the machine Hide's core runs on",
             Self::Asleep => "This agent is already asleep",
@@ -8943,7 +8940,6 @@ mod wire_enum_tests {
         checked.insert("herdr_profile_refusal");
 
         let action_refusals = [
-            AgentActionRefusal::Device,
             AgentActionRefusal::Unsupported,
             AgentActionRefusal::CoreMachineOnly,
             AgentActionRefusal::Asleep,
@@ -8954,8 +8950,7 @@ mod wire_enum_tests {
         ];
         for variant in action_refusals {
             match variant {
-                AgentActionRefusal::Device
-                | AgentActionRefusal::Unsupported
+                AgentActionRefusal::Unsupported
                 | AgentActionRefusal::CoreMachineOnly
                 | AgentActionRefusal::Asleep
                 | AgentActionRefusal::Working

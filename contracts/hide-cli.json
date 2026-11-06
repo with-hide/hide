@@ -3125,7 +3125,6 @@
                 "parent_authority_required",
                 "actor_identity_conflict",
                 "agent_sleep_unsupported",
-                "agent_sleep_device",
                 "agent_sleep_core_machine_only",
                 "agent_sleep_working",
                 "agent_sleep_waiting_for_you",
@@ -5275,7 +5274,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:07011e721abb3a5238b4c1b7abe05e0faab7a5a07428678cc14103a1bdbe020a",
+    "digest": "sha256:68f6a1d841fa83702eccaff1061353868b85b19192c1c309ede9459e09d76c0c",
     "envelopes": {
         "agent": {
             "answer": "value",

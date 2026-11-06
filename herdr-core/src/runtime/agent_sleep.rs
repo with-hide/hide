@@ -149,15 +149,16 @@ impl Runtime {
         true
     }
 
-    /// The same decision for a node that dials this core, run by that node's
-    /// coordinator's tick (PRD core-host-node-remote-core B13). A device the
-    /// core dials is never decided on.
+    /// The same decision for another machine, a node that dials this core or
+    /// a device it dials, run by that machine's coordinator's tick (PRD
+    /// core-host-node-remote-core B13). A machine that is not connected is not
+    /// decided on: its rows are its last session's, and an end could not
+    /// reach it.
     pub(crate) fn tick_node_agent_sleep(&mut self, device: &str, now_unix_ms: u64) -> bool {
         if self
             .node_sleep_next_decision_unix_ms
             .get(device)
             .is_some_and(|next| now_unix_ms < *next)
-            || self.sleep_machine(device) != SleepMachine::Node
             || self.device_engine(device).is_none()
             || self.effects_held()
         {
@@ -170,8 +171,8 @@ impl Runtime {
         self.decide_agent_sleep(Some(device), now_unix_ms)
     }
 
-    /// Puts to sleep what is due on one machine: the core's own (`None`) or a
-    /// node's. At most `MAX_ENDS_IN_FLIGHT` ends run at once over all of them.
+    /// Puts to sleep what is due on one machine: the core's own (`None`) or
+    /// another's. At most `MAX_ENDS_IN_FLIGHT` ends run at once over all of them.
     fn decide_agent_sleep(&mut self, device: Option<&str>, now_unix_ms: u64) -> bool {
         let mut changed = false;
         let machine = device.map_or(SleepMachine::Core, |device| self.sleep_machine(device));
@@ -214,16 +215,14 @@ impl Runtime {
         self.settle_agent_sleep_in(payload, SleepScope::Core);
     }
 
-    /// The same for a node that dials this core, on its session as its engine
-    /// names it, before the session is scoped to the device.
+    /// The same for another machine, on its session as its engine names it,
+    /// before the session is scoped to the device.
     pub(crate) fn settle_node_agent_sleep(
         &mut self,
         device: &str,
         payload: &mut SessionSnapshotPayload,
     ) {
-        if self.sleep_machine(device) == SleepMachine::Node {
-            self.settle_agent_sleep_in(payload, SleepScope::Device(device));
-        }
+        self.settle_agent_sleep_in(payload, SleepScope::Device(device));
     }
 
     fn settle_agent_sleep_in(
@@ -266,15 +265,13 @@ impl Runtime {
         self.stamp_agent_sleep_in(agents, SleepScope::Core);
     }
 
-    /// The same for the rows of a node that dials this core.
+    /// The same for the rows of another machine.
     pub(super) fn stamp_node_agent_sleep(
         &mut self,
         device: &str,
         agents: &mut [SidebarAgentSnapshot],
     ) {
-        if self.sleep_machine(device) == SleepMachine::Node {
-            self.stamp_agent_sleep_in(agents, SleepScope::Device(device));
-        }
+        self.stamp_agent_sleep_in(agents, SleepScope::Device(device));
     }
 
     fn stamp_agent_sleep_in(&mut self, agents: &mut [SidebarAgentSnapshot], scope: SleepScope<'_>) {
@@ -285,14 +282,11 @@ impl Runtime {
         }
     }
 
-    /// A node's engine moved the tab on its screen: a visit, as a committed
-    /// local one is (B12), once the node's session confirms it. Wakes what
+    /// Another machine's tabs on screen moved: a visit, as a committed local
+    /// one is (B12), once that machine's session confirms it. Wakes what
     /// sleeps in the tabs that came on screen and stamps the last look of
     /// those and of the tabs that left.
     pub(super) fn node_agent_sleep_visit(&mut self, device: &str) -> bool {
-        if self.sleep_machine(device) != SleepMachine::Node {
-            return false;
-        }
         let shown = self.shown_node_tabs(device);
         let before = self
             .node_sleep_shown_tabs
@@ -924,15 +918,13 @@ impl Runtime {
         }
     }
 
-    /// How sleep treats a device: this core's own machine, a node that dials
-    /// it, or a device it dials.
+    /// How sleep treats a device: this core's own machine, or another one,
+    /// which sleeps alike whichever way its link was made.
     pub(super) fn sleep_machine(&self, device: &str) -> SleepMachine {
         if device == self.node.as_str() {
             SleepMachine::Core
-        } else if self.link_origin(device) == Some(&LinkOrigin::Inbound) {
-            SleepMachine::Node
         } else {
-            SleepMachine::Device
+            SleepMachine::Node
         }
     }
 
@@ -942,7 +934,8 @@ impl Runtime {
     }
 
     /// Where a pane's sleep or wake runs: the core's own engine and node, or
-    /// those of the node that dials the core with the pane.
+    /// those of the machine with the pane while it is connected; `None` for
+    /// one that is not, so nothing waits on a link that is down.
     fn sleep_target(&self, pane_id: &str) -> Option<SleepTarget> {
         let Some(device) = crate::address::pane_device(pane_id) else {
             let live = self.live.as_ref()?;
@@ -955,9 +948,6 @@ impl Runtime {
                 input_gate: Arc::clone(&self.input_gate),
             });
         };
-        if self.sleep_machine(device) != SleepMachine::Node {
-            return None;
-        }
         let worker = self.worker_context.as_ref()?;
         Some(SleepTarget {
             engine: self.device_engine(device)?,
