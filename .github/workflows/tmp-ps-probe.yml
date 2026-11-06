@@ -1,7 +1,8 @@
 # TEMPORARY (removed before review): 20 Windows runs of hide-agent-hooks `it`
-# and hide-node's bootstrap windows_tests, five fresh runners of four rounds,
-# with no retry. Even rounds run the bootstrap tests under an empty module
-# analysis cache, the state that stalled their first PowerShell starts.
+# (the Windows lane's selection, pr.yml) and hide-node's bootstrap
+# windows_tests, each on a fresh runner as CI runs them, with no retry. Even
+# runners run the bootstrap tests under an empty module analysis cache, the
+# state that stalled their first PowerShell starts.
 name: tmp ps repeat
 on:
   push:
@@ -16,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [1, 2, 3, 4, 5]
+        runner: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     defaults:
       run:
         shell: bash
@@ -41,27 +42,21 @@ jobs:
       - name: Build the Windows test binaries
         timeout-minutes: 40
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
-      - name: Four rounds, no retry
+      - name: One round, no retry
         run: |
           set +e
-          failed=0
-          for round in 1 2 3 4; do
-            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --no-fail-fast $TEST_TARGETS -E 'binary_id(hide-agent-hooks::it)'
-            hooks=$?
-            if [ $((round % 2)) -eq 0 ]; then
-              export PSModuleAnalysisCachePath="$(cygpath -w "$RUNNER_TEMP")\\cold-$round\\ModuleAnalysisCache"
-              cache=empty
-            else
-              cache=runner
-            fi
-            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --no-fail-fast $TEST_TARGETS -E 'package(hide-node) & kind(lib) & test(/bootstrap::windows_tests::/)'
-            bootstrap=$?
-            unset PSModuleAnalysisCachePath
-            echo "ROUND runner=${{ matrix.runner }} round=$round hooks=$hooks bootstrap=$bootstrap cache=$cache"
-            [ $hooks -eq 0 ] && [ $bootstrap -eq 0 ] || failed=$((failed + 1))
-          done
-          echo "ROUNDS FAILED runner=${{ matrix.runner }}: $failed of 4"
-          exit $failed
+          bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --no-fail-fast $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))'
+          hooks=$?
+          if [ $((${{ matrix.runner }} % 2)) -eq 0 ]; then
+            export PSModuleAnalysisCachePath="$(cygpath -w "$RUNNER_TEMP")\\cold\\ModuleAnalysisCache"
+            cache=empty
+          else
+            cache=runner
+          fi
+          bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --no-fail-fast $TEST_TARGETS -E 'package(hide-node) & kind(lib) & test(/bootstrap::windows_tests::/)'
+          bootstrap=$?
+          echo "ROUND runner=${{ matrix.runner }} hooks=$hooks bootstrap=$bootstrap cache=$cache"
+          [ $hooks -eq 0 ] && [ $bootstrap -eq 0 ]
       - name: Processor time contract
         if: ${{ !cancelled() && matrix.runner == 1 }}
         run: bash scripts/verify-cargo.sh nextest --profile ci --retries 0 -p hide-platform --test it -E 'test(processor_time_counts)'
