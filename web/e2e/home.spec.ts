@@ -83,13 +83,13 @@ function paneAt(rest: Rest, folder: string): true | undefined {
 /** A start aimed at Home with a pinned project: `~/hide` is made and the agent runs in it. */
 async function inOpenedHome(page: Page, check: (home: string, root: string) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
     // The fixture's folders are in the daemon's home, as an operator's projects
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
-    daemon = await startHided(herdr, "home", herdr.root);
+    daemon = await startHided(engine, "home", engine.root);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await pinFixture(page);
@@ -105,12 +105,12 @@ async function inOpenedHome(page: Page, check: (home: string, root: string) => P
     await expect.poll(() => fs.existsSync(home), { timeout: 30_000 }).toBe(true);
     const folder = toPage(fs.realpathSync(home));
     await withControl(daemon, (control) => control.until((rest) => paneAt(rest, folder), `a pane in ${folder}`, 30_000));
-    await check(home, herdr.root);
+    await check(home, engine.root);
   } catch (error) {
     await recordFailure(page, daemon);
     throw error;
   } finally {
-    try { daemon?.stop(); } finally { herdr.stop(); }
+    try { daemon?.stop(); } finally { engine.stop(); }
   }
 }
 
@@ -138,10 +138,10 @@ test("Home's ~/hide holds a link to each registered project", { tag: "@platform"
 
 test("a ~/hide that is not Hide's is left alone, and the reason shows in the start panel", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "home-conflict");
+    daemon = await startHided(engine, "home-conflict");
     const home = path.join(daemon.home, "hide");
     fs.mkdirSync(home);
     fs.writeFileSync(path.join(home, "mine.txt"), "the operator's own folder\n");
@@ -159,6 +159,6 @@ test("a ~/hide that is not Hide's is left alone, and the reason shows in the sta
     await screenshot(page, "home-conflict-panel");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -6,7 +6,7 @@
 //! is absent, so an end or a wake that ran anywhere but on the device would
 //! fail instead of passing unseen.
 
-use super::device_catalog::{herdr_workspace, session};
+use super::device_catalog::{engine_workspace, session};
 use super::*;
 use crate::agent_sleep::SleepPhase;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
@@ -150,7 +150,7 @@ fn dialed_device() -> Device {
 /// The device's session as the core takes it: its one tab, and the agent in
 /// it with state sequence `seq`, or no agent.
 fn report(runtime: &mut Runtime, seq: Option<u64>) {
-    let mut reported = session(vec![herdr_workspace(DEVICE, "w1", PATH, &[("t1", PATH)])]);
+    let mut reported = session(vec![engine_workspace(DEVICE, "w1", PATH, &[("t1", PATH)])]);
     if let Some(seq) = seq {
         reported.agents = project_agents(
             crate::sidebar::owned_label_fixture(json!({"agents": [{

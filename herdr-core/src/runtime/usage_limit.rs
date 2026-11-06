@@ -64,7 +64,7 @@ impl Runtime {
                 let (used_percent, resets_at_s) = self
                     .snapshot
                     .usage
-                    .weekly_reading(row.herdr.name, unix_milliseconds() / 1000)?;
+                    .weekly_reading(row.engine_kind, unix_milliseconds() / 1000)?;
                 Some((
                     provider,
                     UsageReading {

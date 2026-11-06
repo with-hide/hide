@@ -13,10 +13,10 @@ test.describe.configure({ timeout: 120_000 });
 
 test("Settings lists its pages in two groups with About apart", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "settings-general");
+    daemon = await startHided(engine, "settings-general");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
@@ -89,16 +89,16 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await expect(github).not.toContainText("Always available");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Sleep after, the issue link and the worktree names live in Agents and Hide AI with their stored values", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "settings-moved");
+    daemon = await startHided(engine, "settings-moved");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
@@ -130,17 +130,17 @@ test("Sleep after, the issue link and the worktree names live in Agents and Hide
     await expect(features.locator("[data-ai-agent-summary]")).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("General and About read without sideways scrolling in Korean and English, light and dark, on the smallest window", async ({ page }) => {
   // B65, settings-left-nav B13: the sheet shrinks with its window to the smallest one, the list beside the page; every row has to wrap, not clip.
   await page.setViewportSize({ width: 720, height: 480 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "settings-narrow");
+    daemon = await startHided(engine, "settings-narrow");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
@@ -247,6 +247,6 @@ test("General and About read without sideways scrolling in Korean and English, l
     }
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

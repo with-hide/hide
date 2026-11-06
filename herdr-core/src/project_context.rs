@@ -517,7 +517,7 @@ pub(crate) fn checkout_panes(
                 CheckoutPaneContext {
                     pane_id: pane.id.clone(),
                     title: pane
-                        .herdr_label
+                        .engine_label
                         .as_ref()
                         .or(pane.terminal_title.as_ref())
                         .or(pane.identity_label.as_ref())
@@ -617,7 +617,7 @@ mod tests {
                         terminal_id: None,
                         failed_terminal_id: None,
                         id: (*pane_id).to_owned(),
-                        herdr_label: None,
+                        engine_label: None,
                         terminal_title: None,
                         cwd: "/fixture".to_owned(),
                         status_code: crate::model::AgentStatusCode::Unknown,
@@ -777,15 +777,15 @@ mod tests {
     /// the project still carries the newest activity of any of them.
     #[test]
     fn primary_checkout_leads_its_project_whatever_its_activity() {
-        let mut herdr = project("herdr", "local", Some(1_000), &[]);
-        herdr.checkouts[0].path = herdr.path.clone();
-        herdr
+        let mut repository = project("herdr", "local", Some(1_000), &[]);
+        repository.checkouts[0].path = repository.path.clone();
+        repository
             .checkouts
             .push(make_worktree_checkout("herdr", "older", Some(2_000)));
-        herdr
+        repository
             .checkouts
             .push(make_worktree_checkout("herdr", "newer", Some(3_000)));
-        let mut projects = vec![herdr];
+        let mut projects = vec![repository];
 
         assert!(sort_projects(&mut projects, &[]));
 

@@ -37,10 +37,10 @@ function screenOf(page: Page, pane: string): Promise<string> {
 }
 
 /** The source pane runs the fixture's second Claude conversation; hided serves the page. */
-async function forkStack(page: Page, herdr: AgentFixture, name: string): Promise<{ daemon: Daemon; forker: string; last: Map<string, Record<string, unknown>> }> {
+async function forkStack(page: Page, engine: AgentFixture, name: string): Promise<{ daemon: Daemon; forker: string; last: Map<string, Record<string, unknown>> }> {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const daemon = await startHided(herdr, name);
-  const [, forker] = herdr.panes;
+  const daemon = await startHided(engine, name);
+  const [, forker] = engine.panes;
   const last = new Map<string, Record<string, unknown>>();
   countSent(page, last);
   await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
@@ -54,7 +54,7 @@ async function forkStack(page: Page, herdr: AgentFixture, name: string): Promise
  * fork's terminal has the keyboard. Returns the fork's pane once its agent runs
  * the clean launch, how long that took, and whether the marker was typed before.
  */
-async function fork(page: Page, herdr: AgentFixture, daemon: Daemon, forker: string, item: "fork_agent" | "fork_agent_side", marker: string, client?: Daemon): Promise<{ forked: string; startMs: number }> {
+async function fork(page: Page, engine: AgentFixture, daemon: Daemon, forker: string, item: "fork_agent" | "fork_agent_side", marker: string, client?: Daemon): Promise<{ forked: string; startMs: number }> {
   const before = await agentPanes(daemon);
   await page.locator(`[data-pane-menu="${forker}"]`).click();
   await expect(page.locator('[data-menu-group="fork"]')).toBeEnabled({ timeout: 20_000 });
@@ -108,36 +108,36 @@ async function fork(page: Page, herdr: AgentFixture, daemon: Daemon, forker: str
   test.info().annotations.push({ type: `${item} timing`, description: `keyboard on fork ${focusMs} ms, fixture ready ${startMs} ms, sent against pending holder ${heldPane !== null}` });
   console.log(`${item}: keyboard on fork ${focusMs} ms, fixture ready ${startMs} ms; sent against pending holder: ${heldPane !== null}`);
   // Claude Code reports the fork's own conversation id.
-  await setAgentSession(herdr, daemon, forked, FORKED_SESSION);
+  await setAgentSession(engine, daemon, forked, FORKED_SESSION);
   return { forked, startMs };
 }
 
 test("Fork agent accepts bare pane keys from another client and opens right of the source", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const stack = await forkStack(page, herdr, "agent-fork-tab");
+    const stack = await forkStack(page, engine, "agent-fork-tab");
     daemon = stack.daemon;
     const { forker, last } = stack;
     // A tab after the source's, so the fork's tab has to land between them; the source's tab stays the one shown.
     const after = await withControl(daemon, async (control) => {
-      const made = await newTab(control, herdr, "after");
-      await focusTab(control, herdr, herdr.tab);
+      const made = await newTab(control, engine, "after");
+      await focusTab(control, engine, engine.tab);
       return made.tab;
     });
-    const { forked } = await fork(page, herdr, daemon, forker, "fork_agent", "typed-before-start", daemon);
+    const { forked } = await fork(page, engine, daemon, forker, "fork_agent", "typed-before-start", daemon);
     expect(last.get("fork_pane")).toMatchObject({ pane_id: forker, placement: "tab" });
     await expect(page.locator(`[data-pane-view="${forked}"]`)).toBeVisible({ timeout: 30_000 });
     await expect.poll(() => coreFocus(daemon!), { timeout: 30_000 }).toBe(forked);
     const strip = page.locator("[data-agent-tab-bar] [data-tab]");
-    await expect.poll(async () => (await strip.evaluateAll((tabs) => tabs.map((tab) => (tab as HTMLElement).dataset.tab))).join(" ")).toMatch(new RegExp(`^${herdr.tab} \\S+ ${after}$`));
+    await expect.poll(async () => (await strip.evaluateAll((tabs) => tabs.map((tab) => (tab as HTMLElement).dataset.tab))).join(" ")).toMatch(new RegExp(`^${engine.tab} \\S+ ${after}$`));
     // Its keys reached the fork's agent after the clean launch, not the shell.
-    const inputLog = path.join(herdr.root, "fork-input.log");
+    const inputLog = path.join(engine.root, "fork-input.log");
     await expect.poll(() => fs.existsSync(inputLog) ? fs.readFileSync(inputLog, "utf8") : "", { timeout: 10_000 }).toBe("typed-before-start");
     await expect.poll(() => screenOf(page, forked), { timeout: 10_000 }).toContain("FORK_INPUT_READY");
     // The default 전부 허용 reached the fork whole through the pane's own shell, PowerShell on Windows:
     // Claude's settings value is JSON, whose quotes a shell could strip.
-    const received = fs.readFileSync(path.join(herdr.root, "fork-argv.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const received = fs.readFileSync(path.join(engine.root, "fork-argv.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
     expect(received).toHaveLength(1);
     expect(received[0]!.join("\n")).toContain(CLAUDE_FULL_ACCESS.join("\n"));
     const screen = await screenOf(page, forked);
@@ -162,18 +162,18 @@ test("Fork agent accepts bare pane keys from another client and opens right of t
     await expect.poll(() => coreFocus(daemon!), { timeout: 30_000 }).toBe(forker);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Fork agent to the side splits the source's tab and moves the keyboard to the fork", async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const stack = await forkStack(page, herdr, "agent-fork-side");
+    const stack = await forkStack(page, engine, "agent-fork-side");
     daemon = stack.daemon;
     const { forker, last } = stack;
-    const { forked } = await fork(page, herdr, daemon, forker, "fork_agent_side", "typed-beside");
+    const { forked } = await fork(page, engine, daemon, forker, "fork_agent_side", "typed-beside");
     expect(last.get("fork_pane")).toMatchObject({ pane_id: forker, placement: "side" });
     await expect.poll(() => coreFocus(daemon!), { timeout: 30_000 }).toBe(forked);
     // The fork shares the source's tab, to its right.
@@ -187,6 +187,6 @@ test("Fork agent to the side splits the source's tab and moves the keyboard to t
     await screenshot(page, "agent-fork-side");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

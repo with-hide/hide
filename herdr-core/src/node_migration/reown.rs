@@ -46,8 +46,10 @@ pub struct OwnerChange {
     /// Each machine's engine socket path, which names it in the ledger's host
     /// scopes while it owns the core. Both are required: a scope naming a
     /// machine whose socket is unknown would keep its old id unnoticed.
-    pub old_owner_herdr_socket: String,
-    pub new_owner_herdr_socket: String,
+    #[serde(rename = "old_owner_herdr_socket")]
+    pub old_owner_engine_socket: String,
+    #[serde(rename = "new_owner_herdr_socket")]
+    pub new_owner_engine_socket: String,
 }
 
 impl OwnerChange {
@@ -471,11 +473,11 @@ impl Mapper<'_> {
                 for agent in each(value, "agents") {
                     let scope = agent.get("host_scope").and_then(Value::as_str);
                     let mapped = match scope {
-                        Some(scope) if scope == self.change.old_owner_herdr_socket => {
+                        Some(scope) if scope == self.change.old_owner_engine_socket => {
                             Some(Value::String(self.change.old_owner_as.clone()))
                         }
                         Some(scope) if scope == self.change.new_owner_was => {
-                            Some(Value::String(self.change.new_owner_herdr_socket.clone()))
+                            Some(Value::String(self.change.new_owner_engine_socket.clone()))
                         }
                         _ => None,
                     };
@@ -1161,8 +1163,8 @@ mod tests {
                 json!({"id": M, "label": "MacBook", "inbound": true}),
             )
             .unwrap(),
-            old_owner_herdr_socket: M_SOCKET.into(),
-            new_owner_herdr_socket: C_SOCKET.into(),
+            old_owner_engine_socket: M_SOCKET.into(),
+            new_owner_engine_socket: C_SOCKET.into(),
         }
     }
 
@@ -1173,8 +1175,8 @@ mod tests {
             new_owner: M.into(),
             new_owner_was: M.into(),
             old_owner_registration: serde_json::from_value(mini_registration()).unwrap(),
-            old_owner_herdr_socket: C_SOCKET.into(),
-            new_owner_herdr_socket: M_SOCKET.into(),
+            old_owner_engine_socket: C_SOCKET.into(),
+            new_owner_engine_socket: M_SOCKET.into(),
         }
     }
 
@@ -2920,5 +2922,26 @@ mod tests {
             .collect();
         assert_eq!(ids, [X, M, "loft"]);
         assert_eq!(core["device_registrations"][1]["label"], json!("MacBook"));
+    }
+
+    /// A move's owner change in the shape 1.2.1 wrote it reads, and is
+    /// written back, as the same document: each machine's engine socket keeps
+    /// its 1.2.1 key (`old_owner_herdr_socket`, `new_owner_herdr_socket`).
+    #[test]
+    fn an_owner_change_in_the_1_2_1_shape_is_written_back_as_the_same_document() {
+        let written = include_str!("../../tests/fixtures/release-1.2.1/owner-change.json");
+        let change: OwnerChange = serde_json::from_str(written).unwrap();
+        assert_eq!(
+            change.old_owner_engine_socket,
+            "/Users/alice/.config/herdr/herdr.sock"
+        );
+        assert_eq!(
+            change.new_owner_engine_socket,
+            "/Users/remote/.config/herdr/herdr.sock"
+        );
+        assert_eq!(
+            serde_json::to_value(&change).unwrap(),
+            serde_json::from_str::<Value>(written).unwrap()
+        );
     }
 }

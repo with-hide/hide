@@ -32,7 +32,7 @@ const OTHER_FILE = '{\n\t"hooks": {\n\t\t"SessionStart": [ {"hooks": [{"type": "
 const CURSOR_FILE = { version: 1, hooks: { stop: [{ command: "/opt/mine.sh", timeout: 5 }], sessionStart: [{ command: "/opt/other-tool/cursor-hook", timeout: 3 }] } };
 const CURSOR_BYTES = `${JSON.stringify(CURSOR_FILE, null, "\t")}\n`;
 
-type Stack = { herdr: AgentFixture; daemon: Daemon; home: string };
+type Stack = { engine: AgentFixture; daemon: Daemon; home: string };
 
 /**
  * A private HOME with the agents' folders (`.claude` only for `claude`), the third-party files above and a kit
@@ -41,12 +41,12 @@ type Stack = { herdr: AgentFixture; daemon: Daemon; home: string };
  * and the PATH of every pane, so the engine classifies a pane that runs one as that agent.
  */
 async function start(label: string, options: { on?: boolean; claude?: boolean } = {}): Promise<Stack> {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   for (const program of ["grok", "cursor-agent"]) {
-    fs.copyFileSync(path.join(herdr.root, "bin", "claude"), path.join(herdr.root, "bin", program));
-    fs.chmodSync(path.join(herdr.root, "bin", program), 0o755);
+    fs.copyFileSync(path.join(engine.root, "bin", "claude"), path.join(engine.root, "bin", program));
+    fs.chmodSync(path.join(engine.root, "bin", program), 0o755);
   }
-  const home = path.join(fs.mkdtempSync(path.join(herdr.root, "gc-")), "home");
+  const home = path.join(fs.mkdtempSync(path.join(engine.root, "gc-")), "home");
   // The daemon's panes run in this HOME on the own engine, and a zsh with no startup file asks its new-user questions.
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(home, ".zshrc"), "PS1='fixture %# '\n");
@@ -57,9 +57,9 @@ async function start(label: string, options: { on?: boolean; claude?: boolean } 
   fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
   fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [], ...(options.on ? { agents: { grok: true, cursor: true } } : {}) }));
   try {
-    return { herdr, daemon: await startHided(herdr, label, home, {}, true), home };
+    return { engine, daemon: await startHided(engine, label, home, {}, true), home };
   } catch (error) {
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
@@ -101,9 +101,9 @@ function watchWire(page: Page) {
   };
 }
 
-const stop = ({ herdr, daemon }: Stack) => {
+const stop = ({ engine, daemon }: Stack) => {
   daemon.stop();
-  herdr.stop();
+  engine.stop();
 };
 
 const grokFile = (home: string) => path.join(home, ".grok", "hooks", "hide.json");
@@ -254,9 +254,9 @@ async function listedAs(daemon: Daemon, pane: string): Promise<string | null | u
  * program in the pane's foreground. Returns the pane once the sidebar lists its row.
  */
 async function agentPane(page: Page, stack: Stack, kind: "grok" | "cursor", beforeStart?: (pane: string) => void): Promise<string> {
-  const { herdr, daemon } = stack;
+  const { engine, daemon } = stack;
   const pane = await withControl(daemon, async (control) => {
-    const made = await newTab(control, herdr, kind);
+    const made = await newTab(control, engine, kind);
     // No page shows the new tab, and keys typed into a pane no view has sized can be dropped.
     viewPane(control, made.pane);
     beforeStart?.(made.pane);
@@ -270,11 +270,11 @@ async function agentPane(page: Page, stack: Stack, kind: "grok" | "cursor", befo
 
 /** Runs `command` as the agent does (a shell, the payload on stdin) from the fixture's checkout, in the pane's environment. */
 function runHook(stack: Stack, pane: string, command: string, payload: unknown, env: Record<string, string>): { stdout: string; stderr: string; status: number | null } {
-  const { herdr, daemon } = stack;
+  const { engine, daemon } = stack;
   const run = spawnSync("/bin/sh", ["-c", command], {
-    cwd: path.join(herdr.root, "fixture"),
+    cwd: path.join(engine.root, "fixture"),
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
-    env: { PATH: herdr.fixturePath, HOME: daemon.home, HIDE_STATE_DIR: daemon.stateDir, HIDE_PANE_ID: pane, ...env },
+    env: { PATH: engine.fixturePath, HOME: daemon.home, HIDE_STATE_DIR: daemon.stateDir, HIDE_PANE_ID: pane, ...env },
     encoding: "utf8",
     timeout: 20_000,
   });
@@ -289,7 +289,7 @@ function runHook(stack: Stack, pane: string, command: string, payload: unknown, 
 async function grokAgentPane(page: Page, stack: Stack): Promise<{ pane: string; run: (command: string, payload: unknown, env: Record<string, string>) => Promise<{ stdout: string; status: number }> }> {
   let asAgent: ((args: string[], run?: AgentRun) => Promise<HideAnswer>) | undefined;
   const pane = await agentPane(page, stack, "grok", (pane) => {
-    asAgent = agentRunner(stack.herdr, stack.daemon.stateDir, pane, "grok");
+    asAgent = agentRunner(stack.engine, stack.daemon.stateDir, pane, "grok");
   });
   return {
     pane,
@@ -316,7 +316,7 @@ const CURSOR_ENV = { CURSOR_VERSION: "2026.10.01" };
 
 test("the installed Grok guard refuses the system opener while retired Cursor callbacks stay silent", async ({ page }) => {
   const stack = await start("grok-cursor-guard", { on: true });
-  const { herdr, home } = stack;
+  const { engine, home } = stack;
   try {
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -325,7 +325,7 @@ test("the installed Grok guard refuses the system opener while retired Cursor ca
     const cursor = await agentPane(page, stack, "cursor");
 
     // B2, Grok: Claude Code's envelope with the same reason; the guard's log holds the one refusal.
-    const grokCall = (command: string) => ({ ...sample("grok-pre-tool-use.json"), cwd: path.join(herdr.root, "fixture"), toolInput: { command } });
+    const grokCall = (command: string) => ({ ...sample("grok-pre-tool-use.json"), cwd: path.join(engine.root, "fixture"), toolInput: { command } });
     const start = "open report.html";
     const refused = runHook(stack, grok, installed.grok(home, "PreToolUse"), grokCall(start), GROK_ENV("pre_tool_use"));
     expect(refused.status).toBe(0);
@@ -336,7 +336,7 @@ test("the installed Grok guard refuses the system opener while retired Cursor ca
     expect(runHook(stack, grok, installed.grok(home, "PreToolUse"), grokCall("cargo test"), GROK_ENV("pre_tool_use")).stdout).toBe("");
 
     // B31: an explicitly invoked stale Cursor entry neither refuses nor emits an allow response.
-    const cursorCall = (command: string) => ({ ...sample("cursor-pre-tool-use.json"), cwd: path.join(herdr.root, "fixture"), tool_input: { command, working_directory: path.join(herdr.root, "fixture") } });
+    const cursorCall = (command: string) => ({ ...sample("cursor-pre-tool-use.json"), cwd: path.join(engine.root, "fixture"), tool_input: { command, working_directory: path.join(engine.root, "fixture") } });
     for (const command of ["open report.html", "cargo test"]) {
       expect(runHook(stack, cursor, legacyCursor(home, "PreToolUse"), cursorCall(command), CURSOR_ENV)).toEqual({ status: 0, stdout: "", stderr: "" });
     }
@@ -395,14 +395,14 @@ test("installed Grok events update counts while a historical Cursor pane stays u
 
 test("inside Grok, only its own hook counts and refuses beside Claude compatibility and stale Cursor callbacks", async ({ page }) => {
   const stack = await start("grok-cursor-once", { on: true, claude: true });
-  const { herdr, home } = stack;
+  const { engine, home } = stack;
   const wire = watchWire(page);
   try {
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
     await installedEverywhere(home, true);
     const { pane: grok, run: asGrok } = await grokAgentPane(page, stack);
-    const cwd = path.join(herdr.root, "fixture");
+    const cwd = path.join(engine.root, "fixture");
     const start = "open report.html";
     // Each hook gets its own agent's documented payload for the one event, in the environment Grok gives all three.
     const payloads = (event: string, grokFields: Record<string, unknown>, grokTool?: string) => ({

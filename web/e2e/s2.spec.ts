@@ -58,18 +58,18 @@ async function focusConfirmed(flow: Flow, pane: string): Promise<void> {
 
 /** The tabs of the fixture's project as the daemon publishes them now. */
 async function listedTabs(flow: Flow): Promise<string[]> {
-  return withControl(flow.daemon, (control) => control.until((rest) => tabsOf(rest, flow.herdr.workspace), "the project's tabs"));
+  return withControl(flow.daemon, (control) => control.until((rest) => tabsOf(rest, flow.engine.workspace), "the project's tabs"));
 }
 
 /** The one tab the project holds now that `before` did not, once the daemon lists it. */
 async function createdTab(flow: Flow, before: readonly string[]): Promise<string> {
-  return withControl(flow.daemon, (control) => control.until((rest) => tabsOf(rest, flow.herdr.workspace)?.find((id) => !before.includes(id)), "the tab just created", 20_000));
+  return withControl(flow.daemon, (control) => control.until((rest) => tabsOf(rest, flow.engine.workspace)?.find((id) => !before.includes(id)), "the tab just created", 20_000));
 }
 
 test.describe.configure({ timeout: 90_000 });
 
 type Flow = {
-  herdr: AgentFixture;
+  engine: AgentFixture;
   daemon: Daemon;
   beta: { tab: string };
   /** The first checkout's three tabs, the fixture's own first tab first. */
@@ -123,21 +123,21 @@ const paneText = (page: Page, paneId: string) => page.evaluate((id) => window.__
  */
 async function startFlow(page: Page, { tabLabels = ["second", "third"] } = {}): Promise<Flow> {
   await page.setViewportSize({ width: 1680, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   const stop = () => {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   };
   try {
-    fs.mkdirSync(path.join(herdr.root, "beta"), { recursive: true });
-    daemon = await startHided(herdr);
+    fs.mkdirSync(path.join(engine.root, "beta"), { recursive: true });
+    daemon = await startHided(engine);
     const { beta, tabs } = await withControl(daemon, async (control) => {
-      const beta = await openProject(control, path.join(herdr.root, "beta"), "beta");
-      const tabs = [herdr.tab];
-      for (const label of tabLabels) tabs.push((await newTab(control, herdr, label)).tab);
+      const beta = await openProject(control, path.join(engine.root, "beta"), "beta");
+      const tabs = [engine.tab];
+      for (const label of tabLabels) tabs.push((await newTab(control, engine, label)).tab);
       // Each new tab took the screen; the flow starts on the fixture's own first tab.
-      await focusTab(control, herdr, herdr.tab);
+      await focusTab(control, engine, engine.tab);
       return { beta, tabs };
     });
     const lastSent = new Map<string, Record<string, unknown>>();
@@ -156,7 +156,7 @@ async function startFlow(page: Page, { tabLabels = ["second", "third"] } = {}): 
     await expect(firstRow).toHaveAttribute("aria-current", "true");
     await expect(page.locator("[data-tab]")).toHaveCount(tabs.length);
     await expect(page.locator("[data-pane-view]")).toHaveCount(2);
-    return { herdr, daemon, beta, tabs, firstRow, sent, lastSent, terminalLists, stop };
+    return { engine, daemon, beta, tabs, firstRow, sent, lastSent, terminalLists, stop };
   } catch (error) {
     stop();
     throw error;
@@ -184,7 +184,7 @@ async function splitShell(page: Page, flow: Flow): Promise<string> {
   await expect.poll(focusedPane).toBe(shellPaneId);
   const shellPane = page.locator(`[data-pane-view="${shellPaneId}"]`);
   await expect(shellPane).toHaveAttribute("data-transport", /connected|controlling|idle/, { timeout: 15_000 });
-  await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(panePrompt(flow.herdr.shell));
+  await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(panePrompt(flow.engine.shell));
   // The next focus_pane must not go out before the focus is confirmed.
   await focusConfirmed(flow, shellPaneId);
   await shellPane.locator(".xterm-helper-textarea").focus();
@@ -195,7 +195,7 @@ async function splitShell(page: Page, flow: Flow): Promise<string> {
 test("switching checkouts is one focus_checkout, and a plain folder is a row of the Overview over its Workspace", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
-    const { herdr, beta, firstRow, sent } = flow;
+    const { engine, beta, firstRow, sent } = flow;
     const betaProject = page.locator("[data-project]", { hasText: "beta" });
     await screenshot(page, "s2-projects-two-checkouts");
     const focusEvents = sent.get("focus_checkout") ?? 0;
@@ -215,7 +215,7 @@ test("switching checkouts is one focus_checkout, and a plain folder is a row of 
     await firstRow.click();
     await expect(await projectRow(page, "fixture")).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", herdr.tab);
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", engine.tab);
     await expect(page.locator("[data-pane-view]")).toHaveCount(2);
   } finally {
     flow.stop();
@@ -226,7 +226,7 @@ test("switching checkouts is one focus_checkout, and a plain folder is a row of 
 test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recent agents, reorder and close still work", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
-    const { herdr, tabs, sent } = flow;
+    const { engine, tabs, sent } = flow;
     // The fixture's first tab runs two Claude agents; the one focused is the agent pane the keyboard was last in.
     const lastAgentPane = (await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"))!;
 
@@ -236,7 +236,7 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const secondTabShell = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
     await expect.poll(() => sent.get("agent_layout.focus")).toBe(1);
-    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(panePrompt(herdr.shell));
+    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(panePrompt(engine.shell));
 
     // New tab opens a terminal directly in the marked checkout owner.
     const tabsBefore = await listedTabs(flow);
@@ -252,7 +252,7 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     // New tab caption and the old numbered new-tab button label.
     await expect(page.locator(`[data-tab="${startedTab}"]`)).toHaveText(/\S/);
     await expect(page.locator("[data-tab][aria-selected=true]")).toHaveAttribute("data-tab", startedTab);
-    await executeTerminalCheck(page, herdr, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!, 15_000);
+    await executeTerminalCheck(page, engine, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!, 15_000);
 
     // ⌥` in the Agent area walks the recent agent panes. The new tab and the
     // second one run plain shells, so the first candidate is the agent pane
@@ -264,12 +264,12 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     await expect(page.locator(`[data-cycle=agents] [data-cycle-row="${secondTabShell}"]`)).toHaveCount(0);
     await page.keyboard.up("Alt");
     await expect(page.locator("[data-cycle]")).toHaveCount(0);
-    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", herdr.tab);
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", engine.tab);
     await expect.poll(() => sent.get("focus_pane")).toBe(paneFocusEvents + 1);
 
     // Agent areas own local order (B7/D19): one move changes the strip without an engine reorder.
     const secondTab = page.locator(`[data-tab="${tabs[1]}"]`);
-    const firstTab = page.locator(`[data-tab="${herdr.tab}"]`);
+    const firstTab = page.locator(`[data-tab="${engine.tab}"]`);
     const from = (await secondTab.boundingBox())!;
     const to = (await firstTab.boundingBox())!;
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
@@ -290,7 +290,7 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     await expect.poll(() => sent.get("close_tab")).toBe(1);
     await expect(page.locator("[data-tab]")).toHaveCount(3);
     await expect(page.locator(`[data-tab="${tabs[2]}"]`)).toHaveCount(0);
-    await page.locator(`[data-tab="${herdr.tab}"]`).click();
+    await page.locator(`[data-tab="${engine.tab}"]`).click();
     await expect(page.locator("[data-pane-view]")).toHaveCount(2);
   } finally {
     flow.stop();
@@ -301,13 +301,13 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
 test("a wheel over a shell pane is one terminal_scroll per batch, and a click is one terminal_click answered by the SGR report", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
-    const { herdr, sent, lastSent } = flow;
+    const { engine, sent, lastSent } = flow;
     // The new pane runs the fixture shell. A wheel over it is one
     // terminal_scroll per batch and the core's viewport follows (B19).
     const shellPane = page.locator('[data-pane-view][data-focused="true"]');
     const shellPaneId = await splitShell(page, flow);
-    await page.keyboard.type(`${herdr.shell === "posix" ? "seq 1 100" : printLinesCommand(herdr.shell, "", 100)}\n`);
-    const bottom = new RegExp(`100\\s+${panePrompt(herdr.shell).source}`);
+    await page.keyboard.type(`${engine.shell === "posix" ? "seq 1 100" : printLinesCommand(engine.shell, "", 100)}\n`);
+    const bottom = new RegExp(`100\\s+${panePrompt(engine.shell).source}`);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(bottom);
     const shellBox = (await shellPane.boundingBox())!;
     await page.mouse.move(shellBox.x + shellBox.width / 2, shellBox.y + shellBox.height / 2);
@@ -335,7 +335,7 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     // program asked for, and that report is the only thing the PTY gets:
     // the shim logs every byte it reads, and no key event went out, so
     // xterm wrote no mouse report of its own.
-    const agentPane = herdr.panes[1];
+    const agentPane = engine.panes[1];
     // The cell comes from xterm's screen element, exactly cols by rows; the
     // host around it is larger by the fit's remainder, and a cell read from
     // the host drifts toward the far edge (the delta is printed so a run
@@ -351,7 +351,7 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     const cell = { column: 4, row: 2 };
     const focusBefore = sent.get("focus_pane") ?? 0;
     const keysBeforeClick = sent.get("key") ?? 0;
-    const inputBefore = fs.existsSync(herdr.inputLogs[1]) ? fs.statSync(herdr.inputLogs[1]).size : 0;
+    const inputBefore = fs.existsSync(engine.inputLogs[1]) ? fs.statSync(engine.inputLogs[1]).size : 0;
     await page.mouse.click(
       agentScreen.x + (cell.column + 0.5) * (agentScreen.width / agentGrid.cols),
       agentScreen.y + (cell.row + 0.5) * (agentScreen.height / agentGrid.rows),
@@ -367,7 +367,7 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     await settledFocus(page, agentPane);
     const report = `\x1b[<0;${cell.column + 1};${cell.row + 1}M\x1b[<0;${cell.column + 1};${cell.row + 1}m`;
     await expect
-      .poll(() => (fs.existsSync(herdr.inputLogs[1]) ? fs.readFileSync(herdr.inputLogs[1], "latin1").slice(inputBefore) : ""), { timeout: 10_000 })
+      .poll(() => (fs.existsSync(engine.inputLogs[1]) ? fs.readFileSync(engine.inputLogs[1], "latin1").slice(inputBefore) : ""), { timeout: 10_000 })
       .toBe(report);
     expect(sent.get("key") ?? 0).toBe(keysBeforeClick);
 
@@ -388,15 +388,15 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
 test("a wheel over an alternate-screen program is one terminal_scroll and no key event, and q reaches it", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
-    const { herdr, sent, lastSent } = flow;
+    const { engine, sent, lastSent } = flow;
     const shellPane = page.locator('[data-pane-view][data-focused="true"]');
     await splitShell(page, flow);
     // The pager fixture draws the alternate screen and logs every byte the
     // PTY hands it, which is what says whether a wheel or a key reached it.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hide-e2e-alt-"));
-    herdr.afterStop(() => fs.rmSync(dir, { recursive: true, force: true }));
+    engine.afterStop(() => fs.rmSync(dir, { recursive: true, force: true }));
     const log = path.join(dir, "bytes.log");
-    await page.keyboard.type(`${altScreenProgram(dir, log, herdr.shell).command}\n`);
+    await page.keyboard.type(`${altScreenProgram(dir, log, engine.shell).command}\n`);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(/^1\s/);
     expect(bytesReceived(log).length).toBe(0);
     const shellBox = (await shellPane.boundingBox())!;
@@ -416,7 +416,7 @@ test("a wheel over an alternate-screen program is one terminal_scroll and no key
     // the PTY got, in this order.
     await expect.poll(() => bytesReceived(log).toString("latin1"), { timeout: 15_000 }).toBe("\x1b[B\x1b[Aq");
     // The program left the alternate screen on q and the shell's prompt is back.
-    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(new RegExp(`${panePrompt(flow.herdr.shell).source}\\s*$`));
+    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(new RegExp(`${panePrompt(flow.engine.shell).source}\\s*$`));
   } finally {
     flow.stop();
   }
@@ -434,9 +434,9 @@ test("a drag selects locally without a click, and its copy joins wrapped lines a
     const shellView = page.locator(`[data-pane-view="${shellPaneId}"]`);
     const shellGrid = (await page.evaluate((id) => window.__hideProbe?.paneGrid(id) ?? null, shellPaneId))!;
     const wrapped = "w".repeat(shellGrid.cols + 7);
-    const textFile = path.join(flow.herdr.root, "selection.txt");
+    const textFile = path.join(flow.engine.root, "selection.txt");
     fs.writeFileSync(textFile, [wrapped, "short", "", "  in", "    deeper", "end", ""].join("\n"));
-    await page.keyboard.type(`${printFileCommand(flow.herdr.shell, textFile)}\n`);
+    await page.keyboard.type(`${printFileCommand(flow.engine.shell, textFile)}\n`);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(/^w+\s*\n\s*w+\s*\n\s*short\s*\n\s*\n\s+in\s*\n\s+deeper\s*\n\s*end/);
     const shellScreen = (await shellView.locator(".xterm-screen").boundingBox())!;
     const shellCell = (column: number, row: number) => ({
@@ -477,7 +477,7 @@ test("a drag selects locally without a click, and its copy joins wrapped lines a
 test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own find, each without a stray key or find bar", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
-    const { herdr, sent } = flow;
+    const { engine, sent } = flow;
     // ⌘/ opens the sheet from the registry with the moved chords marked.
     // The pane keeps keyboard focus under the sheet, and the Escape that
     // closes it is the shell's alone: no ESC byte reaches the program.
@@ -517,7 +517,7 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("claude");
     await page.locator('[data-pane-view][data-focused="true"] .xterm-helper-textarea').focus();
     const findsBefore = sent.get("pane_find_open") ?? 0;
-    const heard = () => herdr.inputLogs.map((file) => (fs.existsSync(file) ? fs.readFileSync(file, "latin1") : "")).join("");
+    const heard = () => engine.inputLogs.map((file) => (fs.existsSync(file) ? fs.readFileSync(file, "latin1") : "")).join("");
     const heardBefore = heard().split("\x0f/").length;
     await page.keyboard.press(chord("find_in_pane"));
     await expect.poll(() => sent.get("pane_find_open") ?? 0).toBe(findsBefore + 1);
@@ -542,7 +542,7 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
   try {
     // The fixture's first tab holds two panes, every other one pane.
     // Each pane carries its own text, typed while its tab was in front.
-    const tabPanes = new Map<string, string[]>([[flow.herdr.tab, [...flow.herdr.panes].sort()]]);
+    const tabPanes = new Map<string, string[]>([[flow.engine.tab, [...flow.engine.panes].sort()]]);
     const typed = new Map<string, string>();
     const mark = async (paneId: string, text: string) => {
       typed.set(paneId, `${typed.get(paneId) ?? ""}${text}`);
@@ -581,7 +581,7 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
     await waitForTerminal(page, sixth);
     await expect(page.locator("[data-pane-view]")).not.toHaveAttribute("data-pane-view", warmPane);
     await expect(page.locator("[data-pane-view]")).toHaveAttribute("data-transport", "controlling");
-    await executeTerminalCheck(page, flow.herdr, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!);
+    await executeTerminalCheck(page, flow.engine, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!);
     tabPanes.set(sixth, [(await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!]);
     await mark(tabPanes.get(sixth)![0], "keep-sixth");
     const order = [...flow.tabs, sixth];
@@ -589,7 +589,7 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
     await expect.poll(() => attachedPanes(page)).toEqual(lastFiveShown(shown, tabPanes));
     await expect.poll(() => liveTerminals(page)).toEqual(lastFiveShown(shown, tabPanes));
     expect(listsDropping(flow.terminalLists, before, retained)).toEqual([]);
-    expect(flow.herdr.panes.map((paneId) => flow.terminalLists.at(-1)!.get(paneId))).toEqual(["released", "released"]);
+    expect(flow.engine.panes.map((paneId) => flow.terminalLists.at(-1)!.get(paneId))).toEqual(["released", "released"]);
     await visit(flow.tabs[4]);
     expect(await warmTextarea!.evaluate((element, id) => element === document.querySelector(`[data-pane-view="${id}"] textarea`), warmPane)).toBe(true);
     shown.push(flow.tabs[4]);
@@ -609,7 +609,7 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
         await mark(tabPanes.get(tab)![0], `-c${cycle}`);
       }
     }
-    const firstInput = flow.herdr.inputLogs[flow.herdr.panes.indexOf(tabPanes.get(flow.herdr.tab)![0])];
+    const firstInput = flow.engine.inputLogs[flow.engine.panes.indexOf(tabPanes.get(flow.engine.tab)![0])];
     if (firstInput) await expect.poll(() => fs.readFileSync(firstInput, "utf8")).toContain("-c1-c2");
   } finally {
     flow.stop();
@@ -619,7 +619,7 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
 test("switching to another checkout and back keeps the first checkout's retained terminals", async ({ page }) => {
   const flow = await startFlow(page);
   try {
-    const retained: string[] = [...flow.herdr.panes];
+    const retained: string[] = [...flow.engine.panes];
     for (const tab of flow.tabs.slice(1)) {
       await page.locator(`[data-tab="${tab}"]`).click();
       await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab);
@@ -663,7 +663,7 @@ test("switching to another checkout and back keeps the first checkout's retained
 test("typed text echoes and parks across a tab switch, and a dropped socket comes back with the tab bar and splits", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
-    const { herdr, tabs, lastSent } = flow;
+    const { engine, tabs, lastSent } = flow;
     // Typed text echoes in the focused pane.
     await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("claude");
     await page.locator('[data-pane-view][data-focused="true"] .xterm-helper-textarea').focus();
@@ -683,10 +683,10 @@ test("typed text echoes and parks across a tab switch, and a dropped socket come
         document.querySelector<HTMLElement>(`[data-tab="${tab}"]`)!.click();
         return window.__hideProbe?.paneText(id) ?? "";
       },
-      { tab: herdr.tab, id: echoPane },
+      { tab: engine.tab, id: echoPane },
     );
     expect(backAtOnce).toContain("s2-echo-4b2e");
-    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", herdr.tab);
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", engine.tab);
     await expect(page.locator(`[data-pane-view="${echoPane}"]`)).toHaveAttribute("data-transport", /connected|controlling|idle/);
     await expect(page.locator(`[data-pane-view="${echoPane}"] [data-terminal]`)).toHaveCount(1);
     // Coming back is a fit on the same size, not a request for a full frame.

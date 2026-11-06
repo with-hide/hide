@@ -875,8 +875,8 @@ fn a_missing_worktree_row_git_has_not_answered_for_is_not_removed() {
 
 /// The device's runtime with an agent's pane in the main checkout, the
 /// caller of `hide workspace remove`, and a finished agent's pane left in the
-/// linked worktree, whose engine is `herdr`.
-fn command_runtime(repo: &Repo, herdr: &Fake) -> SharedRuntime {
+/// linked worktree, whose engine is `fake`.
+fn command_runtime(repo: &Repo, fake: &Fake) -> SharedRuntime {
     let shared = device_runtime(repo);
     let mut runtime = shared.lock().unwrap();
     let project = &mut runtime.snapshot.status.remote[0]
@@ -902,7 +902,7 @@ fn command_runtime(repo: &Repo, herdr: &Fake) -> SharedRuntime {
     project.checkouts.push(linked);
     runtime.install_remote_control(RemoteControlContext::new(
         DEVICE,
-        herdr.engine(),
+        fake.engine(),
         shared.weak(),
         ChangeNotifier::noop(),
     ));
@@ -911,7 +911,7 @@ fn command_runtime(repo: &Repo, herdr: &Fake) -> SharedRuntime {
 }
 
 /// A device engine that closes what it is asked to and then lists no pane.
-fn closing_herdr() -> Fake {
+fn closing_engine() -> Fake {
     FakeEngine::start(|method, _| match method {
         "close_pane" => reply(()),
         "session" => reply(fake::session(serde_json::json!({}))),
@@ -960,22 +960,21 @@ fn removal(path: &str) -> crate::worktree_command::WorktreeRemove {
 /// agent's pane in the engine before Git removes the folder, so no workspace is
 /// left behind with a missing directory, and the merged branch goes too.
 #[test]
-fn the_remove_command_closes_the_worktrees_herdr_panes_then_removes_it() {
+fn the_remove_command_closes_the_worktrees_engine_panes_then_removes_it() {
     let repo = repo();
-    let herdr = closing_herdr();
-    let shared = command_runtime(&repo, &herdr);
+    let fake = closing_engine();
+    let shared = command_runtime(&repo, &fake);
 
     let removed = remove_command(&shared, &repo, removal(&repo.linked)).unwrap();
 
     assert_eq!(removed["removed"], repo.linked.as_str());
     assert_eq!(removed["branch_result"], "deleted");
     assert!(
-        herdr
-            .calls()
+        fake.calls()
             .iter()
             .any(|(method, params)| *method == "close_pane" && params["pane"] == "w2:p1"),
         "{:?}",
-        herdr.calls()
+        fake.calls()
     );
     assert!(!Path::new(&repo.linked).exists());
     assert_eq!(git(&repo.root, &["branch", "--list", "feature"]), "");
@@ -1011,8 +1010,8 @@ fn the_remove_command_refuses_what_the_dialog_refuses_and_closes_nothing() {
         ],
     );
     std::fs::write(Path::new(&repo.linked).join("draft.txt"), "wip\n").unwrap();
-    let herdr = closing_herdr();
-    let shared = command_runtime(&repo, &herdr);
+    let fake = closing_engine();
+    let shared = command_runtime(&repo, &fake);
     let refused = |command| {
         let code = remove_command(&shared, &repo, command).unwrap_err();
         let (code, detail) = crate::coordination::split_refusal(&code);
@@ -1106,7 +1105,7 @@ fn the_remove_command_refuses_what_the_dialog_refuses_and_closes_nothing() {
         "worktree_remove_blocked"
     );
 
-    assert!(herdr.calls().is_empty(), "{:?}", herdr.calls());
+    assert!(fake.calls().is_empty(), "{:?}", fake.calls());
     assert!(shared.lock().unwrap().snapshot.worktree_removal.is_none());
     assert!(Path::new(&repo.linked).exists());
     assert_eq!(

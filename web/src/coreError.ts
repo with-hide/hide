@@ -156,7 +156,7 @@ export function coreErrorText(error: { kind: string }, t: TFunction<"translation
   return t(coreErrorKey(error.kind) ?? fallback);
 }
 
-const HERDR_STATES = new Map<string, MessageKey>([
+const ENGINE_STATES = new Map<string, MessageKey>([
   ["socket_missing", "coreError.herdr.socket_missing"],
   ["unreachable", "coreError.herdr.unreachable"],
   ["stale", "coreError.herdr.stale"],
@@ -165,8 +165,8 @@ const HERDR_STATES = new Map<string, MessageKey>([
 ]);
 
 /** Why this machine's engine does not answer, from `status.herdr.state`; its `message` is the About tab's and the log's. */
-export function herdrStateText(state: string, t: TFunction<"translation">): string {
-  return t(HERDR_STATES.get(state) ?? "coreError.herdr.other");
+export function engineStateText(state: string, t: TFunction<"translation">): string {
+  return t(ENGINE_STATES.get(state) ?? "coreError.herdr.other");
 }
 
 const REMOTE_STATES = new Map<string, MessageKey>([

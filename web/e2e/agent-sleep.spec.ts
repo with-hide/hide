@@ -20,19 +20,19 @@ const SESSION = "fixture-two";
 
 test("an agent slept from the pane menu keeps its row and wakes in the same pane on a visit", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "agent-sleep");
-    const [, sleeper] = herdr.panes;
+    daemon = await startHided(engine, "agent-sleep");
+    const [, sleeper] = engine.panes;
     // Each start leaves its line on the pane's screen; whitespace is dropped, since the line wraps at the pane's width.
     const flat = (text: string) => text.replace(/\s+/g, "");
     const resume = flat(`claude --resume ${SESSION} ${CLAUDE_FULL_ACCESS[0]} ${CLAUDE_FULL_ACCESS[1]}`);
     const typedResumes = () => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", sleeper).then((text) => flat(text).split(resume).length - 1);
     // A new tab is the one shown; the agents' tab is shown again, with this one beside it.
     const other = await withControl(daemon, async (control) => {
-      const made = await newTab(control, herdr, "other");
-      await focusTab(control, herdr, herdr.tab);
+      const made = await newTab(control, engine, "other");
+      await focusTab(control, engine, engine.tab);
       return made;
     });
     const last = new Map<string, Record<string, unknown>>();
@@ -88,7 +88,7 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
     const typedBefore = await typedResumes();
     await page.locator(`[data-tab="${other.tab}"]`).click();
     await expect(page.locator(`[data-pane-view="${sleeper}"]`)).toHaveCount(0);
-    await page.locator(`[data-tab="${herdr.tab}"]`).click();
+    await page.locator(`[data-tab="${engine.tab}"]`).click();
     // The wake types one more resume line at the pane's shell, and the agent is listed in the pane again.
     await expect.poll(typedResumes, { timeout: 30_000 }).toBeGreaterThan(typedBefore);
     await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, sleeper)?.session_id === SESSION ? true : undefined), `the resumed agent in ${sleeper}`, 30_000));
@@ -97,6 +97,6 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
     await screenshot(page, "agent-sleep-awake");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -6,7 +6,7 @@ pub use hide_node_link::address;
 pub mod agent_hooks;
 mod agent_permission;
 mod agent_sleep;
-mod agent_sleep_herdr;
+mod agent_sleep_engine;
 mod agent_start;
 pub mod agent_state;
 mod ai;

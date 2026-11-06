@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ComponentId, ComponentState, KitTarget, PartCause, Reason};
 
-pub use hide_agent_adapter::{Feature, HerdrIntegration};
+pub use hide_agent_adapter::Feature;
 
 /// A folder an agent reads skills from, under the account's home.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -127,11 +127,8 @@ pub struct AgentAdapter {
     /// The folder the agent reads skills from.
     pub skill_dir: SkillDir,
     pub hook: HookSupport,
-    /// The Herdr integration an earlier build installed for the agent. Every
-    /// supported agent has one: an agent the pinned Herdr shipped no
-    /// integration for is not supported (`docs/agent-hooks.md`, Which agents
-    /// Hide supports).
-    pub herdr: HerdrIntegration,
+    /// The agent kind the engine reports the agent's panes as.
+    pub engine_kind: &'static str,
     /// Whether the agent is on without the operator choosing, as Claude Code
     /// and Codex have been since their hooks became part of the kit.
     pub default_on: bool,
@@ -187,7 +184,7 @@ const fn project(declaration: &'static hide_agent_adapter::AgentAdapter) -> Agen
             HookInstall::Plugin(dialect) => HookSupport::Plugin(dialect),
             HookInstall::None => HookSupport::None,
         },
-        herdr: declaration.herdr,
+        engine_kind: declaration.engine_kind,
         default_on: declaration.default_on,
         doc_url: declaration.doc_url,
         declaration,

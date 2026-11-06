@@ -1660,7 +1660,7 @@ pub(crate) struct GoneCheckout {
     /// The project the checkout is a row of.
     pub workspace_id: String,
     /// The engine workspaces whose tabs stand in the checkout, for the log.
-    pub herdr_workspace_ids: Vec<String>,
+    pub engine_workspace_ids: Vec<String>,
     pub path: String,
     /// The checkout's panes as the runtime listed them.
     pub panes: Vec<String>,
@@ -1726,7 +1726,7 @@ pub(crate) fn spawn_gone_checkout_close(
                 "component": "cleanup",
                 "kind": kind,
                 "workspace_id": gone.workspace_id,
-                "herdr_workspace_ids": gone.herdr_workspace_ids,
+                "herdr_workspace_ids": gone.engine_workspace_ids,
                 "checkout": gone.path,
                 "pane_count": gone.panes.len(),
                 "outcome": outcome,

@@ -2,7 +2,7 @@
 //! which links the core takes, how the node is registered, and what the
 //! operator's device actions do to it.
 
-use super::device_catalog::{herdr_workspace, session};
+use super::device_catalog::{engine_workspace, session};
 use super::*;
 use crate::remote::{Arrived, DeviceTransport};
 use std::fs;
@@ -836,7 +836,7 @@ fn a_linked_node_s_sessions_are_read_through_its_link() {
                     ssh_alias: "fixture-host".to_owned(),
                 };
             }
-            let mut reported = session(vec![herdr_workspace(NODE, "w1", &path, &[("t1", &path)])]);
+            let mut reported = session(vec![engine_workspace(NODE, "w1", &path, &[("t1", &path)])]);
             reported.focused_workspace_id = Some(format!("remote:{NODE}:workspace:w1"));
             reported.focused_checkout_id = Some(format!("remote:{NODE}:checkout:w1"));
             runtime.ingest_remote_session(NODE, Ok(reported));
@@ -937,7 +937,7 @@ fn a_node_s_checkout_in_front_is_the_node_s_not_this_machine_s() {
     });
     let mut runtime = shared.lock().unwrap();
     let workspace_id = format!("remote:{NODE}:workspace:w1");
-    let mut reported = session(vec![herdr_workspace(NODE, "w1", &path, &[("t1", &path)])]);
+    let mut reported = session(vec![engine_workspace(NODE, "w1", &path, &[("t1", &path)])]);
     reported.focused_workspace_id = Some(workspace_id.clone());
     runtime.ingest_remote_session(NODE, Ok(reported));
     // The node's projects are its session's rows, never this machine's.
@@ -992,7 +992,7 @@ fn a_node_pane_s_hide_memory_reads_for_the_node_s_session() {
     let views = tempfile::tempdir().unwrap();
     {
         let mut runtime = shared.lock().unwrap();
-        let mut reported = session(vec![herdr_workspace(NODE, "w1", path, &[("t1", path)])]);
+        let mut reported = session(vec![engine_workspace(NODE, "w1", path, &[("t1", path)])]);
         reported.agents = vec![agent("node-session")];
         runtime.ingest_remote_session(NODE, Ok(reported));
         runtime.snapshot.navigator.agents = vec![agent("this-machine-session")];

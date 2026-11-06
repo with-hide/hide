@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import type { HerdrProfileRefusal, KitUnavailable, KitWhy } from "./snapshot";
+import type { MachineProfileRefusal, KitUnavailable, KitWhy } from "./snapshot";
 
 type Translate = TFunction<"translation">;
 
@@ -55,7 +55,7 @@ const UNAVAILABLE_KEYS = new Map<KitUnavailable, MessageKey>([
   ["unreadable", "kitUnavailable.unreadable"],
 ]);
 
-const PROFILE_REFUSAL_KEYS = new Map<HerdrProfileRefusal, MessageKey>([
+const PROFILE_REFUSAL_KEYS = new Map<MachineProfileRefusal, MessageKey>([
   ["no_consent", "herdrProfileRefusal.no_consent"],
   ["invalid_target", "herdrProfileRefusal.invalid_target"],
   ["discovery_pending", "herdrProfileRefusal.discovery_pending"],
@@ -63,7 +63,7 @@ const PROFILE_REFUSAL_KEYS = new Map<HerdrProfileRefusal, MessageKey>([
 ]);
 
 /** Why Hide declined to connect a first-run machine; a code this build does not know gets the general sentence. */
-export function profileRefusalText(refusal: HerdrProfileRefusal, t: Translate): string {
+export function profileRefusalText(refusal: MachineProfileRefusal, t: Translate): string {
   return t(PROFILE_REFUSAL_KEYS.get(refusal) ?? "herdrProfileRefusal.other");
 }
 

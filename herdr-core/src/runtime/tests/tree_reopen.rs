@@ -231,7 +231,7 @@ fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
         } else {
             let pane = reopened(&old);
             Ok(
-                crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                     crate::recent_closed::reopen::ReopenOutcome {
                         tab_id: Some(pane.replace(":p", ":t")),
                         consumed: true,

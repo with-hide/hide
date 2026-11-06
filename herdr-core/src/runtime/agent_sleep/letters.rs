@@ -55,7 +55,7 @@ impl Stage {
                 record
                     .reason
                     .clone()
-                    .unwrap_or_else(|| crate::agent_sleep_herdr::WAKE_NOT_READY.to_owned()),
+                    .unwrap_or_else(|| crate::agent_sleep_engine::WAKE_NOT_READY.to_owned()),
             ),
         }
     }
@@ -77,7 +77,7 @@ impl Stage {
                 record
                     .reason
                     .clone()
-                    .unwrap_or_else(|| crate::agent_sleep_herdr::WAKE_NOT_READY.to_owned()),
+                    .unwrap_or_else(|| crate::agent_sleep_engine::WAKE_NOT_READY.to_owned()),
             ),
         }
     }
@@ -607,11 +607,11 @@ pub(in crate::runtime) fn asleep_observation(actor: Actor) -> Observation {
 /// why in plain words, and what to do.
 fn note_body(recipient: &str, kind: &str, letter: &str, reason: &str) -> String {
     let why = match reason {
-        crate::agent_sleep_herdr::WAKE_FOLDER_MISSING => "its folder no longer exists",
-        crate::agent_sleep_herdr::WAKE_NOT_RESUMED => "its conversation could not be resumed",
-        crate::agent_sleep_herdr::WAKE_NOT_STARTED => "its agent did not start",
-        crate::agent_sleep_herdr::WAKE_NOT_READY => "its agent did not become ready",
-        crate::agent_sleep_herdr::WAKE_LAUNCH_CHOICE => {
+        crate::agent_sleep_engine::WAKE_FOLDER_MISSING => "its folder no longer exists",
+        crate::agent_sleep_engine::WAKE_NOT_RESUMED => "its conversation could not be resumed",
+        crate::agent_sleep_engine::WAKE_NOT_STARTED => "its agent did not start",
+        crate::agent_sleep_engine::WAKE_NOT_READY => "its agent did not become ready",
+        crate::agent_sleep_engine::WAKE_LAUNCH_CHOICE => {
             "the model or effort it was started with is refused"
         }
         _ => "Hide could not wake it",

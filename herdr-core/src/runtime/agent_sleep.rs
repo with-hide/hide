@@ -2,7 +2,7 @@
 //! the three events, and the results the engine workers hand back (PRD
 //! agent-sleep). What is decided and remembered lives in
 //! `crate::agent_sleep`; what touches the engine and processes lives in
-//! `crate::agent_sleep_herdr`. Nothing here blocks: every end and every wake
+//! `crate::agent_sleep_engine`. Nothing here blocks: every end and every wake
 //! runs on a worker and comes back through `ingest_agent_sleep_*`.
 
 use serde::Deserialize;
@@ -12,7 +12,7 @@ use crate::agent_sleep::{
     DECISION_INTERVAL_MS, SLEEP_RETRY_BACKOFF_MS, Settled, SleepMachine, SleepPhase, SleepRecord,
     SleepScope, WakeMode, valid_after_hours,
 };
-use crate::agent_sleep_herdr::{self, SleepTarget, WakeOutcome, WakeRequest};
+use crate::agent_sleep_engine::{self, SleepTarget, WakeOutcome, WakeRequest};
 use crate::model::AgentActionRefusal;
 
 mod command;
@@ -125,7 +125,7 @@ impl Runtime {
             self.letter_wakes.touch();
             self.agent_wake_started.remove(pane_id);
             if let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) {
-                let reason = agent_sleep_herdr::WAKE_NOT_READY.to_owned();
+                let reason = agent_sleep_engine::WAKE_NOT_READY.to_owned();
                 record.phase = SleepPhase::Failed;
                 record.reason = Some(reason.clone());
                 crate::diagnostic!(serde_json::json!({
@@ -662,7 +662,7 @@ impl Runtime {
         // Closed before the worker starts: from here no writer's input can
         // land behind the end, and the worker waits for those already writing.
         self.sync_terminal_intents();
-        if let Err(message) = agent_sleep_herdr::spawn_end(context, pane_id.to_owned(), kind) {
+        if let Err(message) = agent_sleep_engine::spawn_end(context, pane_id.to_owned(), kind) {
             return self.ingest_agent_sleep_end(pane_id, Err(message));
         }
         self.persist_ui_state();
@@ -713,7 +713,7 @@ impl Runtime {
                     pane_id,
                     mode,
                     WakeOutcome::Failed {
-                        reason: agent_sleep_herdr::WAKE_LAUNCH_CHOICE.to_owned(),
+                        reason: agent_sleep_engine::WAKE_LAUNCH_CHOICE.to_owned(),
                         detail,
                     },
                 );
@@ -735,7 +735,7 @@ impl Runtime {
                         pane_id,
                         mode,
                         WakeOutcome::Failed {
-                            reason: agent_sleep_herdr::WAKE_NOT_RESUMED.to_owned(),
+                            reason: agent_sleep_engine::WAKE_NOT_RESUMED.to_owned(),
                             detail,
                         },
                     );
@@ -751,7 +751,7 @@ impl Runtime {
             name: record
                 .agent_name
                 .clone()
-                .unwrap_or_else(|| crate::fork::wake_name(&context.herdr_pane_id)),
+                .unwrap_or_else(|| crate::fork::wake_name(&context.engine_pane_id)),
             mode,
             args,
             cwd: record.cwd.clone(),
@@ -773,12 +773,12 @@ impl Runtime {
             request.name.clone(),
             request.session_id.clone(),
         );
-        if let Err(message) = agent_sleep_herdr::spawn_wake(context, request) {
+        if let Err(message) = agent_sleep_engine::spawn_wake(context, request) {
             return self.ingest_agent_wake(
                 pane_id,
                 mode,
                 WakeOutcome::Failed {
-                    reason: agent_sleep_herdr::WAKE_NOT_READY.to_owned(),
+                    reason: agent_sleep_engine::WAKE_NOT_READY.to_owned(),
                     detail: message,
                 },
             );
@@ -1048,7 +1048,7 @@ impl Runtime {
                 node: Arc::clone(&live.node),
                 runtime: live.runtime.clone(),
                 notifier: live.notifier.clone(),
-                herdr_pane_id: pane_id.to_owned(),
+                engine_pane_id: pane_id.to_owned(),
                 input_gate: Arc::clone(&self.input_gate),
             });
         };
@@ -1058,7 +1058,7 @@ impl Runtime {
             node: super::inbound::InboundLink::for_device(device, worker.runtime.clone()),
             runtime: worker.runtime.clone(),
             notifier: worker.notifier.clone(),
-            herdr_pane_id: crate::address::pane_of(pane_id, device)?.to_owned(),
+            engine_pane_id: crate::address::pane_of(pane_id, device)?.to_owned(),
             input_gate: Arc::clone(&self.input_gate),
         })
     }

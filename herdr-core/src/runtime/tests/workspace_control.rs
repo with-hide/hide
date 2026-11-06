@@ -8,7 +8,7 @@ fn action_id(suffix: &str) -> String {
 fn caller_fixture() -> (Runtime, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("fixture directory");
     let mut runtime = runtime();
-    runtime.snapshot.status.herdr.state = "connected".to_owned();
+    runtime.snapshot.status.engine.state = "connected".to_owned();
     runtime.workspace_views = Some(
         WorkspaceViewStore::open(
             dir.path().join("views.json"),
@@ -164,7 +164,7 @@ fn caller_query_refuses_stale_or_ambiguous_pane_without_using_the_front_workspac
         "views_unavailable"
     );
 
-    runtime.snapshot.status.herdr.state = "disconnected".to_owned();
+    runtime.snapshot.status.engine.state = "disconnected".to_owned();
     assert_eq!(
         runtime
             .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
@@ -1613,7 +1613,7 @@ fn checkout_caller_resolves_the_longest_registered_checkout_containing_its_cwd()
         );
     }
 
-    runtime.snapshot.status.herdr.state = "disconnected".to_owned();
+    runtime.snapshot.status.engine.state = "disconnected".to_owned();
     assert_eq!(
         runtime
             .workspace_control_query(

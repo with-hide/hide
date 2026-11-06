@@ -226,7 +226,7 @@ mod tests {
                 subject: None,
             })
         );
-        assert_eq!(done.key().herdr_pane_id(), "w2:p1");
+        assert_eq!(done.key().engine_pane_id(), "w2:p1");
         // The unreachable device lists nothing.
         assert!(projection.agents().all(|agent| agent.device_id != "gone"));
     }
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(asking.place.as_deref(), Some("hide · prd/mobile-companion"));
         assert_eq!(asking.mark, "turn");
         assert_eq!(asking.line.as_ref().unwrap().tone, "warning");
-        assert_eq!(asking.key().herdr_pane_id(), "w1:p2");
+        assert_eq!(asking.key().engine_pane_id(), "w1:p2");
         let child = projection
             .agents()
             .find(|agent| agent.pane_id == "w1:p3")

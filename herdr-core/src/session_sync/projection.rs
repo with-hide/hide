@@ -390,7 +390,7 @@ impl ProjectionState {
                                         .as_ref()
                                         .map(|_| pane.terminal_id.clone()),
                                     id: crate::address::scoped_pane_id(target_id, &pane.pane_id),
-                                    herdr_label: crate::start_claim::public_label(
+                                    engine_label: crate::start_claim::public_label(
                                         pane.label.as_deref(),
                                     ),
                                     terminal_title: crate::start_claim::public_label(
@@ -489,7 +489,7 @@ impl ProjectionState {
                     .collect::<Vec<_>>();
                 // The engine half of the strip in the engine's order; the runtime
                 // places the device's file tabs among them (`place_device_strips`).
-                let strip = StripTabSnapshot::from_herdr_tabs(&tabs);
+                let strip = StripTabSnapshot::from_engine_tabs(&tabs);
                 let active_tab_id = Some(crate::address::scoped_tab_id(
                     target_id,
                     &workspace.active_tab_id,
@@ -525,7 +525,7 @@ impl ProjectionState {
                             .worktree
                             .as_ref()
                             .is_some_and(|worktree| worktree.is_linked_worktree),
-                        herdr_repo_root: workspace
+                        engine_repo_root: workspace
                             .worktree
                             .as_ref()
                             .map(|worktree| worktree.repo_root.clone()),

@@ -17,7 +17,7 @@ use std::thread;
 use crate::engine::Engine;
 
 use crate::agent_sleep::WakeMode;
-use crate::agent_sleep_herdr::{self, EndError, WakeOutcome, WakeRequest};
+use crate::agent_sleep_engine::{self, EndError, WakeOutcome, WakeRequest};
 use crate::live::LiveContext;
 use crate::model::PaneReopenFailure;
 use crate::recent_closed::ClosedAgent;
@@ -102,7 +102,7 @@ pub(crate) fn reopen(
             format!("{cwd} is not a directory"),
         ));
     }
-    agent_sleep_herdr::end_agent(engine, node, &request.pane_id, &request.kind).map_err(
+    agent_sleep_engine::end_agent(engine, node, &request.pane_id, &request.kind).map_err(
         |error| {
             match error {
                 // The decision was made on a list up to a second old, so an agent
@@ -113,7 +113,7 @@ pub(crate) fn reopen(
             }
         },
     )?;
-    match agent_sleep_herdr::start_agent(
+    match agent_sleep_engine::start_agent(
         engine,
         node,
         &WakeRequest {
@@ -227,45 +227,45 @@ mod tests {
                 PaneReopenFailure::SessionGone,
             ),
         ] {
-            let herdr = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+            let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
             let error = reopen(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &hide_node::Local::of_process(),
                 &request(kind, daemon),
             )
             .expect_err(case);
             assert_eq!(error.code, expected, "{case}");
             assert!(!error.ended, "{case}");
-            assert!(herdr.methods().is_empty(), "{case}");
+            assert!(fake.methods().is_empty(), "{case}");
         }
-        let herdr = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
         let mut gone = request("claude", CodexDaemon::Unknown);
         gone.cwd = Some("/nonexistent/pane-reopen-test".into());
         let error = reopen(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &hide_node::Local::of_process(),
             &gone,
         )
         .expect_err("folder gone");
         assert_eq!(error.code, PaneReopenFailure::StartRefused);
-        assert!(herdr.methods().is_empty());
+        assert!(fake.methods().is_empty());
     }
 
     /// An agent that started working since the decision is not ended.
     #[test]
     fn an_agent_that_is_working_now_is_not_ended_or_started_again() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "agent_state" => agent_info("claude", "working"),
             other => panic!("unexpected {other}"),
         });
         let error = reopen(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &hide_node::Local::of_process(),
             &request("claude", CodexDaemon::Unknown),
         )
         .expect_err("working");
         assert_eq!(error.code, PaneReopenFailure::AgentBusy);
-        assert_eq!(herdr.methods(), ["agent_state"]);
+        assert_eq!(fake.methods(), ["agent_state"]);
     }
 
     /// B29: the agent ends first, and only after the shell holds the terminal
@@ -283,7 +283,7 @@ mod tests {
             let exited = Arc::new(AtomicBool::new(false));
             let seen = Arc::clone(&exited);
             let presses = Arc::new(AtomicUsize::new(0));
-            let herdr = FakeEngine::start(move |method, _| match method {
+            let fake = FakeEngine::start(move |method, _| match method {
                 "agent_state" => agent_info(kind, "idle"),
                 "pane_processes" => {
                     let shell = std::process::id();
@@ -307,19 +307,19 @@ mod tests {
                 exited.store(true, Ordering::SeqCst);
             });
             reopen(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &hide_node::Local::of_process(),
                 &request(kind, daemon),
             )
             .expect("reopened");
             reaper.join().expect("reaped");
-            let methods = herdr.methods();
+            let methods = fake.methods();
             let first_start = methods
                 .iter()
                 .position(|method| *method == "start_agent")
                 .expect("a start was sent");
             assert_eq!(methods[0], "agent_state", "{kind}");
-            let calls = herdr.calls();
+            let calls = fake.calls();
             let (_, start) = &calls[first_start];
             let args: Vec<&str> = start["args"]
                 .as_array()
@@ -352,13 +352,13 @@ mod tests {
     /// A start the engine refuses after the end is reported as one, with the engine's
     /// words kept for the log.
     #[test]
-    fn a_refused_start_is_a_start_refused_with_herdrs_words_in_the_detail() {
+    fn a_refused_start_is_a_start_refused_with_the_engine_s_words_in_the_detail() {
         let mut child =
             process::OwnedChild::spawn(Command::new("/bin/sleep").arg("60")).expect("sleep starts");
         let pid = child.id();
         let exited = Arc::new(AtomicBool::new(false));
         let seen = Arc::clone(&exited);
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "agent_state" => agent_info("claude", "idle"),
             "pane_processes" => {
                 let shell = std::process::id();
@@ -383,7 +383,7 @@ mod tests {
             exited.store(true, Ordering::SeqCst);
         });
         let error = reopen(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &hide_node::Local::of_process(),
             &request("claude", CodexDaemon::Unknown),
         )
@@ -399,7 +399,7 @@ mod tests {
             error.ended,
             "the agent was ended before the start was refused"
         );
-        let methods = herdr.methods();
+        let methods = fake.methods();
         let first_start = methods
             .iter()
             .position(|method| *method == "start_agent")
@@ -415,7 +415,7 @@ mod tests {
     /// are refused as `agent_name_taken`; the reopen waits that out instead
     /// of leaving the pane on its shell.
     #[test]
-    fn a_name_herdr_has_not_released_yet_is_waited_out_and_the_session_starts() {
+    fn a_name_the_engine_has_not_released_yet_is_waited_out_and_the_session_starts() {
         let mut child =
             process::OwnedChild::spawn(Command::new("/bin/sleep").arg("60")).expect("sleep starts");
         let pid = child.id();
@@ -423,7 +423,7 @@ mod tests {
         let seen = Arc::clone(&exited);
         let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let attempts = Arc::clone(&starts);
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "agent_state" => agent_info("claude", "idle"),
             "pane_processes" => {
                 let shell = std::process::id();
@@ -447,7 +447,7 @@ mod tests {
             exited.store(true, Ordering::SeqCst);
         });
         reopen(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &hide_node::Local::of_process(),
             &request("claude", CodexDaemon::Unknown),
         )

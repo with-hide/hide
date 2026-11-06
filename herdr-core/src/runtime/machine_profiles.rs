@@ -9,33 +9,33 @@
 //! from Herdr is its session, through the import.
 
 use super::*;
-use crate::model::{HerdrProfileRefusal, HerdrProfileSnapshot, HerdrProfilesSnapshot};
+use crate::model::{MachineProfileRefusal, MachineProfileSnapshot, MachineProfilesSnapshot};
 use crate::remote::{SshHostListing, WslListing};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The id prefix of a Host row.
 const SSH_HOST_ROW: &str = "ssh:";
 
-pub(super) struct HerdrProfilesJob {
+pub(super) struct MachineProfilesJob {
     id: u64,
     stop: Arc<AtomicBool>,
 }
 
-impl Drop for HerdrProfilesJob {
+impl Drop for MachineProfilesJob {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
     }
 }
 
 impl Runtime {
-    pub(super) fn request_herdr_profiles(&mut self) -> bool {
-        if self.herdr_profiles_job.is_some() {
+    pub(super) fn request_machine_profiles(&mut self) -> bool {
+        if self.machine_profiles_job.is_some() {
             return false;
         }
         let (Some(home), Some(context)) = (self.home_path.clone(), self.worker_context.clone())
         else {
-            self.snapshot.status.herdr_profiles.state = "failed".to_owned();
-            self.snapshot.status.herdr_profiles.error =
+            self.snapshot.status.machine_profiles.state = "failed".to_owned();
+            self.snapshot.status.machine_profiles.error =
                 Some("This computer's machines are unavailable. Reconnect and retry".to_owned());
             return true;
         };
@@ -49,12 +49,12 @@ impl Runtime {
         self.next_ssh_hosts_id = self.next_ssh_hosts_id.wrapping_add(1).max(1);
         let id = self.next_ssh_hosts_id;
         let stop = Arc::new(AtomicBool::new(false));
-        self.herdr_profiles_job = Some(HerdrProfilesJob {
+        self.machine_profiles_job = Some(MachineProfilesJob {
             id,
             stop: Arc::clone(&stop),
         });
-        self.snapshot.status.herdr_profiles.state = "loading".to_owned();
-        self.snapshot.status.herdr_profiles.error = None;
+        self.snapshot.status.machine_profiles.state = "loading".to_owned();
+        self.snapshot.status.machine_profiles.error = None;
         let devices = Arc::clone(&self.devices);
         let spawned = thread::Builder::new()
             .name("herdr-core-saved-machines".to_owned())
@@ -72,7 +72,7 @@ impl Runtime {
                 };
                 let changed = runtime
                     .lock()
-                    .map(|mut guard| guard.settle_herdr_profiles(id, hosts, &wsl))
+                    .map(|mut guard| guard.settle_machine_profiles(id, hosts, &wsl))
                     .unwrap_or(false);
                 if changed {
                     context.notifier.notify();
@@ -82,7 +82,7 @@ impl Runtime {
             crate::diagnostic!(
                 serde_json::json!({"component":"herdr_profiles","kind":"herdr_profiles.not_started","request":id,"reason":error.to_string()})
             );
-            self.settle_herdr_profiles(
+            self.settle_machine_profiles(
                 id,
                 Err("Saved machine discovery could not start. Retry".to_owned()),
                 &Ok(Vec::new()),
@@ -91,20 +91,20 @@ impl Runtime {
         true
     }
 
-    fn settle_herdr_profiles(
+    fn settle_machine_profiles(
         &mut self,
         id: u64,
         hosts: Result<SshHostListing, String>,
         wsl: &WslListing,
     ) -> bool {
         if self
-            .herdr_profiles_job
+            .machine_profiles_job
             .as_ref()
             .is_none_or(|job| job.id != id)
         {
             return false;
         }
-        self.herdr_profiles_job = None;
+        self.machine_profiles_job = None;
         // A listing that could not be read proves nothing about WSL, so the
         // step keeps its failed state with Retry rather than reading empty
         // and being skipped (B1, B25); only a listing read empty is none.
@@ -135,8 +135,8 @@ impl Runtime {
         });
         match answer {
             Err(error) => {
-                self.snapshot.status.herdr_profiles.state = "failed".to_owned();
-                self.snapshot.status.herdr_profiles.error = Some(error);
+                self.snapshot.status.machine_profiles.state = "failed".to_owned();
+                self.snapshot.status.machine_profiles.error = Some(error);
             }
             Ok((hosts, distributions)) => {
                 // Every Host alias leads where `ssh -G` said, spelled as a
@@ -158,7 +158,7 @@ impl Runtime {
                 // resolves to, in the config's order: a second alias of a
                 // server is named by the first. A Host that cannot resolve
                 // is its own row.
-                let mut rows: Vec<(String, HerdrProfileSnapshot)> = Vec::new();
+                let mut rows: Vec<(String, MachineProfileSnapshot)> = Vec::new();
                 for entry in &hosts.entries {
                     let key = match &entry.address {
                         Ok(address) => address.endpoint_key(),
@@ -175,7 +175,7 @@ impl Runtime {
                     .into_iter()
                     .chain(rows.into_iter().map(|(_, row)| row))
                     .collect();
-                self.snapshot.status.herdr_profiles = HerdrProfilesSnapshot {
+                self.snapshot.status.machine_profiles = MachineProfilesSnapshot {
                     state: "ready".to_owned(),
                     error: None,
                     profiles,
@@ -223,7 +223,7 @@ impl Runtime {
     fn default_wsl_row(
         &self,
         distributions: &[hide_node_link::device::WslDistribution],
-    ) -> Option<HerdrProfileSnapshot> {
+    ) -> Option<MachineProfileSnapshot> {
         let distribution = distributions.iter().find(|found| found.default)?;
         let registration = self.wsl_registration(&distribution.name);
         let device_id = registration.map(|registration| registration.id.clone());
@@ -234,7 +234,7 @@ impl Runtime {
         } else {
             None
         };
-        Some(HerdrProfileSnapshot {
+        Some(MachineProfileSnapshot {
             id: format!("wsl:{}", distribution.name),
             label: super::devices::wsl_device_label(&distribution.name),
             target: distribution.name.clone(),
@@ -260,8 +260,8 @@ impl Runtime {
         &self,
         entry: &hide_node_link::device::SshHostEntry,
         address: Option<String>,
-    ) -> HerdrProfileSnapshot {
-        let mut row = HerdrProfileSnapshot {
+    ) -> MachineProfileSnapshot {
+        let mut row = MachineProfileSnapshot {
             id: format!("{SSH_HOST_ROW}{}", entry.alias),
             label: entry.alias.clone(),
             target: entry.alias.clone(),
@@ -293,7 +293,7 @@ impl Runtime {
     /// matched by its own name.
     fn row_registration(
         &self,
-        row: &HerdrProfileSnapshot,
+        row: &MachineProfileSnapshot,
     ) -> Option<&crate::model::DeviceRegistration> {
         if let Some(distro) = row.wsl_distro.as_deref() {
             return self.wsl_registration(distro);
@@ -311,13 +311,13 @@ impl Runtime {
 
     /// Connects the step's row `profile_id`, and remembers the attempt it
     /// started, which the step's sign-in withdrawal may end.
-    pub(super) fn connect_herdr_profile(&mut self, profile_id: &str, consent: bool) -> bool {
+    pub(super) fn connect_machine_profile(&mut self, profile_id: &str, consent: bool) -> bool {
         let before: BTreeMap<String, u64> = self
             .device_hosts
             .iter()
             .map(|(id, host)| (id.clone(), host.generation))
             .collect();
-        let changed = self.connect_herdr_profile_row(profile_id, consent);
+        let changed = self.connect_machine_profile_row(profile_id, consent);
         for (id, host) in &self.device_hosts {
             if before.get(id) != Some(&host.generation) && host.wake == crate::remote::Wake::Allowed
             {
@@ -327,11 +327,11 @@ impl Runtime {
         changed
     }
 
-    fn connect_herdr_profile_row(&mut self, profile_id: &str, consent: bool) -> bool {
+    fn connect_machine_profile_row(&mut self, profile_id: &str, consent: bool) -> bool {
         let Some(index) = self
             .snapshot
             .status
-            .herdr_profiles
+            .machine_profiles
             .profiles
             .iter()
             .position(|p| p.id == profile_id)
@@ -343,27 +343,27 @@ impl Runtime {
             );
             return true;
         };
-        let profile = self.snapshot.status.herdr_profiles.profiles[index].clone();
+        let profile = self.snapshot.status.machine_profiles.profiles[index].clone();
         let refusal = if !consent {
-            Some(HerdrProfileRefusal::NoConsent)
+            Some(MachineProfileRefusal::NoConsent)
         } else if profile.problem.is_some() {
-            Some(HerdrProfileRefusal::InvalidTarget)
-        } else if self.snapshot.status.herdr_profiles.state != "ready" {
-            Some(HerdrProfileRefusal::DiscoveryPending)
+            Some(MachineProfileRefusal::InvalidTarget)
+        } else if self.snapshot.status.machine_profiles.state != "ready" {
+            Some(MachineProfileRefusal::DiscoveryPending)
         } else {
             None
         };
         if let Some(refusal) = refusal {
-            let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
+            let row = &mut self.snapshot.status.machine_profiles.profiles[index];
             row.connect_state = "failed".to_owned();
             row.connect_refusal = Some(refusal);
             return true;
         }
         let registration = self.row_registration(&profile).cloned();
         if registration.is_none() && self.snapshot.ui_state.device_registrations.len() >= 64 {
-            let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
+            let row = &mut self.snapshot.status.machine_profiles.profiles[index];
             row.connect_state = "failed".to_owned();
-            row.connect_refusal = Some(HerdrProfileRefusal::DeviceLimit);
+            row.connect_refusal = Some(MachineProfileRefusal::DeviceLimit);
             return true;
         }
         let registration = match (registration, profile.wsl_distro.as_deref()) {
@@ -398,7 +398,7 @@ impl Runtime {
                 Ok(registration) => registration,
                 Err(refusal) => {
                     self.set_error(refusal.code, refusal.message, false);
-                    let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
+                    let row = &mut self.snapshot.status.machine_profiles.profiles[index];
                     row.connect_state = "failed".to_owned();
                     return true;
                 }
@@ -430,7 +430,7 @@ impl Runtime {
                     }
                     Err(refusal) => {
                         self.set_error(refusal.code, refusal.message, false);
-                        let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
+                        let row = &mut self.snapshot.status.machine_profiles.profiles[index];
                         row.connect_state = "failed".to_owned();
                         return true;
                     }
@@ -454,7 +454,7 @@ impl Runtime {
         let same: Vec<usize> = self
             .snapshot
             .status
-            .herdr_profiles
+            .machine_profiles
             .profiles
             .iter()
             .enumerate()
@@ -466,7 +466,7 @@ impl Runtime {
             .collect();
         let state = self.profile_connection(&registration.id);
         for index in same {
-            let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
+            let row = &mut self.snapshot.status.machine_profiles.profiles[index];
             row.device_id = Some(registration.id.clone());
             row.added_as = Some(registration.label.clone());
             row.connect_state = state.clone();
@@ -508,11 +508,11 @@ mod tests {
             version: crate::model::FIRST_RUN_VERSION,
             step: crate::model::FirstRunStep::Devices,
         });
-        runtime.herdr_profiles_job = Some(HerdrProfilesJob {
+        runtime.machine_profiles_job = Some(MachineProfilesJob {
             id: 1,
             stop: Arc::new(AtomicBool::new(false)),
         });
-        runtime.settle_herdr_profiles(1, Ok(hosts), wsl);
+        runtime.settle_machine_profiles(1, Ok(hosts), wsl);
     }
 
     fn listing(hosts: Vec<SshHostEntry>, truncated: bool) -> SshHostListing {
@@ -569,10 +569,10 @@ mod tests {
         connect(&mut runtime, "ssh:config-ubuntu", false);
         assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
         assert!(runtime.snapshot.status.remote.is_empty());
-        let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
+        let row = &runtime.snapshot.status.machine_profiles.profiles[0];
         assert_eq!(
             (row.connect_state.as_str(), row.connect_refusal),
-            ("failed", Some(HerdrProfileRefusal::NoConsent))
+            ("failed", Some(MachineProfileRefusal::NoConsent))
         );
     }
 
@@ -584,7 +584,7 @@ mod tests {
             two_hosts(),
             &Ok(vec![distro("Debian", 2, false), distro("Ubuntu", 2, true)]),
         );
-        let rows = &runtime.snapshot.status.herdr_profiles.profiles;
+        let rows = &runtime.snapshot.status.machine_profiles.profiles;
         assert_eq!(rows.len(), 3, "the two Hosts and one distribution");
         let wsl = &rows[0];
         assert_eq!(
@@ -617,7 +617,7 @@ mod tests {
             at_devices_with(two_hosts(), &wsl)
                 .snapshot
                 .status
-                .herdr_profiles
+                .machine_profiles
                 .profiles[0]
                 .clone()
         };
@@ -641,8 +641,8 @@ mod tests {
         connect(&mut runtime, "wsl:Legacy", true);
         assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
         assert_eq!(
-            runtime.snapshot.status.herdr_profiles.profiles[0].connect_refusal,
-            Some(HerdrProfileRefusal::InvalidTarget)
+            runtime.snapshot.status.machine_profiles.profiles[0].connect_refusal,
+            Some(MachineProfileRefusal::InvalidTarget)
         );
     }
 
@@ -655,13 +655,13 @@ mod tests {
             Vec::new(),
             &Err("the registry could not be read".to_owned()),
         );
-        let profiles = &unreadable.snapshot.status.herdr_profiles;
+        let profiles = &unreadable.snapshot.status.machine_profiles;
         assert_eq!(profiles.state, "failed");
         assert!(profiles.error.is_some());
         assert!(profiles.profiles.is_empty());
         assert_eq!(step(&unreadable), Some(crate::model::FirstRunStep::Devices));
         let empty = at_devices_with(Vec::new(), &Ok(Vec::new()));
-        assert_eq!(empty.snapshot.status.herdr_profiles.state, "ready");
+        assert_eq!(empty.snapshot.status.machine_profiles.state, "ready");
         assert_eq!(
             step(&empty),
             Some(crate::model::FirstRunStep::Notifications)
@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn without_wsl_the_step_is_the_hosts_alone() {
         let runtime = at_devices(two_hosts(), false);
-        let rows = &runtime.snapshot.status.herdr_profiles.profiles;
+        let rows = &runtime.snapshot.status.machine_profiles.profiles;
         assert_eq!(
             rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
             ["ssh:config-ubuntu", "ssh:mini"]
@@ -706,14 +706,14 @@ mod tests {
             runtime.snapshot.navigator.focused_device_id.as_deref(),
             Some(id.as_str())
         );
-        let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
+        let row = &runtime.snapshot.status.machine_profiles.profiles[0];
         assert_eq!(
             (row.device_id.as_deref(), row.added_as.as_deref()),
             (Some(id.as_str()), Some("WSL Ubuntu"))
         );
         // The Hosts keep their own routes.
         assert!(
-            runtime.snapshot.status.herdr_profiles.profiles[1..]
+            runtime.snapshot.status.machine_profiles.profiles[1..]
                 .iter()
                 .all(|row| row.device_id.is_none())
         );
@@ -732,7 +732,7 @@ mod tests {
             false,
         );
         assert_eq!(step(&runtime), Some(crate::model::FirstRunStep::Devices));
-        let rows = &runtime.snapshot.status.herdr_profiles.profiles;
+        let rows = &runtime.snapshot.status.machine_profiles.profiles;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "ssh:Config.Ubuntu");
         assert_eq!(rows[0].ssh_host.as_deref(), Some("Config.Ubuntu"));
@@ -747,7 +747,7 @@ mod tests {
         assert_eq!(registrations[0].label, "Config.Ubuntu");
         assert_eq!(registrations[0].origin.ssh_alias(), Some("Config.Ubuntu"));
         assert!(registrations[0].host_consent.is_some());
-        let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
+        let row = &runtime.snapshot.status.machine_profiles.profiles[0];
         assert_eq!(row.device_id.as_deref(), Some("config-ubuntu"));
         assert_eq!(row.added_as.as_deref(), Some("Config.Ubuntu"));
         // A second press is the same device, never a second one.
@@ -760,7 +760,7 @@ mod tests {
     #[test]
     fn only_a_complete_empty_read_skips_the_step() {
         let empty = at_devices(Vec::new(), false);
-        assert_eq!(empty.snapshot.status.herdr_profiles.state, "ready");
+        assert_eq!(empty.snapshot.status.machine_profiles.state, "ready");
         assert_eq!(
             step(&empty),
             Some(crate::model::FirstRunStep::Notifications)
@@ -793,7 +793,7 @@ mod tests {
         let rows: Vec<_> = runtime
             .snapshot
             .status
-            .herdr_profiles
+            .machine_profiles
             .profiles
             .iter()
             .map(|row| (row.id.as_str(), row.ssh_host.as_deref()))
@@ -830,7 +830,7 @@ mod tests {
             ),
             &Ok(Vec::new()),
         );
-        let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
+        let row = &runtime.snapshot.status.machine_profiles.profiles[0];
         assert_eq!(row.id, "ssh:b");
         assert_eq!(row.device_id.as_deref(), Some("a"));
         connect(&mut runtime, "ssh:b", true);
@@ -850,7 +850,7 @@ mod tests {
             },
             &Ok(Vec::new()),
         );
-        assert_eq!(runtime.snapshot.status.herdr_profiles.state, "failed");
+        assert_eq!(runtime.snapshot.status.machine_profiles.state, "failed");
         assert_eq!(step(&runtime), Some(crate::model::FirstRunStep::Devices));
     }
 }

@@ -86,7 +86,7 @@ pub(crate) fn needed_paths(raw: &RemoteSessionSnapshot) -> BTreeSet<String> {
         if !checkout.path.trim().is_empty() {
             paths.insert(checkout.path.clone());
         }
-        paths.extend(checkout.herdr_repo_root.iter().cloned());
+        paths.extend(checkout.engine_repo_root.iter().cloned());
         for tab in &checkout.tabs {
             let context = tab_context(tab, checkout);
             if !context.trim().is_empty() {
@@ -215,7 +215,7 @@ fn recorded_place(
             linked_worktree: !worktree.is_main,
         });
     listed.or_else(|| {
-        let repository = raw.herdr_repo_root.as_deref()?;
+        let repository = raw.engine_repo_root.as_deref()?;
         let root = match facts.facts.get(repository)? {
             Fact::Known(known) => known.root.clone(),
             Fact::Refused(_) => PathBuf::from(repository),
@@ -247,7 +247,7 @@ pub(crate) fn group(
             projects.push(raw_workspace.clone());
             continue;
         };
-        let herdr_workspace = raw_workspace
+        let engine_workspace = raw_workspace
             .session_workspace_ids
             .first()
             .cloned()
@@ -263,7 +263,7 @@ pub(crate) fn group(
                 actives
                     .entry(id.clone())
                     .or_default()
-                    .push((herdr_workspace.clone(), tab.clone()));
+                    .push((engine_workspace.clone(), tab.clone()));
             }
             let name = crate::workspace::checkout_row_label(None, Path::new(&raw_checkout.path));
             let part = CheckoutSnapshot {
@@ -306,8 +306,8 @@ pub(crate) fn group(
                             .collect(),
                         ..part
                     };
-                    if !project.session_workspace_ids.contains(&herdr_workspace) {
-                        project.session_workspace_ids.push(herdr_workspace.clone());
+                    if !project.session_workspace_ids.contains(&engine_workspace) {
+                        project.session_workspace_ids.push(engine_workspace.clone());
                     }
                     merge_checkout(project, part);
                 }
@@ -357,7 +357,7 @@ pub(crate) fn group(
                 actives
                     .entry(checkout_id.clone())
                     .or_default()
-                    .push((herdr_workspace.clone(), tab.clone()));
+                    .push((engine_workspace.clone(), tab.clone()));
             }
             // The engine entries of this checkout's tabs; the runtime adds the
             // file tabs (`place_device_strips`).
@@ -365,7 +365,7 @@ pub(crate) fn group(
                 .strip
                 .iter()
                 .filter(|entry| {
-                    entry.kind == StripTabKind::Herdr
+                    entry.kind == StripTabKind::Engine
                         && tabs
                             .iter()
                             .any(|tab| tab.id.as_ref() == Some(&entry.source_id))

@@ -1317,7 +1317,7 @@ pub(super) struct SshHostsListPayload {}
 pub(super) struct AgentDefinitionsReadPayload {}
 
 #[derive(Debug, Deserialize)]
-pub(super) struct HerdrProfilesListPayload {}
+pub(super) struct MachineProfilesListPayload {}
 
 /// The first-run Devices step went away; the core knows which attempts it
 /// started.
@@ -1325,7 +1325,7 @@ pub(super) struct HerdrProfilesListPayload {}
 pub(super) struct FirstRunSignInWithdrawPayload {}
 
 #[derive(Debug, Deserialize)]
-pub(super) struct HerdrProfileConnectPayload {
+pub(super) struct MachineProfileConnectPayload {
     pub(super) profile_id: String,
     pub(super) host_consent: bool,
 }
@@ -1715,8 +1715,8 @@ pub(super) enum Event {
     KitCheck(KitCheckPayload),
     SshHostsList(SshHostsListPayload),
     AgentDefinitionsRead(AgentDefinitionsReadPayload),
-    HerdrProfilesList(HerdrProfilesListPayload),
-    HerdrProfileConnect(HerdrProfileConnectPayload),
+    MachineProfilesList(MachineProfilesListPayload),
+    MachineProfileConnect(MachineProfileConnectPayload),
     UiAttached(UiAttachedPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
@@ -2058,8 +2058,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "kit_check" => decode!(KitCheckPayload, KitCheck),
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
         "agent_definitions_read" => decode!(AgentDefinitionsReadPayload, AgentDefinitionsRead),
-        "herdr_profiles_list" => decode!(HerdrProfilesListPayload, HerdrProfilesList),
-        "herdr_profile_connect" => decode!(HerdrProfileConnectPayload, HerdrProfileConnect),
+        "herdr_profiles_list" => decode!(MachineProfilesListPayload, MachineProfilesList),
+        "herdr_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
@@ -2434,9 +2434,9 @@ impl Runtime {
             Event::KitCheck(_) => self.request_kit_check(),
             Event::SshHostsList(_) => self.request_ssh_hosts(),
             Event::AgentDefinitionsRead(_) => self.request_agent_definitions(),
-            Event::HerdrProfilesList(_) => self.request_herdr_profiles(),
-            Event::HerdrProfileConnect(payload) => {
-                self.connect_herdr_profile(&payload.profile_id, payload.host_consent)
+            Event::MachineProfilesList(_) => self.request_machine_profiles(),
+            Event::MachineProfileConnect(payload) => {
+                self.connect_machine_profile(&payload.profile_id, payload.host_consent)
             }
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
@@ -4418,7 +4418,7 @@ impl Runtime {
                     // shell's last copy of them, which a newer choice can
                     // already have overtaken, so it moves none of them.
                     selected_pane_id: current.selected_pane_id,
-                    focus_from_herdr: current.focus_from_herdr,
+                    focus_from_engine: current.focus_from_engine,
                     shortcut_bindings: if bindings_fit(&payload.shortcut_bindings) {
                         payload.shortcut_bindings
                     } else {

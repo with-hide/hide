@@ -1,7 +1,7 @@
 //! Group-tabs B2/B7/B14/B22/B28: remote checkout navigation owns no PTY,
 //! explicit agent navigation reveals its group, and hidden groups do not attach.
 use super::device_catalog::{
-    connected_status, dispatch, herdr_workspace, next_request, recording_engine, session, tree,
+    connected_status, dispatch, engine_workspace, next_request, recording_engine, session, tree,
 };
 use super::*;
 use crate::model::{AgentLayoutSnapshot, LinkOrigin};
@@ -47,7 +47,7 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
             .unwrap();
         let (arrived_tx, arrived_rx) = std::sync::mpsc::sync_channel(1);
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
-        let herdr = FakeEngine::start(move |method, params| {
+        let fake = FakeEngine::start(move |method, params| {
             if method == "focus_tab" {
                 assert!(params["tab"].is_string());
                 return reply(());
@@ -63,7 +63,7 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
             .unwrap()
             .install_remote_control(RemoteControlContext::new(
                 DEVICE,
-                herdr.engine(),
+                fake.engine(),
                 Arc::downgrade(&shared),
                 ChangeNotifier::noop(),
             ));
@@ -154,7 +154,7 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
             );
         }
         let mut landed = raw(&t.main);
-        let new_tab = herdr_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
+        let new_tab = engine_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
             .checkouts
             .remove(0)
             .tabs
@@ -190,8 +190,7 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
                 .is_empty()
         );
         assert_eq!(
-            herdr
-                .methods()
+            fake.methods()
                 .iter()
                 .filter(|method| **method == "create_tab")
                 .count(),
@@ -244,7 +243,7 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
         let (arrived_tx, arrived_rx) = std::sync::mpsc::sync_channel(1);
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
         let mut created = 0;
-        let herdr = FakeEngine::start(move |method, _| {
+        let fake = FakeEngine::start(move |method, _| {
             assert_eq!(method, "create_tab");
             created += 1;
             if created == 1 {
@@ -259,7 +258,7 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
             .unwrap()
             .install_remote_control(RemoteControlContext::new(
                 DEVICE,
-                herdr.engine(),
+                fake.engine(),
                 Arc::downgrade(&shared),
                 ChangeNotifier::noop(),
             ));
@@ -353,7 +352,7 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
             vec![("t3", t.main.as_str()), ("t4", t.main.as_str())]
         };
         landed.workspaces[0].checkouts[0].tabs.extend(
-            herdr_workspace(DEVICE, "w1", &t.main, &ids)
+            engine_workspace(DEVICE, "w1", &t.main, &ids)
                 .checkouts
                 .remove(0)
                 .tabs,
@@ -383,8 +382,7 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
             Some(tab(if one { "t3" } else { "t4" }).as_str())
         );
         assert_eq!(
-            herdr
-                .methods()
+            fake.methods()
                 .iter()
                 .filter(|method| **method == "create_tab")
                 .count(),
@@ -414,7 +412,7 @@ fn origins() -> [LinkOrigin; 2] {
 }
 
 fn raw(path: &str) -> RemoteSessionSnapshot {
-    let mut answer = session(vec![herdr_workspace(
+    let mut answer = session(vec![engine_workspace(
         DEVICE,
         "w1",
         path,
@@ -521,7 +519,7 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
                 .unwrap();
         }
         let mut landed = raw(&t.main);
-        let new_tab = herdr_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
+        let new_tab = engine_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
             .checkouts
             .remove(0)
             .tabs
@@ -670,7 +668,7 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
         let mut landed = raw(&t.main);
         landed.workspaces[0].checkouts[0].owner_workspace_id = Some("w1".into());
         landed.workspaces[0].checkouts[0].tabs.push(
-            herdr_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
+            engine_workspace(DEVICE, "w1", &t.main, &[("t3", &t.main)])
                 .checkouts
                 .remove(0)
                 .tabs
@@ -848,7 +846,7 @@ fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() 
 }
 
 #[test]
-fn a_start_follow_notifies_herdr_when_its_tab_is_only_active_in_a_background_workspace() {
+fn a_start_follow_notifies_the_engine_when_its_tab_is_only_active_in_a_background_workspace() {
     let t = tree();
     for focused in ["wa", "wb"] {
         let (mut runtime, _) = live_tab_order_runtime(&t.main);
@@ -1455,7 +1453,7 @@ fn successful_remote_checkout_pane_and_tab_visits_supersede_a_global_start() {
 }
 
 #[test]
-fn inbound_and_ssh_empty_checkout_groups_and_drafts_survive_stale_herdr_focus_without_control() {
+fn inbound_and_ssh_empty_checkout_groups_and_drafts_survive_stale_engine_focus_without_control() {
     for origin in origins() {
         let t = tree();
         let (mut runtime, _saved) = setup(origin, &t.main);

@@ -255,7 +255,7 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
     }
     wait(&shared, "both listings", |runtime| {
         runtime.snapshot().status.ssh_hosts.state == "ready"
-            && runtime.snapshot().status.herdr_profiles.state == "ready"
+            && runtime.snapshot().status.machine_profiles.state == "ready"
     });
     let runtime = shared.lock().unwrap();
     let add_device: Vec<(String, Option<String>)> = runtime
@@ -269,7 +269,7 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
     let first_run: Vec<(String, Option<String>)> = runtime
         .snapshot()
         .status
-        .herdr_profiles
+        .machine_profiles
         .profiles
         .iter()
         .map(|row| (row.ssh_host.clone().unwrap(), row.added_as.clone()))
@@ -303,10 +303,10 @@ fn an_include_folder_that_cannot_be_opened_fails_the_first_run_read_with_retry()
         assert!(runtime.dispatch_json(&event("herdr_profiles_list")));
     }
     wait(&shared, "the device listing", |runtime| {
-        runtime.snapshot().status.herdr_profiles.state != "loading"
+        runtime.snapshot().status.machine_profiles.state != "loading"
     });
     let runtime = shared.lock().unwrap();
-    let listing = &runtime.snapshot().status.herdr_profiles;
+    let listing = &runtime.snapshot().status.machine_profiles;
     assert_eq!(listing.state, "failed");
     assert!(listing.error.is_some());
     assert!(listing.profiles.is_empty());
@@ -339,9 +339,16 @@ fn an_unreadable_include_stays_unreadable_past_a_later_include_bound() {
             .dispatch_json(&event("herdr_profiles_list"))
     );
     wait(&shared, "the device listing", |runtime| {
-        runtime.snapshot().status.herdr_profiles.state != "loading"
+        runtime.snapshot().status.machine_profiles.state != "loading"
     });
     let runtime = shared.lock().unwrap();
-    assert_eq!(runtime.snapshot().status.herdr_profiles.state, "failed");
-    assert!(runtime.snapshot().status.herdr_profiles.profiles.is_empty());
+    assert_eq!(runtime.snapshot().status.machine_profiles.state, "failed");
+    assert!(
+        runtime
+            .snapshot()
+            .status
+            .machine_profiles
+            .profiles
+            .is_empty()
+    );
 }

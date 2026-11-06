@@ -511,7 +511,7 @@ pub mod phone {
         }
 
         /// The pane id the engine knows on the device that owns it.
-        pub fn herdr_pane_id(&self) -> &str {
+        pub fn engine_pane_id(&self) -> &str {
             crate::address::pane_of(&self.pane_id, &self.device_id).unwrap_or(&self.pane_id)
         }
     }

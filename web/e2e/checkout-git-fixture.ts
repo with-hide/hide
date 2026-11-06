@@ -6,8 +6,8 @@ import type { FixtureRoot } from "./pane-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { git } from "./work-prs-fixture";
 
-export function checkoutGitFixture(herdr: FixtureRoot, { divergedUpstream = false, historyCount = 1 } = {}) {
-  const root = fs.realpathSync(path.join(herdr.root, "fixture"));
+export function checkoutGitFixture(engine: FixtureRoot, { divergedUpstream = false, historyCount = 1 } = {}) {
+  const root = fs.realpathSync(path.join(engine.root, "fixture"));
   git(root, ["init"]);
   fs.writeFileSync(path.join(root, "tracked.txt"), "original\n");
   git(root, ["add", "."]);
@@ -23,8 +23,8 @@ export function checkoutGitFixture(herdr: FixtureRoot, { divergedUpstream = fals
     git(root, ["commit", "--allow-empty", "-m", "한글 local commit and English"]);
   }
   const sha = git(root, ["rev-parse", "HEAD"]).trim();
-  const log = path.join(herdr.root, "header-gh.jsonl");
-  const executable = fixtureProgram(path.join(herdr.root, "bin"), "gh", `
+  const log = path.join(engine.root, "header-gh.jsonl");
+  const executable = fixtureProgram(path.join(engine.root, "bin"), "gh", `
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('gh fixture'); process.exit(0); }

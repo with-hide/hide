@@ -158,8 +158,8 @@ pub fn back_change(
     peer: &Peer,
     own_node: &str,
     registration: herdr_core::DeviceRegistration,
-    peer_herdr_socket: String,
-    own_herdr_socket: String,
+    peer_engine_socket: String,
+    own_engine_socket: String,
 ) -> OwnerChange {
     OwnerChange {
         old_owner: peer.node.clone(),
@@ -167,8 +167,8 @@ pub fn back_change(
         new_owner: own_node.to_owned(),
         new_owner_was: own_node.to_owned(),
         old_owner_registration: registration,
-        old_owner_herdr_socket: peer_herdr_socket,
-        new_owner_herdr_socket: own_herdr_socket,
+        old_owner_engine_socket: peer_engine_socket,
+        new_owner_engine_socket: own_engine_socket,
     }
 }
 

@@ -23,19 +23,19 @@ type CliAnswer = {
   };
 };
 
-async function fromPane(herdr: AgentFixture, daemon: Daemon, args: string[], sequence: number, expectedStatus = 0): Promise<CliAnswer> {
+async function fromPane(engine: AgentFixture, daemon: Daemon, args: string[], sequence: number, expectedStatus = 0): Promise<CliAnswer> {
   const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
-  const ran = await runInPaneKeepingFocus(herdr, daemon, herdr.panes[0], `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args], stdout: true });
+  const ran = await runInPaneKeepingFocus(engine, daemon, engine.panes[0], `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args], stdout: true });
   expect(ran.status, ran.stderr).toBe(expectedStatus);
   return JSON.parse(ran.stdout) as CliAnswer;
 }
 
 test("pane CLI opens its own file and diff while another Workspace remains in front", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const first = path.join(herdr.root, "fixture");
+    const first = path.join(engine.root, "fixture");
     // The CLI answers in the wire spelling (`/` between names).
     const checkout = toPage(fs.realpathSync(first));
     const file = path.join(first, "보고서.md");
@@ -52,7 +52,7 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     git(["add", "changed.txt"]);
     git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "baseline"]);
     fs.writeFileSync(changed, "modified\n");
-    const beta = path.join(herdr.root, "beta");
+    const beta = path.join(engine.root, "beta");
     fs.mkdirSync(beta);
     fs.writeFileSync(path.join(beta, "README.md"), "Second Workspace\n");
     for (const args of [
@@ -64,7 +64,7 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
       expect(result.status, result.stderr).toBe(0);
     }
 
-    daemon = await startHided(herdr, "workspace-cli");
+    daemon = await startHided(engine, "workspace-cli");
     await withControl(daemon, (control) => openProject(control, beta, "beta"));
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page);
@@ -78,20 +78,20 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     await expect(foregroundPaneLocator).toHaveAttribute("data-pane-view", /./);
     const foregroundPane = await foregroundPaneLocator.getAttribute("data-pane-view");
 
-    const info = await fromPane(herdr, daemon, ["workspace", "info"], 1);
+    const info = await fromPane(engine, daemon, ["workspace", "info"], 1);
     expect(info.ok).toBe(true);
     expect(info.result.context.checkout_path).toBe(checkout);
     expect(info.result.capabilities).toContain("file.open");
     expect(info.result.capabilities).not.toContain("browser.open");
-    const unsupported = await fromPane(herdr, daemon, ["browser", "open", "https://example.com/"], 20, 2);
+    const unsupported = await fromPane(engine, daemon, ["browser", "open", "https://example.com/"], 20, 2);
     expect(unsupported).toMatchObject({ ok: false, reason: "browser_unsupported" });
-    const opened = await fromPane(herdr, daemon, ["file", "open", "보고서.md"], 2);
+    const opened = await fromPane(engine, daemon, ["file", "open", "보고서.md"], 2);
     expect(opened.ok).toBe(true);
     expect(opened.result.context.checkout_path).toBe(checkout);
     expect(opened.result.view_id).toBeTruthy();
-    const diff = await fromPane(herdr, daemon, ["diff", "open", "changed.txt"], 3);
+    const diff = await fromPane(engine, daemon, ["diff", "open", "changed.txt"], 3);
     expect(diff.ok).toBe(true);
-    const views = await fromPane(herdr, daemon, ["view", "list"], 4);
+    const views = await fromPane(engine, daemon, ["view", "list"], 4);
     expect(views.ok).toBe(true);
     expect(views.result.views).toEqual(expect.arrayContaining([
       expect.objectContaining({ view_id: opened.result.view_id, kind: "file", target: expectedFile }),
@@ -101,9 +101,9 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     expect(fileView).toBeDefined();
     const retryId = `${Date.now()}-fixture-split`;
     const command = ["view", "split", fileView!.view_id, "--area", fileView!.area_id, "--edge", "right", "--request-id", retryId];
-    const split = await fromPane(herdr, daemon, command, 5);
+    const split = await fromPane(engine, daemon, command, 5);
     expect(split.ok).toBe(true);
-    expect(await fromPane(herdr, daemon, command, 6)).toEqual(split);
+    expect(await fromPane(engine, daemon, command, 6)).toEqual(split);
     await expect(betaRow).toHaveAttribute("aria-current", "true");
     await expect(page.locator('[data-pane-view][data-focused="true"]')).toHaveAttribute("data-pane-view", foregroundPane!);
     if (process.env.HIDE_E2E_SCREENSHOT_DIR) {
@@ -130,6 +130,6 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     }
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

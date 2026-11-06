@@ -11,7 +11,7 @@ import type { TreeRow } from "./agentRow";
 import type { MessageKey } from "./i18n/catalogs";
 import { thisMachineKey } from "./devices";
 import { translate } from "./i18n/client";
-import { coreErrorText, herdrStateText, remoteStateText } from "./coreError";
+import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
 import { projectsOf } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
@@ -156,11 +156,11 @@ export function liveDescendantCounts(scope: AgentScope): Map<string, number> {
  * reconnects sooner, so there is no Retry.
  */
 function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
-  const herdr = rest?.status?.herdr;
-  if (!herdr?.state || herdr.state === "connected") return { state: "ready" };
-  if (herdr.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
+  const engine = rest?.status?.herdr;
+  if (!engine?.state || engine.state === "connected") return { state: "ready" };
+  if (engine.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
   // The state is worded here; the engine's own sentence, with its socket path, is the About tab's and the log's.
-  return { state: "unavailable", text: translate("coreError.herdr.countsLater", { reason: herdrStateText(herdr.state, translate) }), retry: null };
+  return { state: "unavailable", text: translate("coreError.herdr.countsLater", { reason: engineStateText(engine.state, translate) }), retry: null };
 }
 
 /** `name`: the device as this window calls it (`machineName`). */
@@ -283,15 +283,15 @@ export function overviewProject(rest: SnapshotRest | null, localAgents: AgentRow
 }
 
 /** Engine states in which a catalog will not change on its own soon. */
-const SETTLED_HERDR = new Set(["connected", "unconfigured", "socket_missing", "unreachable", "stale", "incompatible"]);
-const FAILED_HERDR = new Set([...SETTLED_HERDR].filter(state => state !== "connected"));
+const SETTLED_ENGINE = new Set(["connected", "unconfigured", "socket_missing", "unreachable", "stale", "incompatible"]);
+const FAILED_ENGINE = new Set([...SETTLED_ENGINE].filter(state => state !== "connected"));
 
 /** Whether the local saved choice is pending, rather than failed or restored. */
 export function waitingForSavedWorkspace(rest: SnapshotRest | null): boolean {
   // The engine can connect before the asynchronous catalog and persisted View
   // arrive. The core retains a saved choice until its path facts settle;
   // absence during that restore must not choose Main permanently.
-  return Boolean(rest && !focusedRemoteDevice(rest) && !FAILED_HERDR.has(rest.status?.herdr?.state ?? "") && rest.ui_state?.focused_checkout_id && !rest.workspace_view);
+  return Boolean(rest && !focusedRemoteDevice(rest) && !FAILED_ENGINE.has(rest.status?.herdr?.state ?? "") && rest.ui_state?.focused_checkout_id && !rest.workspace_view);
 }
 
 /**
@@ -310,7 +310,7 @@ export function startupScreen(rest: SnapshotRest | null, hasFront: boolean): "wo
   if (hasFront) return rest.workspace_view?.resumed ? "workspace" : "main";
   if (!device) {
     const state = rest.status?.herdr?.state;
-    return state && SETTLED_HERDR.has(state) ? "main" : null;
+    return state && SETTLED_ENGINE.has(state) ? "main" : null;
   }
   const status = rest.status?.remote?.find((row) => row.target_id === device.id);
   if (!status || status.state === "not_connected") return null;

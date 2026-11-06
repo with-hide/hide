@@ -258,10 +258,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Claude,
         hook: HookInstall::Runtime(HookDialect::ClaudeCode),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
-        herdr: HerdrIntegration {
-            name: "claude",
-            target: "claude",
-        },
+        engine_kind: "claude",
         home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "claude",
@@ -367,10 +364,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Runtime(HookDialect::Codex),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
-        herdr: HerdrIntegration {
-            name: "codex",
-            target: "codex",
-        },
+        engine_kind: "codex",
         home_variable: Some("CODEX_HOME"),
         ai: Support::Supported(AiProvider {
             id: "codex",
@@ -466,10 +460,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Guidance(GuidanceDialect::Grok),
         guidance: Support::Unsupported(GROK_CONTEXT_ABSENCE),
-        herdr: HerdrIntegration {
-            name: "grok",
-            target: "grok",
-        },
+        engine_kind: "grok",
         home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "grok",
@@ -592,10 +583,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
-        herdr: HerdrIntegration {
-            name: "opencode",
-            target: "opencode",
-        },
+        engine_kind: "opencode",
         home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "opencode",
@@ -713,10 +701,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Pi),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
-        herdr: HerdrIntegration {
-            name: "pi",
-            target: "pi",
-        },
+        engine_kind: "pi",
         home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "pi",
@@ -828,10 +813,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Omp),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
-        herdr: HerdrIntegration {
-            name: "omp",
-            target: "omp",
-        },
+        engine_kind: "omp",
         home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "omp",
@@ -942,10 +924,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         skill_location: SkillLocation::Antigravity,
         hook: HookInstall::Guidance(GuidanceDialect::Antigravity),
         guidance: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
-        herdr: HerdrIntegration {
-            name: "agy",
-            target: "antigravity-cli",
-        },
+        engine_kind: "agy",
         home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "antigravity",
@@ -1061,10 +1040,7 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     skill_location: SkillLocation::Shared,
     hook: HookInstall::None,
     guidance: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
-    herdr: HerdrIntegration {
-        name: "cursor",
-        target: "cursor",
-    },
+    engine_kind: "cursor",
     home_variable: None,
     ai: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     default_on: false,

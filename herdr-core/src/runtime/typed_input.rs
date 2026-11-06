@@ -1395,14 +1395,19 @@ pub(crate) mod tests {
         assert!(runtime.typed_input_work(T + 600_000).is_empty());
     }
 
-    /// The child's pane as one pass lays it: the engine reporting `herdr` since
+    /// The child's pane as one pass lays it: the engine reporting `engine_status` since
     /// `at`, the hook of its session having reported `hook`, and the core's
     /// turn decided from both at `at`.
-    pub(crate) fn child_reads(runtime: &mut Runtime, herdr: &str, hook: Option<HookTurn>, at: u64) {
+    pub(crate) fn child_reads(
+        runtime: &mut Runtime,
+        engine_status: &str,
+        hook: Option<HookTurn>,
+        at: u64,
+    ) {
         let child = runtime.delivery_observations.get_mut("child").unwrap();
-        child.status = herdr.into();
+        child.status = engine_status.into();
         child.status_changed_at_unix_ms = at;
-        if herdr == "working" {
+        if engine_status == "working" {
             child.entered_working_at_unix_ms = at;
         }
         *child = child.clone().laid(hook, None);
@@ -1415,7 +1420,7 @@ pub(crate) mod tests {
     /// shows nothing, and an answered screen does not have the brief typed
     /// into a working agent a second time.
     #[test]
-    fn a_child_whose_hook_says_it_works_owes_no_record_while_herdr_reads_it_idle() {
+    fn a_child_whose_hook_says_it_works_owes_no_record_while_the_engine_reads_it_idle() {
         const T: u64 = 100_000;
         let (_root, mut runtime, _) = spawned(true, T);
         child_reads(&mut runtime, "idle", Some(HookTurn::Working), T + 1_000);
@@ -1432,7 +1437,7 @@ pub(crate) mod tests {
     /// its parent hears, and once someone answered its screen the brief is
     /// typed again, as for any child at rest.
     #[test]
-    fn a_child_whose_hook_says_it_rests_is_unconfirmed_while_herdr_reads_it_working() {
+    fn a_child_whose_hook_says_it_rests_is_unconfirmed_while_the_engine_reads_it_working() {
         const T: u64 = 100_000;
         let (_root, mut runtime, _) = spawned(false, T);
         child_reads(&mut runtime, "working", Some(HookTurn::Idle), T + 1_000);
@@ -1486,7 +1491,7 @@ pub(crate) mod tests {
     /// brief is judged by its record alone, and its parent hears once it
     /// rests unconfirmed.
     #[test]
-    fn a_turn_herdr_alone_reads_or_other_input_started_is_no_record_of_the_brief() {
+    fn a_turn_the_engine_alone_reads_or_other_input_started_is_no_record_of_the_brief() {
         const T: u64 = 100_000;
         let judged = |runtime: &mut Runtime| {
             assert!(runtime.typed_input_work(T + 1_000).is_empty(), "it works");

@@ -16,7 +16,7 @@ impl From<&PaneSnapshot> for PaneInput {
     fn from(p: &PaneSnapshot) -> Self {
         Self {
             id: p.id.clone(),
-            label: p.herdr_label.clone(),
+            label: p.engine_label.clone(),
             identity: p.identity_label.clone(),
             confirmation: p.requires_close_confirmation,
             status_check: p.requires_close_status_check,
@@ -203,7 +203,7 @@ fn consequence(
             || agent.is_some_and(|a| a.requires_close_status_check);
         let confirmation = pane.requires_close_confirmation
             || agent.is_some_and(|a| a.requires_close_confirmation);
-        let label = pane.herdr_label.as_deref().unwrap_or(&pane.id);
+        let label = pane.engine_label.as_deref().unwrap_or(&pane.id);
         if unknown && !matches!(decision, Decision::StatusUnknown { .. }) {
             decision = Decision::StatusUnknown {
                 label: label.into(),

@@ -287,12 +287,12 @@ fn spawn_stray_prompt(
     let core_pane_id = route.pane_id.clone();
     route.spawn(
         "herdr-core-stray-prompt",
-        move |engine, herdr_pane_id| {
+        move |engine, engine_pane_id| {
             let _admission = gate
                 .admit(&core_pane_id)
                 .map_err(|_| "The agent is asleep".to_owned())?;
             engine
-                .prompt_agent(crate::live::CONTROL_WAIT, herdr_pane_id, &text)
+                .prompt_agent(crate::live::CONTROL_WAIT, engine_pane_id, &text)
                 .map_err(crate::live::failed("agent.prompt"))
         },
         move |runtime, pane_id, result| runtime.ingest_stray_prompt(pane_id, &request_id, result),

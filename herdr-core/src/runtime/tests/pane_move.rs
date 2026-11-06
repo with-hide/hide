@@ -192,7 +192,7 @@ fn remote_pane_move_uses_device_catalog_and_native_layout_identity() {
         .status
         .remote
         .push(super::device_catalog::connected_status(device));
-    let mut raw = super::device_catalog::session(vec![super::device_catalog::herdr_workspace(
+    let mut raw = super::device_catalog::session(vec![super::device_catalog::engine_workspace(
         device,
         "w9",
         CHECKOUT,

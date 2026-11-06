@@ -52,18 +52,18 @@ function worktreesOf(repo: string): string[] {
 
 test("a project outside home is asked about again after its removal, and its worktree is made, selected and read", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
     // The fixture root is not the daemon's home, so this repository is outside it.
-    const folder = path.join(herdr.root, "outside-repo");
+    const folder = path.join(engine.root, "outside-repo");
     fs.mkdirSync(folder);
     const repo = fs.realpathSync.native(folder);
     git(repo, ["init", "-q"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# outside\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-q", "-m", "initial"]);
-    daemon = await asFirstRun(await startHided(herdr, "outside-home-project"));
+    daemon = await asFirstRun(await startHided(engine, "outside-home-project"));
     expect(path.relative(daemon.home, repo).startsWith("..")).toBe(true);
     const registered = watchCore(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -123,6 +123,6 @@ test("a project outside home is asked about again after its removal, and its wor
     await expect(page.locator(`[data-explorer-row="${toPage(fs.realpathSync.native(made))}/README.md"]`)).toBeVisible({ timeout: 30_000 });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -201,7 +201,7 @@ pub struct SessionSpace {
     pub label: String,
     pub cwds: Vec<String>,
     pub purpose: Option<String>,
-    pub checkout: Option<HerdrCheckout>,
+    pub checkout: Option<EngineCheckout>,
     /// The workspace's `hide_owner` token: Hide opened it as the owner of a
     /// plain folder (`checkout_owner::owner_mark`), so a cwd in that folder
     /// or below it is that folder's checkout. The core's own engine saves the
@@ -215,7 +215,7 @@ pub struct SessionSpace {
 /// it when the checkout was opened, so it still names the repository of a
 /// checkout whose folder has since been removed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HerdrCheckout {
+pub struct EngineCheckout {
     pub path: String,
     pub repository: String,
 }
@@ -1638,7 +1638,7 @@ mod tests {
     /// persisted focus keeps resolving and the checkout offers to start a new
     /// terminal instead of the app falling back to "no workspace".
     #[test]
-    fn a_project_keeps_its_identity_when_herdr_closes_its_workspace() {
+    fn a_project_keeps_its_identity_when_the_engine_closes_its_workspace() {
         let (_scratch, root) = temp_dir("identity");
         let registration = registration(root.to_str().unwrap(), "Identity", crate::node::TEST_NODE)
             .expect("registration");
@@ -2108,7 +2108,7 @@ mod tests {
             label: "topic".to_owned(),
             cwds: vec!["/worktrees/topic/src".to_owned()],
             purpose: None,
-            checkout: Some(HerdrCheckout {
+            checkout: Some(EngineCheckout {
                 path: "/worktrees/topic".to_owned(),
                 repository: "/repo".to_owned(),
             }),

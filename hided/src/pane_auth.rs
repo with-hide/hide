@@ -570,7 +570,7 @@ impl Registry {
     pub fn validate(
         &self,
         token: &str,
-        herdr: Option<&EngineHandle>,
+        engine: Option<&EngineHandle>,
         core: &CoreHandle,
         attested: Option<&StreamAttestation>,
     ) -> Result<Capability, &'static str> {
@@ -640,7 +640,7 @@ impl Registry {
                 binding,
             }
         } else {
-            let engine = herdr.ok_or("pane_unavailable")?;
+            let engine = engine.ok_or("pane_unavailable")?;
             inspect_pane(&cap.pane_id, engine, core).inspect_err(|_| self.revoke(token))?
         };
         if actual.context != cap.context || actual.binding != cap.binding {
@@ -783,7 +783,7 @@ impl Attestation {
 fn attest_bootstrap(
     peer: i32,
     request: &PaneRequest,
-    herdr: Option<&EngineHandle>,
+    engine: Option<&EngineHandle>,
     core: &CoreHandle,
     own: Option<&str>,
 ) -> Result<(Attestation, Option<&'static str>), &'static str> {
@@ -796,7 +796,7 @@ fn attest_bootstrap(
     let pane = if request.pane_id.is_empty() {
         Err("pane_not_connected")
     } else {
-        match herdr {
+        match engine {
             Some(engine) => attest_local(peer, &request.pane_id, engine, core),
             None => Err("pane_unavailable"),
         }
@@ -1037,7 +1037,7 @@ pub async fn serve(
     listener: BootstrapListener,
     registry: Arc<Registry>,
     core: Arc<CoreHandle>,
-    herdr: Option<EngineHandle>,
+    engine: Option<EngineHandle>,
     port: u16,
     shutdown: crate::ending::Ending,
     desktop_renderers: Arc<AtomicUsize>,
@@ -1104,7 +1104,7 @@ pub async fn serve(
         };
         let registry = Arc::clone(&registry);
         let core = Arc::clone(&core);
-        let herdr = herdr.clone();
+        let engine = engine.clone();
         let desktop_renderers = Arc::clone(&desktop_renderers);
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -1112,7 +1112,7 @@ pub async fn serve(
                 stream,
                 &registry,
                 &core,
-                herdr.as_ref(),
+                engine.as_ref(),
                 port,
                 desktop_renderers.load(Ordering::SeqCst) > 0,
             );
@@ -1150,7 +1150,7 @@ fn answer_bootstrap(
     mut stream: hide_platform::ipc::LocalStream,
     registry: &Registry,
     core: &CoreHandle,
-    herdr: Option<&EngineHandle>,
+    engine: Option<&EngineHandle>,
     port: u16,
     desktop: bool,
 ) {
@@ -1185,7 +1185,7 @@ fn answer_bootstrap(
             if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) = attest_bootstrap(peer, request, herdr, core, own_install())?;
+            let (attestation, _) = attest_bootstrap(peer, request, engine, core, own_install())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1194,11 +1194,11 @@ fn answer_bootstrap(
             let (path, issued_new, token) =
                 registry.issue_with_token(&attestation, &request.nonce, port, holder)?;
             let token = crate::hook_request::Token(registry, token, issued_new);
-            let cap = registry.validate(&token.1, herdr, core, None)?;
+            let cap = registry.validate(&token.1, engine, core, None)?;
             if let Some(named) = hook.token.as_deref()
                 && registry.get(named).is_some()
             {
-                let prior = registry.validate(named, herdr, core, None)?;
+                let prior = registry.validate(named, engine, core, None)?;
                 if !cap.same_identity(&prior) {
                     return Err("pane_changed");
                 }
@@ -1246,7 +1246,7 @@ fn answer_bootstrap(
         .and(parsed.ok_or("invalid_request"))
         .and_then(|request| {
             let (attestation, pane_reason) =
-                attest_bootstrap(peer, &request, herdr, core, own_install())?;
+                attest_bootstrap(peer, &request, engine, core, own_install())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1990,7 +1990,7 @@ mod tests {
     // Windows cannot read a process's working directory (`cwd_of`).
     #[cfg(unix)]
     #[test]
-    fn bootstrap_without_a_herdr_socket_still_reaches_the_checkout_fallback() {
+    fn bootstrap_without_an_engine_socket_still_reaches_the_checkout_fallback() {
         let directory = tempfile::tempdir().unwrap();
         let core = CoreHandle::bare(directory.path());
         let peer = std::process::id() as i32;

@@ -31,12 +31,12 @@ async function choose(page: Page, language: string) {
 }
 
 test("one confirmed choice follows every window, persists, and resets to each system language", async ({ browser }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   const korean = await browser.newContext({ locale: "ko-KR" });
   const japanese = await browser.newContext({ locale: "ja-JP" });
   try {
-    daemon = await startHided(herdr, "interface-language");
+    daemon = await startHided(engine, "interface-language");
     const left = await korean.newPage();
     const right = await japanese.newPage();
     await openSettings(left, daemon);
@@ -111,17 +111,17 @@ test("one confirmed choice follows every window, persists, and resets to each sy
       await japanese.close();
     } finally {
       daemon?.stop();
-      herdr.stop();
+      engine.stop();
     }
   }
 });
 
 test("unsupported systems use English, and an invalid stored preference is diagnosed and retained", async ({ browser }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   const context = await browser.newContext({ locale: "fr-FR" });
   try {
-    daemon = await startHided(herdr, "interface-language-invalid");
+    daemon = await startHided(engine, "interface-language-invalid");
     const page = await context.newPage();
     await openSettings(page, daemon);
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
@@ -151,7 +151,7 @@ test("unsupported systems use English, and an invalid stored preference is diagn
       await context.close();
     } finally {
       daemon?.stop();
-      herdr.stop();
+      engine.stop();
     }
   }
 });

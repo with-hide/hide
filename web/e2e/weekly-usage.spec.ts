@@ -37,11 +37,11 @@ function sentHints(page: Page): Hints[] {
 test("weekly usage: a loading, an available and an unavailable row, and the hints the page sends", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   // This fixture's claude answers /usage only; no terminal agent is needed.
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   const usage = usageShim();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "usage", undefined, { PATH: usage.path, CODEX_HOME: undefined });
+    daemon = await startHided(engine, "usage", undefined, { PATH: usage.path, CODEX_HOME: undefined });
     const hints = sentHints(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
 
@@ -111,7 +111,7 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     await expect.poll(() => hints.at(-1)).toEqual({ usage_window_visible: false });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     usage.cleanup();
   }
 });

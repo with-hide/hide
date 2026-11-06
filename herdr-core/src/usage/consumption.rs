@@ -64,7 +64,7 @@ impl Publication {
         let agents = hide_agent_adapter::ADAPTERS
             .iter()
             .map(|adapter| {
-                let name = adapter.herdr.name;
+                let name = adapter.engine_kind;
                 let cell = match adapter.usage.tokens {
                     hide_agent_adapter::usage::Support::Unsupported(_) => Cell::Unsupported,
                     hide_agent_adapter::usage::Support::Supported(_) => {

@@ -297,7 +297,7 @@ impl Runtime {
                         .filter(|label| !label.is_empty())
                         .unwrap_or(layout.workspace_id.as_str())
                         .to_owned();
-                    let herdr_workspace = payload
+                    let engine_workspace = payload
                         .workspaces
                         .iter()
                         .find(|workspace| workspace.workspace_id == layout.workspace_id);
@@ -305,19 +305,19 @@ impl Runtime {
                         id: layout.workspace_id.clone(),
                         label,
                         cwds: Vec::new(),
-                        purpose: herdr_workspace
+                        purpose: engine_workspace
                             .and_then(|workspace| workspace.tokens.get("purpose"))
                             .and_then(serde_json::Value::as_str)
                             .map(str::trim)
                             .filter(|purpose| !purpose.is_empty())
                             .map(str::to_owned),
-                        checkout: herdr_workspace
+                        checkout: engine_workspace
                             .and_then(|workspace| workspace.worktree.as_ref())
-                            .map(|worktree| workspace::HerdrCheckout {
+                            .map(|worktree| workspace::EngineCheckout {
                                 path: paths.comparison(&worktree.checkout_path),
                                 repository: paths.comparison(&worktree.repo_root),
                             }),
-                        owner_mark: herdr_workspace
+                        owner_mark: engine_workspace
                             .and_then(|workspace| {
                                 workspace.tokens.get(crate::checkout_owner::OWNER_TOKEN)
                             })
@@ -462,14 +462,14 @@ impl Runtime {
         // is split across checkouts. A tab whose layout has not arrived yet is
         // in it, because the engine counts it when it indexes a move. Rebuilt whole
         // each reconcile so a closed workspace leaves no stale order behind.
-        self.herdr_worktrees = payload
+        self.engine_worktrees = payload
             .workspaces
             .iter()
             .filter_map(|workspace| {
                 Some((workspace.workspace_id.clone(), workspace.worktree.clone()?))
             })
             .collect();
-        self.herdr_workspace_tab_order = payload.tabs.iter().fold(
+        self.engine_workspace_tab_order = payload.tabs.iter().fold(
             BTreeMap::<String, Vec<String>>::new(),
             |mut order, session_tab| {
                 order
@@ -752,7 +752,7 @@ impl Runtime {
         // physical staging tab out of focus/admission and the published list.
         self.project_catalog_agent_groups(&mut workspaces);
         let mut unresolved_active_tabs = BTreeSet::new();
-        let herdr_tabs = HerdrTabView::from_payload(payload);
+        let engine_tabs = EngineTabView::from_payload(payload);
         for session_workspace in &payload.workspaces {
             let Some(active_tab_id) = session_workspace
                 .active_tab_id
@@ -786,7 +786,7 @@ impl Runtime {
             }
         }
         self.report_unresolved_active_tabs(unresolved_active_tabs);
-        self.reconcile_visible_tabs(&mut workspaces, &herdr_tabs, payload.tab_moves.as_ref());
+        self.reconcile_visible_tabs(&mut workspaces, &engine_tabs, payload.tab_moves.as_ref());
 
         let previous = self.snapshot.navigator.clone();
         let previous_card = self.snapshot.card.clone();
@@ -944,17 +944,17 @@ impl Runtime {
             .iter()
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
-        let herdr_ids = |entries: &[StripTabSnapshot]| {
+        let engine_ids = |entries: &[StripTabSnapshot]| {
             entries
                 .iter()
-                .filter(|entry| entry.kind == StripTabKind::Herdr)
+                .filter(|entry| entry.kind == StripTabKind::Engine)
                 .map(|entry| entry.source_id.clone())
                 .collect::<Vec<_>>()
         };
-        let current_herdr = herdr_ids(&strip);
-        let desired_herdr = herdr_ids(&desired);
+        let current_engine = engine_ids(&strip);
+        let desired_engine = engine_ids(&desired);
 
-        if current_herdr == desired_herdr {
+        if current_engine == desired_engine {
             // Only slots Hide owns changed, so the engine has nothing to do and the
             // arrangement is the operator's the moment they drop it.
             self.pending_tab_move.remove(&payload.checkout_id);
@@ -979,7 +979,7 @@ impl Runtime {
         // whose tabs come from two engine workspaces, which is the ordinary
         // arrangement for a repository opened twice.
         let workspace_orders = match device.as_deref() {
-            None => self.herdr_workspace_tab_order.clone(),
+            None => self.engine_workspace_tab_order.clone(),
             Some(target) => self
                 .device_raw_sessions
                 .get(target)
@@ -1008,8 +1008,8 @@ impl Runtime {
                 .cloned()
                 .collect::<Vec<_>>()
         };
-        let current_owned = owned(&current_herdr);
-        let desired_owned = owned(&desired_herdr);
+        let current_owned = owned(&current_engine);
+        let desired_owned = owned(&desired_engine);
         if current_owned == desired_owned {
             // The moved tab kept its place among its own workspace's tabs, so
             // only slots Hide arranges changed and the drop is final now.
@@ -1021,7 +1021,7 @@ impl Runtime {
         }
 
         let Some(insert_index) =
-            herdr_insert_index(&workspace_order, &desired_owned, &moved.source_id)
+            engine_insert_index(&workspace_order, &desired_owned, &moved.source_id)
         else {
             self.set_error(
                 "tab.reorder_inconsistent",
@@ -1061,7 +1061,7 @@ impl Runtime {
                 // checkout's mixed order here would wait for an interleaving
                 // the engine never reports once a checkout draws tabs from two
                 // workspaces, and the drag would snap back and stay back.
-                herdr_order: desired_owned.clone(),
+                engine_order: desired_owned.clone(),
                 target_id: moved.source_id.clone(),
                 generation,
                 connection_generation,
@@ -1088,15 +1088,15 @@ impl Runtime {
         // the answer against is the moved tab's workspace subsequence, never
         // the checkout's mixed order. A device's engine names its tabs without
         // the device scope the strip carries.
-        let herdr_id = |tab_id: &str| match device.as_deref() {
+        let engine_id = |tab_id: &str| match device.as_deref() {
             None => Some(tab_id.to_owned()),
             Some(target) => crate::address::tab_of(tab_id, target).map(str::to_owned),
         };
         let (Some(tab_id), Some(expected_order)) = (
-            herdr_id(&moved.source_id),
+            engine_id(&moved.source_id),
             desired_owned
                 .iter()
-                .map(|tab_id| herdr_id(tab_id))
+                .map(|tab_id| engine_id(tab_id))
                 .collect::<Option<Vec<_>>>(),
         ) else {
             self.pending_tab_move.remove(&payload.checkout_id);
@@ -1191,7 +1191,7 @@ impl Runtime {
         let pending = &mut self.pending_tab_move;
         // Which engine workspace each tab belongs to, so a strip slot is
         // refilled from that workspace's order rather than from a flat one.
-        let owners = &tab_owners(&self.herdr_workspace_tab_order);
+        let owners = &tab_owners(&self.engine_workspace_tab_order);
         let mut live_checkouts = BTreeSet::new();
         // Checkouts whose held arrangement became unreachable. The diagnostic
         // is pushed after the loop, which is where the snapshot is free again.
@@ -1382,8 +1382,8 @@ impl Runtime {
     pub(super) fn reconcile_visible_tabs(
         &mut self,
         workspaces: &mut [WorkspaceSnapshot],
-        herdr: &HerdrTabView,
-        herdr_moves: Option<&crate::sidebar::SessionTabMoves>,
+        engine: &EngineTabView,
+        engine_moves: Option<&crate::sidebar::SessionTabMoves>,
     ) {
         let mut followed: Vec<(String, String, String)> = Vec::new();
         let mut follow_pane: Option<String> = None;
@@ -1391,23 +1391,23 @@ impl Runtime {
         // A changed value or a new focus event is an action to follow. Repeated
         // projections of the same event are only state; a later explicit focus
         // on the same engine tab still carries a fresh intent after creation.
-        let herdr_focus_moved = herdr.focused_tab_id != self.herdr_focused_tab_seen
-            || herdr
+        let engine_focus_moved = engine.focused_tab_id != self.engine_focused_tab_seen
+            || engine
                 .focus_event
                 .as_ref()
-                .is_some_and(|event| self.herdr_tab_focus_seen.as_ref() != Some(event));
+                .is_some_and(|event| self.engine_tab_focus_seen.as_ref() != Some(event));
         // Raw close/status snapshots have no stream stamp. They cannot make a
         // previously consumed event fresh; a new engine has a new generation.
-        if let Some(event) = &herdr.focus_event {
-            self.herdr_tab_focus_seen = Some(event.clone());
+        if let Some(event) = &engine.focus_event {
+            self.engine_tab_focus_seen = Some(event.clone());
         }
-        self.herdr_focused_tab_seen = herdr.focused_tab_id.clone();
+        self.engine_focused_tab_seen = engine.focused_tab_id.clone();
         // The engine's moves since the last session answer Hide's requests in
         // the order they were sent; a focus move among them is not followed.
-        let answered = self.take_tab_focus_answers(herdr, herdr_moves, herdr_focus_moved);
+        let answered = self.take_tab_focus_answers(engine, engine_moves, engine_focus_moved);
         let asks = self.tab_asks();
-        let focus_answered = herdr_focus_moved
-            && herdr
+        let focus_answered = engine_focus_moved
+            && engine
                 .focused_tab_id
                 .as_ref()
                 .is_some_and(|tab_id| answered.iter().any(|request| request.tab_id == *tab_id));
@@ -1522,8 +1522,8 @@ impl Runtime {
                             .as_ref()
                             .is_none_or(|placed| placed.contains(tab_id))
                 };
-                if herdr_focus_moved
-                    && herdr.focused_tab_id.as_ref().is_some_and(|id| {
+                if engine_focus_moved
+                    && engine.focused_tab_id.as_ref().is_some_and(|id| {
                         placed_tabs
                             .as_ref()
                             .is_some_and(|placed| !placed.contains(id))
@@ -1541,7 +1541,7 @@ impl Runtime {
                         .filter(|tab_id| has_tab(tab_id))
                         .cloned()
                 });
-                let herdr_tab = herdr
+                let engine_tab = engine
                     .focused_tab_id
                     .as_deref()
                     .filter(|tab_id| {
@@ -1549,8 +1549,8 @@ impl Runtime {
                             // An explicit external selection can supersede a
                             // started slot even in its first catalog gap.
                             || (unlisted_agent_selection
-                                && herdr.focus_event.as_ref().is_some_and(|event| !event.creation)))
-                            && herdr_focus_moved
+                                && engine.focus_event.as_ref().is_some_and(|event| !event.creation)))
+                            && engine_focus_moved
                             && has_tab(tab_id)
                             // Creation provenance keeps external admissions from
                             // stealing the canvas. Snapshots without event metadata
@@ -1559,8 +1559,8 @@ impl Runtime {
                                 || self.workspace_views.is_none()
                                 || answered.iter().any(|request| request.tab_id == *tab_id)
                                 || asks.asked(tab_id)
-                                || (herdr.focus_event.as_ref().is_some_and(|event| !event.creation))
-                                || (herdr.focus_event.is_none() && self.snapshot.navigator.workspaces.iter().any(|previous| {
+                                || (engine.focus_event.as_ref().is_some_and(|event| !event.creation))
+                                || (engine.focus_event.is_none() && self.snapshot.navigator.workspaces.iter().any(|previous| {
                                     previous.checkouts.iter().any(|previous| {
                                         previous.id == checkout.id
                                             && previous.tabs.iter().any(|tab| {
@@ -1598,7 +1598,7 @@ impl Runtime {
                 // been followed.
                 if focus_answered
                     && let (Some(hide_tab), Some(tab_id)) =
-                        (hide_tab.as_deref(), herdr_tab.as_deref())
+                        (hide_tab.as_deref(), engine_tab.as_deref())
                     && hide_tab != tab_id
                 {
                     crate::diagnostic!(serde_json::json!({
@@ -1630,8 +1630,8 @@ impl Runtime {
                     }
                     None
                 } else {
-                    match (hide_tab, herdr_tab) {
-                        (Some(hide_tab), Some(herdr_tab)) if hide_tab == herdr_tab => {
+                    match (hide_tab, engine_tab) {
+                        (Some(hide_tab), Some(engine_tab)) if hide_tab == engine_tab => {
                             Some(hide_tab)
                         }
                         // Hide's own answer, or the engine about to be moved again by
@@ -1639,7 +1639,7 @@ impl Runtime {
                         (Some(hide_tab), Some(_)) if focus_answered || outstanding => {
                             Some(hide_tab)
                         }
-                        (Some(hide_tab), Some(herdr_tab)) => {
+                        (Some(hide_tab), Some(engine_tab)) => {
                             // Following the tab has to bring the keyboard with
                             // it. Leaving the projection on the tab that just
                             // stopped being visible parks the focus ring and
@@ -1650,31 +1650,31 @@ impl Runtime {
                                 let first_pane_id = checkout
                                     .tabs
                                     .iter()
-                                    .find(|tab| tab.id.as_deref() == Some(herdr_tab.as_str()))
+                                    .find(|tab| tab.id.as_deref() == Some(engine_tab.as_str()))
                                     .and_then(|tab| tab.panes.first())
                                     .map(|pane| pane.id.clone());
-                                follow_pane = self.tab_focus_pane_id(&herdr_tab, first_pane_id);
+                                follow_pane = self.tab_focus_pane_id(&engine_tab, first_pane_id);
                             }
-                            followed.push((checkout.id.clone(), hide_tab, herdr_tab.clone()));
-                            Some(herdr_tab)
+                            followed.push((checkout.id.clone(), hide_tab, engine_tab.clone()));
+                            Some(engine_tab)
                         }
                         (Some(hide_tab), None) => Some(hide_tab),
                         // With no value of its own yet, Hide takes the first of:
                         // the tab it asked for, the tab holding the keyboard,
                         // the tab the engine has focused, a tab the engine shows in any of
                         // the checkout's workspaces, the first tab.
-                        (None, herdr_tab) => pending_tab
+                        (None, engine_tab) => pending_tab
                             .clone()
                             .filter(|tab_id| has_tab(tab_id))
                             .or(selected_tab)
-                            .or(herdr_tab)
+                            .or(engine_tab)
                             .or_else(|| {
                                 checkout
                                     .tabs
                                     .iter()
                                     .filter_map(|tab| tab.id.as_deref())
                                     .find(|tab_id| {
-                                        has_tab(tab_id) && herdr.is_active_in_its_workspace(tab_id)
+                                        has_tab(tab_id) && engine.is_active_in_its_workspace(tab_id)
                                     })
                                     .map(str::to_owned)
                             })
@@ -1747,20 +1747,20 @@ impl Runtime {
             // follows only a focus the operator made in Hide.
             self.operator_focused_pane_id = None;
         }
-        for (checkout_id, hide_tab, herdr_tab) in followed {
+        for (checkout_id, hide_tab, engine_tab) in followed {
             self.supersede_start_navigation();
             crate::diagnostic!(serde_json::json!({
                 "component": "view_state",
                 "kind": "tab.focus.followed",
                 "checkout_id": checkout_id,
                 "from_tab_id": hide_tab,
-                "to_tab_id": herdr_tab,
+                "to_tab_id": engine_tab,
                 "origin": self.engine_name(),
             }));
             self.push_diagnostic(
                 "tab.focus.followed",
                 format!(
-                    "The engine focused tab {herdr_tab} in {checkout_id}; Hide was showing {hide_tab}"
+                    "The engine focused tab {engine_tab} in {checkout_id}; Hide was showing {hide_tab}"
                 ),
             );
         }
@@ -2190,14 +2190,14 @@ impl Runtime {
         }
         // A saved selection this session does not hold is gone, or was this
         // machine's under another core, which saved it as its device's and
-        // so never at all (a core move's rekey says so, `focus_from_herdr`).
+        // so never at all (a core move's rekey says so, `focus_from_engine`).
         // Either way the engine's own focus is where Hide left the keyboard last,
         // since Hide tells the engine every focus it takes, so the window opens on
         // the engine's pane and its checkout; with nothing saved, or the engine's focus
         // outside every checkout, the catalog's first checkout is the start.
         // Only a pane a catalog checkout holds: one outside every checkout
         // would leave a selected pane with no checkout to show it.
-        let herdr_focus = payload.focused_pane_id.as_deref().filter(|pane_id| {
+        let engine_focus = payload.focused_pane_id.as_deref().filter(|pane_id| {
             payload
                 .layouts
                 .iter()
@@ -2253,13 +2253,13 @@ impl Runtime {
             return;
         }
         self.restore_hint_pending = false;
-        let moved = std::mem::take(&mut self.snapshot.ui_state.focus_from_herdr);
+        let moved = std::mem::take(&mut self.snapshot.ui_state.focus_from_engine);
         let restore_missed = moved
             || (self.snapshot.ui_state.selected_pane_id.is_some() && !restored_pane_exists)
             || (self.snapshot.ui_state.focused_checkout_id.is_some() && !restored_checkout_exists);
         if !restored_pane_exists {
             self.snapshot.ui_state.selected_pane_id =
-                herdr_focus.filter(|_| restore_missed).map(str::to_owned);
+                engine_focus.filter(|_| restore_missed).map(str::to_owned);
             self.snapshot.terminal.pane_id = None;
             self.snapshot.focused.pane_id = None;
         }
@@ -2597,14 +2597,14 @@ impl Runtime {
             else {
                 return false;
             };
-            let herdr_tabs = HerdrTabView::from_payload(payload);
+            let engine_tabs = EngineTabView::from_payload(payload);
             payload.layouts.iter().any(|layout| {
                 layout.focused_pane_id == pending.target_id
                     && layout
                         .panes
                         .iter()
                         .any(|pane| pane.pane_id == pending.target_id)
-                    && herdr_tabs.is_active_in_its_workspace(&layout.tab_id)
+                    && engine_tabs.is_active_in_its_workspace(&layout.tab_id)
             })
         });
         // What Hide draws ahead of the engine is laid over the session only now,
@@ -2847,7 +2847,7 @@ impl Runtime {
                                     // after this snapshot; the tab the engine names now
                                     // is where the operator is looking, not the
                                     // checkout's first pane.
-                                    HerdrTabView::from_payload(&payload)
+                                    EngineTabView::from_payload(&payload)
                                         .focused_tab_id
                                         .and_then(|tab_id| {
                                             payload
@@ -3094,11 +3094,11 @@ impl Runtime {
             || close_topology_changed
             || pane_topology_changed
             || !excluded.is_empty();
-        if self.snapshot.status.herdr.state != state
-            || self.snapshot.status.herdr.message.as_deref() != message.as_deref()
+        if self.snapshot.status.engine.state != state
+            || self.snapshot.status.engine.message.as_deref() != message.as_deref()
         {
-            self.snapshot.status.herdr.state = state.to_owned();
-            self.snapshot.status.herdr.message = message;
+            self.snapshot.status.engine.state = state.to_owned();
+            self.snapshot.status.engine.message = message;
             changed = true;
         }
         if let Some(mut agents) = agents {
@@ -3442,13 +3442,13 @@ impl Runtime {
         // forward selects a pane locally without telling the engine, and skipping
         // the notification then let the engine's next layout take the focus back.
         // A tab active only in a background workspace is not global focus.
-        let herdr_agrees = self.layout_holding_pane(&pane_id).is_none_or(|layout| {
+        let engine_agrees = self.layout_holding_pane(&pane_id).is_none_or(|layout| {
             layout.focused_pane_id == pane_id
-                && (self.herdr_focused_tab_seen.as_deref() == Some(layout.tab_id.as_str())
+                && (self.engine_focused_tab_seen.as_deref() == Some(layout.tab_id.as_str())
                     || self.pane_focus_tab_confirmed(&layout.tab_id))
         });
         let notify = !already_focused
-            || !herdr_agrees
+            || !engine_agrees
             || !self.view_focus_settled_on(ViewFocusSlot::Pane, &pane_id)
             || self.pane_focus_in_flight.is_some();
         let same_pending = self
@@ -5101,11 +5101,11 @@ impl Runtime {
                 self.snapshot.task_operation.as_ref().and_then(|operation| {
                     let pane_id = operation.pane_id.clone()?;
                     let kind = operation.agent_kind.clone()?;
-                    let herdr_pane_id = match operation.device_id.as_deref() {
+                    let engine_pane_id = match operation.device_id.as_deref() {
                         Some(device) => crate::address::pane_of(&pane_id, device)?,
                         None => pane_id.as_str(),
                     };
-                    let name = crate::fork::task_agent_name(&kind, herdr_pane_id);
+                    let name = crate::fork::task_agent_name(&kind, engine_pane_id);
                     Some((pane_id, kind, name))
                 })
         {
@@ -6145,7 +6145,7 @@ impl Runtime {
                     .then(|| self.visible_tab_ids.get(checkout_id).cloned())
                     .flatten()
             });
-        let Some((checkout_path, first_pane_id, has_herdr_tab)) = self
+        let Some((checkout_path, first_pane_id, has_engine_tab)) = self
             .snapshot
             .navigator
             .workspaces
@@ -6228,7 +6228,7 @@ impl Runtime {
         // With separate View areas the alignment above already chose the
         // Workspace's remembered View tab; only the shared canvas needs a
         // document to show in place of a missing terminal.
-        if !has_herdr_tab
+        if !has_engine_tab
             && !self.separate_view_areas()
             && let Some(file_tab_id) = self
                 .snapshot

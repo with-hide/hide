@@ -19,10 +19,10 @@ async function drag(page: Page, handle: Locator, dx: number, dy: number) {
 }
 
 test("@platform Overview restores its exact current session and keeps map movement local", async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "overview-map");
+    daemon = await startHided(engine, "overview-map");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await openOverview(page, "work");
@@ -112,16 +112,16 @@ test("@platform Overview restores its exact current session and keeps map moveme
     await graph.getByRole("button", { name: "Unfold all", exact: true }).click();
     await expect(graph.locator("[data-graph-cluster]")).toHaveCount(0);
     await expect.poll(positions).toEqual(before);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 // PRD overview-graph-remembered B1, B3, B5, B9: the core keeps the map's arrangement, so a
 // reloaded shell opens it as it was left, and Reset layout's fresh map is what reopens.
 test("Overview's work map keeps a hidden project and a dropped session across a reload until Reset layout", async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "overview-map-remembered");
+    daemon = await startHided(engine, "overview-map-remembered");
     const graph = page.locator("[data-overview-graph]");
     const open = async (reload: boolean) => {
       if (reload) await page.reload();
@@ -150,16 +150,16 @@ test("Overview's work map keeps a hidden project and a dropped session across a 
     await expect.poll(place).toBe(fresh);
     await open(true);
     await expect.poll(place).toBe(fresh);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 // PRD pane-open-in-overview B4-B7, B12: an agent pane's menu opens the Overview's Work map with
 // that pane's session chosen, its hidden project shown again, framed, and Escape steps back to the pane.
 test("a pane's Show in Overview opens Work with its session chosen and gives the keyboard back", async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "overview-map-pane");
+    daemon = await startHided(engine, "overview-map-pane");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await openOverview(page, "work");
@@ -201,16 +201,16 @@ test("a pane's Show in Overview opens Work with its session chosen and gives the
     await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
     await expect(current.locator(".og-session-target")).toHaveAttribute("aria-pressed", "true");
     await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 // The side column's search finds a session on the map: what it does not find dims in place,
 // and Enter shows the first found session with its details, as choosing it on the map does.
 test("Overview's work map search dims what it does not find and Enter shows the found session", async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "overview-map-search");
+    daemon = await startHided(engine, "overview-map-search");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await openOverview(page, "work");
@@ -236,5 +236,5 @@ test("Overview's work map search dims what it does not find and Enter shows the 
     await page.keyboard.press("Escape");
     await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
     await expect(search).toHaveValue(title);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });

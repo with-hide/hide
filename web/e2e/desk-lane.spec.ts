@@ -18,7 +18,7 @@ import { enterWorkspace } from "./wire";
 // `register` and `spawn`) for a real pane of the fixture's engine, while the
 // daemon is down.
 
-type Desk = { page: Page; herdr: AgentFixture; daemon: Daemon; pane: string };
+type Desk = { page: Page; engine: AgentFixture; daemon: Daemon; pane: string };
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -55,21 +55,21 @@ async function switchDesk(page: Page, on: boolean) {
 
 /** A Workspace whose second pane is a thread Desk started, Desk switched on, and the page on Desk's room unless `open` is false. */
 async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
-  const herdr = await startFixture({ agents: false });
-  const repo = path.join(herdr.root, "fixture");
-  let daemon = await startHided(herdr, name);
-  const pane = herdr.panes[1];
+  const engine = await startFixture({ agents: false });
+  const repo = path.join(engine.root, "fixture");
+  let daemon = await startHided(engine, name);
+  const pane = engine.panes[1];
   daemon = await daemon.restart((stateDir) => {
     fs.writeFileSync(path.join(stateDir, "delivery-ledger.json"), JSON.stringify(deskLedger(daemon.node, pane, repo)));
   });
   await page.goto("about:blank");
   await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
   await enterWorkspace(page, "fixture");
-  if (!open) return { page, herdr, daemon, pane };
+  if (!open) return { page, engine, daemon, pane };
   await switchDesk(page, true);
   await page.locator("[data-desk-sidebar-row]").click();
   await expect(page.locator("[data-desk-screen]")).toBeVisible();
-  return { page, herdr, daemon, pane };
+  return { page, engine, daemon, pane };
 }
 
 const room = (page: Page) => page.locator("[data-desk-room]");
@@ -98,7 +98,7 @@ test("☰ opens the Threads list over the chat and a row opens its thread in the
     await expect(page.locator('[data-desk-view-column] [data-desk-outputs="0"]')).toBeVisible();
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });
 
@@ -138,7 +138,7 @@ test("📌 beside ✕ docks Desk's lane beside the chat, the core keeps it throu
     await expect(page.locator("[data-desk-chat-column] [data-desk-composer-input]")).toBeFocused();
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });
 
@@ -166,7 +166,7 @@ test("⌘J goes from a thread to its Agent tab and back to Desk with the thread 
     await expect(page.locator(`[data-pane-view="${desk.pane}"]`)).toHaveAttribute("data-focused", "true");
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });
 
@@ -194,6 +194,6 @@ test("Desk is off on a new install, its switch in Settings shows it without a re
     await expect(page.locator(`[data-pane-view="${desk.pane}"] [data-desk-pane-to-desk]`)).toHaveCount(0);
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });

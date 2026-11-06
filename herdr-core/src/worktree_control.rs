@@ -1191,7 +1191,7 @@ pub fn spawn_remote_purpose_write(
     thread::Builder::new()
         .name("herdr-core-remote-purpose-write".into())
         .spawn(move || {
-            let git = HerdrOnly;
+            let git = EngineOnly;
             let result = write_purpose(context.engine.as_ref(), &git, &request);
             if let Some(runtime) = context.runtime.upgrade() {
                 if let Ok(mut guard) = runtime.lock() {
@@ -1667,7 +1667,7 @@ fn launch_agent(
         Ok(_) => typed.map_or(Launch::Started, |prompt| {
             type_first_prompt(engine, id, pane_id, kind, &name, prompt)
         }),
-        Err(StartError::Herdr(EngineError::Answer(message))) => {
+        Err(StartError::Engine(EngineError::Answer(message))) => {
             Launch::Unknown(AgentFailure::with_detail(
                 "agent_start.unconfirmed",
                 format!("The engine answered the agent start in an unexpected shape ({message})"),
@@ -1684,15 +1684,15 @@ fn launch_agent(
             line,
         }),
         // Hide's own check refused in the engine's place, before the engine was asked.
-        Err(StartError::Herdr(EngineError::Refused { code, message }))
+        Err(StartError::Engine(EngineError::Refused { code, message }))
             if message == crate::live::SESSION_CHANGED =>
         {
             Launch::Failed(AgentFailure::reason(code))
         }
-        Err(StartError::Herdr(EngineError::Refused { code, message })) => Launch::Failed(
+        Err(StartError::Engine(EngineError::Refused { code, message })) => Launch::Failed(
             AgentFailure::with_detail("agent_start.refused_by_herdr", format!("{code}: {message}")),
         ),
-        Err(StartError::Herdr(error)) => Launch::Unknown(AgentFailure::with_detail(
+        Err(StartError::Engine(error)) => Launch::Unknown(AgentFailure::with_detail(
             "agent_start.unconfirmed",
             format!("The engine did not confirm the agent start ({error})"),
         )),
@@ -2429,9 +2429,9 @@ impl GitCommands for NodeGit<'_> {
 /// A device checkout keeps its purpose in the engine's metadata only; the branch
 /// description mirror is this machine's (B30), so a device write never asks
 /// for git.
-struct HerdrOnly;
+struct EngineOnly;
 
-impl GitCommands for HerdrOnly {
+impl GitCommands for EngineOnly {
     fn run(&self, _cwd: &str, _command: GitCommand) -> Result<String, String> {
         Err("A device checkout keeps its purpose in the engine only".to_owned())
     }
@@ -4235,7 +4235,7 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_tab_is_focused_in_herdr_only_when_the_request_asks() {
+    fn a_checkout_tab_is_focused_in_the_engine_only_when_the_request_asks() {
         for focus in [true, false] {
             let server = server(vec![reply(("w9:t2".to_owned(), "w9:p2".to_owned()))]);
             let outcome = create_checkout_tab(
@@ -4690,7 +4690,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_codex_first_start_refuses_before_contacting_herdr() {
+    fn an_unknown_codex_first_start_refuses_before_contacting_the_engine() {
         let server = server(vec![]);
         let outcome = launch_with_prompt(
             &*server,
@@ -4718,7 +4718,7 @@ mod tests {
     /// The chosen agent is looked up on the node that would run it, and one
     /// it lacks fails the start before the engine types anything into the pane.
     #[test]
-    fn an_agent_missing_from_its_node_fails_before_contacting_herdr() {
+    fn an_agent_missing_from_its_node_fails_before_contacting_the_engine() {
         struct Missing(Mutex<Vec<hide_node_link::protocol::Call>>);
         impl crate::node_access::NodeLink for Missing {
             fn call(
@@ -4832,7 +4832,7 @@ mod tests {
     /// B31: a prompt with a character that cannot be passed fails the start
     /// with the reason, and the engine is not asked at all.
     #[test]
-    fn a_prompt_with_another_control_character_fails_the_start_before_herdr() {
+    fn a_prompt_with_another_control_character_fails_the_start_before_the_engine() {
         let server = server(vec![]);
         let outcome = launch_with_prompt(
             &*server,
@@ -4864,7 +4864,7 @@ mod tests {
     /// A prompt over the cap fails the start before the engine is asked, rather
     /// than failing inside the pane's shell where no one reads it.
     #[test]
-    fn a_prompt_over_the_cap_fails_the_start_before_herdr() {
+    fn a_prompt_over_the_cap_fails_the_start_before_the_engine() {
         let server = server(vec![]);
         let at_cap = "가".repeat(crate::start_prompt::MAX_PROMPT_BYTES / 3);
         assert!(crate::start_prompt::prompt_argument(&at_cap).is_ok());

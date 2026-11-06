@@ -343,7 +343,7 @@ fn start_dormant(
     match started {
         // An answer in a shape the start does not promise is still the engine
         // taking the start.
-        Ok(_) | Err(StartError::Herdr(EngineError::Answer(_))) => {
+        Ok(_) | Err(StartError::Engine(EngineError::Answer(_))) => {
             match super::report_resumed_session(
                 engine,
                 pane,
@@ -362,8 +362,8 @@ fn start_dormant(
         }
         Err(StartError::NotStarted { .. })
         | Err(StartError::ShellStarting(_))
-        | Err(StartError::Herdr(EngineError::Refused { .. })) => DormantStartOutcome::NotStarted,
-        Err(StartError::Herdr(_)) => {
+        | Err(StartError::Engine(EngineError::Refused { .. })) => DormantStartOutcome::NotStarted,
+        Err(StartError::Engine(_)) => {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_sleep", "kind": "agent_sleep.resume_unconfirmed",
                 "sleep_id": work.id.as_str(),
@@ -406,7 +406,7 @@ mod tests {
         let names = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&names);
         let starts = Arc::new(AtomicUsize::new(0));
-        let herdr = FakeEngine::start(move |method, params| match method {
+        let fake = FakeEngine::start(move |method, params| match method {
             "pane_processes" => reply(processes(&json!({
                 "shell_pid":42,"foreground_process_group_id":42,
                 "foreground_processes":[{"pid":42,"name":"zsh"}]
@@ -437,7 +437,7 @@ mod tests {
         };
         let node = hide_node::Local::of_process();
         let outcome = start_dormant(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &node,
             &work,
             vec!["--resume".into(), work.record.native_session_id.clone()],
@@ -447,7 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn a_session_that_held_a_registration_wakes_under_its_name_and_waits_for_herdr_to_release_it() {
+    fn a_session_that_held_a_registration_wakes_under_its_name_and_waits_for_the_engine_to_release_it()
+     {
         let (outcome, names) = wake(true, 2);
         assert!(matches!(outcome, DormantStartOutcome::Started));
         assert_eq!(names, ["reviewer", "reviewer", "reviewer"]);
@@ -470,7 +471,7 @@ mod tests {
         record.kind = kind.into();
         let reports = Arc::new(Mutex::new(Vec::new()));
         let reported = Arc::clone(&reports);
-        let herdr = FakeEngine::start(move |method, params| match method {
+        let fake = FakeEngine::start(move |method, params| match method {
             "report_agent_session" => {
                 reported.lock().unwrap().push(params.clone());
                 if accepts {
@@ -486,7 +487,7 @@ mod tests {
             record,
         };
         let result = super::super::report_resumed_session(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "w1:p9",
             &work.record.kind,
             &work.record.native_session_id,

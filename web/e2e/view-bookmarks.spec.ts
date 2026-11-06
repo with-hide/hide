@@ -16,9 +16,9 @@ test.describe.configure({ timeout: 180_000 });
 test.use({ actionTimeout: 15_000 });
 
 /** Runs `hide <args>` in the shell of `pane`, as an agent in that tab would. */
-async function hideFrom(herdr: AgentFixture, daemon: Daemon, pane: string, args: string[], sequence: number): Promise<void> {
+async function hideFrom(engine: AgentFixture, daemon: Daemon, pane: string, args: string[], sequence: number): Promise<void> {
   const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
-  const ran = await runInPaneKeepingFocus(herdr, daemon, pane, `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args] });
+  const ran = await runInPaneKeepingFocus(engine, daemon, pane, `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args] });
   expect(ran.status, ran.stderr).toBe(0);
 }
 
@@ -50,20 +50,20 @@ function savedAgentTabs(daemon: Daemon): string[] {
 
 test("Agent switching preserves the selected View and background opens stay behind it", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const fixture = path.join(herdr.root, "fixture");
+    const fixture = path.join(engine.root, "fixture");
     for (const name of ["a.md", "b.md", "c.md", "d.md"]) fs.writeFileSync(path.join(fixture, name), `${name}\n`);
-    daemon = await startHided(herdr, "view-bookmarks");
+    daemon = await startHided(engine, "view-bookmarks");
     // A second tab, with the first still the one shown.
     const created = await withControl(daemon, async (control) => {
-      const made = await newTab(control, herdr, "second");
-      await focusTab(control, herdr, herdr.tab);
+      const made = await newTab(control, engine, "second");
+      await focusTab(control, engine, engine.tab);
       return made;
     });
-    const [first, second] = [herdr.tab, created.tab];
-    const [firstPane, secondPane] = [herdr.panes[0], created.pane];
+    const [first, second] = [engine.tab, created.tab];
+    const [firstPane, secondPane] = [engine.panes[0], created.pane];
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -75,7 +75,7 @@ test("Agent switching preserves the selected View and background opens stay behi
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
 
     // Tab 1 is in front and opens a.md.
-    await hideFrom(herdr, daemon, firstPane, ["file", "open", "a.md"], 1);
+    await hideFrom(engine, daemon, firstPane, ["file", "open", "a.md"], 1);
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
     // Tab 2 is shown for the first time and the
@@ -85,7 +85,7 @@ test("Agent switching preserves the selected View and background opens stay behi
     await expect(agentTab(page, second)).toHaveAttribute("aria-selected", "true");
     await expect(viewTabs(page)).toHaveCount(1);
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
-    await hideFrom(herdr, daemon, secondPane, ["file", "open", "b.md"], 2);
+    await hideFrom(engine, daemon, secondPane, ["file", "open", "b.md"], 2);
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect(viewTabs(page)).toHaveCount(2);
 
@@ -113,7 +113,7 @@ test("Agent switching preserves the selected View and background opens stay behi
     });
     // The new shell takes typed keys once the page has drawn it at its prompt.
     await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", sibling), { timeout: 30_000, message: `the prompt in ${sibling}` }).toContain("fixture %");
-    await hideFrom(herdr, daemon, sibling, ["file", "open", "c.md"], 3);
+    await hideFrom(engine, daemon, sibling, ["file", "open", "c.md"], 3);
     await expect(viewTabs(page)).toHaveCount(3);
     await expect(viewTabs(page).filter({ hasText: "c.md" })).toHaveCount(1);
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
@@ -125,7 +125,7 @@ test("Agent switching preserves the selected View and background opens stay behi
     // what the operator had in front there.
     await agentTab(page, second).click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
-    await hideFrom(herdr, daemon, firstPane, ["file", "open", "d.md"], 4);
+    await hideFrom(engine, daemon, firstPane, ["file", "open", "d.md"], 4);
     await expect(viewTabs(page)).toHaveCount(4);
     await expect(viewTabs(page).filter({ hasText: "d.md" })).toHaveCount(1);
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
@@ -150,6 +150,6 @@ test("Agent switching preserves the selected View and background opens stay behi
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

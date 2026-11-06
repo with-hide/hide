@@ -58,7 +58,7 @@ struct Device {
     lost_reads: usize,
 }
 
-fn device_herdr(device: Arc<Mutex<Device>>) -> Fake {
+fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
     FakeEngine::start(move |method, params| {
         let mut device = device.lock().unwrap();
         let checkout = device.checkout.clone();
@@ -140,7 +140,7 @@ struct Spawner {
     runtime: Arc<Mutex<Runtime>>,
     actor: Actor,
     device: Arc<Mutex<Device>>,
-    herdr: Fake,
+    fake: Fake,
     path: PathBuf,
     _worker: Worker,
     client: crate::delivery::worker::Client,
@@ -167,7 +167,7 @@ fn spawner() -> Spawner {
         panes: vec![(CALLER.into(), None)],
         ..Default::default()
     }));
-    let herdr = device_herdr(device.clone());
+    let fake = device_engine(device.clone());
     {
         let mut guard = runtime.lock().unwrap();
         guard
@@ -215,7 +215,7 @@ fn spawner() -> Spawner {
         );
         guard.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            herdr.engine(),
+            fake.engine(),
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
         ));
@@ -314,7 +314,7 @@ fn spawner() -> Spawner {
         runtime,
         actor,
         device,
-        herdr,
+        fake,
         path,
         _worker: worker,
         client,
@@ -387,7 +387,7 @@ impl Spawner {
     }
 
     fn count(&self, method: &str) -> usize {
-        self.herdr
+        self.fake
             .methods()
             .iter()
             .filter(|seen| **seen == method)
@@ -524,7 +524,7 @@ fn local_spawner() -> Spawner {
         panes: vec![("sender".into(), None)],
         ..Default::default()
     }));
-    let herdr = device_herdr(device.clone());
+    let fake = device_engine(device.clone());
     {
         let mut guard = runtime.lock().unwrap();
         let payload: crate::sidebar::SessionSnapshotPayload =
@@ -542,10 +542,10 @@ fn local_spawner() -> Spawner {
             },
         );
         guard.live = Some(live::LiveContext {
-            socket_path: herdr.scope(),
+            socket_path: fake.scope(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            engine: herdr.engine(),
+            engine: fake.engine(),
             node: Arc::new(Node),
         });
         guard.own_node = Arc::new(Node);
@@ -604,7 +604,7 @@ fn local_spawner() -> Spawner {
         runtime,
         actor,
         device,
-        herdr,
+        fake,
         path,
         _worker: worker,
         client,

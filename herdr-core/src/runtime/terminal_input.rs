@@ -313,9 +313,9 @@ impl InputRequests {
     /// Marks a request's pane laid out once the engine's own layout carries it.
     /// Only the engine's layout counts: a pane Hide draws ahead may expire
     /// before the engine lays it out, and its keys must still reach it then.
-    pub(super) fn mark_laid_out(&mut self, in_herdr_layout: impl Fn(&str) -> bool) {
+    pub(super) fn mark_laid_out(&mut self, in_engine_layout: impl Fn(&str) -> bool) {
         for request in &mut self.requests {
-            if !request.laid_out && request.pane().is_some_and(&in_herdr_layout) {
+            if !request.laid_out && request.pane().is_some_and(&in_engine_layout) {
                 request.laid_out = true;
             }
         }
@@ -801,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn a_creation_refused_before_herdr_is_discarded_for_the_shell() {
+    fn a_creation_refused_before_the_engine_is_discarded_for_the_shell() {
         let mut requests = InputRequests::default();
         assert!(requests.refuse_unopened("r1"));
         assert!(!requests.refuse_unopened("r1"));
@@ -961,14 +961,14 @@ mod tests {
 
     #[test]
     fn the_wait_ends_when_the_shell_s_line_editor_reads() {
-        let herdr = shell_pane();
+        let fake = shell_pane();
         let node = Terminal::answering(vec![
             Ok(LineInput::Lines { limit: 1024 }),
             Ok(LineInput::Lines { limit: 1024 }),
             Ok(LineInput::Keys),
         ]);
         let outcome = wait_for_shell_reading(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(60),
@@ -982,13 +982,13 @@ mod tests {
     /// it again rather than writing the keys into its line mode.
     #[test]
     fn a_failed_read_is_read_again_within_the_wait() {
-        let herdr = shell_pane();
+        let fake = shell_pane();
         let node = Terminal::answering(vec![
             Err("controls no terminal".to_owned()),
             Ok(LineInput::Keys),
         ]);
         let outcome = wait_for_shell_reading(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(60),
@@ -1002,11 +1002,11 @@ mod tests {
     /// ends at its bound and the keys are written anyway.
     #[test]
     fn a_shell_that_never_reads_ends_the_wait_at_its_bound() {
-        let herdr = shell_pane();
+        let fake = shell_pane();
         let node = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
         // The bound is the subject: a short one keeps the test short.
         let outcome = wait_for_shell_reading(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_millis(150),
@@ -1020,7 +1020,7 @@ mod tests {
     /// a failed read, still starting at the bound, ends as a timeout.
     #[test]
     fn a_read_after_a_failure_ends_the_wait_as_a_timeout() {
-        let herdr = shell_pane();
+        let fake = shell_pane();
         let node = Terminal::answering(vec![
             Err("controls no terminal".to_owned()),
             Ok(LineInput::Lines { limit: 1024 }),
@@ -1030,7 +1030,7 @@ mod tests {
         // request over 100 ms on a loaded CI runner ended the wait on the
         // failed read instead (2026-10-16, twice in one nextest run).
         let outcome = wait_for_shell_reading(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(1),
@@ -1129,10 +1129,10 @@ mod tests {
 
     #[test]
     fn a_wait_nothing_waits_for_reads_nothing() {
-        let herdr = shell_pane();
+        let fake = shell_pane();
         let node = Terminal::answering(vec![Ok(LineInput::Keys)]);
         let outcome = wait_for_shell_reading(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(60),
@@ -1140,7 +1140,7 @@ mod tests {
         );
         assert_eq!(outcome, None);
         assert_eq!(node.reads(), 0);
-        assert!(herdr.methods().is_empty(), "{:?}", herdr.methods());
+        assert!(fake.methods().is_empty(), "{:?}", fake.methods());
     }
 
     #[test]

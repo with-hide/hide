@@ -928,7 +928,7 @@ impl OwnEngine<'static> {
             StartError::ShellStarting(line) => {
                 crate::agent_start::shell_starting_message(line.as_deref())
             }
-            StartError::Herdr(error) => error.to_string(),
+            StartError::Engine(error) => error.to_string(),
         })?;
         let group = self
             .processes(&resume.pane)

@@ -18,17 +18,17 @@ test.use({ actionTimeout: 15_000 });
 
 test("folded documents kept behind the tool column show nothing through them", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const fixture = path.join(herdr.root, "fixture");
+    const fixture = path.join(engine.root, "fixture");
     fs.writeFileSync(path.join(fixture, "a.md"), "a\n");
-    daemon = await startHided(herdr, "lane-hidden-tool");
+    daemon = await startHided(engine, "lane-hidden-tool");
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
     const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
-    const ran = await runInPaneKeepingFocus(herdr, daemon, herdr.panes[0], "cli-1", { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, "file", "open", "a.md"] });
+    const ran = await runInPaneKeepingFocus(engine, daemon, engine.panes[0], "cli-1", { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, "file", "open", "a.md"] });
     expect(ran.status, ran.stderr).toBe(0);
     // The command came from a background pane; explicitly show its document
     // before testing that the operator can fold it again.
@@ -53,6 +53,6 @@ test("folded documents kept behind the tool column show nothing through them", a
     await expect(close).toHaveCSS("opacity", "1");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

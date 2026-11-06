@@ -17,18 +17,18 @@ fn session(zoomed: bool) -> SessionSnapshotPayload {
 }
 
 fn setup() -> (Runtime, Fake, u64) {
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "set_zoom" => reply(()),
         other => refused("unsupported", &format!("unexpected {other}")),
     });
     let (mut runtime, _) = tab_order_runtime(PATH);
     record_terminals(&mut runtime);
-    runtime.live = Some(herdr.live());
+    runtime.live = Some(fake.live());
     runtime.ingest_session(Ok(session(true)));
     let task = runtime
         .begin_task_operation("checkout_start", None, None, None, None)
         .unwrap();
-    (runtime, herdr, task)
+    (runtime, fake, task)
 }
 
 fn zoom(runtime: &mut Runtime) -> String {
@@ -60,7 +60,7 @@ fn confirm_unzoom(runtime: &mut Runtime, id: &str) {
 
 #[test]
 fn checkout_start_waits_its_turn_and_holds_followers_through_intermediate_topology() {
-    let (mut runtime, _herdr, task) = setup();
+    let (mut runtime, _fake, task) = setup();
     let first = zoom(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
     let follower = zoom(&mut runtime);
@@ -88,7 +88,7 @@ fn checkout_start_waits_its_turn_and_holds_followers_through_intermediate_topolo
 
 #[test]
 fn checkout_start_shares_the_existing_eight_waiter_limit() {
-    let (mut runtime, _herdr, task) = setup();
+    let (mut runtime, _fake, task) = setup();
     zoom(&mut runtime);
     for _ in 0..GEOMETRY_QUEUE_LIMIT {
         zoom(&mut runtime);
@@ -99,7 +99,7 @@ fn checkout_start_shares_the_existing_eight_waiter_limit() {
 
 #[test]
 fn checkout_start_receives_refusal_when_the_operation_ahead_fails() {
-    let (mut runtime, _herdr, task) = setup();
+    let (mut runtime, _fake, task) = setup();
     let first = zoom(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
     let follower = zoom(&mut runtime);
@@ -111,7 +111,7 @@ fn checkout_start_receives_refusal_when_the_operation_ahead_fails() {
 
 #[test]
 fn checkout_start_cancel_covers_both_waiting_and_grant_racing_with_timeout() {
-    let (mut runtime, _herdr, task) = setup();
+    let (mut runtime, _fake, task) = setup();
     let first = zoom(&mut runtime);
     let predecessor = zoom(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
@@ -135,7 +135,7 @@ fn checkout_start_cancel_covers_both_waiting_and_grant_racing_with_timeout() {
 
 #[test]
 fn checkout_start_abandoned_receiver_cannot_lock_the_tab() {
-    let (mut runtime, _herdr, task) = setup();
+    let (mut runtime, _fake, task) = setup();
     let first = zoom(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
     let follower = zoom(&mut runtime);
@@ -147,7 +147,7 @@ fn checkout_start_abandoned_receiver_cannot_lock_the_tab() {
 
 #[test]
 fn checkout_start_deadline_revokes_the_lease_and_drops_followers_without_resending() {
-    let (mut runtime, _herdr, task) = setup();
+    let (mut runtime, _fake, task) = setup();
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
     let lease = ready.try_recv().unwrap().unwrap();
     let follower = zoom(&mut runtime);
@@ -160,7 +160,7 @@ fn checkout_start_deadline_revokes_the_lease_and_drops_followers_without_resendi
 #[test]
 fn checkout_start_does_not_grant_a_replaced_task_or_connection() {
     for replace_task in [false, true] {
-        let (mut runtime, _herdr, task) = setup();
+        let (mut runtime, _fake, task) = setup();
         let first = zoom(&mut runtime);
         let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
         if replace_task {
@@ -176,7 +176,7 @@ fn checkout_start_does_not_grant_a_replaced_task_or_connection() {
 
 #[test]
 fn checkout_start_revalidates_its_group_target_after_waiting() {
-    let (runtime, _herdr, task) = setup();
+    let (runtime, _fake, task) = setup();
     let mut runtime = super::workspace_view::with_new_views(runtime, "start-geometry-target");
     runtime.ingest_session(Ok(session(true)));
     runtime.sync_workspace_view();
@@ -208,7 +208,7 @@ fn checkout_start_revalidates_its_group_target_after_waiting() {
 #[test]
 fn queued_checkout_start_refuses_full_tab_and_last_pane_closes_without_native_work() {
     for event in ["close_tab", "close_pane"] {
-        let (mut runtime, herdr, task) = setup();
+        let (mut runtime, fake, task) = setup();
         // Stop at the queue's admission boundary, before the coordinator's
         // next pump. No transport answer or scheduler delay creates the race.
         runtime.pumping_geometry = true;
@@ -229,7 +229,7 @@ fn queued_checkout_start_refuses_full_tab_and_last_pane_closes_without_native_wo
         );
         assert!(!runtime.snapshot().recent_closed.notices.is_empty());
         assert!(
-            herdr.methods().is_empty(),
+            fake.methods().is_empty(),
             "the refused close sends no native request"
         );
         assert_eq!(ready.try_recv(), Err(TryRecvError::Empty));
@@ -241,14 +241,14 @@ fn queued_checkout_start_refuses_full_tab_and_last_pane_closes_without_native_wo
         runtime.finish_checkout_start_geometry(task, &lease, Err("start cancelled".into()));
         runtime.dispatch_json(&explorer_event(event, payload));
         assert_eq!(runtime.close_operations.len(), 1);
-        herdr.wait_for_calls(1, Duration::from_secs(5));
+        fake.wait_for_calls(1, Duration::from_secs(5));
     }
 }
 
 #[test]
 fn a_close_ahead_of_checkout_start_keeps_its_normal_fifo_turn() {
     const OTHER: &str = "w-order:p2";
-    let (mut runtime, _herdr, task) = setup();
+    let (mut runtime, _fake, task) = setup();
     let mut split = session(true);
     let mut other = split.panes[0].clone();
     other.pane_id = OTHER.into();
@@ -307,7 +307,7 @@ fn a_close_ahead_of_checkout_start_keeps_its_normal_fifo_turn() {
 const DEVICE: &str = "geometry-device";
 
 fn remote_setup() -> (Runtime, Fake, u64, String, String) {
-    let (mut runtime, herdr, task) = setup();
+    let (mut runtime, fake, task) = setup();
     let tab = format!("remote:{DEVICE}:tab:{TAB}");
     let pane_id = crate::address::scoped_pane_id(DEVICE, PANE);
     let workspace_id = format!("remote:{DEVICE}:workspace:w-order");
@@ -367,12 +367,12 @@ fn remote_setup() -> (Runtime, Fake, u64, String, String) {
     });
     runtime.install_remote_control(RemoteControlContext::new(
         DEVICE,
-        herdr.engine(),
+        fake.engine(),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
     runtime.snapshot.task_operation.as_mut().unwrap().device_id = Some(DEVICE.into());
-    (runtime, herdr, task, tab, pane_id)
+    (runtime, fake, task, tab, pane_id)
 }
 
 fn remote_zoom(runtime: &mut Runtime, pane_id: &str, request: &str) {
@@ -389,7 +389,7 @@ fn remote_zoom(runtime: &mut Runtime, pane_id: &str, request: &str) {
 
 #[test]
 fn checkout_start_waits_for_remote_control_and_blocks_later_remote_controls() {
-    let (mut runtime, _herdr, task, tab, pane_id) = remote_setup();
+    let (mut runtime, _fake, task, tab, pane_id) = remote_setup();
     remote_zoom(&mut runtime, &pane_id, "first");
     assert_eq!(runtime.remote_operations.len(), 1);
     let ready = runtime
@@ -422,7 +422,7 @@ fn checkout_start_waits_for_remote_control_and_blocks_later_remote_controls() {
 
 #[test]
 fn checkout_start_remote_unknown_does_not_grant_and_reconnect_revokes_held_lease() {
-    let (mut runtime, _herdr, task, tab, pane_id) = remote_setup();
+    let (mut runtime, _fake, task, tab, pane_id) = remote_setup();
     remote_zoom(&mut runtime, &pane_id, "first");
     runtime.expire_remote_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1);
     let ready = runtime

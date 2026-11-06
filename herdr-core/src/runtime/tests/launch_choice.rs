@@ -123,10 +123,10 @@ fn checkout_of(folder: &tempfile::TempDir) -> String {
 
 /// A fake engine that starts any agent in a pane whose shell holds the
 /// terminal, and hands each start's arguments to the test.
-fn starting_herdr() -> (Fake, std::sync::mpsc::Receiver<(String, serde_json::Value)>) {
+fn starting_engine() -> (Fake, std::sync::mpsc::Receiver<(String, serde_json::Value)>) {
     let (sent, starts) = std::sync::mpsc::channel();
     let observed = std::sync::Mutex::new(None::<serde_json::Value>);
-    let herdr = FakeEngine::start(move |method, params| match method {
+    let fake = FakeEngine::start(move |method, params| match method {
         "pane_processes" => reply(fake::processes(&json!({
             "shell_pid": 42, "foreground_process_group_id": 42,
             "foreground_processes": [{"pid": 42, "name": "zsh"}]
@@ -155,7 +155,7 @@ fn starting_herdr() -> (Fake, std::sync::mpsc::Receiver<(String, serde_json::Val
         // the start; refusing it leaves a working fork.
         other => refused("unsupported", &format!("fixture answers no {other}")),
     });
-    (herdr, starts)
+    (fake, starts)
 }
 
 fn next_start(
@@ -174,8 +174,8 @@ fn sleep(runtime: &mut Runtime, folder: &tempfile::TempDir, kind: &str) {
     runtime.ingest_session(Ok(session(&checkout_of(folder), kind, false)));
 }
 
-fn wake(runtime: &mut Runtime, herdr: &Fake) {
-    runtime.live.as_mut().unwrap().engine = herdr.engine();
+fn wake(runtime: &mut Runtime, fake: &Fake) {
+    runtime.live.as_mut().unwrap().engine = fake.engine();
     assert!(runtime.dispatch_json(&event("agent_wake", json!({"pane_id": AGENT}))));
 }
 
@@ -195,8 +195,8 @@ fn a_wake_resumes_the_agent_with_the_model_and_effort_it_was_started_with() {
     ] {
         let (mut runtime, folder) = started(kind, Some(&launch));
         sleep(&mut runtime, &folder, kind);
-        let (herdr, starts) = starting_herdr();
-        wake(&mut runtime, &herdr);
+        let (fake, starts) = starting_engine();
+        wake(&mut runtime, &fake);
         assert_eq!(
             next_start(&starts),
             (AGENT.to_owned(), resumed(kind, &words)),
@@ -259,8 +259,8 @@ fn a_choice_kept_before_the_session_arrives_reaches_the_wake() {
         (Some("gpt-6-luna"), Some("low"))
     );
     sleep(&mut runtime, &folder, "codex");
-    let (herdr, starts) = starting_herdr();
-    wake(&mut runtime, &herdr);
+    let (fake, starts) = starting_engine();
+    wake(&mut runtime, &fake);
     assert_eq!(
         next_start(&starts),
         (
@@ -293,8 +293,8 @@ fn a_wake_of_an_agent_with_no_recorded_choice_resumes_as_before() {
     );
     saved.as_object_mut().unwrap().remove("launch");
     *record = serde_json::from_value(saved).unwrap();
-    let (herdr, starts) = starting_herdr();
-    wake(&mut runtime, &herdr);
+    let (fake, starts) = starting_engine();
+    wake(&mut runtime, &fake);
     assert_eq!(next_start(&starts).1, resumed("claude", &[]));
     assert!(runtime.snapshot().ui_state.pane_launches.is_empty());
 }
@@ -317,12 +317,12 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
     ] {
         let (mut runtime, _folder) = started(kind, Some(&launch));
         let terminals = record_terminals(&mut runtime);
-        let (herdr, starts) = starting_herdr();
+        let (fake, starts) = starting_engine();
         let shared = SharedRuntime::new(runtime);
         {
             let mut runtime = shared.lock().unwrap();
             let live = runtime.live.as_mut().unwrap();
-            live.engine = herdr.engine();
+            live.engine = fake.engine();
             live.runtime = shared.weak();
             assert!(runtime.dispatch_json(&event(
                 "fork_pane",
@@ -376,8 +376,8 @@ fn a_fork_on_a_choice_its_agent_does_not_take_is_refused_before_a_pane_is_made()
         effort: Some("ultra".into()),
     };
     let (mut runtime, _folder) = started("codex", Some(&launch));
-    let (herdr, starts) = starting_herdr();
-    runtime.live.as_mut().unwrap().engine = herdr.engine();
+    let (fake, starts) = starting_engine();
+    runtime.live.as_mut().unwrap().engine = fake.engine();
     runtime.dispatch_json(&event(
         "fork_pane",
         json!({"pane_id": AGENT, "placement": "side", "origin": "operator"}),
@@ -387,7 +387,7 @@ fn a_fork_on_a_choice_its_agent_does_not_take_is_refused_before_a_pane_is_made()
     assert!(error.message.contains("ultra"), "{}", error.message);
     assert!(runtime.forks_in_flight.is_empty());
     assert!(starts.recv_timeout(Duration::from_millis(200)).is_err());
-    assert!(herdr.methods().is_empty(), "{:?}", herdr.methods());
+    assert!(fake.methods().is_empty(), "{:?}", fake.methods());
 }
 
 /// Closing a pane keeps its agent's choice with the closed pane, and the
@@ -431,7 +431,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
     assert!(runtime.ingest_reopen_result(
         &request,
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: None,
                     consumed: true,
@@ -661,8 +661,8 @@ fn a_wake_follows_the_permission_saved_now_and_adds_nothing_for_ask() {
             .extend(permission.as_object().unwrap().clone());
         set_permission(&mut runtime, payload);
         sleep(&mut runtime, &folder, "claude");
-        let (herdr, starts) = starting_herdr();
-        wake(&mut runtime, &herdr);
+        let (fake, starts) = starting_engine();
+        wake(&mut runtime, &fake);
         assert_eq!(
             next_start(&starts),
             (AGENT.to_owned(), resumed_with("claude", &access, &words)),

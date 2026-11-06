@@ -960,16 +960,16 @@ fn view_authority_a_tab_switch_moves_the_strip_and_the_canvas_in_one_snapshot() 
 /// question already asked, not a new focus, so it must not pull the canvas
 /// back.
 #[test]
-fn view_authority_a_stale_herdr_tab_does_not_undo_an_unconfirmed_switch() {
+fn view_authority_a_stale_engine_tab_does_not_undo_an_unconfirmed_switch() {
     let checkout_path = "/private/tmp/hide-view-authority-stale-tab";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let mut herdr = HerdrMoves::new();
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    let mut engine = EngineMoves::new();
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t3")));
 
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
 
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -982,7 +982,7 @@ fn view_authority_a_stale_herdr_tab_does_not_undo_an_unconfirmed_switch() {
     );
 
     // The confirmation ends the wait, and the value is unchanged by it.
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t3"], herdr_on("w-order:t3"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t3"], engine_on("w-order:t3"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t3")
@@ -1001,9 +1001,9 @@ fn view_authority_a_late_answer_to_a_superseded_switch_is_not_followed() {
     let checkout_path = "/private/tmp/hide-view-authority-superseded-tab";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2"];
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
-    let mut herdr = HerdrMoves::new();
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    let mut engine = EngineMoves::new();
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
 
@@ -1032,7 +1032,7 @@ fn view_authority_a_late_answer_to_a_superseded_switch_is_not_followed() {
         }
         // The first session is from before the drop: the engine has moved nowhere.
         let moved: &[&str] = if step == 0 { &[] } else { &[answer] };
-        runtime.ingest_session(Ok(herdr.after(moved, herdr_on(answer))));
+        runtime.ingest_session(Ok(engine.after(moved, engine_on(answer))));
         assert_eq!(
             checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
             Some("w-order:t1"),
@@ -1047,7 +1047,7 @@ fn view_authority_a_late_answer_to_a_superseded_switch_is_not_followed() {
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 
     // Once the engine has answered both, a move it makes on its own is followed.
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t2"], engine_on("w-order:t2"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t2")
@@ -1066,16 +1066,16 @@ fn view_authority_a_pane_focus_s_late_tab_move_is_its_answer_not_an_outside_focu
     let checkout_path = "/private/tmp/hide-view-authority-pane-tab";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
-    let mut herdr = HerdrMoves::new();
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    let mut engine = EngineMoves::new();
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
     for tab in ["w-order:t3", "w-order:t1", "w-order:t2", "w-order:t1"] {
         assert!(runtime.dispatch_json(&operator_focus_event(&format!("{tab}:p"))));
         finish_running_pane_focus(&mut runtime, Ok(()));
     }
 
     for answer in ["w-order:t3", "w-order:t1", "w-order:t2", "w-order:t1"] {
-        runtime.ingest_session(Ok(herdr.after(&[answer], herdr_on(answer))));
+        runtime.ingest_session(Ok(engine.after(&[answer], engine_on(answer))));
         assert_eq!(
             checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
             Some("w-order:t1"),
@@ -1093,7 +1093,7 @@ fn view_authority_a_pane_focus_s_late_tab_move_is_its_answer_not_an_outside_focu
     );
 
     // Once the engine has answered, a tab it focuses on its own is followed.
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t3"], herdr_on("w-order:t3"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t3"], engine_on("w-order:t3"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t3")
@@ -1113,9 +1113,9 @@ fn view_authority_a_tab_focus_that_leaves_after_its_wait_was_replaced_is_superse
     let checkout_path = "/private/tmp/hide-view-authority-left-replaced";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
-    let mut herdr = HerdrMoves::new();
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t3"))));
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    let mut engine = EngineMoves::new();
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t3"))));
     let focus = |tab_id: &str| RemoteControlAction::FocusTab {
         tab_id: tab_id.to_owned(),
     };
@@ -1129,14 +1129,14 @@ fn view_authority_a_tab_focus_that_leaves_after_its_wait_was_replaced_is_superse
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t3:p")));
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t3"))));
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t3"))));
     // The lane sends t2, then t1, then the pane focus.
     runtime.complete_lane_tab(focus("w-order:t2"), acknowledged(), 3);
     runtime.complete_lane_tab(focus("w-order:t1"), acknowledged(), 3);
     finish_running_pane_focus(&mut runtime, Ok(()));
 
     for answer in ["w-order:t2", "w-order:t1", "w-order:t3"] {
-        runtime.ingest_session(Ok(herdr.after(&[answer], herdr_on(answer))));
+        runtime.ingest_session(Ok(engine.after(&[answer], engine_on(answer))));
         assert_eq!(
             checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
             Some("w-order:t3"),
@@ -1151,7 +1151,7 @@ fn view_authority_a_tab_focus_that_leaves_after_its_wait_was_replaced_is_superse
     assert!(sent_tab_moves(&runtime).is_empty());
 
     // Each answer was consumed, so a tab the engine focuses on its own is followed.
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t2"], engine_on("w-order:t2"))));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t2")
@@ -1169,8 +1169,8 @@ fn view_authority_a_pane_focus_that_has_not_left_is_not_confirmed_by_an_earlier_
     let checkout_path = "/private/tmp/hide-view-authority-unsent-pane";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let herdr_on = |tab: &str| Ok(tab_order_payload(checkout_path, &tabs, &tabs, tab));
-    runtime.ingest_session(herdr_on("w-order:t3"));
+    let engine_on = |tab: &str| Ok(tab_order_payload(checkout_path, &tabs, &tabs, tab));
+    runtime.ingest_session(engine_on("w-order:t3"));
     let focus = |tab_id: &str| RemoteControlAction::FocusTab {
         tab_id: tab_id.to_owned(),
     };
@@ -1184,7 +1184,7 @@ fn view_authority_a_pane_focus_that_has_not_left_is_not_confirmed_by_an_earlier_
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t3:p")));
-    runtime.ingest_session(herdr_on("w-order:t3"));
+    runtime.ingest_session(engine_on("w-order:t3"));
     runtime.complete_lane_tab(focus("w-order:t2"), acknowledged(), 3);
     runtime.complete_lane_tab(focus("w-order:t1"), acknowledged(), 3);
     assert_eq!(
@@ -1202,13 +1202,13 @@ fn view_authority_a_pane_focus_that_has_not_left_is_not_confirmed_by_an_earlier_
 /// was remembered as superseded, so the engine's next move to that tab within
 /// the deadline was consumed as its answer instead of followed.
 #[test]
-fn view_authority_a_tab_focus_that_has_not_left_is_not_confirmed_by_herdr_s_own_move() {
+fn view_authority_a_tab_focus_that_has_not_left_is_not_confirmed_by_the_engine_s_own_move() {
     let checkout_path = "/private/tmp/hide-view-authority-unsent-tab";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
-    let mut herdr = HerdrMoves::new();
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    let mut engine = EngineMoves::new();
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
     let focus = |tab_id: &str| RemoteControlAction::FocusTab {
         tab_id: tab_id.to_owned(),
     };
@@ -1222,13 +1222,13 @@ fn view_authority_a_tab_focus_that_has_not_left_is_not_confirmed_by_herdr_s_own_
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t3")));
     // The engine applies t2, then moves to t3 on its own while t3 still waits.
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t3"], herdr_on("w-order:t3"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t2"], engine_on("w-order:t2"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t3"], engine_on("w-order:t3"))));
     runtime.complete_lane_tab(focus("w-order:t2"), acknowledged(), 3);
     runtime.complete_lane_tab(focus("w-order:t3"), acknowledged(), 3);
 
     for outside in ["w-order:t1", "w-order:t3"] {
-        runtime.ingest_session(Ok(herdr.after(&[outside], herdr_on(outside))));
+        runtime.ingest_session(Ok(engine.after(&[outside], engine_on(outside))));
         assert_eq!(
             checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
             Some(outside),
@@ -1242,12 +1242,12 @@ fn view_authority_a_tab_focus_that_has_not_left_is_not_confirmed_by_herdr_s_own_
 /// focus that lands there is confirmed by the engine's answer. Waiting for an
 /// event held every move the engine made on its own until the deadline.
 #[test]
-fn view_authority_a_tab_focus_on_the_tab_herdr_shows_is_confirmed_by_its_answer() {
+fn view_authority_a_tab_focus_on_the_tab_the_engine_shows_is_confirmed_by_its_answer() {
     let checkout_path = "/private/tmp/hide-view-authority-shown-tab";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let herdr_on = |tab: &str| Ok(tab_order_payload(checkout_path, &tabs, &tabs, tab));
-    runtime.ingest_session(herdr_on("w-order:t1"));
+    let engine_on = |tab: &str| Ok(tab_order_payload(checkout_path, &tabs, &tabs, tab));
+    runtime.ingest_session(engine_on("w-order:t1"));
 
     // t2 is refused, so the engine stays on t1, where t1 then lands.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
@@ -1270,7 +1270,7 @@ fn view_authority_a_tab_focus_on_the_tab_herdr_shows_is_confirmed_by_its_answer(
         3,
     );
 
-    runtime.ingest_session(herdr_on("w-order:t3"));
+    runtime.ingest_session(engine_on("w-order:t3"));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
         Some("w-order:t3"),
@@ -1290,8 +1290,8 @@ fn view_authority_a_session_from_before_an_earlier_request_does_not_answer_a_lat
     let checkout_path = "/private/tmp/hide-view-authority-aba";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
-    let mut herdr = HerdrMoves::new();
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    let mut engine = EngineMoves::new();
     let answer = |runtime: &mut Runtime, tab_id: &str| {
         runtime.complete_lane_tab(
             RemoteControlAction::FocusTab {
@@ -1305,25 +1305,25 @@ fn view_authority_a_session_from_before_an_earlier_request_does_not_answer_a_lat
         );
     };
     let on_screen = |runtime: &Runtime| checkout_active_tab_id(runtime, &checkout_id);
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     answer(&mut runtime, "w-order:t2");
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t2"], engine_on("w-order:t2"))));
 
     // Second and third clicks: both answered, neither event in yet; a
     // session still from before the second arrives in between.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
     answer(&mut runtime, "w-order:t1");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t2"))));
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t2"))));
     answer(&mut runtime, "w-order:t2");
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t1"], herdr_on("w-order:t1"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t1"], engine_on("w-order:t1"))));
     assert_eq!(on_screen(&runtime).as_deref(), Some("w-order:t2"));
 
     // Fourth click, answered before the third click's event arrives.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1")));
     answer(&mut runtime, "w-order:t1");
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t2"], engine_on("w-order:t2"))));
     assert_eq!(
         on_screen(&runtime).as_deref(),
         Some("w-order:t1"),
@@ -1334,7 +1334,7 @@ fn view_authority_a_session_from_before_an_earlier_request_does_not_answer_a_lat
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     answer(&mut runtime, "w-order:t2");
     for event in ["w-order:t1", "w-order:t2"] {
-        runtime.ingest_session(Ok(herdr.after(&[event], herdr_on(event))));
+        runtime.ingest_session(Ok(engine.after(&[event], engine_on(event))));
         assert_eq!(
             on_screen(&runtime).as_deref(),
             Some("w-order:t2"),
@@ -1344,7 +1344,7 @@ fn view_authority_a_session_from_before_an_earlier_request_does_not_answer_a_lat
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 
     // Every request is answered, so a move the engine makes on its own is followed.
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t3"], herdr_on("w-order:t3"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t3"], engine_on("w-order:t3"))));
     assert_eq!(on_screen(&runtime).as_deref(), Some("w-order:t3"));
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 1);
 }
@@ -1356,7 +1356,7 @@ fn view_authority_a_session_from_before_an_earlier_request_does_not_answer_a_lat
 /// its move, by an answer that moves nothing, by a refusal, or by the
 /// deadline) a move the engine makes on its own is followed.
 #[test]
-fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answers_in() {
+fn view_authority_the_screen_stays_on_the_last_request_whatever_order_the_engine_answers_in() {
     #[derive(Debug)]
     enum Step {
         Click(&'static str),
@@ -1364,7 +1364,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
         Refuse(&'static str),
         /// A session published after the engine made these moves, showing the
         /// last of them.
-        Herdr(&'static [&'static str]),
+        Engine(&'static [&'static str]),
         Deadline,
     }
     use Step::*;
@@ -1374,10 +1374,10 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
             &[
                 Click("t2"),
                 Answer("t2"),
-                Herdr(&["t2"]),
+                Engine(&["t2"]),
                 Click("t3"),
                 Answer("t3"),
-                Herdr(&["t3"]),
+                Engine(&["t3"]),
             ],
         ),
         (
@@ -1387,7 +1387,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Answer("t2"),
                 Click("t3"),
                 Answer("t3"),
-                Herdr(&["t2", "t3"]),
+                Engine(&["t2", "t3"]),
             ],
         ),
         (
@@ -1397,7 +1397,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Answer("t2"),
                 Click("t1"),
                 Answer("t1"),
-                Herdr(&["t2", "t1"]),
+                Engine(&["t2", "t1"]),
             ],
         ),
         (
@@ -1409,7 +1409,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Answer("t3"),
                 Click("t2"),
                 Answer("t2"),
-                Herdr(&["t2", "t3", "t2"]),
+                Engine(&["t2", "t3", "t2"]),
             ],
         ),
         (
@@ -1421,9 +1421,9 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Answer("t3"),
                 Click("t2"),
                 Answer("t2"),
-                Herdr(&["t2"]),
-                Herdr(&["t3"]),
-                Herdr(&["t2"]),
+                Engine(&["t2"]),
+                Engine(&["t3"]),
+                Engine(&["t2"]),
             ],
         ),
         // #660: an Agent drop (t2), a click back into the first area (t1), then
@@ -1437,11 +1437,11 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Answer("t2"),
                 Click("t1"),
                 Answer("t1"),
-                Herdr(&["t2"]),
+                Engine(&["t2"]),
                 Click("t2"),
                 Answer("t2"),
-                Herdr(&["t1"]),
-                Herdr(&["t2"]),
+                Engine(&["t1"]),
+                Engine(&["t2"]),
             ],
         ),
         (
@@ -1451,7 +1451,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Click("t2"),
                 Answer("t2"),
                 Answer("t2"),
-                Herdr(&["t2"]),
+                Engine(&["t2"]),
             ],
         ),
         (
@@ -1464,7 +1464,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Click("t2"),
                 Refuse("t2"),
                 Click("t1"),
-                Herdr(&["t3"]),
+                Engine(&["t3"]),
                 Answer("t1"),
             ],
         ),
@@ -1475,7 +1475,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 Click("t3"),
                 Refuse("t2"),
                 Answer("t3"),
-                Herdr(&["t3"]),
+                Engine(&["t3"]),
             ],
         ),
         ("never reported", &[Click("t2"), Answer("t2"), Deadline]),
@@ -1484,7 +1484,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
     for (index, (name, steps)) in cases.into_iter().enumerate() {
         let checkout_path = format!("/private/tmp/hide-view-authority-order-{index}");
         let (mut runtime, checkout_id) = live_tab_order_runtime(&checkout_path);
-        let mut herdr = HerdrMoves::new();
+        let mut engine = EngineMoves::new();
         let session = |tab: &str| tab_order_payload(&checkout_path, &tabs, &tabs, tab);
         let tab = |short: &str| format!("w-order:{short}");
         let control = |runtime: &mut Runtime, short: &str, result| {
@@ -1494,7 +1494,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                 3,
             );
         };
-        runtime.ingest_session(Ok(herdr.after(&[], session("w-order:t1"))));
+        runtime.ingest_session(Ok(engine.after(&[], session("w-order:t1"))));
         let mut last_sent = tab("t1");
         for step in steps {
             match step {
@@ -1515,11 +1515,11 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
                     short,
                     Err(live::ControlFailure::Definite("tab.focus rejected".into())),
                 ),
-                Herdr(moves) => {
+                Engine(moves) => {
                     let moves = moves.iter().map(|short| tab(short)).collect::<Vec<_>>();
                     let moves = moves.iter().map(String::as_str).collect::<Vec<_>>();
                     let shown = *moves.last().expect("a session after at least one move");
-                    runtime.ingest_session(Ok(herdr.after(&moves, session(shown))));
+                    runtime.ingest_session(Ok(engine.after(&moves, session(shown))));
                 }
                 Deadline => {
                     let deadline = newest_sent_at(&runtime) + VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS;
@@ -1542,7 +1542,7 @@ fn view_authority_the_screen_stays_on_the_last_request_whatever_order_herdr_answ
             "{name}"
         );
 
-        runtime.ingest_session(Ok(herdr.after(&["w-order:t4"], session("w-order:t4"))));
+        runtime.ingest_session(Ok(engine.after(&["w-order:t4"], session("w-order:t4"))));
         assert_eq!(
             checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
             Some("w-order:t4"),
@@ -1567,7 +1567,7 @@ fn view_authority_dropped_moves_fall_back_to_the_tabs_newly_active() {
     let checkout_path = "/private/tmp/hide-view-authority-moves-gap";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3", "w-order:t4"];
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
     let answer = |runtime: &mut Runtime, tab_id: &str| {
         runtime.complete_lane_tab(
             RemoteControlAction::FocusTab {
@@ -1581,8 +1581,8 @@ fn view_authority_dropped_moves_fall_back_to_the_tabs_newly_active() {
         );
     };
     let on_screen = |runtime: &Runtime| checkout_active_tab_id(runtime, &checkout_id);
-    let mut herdr = HerdrMoves::new();
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    let mut engine = EngineMoves::new();
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
 
     // t2's move is the oldest of more than the engine keeps.
     for tab in ["w-order:t2", "w-order:t3"] {
@@ -1599,7 +1599,7 @@ fn view_authority_dropped_moves_fall_back_to_the_tabs_newly_active() {
             .count()
     };
     let ((), records) = crate::diagnostics::capture(|| {
-        runtime.ingest_session(Ok(herdr.after(&moves, herdr_on("w-order:t3"))));
+        runtime.ingest_session(Ok(engine.after(&moves, engine_on("w-order:t3"))));
     });
     assert!(sent_tab_moves(&runtime).is_empty());
     assert_eq!(on_screen(&runtime).as_deref(), Some("w-order:t3"));
@@ -1608,22 +1608,22 @@ fn view_authority_dropped_moves_fall_back_to_the_tabs_newly_active() {
     // A new engine counts its moves from its own snapshot.
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     answer(&mut runtime, "w-order:t2");
-    let mut herdr = herdr.reconnected();
+    let mut engine = engine.reconnected();
     let ((), records) = crate::diagnostics::capture(|| {
-        runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t2"))));
+        runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t2"))));
     });
     assert!(sent_tab_moves(&runtime).is_empty());
     assert_eq!(on_screen(&runtime).as_deref(), Some("w-order:t2"));
     assert_eq!(gaps(&records), 1, "{records:?}");
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 0);
 
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t4"], herdr_on("w-order:t4"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t4"], engine_on("w-order:t4"))));
     assert_eq!(on_screen(&runtime).as_deref(), Some("w-order:t4"));
     assert_eq!(diagnostic_count(&runtime, "tab.focus.followed"), 1);
 
-    let mut herdr = herdr.reconnected();
+    let mut engine = engine.reconnected();
     let ((), records) = crate::diagnostics::capture(|| {
-        runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t4"))));
+        runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t4"))));
     });
     assert_eq!(gaps(&records), 0, "{records:?}");
 }
@@ -1638,9 +1638,9 @@ fn view_authority_a_snapshot_read_outside_the_stream_answers_no_request() {
     let checkout_path = "/private/tmp/hide-view-authority-raw-snapshot";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2"];
-    let herdr_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
-    let mut herdr = HerdrMoves::new();
-    runtime.ingest_session(Ok(herdr.after(&[], herdr_on("w-order:t1"))));
+    let engine_on = |tab: &str| tab_order_payload(checkout_path, &tabs, &tabs, tab);
+    let mut engine = EngineMoves::new();
+    runtime.ingest_session(Ok(engine.after(&[], engine_on("w-order:t1"))));
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     runtime.complete_lane_tab(
         RemoteControlAction::FocusTab {
@@ -1654,7 +1654,7 @@ fn view_authority_a_snapshot_read_outside_the_stream_answers_no_request() {
     );
     assert_eq!(sent_tab_moves(&runtime), ["w-order:t2"]);
 
-    let read_outside = herdr_on("w-order:t2");
+    let read_outside = engine_on("w-order:t2");
     assert!(read_outside.tab_moves.is_none());
     runtime.ingest_session(Ok(read_outside));
     assert_eq!(
@@ -1667,7 +1667,7 @@ fn view_authority_a_snapshot_read_outside_the_stream_answers_no_request() {
         Some("w-order:t2")
     );
 
-    runtime.ingest_session(Ok(herdr.after(&["w-order:t2"], herdr_on("w-order:t2"))));
+    runtime.ingest_session(Ok(engine.after(&["w-order:t2"], engine_on("w-order:t2"))));
     assert!(sent_tab_moves(&runtime).is_empty());
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -1999,9 +1999,9 @@ fn split_checkout_a_tab_focus_is_confirmed_by_the_workspace_that_owns_the_tab() 
         ("wa", &["wa:t1", "wa:t2"], "wa:t1"),
         ("wb", &["wb:t1"], "wb:t1"),
     ];
-    let mut herdr = HerdrMoves::new();
+    let mut engine = EngineMoves::new();
     runtime.ingest_session(Ok(
-        herdr.after(&[], split_checkout_payload(checkout_path, &before, "wb"))
+        engine.after(&[], split_checkout_payload(checkout_path, &before, "wb"))
     ));
     assert_eq!(
         checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
@@ -2026,7 +2026,7 @@ fn split_checkout_a_tab_focus_is_confirmed_by_the_workspace_that_owns_the_tab() 
         ("wa", &["wa:t1", "wa:t2"], "wa:t2"),
         ("wb", &["wb:t1"], "wb:t1"),
     ];
-    runtime.ingest_session(Ok(herdr.after(
+    runtime.ingest_session(Ok(engine.after(
         &["wa:t2"],
         split_checkout_payload(checkout_path, &confirmed, "wb"),
     )));
@@ -2055,7 +2055,7 @@ fn split_checkout_a_tab_focus_is_confirmed_by_the_workspace_that_owns_the_tab() 
 /// workspace's memory, not a focus. It never moves the canvas; a move of
 /// the engine's keyboard into that workspace does.
 #[test]
-fn split_checkout_another_workspaces_active_tab_is_not_followed_until_herdr_focuses_it() {
+fn split_checkout_another_workspaces_active_tab_is_not_followed_until_the_engine_focuses_it() {
     let checkout_path = "/private/tmp/hide-split-checkout-follow";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let start: [(&str, &[&str], &str); 2] = [
@@ -2167,9 +2167,9 @@ fn split_checkout_a_created_tab_is_visible_on_the_acknowledgment() {
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let before: [(&str, &[&str], &str); 2] =
         [("wa", &["wa:t1"], "wa:t1"), ("wb", &["wb:t1"], "wb:t1")];
-    let mut herdr = HerdrMoves::new();
+    let mut engine = EngineMoves::new();
     runtime.ingest_session(Ok(
-        herdr.after(&[], split_checkout_payload(checkout_path, &before, "wa"))
+        engine.after(&[], split_checkout_payload(checkout_path, &before, "wa"))
     ));
 
     runtime.ingest_local_control_result(
@@ -2205,7 +2205,7 @@ fn split_checkout_a_created_tab_is_visible_on_the_acknowledgment() {
         ("wa", &["wa:t1", "wa:t2"], "wa:t2"),
         ("wb", &["wb:t1"], "wb:t1"),
     ];
-    runtime.ingest_session(Ok(herdr.after(
+    runtime.ingest_session(Ok(engine.after(
         &["wa:t2"],
         split_checkout_payload(checkout_path, &after, "wa"),
     )));
@@ -2260,7 +2260,7 @@ fn split_checkout_a_pane_focus_in_a_hidden_tab_brings_the_tab_forward() {
 /// names the second tab active and no focused pane yet, and the keyboard
 /// goes to that tab's pane, not to the checkout's first.
 #[test]
-fn closing_the_visible_tab_lands_on_the_tab_herdr_moved_to() {
+fn closing_the_visible_tab_lands_on_the_tab_the_engine_moved_to() {
     let checkout_path = "/private/tmp/hide-close-lands-on-herdr-tab";
     let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
@@ -2507,7 +2507,7 @@ fn pane_focus_rejects_a_stale_stream_after_confirmation_and_follows_a_verified_e
 /// could not answer while it was still the latest is one, logged with
 /// the engine's reason; one a newer focus overtook ends quietly.
 #[test]
-fn only_the_latest_readback_herdr_could_not_answer_is_a_failure_line() {
+fn only_the_latest_readback_the_engine_could_not_answer_is_a_failure_line() {
     let failures = |records: &[serde_json::Value]| {
         records
             .iter()
@@ -2940,7 +2940,7 @@ fn view_authority_repeating_a_focus_sends_no_second_notification() {
 }
 
 #[test]
-fn tab_order_follows_herdr_and_not_layout_arrival() {
+fn tab_order_follows_the_engine_and_not_layout_arrival() {
     let checkout_path = "/private/tmp/hide-tab-order-arrival";
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
     // The engine reports t1, t2, t3; the layouts arrive in the order the tabs
@@ -3001,7 +3001,7 @@ fn tab_order_follows_a_move_and_ignores_a_layout_redraw() {
 }
 
 #[test]
-fn herdr_active_tab_names_the_projected_tab() {
+fn the_engine_active_tab_names_the_projected_tab() {
     let checkout_path = "/private/tmp/hide-tab-order-active";
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
@@ -3023,7 +3023,7 @@ fn herdr_active_tab_names_the_projected_tab() {
 }
 
 #[test]
-fn herdr_active_tab_unresolved_is_reported_not_replaced() {
+fn the_engine_active_tab_unresolved_is_reported_not_replaced() {
     let checkout_path = "/private/tmp/hide-tab-order-unplaceable";
     let (mut runtime, checkout_id) = tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2"];
@@ -3081,20 +3081,20 @@ fn tab_strip_reorder_index_counts_positions_before_the_tab_leaves_the_list() {
     // 0.8.2 server was observed answering with exactly these orders.
     let current = ["t1", "t2", "t3"].map(str::to_owned);
     assert_eq!(
-        herdr_insert_index(&current, &["t2", "t1", "t3"].map(str::to_owned), "t1"),
+        engine_insert_index(&current, &["t2", "t1", "t3"].map(str::to_owned), "t1"),
         Some(2)
     );
     assert_eq!(
-        herdr_insert_index(&current, &["t2", "t3", "t1"].map(str::to_owned), "t1"),
+        engine_insert_index(&current, &["t2", "t3", "t1"].map(str::to_owned), "t1"),
         Some(3)
     );
     assert_eq!(
-        herdr_insert_index(&current, &["t3", "t1", "t2"].map(str::to_owned), "t3"),
+        engine_insert_index(&current, &["t3", "t1", "t2"].map(str::to_owned), "t3"),
         Some(0)
     );
     // A file tab is not one of the engine's, so there is no engine move to make.
     assert_eq!(
-        herdr_insert_index(
+        engine_insert_index(
             &current,
             &["t1", "t2", "t3"].map(str::to_owned),
             "file:notes"
@@ -3110,24 +3110,24 @@ fn tab_strip_reorder_index_counts_positions_before_the_tab_leaves_the_list() {
     // 3 in both cases, which puts the tab between t2 and t3.
     let leading = ["t5", "t1", "t2", "t3"].map(str::to_owned);
     assert_eq!(
-        herdr_insert_index(&leading, &["t2", "t3", "t1"].map(str::to_owned), "t1"),
+        engine_insert_index(&leading, &["t2", "t3", "t1"].map(str::to_owned), "t1"),
         Some(4)
     );
     let trailing = ["t1", "t2", "t3", "t5"].map(str::to_owned);
     assert_eq!(
-        herdr_insert_index(&trailing, &["t2", "t3", "t1"].map(str::to_owned), "t1"),
+        engine_insert_index(&trailing, &["t2", "t3", "t1"].map(str::to_owned), "t1"),
         Some(3)
     );
     // A tab that keeps a successor in its own strip is placed in front of
     // it, wherever the workspace holds that successor.
     assert_eq!(
-        herdr_insert_index(&leading, &["t2", "t1", "t3"].map(str::to_owned), "t1"),
+        engine_insert_index(&leading, &["t2", "t1", "t3"].map(str::to_owned), "t1"),
         Some(3)
     );
 }
 
 #[test]
-fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
+fn tab_strip_reorder_asks_the_engine_and_lands_only_once_the_engine_reports_the_order() {
     let (mut runtime, checkout_id, directory) = strip_checkout("herdr-move");
     let checkout_path = directory.to_string_lossy().into_owned();
     let tabs = ["w-order:t1", "w-order:t2"];
@@ -3141,8 +3141,8 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
     let file_entry = strip_ids(&runtime, &checkout_id)[2].clone();
     let before = strip_ids(&runtime, &checkout_id);
 
-    let herdr = FakeEngine::start(|_, _| tab_list(&["w-order:t2", "w-order:t1"]));
-    runtime.live = Some(herdr.live());
+    let fake = FakeEngine::start(|_, _| tab_list(&["w-order:t2", "w-order:t1"]));
+    runtime.live = Some(fake.live());
 
     // Move the first engine tab behind the second. The file tab does not
     // move, so the arrangement differs from the engine's only in the engine's own
@@ -3153,8 +3153,8 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
         "herdr:w-order:t1",
         1
     ));
-    herdr.wait_for_calls(1, Duration::from_secs(5));
-    let request = &requests_of(&herdr)[0];
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&fake)[0];
     assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
@@ -3164,7 +3164,7 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
     // The strip does not move on the operator's word alone.
     assert_eq!(strip_ids(&runtime, &checkout_id), before);
     assert_eq!(
-        runtime.pending_tab_move[&checkout_id].herdr_order,
+        runtime.pending_tab_move[&checkout_id].engine_order,
         vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()]
     );
 
@@ -3213,10 +3213,10 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
         "the repository's checkout holds only its own three tabs"
     );
 
-    let herdr = FakeEngine::start(|_, _| {
+    let fake = FakeEngine::start(|_, _| {
         tab_list(&["w-order:t5", "w-order:t2", "w-order:t3", "w-order:t1"])
     });
-    runtime.live = Some(herdr.live());
+    runtime.live = Some(fake.live());
 
     // Drag the first tab to the end of this checkout's strip. In the
     // checkout's own coordinates that reads as index 3, which the engine would
@@ -3227,8 +3227,8 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
         "herdr:w-order:t1",
         2
     ));
-    herdr.wait_for_calls(1, Duration::from_secs(5));
-    let request = &requests_of(&herdr)[0];
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&fake)[0];
     assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
@@ -3262,7 +3262,7 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
 }
 
 #[test]
-fn tab_strip_reorder_keeps_herdrs_order_and_reports_when_a_move_is_refused() {
+fn tab_strip_reorder_keeps_the_engine_s_order_and_reports_when_a_move_is_refused() {
     let (mut runtime, checkout_id, directory) = strip_checkout("herdr-refused");
     let checkout_path = directory.to_string_lossy().into_owned();
     let tabs = ["w-order:t1", "w-order:t2"];
@@ -3278,7 +3278,7 @@ fn tab_strip_reorder_keeps_herdrs_order_and_reports_when_a_move_is_refused() {
         PendingTabMove {
             desired: vec!["herdr:w-order:t2".to_owned(), "herdr:w-order:t1".to_owned()],
             workspace_id: "w-order".to_owned(),
-            herdr_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
+            engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
             target_id: "w-order:t1".to_owned(),
             generation: 7,
             connection_generation: 0,
@@ -3339,8 +3339,8 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
     // Both drags are answered; what the answer says does not matter here,
     // because the worker's callback is what carries it and this test
     // drives that by hand.
-    let herdr = FakeEngine::start(|_, _| tab_list(&["w-order:t2", "w-order:t1"]));
-    runtime.live = Some(herdr.live());
+    let fake = FakeEngine::start(|_, _| tab_list(&["w-order:t2", "w-order:t1"]));
+    runtime.live = Some(fake.live());
 
     // The first drag is refused.
     assert!(reorder_tab(
@@ -3388,8 +3388,8 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
         "herdr:w-order:t1",
         1
     ));
-    herdr.wait_for_calls(2, Duration::from_secs(5));
-    let requests = requests_of(&herdr);
+    fake.wait_for_calls(2, Duration::from_secs(5));
+    let requests = requests_of(&fake);
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1]["method"], "move_tab");
     assert_eq!(
@@ -3397,7 +3397,7 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
         "the retry asks Herdr for exactly what the refused drag asked for"
     );
     assert_eq!(
-        runtime.pending_tab_move[&checkout_id].herdr_order,
+        runtime.pending_tab_move[&checkout_id].engine_order,
         vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()]
     );
 
@@ -3431,7 +3431,7 @@ fn tab_strip_reorder_ignores_a_result_a_later_drag_has_replaced() {
     let live = PendingTabMove {
         desired: vec!["herdr:w-order:t2".to_owned(), "herdr:w-order:t1".to_owned()],
         workspace_id: "w-order".to_owned(),
-        herdr_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
+        engine_order: vec!["w-order:t2".to_owned(), "w-order:t1".to_owned()],
         target_id: "w-order:t1".to_owned(),
         generation: 9,
         connection_generation: 0,
@@ -3508,7 +3508,7 @@ fn tab_label_has_no_position_derived_path_left_in_the_shell() {
 }
 
 #[test]
-fn tab_label_names_the_next_tab_after_the_lowest_free_herdr_number() {
+fn tab_label_names_the_next_tab_after_the_lowest_free_engine_number() {
     let next = |labels: &[&str]| crate::model::next_tab_label(labels.iter().copied());
     assert_eq!(next(&[]), "Tab 1");
     assert_eq!(next(&["1", "2"]), "Tab 3");
@@ -3857,7 +3857,7 @@ fn a_missing_selected_pane_reports_without_falling_back_to_a_same_cwd_pane() {
 /// the keyboard, which is where the last core left it, not on the catalog's
 /// first row.
 #[test]
-fn a_restored_selection_of_another_machine_opens_where_herdr_has_the_keyboard() {
+fn a_restored_selection_of_another_machine_opens_where_the_engine_has_the_keyboard() {
     let checkout = Some("remote:old-core:checkout:feature");
     for (saved_pane, saved_checkout, moved) in [
         (Some("remote:old-core:pane:w1:p1"), checkout, false),
@@ -3865,7 +3865,7 @@ fn a_restored_selection_of_another_machine_opens_where_herdr_has_the_keyboard() 
         // The other core saved nothing of this machine; its rekey says so.
         (None, None, true),
     ] {
-        restored_selection_opens_on_herdrs_focus(saved_pane, saved_checkout, moved);
+        restored_selection_opens_on_the_engine_s_focus(saved_pane, saved_checkout, moved);
     }
 }
 
@@ -4007,7 +4007,7 @@ fn a_removed_saved_checkout_restores_the_panes_known_current_checkout() {
     assert!(!runtime.catalog_paths.knows(&unrelated));
 }
 
-fn restored_selection_opens_on_herdrs_focus(
+fn restored_selection_opens_on_the_engine_s_focus(
     saved_pane: Option<&str>,
     saved_checkout: Option<&str>,
     moved: bool,
@@ -4017,7 +4017,7 @@ fn restored_selection_opens_on_herdrs_focus(
     runtime.snapshot.ui_state.focused_checkout_id = saved_checkout.map(str::to_owned);
     runtime.snapshot.navigator.focused_checkout_id = saved_checkout.map(str::to_owned);
     runtime.snapshot.ui_state.selected_pane_id = saved_pane.map(str::to_owned);
-    runtime.snapshot.ui_state.focus_from_herdr = moved;
+    runtime.snapshot.ui_state.focus_from_engine = moved;
     let repository = repository.to_string_lossy().into_owned();
     let worktree = worktree.to_string_lossy().into_owned();
     let mut payload = split_workspace_payload(
@@ -4050,21 +4050,21 @@ fn restored_selection_opens_on_herdrs_focus(
         Some("w-order:t5:p")
     );
     assert_eq!(runtime.snapshot().status.last_error, None);
-    assert!(!runtime.snapshot.ui_state.focus_from_herdr, "taken once");
+    assert!(!runtime.snapshot.ui_state.focus_from_engine, "taken once");
 }
 
 /// The engine's keyboard on a pane no catalog checkout holds is no place to open:
 /// a restore that missed starts on the catalog's first checkout, with no
 /// selected pane outside it.
 #[test]
-fn a_missed_restore_with_herdrs_focus_outside_every_checkout_opens_catalog_first() {
+fn a_missed_restore_with_the_engine_s_focus_outside_every_checkout_opens_catalog_first() {
     let (mut runtime, first_checkout, repository, worktree) =
         split_workspace_checkouts("restore-outside");
     runtime.snapshot.ui_state.focused_checkout_id =
         Some("remote:old-core:checkout:feature".to_owned());
     runtime.snapshot.navigator.focused_checkout_id =
         Some("remote:old-core:checkout:feature".to_owned());
-    runtime.snapshot.ui_state.focus_from_herdr = true;
+    runtime.snapshot.ui_state.focus_from_engine = true;
     let repository = repository.to_string_lossy().into_owned();
     let worktree = worktree.to_string_lossy().into_owned();
     let mut payload = split_workspace_payload(
@@ -4201,7 +4201,7 @@ fn a_restored_pane_the_session_no_longer_has_retargets_without_reporting() {
 /// rather than for the drag. A drag that only steps over the other
 /// workspace's tabs changes nothing the engine can see, so it lands locally.
 #[test]
-fn tab_strip_reorder_a_drag_past_another_workspaces_tabs_needs_no_herdr_move() {
+fn tab_strip_reorder_a_drag_past_another_workspaces_tabs_needs_no_engine_move() {
     let (mut runtime, checkout_id, directory) = strip_checkout("split-local");
     let checkout_path = directory.to_string_lossy().into_owned();
     assert!(runtime.ingest_session(Ok(split_checkout_payload(
@@ -4257,8 +4257,8 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
     ))));
     let before = strip_ids(&runtime, &checkout_id);
 
-    let herdr = FakeEngine::start(|_, _| tab_list(&["w-right:t2", "w-right:t1"]));
-    runtime.live = Some(herdr.live());
+    let fake = FakeEngine::start(|_, _| tab_list(&["w-right:t2", "w-right:t1"]));
+    runtime.live = Some(fake.live());
 
     // Move the right workspace's first tab behind its second.
     let moved = before
@@ -4272,8 +4272,8 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
         .expect("the right workspace's second tab");
     assert!(reorder_tab(&mut runtime, &checkout_id, &moved, target));
 
-    herdr.wait_for_calls(1, Duration::from_secs(5));
-    let request = &requests_of(&herdr)[0];
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&fake)[0];
     assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
@@ -4345,8 +4345,8 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
         "the fixture strip is not the order this test reasons about: {before:?}"
     );
 
-    let herdr = FakeEngine::start(|_, _| tab_list(&["w-right:t2", "w-right:t1"]));
-    runtime.live = Some(herdr.live());
+    let fake = FakeEngine::start(|_, _| tab_list(&["w-right:t2", "w-right:t1"]));
+    runtime.live = Some(fake.live());
 
     // The right workspace's second tab is dragged to the very front, over
     // the left workspace's tab as well as its own sibling.
@@ -4356,8 +4356,8 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
         "herdr:w-right:t2",
         0
     ));
-    herdr.wait_for_calls(1, Duration::from_secs(5));
-    let request = &requests_of(&herdr)[0];
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    let request = &requests_of(&fake)[0];
     assert_eq!(request["method"], "move_tab");
     assert_eq!(
         request["params"],
@@ -4766,7 +4766,7 @@ fn tab_rename_keeps_the_committed_name_on_failure_and_ignores_old_receipts() {
     };
     tab.label = Some("Saved".into());
     checkout.tabs.push(tab.clone());
-    checkout.strip = StripTabSnapshot::from_herdr_tabs(&checkout.tabs);
+    checkout.strip = StripTabSnapshot::from_engine_tabs(&checkout.tabs);
     runtime.snapshot.navigator.workspaces =
         vec![workspace("w", "Fixture", "/fixture", vec![checkout])];
     runtime.snapshot.tab = tab;
@@ -4811,8 +4811,8 @@ fn tab_rename_keeps_the_committed_name_on_failure_and_ignores_old_receipts() {
     runtime.apply_tab_rename(&mut incoming);
     assert_eq!(incoming.label.as_deref(), Some("External"));
 
-    let herdr = FakeEngine::start(|_, _| reply(()));
-    runtime.live = Some(herdr.live());
+    let fake = FakeEngine::start(|_, _| reply(()));
+    runtime.live = Some(fake.live());
     runtime.rename_tab(request("slow", "First"));
     runtime.rename_tab(request("newer", "Retry me"));
     runtime.ingest_tab_rename_result("slow", Ok(()));
@@ -4825,7 +4825,7 @@ fn tab_rename_keeps_the_committed_name_on_failure_and_ignores_old_receipts() {
 }
 
 #[test]
-fn tab_name_follows_core_focus_before_herdr_and_on_refusal() {
+fn tab_name_follows_core_focus_before_the_engine_and_on_refusal() {
     let path = "/private/tmp/hide-tab-focus-name";
     let (mut runtime, _) = tab_order_runtime(path);
     let mut payload = tab_order_payload(path, &["w-order:t1"], &["w-order:t1"], "w-order:t1");

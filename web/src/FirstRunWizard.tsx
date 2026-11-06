@@ -82,7 +82,7 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
   const [answered, setAnswered] = useState(false);
   const steps = wizardSteps(profiles);
   // Read saved configuration once per walk. This does not connect a device.
-  useEffect(() => { if (desktop) actions.listHerdrProfiles(); }, [actions, desktop]);
+  useEffect(() => { if (desktop) actions.listMachineProfiles(); }, [actions, desktop]);
   const primary = useRef<(() => void) | null>(null);
   // Each render's step names its own main button; a step without one (the project step) leaves Enter to its controls.
   primary.current = null;

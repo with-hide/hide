@@ -603,7 +603,7 @@ fn the_breadcrumb_path_and_each_steps_siblings_come_out_of_the_lineage() {
 }
 
 #[test]
-fn lineage_identity_uses_tasks_even_when_herdr_names_exist() {
+fn lineage_identity_uses_tasks_even_when_engine_names_exist() {
     let mut rows = project_agents(
         crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [
             {
@@ -1037,7 +1037,7 @@ fn a_strip_entry_carries_its_one_agents_identity_and_mark() {
 }
 
 #[test]
-fn a_move_herdr_declined_is_an_error_rather_than_a_silent_success() {
+fn a_move_the_engine_declined_is_an_error_rather_than_a_silent_success() {
     // The engine reports a refusal as an unchanged move with a reason, not as an
     // error, so the decision has to read `changed` rather than assume that a
     // successful request moved anything.

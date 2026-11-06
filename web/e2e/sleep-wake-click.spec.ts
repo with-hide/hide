@@ -22,11 +22,11 @@ test.describe.configure({ timeout: 120_000 });
 const SESSION = "fixture-two";
 
 test("a mouse click at the center of Wake agent over a WebGL terminal wakes the pane", async ({ page }) => {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "sleep-wake-click");
-    const [, sleeper] = herdr.panes;
+    daemon = await startHided(engine, "sleep-wake-click");
+    const [, sleeper] = engine.panes;
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
     const pane = page.locator(`[data-pane-view="${sleeper}"]`);
@@ -69,7 +69,7 @@ test("a mouse click at the center of Wake agent over a WebGL terminal wakes the 
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0, { timeout: 30_000 });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 

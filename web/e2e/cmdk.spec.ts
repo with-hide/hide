@@ -50,11 +50,11 @@ async function focusAgent(page: Page, pane: string): Promise<void> {
 
 test("⌘K lists what is connected to the agent in front, goes to an agent by name, keeps only Start an agent…, and asks GitHub nothing", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "cmdk-names");
-    const [one, two] = herdr.panes;
+    daemon = await startHided(engine, "cmdk-names");
+    const [one, two] = engine.panes;
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -118,7 +118,7 @@ test("⌘K lists what is connected to the agent in front, goes to an agent by na
     expect(sent.get("github_search") ?? 0).toBe(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
@@ -210,27 +210,27 @@ async function titledAgents(fixture: Awaited<ReturnType<typeof startEngine>>, da
 
 test("⌘K relates the agent in front to its issue and pull request, finds them by #number, and searches GitHub only from its own row", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-nav");
+    const worktree = path.join(engine.root, "repo-nav");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
     git(worktree, ["commit", "--allow-empty", "-m", "navigation"]);
 
-    const gh = fakeGh(herdr.root);
-    daemon = await startHided(herdr, "cmdk-github", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
+    const gh = fakeGh(engine.root);
+    daemon = await startHided(engine, "cmdk-github", undefined, { PATH: `${gh.bin}${path.delimiter}${engine.fixturePath}` });
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     // The page connects first: the core lists a linked worktree of a project while a page shows it.
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
-    const agent = await titledAgents(herdr, daemon, repo, worktree);
+    const agent = await titledAgents(engine, daemon, repo, worktree);
     await page.locator(`[data-checkout][aria-label^="${BRANCH}"]`).first().click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await focusAgent(page, agent);
@@ -333,23 +333,23 @@ test("⌘K relates the agent in front to its issue and pull request, finds them 
     await page.keyboard.press("Escape");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⌘P then ⌘↵ opens the highlighted file beside the area in use, and ↵ alone opens it in the preview", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const root = path.join(herdr.root, "fixture");
-    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { env: { ...process.env, HOME: path.join(herdr.root, "home") } });
+    const root = path.join(engine.root, "fixture");
+    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { env: { ...process.env, HOME: path.join(engine.root, "home") } });
     fs.writeFileSync(path.join(root, "first.txt"), "first\n");
     fs.writeFileSync(path.join(root, "second.txt"), "second\n");
     git("init", "-q");
     git("add", ".");
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "Initial files");
-    daemon = await startHided(herdr, "cmdk-beside");
+    daemon = await startHided(engine, "cmdk-beside");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -383,16 +383,16 @@ test("⌘P then ⌘↵ opens the highlighted file beside the area in use, and �
     await expect(page.locator('[data-view-tab-bar] [role="tab"]')).toHaveCount(2);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⌘K lists the checkouts last brought to the front under Recent, keeps them across a restart, shows them alone on Settings, and goes back to one", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "cmdk-recent");
+    daemon = await startHided(engine, "cmdk-recent");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const fixtureLocator = page.locator("[data-project] [data-checkout]").first();
@@ -472,15 +472,15 @@ test("⌘K lists the checkouts last brought to the front under Recent, keeps the
     await expect(page.locator(`[data-checkout="${fixture}"]`)).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⌘K lists a typed URL as unavailable in a browser tab, and opens it as a browser display in the active View area in the desktop app", async ({ page }) => {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "cmdk-open-url");
+    daemon = await startHided(engine, "cmdk-open-url");
     const url = `${daemon.origin}/#token=${daemon.token}`;
     await page.goto(url);
     await enterWorkspace(page, "fixture");
@@ -538,6 +538,6 @@ test("⌘K lists a typed URL as unavailable in a browser tab, and opens it as a 
     await screenshot(page, "cmdk-open-url-opened");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

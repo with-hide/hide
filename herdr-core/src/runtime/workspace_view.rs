@@ -1192,7 +1192,7 @@ impl Runtime {
             .flat_map(|store| &store.views.workspaces)
             .filter(|view| {
                 let connected = if view.device_id == self.node.as_str() {
-                    self.snapshot.status.herdr.state == "connected"
+                    self.snapshot.status.engine.state == "connected"
                 } else {
                     self.snapshot.status.remote.iter().any(|remote| {
                         remote.target_id == view.device_id && remote.state == "connected"

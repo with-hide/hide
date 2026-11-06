@@ -725,7 +725,7 @@ pub fn project_lineage_path(
 pub(crate) fn provider_name(kind: Option<&str>) -> String {
     match non_empty(kind) {
         Some(kind) => hide_agent_adapter::adapter(kind)
-            .map(|row| row.sidebar_label.unwrap_or(row.herdr.name))
+            .map(|row| row.sidebar_label.unwrap_or(row.engine_kind))
             .unwrap_or(kind)
             .to_owned(),
         None => "Agent".to_owned(),
@@ -809,7 +809,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         descendant_mark: None,
         descendant_line: None,
         id: agent.id.unwrap_or_else(|| pane_id.clone()),
-        herdr_name: non_empty(agent.name.as_deref())
+        given_name: non_empty(agent.name.as_deref())
             .filter(|name| !crate::fork::hide_made_name(name, agent_kind, &pane_id))
             .map(str::to_owned),
         started_name: non_empty(agent.name.as_deref()).map(str::to_owned),
@@ -1273,7 +1273,7 @@ mod tests {
                         terminal_id: None,
                         failed_terminal_id: None,
                         id: (*id).to_owned(),
-                        herdr_label: None,
+                        engine_label: None,
                         terminal_title: None,
                         cwd: "/fixture".to_owned(),
                         status_code: AgentStatusCode::Unknown,
@@ -1494,7 +1494,7 @@ mod tests {
     /// done agent has a result to review. Neither lifecycle decides Hide's
     /// pane-level read state.
     #[test]
-    fn axes_map_herdr_lifecycles_with_blocked_as_approval() {
+    fn axes_map_engine_lifecycles_with_blocked_as_approval() {
         let projection = project_agents(payload(json!([
             {"pane_id":"working","agent_status":"working","state_change_seq":1},
             {"pane_id":"blocked","agent_status":"blocked","state_change_seq":2},
@@ -1591,11 +1591,11 @@ mod tests {
     /// the engine's state, in both directions, until that session reports again;
     /// without a hook turn the engine's state still decides.
     #[test]
-    fn a_hook_turn_decides_the_axes_ahead_of_herdrs_state() {
+    fn a_hook_turn_decides_the_axes_ahead_of_the_engine_s_state() {
         use hide_node_link::panes::HookTurn;
-        let axes = |herdr: &str, hook: Option<HookTurn>| {
+        let axes = |engine_status: &str, hook: Option<HookTurn>| {
             let mut agent = payload(json!([{
-                "pane_id":"p", "agent":"claude", "agent_status":herdr, "state_change_seq":3
+                "pane_id":"p", "agent":"claude", "agent_status":engine_status, "state_change_seq":3
             }]))
             .agents
             .remove(0);
@@ -2344,18 +2344,18 @@ mod tests {
     /// `done` to `idle` and bumping its sequence, does not read anything. Only
     /// Hide's own record does.
     #[test]
-    fn read_record_ignores_herdr_marking_the_tab_seen() {
+    fn read_record_ignores_the_engine_marking_the_tab_seen() {
         let mut agents = projected(json!([finished("a", 1), finished("b", 2)]));
         let mut records = BTreeMap::new();
         apply_read_state(&mut agents, &mut records, &mut connection(), Some("b"));
 
-        let seen_by_herdr = json!([
+        let seen_by_engine = json!([
             {"pane_id":"a","agent_status":"idle","state_change_seq":9,
              "tokens":{"status_done":"\u{25cf}","activity":"0000000000001"}},
             {"pane_id":"b","agent_status":"idle","state_change_seq":9,
              "tokens":{"status_done":"\u{25cf}","activity":"0000000000001"}}
         ]);
-        let mut agents = projected(seen_by_herdr);
+        let mut agents = projected(seen_by_engine);
         apply_read_state(&mut agents, &mut records, &mut connection(), None);
         assert!(
             agents.iter().all(|agent| agent.unread),
@@ -2369,7 +2369,7 @@ mod tests {
     /// lands after the operator's focus has left the pane: the completion going
     /// away is not news, the way a descendant's signal going away is not.
     #[test]
-    fn a_read_demand_stays_read_when_herdr_marks_its_tab_seen_after_focus_left() {
+    fn a_read_demand_stays_read_when_the_engine_marks_its_tab_seen_after_focus_left() {
         let asking = |status: &str| {
             json!([{
                 "pane_id":"a","agent_status":status,"state_change_seq":4,
@@ -2554,7 +2554,7 @@ mod tests {
     /// the engine recorded, which Copy session id reads, and none when it recorded
     /// none or recorded a path.
     #[test]
-    fn an_agent_row_carries_the_session_id_herdr_recorded() {
+    fn an_agent_row_carries_the_session_id_the_engine_recorded() {
         let agent = |pane: &str, session: Value| {
             let mut agent = finished(pane, 1);
             agent["agent_session"] = session;
@@ -2911,7 +2911,7 @@ mod tests {
     /// The ordering key falls back to the engine's own sequence, zero padded to the
     /// activity token's width, when no label worker timestamp came.
     #[test]
-    fn last_activity_falls_back_to_the_herdr_sequence() {
+    fn last_activity_falls_back_to_the_engine_sequence() {
         let projection = project_agents(payload(json!([
             {"pane_id":"working","agent_status":"working","state_change_seq":1}
         ])));

@@ -85,25 +85,25 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
   await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
   const port = (site.address() as { port: number }).port;
   const url = `http://127.0.0.1:${port}/acme/repo/pull/180`;
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-pr");
+    const worktree = path.join(engine.root, "repo-pr");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
     git(worktree, ["commit", "--allow-empty", "-m", "card"]);
 
-    daemon = await startHided(herdr, "checkout-pr", undefined, { PATH: `${fakeGh(herdr.root, url)}${path.delimiter}${herdr.fixturePath}` });
+    daemon = await startHided(engine, "checkout-pr", undefined, { PATH: `${fakeGh(engine.root, url)}${path.delimiter}${engine.fixturePath}` });
     const sent = countSent(page);
     // The core lists a linked worktree once a client shows its repository.
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await workspaceAt(herdr, daemon, repo, "메인 체크아웃 정리");
-    await workspaceAt(herdr, daemon, worktree, "PR 카드 구현", true);
+    await workspaceAt(engine, daemon, repo, "메인 체크아웃 정리");
+    await workspaceAt(engine, daemon, worktree, "PR 카드 구현", true);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
@@ -267,7 +267,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await screenshot(page, "checkout-pr-card-light");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     site.close();
   }
 });
@@ -275,19 +275,19 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
 // @platform: The card names a checkout by the path the core reads it at, which the system spells (`C:\...` on Windows, /private/var on macOS) and the page shows in the wire spelling.
 test("a checkout's card names the checkout by its real path", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-pr");
+    const worktree = path.join(engine.root, "repo-pr");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
 
-    daemon = await startHided(herdr, "checkout-path");
+    daemon = await startHided(engine, "checkout-path");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await withControl(daemon, async (control) => {
       await openProject(control, repo, "repo");
@@ -315,6 +315,6 @@ test("a checkout's card names the checkout by its real path", { tag: "@platform"
     }
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

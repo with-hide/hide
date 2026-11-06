@@ -7,7 +7,8 @@
 pub struct JourneyAdapter {
     pub id: &'static str,
     /// The agent kind `hide agent spawn --kind` takes and the engine reports.
-    pub herdr_kind: &'static str,
+    #[serde(rename = "herdr_kind")]
+    pub engine_kind: &'static str,
     /// The agent's own folder in its HOME, whose presence tells the kit the
     /// agent is set up there, as a CLI that has run once leaves it.
     pub home_folder: &'static [&'static str],
@@ -296,14 +297,14 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         JourneyAdapter {
             id: row.id,
             fake_home: row.fake_home,
-            herdr_kind: row.herdr.name,
+            engine_kind: row.engine_kind,
             home_folder: row.folder,
             prompt_form: row.start.map(|start| start.prompt_form()),
             model_flag: row.start.map_or(&[], |start| start.options().model),
             full_access_flag: row
                 .start
                 .map_or_else(Vec::new, |start| start.options().full_access.names()),
-            untitled: row.sidebar_label.unwrap_or(row.herdr.name),
+            untitled: row.sidebar_label.unwrap_or(row.engine_kind),
             cells,
             request_budget: row.start.map(|start| turns * requests_per_turn(start)),
             minimum_version: row.minimum.map(|minimum| minimum.version),

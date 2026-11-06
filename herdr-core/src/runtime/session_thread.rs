@@ -1482,11 +1482,11 @@ mod tests {
         let mut runtime = runtime(&node);
         let terminals = Arc::new(GrantingTerminals::default());
         runtime.set_terminals(Arc::clone(&terminals) as _);
-        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
             assert_eq!(method, "submit_text");
             crate::engine::fake::reply(())
         });
-        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
         observe(&mut runtime, "idle", 1, "t1", true);
         node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
         open(&mut runtime);
@@ -1502,7 +1502,7 @@ mod tests {
             text: "이거 봐줘".to_owned(),
             paths: vec![file.clone()],
         });
-        let sent = herdr.calls_of("submit_text");
+        let sent = fake.calls_of("submit_text");
         assert_eq!(sent.len(), 1, "{sent:?}");
         let params = &sent[0];
         assert_eq!(params["pane"], "w1:p1");
@@ -1534,7 +1534,7 @@ mod tests {
             text: "계속".to_owned(),
             paths: Vec::new(),
         });
-        assert_eq!(herdr.calls_of("submit_text").len(), 1);
+        assert_eq!(fake.calls_of("submit_text").len(), 1);
         assert_eq!(
             thread(&runtime)
                 .input
@@ -1550,11 +1550,11 @@ mod tests {
         let node = Arc::new(ScriptedNode::default());
         let mut runtime = runtime(&node);
         runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
-        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
             assert_eq!(method, "submit_text");
             crate::engine::fake::refused("pane_not_found", "no such pane")
         });
-        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
         observe(&mut runtime, "idle", 1, "t1", true);
         node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
         open(&mut runtime);
@@ -1577,7 +1577,7 @@ mod tests {
 
         // The core still sees the pane, the engine does not.
         send(&mut runtime);
-        assert_eq!(herdr.calls_of("submit_text").len(), 1);
+        assert_eq!(fake.calls_of("submit_text").len(), 1);
         assert_eq!(refusal(&runtime), gone);
 
         // The engine's next read has no such pane.
@@ -1587,7 +1587,7 @@ mod tests {
         assert_eq!(thread(&runtime).pane, ThreadPane::Gone);
         send(&mut runtime);
         assert_eq!(
-            herdr.calls_of("submit_text").len(),
+            fake.calls_of("submit_text").len(),
             1,
             "a closed pane is not asked"
         );
@@ -1606,11 +1606,11 @@ mod tests {
             .hold
             .store(true, std::sync::atomic::Ordering::SeqCst);
         runtime.set_terminals(Arc::clone(&terminals) as _);
-        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
             assert_eq!(method, "submit_text");
             crate::engine::fake::reply(())
         });
-        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
         observe(&mut runtime, "idle", 1, "t1", true);
         node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
         open(&mut runtime);
@@ -1642,9 +1642,9 @@ mod tests {
                 .is_some_and(|input| input.state != ThreadInputState::Sending)
         });
         assert!(
-            herdr.calls_of("submit_text").is_empty(),
+            fake.calls_of("submit_text").is_empty(),
             "{:?}",
-            herdr.calls_of("submit_text")
+            fake.calls_of("submit_text")
         );
         assert_eq!(
             thread(&shared.lock().unwrap())
@@ -1662,10 +1662,10 @@ mod tests {
         let node = Arc::new(ScriptedNode::default());
         let mut runtime = runtime(&node);
         runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
-        let herdr = crate::engine::fake::FakeEngine::start(|method, _| {
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
             panic!("nothing reaches the engine, asked {method}");
         });
-        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
         observe(&mut runtime, "idle", 1, "t1", true);
         node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
         open(&mut runtime);
@@ -1678,7 +1678,7 @@ mod tests {
             text: "계속".to_owned(),
             paths: Vec::new(),
         });
-        assert!(herdr.calls_of("submit_text").is_empty());
+        assert!(fake.calls_of("submit_text").is_empty());
         assert_eq!(
             thread(&runtime)
                 .input

@@ -96,15 +96,15 @@ function stopDaemon(child: ChildProcess, binary: string, env: NodeJS.ProcessEnv,
  * `seedHideAi: false` leaves Hide AI unchosen, as a Mac that has never been asked is, for a spec
  * about the first-run rule.
  */
-export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride?: string, extraEnv: NodeJS.ProcessEnv = {}, bundled = false, options: { seedHideAi?: boolean } = {}): Promise<Daemon> {
+export async function startHided(engine: DaemonEngine, label = "s2", homeOverride?: string, extraEnv: NodeJS.ProcessEnv = {}, bundled = false, options: { seedHideAi?: boolean } = {}): Promise<Daemon> {
   // The daemon places pane-bootstrap.sock below this directory. Keep the
   // fixture root short enough for macOS's Unix socket path limit.
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hde-")));
-  const home = homeOverride ?? herdr.home ?? path.join(dir, "home");
+  const home = homeOverride ?? engine.home ?? path.join(dir, "home");
   fs.mkdirSync(path.join(home, "projects", "alpha"), { recursive: true });
   fs.mkdirSync(path.join(home, "projects", ".hidden"), { recursive: true });
   fs.writeFileSync(path.join(home, "projects", "notes.txt"), "x");
-  linkFixtureTranscripts(herdr, home);
+  linkFixtureTranscripts(engine, home);
   // Hide AI asks no model until an agent is chosen (PRD settings-cleanup B47), and a fixture
   // Mac has no signed-in agent for the first-run rule to pick, so the operator here has
   // already chosen the `claude` fixture shim; a home that brought its own choice keeps it.
@@ -114,10 +114,10 @@ export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride
     fs.writeFileSync(aiFile, JSON.stringify({ provider: "claude" }));
   }
   if (bundled) linkBundle();
-  const daemon = await launch(herdr, label, dir, home, "0", extraEnv, bundled ? bundledExecutable("hided") : undefined);
-  if (herdr.opened) {
+  const daemon = await launch(engine, label, dir, home, "0", extraEnv, bundled ? bundledExecutable("hided") : undefined);
+  if (engine.opened) {
     try {
-      await herdr.opened(daemon);
+      await engine.opened(daemon);
     } catch (error) {
       throw afterCleanup(error, daemon.stop);
     }
@@ -149,7 +149,7 @@ export function aiSettingsFile(home: string): string {
 /** 100 ms ticks a started daemon is given to write its state file and answer /health: 30 s, three times the product's own bound. */
 const START_WAIT_TICKS = 300;
 
-async function launch(herdr: DaemonEngine, label: string, dir: string, home: string, port: string, extraEnv: NodeJS.ProcessEnv, bundledAt?: string): Promise<Daemon> {
+async function launch(engine: DaemonEngine, label: string, dir: string, home: string, port: string, extraEnv: NodeJS.ProcessEnv, bundledAt?: string): Promise<Daemon> {
   const env = inheritedFixtureEnv();
   const statePath = path.join(dir, "hide", "hided.json");
   fs.rmSync(statePath, { force: true });
@@ -164,10 +164,10 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     // Catalog discovery probes every provider on hided's PATH, so use the
     // same controlled shim and system tools as the engine fixture.
     // Specs adding a shim prepend it to this path through extraEnv.
-    PATH: herdr.fixturePath,
+    PATH: engine.fixturePath,
     // `open_external` must not launch a GUI application on the runner.
-    HIDE_OPEN_COMMAND: fixtureOpenCommand(herdr.root),
-    ...herdr.daemonEnv,
+    HIDE_OPEN_COMMAND: fixtureOpenCommand(engine.root),
+    ...engine.daemonEnv,
     ...extraEnv,
   };
   const child = spawnDaemon(binary, daemonEnv);
@@ -234,7 +234,7 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
   const { stop, disown } = ownUntilWorkerExit(() => {
     end();
     endPaneHolders(path.join(dir, "hide"), process.platform === "win32" ? { endTree: (pid) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
-    herdr.afterStop(removeDir);
+    engine.afterStop(removeDir);
   });
   // The product itself gives a started daemon `HEALTHY_WITHIN` (10 s, `hided/src/cli.rs`) to answer
   // /health, and a loaded Windows runner needs most of it, so this waits at least that long. A daemon
@@ -268,7 +268,7 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
             await beforeStart?.(path.join(dir, "hide"));
             // The next daemon takes over the directory and its removal.
             disown();
-            return launch(herdr, label, dir, home, String(state.port), extraEnv, bundledAt);
+            return launch(engine, label, dir, home, String(state.port), extraEnv, bundledAt);
           };
           return { pid: child.pid!, origin, token: state.token, home: fs.realpathSync(home), stateDir: path.join(dir, "hide"), hostId, node, stop, restart };
         }

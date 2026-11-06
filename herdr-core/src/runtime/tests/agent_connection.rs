@@ -853,7 +853,7 @@ fn a_machine_with_no_kit_or_no_such_device_refuses_the_request_with_an_error() {
 /// as done, with nothing left published and the calls in the order that
 /// never mutates before the engine has confirmed.
 #[test]
-fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
+fn a_reopen_through_the_worker_waits_for_the_engine_to_release_the_name() {
     use hide_platform::process;
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -866,7 +866,7 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     let gone_flag = Arc::clone(&exited);
     let starts = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::clone(&starts);
-    let herdr = FakeEngine::start(move |method, params| {
+    let engine_session = FakeEngine::start(move |method, params| {
         let info = |shell: u32, foreground: u32| {
             reply(fake::processes(&json!({
                 "shell_pid": shell, "foreground_process_group_id": foreground,
@@ -939,10 +939,10 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     {
         let mut runtime = shared.lock().unwrap();
         runtime.live = Some(crate::live::LiveContext {
-            socket_path: herdr.scope(),
+            socket_path: engine_session.scope(),
             runtime: Arc::downgrade(&shared),
             notifier: crate::handle::ChangeNotifier::noop(),
-            engine: herdr.engine(),
+            engine: engine_session.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         assert!(reopen(&mut runtime, "w1:p2"));
@@ -966,7 +966,7 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
         "the name was released, so the session started and nothing is left to say"
     );
     assert_eq!(starts.load(Ordering::SeqCst), 3);
-    let methods = herdr.methods();
+    let methods = engine_session.methods();
     assert_eq!(
         methods[0], "agent_state",
         "the agent is read before it is touched"
@@ -1001,7 +1001,7 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
         .expect("sleep starts");
     let pid = child.id();
     let (sent, starts) = std::sync::mpsc::channel();
-    let herdr = FakeEngine::start(move |method, params| match method {
+    let engine_session = FakeEngine::start(move |method, params| match method {
         "agent_state" => reply(crate::engine::fake::agent_state(&reopened_agent())),
         "delivery_agent" => reply(fake::delivery_agent(&reopened_agent())),
         "pane_processes" => {
@@ -1059,10 +1059,10 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
     {
         let mut runtime = shared.lock().unwrap();
         runtime.live = Some(crate::live::LiveContext {
-            socket_path: herdr.scope(),
+            socket_path: engine_session.scope(),
             runtime: shared.weak(),
             notifier: crate::handle::ChangeNotifier::noop(),
-            engine: herdr.engine(),
+            engine: engine_session.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         assert!(reopen(&mut runtime, "w1:p2"));
@@ -1169,13 +1169,13 @@ fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
     use hide_node_link::panes::HookTurn;
     let mut runtime = runtime();
     runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
-    let mut herdr = session(&[("w1:p1", "claude", false)]);
-    herdr["agents"][0]["agent_status"] = "working".into();
+    let mut engine_session = session(&[("w1:p1", "claude", false)]);
+    engine_session["agents"][0]["agent_status"] = "working".into();
     let publish = |runtime: &mut Runtime, status: &str| {
-        let mut herdr = herdr.clone();
-        herdr["agents"][0]["agent_status"] = status.into();
+        let mut engine_session = engine_session.clone();
+        engine_session["agents"][0]["agent_status"] = status.into();
         runtime.ingest_session(Ok(
-            crate::sidebar::owned_label_fixture(herdr).expect("session payload")
+            crate::sidebar::owned_label_fixture(engine_session).expect("session payload")
         ));
     };
     let report = |runtime: &mut Runtime, turn, waiting: &[&str]| {
@@ -1224,16 +1224,16 @@ fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
 /// agent, then lists it again under the session that ended, and the new
 /// session's hook, proven to run in the pane, decides the row.
 #[test]
-fn an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session() {
+fn an_agent_started_again_in_its_pane_follows_its_hook_over_the_engine_s_earlier_session() {
     use hide_node_link::panes::HookTurn;
     let mut runtime = runtime();
     runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
     let listed = |runtime: &mut Runtime, status: &str| {
-        let mut herdr = session(&[("w1:p1", "claude", false)]);
-        herdr["agents"][0]["agent_status"] = status.into();
-        herdr["agents"][0]["agent_session"]["value"] = "session-old".into();
+        let mut engine_session = session(&[("w1:p1", "claude", false)]);
+        engine_session["agents"][0]["agent_status"] = status.into();
+        engine_session["agents"][0]["agent_session"]["value"] = "session-old".into();
         runtime.ingest_session(Ok(
-            crate::sidebar::owned_label_fixture(herdr).expect("session payload")
+            crate::sidebar::owned_label_fixture(engine_session).expect("session payload")
         ));
     };
     let report = |runtime: &mut Runtime, session: &str, turn| {

@@ -24,7 +24,7 @@ impl Default for UsagePreferences {
                 .filter(|row| matches!(row.usage.window(WindowKind::Weekly), Support::Supported(_)))
                 .take(MAX_PINS - 1)
                 .map(|row| Pin {
-                    agent: row.herdr.name.into(),
+                    agent: row.engine_kind.into(),
                     window: WindowKind::Weekly,
                 })
                 .collect(),
@@ -139,10 +139,10 @@ impl UsagePreferences {
 }
 fn supported(agent: &str, kind: WindowKind) -> bool {
     hide_agent_adapter::adapter(agent).is_some_and(|row| {
-        row.herdr.name == agent && matches!(row.usage.window(kind), Support::Supported(_))
+        row.engine_kind == agent && matches!(row.usage.window(kind), Support::Supported(_))
     })
 }
 fn supports_limits(agent: &str) -> bool {
     hide_agent_adapter::adapter(agent)
-        .is_some_and(|row| row.herdr.name == agent && row.usage.limit_sources().next().is_some())
+        .is_some_and(|row| row.engine_kind == agent && row.usage.limit_sources().next().is_some())
 }

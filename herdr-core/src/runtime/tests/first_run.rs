@@ -57,7 +57,7 @@ pub(super) fn step(runtime: &Runtime) -> Option<FirstRunStep> {
 
 pub(super) fn report_here(runtime: &mut Runtime, report: &KitReport) {
     // Existing cases exercise the original no-saved-devices route.
-    runtime.snapshot.status.herdr_profiles.state = "ready".to_owned();
+    runtime.snapshot.status.machine_profiles.state = "ready".to_owned();
     let node = runtime.node.clone();
     runtime.ingest_kit_report(node.as_str(), report);
 }
@@ -943,14 +943,14 @@ fn only_a_successful_empty_discovery_skips_devices_and_back_follows_that_route()
         step: FirstRunStep::Devices,
     });
     for state in ["idle", "loading", "failed"] {
-        runtime.snapshot.status.herdr_profiles.state = state.to_owned();
+        runtime.snapshot.status.machine_profiles.state = state.to_owned();
         assert!(
             !runtime.settle_first_run_devices(),
             "{state} is not an empty saved list"
         );
         assert_eq!(step(&runtime), Some(FirstRunStep::Devices));
     }
-    runtime.snapshot.status.herdr_profiles.state = "ready".to_owned();
+    runtime.snapshot.status.machine_profiles.state = "ready".to_owned();
     assert!(runtime.settle_first_run_devices());
     assert_eq!(step(&runtime), Some(FirstRunStep::Notifications));
     assert!(runtime.dispatch_json(&event(
@@ -995,9 +995,9 @@ fn a_listed_host_keeps_the_devices_route_even_when_it_cannot_connect() {
     runtime
         .snapshot
         .status
-        .herdr_profiles
+        .machine_profiles
         .profiles
-        .push(crate::model::HerdrProfileSnapshot {
+        .push(crate::model::MachineProfileSnapshot {
             id: "ssh:build".to_owned(),
             label: "build".to_owned(),
             target: "build".to_owned(),

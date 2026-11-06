@@ -102,8 +102,12 @@ struct StoredUiState {
     selected_pane_id: Option<String>,
     /// Written only by a core move's rekey and left out once taken, so an
     /// ordinary store never carries it and an older build ignores it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    focus_from_herdr: bool,
+    #[serde(
+        rename = "focus_from_herdr",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    focus_from_engine: bool,
     #[serde(default)]
     shortcut_bindings: BTreeMap<String, String>,
     /// Absent in a store written before the shortcut import existed, which loads
@@ -648,7 +652,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             overview_graph,
             selected_path: stored.selected_path,
             selected_pane_id: stored.selected_pane_id,
-            focus_from_herdr: stored.focus_from_herdr,
+            focus_from_engine: stored.focus_from_engine,
             shortcut_bindings: stored.shortcut_bindings,
             shortcut_bindings_imported: stored.shortcut_bindings_imported,
             browser_shortcut_bindings: stored.browser_shortcut_bindings,
@@ -835,7 +839,7 @@ pub fn save(
         ),
         selected_path: state.selected_path.clone(),
         selected_pane_id: state.selected_pane_id.clone(),
-        focus_from_herdr: state.focus_from_herdr,
+        focus_from_engine: state.focus_from_engine,
         shortcut_bindings: state.shortcut_bindings.clone(),
         shortcut_bindings_imported: state.shortcut_bindings_imported,
         browser_shortcut_bindings: state.browser_shortcut_bindings.clone(),
@@ -1325,11 +1329,11 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("state.json");
         let moved = UiStateSnapshot {
-            focus_from_herdr: true,
+            focus_from_engine: true,
             ..UiStateSnapshot::default()
         };
         save(&path, &moved, &PaneTerminalSizes::new()).unwrap();
-        assert!(load(&path).0.focus_from_herdr);
+        assert!(load(&path).0.focus_from_engine);
         save(
             &path,
             &UiStateSnapshot::default(),
@@ -1341,7 +1345,7 @@ mod tests {
                 .unwrap()
                 .contains("focus_from_herdr")
         );
-        assert!(!load(&path).0.focus_from_herdr);
+        assert!(!load(&path).0.focus_from_engine);
     }
 
     #[test]
@@ -1981,5 +1985,25 @@ mod tests {
             assert_eq!(disposition, LoadDisposition::Corrupt);
             assert!(state.expanded_paths.is_empty());
         }
+    }
+
+    /// The store the 1.2.1 daemon wrote (an isolated run of that release),
+    /// with the hint a 1.2.1 core move's rekey adds, loads with the hint and
+    /// is saved back under the key 1.2.1 reads, `focus_from_herdr`.
+    #[test]
+    fn a_moved_store_release_1_2_1_wrote_keeps_its_focus_hint_key() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("core-state.json");
+        fs::write(
+            &path,
+            include_str!("../tests/fixtures/release-1.2.1/core-state-moved.json"),
+        )
+        .unwrap();
+        let (state, sizes, _) = load(&path);
+        assert!(state.focus_from_engine);
+        save(&path, &state, &sizes).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["focus_from_herdr"], serde_json::json!(true));
+        assert!(saved.get("focus_from_engine").is_none());
     }
 }

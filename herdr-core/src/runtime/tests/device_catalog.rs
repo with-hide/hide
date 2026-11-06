@@ -59,7 +59,7 @@ pub(super) fn tree() -> Tree {
 
 /// One engine workspace as the session projection reports it: one row, one
 /// checkout, a tab per (id, directory).
-pub(super) fn herdr_workspace(
+pub(super) fn engine_workspace(
     target: &str,
     wid: &str,
     path: &str,
@@ -82,7 +82,7 @@ pub(super) fn herdr_workspace(
             panes: vec![pane(&format!("remote:{target}:pane:{tab}"), cwd)],
         })
         .collect();
-    row.strip = StripTabSnapshot::from_herdr_tabs(&row.tabs);
+    row.strip = StripTabSnapshot::from_engine_tabs(&row.tabs);
     row.has_panes = true;
     let mut workspace = workspace(&workspace_id, wid, path, vec![row]);
     workspace.remote_target_id = Some(target.to_owned());
@@ -159,9 +159,9 @@ fn layout(session: &RemoteSessionSnapshot) -> Layout {
 fn a_devices_workspaces_are_grouped_into_its_repositories_by_its_helper_facts() {
     let t = tree();
     let raw = session(vec![
-        herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main), ("t2", &t.other)]),
-        herdr_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
-        herdr_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
+        engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main), ("t2", &t.other)]),
+        engine_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
+        engine_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
     ]);
     let grouped = device_catalog::group(
         TARGET,
@@ -221,7 +221,7 @@ fn a_devices_workspaces_are_grouped_into_its_repositories_by_its_helper_facts() 
     }
 
     // B2: the same place on another device is another project.
-    let elsewhere = session(vec![herdr_workspace(
+    let elsewhere = session(vec![engine_workspace(
         "studio",
         "w1",
         &t.main,
@@ -248,8 +248,8 @@ fn a_windows_devices_folders_group_by_the_wire_spelling_its_helper_answers() {
         })
     };
     let raw = session(vec![
-        herdr_workspace("pc", "w1", main, &[("t1", main)]),
-        herdr_workspace("pc", "w2", linked, &[("t2", linked)]),
+        engine_workspace("pc", "w1", main, &[("t1", main)]),
+        engine_workspace("pc", "w2", linked, &[("t2", linked)]),
     ]);
     let answered = DeviceFacts {
         facts: [
@@ -297,18 +297,18 @@ fn with_refused(mut facts: DeviceFacts, refused: &[&str]) -> DeviceFacts {
 /// An engine workspace attached to a linked worktree of `repository` at
 /// `path`, as the session projection reports it.
 fn worktree_workspace(wid: &str, path: &str, repository: &str) -> WorkspaceSnapshot {
-    let mut workspace = herdr_workspace(TARGET, wid, path, &[(wid, path)]);
+    let mut workspace = engine_workspace(TARGET, wid, path, &[(wid, path)]);
     workspace.checkouts[0].is_worktree = true;
-    workspace.checkouts[0].herdr_repo_root = Some(repository.to_owned());
+    workspace.checkouts[0].engine_repo_root = Some(repository.to_owned());
     workspace
 }
 
 #[test]
-fn a_devices_removed_worktree_stays_a_missing_checkout_of_the_repository_herdr_recorded() {
+fn a_devices_removed_worktree_stays_a_missing_checkout_of_the_repository_the_engine_recorded() {
     let t = tree();
     let gone = format!("{}-gone", t.linked);
     let raw = session(vec![
-        herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+        engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
         worktree_workspace("w2", &gone, &t.main),
     ]);
 
@@ -346,8 +346,8 @@ fn a_devices_removed_worktree_stays_a_missing_checkout_of_the_repository_herdr_r
 fn a_devices_removed_worktree_its_git_still_lists_stays_under_its_repository() {
     let t = tree();
     let gone = format!("{}-gone", t.linked);
-    let mut plain = herdr_workspace(TARGET, "w2", &gone, &[("t2", &gone)]);
-    plain.checkouts[0].herdr_repo_root = None;
+    let mut plain = engine_workspace(TARGET, "w2", &gone, &[("t2", &gone)]);
+    plain.checkouts[0].engine_repo_root = None;
     let raw = session(vec![plain]);
     let mut worktrees = device_catalog::DeviceWorktrees::default();
     worktrees.projects.insert(
@@ -383,7 +383,12 @@ fn a_devices_removed_worktree_its_git_still_lists_stays_under_its_repository() {
 fn a_devices_removed_folder_nothing_places_stays_a_row_of_its_own() {
     let t = tree();
     let gone = format!("{}-gone", t.other);
-    let raw = session(vec![herdr_workspace(TARGET, "w3", &gone, &[("t3", &gone)])]);
+    let raw = session(vec![engine_workspace(
+        TARGET,
+        "w3",
+        &gone,
+        &[("t3", &gone)],
+    )]);
 
     let grouped = device_catalog::group(TARGET, &raw, &with_refused(answered(&[]), &[&gone]), None);
 
@@ -396,8 +401,8 @@ fn a_devices_removed_folder_nothing_places_stays_a_row_of_its_own() {
 fn a_directory_the_helper_has_not_confirmed_is_shown_as_its_workspace_and_says_why() {
     let t = tree();
     let raw = session(vec![
-        herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
-        herdr_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
+        engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+        engine_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
     ]);
     let mut facts = answered(&[&t.main]);
     let grouped = device_catalog::group(TARGET, &raw, &facts, None);
@@ -479,8 +484,8 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
         .unwrap()
         .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
     let mut raw = session(vec![
-        herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
-        herdr_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
+        engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+        engine_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
     ]);
     raw.focused_workspace_id = Some(format!("remote:{TARGET}:workspace:w2"));
     raw.focused_checkout_id = Some(format!("remote:{TARGET}:checkout:w2"));
@@ -548,8 +553,8 @@ fn a_device_session_is_grouped_when_its_helper_answers() {
         .unwrap()
         .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
     let raw = session(vec![
-        herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
-        herdr_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
+        engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+        engine_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
     ]);
 
     device.hold();
@@ -663,8 +668,8 @@ fn a_reconnected_device_keeps_its_panes_in_their_checkouts_until_its_helper_answ
     shared.lock().unwrap().ingest_remote_session(
         TARGET,
         Ok(session(vec![
-            herdr_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
-            herdr_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
+            engine_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
+            engine_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
         ])),
     );
     wait(&shared, "the first connection's facts", |runtime| {
@@ -770,7 +775,7 @@ fn retrying_a_device_keeps_its_panes_in_their_checkouts() {
             1,
         ),
     );
-    let raw = session(vec![herdr_workspace(
+    let raw = session(vec![engine_workspace(
         TARGET,
         "w2",
         &t.linked,
@@ -866,7 +871,7 @@ fn listed_branch(runtime: &Runtime, path: &str) -> Option<String> {
 #[test]
 fn a_retried_device_rereads_its_worktrees_when_its_helper_is_up_before_its_session() {
     let repo = super::device_worktrees::repo();
-    let workspaces = vec![herdr_workspace(
+    let workspaces = vec![engine_workspace(
         TARGET,
         "w2",
         &repo.linked,
@@ -902,7 +907,7 @@ fn a_retried_device_rereads_its_worktrees_when_its_helper_is_up_before_its_sessi
 #[test]
 fn a_device_answering_as_another_machine_forgets_what_the_last_one_said_about_its_folders() {
     let t = tree();
-    let (mut runtime, _views) = catalog_device_runtime(vec![herdr_workspace(
+    let (mut runtime, _views) = catalog_device_runtime(vec![engine_workspace(
         TARGET,
         "w2",
         &t.linked,
@@ -958,7 +963,7 @@ fn a_device_past_its_cap_of_answers_keeps_only_the_folders_its_session_still_sho
     let plain = Path::new(&repo.root).with_file_name("plain");
     std::fs::create_dir(&plain).unwrap();
     let plain = plain.to_string_lossy().into_owned();
-    let (mut runtime, _views) = catalog_device_runtime(vec![herdr_workspace(
+    let (mut runtime, _views) = catalog_device_runtime(vec![engine_workspace(
         TARGET,
         "w2",
         &repo.linked,
@@ -990,7 +995,7 @@ fn a_device_past_its_cap_of_answers_keeps_only_the_folders_its_session_still_sho
     // The repository's panes close and a plain folder's open.
     runtime.ingest_remote_session(
         TARGET,
-        Ok(session(vec![herdr_workspace(
+        Ok(session(vec![engine_workspace(
             TARGET,
             "w3",
             &plain,
@@ -1022,7 +1027,7 @@ fn a_device_whose_helper_is_not_allowed_shows_its_workspaces_unconfirmed() {
     });
     runtime.ingest_remote_session(
         TARGET,
-        Ok(session(vec![herdr_workspace(
+        Ok(session(vec![engine_workspace(
             TARGET,
             "w1",
             &t.main,
@@ -1134,7 +1139,7 @@ fn a_device_registration_is_listed_without_panes_pinned_and_removed_on_that_devi
         });
     runtime.ingest_remote_session(
         TARGET,
-        Ok(session(vec![herdr_workspace(
+        Ok(session(vec![engine_workspace(
             TARGET,
             "w1",
             &t.main,
@@ -1556,7 +1561,7 @@ fn a_project_registered_on_a_device_asks_that_device_for_its_first_terminal() {
     let mut runtime = runtime();
     registering_device(
         &mut runtime,
-        vec![herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)])],
+        vec![engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)])],
     );
     recording_device(&mut runtime);
 
@@ -1646,14 +1651,14 @@ fn a_refused_registration_terminal_is_logged_and_leaves_the_project_on_its_start
     let t = tree();
     let mut runtime = runtime();
     registering_device(&mut runtime, Vec::new());
-    let herdr = FakeEngine::start(|_, _| refused("internal_error", "refused by the fixture"));
+    let fake = FakeEngine::start(|_, _| refused("internal_error", "refused by the fixture"));
     let shared = Arc::new(Mutex::new(runtime));
     shared
         .lock()
         .unwrap()
         .install_remote_control(RemoteControlContext::new(
             TARGET,
-            herdr.engine(),
+            fake.engine(),
             Arc::downgrade(&shared),
             ChangeNotifier::noop(),
         ));
@@ -1716,7 +1721,7 @@ fn device_strip(runtime: &Runtime, checkout_id: &str) -> Vec<String> {
 /// when the device reports the new order. A device that is not connected
 /// takes no move.
 #[test]
-fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_dropped_in() {
+fn a_device_tab_moves_on_its_own_engine_and_a_file_tab_keeps_the_slot_it_was_dropped_in() {
     let t = tree();
     let mut runtime = runtime();
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
@@ -1733,7 +1738,7 @@ fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_drop
             .iter()
             .map(|tab| (*tab, t.main.as_str()))
             .collect::<Vec<_>>();
-        session(vec![herdr_workspace(TARGET, "w1", &t.main, &tabs)])
+        session(vec![engine_workspace(TARGET, "w1", &t.main, &tabs)])
     };
     runtime.ingest_remote_session(TARGET, Ok(raw(&["t1", "t2"])));
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -2006,8 +2011,8 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
         unreachable_since_unix_ms: None,
     });
     let mut raw = session(vec![
-        herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
-        herdr_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
+        engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+        engine_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
     ]);
     raw.focused_workspace_id = Some(format!("remote:{TARGET}:workspace:w1"));
     raw.focused_checkout_id = Some(format!("remote:{TARGET}:checkout:w1"));
@@ -2064,8 +2069,8 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     assert_eq!(resumed(&mut runtime), (t.linked.clone(), true));
     let moved = |runtime: &mut Runtime, workspace: &str| {
         let mut raw = session(vec![
-            herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
-            herdr_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
+            engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+            engine_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
         ]);
         raw.focused_workspace_id = Some(format!("remote:{TARGET}:workspace:{workspace}"));
         raw.focused_checkout_id = Some(format!("remote:{TARGET}:checkout:{workspace}"));
@@ -2165,7 +2170,7 @@ fn a_device_pane_carries_its_children_and_its_path_to_the_parent() {
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
-    let mut raw = session(vec![herdr_workspace(
+    let mut raw = session(vec![engine_workspace(
         TARGET,
         "w1",
         &t.main,
@@ -2238,7 +2243,7 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
-    let mut raw = session(vec![herdr_workspace(
+    let mut raw = session(vec![engine_workspace(
         TARGET,
         "w1",
         &t.main,
@@ -2312,7 +2317,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
-    let mut raw = session(vec![herdr_workspace(
+    let mut raw = session(vec![engine_workspace(
         TARGET,
         "w1",
         &t.main,
@@ -2466,11 +2471,11 @@ pub(super) fn next_request(
 fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_owner() {
     let t = tree();
     let raw = || {
-        let mut bound = herdr_workspace(TARGET, "w5N", &t.main, &[("a", &t.main)]);
+        let mut bound = engine_workspace(TARGET, "w5N", &t.main, &[("a", &t.main)]);
         bound.checkouts[0].owner_workspace_id = Some("w5N".to_owned());
         session(vec![
             bound,
-            herdr_workspace(TARGET, "w5T", &t.main, &[("b", &t.main), ("c", &t.main)]),
+            engine_workspace(TARGET, "w5T", &t.main, &[("b", &t.main), ("c", &t.main)]),
         ])
     };
     let row = |grouped: &RemoteSessionSnapshot| {
@@ -2572,13 +2577,13 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
     assert_eq!(request["method"], "focus_tab");
     assert_eq!(request["params"]["tab"], "c");
     // Once that tab is gone, the owner's active tab.
-    let mut bound = herdr_workspace(TARGET, "w5N", &t.main, &[("a", &t.main)]);
+    let mut bound = engine_workspace(TARGET, "w5N", &t.main, &[("a", &t.main)]);
     bound.checkouts[0].owner_workspace_id = Some("w5N".to_owned());
     runtime.ingest_remote_session(
         TARGET,
         Ok(session(vec![
             bound,
-            herdr_workspace(TARGET, "w5T", &t.main, &[("b", &t.main)]),
+            engine_workspace(TARGET, "w5T", &t.main, &[("b", &t.main)]),
         ])),
     );
     send(
@@ -2597,7 +2602,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
     // than landing in w5T; while the folder is unconfirmed its kind is
     // unknown, so nothing is opened on a guess.
     let unbound = || {
-        session(vec![herdr_workspace(
+        session(vec![engine_workspace(
             TARGET,
             "w5T",
             &t.main,
@@ -2693,8 +2698,8 @@ fn folds_saved_under_old_device_checkout_ids_carry_over() {
     runtime.ingest_remote_session(
         TARGET,
         Ok(session(vec![
-            herdr_workspace(TARGET, "w5N", &t.main, &[("a", &t.main)]),
-            herdr_workspace(TARGET, "w5T", &t.main, &[("b", &t.main)]),
+            engine_workspace(TARGET, "w5N", &t.main, &[("a", &t.main)]),
+            engine_workspace(TARGET, "w5T", &t.main, &[("b", &t.main)]),
         ])),
     );
 
@@ -2760,7 +2765,7 @@ fn a_device_tab_hide_created_stays_in_its_folder_while_its_pane_reports_the_birt
             .collect()
     };
     let raw = |cwd: &str| {
-        session(vec![herdr_workspace(
+        session(vec![engine_workspace(
             TARGET,
             "w1",
             &t.main,
@@ -2811,7 +2816,7 @@ fn connected_device_runtime() -> Runtime {
 /// `t1` holding a second pane (`t1b`) for a zoom to hide, zoomed or not.
 fn device_report(target: &str, path: &str, tabs: &[&str], zoomed: bool) -> RemoteSessionSnapshot {
     let tabs = tabs.iter().map(|tab| (*tab, path)).collect::<Vec<_>>();
-    let mut raw = session(vec![herdr_workspace(target, "w1", path, &tabs)]);
+    let mut raw = session(vec![engine_workspace(target, "w1", path, &tabs)]);
     let t1 = format!("remote:{target}:tab:t1");
     if let Some(tab) = raw.workspaces[0].checkouts[0]
         .tabs
@@ -3199,8 +3204,8 @@ fn a_device_created_worktrees_first_tab_stays_in_its_worktree_while_the_pane_rep
     runtime.ingest_remote_session(
         TARGET,
         Ok(session(vec![
-            herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
-            herdr_workspace(TARGET, "w2", &t.other, &[("t2", &t.other)]),
+            engine_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+            engine_workspace(TARGET, "w2", &t.other, &[("t2", &t.other)]),
         ])),
     );
 
@@ -3224,7 +3229,7 @@ fn a_device_created_worktrees_first_tab_stays_in_its_worktree_while_the_pane_rep
 fn a_device_acknowledgment_after_the_session_carried_the_tab_regroups_it_at_once() {
     let t = tree();
     let mut runtime = device_runtime(&t);
-    let raw = session(vec![herdr_workspace(
+    let raw = session(vec![engine_workspace(
         TARGET,
         "w1",
         &t.main,
@@ -3251,7 +3256,7 @@ fn a_device_cwd_is_compared_by_its_names_not_by_this_machines_files() {
     let alias = format!("{}-alias", t.main);
     std::os::unix::fs::symlink(&t.main, &alias).expect("a link to the checkout");
     let raw = |cwd: &str| {
-        session(vec![herdr_workspace(
+        session(vec![engine_workspace(
             TARGET,
             "w1",
             &t.main,
@@ -3280,7 +3285,7 @@ fn a_device_tab_whose_pane_never_reports_its_folder_is_believed_after_the_window
     let t = tree();
     let mut runtime = device_runtime(&t);
     let clock = super::birth_cwd::SteeredClock::install(&mut runtime);
-    let raw = session(vec![herdr_workspace(
+    let raw = session(vec![engine_workspace(
         TARGET,
         "w1",
         &t.main,
@@ -3322,7 +3327,7 @@ fn a_second_device_acknowledgment_does_not_settle_the_first_tab() {
     let t = tree();
     let mut runtime = device_runtime(&t);
     let raw = |first: &str, second: &str| {
-        session(vec![herdr_workspace(
+        session(vec![engine_workspace(
             TARGET,
             "w1",
             &t.main,
@@ -3404,7 +3409,7 @@ fn a_device_birth_cwd_inside_a_nested_linked_worktree_stays_clamped_to_the_outer
     acknowledge_device_tab(&mut runtime, &t.main);
 
     let raw = |cwd: &str| {
-        session(vec![herdr_workspace(
+        session(vec![engine_workspace(
             TARGET,
             "w1",
             &t.main,
@@ -3437,7 +3442,7 @@ fn a_repeated_device_acknowledgment_keeps_the_settled_record() {
     let t = tree();
     let mut runtime = device_runtime(&t);
     let raw = |cwd: &str| {
-        session(vec![herdr_workspace(
+        session(vec![engine_workspace(
             TARGET,
             "w1",
             &t.main,
@@ -3460,7 +3465,7 @@ fn a_repeated_device_acknowledgment_keeps_the_settled_record() {
 #[test]
 fn a_device_project_shows_the_name_kept_for_it_and_its_folder_name_without_one() {
     let t = tree();
-    let (mut runtime, _views) = catalog_device_runtime(vec![herdr_workspace(
+    let (mut runtime, _views) = catalog_device_runtime(vec![engine_workspace(
         TARGET,
         "w2",
         &t.linked,

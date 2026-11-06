@@ -41,10 +41,10 @@ function heldGit(root: string, fixturePath: string): { path: string; release: ()
 
 test("a checkout row being deleted opens no empty menu", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
@@ -52,13 +52,13 @@ test("a checkout row being deleted opens no empty menu", async ({ page }) => {
     git(repo, ["commit", "-m", "initial"]);
     git(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
-    const worktree = path.join(herdr.root, "repo-slow");
+    const worktree = path.join(engine.root, "repo-slow");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
     // Unmerged, so the row stays among the active checkouts rather than folding into Inactive.
     git(worktree, ["commit", "--allow-empty", "-m", "not merged anywhere"]);
 
-    const held = heldGit(herdr.root, herdr.fixturePath);
-    daemon = await startHided(herdr, "worktree-removing-menu", undefined, { PATH: held.path });
+    const held = heldGit(engine.root, engine.fixturePath);
+    daemon = await startHided(engine, "worktree-removing-menu", undefined, { PATH: held.path });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     // A pane in main keeps the project listed once the worktree goes; the core lists the worktree, with no tab of its own, once a client shows its repository.
@@ -97,6 +97,6 @@ test("a checkout row being deleted opens no empty menu", async ({ page }) => {
     expect(fs.existsSync(worktree)).toBe(false);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

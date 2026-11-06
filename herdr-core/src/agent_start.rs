@@ -235,7 +235,7 @@ pub(crate) enum StartError {
     ShellStarting(Option<String>),
     /// The engine's own answer to `agent.start`: a refusal, no answer at all, or
     /// an answer in a shape the start does not promise (`Answer`).
-    Herdr(EngineError),
+    Engine(EngineError),
 }
 
 /// Records, on the node that will run it, that `kind` may work in `path`, a
@@ -475,7 +475,7 @@ fn start_within(
                         "refusals": busy,
                         "waited_ms": started.elapsed().as_millis() as u64,
                     }));
-                    return Err(StartError::Herdr(EngineError::Refused { code, message }));
+                    return Err(StartError::Engine(EngineError::Refused { code, message }));
                 }
                 thread::sleep(POLL_INTERVAL.min(deadline - now));
             }
@@ -494,10 +494,10 @@ fn start_within(
             Err(EngineError::Refused { code, message }) if code == NAME_TAKEN && !settled => {
                 settled = true;
                 if !shell.settle_name(&start.launch().name) {
-                    return Err(StartError::Herdr(EngineError::Refused { code, message }));
+                    return Err(StartError::Engine(EngineError::Refused { code, message }));
                 }
             }
-            answer => return answer.map_err(StartError::Herdr),
+            answer => return answer.map_err(StartError::Engine),
         }
     }
 }
@@ -805,7 +805,7 @@ mod tests {
                 for owner_ends in [true, false] {
                     let reads = Arc::new(AtomicUsize::new(0));
                     let observed = reads.clone();
-                    let herdr = FakeEngine::start(move |method, _| {
+                    let fake = FakeEngine::start(move |method, _| {
                         assert_eq!(method, "delivery_agent");
                         observed.fetch_add(1, Ordering::SeqCst);
                         let mut read = json!({
@@ -818,7 +818,7 @@ mod tests {
                         reply(delivery_agent(&read))
                     });
                     let result = confirm_fork_started(
-                        herdr.engine().as_ref(),
+                        fake.engine().as_ref(),
                         "w1:p1",
                         "fork-one",
                         agent.kind(),
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn a_still_pending_fork_reaches_its_deadline_without_typing() {
-        let herdr = FakeEngine::start(|method, _| {
+        let fake = FakeEngine::start(|method, _| {
             assert_eq!(method, "delivery_agent", "input never reaches the shell");
             reply(delivery_agent(&json!({
                 "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
@@ -853,7 +853,7 @@ mod tests {
             })))
         });
         let result = confirm_fork_started(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "w1:p1",
             "fork-one",
             "claude",
@@ -861,14 +861,14 @@ mod tests {
             Instant::now() + Duration::from_millis(200),
         );
         assert!(result.unwrap_err().contains("deadline elapsed"));
-        assert!(!herdr.methods().is_empty());
+        assert!(!fake.methods().is_empty());
     }
 
     #[test]
     fn a_fork_waits_for_its_named_agent_instead_of_releasing_keys_to_a_shell() {
         let reads = Arc::new(AtomicUsize::new(0));
         let observed = reads.clone();
-        let herdr = FakeEngine::start(move |method, params| {
+        let fake = FakeEngine::start(move |method, params| {
             assert_eq!(method, "delivery_agent");
             assert_eq!(params["target"], "fork-one");
             let read = observed.fetch_add(1, Ordering::SeqCst);
@@ -880,7 +880,7 @@ mod tests {
             })))
         });
         confirm_fork_started(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             "w1:p1",
             "fork-one",
             "claude",
@@ -908,7 +908,7 @@ mod tests {
         ] {
             let reads = Arc::new(AtomicUsize::new(0));
             let observed = reads.clone();
-            let herdr = FakeEngine::start(move |method, _| {
+            let fake = FakeEngine::start(move |method, _| {
                 assert_eq!(method, "delivery_agent", "confirmation never types keys");
                 let read = observed.fetch_add(1, Ordering::SeqCst);
                 if case == "gone" || read > 0 {
@@ -930,7 +930,7 @@ mod tests {
                     Duration::from_millis(200)
                 };
             let result = confirm_fork_started(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 "w1:p1",
                 "fork-one",
                 "claude",
@@ -968,9 +968,9 @@ mod tests {
         })
     }
 
-    fn start(herdr: &Fake, wait: Duration) -> Result<StartedAgent, StartError> {
+    fn start(fake: &Fake, wait: Duration) -> Result<StartedAgent, StartError> {
         start_within(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             None,
             "test:start",
             ShellStart::Plain,
@@ -982,9 +982,9 @@ mod tests {
         )
     }
 
-    fn start_reusing_name(herdr: &Fake, name_wait: Duration) -> Result<StartedAgent, StartError> {
+    fn start_reusing_name(fake: &Fake, name_wait: Duration) -> Result<StartedAgent, StartError> {
         start_within(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             None,
             "test:start",
             ShellStart::Plain,
@@ -1000,7 +1000,7 @@ mod tests {
     fn the_start_waits_until_the_shell_alone_holds_the_terminal() {
         let reads = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&reads);
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             // Startup files first run a command in their own group, then one
             // in the shell's group, and only then leave the shell alone.
             "pane_processes" => match seen.fetch_add(1, Ordering::SeqCst) {
@@ -1011,9 +1011,9 @@ mod tests {
             "start_agent" => started(),
             other => panic!("unexpected {other}"),
         });
-        assert!(start(&herdr, Duration::from_secs(5)).is_ok());
+        assert!(start(&fake, Duration::from_secs(5)).is_ok());
         assert_eq!(
-            herdr.methods(),
+            fake.methods(),
             [
                 "pane_processes",
                 "pane_processes",
@@ -1027,7 +1027,7 @@ mod tests {
     fn a_start_refused_as_busy_waits_for_the_shell_and_is_sent_again() {
         let starts = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&starts);
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "start_agent" if seen.fetch_add(1, Ordering::SeqCst) == 0 => refused(
                 PANE_BUSY,
@@ -1036,9 +1036,9 @@ mod tests {
             "start_agent" => started(),
             other => panic!("unexpected {other}"),
         });
-        assert!(start(&herdr, Duration::from_secs(5)).is_ok());
+        assert!(start(&fake, Duration::from_secs(5)).is_ok());
         assert_eq!(
-            herdr.methods(),
+            fake.methods(),
             [
                 "pane_processes",
                 "start_agent",
@@ -1054,8 +1054,8 @@ mod tests {
     /// The start asks once a poll until its deadline, then gives the engine's
     /// refusal, and never asks in a burst.
     #[test]
-    fn a_pane_herdr_keeps_refusing_as_busy_is_asked_once_a_poll_until_the_deadline() {
-        let herdr = FakeEngine::start(|method, _| match method {
+    fn a_pane_the_engine_keeps_refusing_as_busy_is_asked_once_a_poll_until_the_deadline() {
+        let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "start_agent" => refused(
                 PANE_BUSY,
@@ -1064,11 +1064,11 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let wait = Duration::from_millis(600);
-        let Err(StartError::Herdr(EngineError::Refused { code, .. })) = start(&herdr, wait) else {
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) = start(&fake, wait) else {
             panic!("a pane the engine never frees is not a start");
         };
         assert_eq!(code, PANE_BUSY);
-        let asked = herdr
+        let asked = fake
             .methods()
             .iter()
             .filter(|method| **method == "start_agent")
@@ -1083,14 +1083,14 @@ mod tests {
     #[test]
     fn a_changed_session_after_readiness_or_a_busy_refusal_never_types_another_start() {
         for previously_admitted in [false, true] {
-            let herdr = FakeEngine::start(|method, _| match method {
+            let fake = FakeEngine::start(|method, _| match method {
                 "pane_processes" => process_info(SHELL, &[SHELL]),
                 "start_agent" => refused(PANE_BUSY, "busy before typing"),
                 other => panic!("unexpected {other}"),
             });
             let checks = std::cell::Cell::new(0);
             let answer = start_within(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 None,
                 "checked",
                 ShellStart::Plain,
@@ -1111,7 +1111,7 @@ mod tests {
             assert!(
                 matches!(answer, Err(StartError::NotStarted { reason, .. }) if reason == "session_route_unconfirmed")
             );
-            let typed_attempts = herdr
+            let typed_attempts = fake
                 .methods()
                 .iter()
                 .filter(|method| **method == "start_agent")
@@ -1122,23 +1122,23 @@ mod tests {
 
     #[test]
     fn a_shell_that_never_reaches_its_prompt_types_nothing_and_says_so() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(4200, &[4200]),
             other => panic!("unexpected {other}"),
         });
         let Err(StartError::NotStarted { reason, detail }) =
-            start(&herdr, Duration::from_millis(300))
+            start(&fake, Duration::from_millis(300))
         else {
             panic!("a shell that never holds the terminal is not a start");
         };
         assert_eq!(reason, "agent_start.shell_no_prompt");
         assert!(detail.contains("did not reach its prompt"), "{detail}");
-        assert!(!herdr.methods().contains(&"start_agent"));
+        assert!(!fake.methods().contains(&"start_agent"));
     }
 
     #[test]
-    fn another_refusal_is_herdrs_answer_at_once() {
-        let herdr = FakeEngine::start(|method, _| match method {
+    fn another_refusal_is_the_engine_s_answer_at_once() {
+        let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "start_agent" => refused("agent_name_taken", "agent name one is already used"),
             "delivery_agent" => reply(delivery_agent(&json!({
@@ -1147,14 +1147,14 @@ mod tests {
                 "agent_status": "unknown", "revision": 0, "launch_pending": false}))),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
-            start(&herdr, Duration::from_secs(5))
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) =
+            start(&fake, Duration::from_secs(5))
         else {
             panic!("a refusal other than a busy pane is not retried");
         };
         assert_eq!(code, "agent_name_taken");
         assert_eq!(
-            herdr.methods(),
+            fake.methods(),
             ["pane_processes", "start_agent", "delivery_agent"]
         );
     }
@@ -1163,10 +1163,10 @@ mod tests {
     /// start under the same name is refused until then and must be sent
     /// again, once the refusal is gone, and not before.
     #[test]
-    fn a_start_under_the_ended_agents_name_is_sent_again_until_herdr_lets_go() {
+    fn a_start_under_the_ended_agents_name_is_sent_again_until_the_engine_lets_go() {
         let starts = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&starts);
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "start_agent" if seen.fetch_add(1, Ordering::SeqCst) < 2 => {
                 refused(NAME_TAKEN, "agent name two is already used")
@@ -1174,13 +1174,13 @@ mod tests {
             "start_agent" => started(),
             other => panic!("unexpected {other}"),
         });
-        assert!(start_reusing_name(&herdr, Duration::from_secs(5)).is_ok());
+        assert!(start_reusing_name(&fake, Duration::from_secs(5)).is_ok());
         assert_eq!(starts.load(Ordering::SeqCst), 3);
     }
 
-    fn start_named(herdr: &Fake) -> Result<StartedAgent, StartError> {
+    fn start_named(fake: &Fake) -> Result<StartedAgent, StartError> {
         start_within(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             None,
             "test:start",
             ShellStart::Plain,
@@ -1198,10 +1198,10 @@ mod tests {
     /// start refused under it reads the name once and, when the engine let go,
     /// starts rather than being refused for good.
     #[test]
-    fn a_name_herdr_lets_go_when_read_is_started_again() {
+    fn a_name_the_engine_lets_go_when_read_is_started_again() {
         let starts = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&starts);
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "start_agent" if seen.fetch_add(1, Ordering::SeqCst) == 0 => {
                 refused(NAME_TAKEN, "agent name factory-hide-t1 is already used")
@@ -1210,8 +1210,8 @@ mod tests {
             "delivery_agent" => refused(AGENT_NOT_FOUND, "agent target factory-hide-t1 not found"),
             other => panic!("unexpected {other}"),
         });
-        assert!(start_named(&herdr).is_ok());
-        let calls = herdr.calls();
+        assert!(start_named(&fake).is_ok());
+        let calls = fake.calls();
         let (_, read) = calls
             .iter()
             .find(|(method, _)| *method == "delivery_agent")
@@ -1223,8 +1223,8 @@ mod tests {
     /// A name the engine still holds after the read is an agent's, or a start
     /// that may still show one: the refusal is the answer.
     #[test]
-    fn a_name_still_held_after_the_read_is_herdrs_refusal() {
-        let herdr = FakeEngine::start(move |method, _| match method {
+    fn a_name_still_held_after_the_read_is_the_engine_s_refusal() {
+        let fake = FakeEngine::start(move |method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "start_agent" => refused(NAME_TAKEN, "agent name factory-hide-t1 is already used"),
             "delivery_agent" => reply(delivery_agent(&json!({
@@ -1233,12 +1233,12 @@ mod tests {
                     "agent_status": "unknown", "revision": 0, "launch_pending": true}))),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::Herdr(EngineError::Refused { code, .. })) = start_named(&herdr) else {
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) = start_named(&fake) else {
             panic!("a name someone else holds is refused");
         };
         assert_eq!(code, NAME_TAKEN);
         assert_eq!(
-            herdr.methods(),
+            fake.methods(),
             ["pane_processes", "start_agent", "delivery_agent"]
         );
     }
@@ -1246,8 +1246,8 @@ mod tests {
     /// The wait is bounded, and an ordinary start never waits for a name: it
     /// belongs to someone else.
     #[test]
-    fn a_name_that_is_never_released_is_herdrs_answer_and_an_ordinary_start_does_not_wait() {
-        let herdr = FakeEngine::start(|method, _| match method {
+    fn a_name_that_is_never_released_is_the_engine_s_answer_and_an_ordinary_start_does_not_wait() {
+        let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "start_agent" => refused(NAME_TAKEN, "agent name two is already used"),
             "delivery_agent" => reply(delivery_agent(&json!({
@@ -1256,21 +1256,21 @@ mod tests {
                     "agent_status": "unknown", "revision": 0, "launch_pending": false}))),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
-            start_reusing_name(&herdr, Duration::from_millis(300))
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) =
+            start_reusing_name(&fake, Duration::from_millis(300))
         else {
             panic!("a name that is never released is refused");
         };
         assert_eq!(code, NAME_TAKEN);
-        let before = herdr.methods().len();
-        let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
-            start(&herdr, Duration::from_secs(5))
+        let before = fake.methods().len();
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) =
+            start(&fake, Duration::from_secs(5))
         else {
             panic!("an ordinary start takes the refusal as the answer");
         };
         assert_eq!(code, NAME_TAKEN);
         assert_eq!(
-            herdr.methods().len() - before,
+            fake.methods().len() - before,
             3,
             "one process read, one start and one read of the held name, nothing sent again"
         );
@@ -1322,13 +1322,13 @@ mod tests {
 
     /// A first prompt of `bytes` bytes, the argument the engine types last.
     fn start_with_prompt(
-        herdr: &Fake,
+        fake: &Fake,
         node: Option<&dyn NodeLink>,
         bytes: usize,
         wait: Duration,
     ) -> Result<StartedAgent, StartError> {
         start_within(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             node,
             "test:start",
             ShellStart::Plain,
@@ -1340,9 +1340,8 @@ mod tests {
         )
     }
 
-    fn typed(herdr: &Fake) -> usize {
-        herdr
-            .methods()
+    fn typed(fake: &Fake) -> usize {
+        fake.methods()
             .iter()
             .filter(|method| **method == "start_agent")
             .count()
@@ -1353,16 +1352,16 @@ mod tests {
     /// 1,024 bytes; the start waits until the line editor reads keys.
     #[test]
     fn a_long_start_line_waits_for_the_shells_line_editor() {
-        let herdr = shell_alone("agent-start-editor");
+        let fake = shell_alone("agent-start-editor");
         let terminal = Terminal::answering(vec![
             Ok(LineInput::Lines { limit: 1024 }),
             Ok(LineInput::Lines { limit: 1024 }),
             Ok(LineInput::Keys),
         ]);
-        assert!(start_with_prompt(&herdr, Some(&terminal), 4800, Duration::from_secs(5)).is_ok());
+        assert!(start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_secs(5)).is_ok());
         assert_eq!(terminal.reads.load(Ordering::SeqCst), 3);
-        assert_eq!(typed(&herdr), 1);
-        assert_eq!(herdr.methods().last().copied(), Some("start_agent"));
+        assert_eq!(typed(&fake), 1);
+        assert_eq!(fake.methods().last().copied(), Some("start_agent"));
     }
 
     /// A line that fits the terminal's own limit reaches the shell whole
@@ -1371,13 +1370,13 @@ mod tests {
     #[test]
     fn a_long_line_the_terminal_keeps_whole_starts_without_waiting() {
         for input in [LineInput::Lines { limit: 4096 }, LineInput::Console] {
-            let herdr = shell_alone("agent-start-fits");
+            let fake = shell_alone("agent-start-fits");
             let terminal = Terminal::answering(vec![Ok(input)]);
             assert!(
-                start_with_prompt(&herdr, Some(&terminal), 2400, Duration::from_secs(5)).is_ok()
+                start_with_prompt(&fake, Some(&terminal), 2400, Duration::from_secs(5)).is_ok()
             );
             assert_eq!(terminal.reads.load(Ordering::SeqCst), 1);
-            assert_eq!(typed(&herdr), 1);
+            assert_eq!(typed(&fake), 1);
         }
     }
 
@@ -1386,37 +1385,37 @@ mod tests {
     /// line editor still starts a plain command.
     #[test]
     fn a_short_start_line_asks_no_node() {
-        let herdr = shell_alone("agent-start-short");
+        let fake = shell_alone("agent-start-short");
         let terminal = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
-        assert!(start_with_prompt(&herdr, Some(&terminal), 600, Duration::from_secs(5)).is_ok());
+        assert!(start_with_prompt(&fake, Some(&terminal), 600, Duration::from_secs(5)).is_ok());
         assert_eq!(terminal.reads.load(Ordering::SeqCst), 0);
-        assert!(start_with_prompt(&herdr, None, 600, Duration::from_secs(5)).is_ok());
-        assert_eq!(typed(&herdr), 2);
+        assert!(start_with_prompt(&fake, None, 600, Duration::from_secs(5)).is_ok());
+        assert_eq!(typed(&fake), 2);
     }
 
     /// The wait is the shell wait: past it a terminal still holding lines
     /// gets nothing typed, never a cut line, and the reason names the limit.
     #[test]
     fn a_terminal_that_never_leaves_line_mode_gets_nothing_typed() {
-        let herdr = shell_alone("agent-start-canonical");
+        let fake = shell_alone("agent-start-canonical");
         let terminal = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
         let Err(StartError::NotStarted { reason, detail }) =
-            start_with_prompt(&herdr, Some(&terminal), 4800, Duration::from_millis(300))
+            start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_millis(300))
         else {
             panic!("a line the terminal would cut is not typed");
         };
         assert_eq!(reason, "agent_start.shell_not_reading");
         assert!(detail.contains("1024 bytes"), "{detail}");
-        assert_eq!(typed(&herdr), 0);
+        assert_eq!(typed(&fake), 0);
     }
 
     /// Without a node to ask, or with one that cannot read the terminal, a
     /// long line is not typed on a guess.
     #[test]
     fn a_long_line_whose_terminal_cannot_be_read_gets_nothing_typed() {
-        let herdr = shell_alone("agent-start-unread");
+        let fake = shell_alone("agent-start-unread");
         let Err(StartError::NotStarted { reason, detail }) =
-            start_with_prompt(&herdr, None, 4800, Duration::from_secs(5))
+            start_with_prompt(&fake, None, 4800, Duration::from_secs(5))
         else {
             panic!("no node, no long line");
         };
@@ -1424,12 +1423,12 @@ mod tests {
         assert!(detail.contains("cannot be asked"), "{detail}");
         let terminal = Terminal::answering(vec![Err("the helper is gone".into())]);
         let Err(StartError::NotStarted { detail, .. }) =
-            start_with_prompt(&herdr, Some(&terminal), 4800, Duration::from_secs(5))
+            start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_secs(5))
         else {
             panic!("an unread terminal is not a reading one");
         };
         assert!(detail.contains("the helper is gone"), "{detail}");
-        assert_eq!(typed(&herdr), 0);
+        assert_eq!(typed(&fake), 0);
     }
 
     /// The pane's prompt mark, once its shell marked its first prompt.
@@ -1437,9 +1436,9 @@ mod tests {
         reply(tokens[PROMPT_TOKEN].as_str().map(str::to_owned))
     }
 
-    fn start_integrated(herdr: &Fake, wait: Duration) -> Result<StartedAgent, StartError> {
+    fn start_integrated(fake: &Fake, wait: Duration) -> Result<StartedAgent, StartError> {
         start_within(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             None,
             "test:start",
             ShellStart::Integrated {
@@ -1460,15 +1459,15 @@ mod tests {
     fn an_integrated_shell_is_typed_into_only_after_its_first_prompt_is_marked() {
         let reads = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&reads);
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "pane_token" if seen.fetch_add(1, Ordering::SeqCst) < 2 => pane_with(json!({})),
             "pane_token" => pane_with(json!({PROMPT_TOKEN: "1"})),
             "start_agent" => started(),
             other => panic!("unexpected {other}"),
         });
-        assert!(start_integrated(&herdr, Duration::from_secs(5)).is_ok());
-        let methods = herdr.methods();
+        assert!(start_integrated(&fake, Duration::from_secs(5)).is_ok());
+        let methods = fake.methods();
         assert_eq!(methods.iter().filter(|m| **m == "pane_token").count(), 3);
         assert_eq!(methods.last().copied(), Some("start_agent"));
     }
@@ -1480,7 +1479,7 @@ mod tests {
     fn a_shell_held_by_a_startup_question_gets_nothing_typed_and_names_the_question() {
         for foreground in [&[SHELL][..], &[SHELL, SHELL + 1]] {
             let foreground = foreground.to_vec();
-            let herdr = FakeEngine::start(move |method, _| match method {
+            let fake = FakeEngine::start(move |method, _| match method {
                 "pane_processes" => process_info(SHELL, &foreground),
                 "pane_token" => pane_with(json!({})),
                 "read_pane" => reply(PaneText {
@@ -1491,7 +1490,7 @@ mod tests {
                 other => panic!("unexpected {other}"),
             });
             let Err(StartError::ShellStarting(line)) =
-                start_integrated(&herdr, Duration::from_millis(300))
+                start_integrated(&fake, Duration::from_millis(300))
             else {
                 panic!("an unmarked shell is not a start");
             };
@@ -1499,7 +1498,7 @@ mod tests {
                 line.as_deref(),
                 Some("[oh-my-zsh] Would you like to update? [Y/n]")
             );
-            assert!(!herdr.methods().contains(&"start_agent"));
+            assert!(!fake.methods().contains(&"start_agent"));
         }
     }
 
@@ -1508,7 +1507,7 @@ mod tests {
     /// leave the pane with it.
     #[test]
     fn a_question_line_carries_no_credential_and_no_hidden_characters() {
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "pane_token" => pane_with(json!({})),
             "read_pane" => reply(PaneText {
@@ -1519,7 +1518,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let Err(StartError::ShellStarting(Some(line))) =
-            start_integrated(&herdr, Duration::from_millis(300))
+            start_integrated(&fake, Duration::from_millis(300))
         else {
             panic!("an unmarked shell is not a start");
         };
@@ -1531,7 +1530,7 @@ mod tests {
     #[test]
     fn a_credential_at_the_end_of_a_long_question_line_leaves_no_piece() {
         let text = format!("{} sk-{} [y/N]\n", "x".repeat(105), "A".repeat(30));
-        let herdr = FakeEngine::start(move |method, _| match method {
+        let fake = FakeEngine::start(move |method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
             "pane_token" => pane_with(json!({})),
             "read_pane" => reply(PaneText {
@@ -1541,7 +1540,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let Err(StartError::ShellStarting(Some(line))) =
-            start_integrated(&herdr, Duration::from_millis(300))
+            start_integrated(&fake, Duration::from_millis(300))
         else {
             panic!("an unmarked shell is not a start");
         };
@@ -1553,7 +1552,7 @@ mod tests {
     /// PowerShell is still the shell whose mark is waited for.
     #[test]
     fn a_windows_shell_named_by_its_full_path_is_the_launched_one() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => reply(processes(
                 &json!({"type": "pane_process_info", "process_info": {
                 "pane_id": "w1:p1", "shell_pid": SHELL, "foreground_process_group_id": SHELL,
@@ -1568,7 +1567,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let answer = start_within(
-            herdr.engine().as_ref(),
+            fake.engine().as_ref(),
             None,
             "test:start",
             ShellStart::Integrated {
@@ -1584,7 +1583,7 @@ mod tests {
             matches!(answer, Err(StartError::ShellStarting(_))),
             "{answer:?}"
         );
-        assert!(!herdr.methods().contains(&"start_agent"));
+        assert!(!fake.methods().contains(&"start_agent"));
     }
 
     /// A startup file that replaces the launched shell with another one
@@ -1592,7 +1591,7 @@ mod tests {
     /// so nothing waits for one.
     #[test]
     fn a_shell_other_than_the_launched_one_is_started_without_waiting_for_a_mark() {
-        let herdr = FakeEngine::start(|method, _| match method {
+        let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => reply(processes(
                 &json!({"type": "pane_process_info", "process_info": {
                 "pane_id": "w1:p1", "shell_pid": SHELL, "foreground_process_group_id": SHELL,
@@ -1601,8 +1600,8 @@ mod tests {
             "start_agent" => started(),
             other => panic!("unexpected {other}"),
         });
-        assert!(start_integrated(&herdr, Duration::from_secs(5)).is_ok());
-        assert_eq!(herdr.methods(), ["pane_processes", "start_agent"]);
+        assert!(start_integrated(&fake, Duration::from_secs(5)).is_ok());
+        assert_eq!(fake.methods(), ["pane_processes", "start_agent"]);
     }
 
     #[test]

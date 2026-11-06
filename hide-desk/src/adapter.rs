@@ -142,7 +142,7 @@ impl AdapterId {
     }
 
     pub fn as_str(self) -> &'static str {
-        self.catalog().herdr.name
+        self.catalog().engine_kind
     }
 
     pub fn parse(id: &str) -> Option<Self> {
@@ -477,7 +477,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desk_speaks_with_every_agent_the_catalog_can_start_by_its_herdr_name() {
+    fn desk_speaks_with_every_agent_the_catalog_can_start_by_its_engine_kind() {
         let names: Vec<&str> = AdapterId::all().map(AdapterId::as_str).collect();
         assert_eq!(
             names,

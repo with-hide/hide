@@ -1408,7 +1408,7 @@ pub(crate) mod omp {
     /// session, by the id in the header, so the core can key the link
     /// record's lineage by either.
     #[test]
-    fn the_file_herdr_reports_and_the_link_reader_name_one_session() {
+    fn the_file_the_engine_reports_and_the_link_reader_name_one_session() {
         let mut native = Native::new();
         native.request.reference_kind = "path".to_owned();
         native.request.reference_value = native.path.display().to_string();
@@ -2789,7 +2789,7 @@ pub(crate) mod pi {
     /// session, by the id in the header, so the core can key the link
     /// record's lineage by either.
     #[test]
-    fn the_file_herdr_reports_and_the_link_reader_name_one_session() {
+    fn the_file_the_engine_reports_and_the_link_reader_name_one_session() {
         let mut native = Native::new();
         native.request.reference_kind = "path".to_owned();
         native.request.reference_value = native.path.display().to_string();

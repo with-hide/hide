@@ -5,7 +5,7 @@
 import { AGENT_ADAPTERS } from "./agentAdapters";
 import type { ProviderKind } from "./agentPicker";
 import type { NotificationPermission } from "./host";
-import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
+import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type MachineProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
 
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
 export type WizardStep = Exclude<FirstRunStep, "done">;
@@ -14,7 +14,7 @@ export type WizardStep = Exclude<FirstRunStep, "done">;
  * Failed or unread discovery has its own retry step; only a complete read that found nothing skips it, so a list cut
  * at a bound keeps the step (the core's `first_run_has_devices` holds the same rule).
  */
-export function wizardSteps(profiles: HerdrProfiles | undefined): readonly WizardStep[] {
+export function wizardSteps(profiles: MachineProfiles | undefined): readonly WizardStep[] {
   return profiles?.state === "ready" && profiles.profiles.length === 0 && !profiles.truncated
     ? ["agents", "notifications", "project"]
     : ["agents", "devices", "notifications", "project"];

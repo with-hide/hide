@@ -2,7 +2,7 @@
 //! conversation to resume in the same pane (PRD agent-sleep).
 //!
 //! This module decides and remembers; it makes no engine call and ends no
-//! process. `agent_sleep_herdr.rs` is the one boundary that does, so when
+//! process. `agent_sleep_engine.rs` is the one boundary that does, so when
 //! the engine offers a hibernate of its own only that file changes (D-20).
 //!
 //! The engine forgets an agent whose process ended (Herdr did too): it drops it from
@@ -242,8 +242,8 @@ impl SleepRecord {
             kind: agent.agent_kind.clone(),
             session_id,
             // A device row's id is the core's own scoped one, never a name;
-            // its engine name, when someone gave one, is `herdr_name`.
-            agent_name: agent.herdr_name.clone().or_else(|| {
+            // its engine name, when someone gave one, is `given_name`.
+            agent_name: agent.given_name.clone().or_else(|| {
                 (!crate::address::is_device_scoped(&agent.pane_id)
                     && agent.id != agent.pane_id
                     && !agent.id.trim().is_empty())
@@ -708,7 +708,7 @@ mod tests {
             descendant_mark: None,
             descendant_line: None,
             id: pane_id.to_owned(),
-            herdr_name: None,
+            given_name: None,
             started_name: None,
             declared_fork: None,
             forked_from: None,
@@ -968,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sleeping_agent_herdr_stopped_listing_keeps_its_row() {
+    fn a_sleeping_agent_the_engine_stopped_listing_keeps_its_row() {
         let mut parent = agent("w1:p2");
         parent.id = "reviewer".into();
         parent.spawned_from_pane_id = Some("w1:p1".into());
@@ -990,7 +990,7 @@ mod tests {
         assert_eq!(
             (
                 row.id.as_str(),
-                row.herdr_name.as_deref(),
+                row.given_name.as_deref(),
                 row.pane_id.as_str(),
                 row.identity_label.as_str(),
                 row.session_id.as_deref(),

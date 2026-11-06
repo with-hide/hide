@@ -483,7 +483,7 @@ async fn conversation_step(
         return (None, None);
     }
     let reader = Arc::clone(mobile);
-    let pane_id = key.herdr_pane_id().to_owned();
+    let pane_id = key.engine_pane_id().to_owned();
     let (transcript, page) = tokio::task::spawn_blocking(move || {
         let source = reader
             .engine(reader.node().as_str())
@@ -547,7 +547,7 @@ struct RowsReader {
 
 impl RowsReader {
     async fn read(&mut self, mobile: &Arc<Mobile>, key: &AgentKey, asked: u32) -> Option<Value> {
-        let pane_id = key.herdr_pane_id().to_owned();
+        let pane_id = key.engine_pane_id().to_owned();
         let device_id = key.device_id.clone();
         let reader = Arc::clone(mobile);
         // Resolving a device's connection waits on the core owner thread,
@@ -1487,10 +1487,10 @@ async fn input(
         return answer(false, Some("gone"));
     };
     let text = message.get("text").and_then(Value::as_str);
-    let herdr_key = message.get("key").and_then(Value::as_str);
-    let problem = match (text, herdr_key) {
+    let engine_key = message.get("key").and_then(Value::as_str);
+    let problem = match (text, engine_key) {
         (Some(text), None) => pane::reply_problem(text),
-        (None, Some(key)) => pane::herdr_key(key).is_none().then_some("unknown_key"),
+        (None, Some(key)) => pane::engine_key(key).is_none().then_some("unknown_key"),
         _ => Some("invalid_request"),
     };
     if let Some(problem) = problem {
@@ -1505,12 +1505,12 @@ async fn input(
         Reservation::Seen(InputState::InFlight) => return answer(false, Some("in_flight")),
         Reservation::Seen(InputState::Uncertain) => return answer(false, Some("uncertain")),
     }
-    let pane_id = key.herdr_pane_id().to_owned();
+    let pane_id = key.engine_pane_id().to_owned();
     let core_pane_id = key.pane_id.clone();
     let device_id = key.device_id.clone();
     let writer = Arc::clone(mobile);
     let text = text.map(str::to_owned);
-    let herdr_key = herdr_key.and_then(pane::herdr_key);
+    let engine_key = engine_key.and_then(pane::engine_key);
     // The blocking write owns settlement even if its async caller is cancelled.
     // A panic or a queued closure dropped at shutdown conservatively settles Uncertain.
     struct Settlement {
@@ -1533,7 +1533,7 @@ async fn input(
     };
     let (certain, result) = tokio::task::spawn_blocking(move || {
         let (attempted, result) = (|| {
-            let input = match (&text, herdr_key) {
+            let input = match (&text, engine_key) {
                 (Some(text), _) => Input::Reply(text),
                 (None, Some(key)) => Input::Key(key),
                 (None, None) => unreachable!("validated above"),

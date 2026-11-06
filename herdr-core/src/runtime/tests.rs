@@ -672,7 +672,7 @@ pub(super) fn pane(id: &str, cwd: &str) -> PaneSnapshot {
         terminal_id: None,
         failed_terminal_id: None,
         id: id.to_owned(),
-        herdr_label: None,
+        engine_label: None,
         terminal_title: None,
         cwd: cwd.to_owned(),
         status_code: crate::model::AgentStatusCode::Attached,
@@ -995,9 +995,9 @@ fn correlated_pane_focus_event(pane_id: &str, request_id: &str) -> Vec<u8> {
 /// The engine's event stream as the engine publishes it: each session carries
 /// the tab moves the engine has made, so a test states which moves a session
 /// comes after instead of leaving the core to infer them from its state.
-struct HerdrMoves(crate::sidebar::SessionTabMoves);
+struct EngineMoves(crate::sidebar::SessionTabMoves);
 
-impl HerdrMoves {
+impl EngineMoves {
     fn new() -> Self {
         Self(crate::sidebar::SessionTabMoves {
             generation: 1,
@@ -1574,7 +1574,7 @@ fn close_capture_request(key: &str) -> crate::recent_closed::capture::CloseCaptu
 }
 
 #[test]
-fn a_device_that_is_not_connected_lends_no_herdr_api_to_a_phone() {
+fn a_device_that_is_not_connected_lends_no_engine_api_to_a_phone() {
     // The phone's detail reads this as "the device is not connected" (mobile-companion B28).
     let runtime = runtime();
     assert!(runtime.device_engine("ssh-mini").is_none());
@@ -1595,7 +1595,7 @@ fn start_claims_survive_local_projection_without_becoming_public_titles() {
         let panes = project_layout_panes(&payload.layouts[0], &payload, &[], &[], "/repo");
         let pane = &panes[0];
         assert_eq!(pane.start_claim.as_deref(), Some(claim.as_str()));
-        assert_eq!(pane.herdr_label, None);
+        assert_eq!(pane.engine_label, None);
         assert_eq!(pane.terminal_title, None);
         let public = serde_json::to_string(pane).unwrap();
         assert!(!public.contains(&claim));
@@ -1605,7 +1605,7 @@ fn start_claims_survive_local_projection_without_becoming_public_titles() {
     payload.panes[0].label = Some(" 작업 메모 ".into());
     payload.panes[0].terminal_title = Some("hide-start:v1:human notes".into());
     let panes = project_layout_panes(&payload.layouts[0], &payload, &[], &[], "/repo");
-    assert_eq!(panes[0].herdr_label.as_deref(), Some(" 작업 메모 "));
+    assert_eq!(panes[0].engine_label.as_deref(), Some(" 작업 메모 "));
     assert_eq!(
         panes[0].terminal_title.as_deref(),
         Some("hide-start:v1:human notes")

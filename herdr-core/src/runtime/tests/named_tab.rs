@@ -320,7 +320,7 @@ fn a_reopened_tab_the_operator_named_is_named_again() {
     runtime.ingest_reopen_result(
         &request,
         Ok(
-            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
                 crate::recent_closed::reopen::ReopenOutcome {
                     tab_id: Some("w-order:t9".into()),
                     consumed: true,

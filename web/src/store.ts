@@ -217,7 +217,7 @@ type Store = {
    */
   operatorFocusSent: number;
   operatorFocusApplied: number;
-  herdrState: string | null;
+  engineState: string | null;
   find: PaneFind | null;
   /** The Explorer's listings, one per expanded folder, oldest evicted past `LISTING_CAP`. */
   listings: Record<string, DirectoryList>;
@@ -356,7 +356,7 @@ export const useShellStore = create<Store>((set, get) => ({
   focusedPaneId: null,
   operatorFocusSent: 0,
   operatorFocusApplied: 0,
-  herdrState: null,
+  engineState: null,
   find: null,
   listings: {},
   pathRefusal: null,
@@ -674,7 +674,7 @@ export const useShellStore = create<Store>((set, get) => ({
         ...cursors,
         focusedPaneId: focusedPaneOf(rest),
         operatorFocusApplied: appliedAfter(rest, get()),
-        herdrState: rest.status?.herdr?.state ?? get().herdrState,
+        engineState: rest.status?.herdr?.state ?? get().engineState,
       });
     } else {
       set(cursors);

@@ -416,7 +416,7 @@ fn a_save_on_its_way_cannot_bring_a_removed_projects_protections_back() {
 }
 
 #[test]
-fn a_project_shown_from_a_herdr_workspace_is_guarded_without_a_registration() {
+fn a_project_shown_from_an_engine_workspace_is_guarded_without_a_registration() {
     let mut runtime = held(fixture());
     runtime.snapshot.ui_state.workspace_registrations.clear();
     runtime.snapshot.navigator.workspaces[0].registered = false;

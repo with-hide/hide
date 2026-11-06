@@ -1691,7 +1691,7 @@ fn provider_label(provider: &str) -> String {
             let descriptor = agent.format().adapter();
             descriptor
                 .sidebar_label
-                .unwrap_or(descriptor.herdr.name)
+                .unwrap_or(descriptor.engine_kind)
                 .to_owned()
         }
         None => "Hide".to_owned(),

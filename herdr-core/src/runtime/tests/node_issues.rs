@@ -8,7 +8,7 @@
 //! The node is the documents test double, which answers with the real host
 //! dispatch, so its facts, worktrees and branch notes are real Git.
 
-use super::device_catalog::{herdr_workspace, session};
+use super::device_catalog::{engine_workspace, session};
 use super::device_worktrees::git;
 use super::documents::FakeDevice;
 use super::*;
@@ -187,8 +187,8 @@ fn node_runtime(
 ) -> SharedRuntime {
     let connector = FakeEngine::absent().engine();
     let workspaces = vec![
-        herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
-        herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
+        engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+        engine_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
     ];
     node_runtime_with(repo, node, own, store, connector, workspaces)
 }
@@ -1541,8 +1541,8 @@ fn a_worktree_read_whose_link_is_lost_asks_no_branch_notes() {
         runtime.ingest_remote_session(
             NODE,
             Ok(session(vec![
-                herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
-                herdr_workspace(NODE, "w3", &other.root, &[("t3", &other.root)]),
+                engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+                engine_workspace(NODE, "w3", &other.root, &[("t3", &other.root)]),
             ])),
         );
         runtime.request_device_worktrees(NODE, true);
@@ -1772,7 +1772,7 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
         &repo.root,
         &["worktree", "add", "-q", "-b", "changed", &changed],
     );
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "session" => reply(fake::session(serde_json::json!({}))),
         other => panic!("the node's engine is asked {other}"),
     });
@@ -1782,8 +1782,8 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
         FakeDevice::new(),
         own.clone(),
         Default::default(),
-        herdr.engine(),
-        vec![herdr_workspace(NODE, "w1", &repo.root, &[])],
+        fake.engine(),
+        vec![engine_workspace(NODE, "w1", &repo.root, &[])],
     );
     let workspace_id = {
         let runtime = shared.lock().unwrap();
@@ -1915,7 +1915,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
         Recording::of(None),
         Default::default(),
         connector,
-        vec![herdr_workspace(
+        vec![engine_workspace(
             NODE,
             "w1",
             &repo.root,
@@ -1938,8 +1938,8 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
             origin: crate::model::LinkOrigin::Inbound,
             host_consent: None,
         },
-        old_owner_herdr_socket: "/tmp/macbook-herdr.sock".to_owned(),
-        new_owner_herdr_socket: "/tmp/mini-herdr.sock".to_owned(),
+        old_owner_engine_socket: "/tmp/macbook-herdr.sock".to_owned(),
+        new_owner_engine_socket: "/tmp/mini-herdr.sock".to_owned(),
     };
     let moved = crate::node_migration::id_table(
         &change,
@@ -2021,7 +2021,7 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
     let created = format!("{}-4-start", repo.root);
     let root = repo.root.clone();
     let path = created.clone();
-    let herdr = FakeEngine::start(move |method, _| match method {
+    let fake = FakeEngine::start(move |method, _| match method {
         "create_worktree" => {
             git(&root, &["worktree", "add", "-q", "-b", "4-start", &path]);
             reply(crate::engine::CreatedWorktree {
@@ -2043,10 +2043,10 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
         FakeDevice::new(),
         own.clone(),
         store,
-        herdr.engine(),
+        fake.engine(),
         vec![
-            herdr_workspace(NODE, "w1", &repo.root, &[]),
-            herdr_workspace(NODE, "w2", &repo.linked, &[]),
+            engine_workspace(NODE, "w1", &repo.root, &[]),
+            engine_workspace(NODE, "w2", &repo.linked, &[]),
         ],
     );
     dispatch(
@@ -2077,7 +2077,7 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
         git(&repo.root, &["config", "branch.4-start.issue"]).trim(),
         "L-4"
     );
-    let tokens: Vec<serde_json::Value> = herdr
+    let tokens: Vec<serde_json::Value> = fake
         .calls()
         .into_iter()
         .filter(|(method, _)| *method == "report_workspace_token")
@@ -2292,7 +2292,7 @@ fn a_node_pull_request_is_handed_to_an_agent_on_the_node() {
     let own = Recording::of(None);
     *own.gh_stdout.lock().unwrap() =
         Some(r#"{"body":"b","statusCheckRollup":[],"reviews":[]}"#.to_owned());
-    let herdr = FakeEngine::start(|method, _| {
+    let fake = FakeEngine::start(|method, _| {
         refused("unsupported", &format!("the fixture answers no {method}"))
     });
     let shared = node_runtime_with(
@@ -2300,10 +2300,10 @@ fn a_node_pull_request_is_handed_to_an_agent_on_the_node() {
         FakeDevice::new(),
         own.clone(),
         Default::default(),
-        herdr.engine(),
+        fake.engine(),
         vec![
-            herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
-            herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
+            engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+            engine_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
         ],
     );
     let workspace_id = {
@@ -2342,8 +2342,8 @@ fn a_node_pull_request_is_handed_to_an_agent_on_the_node() {
         serde_json::json!({"workspace_id": workspace_id, "pr_number": 7, "provider": "claude",
             "prompt": "Fix the failing checks"}),
     );
-    herdr.wait_for_calls(1, Duration::from_secs(10));
-    let opened = herdr.calls();
+    fake.wait_for_calls(1, Duration::from_secs(10));
+    let opened = fake.calls();
     assert_eq!(
         opened
             .iter()
@@ -2379,7 +2379,7 @@ fn node_pull_request_worktree(stay_behind: bool) -> (bool, bool) {
     git(&repo.root, &["branch", "pr-branch"]);
     let node = Recording::of(Some(FakeDevice::new()));
     let own = Recording::of(None);
-    let herdr = FakeEngine::start(|method, _| {
+    let fake = FakeEngine::start(|method, _| {
         refused("unsupported", &format!("the fixture answers no {method}"))
     });
     let shared = node_runtime_with(
@@ -2387,10 +2387,10 @@ fn node_pull_request_worktree(stay_behind: bool) -> (bool, bool) {
         node.clone(),
         own.clone(),
         Default::default(),
-        herdr.engine(),
+        fake.engine(),
         vec![
-            herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
-            herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
+            engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+            engine_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
         ],
     );
     let workspace_id = {
@@ -2407,8 +2407,8 @@ fn node_pull_request_worktree(stay_behind: bool) -> (bool, bool) {
         serde_json::json!({"workspace_id": workspace_id, "pr_number": 7, "provider": "claude",
             "prompt": "Fix the failing checks", "request_id": "start-pr-7", "stay_behind": stay_behind}),
     );
-    herdr.wait_for_calls(1, Duration::from_secs(10));
-    let asked = herdr.calls();
+    fake.wait_for_calls(1, Duration::from_secs(10));
+    let asked = fake.calls();
     assert_eq!(
         asked
             .iter()
@@ -2506,8 +2506,8 @@ fn a_node_checkout_links_the_issue_its_delegated_child_names() {
     let parent = format!("remote:{NODE}:pane:t1");
     let child = format!("remote:{NODE}:pane:t2");
     let mut raw = session(vec![
-        herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
-        herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
+        engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+        engine_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
     ]);
     raw.agents = crate::sidebar::project_agents(
         crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [
@@ -2540,10 +2540,10 @@ fn a_failed_node_write_s_token_is_not_drawn_as_a_direct_link() {
     let own = Recording::of(None);
     *own.gh_answers.lock().unwrap() = vec![("api graphql", graphql_issue(5))];
     let workspaces = |token: Option<&str>| {
-        let mut linked = herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]);
+        let mut linked = engine_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]);
         linked.checkouts[0].owner_workspace_id = Some("w2".to_owned());
         let mut raw = session(vec![
-            herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+            engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
             linked,
         ]);
         if let Some(token) = token {
@@ -2605,10 +2605,10 @@ fn a_failed_node_write_s_token_is_not_drawn_as_a_direct_link() {
 fn a_node_checkout_s_malformed_link_is_logged_once_per_value() {
     let repo = repo(Some("https://github.com/acme/app.git"), "feature");
     let workspaces = |token: &str| {
-        let mut linked = herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]);
+        let mut linked = engine_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]);
         linked.checkouts[0].owner_workspace_id = Some("w2".to_owned());
         let mut raw = session(vec![
-            herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+            engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
             linked,
         ]);
         raw.issue_tokens
@@ -2660,8 +2660,8 @@ fn a_node_github_read_asks_the_links_its_rows_were_derived_with() {
     ingest_node_issues(&mut runtime, &repo, &[9]);
     let child = format!("remote:{NODE}:pane:t2");
     let mut raw = session(vec![
-        herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
-        herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
+        engine_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
+        engine_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
     ]);
     raw.issue_tokens
         .panes
@@ -2776,7 +2776,7 @@ fn a_node_cleanup_says_why_github_cannot_prove_a_merge() {
             "work",
         ],
     );
-    let herdr = FakeEngine::start(|method, _| match method {
+    let fake = FakeEngine::start(|method, _| match method {
         "session" => reply(fake::session(serde_json::json!({}))),
         other => panic!("the node's engine is asked {other}"),
     });
@@ -2785,8 +2785,8 @@ fn a_node_cleanup_says_why_github_cannot_prove_a_merge() {
         FakeDevice::new(),
         Recording::of(None),
         Default::default(),
-        herdr.engine(),
-        vec![herdr_workspace(NODE, "w1", &repo.root, &[])],
+        fake.engine(),
+        vec![engine_workspace(NODE, "w1", &repo.root, &[])],
     );
     let workspace_id = node_project(&shared.lock().unwrap()).unwrap().id.clone();
     dispatch(
@@ -2835,7 +2835,7 @@ fn a_node_worktree_the_window_selected_stays_out_of_the_inactive_fold() {
         Recording::of(None),
         Default::default(),
         FakeEngine::absent().engine(),
-        vec![herdr_workspace(
+        vec![engine_workspace(
             NODE,
             "w1",
             &repo.root,

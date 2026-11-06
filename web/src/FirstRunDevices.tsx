@@ -18,7 +18,7 @@ import { Checkbox } from "./components/ui/checkbox";
 import { DialogBody, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
-import type { HerdrProfile } from "./snapshot";
+import type { MachineProfile } from "./snapshot";
 import { DeviceInstallTerms } from "./settings/AddDevice";
 import { DeviceLink, deviceLinkShown } from "./settings/DeviceRow";
 import { canRetryDevice, retrySignsIn } from "./settings";
@@ -56,8 +56,8 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   const wsl = rows.some((profile) => profile.wsl_distro);
   const reading = !profiles || profiles.state === "idle" || profiles.state === "loading";
   const failed = profiles?.state === "failed";
-  const deviceOf = (profile: HerdrProfile) => rest?.navigator?.devices?.find((row) => row.id === profile.device_id);
-  const rowState = (profile: HerdrProfile): RowState => {
+  const deviceOf = (profile: MachineProfile) => rest?.navigator?.devices?.find((row) => row.id === profile.device_id);
+  const rowState = (profile: MachineProfile): RowState => {
     if (profile.problem) return "unavailable";
     const deviceId = profile.device_id ?? profile.added_as;
     const remote = rest?.status?.remote?.find((row) => row.target_id === deviceId);
@@ -80,14 +80,14 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   const busy = [...states.values()].some((state) => state === "connecting" || state === "installing");
   // A failed row is tried again by its own action only (Sign in, Retry, none for a changed server key).
   const targets = rows.filter((profile) => selected.has(profile.id) && states.get(profile.id) === "saved" && !profile.problem);
-  const connect = (only?: HerdrProfile) => {
+  const connect = (only?: MachineProfile) => {
     if (busy) return;
     const chosen = only ? [only] : targets;
     if (chosen.length === 0) return;
     pressed.current = true;
     setPressedAt(revision);
     setSent((previous) => new Set([...previous, ...chosen.map((row) => row.id)]));
-    for (const profile of chosen) actions.connectHerdrProfile(profile.id);
+    for (const profile of chosen) actions.connectMachineProfile(profile.id);
   };
   // A proven empty result skips this step, including Help's local walk.
   useEffect(() => { if (profiles?.state === "ready" && rows.length === 0 && !profiles.truncated) onNext(); }, [profiles?.state, rows.length]);
@@ -111,7 +111,7 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
         {reading ? <Status tone="pending">{t("firstRun.devices.loading")}</Status> : failed ? (
           <div role="status" className="flex flex-wrap items-center gap-sm">
             <Status tone="error">{t("firstRun.devices.readFailed")}</Status>
-            <Button variant="secondary" onClick={actions.listHerdrProfiles} data-first-run-devices-retry="true">{t("common.retry")}</Button>
+            <Button variant="secondary" onClick={actions.listMachineProfiles} data-first-run-devices-retry="true">{t("common.retry")}</Button>
           </div>
         ) : rows.length === 0 ? <Note>{t("firstRun.devices.empty")}</Note> : (
           <div role="group" aria-label={t("firstRun.devices.selection")} className="divide-y divide-border rounded-md border border-border bg-card">

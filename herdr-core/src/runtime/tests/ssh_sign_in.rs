@@ -744,10 +744,10 @@ fn hide_device_retry_answers_as_its_published_schema() {
 /// The first-run Devices step lists the device as its ssh config Host.
 fn step_lists_the_host(shared: &Arc<Mutex<Runtime>>) {
     let mut runtime = shared.lock().unwrap();
-    runtime.snapshot.status.herdr_profiles = crate::model::HerdrProfilesSnapshot {
+    runtime.snapshot.status.machine_profiles = crate::model::MachineProfilesSnapshot {
         state: "ready".to_owned(),
         error: None,
-        profiles: vec![crate::model::HerdrProfileSnapshot {
+        profiles: vec![crate::model::MachineProfileSnapshot {
             id: format!("ssh:{DEVICE}"),
             label: DEVICE.to_owned(),
             target: DEVICE.to_owned(),

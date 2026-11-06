@@ -512,7 +512,7 @@ mod tests {
     /// Codex at rest after `codex fork` has no session in the engine; its first
     /// turn reports one, and only then is the fork registered.
     #[test]
-    fn a_wait_binds_once_herdr_shows_the_agents_session_and_holds_while_it_rests() {
+    fn a_wait_binds_once_the_engine_shows_the_agents_session_and_holds_while_it_rests() {
         let (ledger, wait) = forked();
         let resting = [listed("w2:p1", &wait.name, None)];
         assert_eq!(

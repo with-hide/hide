@@ -9,11 +9,11 @@ import { chord } from "./chords";
 test("close follows the keyboard and the lane never renders an empty surface", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1920, height: 1000 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n\n한글과 English\n");
-    daemon = await startHided(herdr, "close-policy");
+    fs.writeFileSync(path.join(engine.root, "fixture", "notes.md"), "# Notes\n\n한글과 English\n");
+    daemon = await startHided(engine, "close-policy");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page);
     await showExplorer(page);
@@ -63,7 +63,7 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await editor.click();
     await page.keyboard.press("Escape");
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
-    const [first, second] = herdr.panes;
+    const [first, second] = engine.panes;
     await page.locator(`[data-terminal-host="${second}"]`).click();
     await page.keyboard.press(chord("close_tab"));
     const confirm = page.getByRole("button", { name: "Stop work and close" });
@@ -74,6 +74,6 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await screenshot(page, "close-pane-survivor");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

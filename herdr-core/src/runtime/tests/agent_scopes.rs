@@ -480,7 +480,7 @@ fn close_consequences_keep_unknown_priority_and_outside_descendant_counts() {
     let mut root = pane("root", "/fixture");
     root.requires_close_confirmation = true;
     let mut neighbour = pane("neighbour", "/fixture");
-    neighbour.herdr_label = Some("second pane".into());
+    neighbour.engine_label = Some("second pane".into());
     let mut inside = checkout("project", "inside", "/fixture", Some(root));
     inside.tabs[0].panes.push(neighbour);
     let outside = checkout(
