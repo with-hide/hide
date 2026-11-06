@@ -14,6 +14,7 @@ import { MissionDetail } from "./MissionDetail";
 import { MissionsScreen } from "./MissionsScreen";
 import { PrDetail } from "./PrDetail";
 import { PrsScreen } from "./PrsScreen";
+import { SettingsSheet } from "./SettingsSheet";
 import { StartSheet } from "./StartSheet";
 import { TabBar } from "./TabBar";
 import {
@@ -99,9 +100,9 @@ function standalone(): boolean {
 
 /**
  * `hosted` and `picker` are the gallery's: the list as a hosted phone draws it,
- * with the device sheet already open on the Mac it names. A phone passes neither.
+ * with the device sheet already open on the Mac it names, or the settings sheet open. A phone passes none.
  */
-export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolean; picker?: { room: string; open: boolean } }) {
+export function ListScreen({ hosted = hostedPhone(), picker, settingsOpen = false }: { hosted?: boolean; picker?: { room: string; open: boolean }; settingsOpen?: boolean }) {
   const { t } = useInterfaceTranslation();
   const macName = usePhone((s) => s.macName);
   const otherPhones = usePhone((s) => s.otherPhones);
@@ -121,7 +122,8 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
       <header className="phone-safe-top px-xl" data-phone-connected={connected ? "true" : "false"}>
         <div className="flex items-center justify-between pt-lg">
           <h1 className="text-headline font-semibold text-foreground">hide</h1>
-          <div className="flex items-center gap-md">
+          <div className="flex items-center">
+            <SettingsSheet defaultOpen={settingsOpen} />
             <button
               type="button"
               aria-label={t("mobile.start.title")}
