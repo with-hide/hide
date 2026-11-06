@@ -4354,6 +4354,9 @@ impl Runtime {
         );
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.device_id = device.clone();
+            // The task's completion takes the desktop's screen nowhere
+            // (`ingest_task_operation_result`).
+            operation.stays_behind = payload.stay_behind;
         }
         let request = crate::worktree_control::WorktreeTaskRequest {
             id,
@@ -4361,7 +4364,8 @@ impl Runtime {
             branch,
             base_branch: payload.base_branch,
             agent_kind: payload.agent_kind,
-            focus: true,
+            // The engine focuses the tab it makes unless the start stays behind.
+            focus: !payload.stay_behind,
             purpose: payload.purpose,
             // The link is kept where the core keeps a checkout's links: on
             // this machine or a node that dials it (D-29), never a device it

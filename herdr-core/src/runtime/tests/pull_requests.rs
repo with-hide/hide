@@ -378,6 +378,141 @@ fn handing_a_pull_request_to_an_agent_starts_in_its_checkout_or_a_worktree_of_it
     );
 }
 
+/// PRD mobile-companion-ui B44: a hand-over from the phone starts the same
+/// agent in the same checkout and says on the slot that it stays behind, so
+/// the desktop's screen is not moved; one with no such word does not say it.
+/// A refusal said before any start holds the slot answers the phone's request
+/// by its id, so the phone is told rather than left to time out.
+#[test]
+fn a_phone_hand_over_stays_behind_and_its_refusal_answers_its_request() {
+    let mut runtime = pr_runtime(vec![pull_request(
+        7,
+        "4-task",
+        PullRequestBadge::Open,
+        None,
+    )]);
+    let hand_over = |extra: serde_json::Value| {
+        let mut payload = serde_json::json!({"workspace_id": "w", "pr_number": 7, "provider": "claude", "prompt": "CI를 고쳐줘"});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        event("pr_delegate", payload)
+    };
+    assert!(runtime.dispatch_json(&hand_over(serde_json::json!({}))));
+    assert!(
+        !runtime
+            .snapshot()
+            .task_operation
+            .as_ref()
+            .unwrap()
+            .stays_behind
+    );
+    // The slot is held by the first start; the operator's acknowledgement frees it.
+    let id = runtime.snapshot().task_operation.as_ref().unwrap().id;
+    assert!(runtime.dispatch_json(&event("task_operation_ack", serde_json::json!({"id": id}))));
+    assert!(runtime.dispatch_json(&hand_over(serde_json::json!({"stay_behind": true}))));
+    assert!(
+        runtime
+            .snapshot()
+            .task_operation
+            .as_ref()
+            .unwrap()
+            .stays_behind
+    );
+
+    let refused = |runtime: &mut Runtime, extra: serde_json::Value| {
+        assert!(runtime.dispatch_json(&hand_over(extra)));
+        runtime.snapshot().status.last_error.clone().unwrap()
+    };
+    let error = refused(
+        &mut runtime,
+        serde_json::json!({"provider": "terminal", "request_id": "phone-1", "stay_behind": true}),
+    );
+    assert_eq!(
+        (error.kind.as_str(), error.request_id.as_deref()),
+        ("pr_delegate.unknown_provider", Some("phone-1"))
+    );
+    // A refusal that already carries its request keeps it, and one with none stays unanswered.
+    let error = refused(&mut runtime, serde_json::json!({"provider": "terminal"}));
+    assert_eq!(error.request_id, None);
+}
+
+/// The phone's pull requests are read from the record the core publishes, so
+/// the field names of the board, the card and the list cannot drift from the
+/// phone's whitelist without this failing (PRD mobile-companion-ui B37-B40).
+#[test]
+fn the_phone_reads_the_pull_requests_the_core_published_with_their_card_and_write() {
+    use crate::agent_state::phone::{PhonePrs, project};
+    let now = unix_milliseconds();
+    // Touched just now: the board folds a pull request nothing moved on for a week.
+    let mut recent = pull_request(2, "open-work", PullRequestBadge::Open, None);
+    recent.updated_at_unix_ms = Some(now);
+    let mut runtime = pr_runtime(vec![
+        recent,
+        pull_request(
+            4,
+            "new-merge",
+            PullRequestBadge::Merged,
+            Some(now - 2 * DAY),
+        ),
+    ]);
+    // A merge GitHub refused, as the card of pull request 2 keeps it.
+    runtime.dispatch_json(&event(
+        "pr_merge",
+        serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"}),
+    ));
+    let rest = serde_json::to_value(runtime.snapshot()).unwrap();
+    let phone = PhonePrs::project(
+        &rest,
+        crate::node::TEST_NODE,
+        &project(&rest, crate::node::TEST_NODE),
+    );
+    assert_eq!(
+        phone
+            .projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect::<Vec<_>>(),
+        ["w"]
+    );
+    // The open pull request first, then the one merged lately; each under its project.
+    assert_eq!(
+        phone
+            .items
+            .iter()
+            .map(|pr| pr.key.as_str())
+            .collect::<Vec<_>>(),
+        ["w#2", "w#4"]
+    );
+    let open = phone.find("w#2").expect("the open pull request is listed");
+    assert_eq!(
+        (
+            open.project.as_str(),
+            open.pr.number,
+            open.pr.head_branch.as_str()
+        ),
+        ("w", 2, "open-work")
+    );
+    let write = open
+        .card
+        .as_ref()
+        .and_then(|card| card.write.as_ref())
+        .expect("the card's write");
+    assert_eq!(
+        (
+            write.action.as_str(),
+            write.phase.as_str(),
+            write.head.as_str()
+        ),
+        ("merge", "failed", HEAD)
+    );
+    assert_eq!(
+        phone.find("w#4").map(|pr| pr.reason.kind.as_str()),
+        Some("merged")
+    );
+}
+
 /// PRD pr-review-status D-11: a pre-check is a start like any other, and its
 /// start is followed so its session is recorded as the pull request's review.
 #[test]

@@ -19,7 +19,9 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { closePane, sendKeys, withControl } from "./daemon-actions";
+import { closePane, openProject, sendKeys, withControl } from "./daemon-actions";
+import { initGithubRepository } from "./github-remote";
+import { fakeGh, git, head, moveHead, writes } from "./work-prs-fixture";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, labelMarker } from "./pane-fixture";
 import { DNS, FakeTailscale } from "./fake-tailscale";
@@ -833,6 +835,84 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await expect(detail).toBeVisible({ timeout: 45_000 });
     await expect(detail).not.toHaveAttribute("data-phone-detail", new RegExp(`\\|${pane}$`));
     await expect(sheet).toHaveCount(0);
+  } finally {
+    for (const context of contexts) await context.close();
+    daemon?.stop();
+    fixture.stop();
+    tailscale.remove();
+  }
+});
+
+test("the phone's PR tab lists a GitHub project's pull requests, refuses a merge whose head moved, then merges once on the head it read again", async ({ browser, page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await startFixture({ agents: false });
+  const tailscale = new FakeTailscale();
+  tailscale.install();
+  tailscale.ready();
+  let daemon: Daemon | null = null;
+  const contexts: BrowserContext[] = [];
+  try {
+    // A GitHub project whose pull requests a fake `gh` answers and records every write of: nothing here reaches GitHub.
+    const repo = path.join(fixture.root, "repo");
+    fs.mkdirSync(repo);
+    initGithubRepository(repo);
+    fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
+    git(repo, ["add", "README.md"]);
+    git(repo, ["commit", "-m", "initial"]);
+    const gh = fakeGh(fixture.root);
+    daemon = await startHided(fixture, "mobile-prs", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin, PATH: `${gh.bin}${path.delimiter}${fixture.fixturePath}` });
+    await withControl(daemon, async (control) => {
+      const project = await openProject(control, repo, "repo");
+      control.send("github_request", { workspace_id: project.workspace, refresh: true });
+    });
+    await openMobileSettings(page, daemon);
+    await page.locator('[data-mobile-switch="true"]').click();
+    const phoneContextA = await phoneContext(browser);
+    contexts.push(phoneContextA);
+    const phone = await phoneContextA.newPage();
+    await phone.goto(await shownPairingUrl(page, daemon));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });
+
+    // B37: the open pull requests in the four groups, the merged one left out.
+    await phone.locator('[data-phone-tab="prs"]').tap();
+    const numbers = async (group: string) => (await phone.locator(`[data-phone-pr-group="${group}"] [data-phone-pr]`).evaluateAll((rows) => rows.map((row) => (row.getAttribute("data-phone-pr") ?? "").split("#")[1]))).sort();
+    await expect.poll(() => numbers("ready"), { timeout: 30_000 }).toEqual(["31"]);
+    expect(await numbers("failed")).toEqual(["32", "34"]);
+    expect(await numbers("review")).toEqual(["33", "35", "36"]);
+    await expect(phone.locator('[data-phone-pr$="#37"]')).toHaveCount(0);
+    await screenshot(phone, "mobile-phone-prs");
+
+    // B39-B41: the page reads the card, Merge asks once, and nothing is written until the confirmation is pressed.
+    await phone.locator('[data-phone-pr$="#31"]').tap();
+    await expect(phone.locator("[data-phone-pr-file]")).toHaveCount(2, { timeout: 30_000 });
+    await expect(phone.locator("[data-phone-pr-merge]")).toBeEnabled();
+    await phone.locator("[data-phone-pr-merge]").tap();
+    await expect(phone.locator("[data-phone-pr-confirm]")).toBeVisible();
+    await screenshot(phone, "mobile-phone-pr-confirm");
+    expect(writes(gh.state)).toEqual([]);
+
+    // B42, B43: a head that moved after the card was read is refused by GitHub, nothing merges, and the page says so in the desktop's words.
+    const shown = head(gh.state, 31);
+    const moved = `${shown.slice(0, 39)}e`;
+    moveHead(gh.state, 31, moved);
+    await phone.locator("[data-phone-pr-confirm-yes]").tap();
+    await expect(phone.locator('[data-phone-pr-write="failed"]')).toBeVisible({ timeout: 30_000 });
+    expect(writes(gh.state)).toHaveLength(1);
+    expect(writes(gh.state)[0]).toEqual(expect.arrayContaining(["pr", "merge", "31", "--match-head-commit", shown]));
+    await expect(phone.locator("[data-phone-pr-merge]")).toBeDisabled();
+    await screenshot(phone, "mobile-phone-pr-refused");
+
+    // Read again, the page shows the new head and one more confirmation merges on it: two writes in all, one per confirmed intent.
+    await phone.locator("[data-phone-pr-look-again]").tap();
+    // Look again reads the list and the card; the core takes a merge only once the list shows the head the card did.
+    await expect(phone.locator("[data-phone-pr-page]")).toContainText("(moved)", { timeout: 30_000 });
+    await expect(phone.locator("[data-phone-pr-page]")).toHaveAttribute("data-phone-pr-head", moved, { timeout: 30_000 });
+    await expect(phone.locator("[data-phone-pr-merge]")).toBeEnabled();
+    await phone.locator("[data-phone-pr-merge]").tap();
+    await phone.locator("[data-phone-pr-confirm-yes]").tap();
+    await expect.poll(() => writes(gh.state).length, { timeout: 30_000 }).toBe(2);
+    expect(writes(gh.state)[1]).toEqual(expect.arrayContaining(["pr", "merge", "31", "--match-head-commit", moved]));
   } finally {
     for (const context of contexts) await context.close();
     daemon?.stop();

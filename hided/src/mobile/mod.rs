@@ -19,6 +19,7 @@ pub mod pane;
 pub mod phone;
 pub mod phones;
 pub mod projection;
+pub mod prs;
 pub mod push;
 pub mod relay;
 pub mod start;
@@ -40,7 +41,7 @@ use crate::core::CoreHandle;
 use herdr_core::delivery::worker::{HumanNotice, HumanNoticeKind};
 use herdr_core::engine::EngineHandle;
 use phones::{PairRefusal, Phones};
-use projection::{AgentKey, PhoneMissions, Projection};
+use projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
 use store::{
     Method, MobileSettings, Notifications, PhoneOrigin, PhoneRecord, PushMode, PushSubscription,
     ServeRecord,
@@ -204,6 +205,8 @@ pub struct Mobile {
     projection: watch::Sender<Arc<Projection>>,
     /// The missions a phone lists, built from the same inputs as `projection`.
     missions: watch::Sender<Arc<PhoneMissions>>,
+    /// The pull requests a phone lists, built from the same inputs as `projection`.
+    prs: watch::Sender<Arc<PhonePrs>>,
     /// What the start sheet lists, republished when it changes.
     catalog: watch::Sender<Arc<start::Catalog>>,
     /// The core's answers to start requests, for the requests waiting on them.
@@ -295,6 +298,7 @@ impl Mobile {
             frame: watch::channel(Arc::new(Value::Null)).0,
             projection: watch::channel(Arc::new(Projection::default())).0,
             missions: watch::channel(Arc::new(PhoneMissions::default())).0,
+            prs: watch::channel(Arc::new(PhonePrs::default())).0,
             catalog: watch::channel(Arc::new(start::Catalog::default())).0,
             answers: watch::channel(Arc::new(Vec::new())).0,
             starts: start::Desk::default(),
@@ -461,6 +465,15 @@ impl Mobile {
     /// The missions a phone may name in a request now.
     pub fn missions(&self) -> Arc<PhoneMissions> {
         Arc::clone(&self.missions.borrow())
+    }
+
+    pub fn subscribe_prs(&self) -> watch::Receiver<Arc<PhonePrs>> {
+        self.prs.subscribe()
+    }
+
+    /// The pull requests a phone may name in a request now.
+    pub fn prs(&self) -> Arc<PhonePrs> {
+        Arc::clone(&self.prs.borrow())
     }
 
     pub fn subscribe_catalog(&self) -> watch::Receiver<Arc<start::Catalog>> {
@@ -1671,6 +1684,44 @@ impl Mobile {
             .await
     }
 
+    /// One `delegate_pr` frame (PRD mobile-companion-ui D-13, B44): the
+    /// desktop PR card's hand-over for a listed pull request that a checkout
+    /// holds, started through the same claim and answered the same way as a
+    /// start from the sheet.
+    pub async fn delegate_pr(&self, phone_id: &str, message: &Value) -> Value {
+        let Some(request_id) = message
+            .get("request_id")
+            .and_then(Value::as_str)
+            .filter(|id| start::request_id_valid(id))
+        else {
+            return json!({"type": "start_result", "ok": false, "reason": "invalid_request"});
+        };
+        if let Err(reason) = self.still_admitted(phone_id) {
+            herdr_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "start.refused", "phone_id": phone_id, "reason": reason,
+            }));
+            return json!({"type": "start_result", "request_id": request_id, "ok": false, "reason": reason});
+        }
+        let event = prs::delegate(message, &self.prs(), request_id);
+        if let Err(reason) = &event {
+            herdr_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "scope.refused", "phone_id": phone_id,
+                "request": format!("delegate_pr:{reason}"),
+            }));
+        }
+        let core = Arc::clone(&self.config.core);
+        self.starts
+            .start_event(
+                phone_id,
+                request_id,
+                event,
+                self.answers.subscribe(),
+                start::ANSWER_LIMIT,
+                move |event| core.dispatch(event),
+            )
+            .await
+    }
+
     pub fn set_viewing(&self, connection: u64, viewing: Option<AgentKey>) {
         if let Some(phone) = self.live().get_mut(&connection) {
             phone.viewing = viewing;
@@ -1868,6 +1919,14 @@ impl Mobile {
                         true
                     }
                 });
+                self.prs.send_if_modified(|current| {
+                    if **current == PhonePrs::default() {
+                        false
+                    } else {
+                        *current = Arc::new(PhonePrs::default());
+                        true
+                    }
+                });
                 tokio::select! {
                     _ = self.wake.notified() => continue,
                     _ = stopping.changed() => return,
@@ -1930,6 +1989,24 @@ impl Mobile {
                             }));
                         }
                         *current = Arc::new(missions);
+                        true
+                    });
+                    let prs = PhonePrs::project(&rest, self.node().as_str(), &next);
+                    self.prs.send_if_modified(|current| {
+                        if **current == prs {
+                            return false;
+                        }
+                        // Recorded when the list first goes over the cap, not on every
+                        // change while it stays over (the count is in the frame).
+                        if prs.omitted > 0 && current.omitted == 0 {
+                            herdr_core::diagnostic!(json!({
+                                "component": "mobile_phone", "kind": "prs.capped",
+                                "omitted": prs.omitted,
+                                "open_cap": herdr_core::agent_state::phone::MAX_PRS,
+                                "settled_cap": herdr_core::agent_state::phone::MAX_SETTLED,
+                            }));
+                        }
+                        *current = Arc::new(prs);
                         true
                     });
                     changed = self.projection.send_if_modified(|current| {

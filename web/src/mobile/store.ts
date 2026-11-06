@@ -5,9 +5,10 @@
 
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
-import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
+import { holds, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
 
 export type Screen =
@@ -21,8 +22,27 @@ export type Screen =
   /** hided refused this phone for good: an expired code, the phone limit, a revoke. */
   | "refused";
 
-/** The bottom bar's places (PRD mobile-companion-ui B28); the PR tab is one more entry here and in `PHONE_TABS`. */
-export type PhoneTab = "agents" | "missions";
+/** The bottom bar's places (PRD mobile-companion-ui B28). */
+export type PhoneTab = "agents" | "missions" | "prs";
+
+/** The open pull requests as the last `prs` frame carried them; kept across a lost connection, dimmed under the unreachable line (B45). */
+export type PrsState = { projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted: number };
+
+/**
+ * The hand-over sheet of one pull request (B44): the prompt and the agent choice stay until a start succeeds, so a refusal or a
+ * lost connection never costs what the operator edited. `feedbackId` names the feedback read the prompt is filled from.
+ */
+export type PrDelegateSheet = {
+  key: string;
+  prompt: string;
+  /** The operator typed in the prompt: a read arriving later no longer replaces it. */
+  edited: boolean;
+  choice: StartChoice;
+  feedbackId: string | null;
+  /** The request id waiting for hided's answer. */
+  pending: string | null;
+  error: Notice | null;
+};
 
 /** An answer sent from a mission's page that the core has not yet kept or refused; the page draws it as the desktop's banner does. */
 export type MissionAnswerSent = { requestId: string; mission: string; pressed: PressedAnswer };
@@ -129,6 +149,19 @@ type PhoneState = {
   missionDrafts: Record<string, string>;
   missionAnswer: MissionAnswerSent | null;
   missionAnswerError: { mission: string; notice: Notice } | null;
+  /** Null until the first `prs` frame; kept across a lost connection, dimmed under the unreachable line (B45). */
+  prs: PrsState | null;
+  /** The pull request whose page is open on the PR tab, by `PhonePr.key`. */
+  prOpen: string | null;
+  /** The merge confirmation, open on a page; it closes without sending when the page no longer shows what it named. */
+  prConfirm: MergeConfirm | null;
+  /** A merge sent from a page that hided has not answered yet. */
+  prPending: { requestId: string; key: string } | null;
+  /** The line under a page's buttons for a read or merge hided refused or the connection lost. */
+  prNotice: { key: string; notice: Notice } | null;
+  prDelegate: PrDelegateSheet | null;
+  /** The pull request just handed to an agent, whose page says so until it is left. */
+  prDelegated: string | null;
   /** The deep link waiting for the first list (B32). */
   pendingOpen: AgentKey | null;
   pendingInput: PendingInput | null;
@@ -172,6 +205,13 @@ const initial: PhoneState = {
   missionDrafts: {},
   missionAnswer: null,
   missionAnswerError: null,
+  prs: null,
+  prOpen: null,
+  prConfirm: null,
+  prPending: null,
+  prNotice: null,
+  prDelegate: null,
+  prDelegated: null,
   pendingOpen: null,
   pendingInput: null,
   inputError: null,
@@ -227,6 +267,20 @@ export function applyFrame(frame: ServerFrame): void {
         missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
         missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),
         missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("done:") || listed.has(key.slice("done:".length)))),
+      });
+      return;
+    }
+    case "prs": {
+      const items = frame.items;
+      const listed = new Set(items.map((pr) => pr.key));
+      patch({
+        prs: { projects: frame.projects, items, feedback: frame.feedback, omitted: frame.omitted ?? 0 },
+        // A pull request that left the list takes its page, its confirmation and its sheet with it.
+        prOpen: state.prOpen && listed.has(state.prOpen) ? state.prOpen : null,
+        prConfirm: state.prConfirm && holds(state.prConfirm, prOf(items, state.prConfirm.key)) ? state.prConfirm : null,
+        prDelegate: state.prDelegate && listed.has(state.prDelegate.key) ? state.prDelegate : null,
+        prNotice: state.prNotice && listed.has(state.prNotice.key) ? state.prNotice : null,
+        prDelegated: state.prDelegated && listed.has(state.prDelegated) ? state.prDelegated : null,
       });
       return;
     }
@@ -309,7 +363,7 @@ export function openFold(key: string): void {
 }
 
 export function setTab(tab: PhoneTab): void {
-  usePhone.setState({ tab, missionOpen: null });
+  usePhone.setState({ tab, missionOpen: null, prOpen: null });
 }
 
 /** Opens a mission's page on the missions tab. */
@@ -333,6 +387,15 @@ export function setMissionFold(key: string, open: boolean): void {
 
 export function setMissionDraft(id: string, text: string): void {
   usePhone.setState((state) => ({ missionDrafts: { ...state.missionDrafts, [id]: text }, missionAnswerError: null }));
+}
+
+/** Opens a pull request's page on the PR tab. */
+export function openPr(key: string): void {
+  usePhone.setState({ tab: "prs", prOpen: key, prConfirm: null, prNotice: null, prDelegated: null });
+}
+
+export function closePr(): void {
+  usePhone.setState({ prOpen: null, prConfirm: null, prNotice: null, prDelegated: null });
 }
 
 /** The mission a page shows, from the current record; null once it left the list. */

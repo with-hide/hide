@@ -12,6 +12,8 @@ import { Detail } from "./Detail";
 import { GroupRows } from "./ListRows";
 import { MissionDetail } from "./MissionDetail";
 import { MissionsScreen } from "./MissionsScreen";
+import { PrDetail } from "./PrDetail";
+import { PrsScreen } from "./PrsScreen";
 import { StartSheet } from "./StartSheet";
 import { TabBar } from "./TabBar";
 import {
@@ -37,6 +39,7 @@ export function App() {
   const deviceProtocol = usePhone((s) => s.deviceProtocol);
   const tab = usePhone((s) => s.tab);
   const missionOpen = usePhone((s) => s.missionOpen);
+  const prOpen = usePhone((s) => s.prOpen);
   if (screen === "version") return <VersionScreen t={t} name={name} protocol={deviceProtocol} app={String(PHONE_PROTOCOL)} />;
   if (screen === "pair") return <PairScreen />;
   if (screen === "refused") return <Guidance refused />;
@@ -44,6 +47,7 @@ export function App() {
   // A worker or a Conductor opened from a mission step is the agent's own detail, on either tab (B36).
   if (detail) return <Detail onBack={closeDetail} />;
   if (tab === "missions") return missionOpen ? <MissionDetail /> : <MissionsScreen />;
+  if (tab === "prs") return prOpen ? <PrDetail /> : <PrsScreen />;
   return <ListScreen />;
 }
 

@@ -751,7 +751,24 @@ impl Runtime {
     /// such checkout, in a new worktree of that existing branch, on the
     /// machine the project is on. Both report through the task-operation
     /// slot, as every start does.
-    pub(super) fn delegate_pr(&mut self, mut payload: PrDelegatePayload) -> bool {
+    pub(super) fn delegate_pr(&mut self, payload: PrDelegatePayload) -> bool {
+        let request_id = payload.request_id.clone();
+        let before_error = self.snapshot.status.last_error.clone();
+        let changed = self.delegate_pr_now(payload);
+        // A refusal said before any start held the slot answers its request by
+        // id, as a start's own refusal does, so a surface that waits on the
+        // id (the phone) is told rather than left to time out.
+        if let Some(request_id) = request_id
+            && self.snapshot.status.last_error != before_error
+            && let Some(error) = self.snapshot.status.last_error.as_mut()
+            && error.request_id.is_none()
+        {
+            error.request_id = Some(request_id);
+        }
+        changed
+    }
+
+    fn delegate_pr_now(&mut self, mut payload: PrDelegatePayload) -> bool {
         let Some(provider) = hide_agent_adapter::start_kind(&payload.provider) else {
             self.set_error(
                 "pr_delegate.unknown_provider",
@@ -810,7 +827,7 @@ impl Runtime {
                 request_id: payload.request_id,
                 resume_session_id: None,
                 resume_session_path: None,
-                stay_behind: false,
+                stay_behind: payload.stay_behind,
             }),
             None => self.start_answered_worktree_task(
                 CreateWorktreePayload {
@@ -824,6 +841,7 @@ impl Runtime {
                     task_key: None,
                     prompt,
                     model: payload.model,
+                    stay_behind: payload.stay_behind,
                 },
                 true,
             ),

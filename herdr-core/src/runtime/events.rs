@@ -957,6 +957,11 @@ pub(super) struct CreateWorktreePayload {
     /// The model the agent CLI is started with; absent is its own default.
     #[serde(default)]
     pub(super) model: Option<String>,
+    /// The start comes from a surface that is not the operator's own screen
+    /// (the phone): the tab is made and listed, but the desktop's visible tab,
+    /// keyboard focus and the engine's focus stay where they are.
+    #[serde(default)]
+    pub(super) stay_behind: bool,
 }
 
 /// `issue_source_set`: a project's issue source chosen in Settings › Issues;
@@ -1184,6 +1189,12 @@ pub(super) struct PrDelegatePayload {
     /// (PRD pr-review-status D-11); absent is any other work.
     #[serde(default)]
     pub(super) intent: Option<PrDelegateIntent>,
+    /// The start comes from a surface that is not the operator's own screen
+    /// (the phone): the agent starts where it would (in the checkout of the
+    /// branch, or in a new worktree of it) and the desktop's tab, keyboard and
+    /// the engine's focus stay where they are.
+    #[serde(default)]
+    pub(super) stay_behind: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]

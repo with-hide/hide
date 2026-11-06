@@ -1,6 +1,6 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { useElapsed } from "./components/elapsed";
-import { useInterfaceTranslation } from "./i18n/client";
+import { useInterfaceTranslation } from "./i18n/translator";
 import type { PrGroupId, PrReason } from "./agentScope";
 import { cn } from "./lib/utils";
 
