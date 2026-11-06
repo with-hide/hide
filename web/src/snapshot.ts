@@ -1094,8 +1094,6 @@ export type TerminalPane = {
   transport_message: string | null;
   /** Core transport identity; absent in older snapshots and fixtures. */
   transport_generation?: number;
-  /** This client only observes the pane and the engine did not move it for the last wheel; absent while false. */
-  scroll_held_elsewhere?: boolean;
 };
 
 /** Where keys sent against a creation request go (PRD instant-pane-topology D-11). */

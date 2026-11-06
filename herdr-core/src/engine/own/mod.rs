@@ -1947,22 +1947,6 @@ impl<'g> Engine for OwnEngine<'g> {
         }
     }
 
-    fn scroll_pane(
-        &self,
-        _wait: Wait,
-        pane: &str,
-        offset_from_bottom: u64,
-    ) -> Answer<Option<crate::find::pane::PaneScroll>> {
-        self.check()?;
-        self.known(pane)?;
-        let scroll = self
-            .shared
-            .holders
-            .scroll(pane, Some(offset_from_bottom))
-            .map_err(holder_error)?;
-        Ok(Some(pane_scroll(scroll)))
-    }
-
     fn report_pane_tokens(
         &self,
         _wait: Wait,

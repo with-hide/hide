@@ -39,8 +39,7 @@ import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, paste
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
- * the header. An observed pane (another client holds the engine's control) streams
- * too, and its wheel moves the engine's viewport.
+ * the header.
  */
 const LIVE_STATES = new Set(["connected", "controlling", "observing", "idle"]);
 
@@ -60,9 +59,6 @@ export function transportCaption(transport: TerminalPane | undefined, t: TFuncti
   // With its host's connection down, a remote attach ends as `closing`; the
   // pane is not closing, its device is unreachable.
   if (offline) return { text: t("panes.transport.disconnected"), reconnects: false };
-  // The core found the last wheel unmoved on a pane another client controls
-  // (B3): said where the wheel went rather than dropped silently.
-  if (transport?.scroll_held_elsewhere) return { text: t("panes.transport.scrollElsewhere"), reconnects: false };
   if (!transport || LIVE_STATES.has(transport.transport_state)) return null;
   if (!local) {
     const state = transport.transport_state;

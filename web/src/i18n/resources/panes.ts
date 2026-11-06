@@ -8,7 +8,6 @@ export const panesEnglish = {
   "panes.restore.explanation": "The terminal could not start after restoration. Check its folder, then close this pane and open a new terminal.",
   "panes.restore.close": "Close pane",
   "panes.transport.disconnected": "disconnected",
-  "panes.transport.scrollElsewhere": "scroll held by another client",
   "panes.transport.released": "released · click to attach",
   "panes.transport.ended": "ended · click to restart",
   "panes.transport.exited": "exited {{exitCode}} · click to restart",
@@ -240,7 +239,6 @@ export const panesEnglish = {
 
 const ko = {
   "panes.transport.disconnected": "연결 안 됨",
-  "panes.transport.scrollElsewhere": "다른 클라이언트가 스크롤 제어 중",
   "panes.transport.released": "연결 해제됨 · 클릭하여 연결",
   "panes.transport.ended": "종료됨 · 클릭하여 다시 시작",
   "panes.transport.exited": "종료 코드 {{exitCode}} · 클릭하여 다시 시작",
@@ -475,7 +473,6 @@ const ko = {
 
 const zhCN = {
   "panes.transport.disconnected": "已断开连接",
-  "panes.transport.scrollElsewhere": "另一个客户端正在控制滚动",
   "panes.transport.released": "已释放连接 · 点击连接",
   "panes.transport.ended": "已结束 · 点击重启",
   "panes.transport.exited": "退出码 {{exitCode}} · 点击重启",
@@ -710,7 +707,6 @@ const zhCN = {
 
 const ja = {
   "panes.transport.disconnected": "切断されています",
-  "panes.transport.scrollElsewhere": "別のクライアントがスクロールを制御しています",
   "panes.transport.released": "接続解除済み · クリックして接続",
   "panes.transport.ended": "終了済み · クリックして再起動",
   "panes.transport.exited": "終了コード{{exitCode}} · クリックして再起動",

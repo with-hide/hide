@@ -156,9 +156,7 @@ pub(crate) fn of(
             None,
         )
     } else if let Some(transport) = transport {
-        if transport.scroll_held_elsewhere {
-            notice("controlled_elsewhere", "muted", None, None, None)
-        } else if transport.closed || transport.transport_state == "ended" {
+        if transport.closed || transport.transport_state == "ended" {
             let failed = transport.exit_code.is_some_and(|code| code != 0);
             notice(
                 if failed { "exit" } else { "terminated" },

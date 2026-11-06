@@ -3130,11 +3130,6 @@ pub struct TerminalPaneSnapshot {
     pub transport_last_attempt_at_unix_ms: Option<u64>,
     pub transport_exit_category: Option<String>,
     pub transport_retry_decision: String,
-    /// This client only observes the pane and the engine did not move its view
-    /// for the last wheel: another client holds the pane's scrolling. Absent
-    /// from the wire while false.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub scroll_held_elsewhere: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -629,18 +629,6 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("pane_scroll", json!({"pane": pane}))
     }
 
-    fn scroll_pane(
-        &self,
-        _wait: Wait,
-        pane: &str,
-        offset_from_bottom: u64,
-    ) -> Answer<Option<crate::find::pane::PaneScroll>> {
-        self.ask(
-            "scroll_pane",
-            json!({"pane": pane, "offset_from_bottom": offset_from_bottom}),
-        )
-    }
-
     fn report_pane_tokens(
         &self,
         _wait: Wait,

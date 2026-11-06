@@ -637,7 +637,7 @@ Pending and failed moves appear at the initiating popover, ancestor step or Open
 
 Why the terminal is not live is said where the terminal would be, never on the second row (`Header.notice`, drawn by `web/src/PaneNotice.tsx`): the core publishes at most one notice, the device being away first, then terminal restoration failure, sleep, and the stream's own state.
 Sleep, restoration failure and a local stream that can be attached again draw bodies of their own, described below; every other notice covers the terminal with its words on the card fill: `연결 안 됨 · <device>`, `다시 연결하는 중…`, `헬퍼가 허용되지 않음 · 설정 > 기기에서 허용하세요`, `사용할 수 없음`, `종료됨`, or a failed exit in red with the actual code.
-A start or a close that passes by itself is a small caption over whatever the terminal shows, and a wheel another client holds is a corner caption, because that terminal is live.
+A start or a close that passes by itself is a small caption over whatever the terminal shows.
 Connection and sleep recovery controls stay in the body, and limited integration stays a header icon.
 The engine's explicit restoration failure is a terminal fact, independent of a saved sleep record; the pane's agent runs no process, so its row reads stopped and at rest rather than unknown ([status-model.md](status-model.md#where-each-axis-comes-from)).
 Its pane body says the terminal could not be restored, names its folder and offers Close pane; raw details remain in diagnostics.

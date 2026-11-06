@@ -183,69 +183,6 @@ pub struct PaneScroll {
     pub max_offset_from_bottom: u64,
 }
 
-/// Moves an observed pane's viewport by `lines` (positive shows older lines).
-///
-/// `pane.scroll` takes an absolute offset and any socket client may send it,
-/// which is what an observer without a terminal writer has; the offset comes
-/// from the metrics `pane.get` reports, and the engine clamps an overshoot at the
-/// top. Two requests off the runtime mutex; the core keeps one in flight per
-/// pane and sums the wheels that arrive meanwhile.
-pub fn spawn_viewport_scroll(route: PaneApiRoute, lines: i32) -> Result<(), String> {
-    route.spawn(
-        "herdr-core-viewport-scroll",
-        move |engine, herdr_pane_id| scroll_viewport(engine, herdr_pane_id, lines),
-        |runtime, pane_id, result| runtime.ingest_viewport_scroll(pane_id, result),
-    )
-}
-
-/// Why an observed pane's viewport did not move.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ViewportScrollError {
-    /// The engine answered and refused the request (an older device the engine without
-    /// `pane.scroll`, say): this client cannot scroll the pane.
-    Refused(String),
-    /// The engine was not reached or answered something unreadable; nothing is
-    /// known about the pane's scrolling.
-    Unreachable(String),
-}
-
-fn scroll_failure(method: &str) -> impl FnOnce(EngineError) -> ViewportScrollError + '_ {
-    move |error| match error {
-        EngineError::Refused { code, message } => {
-            ViewportScrollError::Refused(format!("{method} was refused: {code}: {message}"))
-        }
-        EngineError::Request(message) | EngineError::Answer(message) => {
-            ViewportScrollError::Unreachable(message)
-        }
-        error => ViewportScrollError::Unreachable(format!("{method} failed: {error}")),
-    }
-}
-
-fn scroll_viewport(
-    engine: &dyn Engine,
-    pane_id: &str,
-    lines: i32,
-) -> Result<Option<PaneScroll>, ViewportScrollError> {
-    let Some(current) = engine
-        .pane_scroll(CONTROL_WAIT, pane_id)
-        .map_err(scroll_failure("pane.get"))?
-    else {
-        return Ok(None);
-    };
-    let distance = u64::from(lines.unsigned_abs());
-    let target = if lines > 0 {
-        current.offset_from_bottom.saturating_add(distance)
-    } else {
-        current.offset_from_bottom.saturating_sub(distance)
-    };
-    if target == current.offset_from_bottom {
-        return Ok(Some(current));
-    }
-    engine
-        .scroll_pane(CONTROL_WAIT, pane_id, target)
-        .map_err(scroll_failure("pane.scroll"))
-}
-
 fn run_pane_find(
     engine: &dyn Engine,
     pane_id: &str,

@@ -295,8 +295,6 @@ impl Runtime {
         }
         self.reconcile_attachment_target();
         self.wheel_before_attach.retain(|pane_id, _| keep(pane_id));
-        self.viewport_scrolls.retain(|pane_id, _| keep(pane_id));
-        self.panes_scroll_held.retain(|pane_id| keep(pane_id));
         before != self.terminal_state_len()
     }
     /// Every pane-keyed terminal map, counted together so a retain pass can
@@ -305,8 +303,6 @@ impl Runtime {
         self.terminal_states.len()
             + self.terminal_sizes.len()
             + self.wheel_before_attach.len()
-            + self.viewport_scrolls.len()
-            + self.panes_scroll_held.len()
             + self.panes_closing.len()
     }
     pub(super) fn reconcile_remote_terminal_selection(&mut self) -> bool {
@@ -456,7 +452,6 @@ impl Runtime {
             transport_last_attempt_at_unix_ms: state.last_attempt_at_unix_ms,
             transport_exit_category: state.exit_category.clone(),
             transport_retry_decision: state.retry_decision.clone(),
-            scroll_held_elsewhere: self.panes_scroll_held.contains(pane_id),
         }
     }
     pub(super) fn sync_transport_projection(&mut self, pane_id: &str) {
@@ -469,8 +464,7 @@ impl Runtime {
             .iter_mut()
             .find(|pane| pane.pane_id == pane_id)
         {
-            header_changed = pane.transport_state != projected.transport_state
-                || pane.scroll_held_elsewhere != projected.scroll_held_elsewhere;
+            header_changed = pane.transport_state != projected.transport_state;
             *pane = TerminalPaneSnapshot {
                 closed: pane.closed,
                 exit_code: pane.exit_code,
@@ -746,15 +740,11 @@ impl Runtime {
     /// Moves a pane's view by a wheel's signed lines (positive shows older
     /// lines), and whether that changed the snapshot.
     ///
-    /// The engine gives terminal control to one client per pane. The controlling
-    /// session writes `terminal.scroll`, which the engine routes to the program's
-    /// mouse handling or the history; the node writes it. A pane another
-    /// client controls (another client of the same engine, say) is
-    /// observed, and an observer has no writer, so its wheel moves the engine's
-    /// viewport with `pane.scroll` instead; the engine keeps one viewport per pane,
-    /// so both clients see the move. A pane with no session yet keeps the
-    /// lines for its first frame. Every scroll producer comes through here,
-    /// so none of them drops a wheel.
+    /// A controlled pane's session writes `terminal.scroll`, which the pane's
+    /// holder routes to the program's mouse handling or the history; the node
+    /// writes it. A pane with no session yet keeps the lines for its first
+    /// frame. Every scroll producer comes through here, so none of them drops
+    /// a wheel.
     pub(super) fn scroll_pane(&mut self, pane_id: &str, request: ScrollRequest) -> bool {
         if request.lines == 0 {
             return false;
@@ -773,13 +763,6 @@ impl Runtime {
                     modifiers: request.modifiers,
                 });
                 false
-            }
-            Some("observing") => {
-                if let Some(pending) = self.viewport_scrolls.get_mut(pane_id) {
-                    *pending = pending.saturating_add(request.lines);
-                    return false;
-                }
-                self.start_viewport_scroll(pane_id, request.lines)
             }
             _ => {
                 let first = !self.wheel_before_attach.contains_key(pane_id);
@@ -815,92 +798,6 @@ impl Runtime {
                 },
             );
         }
-    }
-    fn start_viewport_scroll(&mut self, pane_id: &str, lines: i32) -> bool {
-        if lines == 0 {
-            return false;
-        }
-        // A pane whose engine cannot be reached says so through its own
-        // transport state (a device's `disconnected`); the wheel is logged,
-        // never read as another client holding the scroll.
-        let route = match self.pane_api_route(pane_id) {
-            Ok(route) => route,
-            Err(reason) => {
-                self.push_diagnostic(
-                    "terminal.scroll_failed",
-                    format!("Pane {pane_id} was not scrolled: {reason}"),
-                );
-                return true;
-            }
-        };
-        self.viewport_scrolls.insert(pane_id.to_owned(), 0);
-        if let Err(message) = crate::find::pane::spawn_viewport_scroll(route, lines) {
-            self.viewport_scrolls.remove(pane_id);
-            self.set_error("terminal.scroll_failed", message, true);
-            return true;
-        }
-        false
-    }
-    /// Applies a landed `pane.scroll`: the marker follows whether the engine moved
-    /// anything, and the lines that arrived meanwhile go out as one request.
-    pub fn ingest_viewport_scroll(
-        &mut self,
-        pane_id: &str,
-        result: Result<
-            Option<crate::find::pane::PaneScroll>,
-            crate::find::pane::ViewportScrollError,
-        >,
-    ) -> bool {
-        let Some(pending) = self.viewport_scrolls.remove(pane_id) else {
-            return false;
-        };
-        let mut changed = match result {
-            Ok(Some(scroll)) if scroll.max_offset_from_bottom > 0 => {
-                self.release_scroll_hold(pane_id)
-            }
-            // An alternate-screen program has no history in the engine's viewport;
-            // only the controlling client's wheel reaches the program itself.
-            Ok(_) => self.hold_scroll_elsewhere(
-                pane_id,
-                "The engine has no history to move for this pane, and only the client controlling it can scroll the program",
-            ),
-            Err(crate::find::pane::ViewportScrollError::Refused(message)) => {
-                self.hold_scroll_elsewhere(pane_id, &message)
-            }
-            Err(crate::find::pane::ViewportScrollError::Unreachable(message)) => {
-                self.push_diagnostic(
-                    "terminal.scroll_failed",
-                    format!("Pane {pane_id} was not scrolled: {message}"),
-                );
-                true
-            }
-        };
-        changed |= self.scroll_pane(
-            pane_id,
-            ScrollRequest {
-                lines: pending,
-                ..Default::default()
-            },
-        );
-        changed
-    }
-    fn hold_scroll_elsewhere(&mut self, pane_id: &str, reason: &str) -> bool {
-        if !self.panes_scroll_held.insert(pane_id.to_owned()) {
-            return false;
-        }
-        crate::diagnostic!(serde_json::json!({
-            "component": "terminal", "kind": "terminal.scroll_held_elsewhere",
-            "pane_id": pane_id, "reason": reason,
-        }));
-        self.sync_transport_projection(pane_id);
-        true
-    }
-    pub(super) fn release_scroll_hold(&mut self, pane_id: &str) -> bool {
-        if !self.panes_scroll_held.remove(pane_id) {
-            return false;
-        }
-        self.sync_transport_projection(pane_id);
-        true
     }
     /// Where a pane's socket requests go: this machine's engine, or the
     /// device's engine under the id that the engine knows the pane by. The error is
@@ -1663,10 +1560,6 @@ impl Runtime {
                     && !self.terminal_attach_requested.contains(&pane)
                 {
                     return false;
-                }
-                if state.state == "controlling" {
-                    // This client's own wheel reaches a controlled pane.
-                    self.panes_scroll_held.remove(&pane);
                 }
                 if state.state == "closing" && !self.close_operation_holds_pane(&pane) {
                     self.panes_closing.remove(&pane);

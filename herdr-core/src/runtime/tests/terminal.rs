@@ -380,181 +380,6 @@ fn a_wheel_before_the_attach_is_sent_with_the_first_frame() {
     assert!(runtime.wheel_before_attach.is_empty());
 }
 
-/// A fake engine holding one pane's scroll position, answering its reads
-/// and moves the way the own engine does: an overshoot at the top is
-/// clamped, and the answer carries the position after the move.
-fn scrolling_herdr(max: Arc<Mutex<u64>>) -> Fake {
-    let offset = Arc::new(Mutex::new(0_u64));
-    FakeEngine::start(move |method, params| {
-        let max = *max.lock().unwrap();
-        let mut offset = offset.lock().unwrap();
-        match method {
-            "pane_scroll" => {}
-            "scroll_pane" => {
-                *offset = params["offset_from_bottom"].as_u64().unwrap().min(max);
-            }
-            other => panic!("unexpected {other}"),
-        }
-        reply(Some(crate::find::pane::PaneScroll {
-            offset_from_bottom: *offset,
-            max_offset_from_bottom: max,
-        }))
-    })
-}
-
-fn observed_runtime(herdr: &Fake, pane: &str) -> SharedRuntime {
-    let shared = SharedRuntime::new(runtime());
-    {
-        let mut runtime = shared.lock().unwrap();
-        runtime.live = Some(live::LiveContext {
-            runtime: shared.weak(),
-            ..herdr.live()
-        });
-        runtime
-            .terminal_states
-            .insert(pane.to_owned(), terminal_state("observing", 1));
-        runtime.ensure_terminal_pane(pane);
-    }
-    shared
-}
-
-#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
-fn settle(shared: &Arc<Mutex<Runtime>>) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !shared.lock().unwrap().viewport_scrolls.is_empty() {
-        assert!(Instant::now() < deadline, "a viewport scroll never landed");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-fn scroll_offsets(herdr: &Fake) -> Vec<u64> {
-    herdr
-        .calls()
-        .into_iter()
-        .filter(|(method, _)| *method == "scroll_pane")
-        .map(|(_, params)| params["offset_from_bottom"].as_u64().unwrap())
-        .collect()
-}
-
-/// B1, B2. A pane another client controls (another engine client on the
-/// same server) is observed, and an observer has no terminal writer; its wheel
-/// moves the engine's viewport with `pane.scroll` instead of being dropped. One
-/// request is in flight per pane, and the wheels that arrive meanwhile go
-/// out as one summed request when it lands.
-#[test]
-fn a_wheel_on_an_observed_pane_moves_herdrs_viewport() {
-    let max = Arc::new(Mutex::new(300));
-    let herdr = scrolling_herdr(Arc::clone(&max));
-    let pane = "w1:p1";
-    let shared = observed_runtime(&herdr, pane);
-    {
-        let mut runtime = shared.lock().unwrap();
-        runtime.dispatch_json(&wheel_event(pane, "up", 3));
-        runtime.dispatch_json(&wheel_event(pane, "up", 2));
-        runtime.dispatch_json(&wheel_event(pane, "down", 1));
-    }
-    settle(&shared);
-    assert_eq!(scroll_offsets(&herdr), vec![3, 4]);
-    shared
-        .lock()
-        .unwrap()
-        .dispatch_json(&wheel_event(pane, "down", 10));
-    settle(&shared);
-    assert_eq!(scroll_offsets(&herdr), vec![3, 4, 0]);
-    let runtime = shared.lock().unwrap();
-    assert!(!runtime.terminal_pane_snapshot(pane).scroll_held_elsewhere);
-    assert!(runtime.snapshot.status.last_error.is_none());
-}
-
-/// B3. When the engine moves nothing for an observer (an alternate-screen program
-/// has no history in the viewport, and only the controlling client's wheel
-/// reaches the program), the pane says another client holds its scrolling
-/// rather than dropping the wheel silently; a later wheel that moves clears
-/// it.
-#[test]
-fn an_observed_wheel_herdr_cannot_move_shows_the_hold_until_one_moves() {
-    let max = Arc::new(Mutex::new(0));
-    let herdr = scrolling_herdr(Arc::clone(&max));
-    let pane = "w1:p1";
-    let shared = observed_runtime(&herdr, pane);
-    shared
-        .lock()
-        .unwrap()
-        .dispatch_json(&wheel_event(pane, "up", 3));
-    settle(&shared);
-    {
-        let runtime = shared.lock().unwrap();
-        let projected = runtime
-            .snapshot
-            .terminal
-            .panes
-            .iter()
-            .find(|row| row.pane_id == pane)
-            .expect("the pane is projected");
-        assert!(projected.scroll_held_elsewhere);
-        let wire = serde_json::to_value(projected).unwrap();
-        assert_eq!(wire["scroll_held_elsewhere"], true);
-    }
-    *max.lock().unwrap() = 300;
-    shared
-        .lock()
-        .unwrap()
-        .dispatch_json(&wheel_event(pane, "up", 3));
-    settle(&shared);
-    let runtime = shared.lock().unwrap();
-    let projected = runtime
-        .snapshot
-        .terminal
-        .panes
-        .iter()
-        .find(|row| row.pane_id == pane)
-        .unwrap();
-    assert!(!projected.scroll_held_elsewhere);
-    assert!(
-        serde_json::to_value(projected)
-            .unwrap()
-            .get("scroll_held_elsewhere")
-            .is_none(),
-        "the field stays off the wire while false"
-    );
-}
-
-/// B3's marker says another client holds the pane's scrolling, so only
-/// the engine's own answer may raise it. A pane with no route to its engine, or a
-/// an engine that cannot be reached, logs the failed wheel and leaves the pane's
-/// transport state to say why; it never claims another client holds it.
-#[test]
-fn an_observed_wheel_that_cannot_reach_herdr_is_logged_not_held() {
-    let pane = "w1:p1";
-    let herdr = FakeEngine::start(|method, _| {
-        Err(crate::engine::EngineError::Transport(format!(
-            "{method}: no route"
-        )))
-    });
-    let shared = observed_runtime(&herdr, pane);
-    shared
-        .lock()
-        .unwrap()
-        .dispatch_json(&wheel_event(pane, "up", 3));
-    settle(&shared);
-    {
-        let mut runtime = shared.lock().unwrap();
-        assert!(!runtime.terminal_pane_snapshot(pane).scroll_held_elsewhere);
-        runtime.live = None;
-        runtime.dispatch_json(&wheel_event(pane, "up", 3));
-        assert!(runtime.viewport_scrolls.is_empty());
-        assert!(!runtime.terminal_pane_snapshot(pane).scroll_held_elsewhere);
-        let failed = runtime
-            .snapshot
-            .status
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.kind == "terminal.scroll_failed")
-            .count();
-        assert_eq!(failed, 2, "each unreachable wheel is logged");
-    }
-}
-
 /// B6. A device pane is searched through that device's engine under the id
 /// that the engine knows it by; a device that is not connected answers the reason
 /// in the find bar instead of searching this machine.
@@ -634,16 +459,12 @@ fn retiring_a_pane_clears_every_pane_keyed_terminal_state() {
         .insert(pane.into(), terminal_state("controlling", 7));
     runtime.terminal_sizes.insert(pane.into(), (80, 24));
     runtime.wheel_before_attach.insert(pane.into(), 3);
-    runtime.viewport_scrolls.insert(pane.into(), 0);
-    runtime.panes_scroll_held.insert(pane.into());
     runtime.panes_closing.insert(pane.into());
 
     assert!(runtime.retain_terminal_pane_state(|known| known != pane));
     assert!(!runtime.terminal_states.contains_key(pane));
     assert!(!runtime.terminal_sizes.contains_key(pane));
     assert!(!runtime.wheel_before_attach.contains_key(pane));
-    assert!(!runtime.viewport_scrolls.contains_key(pane));
-    assert!(!runtime.panes_scroll_held.contains(pane));
     assert!(!runtime.panes_closing.contains(pane));
     // Its node forgets it too, so an id the engine reuses starts clean.
     assert_eq!(
@@ -1503,10 +1324,10 @@ fn find_opens_the_agents_own_search_only_where_herdr_holds_no_history() {
 
 /// Terminal bytes never reach the core, so no frame rebuilds every pane's
 /// operator state under the runtime lock, and a node repeating a pane's
-/// state derives nothing; an actual transport or scroll-control transition
-/// derives the headers once.
+/// state derives nothing; an actual transport transition derives the headers
+/// once.
 #[test]
-fn transport_and_scroll_transitions_derive_pane_headers_once_each() {
+fn transport_transitions_derive_pane_headers_once_each() {
     let mut runtime = runtime();
     let id = "w-frame:p1";
     runtime.snapshot.terminal.panes = vec![TerminalPaneSnapshot {
@@ -1520,14 +1341,10 @@ fn transport_and_scroll_transitions_derive_pane_headers_once_each() {
         report_terminal(&mut runtime, id, terminal_state("controlling", 1));
     }
     assert_eq!(runtime.pane_header_derivations, before);
-    runtime.panes_scroll_held.insert(id.into());
-    runtime.sync_transport_projection(id);
-    assert!(runtime.snapshot.terminal.panes[0].scroll_held_elsewhere);
-    assert_eq!(runtime.pane_header_derivations, before + 1);
     report_terminal(&mut runtime, id, terminal_state("unavailable", 1));
     assert_eq!(
         runtime.snapshot.terminal.panes[0].transport_state,
         "unavailable"
     );
-    assert_eq!(runtime.pane_header_derivations, before + 2);
+    assert_eq!(runtime.pane_header_derivations, before + 1);
 }
