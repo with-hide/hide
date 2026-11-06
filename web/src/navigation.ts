@@ -16,7 +16,7 @@ import type { BoardProject } from "./projectBoard";
 import { projectsOf } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { hideAiPlace } from "./hideAiOrigin";
-import { focusedRemoteDevice, frontCheckout, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace, type WorkspaceRegistration } from "./snapshot";
+import { focusedRemoteDevice, frontCheckout, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
 import type { Tool } from "./workspace";
 import { startAnswer } from "./startAnswer";
 
@@ -48,23 +48,10 @@ export type DeviceAvailability =
   | { state: "loading"; text: string }
   | { state: "unavailable"; text: string; retry: AvailabilityRetry | null };
 
-export type ProjectEntry = {
-  id: string;
-  label: string;
-  path: string;
-  deviceId: string;
-  pinned: boolean;
-  /** The Project's catalog row, or null when its device has no session to show it from. */
-  workspace: Workspace | null;
-  workspaceCount: number | null;
-  counts: GroupCounts | null;
-};
-
 export type DeviceSection = {
   device: Device;
   local: boolean;
   availability: DeviceAvailability;
-  projects: ProjectEntry[];
 };
 
 /** The agents running in a Project, in the core's order. */
@@ -192,72 +179,28 @@ function deviceAvailability(device: Device, status: RemoteStatus | undefined, na
   return { state: "ready" };
 }
 
-function entryOf(workspace: Workspace, _agents: AgentRow[], trusted: boolean, checkoutsTrusted = trusted): ProjectEntry {
-  return {
-    id: workspace.id,
-    label: workspace.label,
-    path: workspace.path,
-    deviceId: workspace.device_id,
-    pinned: workspace.pinned,
-    workspace,
-    workspaceCount: checkoutsTrusted ? workspace.checkouts.length : null,
-    counts: trusted ? workspace.agent_scope.groups : null,
-  };
-}
-
-function registrationEntry(registration: WorkspaceRegistration): ProjectEntry {
-  return {
-    id: registration.id,
-    label: registration.label,
-    path: registration.path,
-    deviceId: registration.device_id,
-    pinned: registration.pinned,
-    workspace: null,
-    workspaceCount: null,
-    counts: null,
-  };
-}
-
-function byPinThenLabel(left: ProjectEntry, right: ProjectEntry): number {
-  if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
-  return left.label.localeCompare(right.label);
-}
-
 /**
- * The Overview of a device's projects: one section per device, this machine
- * first, or the one `deviceId` names. A device with a session lists its
- * projected Projects; one without lists its registrations with no counts,
- * marked loading or unavailable, so nothing is guessed (B3, B21). The
- * device's Home is no project and is not listed.
+ * Each device Main can show, this machine first, or the one `deviceId`
+ * names, with how far its projects can be trusted right now (B3, B21). The
+ * projects themselves are `boardProjects`, in the core's order, so Main
+ * lists pinned projects in the order the sidebar does.
  */
-export function mainSections(rest: SnapshotRest | null, localAgents: AgentRow[], deviceId?: string): DeviceSection[] {
+export function mainSections(rest: SnapshotRest | null, deviceId?: string): DeviceSection[] {
   const devices = (rest?.navigator?.devices ?? []).filter((device) => deviceId === undefined || device.id === deviceId);
-  const registrations = (rest?.ui_state?.workspace_registrations ?? []).filter((row) => !row.home);
   const sections: DeviceSection[] = [];
   const local = devices.find((device) => device.kind !== "remote");
-  if (local) {
-    const availability = localAvailability(rest);
-    // The checkouts are this machine's own facts; only the agents need the engine.
-    const projects = projectsOf(rest?.navigator?.workspaces ?? []).map((workspace) => entryOf(workspace, localAgents, availability.state === "ready", true));
-    sections.push({ device: local, local: true, availability, projects: [...projects].sort(byPinThenLabel) });
-  }
+  if (local) sections.push({ device: local, local: true, availability: localAvailability(rest) });
   for (const device of devices.filter((row) => row.kind === "remote")) {
     const status = rest?.status?.remote?.find((row) => row.target_id === device.id);
-    const availability = deviceAvailability(device, status, machineName(rest?.navigator?.devices, device.id, translate));
-    const session = status?.session ?? null;
-    const projects = session
-      ? projectsOf(session.workspaces).map((workspace) => entryOf(workspace, session.agents, availability.state === "ready"))
-      : registrations.filter((row) => row.device_id === device.id).map(registrationEntry);
-    sections.push({ device, local: false, availability, projects: [...projects].sort(byPinThenLabel) });
+    sections.push({ device, local: false, availability: deviceAvailability(device, status, machineName(rest?.navigator?.devices, device.id, translate)) });
   }
   return sections;
 }
 
 /**
- * How many Projects an Overview lists, counted the way `mainSections` lists
- * them: this machine's catalog, and each device's session or, before it
- * answers, its registrations, Home excluded. A number, so a caller reads it
- * without building the sections.
+ * How many Projects an Overview lists: this machine's catalog, and each
+ * device's session or, before it answers, its registrations, Home excluded.
+ * A number, so a caller reads it without building the list.
  */
 export function allProjectsCount(rest: SnapshotRest | null, deviceId?: string): number {
   const devices = (rest?.navigator?.devices ?? []).filter((device) => deviceId === undefined || device.id === deviceId);

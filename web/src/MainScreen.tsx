@@ -53,7 +53,7 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const setView = useUiStore((s) => s.setMainView);
   const panel = useUiStore((s) => s.overview.panel);
   const projectId = useUiStore((s) => s.overview.projectId);
-  const section = useMemo(() => mainSections(rest, agents, deviceId)[0] ?? null, [rest, agents, deviceId]);
+  const section = useMemo(() => mainSections(rest, deviceId)[0] ?? null, [rest, deviceId]);
   const availability: DeviceAvailability = section?.availability ?? { state: "ready" };
   const projects = useMemo(() => boardProjects(rest, agents, deviceId), [rest, agents, deviceId]);
   const rows = useMemo(() => everyAgent(rest, agents), [rest, agents]);
