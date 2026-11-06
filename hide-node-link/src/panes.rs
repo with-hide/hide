@@ -15,7 +15,13 @@ pub const PANE_NEXT_ACTION: &str = "Reconnect the pane and retry";
 /// (PRD engine-bundle-4-herdr-removal B10).
 pub const PANE_NOT_MOVED_NEXT_ACTION: &str = "This pane still runs in Herdr: move Herdr from Hide's window, then run the command in the moved pane";
 
+/// What a pane's caller can do about a node's or daemon's refusal; the
+/// installation rule's own refusals say theirs
+/// (`hide_agent_hooks::hook_request::install::next_action`).
 pub fn refusal_next_action(reason: &str) -> &'static str {
+    if let Some(next_action) = hide_agent_hooks::hook_request::install::next_action(reason) {
+        return next_action;
+    }
     match reason {
         "checkout_not_registered" | "caller_unavailable" => CHECKOUT_NEXT_ACTION,
         "pane_not_moved" => PANE_NOT_MOVED_NEXT_ACTION,
