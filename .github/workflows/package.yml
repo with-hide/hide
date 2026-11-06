@@ -6,7 +6,8 @@
 # installer installs for the user, survives a reinstall while the daemon
 # runs from the build's runtime copy and uninstalls
 # (`desktop/scripts/smoke-windows-installer.mjs`); the deb installs on Ubuntu
-# and the rpm in a Fedora container; each installed app then starts without a
+# and in a bare Ubuntu container, the rpm in a Fedora container; each installed
+# app finds every library it links and then starts without a
 # window (`desktop/scripts/smoke-package.mjs`). The installed Windows app is
 # then opened with its window (`desktop/e2e/packaged-window.spec.ts`), and the
 # shell it draws is kept. Last, on both systems, a release-numbered build of
@@ -357,6 +358,21 @@ jobs:
       - name: Start the installed package without a window
         timeout-minutes: 5
         run: node desktop/scripts/smoke-package.mjs "${{ steps.installed.outputs.app }}"
+      # The runner above already carries a desktop's libraries, so a library
+      # the deb forgot to depend on is only missed on a bare system, such as
+      # a WSL distribution; this one has nothing but what the deb pulls in.
+      # Node is the runner's own, mounted, so apt installs nothing else.
+      - name: Install the deb in a bare Ubuntu and start it without a window
+        timeout-minutes: 15
+        run: |
+          docker run --rm -v "$PWD:/w" -v "$(readlink -f "$(command -v node)"):/usr/local/bin/node:ro" -w /w ubuntu:24.04 bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -q
+            apt-get install -y -q --no-install-recommends "/w/desktop/out/release/hide-v'"$HIDE_VERSION"'-linux-x64.deb"
+            [ -s /etc/machine-id ] || tr -d - </proc/sys/kernel/random/uuid >/etc/machine-id
+            useradd -m person
+            runuser -u person -- node desktop/scripts/smoke-package.mjs /opt/hide
+          '
       - name: Install the rpm in Fedora and start it without a window
         timeout-minutes: 15
         run: |
