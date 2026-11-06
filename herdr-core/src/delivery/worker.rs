@@ -1540,6 +1540,7 @@ mod tests {
             answered_at_unix_ms: 0,
             observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
+            hide_typed_at_unix_ms: 0,
             session: Some(hide_session::session_activity::SessionActivityRequest {
                 agent: hide_session::Agent::Codex,
                 reference_kind: "id".into(),
