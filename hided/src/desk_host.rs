@@ -58,11 +58,7 @@ impl DeskPlatform for DeskHost {
         let nonce = hex::encode(bytes);
         let reference = self
             .registry
-            .issue_desk(
-                &nonce,
-                self.port,
-                hide_core::desk::desk_context(&self.node),
-            )
+            .issue_desk(&nonce, self.port, hide_core::desk::desk_context(&self.node))
             .map_err(str::to_owned)?;
         Ok(DeskCredential { reference, nonce })
     }

@@ -311,10 +311,7 @@ fn a_node_s_agents_are_reached_only_through_its_link() {
         // The core's own engine, which a node's agent must never be sent to.
         let mut runtime = shared.lock().unwrap();
         let socket = std::env::temp_dir()
-            .join(format!(
-                "hide-core-inbound-own-{}.sock",
-                std::process::id()
-            ))
+            .join(format!("hide-core-inbound-own-{}.sock", std::process::id()))
             .to_string_lossy()
             .into_owned();
         runtime.live = Some(crate::live::LiveContext {

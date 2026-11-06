@@ -856,10 +856,7 @@ async fn prepare(
         });
     }
     // Hide AI settings move with the core and are never merged.
-    match (
-        &inspected.ai,
-        hide_core::stored_hide_ai_settings(&env.home),
-    ) {
+    match (&inspected.ai, hide_core::stored_hide_ai_settings(&env.home)) {
         (Ok(None), _) => {}
         (Ok(Some(theirs)), Ok(Some(ours))) if *theirs == ours => {}
         (Ok(Some(_)), _) => held.push("Hide AI settings unlike this machine's".to_owned()),

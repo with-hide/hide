@@ -766,10 +766,7 @@ impl CoreHandle {
     }
 
     /// Starts Desk with the identity and places hided gives its process.
-    pub fn set_desk(
-        &self,
-        platform: Arc<dyn hide_core::desk::DeskPlatform>,
-    ) -> Result<(), String> {
+    pub fn set_desk(&self, platform: Arc<dyn hide_core::desk::DeskPlatform>) -> Result<(), String> {
         self.commands
             .send(Command::SetDesk { platform })
             .map_err(|_| "core owner thread is gone".to_owned())

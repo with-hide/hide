@@ -125,8 +125,7 @@ pub fn device_target_from_rest(rest: &hide_core::RestSections, node: &str) -> Op
         .as_deref()
         .filter(|device| *device != node)?;
     let ui = &rest.ui_state;
-    if !ui.right_panel_visible || ui.right_panel_section != hide_core::RightPanelSection::Explorer
-    {
+    if !ui.right_panel_visible || ui.right_panel_section != hide_core::RightPanelSection::Explorer {
         return None;
     }
     if rest

@@ -21,10 +21,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use hide_agent_hooks::hook_request::install::{self, PaneRequest};
 use hide_core::address;
 use hide_core::engine::EngineHandle;
 use hide_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
-use hide_agent_hooks::hook_request::install::{self, PaneRequest};
 use hide_node::pane_proof::{PaneIdentity, caller_directory, descends_from, process_start};
 use hide_node::ssh::RemoteHost;
 use hide_node_link::panes::StreamCaller;

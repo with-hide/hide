@@ -1012,10 +1012,7 @@ fn roots_from_rest(rest: &hide_core::RestSections) -> Vec<Root> {
         .collect()
 }
 
-fn device_roots_from_rest(
-    rest: &hide_core::RestSections,
-    node: &str,
-) -> Vec<boundary::DeviceRoot> {
+fn device_roots_from_rest(rest: &hide_core::RestSections, node: &str) -> Vec<boundary::DeviceRoot> {
     rest.navigator
         .workspaces
         .iter()

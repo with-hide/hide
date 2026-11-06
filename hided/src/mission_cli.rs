@@ -831,10 +831,7 @@ mod tests {
             .and_then(|rest| rest.split("```").next())
             .expect("the guide shows a plan");
         let plan = plan_input(example).unwrap();
-        assert_eq!(
-            plan.strength,
-            Some(hide_core::missions::Strength::Thorough)
-        );
+        assert_eq!(plan.strength, Some(hide_core::missions::Strength::Thorough));
         assert!(plan.strength_why.is_some());
         // The nodes show the steps the guide asks for, within the limits the core holds them to.
         let steps: Vec<_> = plan

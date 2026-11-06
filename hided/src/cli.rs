@@ -565,50 +565,51 @@ fn parse_memory<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comman
     let verb = iter.next().map(String::as_str);
     let words = iter.map(String::as_str).collect::<Vec<_>>();
     let rest = words.join(" ");
-    let command = match (verb, words.as_slice()) {
-        (Some("show"), [card]) => hide_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Show { number }),
-        (Some("forget"), [card]) => hide_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Forget { number }),
-        (Some("undo"), [card]) => hide_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Undo { number }),
-        (Some("release"), [card]) => hide_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Release { number }),
-        (Some("recheck"), [card]) => hide_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Recheck { number }),
-        (Some("placed"), [card, path]) => {
-            hide_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
-                number,
-                path: (*path).to_owned(),
-            })
-        }
-        (Some("building"), [card, branch, path]) => hide_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Building {
-                number,
-                branch: (*branch).to_owned(),
-                path: (*path).to_owned(),
-            }),
-        (Some(verb @ ("outdated" | "skipped" | "unbuilt" | "stale")), [card, reason @ ..])
-            if !reason.is_empty() =>
-        {
-            hide_core::memory_command::parse_card(card).map(|number| {
-                let reason = reason.join(" ");
-                match verb {
-                    "skipped" => MemoryCommand::Skipped { number, reason },
-                    "unbuilt" => MemoryCommand::Unbuilt { number, reason },
-                    "stale" => MemoryCommand::Stale { number, reason },
-                    _ => MemoryCommand::Outdated { number, reason },
-                }
-            })
-        }
-        (Some("search"), [_, ..]) if !rest.trim().is_empty() => {
-            Some(MemoryCommand::Search { words: rest })
-        }
-        (Some("add"), [_, ..]) if !rest.trim().is_empty() => {
-            Some(MemoryCommand::Add { text: rest })
-        }
-        _ => None,
-    };
+    let command =
+        match (verb, words.as_slice()) {
+            (Some("show"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Show { number }),
+            (Some("forget"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Forget { number }),
+            (Some("undo"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Undo { number }),
+            (Some("release"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Release { number }),
+            (Some("recheck"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Recheck { number }),
+            (Some("placed"), [card, path]) => {
+                hide_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
+                    number,
+                    path: (*path).to_owned(),
+                })
+            }
+            (Some("building"), [card, branch, path]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Building {
+                    number,
+                    branch: (*branch).to_owned(),
+                    path: (*path).to_owned(),
+                }),
+            (Some(verb @ ("outdated" | "skipped" | "unbuilt" | "stale")), [card, reason @ ..])
+                if !reason.is_empty() =>
+            {
+                hide_core::memory_command::parse_card(card).map(|number| {
+                    let reason = reason.join(" ");
+                    match verb {
+                        "skipped" => MemoryCommand::Skipped { number, reason },
+                        "unbuilt" => MemoryCommand::Unbuilt { number, reason },
+                        "stale" => MemoryCommand::Stale { number, reason },
+                        _ => MemoryCommand::Outdated { number, reason },
+                    }
+                })
+            }
+            (Some("search"), [_, ..]) if !rest.trim().is_empty() => {
+                Some(MemoryCommand::Search { words: rest })
+            }
+            (Some("add"), [_, ..]) if !rest.trim().is_empty() => {
+                Some(MemoryCommand::Add { text: rest })
+            }
+            _ => None,
+        };
     command
         .map(CommandKind::Memory)
         .ok_or_else(|| MEMORY_USAGE.to_owned())

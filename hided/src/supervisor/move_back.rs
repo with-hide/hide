@@ -290,10 +290,7 @@ pub(super) async fn prepare_back(
             detail,
         }),
     }
-    let unlike = match (
-        &inspected.ai,
-        hide_core::stored_hide_ai_settings(&env.home),
-    ) {
+    let unlike = match (&inspected.ai, hide_core::stored_hide_ai_settings(&env.home)) {
         (_, Ok(None)) => None,
         (Ok(Some(theirs)), Ok(Some(ours))) if *theirs == ours => None,
         (_, Ok(Some(_))) => Some("Hide AI settings unlike the core's".to_owned()),
