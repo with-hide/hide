@@ -21,9 +21,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use herdr_core::address;
-use herdr_core::engine::EngineHandle;
-use herdr_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
+use hide_core::address;
+use hide_core::engine::EngineHandle;
+use hide_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
 use hide_agent_hooks::hook_request::install::{self, PaneRequest};
 use hide_node::pane_proof::{PaneIdentity, caller_directory, descends_from, process_start};
 use hide_node::ssh::RemoteHost;
@@ -206,7 +206,7 @@ fn pane_binding(identity: PaneIdentity) -> Binding {
 /// register it or record its prompts, which the operator otherwise sees only
 /// as input not confirmed, so the refusal is logged.
 fn note_capability_limit(pane_id: &str, live: usize) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "pane_auth",
         "kind": "pane_auth.capability_limit",
         "pane_id": pane_id,
@@ -438,7 +438,7 @@ impl Registry {
         context: Context,
     ) -> Result<PathBuf, &'static str> {
         let attestation = Attestation {
-            pane_id: herdr_core::workspace_control::DESK_CALLER.to_owned(),
+            pane_id: hide_core::workspace_control::DESK_CALLER.to_owned(),
             context,
             binding: Binding::Desk { pid: 0, started: 0 },
         };
@@ -519,7 +519,7 @@ impl Registry {
         request_id: &str,
     ) -> Result<Option<Capability>, &'static str> {
         let Some(cap) = self.get(token) else {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_panes",
                 "kind": "hook.reference_missing",
                 "node": node,
@@ -806,12 +806,12 @@ fn attest_bootstrap(
     // in Herdr, beside the engine (PRD engine-bundle-4-herdr-removal D-7,
     // B10).
     if pane.is_err()
-        && herdr_core::herdr_import::holds(
+        && hide_core::herdr_import::holds(
             &hide_kit::layout::engine_dir(core.state_dir()),
             &request.pane_id,
         )
     {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "pane_auth",
             "kind": "pane_auth.pane_not_moved",
             "pane_id": request.pane_id,
@@ -873,7 +873,7 @@ fn note_checkout_capability(
     reason: Option<&str>,
     pane_reason: Option<&str>,
 ) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "pane_auth",
         "kind": kind,
         "stage": stage,
@@ -991,7 +991,7 @@ fn inspect_pane(
 /// core's own engine names when the shell started, from the pane's record
 /// (PRD engine-bundle-3-core-owns D-9): a pid the system has given another
 /// process since is not that pane's shell, and is refused `pane_changed`.
-fn proved_shell(proof: &herdr_core::engine::PaneProof) -> Result<Binding, &'static str> {
+fn proved_shell(proof: &hide_core::engine::PaneProof) -> Result<Binding, &'static str> {
     let shell_started = process_start(proof.shell_pid).ok_or("pane_unavailable")?;
     if proof
         .shell_started
@@ -1137,7 +1137,7 @@ impl Drop for CloseOnDrop {
 /// The bootstrap listener stopped accepting for a reason other than the
 /// daemon's own stop; panes cannot get a capability until hided restarts.
 fn note_bootstrap_stopped(error: &std::io::Error) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "pane_auth",
         "kind": "bootstrap.stopped",
         "message": error.to_string(),
@@ -1372,7 +1372,7 @@ mod tests {
     #[test]
     fn a_pane_s_caller_is_any_descendant_of_its_recorded_shell_and_nothing_else() {
         let tree = PaneTree::start();
-        let proof = |shell_started| herdr_core::engine::PaneProof {
+        let proof = |shell_started| hide_core::engine::PaneProof {
             pane_id: "w1:p1".to_owned(),
             terminal_id: "w1:p1".to_owned(),
             shell_pid: tree.shell(),
@@ -1829,7 +1829,7 @@ mod tests {
     fn a_desk_capability_holds_while_its_process_runs_and_ends_when_revoked() {
         let directory = tempfile::tempdir().unwrap();
         let registry = Registry::new(directory.path()).unwrap();
-        let context = herdr_core::desk::desk_context("local");
+        let context = hide_core::desk::desk_context("local");
         let nonce = "0123456789abcdef0123456789abcdef";
         let path = registry.issue_desk(nonce, 12345, context.clone()).unwrap();
         let reference: Reference = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -1842,7 +1842,7 @@ mod tests {
         let capability = registry.get(&token).unwrap();
         assert_eq!(
             capability.pane_id,
-            herdr_core::workspace_control::DESK_CALLER
+            hide_core::workspace_control::DESK_CALLER
         );
         assert_eq!(capability.context, context);
         assert!(!capability.one_shot);

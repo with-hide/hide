@@ -795,7 +795,7 @@ fn read_pane_focus(
 /// result can only settle the request carrying its own identity.
 pub(crate) fn spawn_control_lane(first: LaneStart) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-control-lane".to_owned())
+        .name("hide-core-control-lane".to_owned())
         .spawn(move || {
             let mut current = first;
             loop {
@@ -885,17 +885,17 @@ pub fn spawn_pane_control_with_generation(
     connection_generation: Option<u64>,
 ) -> Result<(), String> {
     let worker_name = match &action {
-        PaneControlAction::Project { .. } => "herdr-core-pane-project".to_owned(),
-        PaneControlAction::Focus { .. } => "herdr-core-pane-focus".to_owned(),
+        PaneControlAction::Project { .. } => "hide-core-pane-project".to_owned(),
+        PaneControlAction::Focus { .. } => "hide-core-pane-focus".to_owned(),
         PaneControlAction::Split { direction, .. } => {
-            format!("herdr-core-pane-split-{}", direction.as_str())
+            format!("hide-core-pane-split-{}", direction.as_str())
         }
         PaneControlAction::Resize { direction, .. } => {
-            format!("herdr-core-pane-resize-{}", direction.as_str())
+            format!("hide-core-pane-resize-{}", direction.as_str())
         }
-        PaneControlAction::ToggleZoom { .. } => "herdr-core-pane-zoom".to_owned(),
-        PaneControlAction::Close { .. } => "herdr-core-pane-close".to_owned(),
-        PaneControlAction::MoveToNewTab { .. } => "herdr-core-pane-move".to_owned(),
+        PaneControlAction::ToggleZoom { .. } => "hide-core-pane-zoom".to_owned(),
+        PaneControlAction::Close { .. } => "hide-core-pane-close".to_owned(),
+        PaneControlAction::MoveToNewTab { .. } => "hide-core-pane-move".to_owned(),
     };
     thread::Builder::new()
         .name(worker_name)
@@ -977,44 +977,44 @@ pub(crate) fn spawn_remote_control_checked(
     let target_id = context.target_id.clone();
     let worker_name = match &action {
         RemoteControlAction::Pane(PaneControlAction::Focus { .. }) => {
-            format!("herdr-core-remote-{target_id}-pane-focus")
+            format!("hide-core-remote-{target_id}-pane-focus")
         }
         RemoteControlAction::Pane(PaneControlAction::Split { direction, .. }) => format!(
-            "herdr-core-remote-{target_id}-pane-split-{}",
+            "hide-core-remote-{target_id}-pane-split-{}",
             direction.as_str()
         ),
         RemoteControlAction::Pane(PaneControlAction::ToggleZoom { .. }) => {
-            format!("herdr-core-remote-{target_id}-pane-zoom")
+            format!("hide-core-remote-{target_id}-pane-zoom")
         }
         RemoteControlAction::Pane(PaneControlAction::Close { .. }) => {
-            format!("herdr-core-remote-{target_id}-pane-close")
+            format!("hide-core-remote-{target_id}-pane-close")
         }
         RemoteControlAction::Pane(PaneControlAction::MoveToNewTab { .. }) => {
-            format!("herdr-core-remote-{target_id}-pane-move")
+            format!("hide-core-remote-{target_id}-pane-move")
         }
         RemoteControlAction::Pane(
             PaneControlAction::Project { .. } | PaneControlAction::Resize { .. },
         ) => return Err("unsupported remote pane control action".to_owned()),
         RemoteControlAction::FocusWorkspace { .. } => {
-            format!("herdr-core-remote-{target_id}-workspace-focus")
+            format!("hide-core-remote-{target_id}-workspace-focus")
         }
         RemoteControlAction::FocusTab { .. } => {
-            format!("herdr-core-remote-{target_id}-tab-focus")
+            format!("hide-core-remote-{target_id}-tab-focus")
         }
         RemoteControlAction::CreateTab { .. } => {
-            format!("herdr-core-remote-{target_id}-tab-create")
+            format!("hide-core-remote-{target_id}-tab-create")
         }
         RemoteControlAction::OpenOwner { .. } => {
-            format!("herdr-core-remote-{target_id}-owner-open")
+            format!("hide-core-remote-{target_id}-owner-open")
         }
         RemoteControlAction::CloseTab { .. } => {
-            format!("herdr-core-remote-{target_id}-tab-close")
+            format!("hide-core-remote-{target_id}-tab-close")
         }
         RemoteControlAction::RenameTab { .. } => {
-            format!("herdr-core-remote-{target_id}-tab-rename")
+            format!("hide-core-remote-{target_id}-tab-rename")
         }
         RemoteControlAction::MoveTab { .. } => {
-            format!("herdr-core-remote-{target_id}-tab-move")
+            format!("hide-core-remote-{target_id}-tab-move")
         }
     };
     thread::Builder::new()

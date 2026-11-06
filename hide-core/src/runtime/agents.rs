@@ -175,7 +175,7 @@ impl Runtime {
         let worker_target_id = target_id.clone();
         let worker_root_path = root_path.clone();
         match thread::Builder::new()
-            .name(format!("herdr-core-remote-files-{target_id}"))
+            .name(format!("hide-core-remote-files-{target_id}"))
             .spawn(move || {
                 let result =
                     crate::node_access::list_folder(channel.as_ref(), &worker_root_path, "")

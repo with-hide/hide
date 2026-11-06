@@ -237,7 +237,7 @@ impl RelayTap {
             // that fits and asks none, since its next is likely as long.
             state.awaiting_full.insert(pane.to_owned());
             drop(state);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_relay",
                 "kind": "relay.terminals_frame_too_long",
                 "node": self.node,
@@ -325,7 +325,7 @@ impl RelayTap {
             panes += 1;
         }
         state.dropped += 1;
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_relay",
             "kind": "relay.terminals_overflow",
             "node": self.node,
@@ -353,7 +353,7 @@ impl RelayTap {
         state.bytes = forgotten.iter().map(TapItem::size).sum();
         state.items = forgotten;
         state.dropped += 1;
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_relay",
             "kind": "relay.terminals_overflow",
             "node": self.node,
@@ -504,7 +504,7 @@ impl RelayRequests {
         if taken {
             return Some(RelayScreenSlot(Arc::clone(self)));
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_relay",
             "kind": "relay.screens_full",
             "node": node,
@@ -527,7 +527,7 @@ impl RelayRequests {
         }
         let refused = self.refused.fetch_add(1, Ordering::Relaxed) + 1;
         if refused.is_power_of_two() {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_relay",
                 "kind": "relay.requests_full",
                 "node": node,
@@ -551,7 +551,7 @@ pub async fn serve_terminals(
 ) {
     let tap = RelayTap::new(&node);
     outputs.add(Arc::clone(&tap));
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_relay",
         "kind": "relay.terminals_opened",
         "node": node,
@@ -568,7 +568,7 @@ pub async fn serve_terminals(
         outputs.remove(&tap)
     })
     .await;
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_relay",
         "kind": "relay.terminals_closed",
         "node": node,
@@ -638,7 +638,7 @@ where
             incoming = stream.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     if let Err(reason) = take_down(&text, terminals.as_ref(), &own_node) {
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "node_relay",
                             "kind": "relay.terminals_line_refused",
                             "node": node,

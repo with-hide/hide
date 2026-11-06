@@ -84,7 +84,7 @@ impl LabelAnalyzer {
             job: Arc::clone(&running),
         };
         let worker = std::thread::Builder::new()
-            .name("herdr-core-labels-analyzer".to_owned())
+            .name("hide-core-labels-analyzer".to_owned())
             .spawn(move || run(receiver, settings, router, reach, standing, thread))
             .map_err(|error| format!("label analyzer could not be started: {error}"))?;
         Ok(Self {

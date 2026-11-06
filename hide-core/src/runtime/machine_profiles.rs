@@ -57,7 +57,7 @@ impl Runtime {
         self.snapshot.status.machine_profiles.error = None;
         let devices = Arc::clone(&self.devices);
         let spawned = thread::Builder::new()
-            .name("herdr-core-saved-machines".to_owned())
+            .name("hide-core-saved-machines".to_owned())
             .spawn(move || {
                 let hosts = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     devices.ssh_hosts(&home, &registered, &stop)

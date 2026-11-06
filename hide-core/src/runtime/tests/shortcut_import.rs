@@ -32,7 +32,7 @@ fn runtime_at(state: &std::path::Path, native: &std::path::Path) -> Runtime {
 /// A new private folder holding the core's store and the native app's; the
 /// test keeps the folder.
 fn paths(name: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
-    let dir = scratch_dir(&format!("herdr-core-shortcut-import-{name}-"));
+    let dir = scratch_dir(&format!("hide-core-shortcut-import-{name}-"));
     let state = dir.path().join("core-state.json");
     let native = dir.path().join("native-app-state.json");
     (dir, state, native)

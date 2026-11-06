@@ -75,7 +75,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use herdr_core::{CoreOptions, SCHEMA_VERSION};
+use hide_core::{CoreOptions, SCHEMA_VERSION};
 use tokio::sync::Notify;
 
 use crate::attachments::Attachments;
@@ -298,7 +298,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     seat.starting("core.state");
     // This machine's name in every key that names it. A machine Hide cannot
     // name refuses to start rather than guess one (PRD core-host-node D-28).
-    let node = herdr_core::node::NodeId::of_this_machine()?;
+    let node = hide_core::node::NodeId::of_this_machine()?;
     // A machine whose core runs elsewhere starts the node role instead.
     if placement::read(&env.state_dir, node.as_str())?.is_some() {
         return Err(
@@ -312,7 +312,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // reads it; a store that cannot be converted stops the start and names
     // the file (PRD core-host-node B2).
     let converted =
-        herdr_core::node_migration::convert(&env.state_dir, &node).map_err(|refusal| {
+        hide_core::node_migration::convert(&env.state_dir, &node).map_err(|refusal| {
             let record = serde_json::json!({
                 "component": "hided",
                 "kind": "node_migration.refused",
@@ -326,7 +326,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 "reason": &refusal.reason,
             });
             if let Err(error) =
-                herdr_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
+                hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
             {
                 eprintln!("the start refusal could not be logged: {error}");
             }
@@ -342,7 +342,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "retention_rows": converted.retention_rows,
         });
         if let Err(error) =
-            herdr_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
+            hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
         {
             eprintln!("the conversion could not be logged: {error}");
         }
@@ -432,7 +432,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 && let Ok(Err(message)) =
                     tokio::task::spawn_blocking(move || core.release_effects()).await
             {
-                herdr_core::diagnostic!(serde_json::json!({
+                hide_core::diagnostic!(serde_json::json!({
                     "component": "core_move",
                     "kind": "effects.release_failed",
                     "message": message,
@@ -630,7 +630,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             }
             let machine = herdr_transition::LocalMachine::new(&env, herdr_move);
             if let Err(reason) = core.set_herdr_import(Arc::new(machine)) {
-                herdr_core::diagnostic!(serde_json::json!({
+                hide_core::diagnostic!(serde_json::json!({
                     "component": "herdr_transition",
                     "kind": "herdr_transition.install_failed",
                     "reason": reason,
@@ -682,11 +682,11 @@ pub async fn start_node_daemon(env: Env) -> Result<RunningNode, String> {
 /// The node role on `seat`, which already holds the instance lock.
 pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningNode, String> {
     seat.starting("node");
-    let node = herdr_core::node::NodeId::of_this_machine()?;
+    let node = hide_core::node::NodeId::of_this_machine()?;
     let placement = placement::read(&env.state_dir, node.as_str())?
         .ok_or("no core placement record: this state folder starts a core")?;
     // Its records go where the core's would: Logs beside the state folder.
-    if let Err(error) = herdr_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
+    if let Err(error) = hide_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
         eprintln!(
             "{}",
             serde_json::json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
@@ -745,7 +745,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
                 state_dir: env.state_dir.clone(),
             }),
     )?;
-    herdr_core::diagnostic!(serde_json::json!({
+    hide_core::diagnostic!(serde_json::json!({
         "component": "node_daemon",
         "kind": "started",
         "node": node.as_str(),
@@ -769,7 +769,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
                 hide_kit::panes::Panes::open(
                     &node_home,
                     &hide_kit::layout::device_node_state(&node_home),
-                    |record| herdr_core::diagnostic!(record),
+                    |record| hide_core::diagnostic!(record),
                 )?
                 .live()
             }),
@@ -785,7 +785,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             .with_graceful_shutdown(async move { relay_stopping.ended().await })
             .await;
         if let Err(error) = served {
-            herdr_core::diagnostic!(serde_json::json!({
+            hide_core::diagnostic!(serde_json::json!({
                 "component": "node_daemon",
                 "kind": "browser_relay.exit",
                 "message": error.to_string(),
@@ -880,7 +880,7 @@ impl RootFollower {
     }
 }
 
-fn roots_changed(rest: &herdr_core::RestSections, have: u64) -> bool {
+fn roots_changed(rest: &hide_core::RestSections, have: u64) -> bool {
     rest.navigator.workspaces.revision > have
         || rest.status.remote.revision > have
         || rest.navigator.root_path.revision > have
@@ -944,7 +944,7 @@ fn spawn_root_refresh(roots: Arc<RootFollower>, clients: Arc<AtomicUsize>) {
 
 /// One snapshot value's roots, watch folders and registered index roots.
 fn apply_snapshot(
-    rest: &herdr_core::RestSections,
+    rest: &hide_core::RestSections,
     core: &CoreHandle,
     boundary: &Boundary,
     watch: &watch::WatchService,
@@ -993,7 +993,7 @@ fn apply_snapshot(
     ));
 }
 
-fn roots_from_rest(rest: &herdr_core::RestSections) -> Vec<Root> {
+fn roots_from_rest(rest: &hide_core::RestSections) -> Vec<Root> {
     rest.navigator
         .workspaces
         .iter()
@@ -1013,7 +1013,7 @@ fn roots_from_rest(rest: &herdr_core::RestSections) -> Vec<Root> {
 }
 
 fn device_roots_from_rest(
-    rest: &herdr_core::RestSections,
+    rest: &hide_core::RestSections,
     node: &str,
 ) -> Vec<boundary::DeviceRoot> {
     rest.navigator
@@ -1058,20 +1058,20 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        let options: herdr_core::CoreOptions = serde_json::from_value(serde_json::json!({
+        let options: hide_core::CoreOptions = serde_json::from_value(serde_json::json!({
             "schema_version": 2, "node_id": "test-node", "app_state_path": ""
         }))
         .unwrap();
-        let mut snapshot = herdr_core::Snapshot::initial(&options);
-        let paths = herdr_core::workspace::PathIndex::ask(
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        let paths = hide_core::workspace::PathIndex::ask(
             &hide_node::Local::of_process(),
             std::collections::BTreeSet::from([path.clone()]),
         )
         .unwrap();
-        snapshot.navigator.workspaces = herdr_core::workspace::build_catalog(
-            &herdr_core::node::NodeId::parse("test-node").unwrap(),
+        snapshot.navigator.workspaces = hide_core::workspace::build_catalog(
+            &hide_core::node::NodeId::parse("test-node").unwrap(),
             &[],
-            &[herdr_core::workspace::SessionSpace {
+            &[hide_core::workspace::SessionSpace {
                 checkout: None,
                 id: "fixture".to_owned(),
                 label: "fixture".to_owned(),
@@ -1087,7 +1087,7 @@ mod tests {
         device.device_id = "fixture-device".to_owned();
         device.checkouts[0].path = "/remote/fixture".to_owned();
         snapshot.navigator.workspaces.push(device);
-        let initial = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let initial = hide_core::RestSections::capture(&snapshot, None, 1);
         assert_eq!(roots_from_rest(&initial).len(), 1);
         assert_eq!(
             roots_from_rest(&initial)[0].path,
@@ -1101,7 +1101,7 @@ mod tests {
             }]
         );
         snapshot.zoomed = Some("fixture:pane".to_owned());
-        let selected = herdr_core::RestSections::capture(&snapshot, Some(&initial), 2);
+        let selected = hide_core::RestSections::capture(&snapshot, Some(&initial), 2);
         assert_eq!(roots_from_rest(&selected), roots_from_rest(&initial));
         assert_eq!(
             device_roots_from_rest(&selected, "test-node"),
@@ -1109,7 +1109,7 @@ mod tests {
         );
         snapshot.navigator.workspaces[0].checkouts[0].exists = false;
         snapshot.navigator.workspaces.pop();
-        let removed = herdr_core::RestSections::capture(&snapshot, Some(&selected), 3);
+        let removed = hide_core::RestSections::capture(&snapshot, Some(&selected), 3);
         assert!(roots_from_rest(&removed).is_empty());
         assert!(device_roots_from_rest(&removed, "test-node").is_empty());
         assert_eq!(
@@ -1122,7 +1122,7 @@ mod tests {
     #[test]
     fn root_follower_detects_remote_session_changes_for_independent_and_reset_cursors() {
         let mut snapshot = watch::tests::remote_snapshot();
-        let initial = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let initial = hide_core::RestSections::capture(&snapshot, None, 1);
         assert_eq!(
             device_roots_from_rest(&initial, "test-node"),
             vec![boundary::DeviceRoot {
@@ -1133,7 +1133,7 @@ mod tests {
         assert!(roots_changed(&initial, 0));
         assert!(!roots_changed(&initial, 1));
         snapshot.zoomed = Some("fixture:p1".into());
-        let zoom = herdr_core::RestSections::capture(&snapshot, Some(&initial), 2);
+        let zoom = hide_core::RestSections::capture(&snapshot, Some(&initial), 2);
         assert!(
             !roots_changed(&zoom, 1),
             "another reader's zoom does not renew roots"
@@ -1145,7 +1145,7 @@ mod tests {
             .workspaces[0]
             .checkouts[0]
             .path = "/r/new".into();
-        let moved = herdr_core::RestSections::capture(&snapshot, Some(&zoom), 3);
+        let moved = hide_core::RestSections::capture(&snapshot, Some(&zoom), 3);
         assert!(roots_changed(&moved, 2));
         assert!(roots_changed(&moved, 1));
         assert_eq!(
@@ -1153,7 +1153,7 @@ mod tests {
             "/r/new"
         );
         snapshot.status.remote.clear();
-        let removed = herdr_core::RestSections::capture(&snapshot, Some(&moved), 4);
+        let removed = hide_core::RestSections::capture(&snapshot, Some(&moved), 4);
         assert!(roots_changed(&removed, 3));
         assert!(roots_changed(&removed, 1));
         assert!(

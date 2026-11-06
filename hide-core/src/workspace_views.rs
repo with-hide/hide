@@ -770,7 +770,7 @@ mod tests {
     /// A new folder, removed when the test drops it.
     fn scratch(name: &str) -> tempfile::TempDir {
         tempfile::Builder::new()
-            .prefix(&format!("herdr-core-workspace-views-{name}-"))
+            .prefix(&format!("hide-core-workspace-views-{name}-"))
             .tempdir()
             .unwrap()
     }

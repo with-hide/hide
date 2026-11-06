@@ -233,7 +233,7 @@ fn check_owner_thread(core: &Core, operation: &str) -> bool {
     }
     lock_recover(&core.runtime).set_error(
         "core.wrong_thread",
-        format!("{operation} must run on the thread that created herdr-core"),
+        format!("{operation} must run on the thread that created hide-core"),
         false,
     );
     false

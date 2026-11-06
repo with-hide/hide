@@ -111,7 +111,7 @@ fn a_first_run_opens_the_wizard_and_an_existing_install_never_does() {
 /// nothing, and a restart reopens the step the wizard stood on.
 #[test]
 fn the_first_step_moves_on_when_its_pass_lands_and_a_restart_reopens_there() {
-    let folder = scratch_dir("herdr-core-first-run-");
+    let folder = scratch_dir("hide-core-first-run-");
     let path = folder.path().join("state.json");
     let mut runtime = runtime_at(&path);
     report_here(&mut runtime, &first_run_pass());
@@ -683,7 +683,7 @@ fn a_reopened_first_step_switches_only_what_it_changed() {
 /// survive a shared UI save and a restart.
 #[test]
 fn the_notification_switch_and_screen_intros_survive_a_save_and_a_restart() {
-    let folder = scratch_dir("herdr-core-first-run-switch-");
+    let folder = scratch_dir("hide-core-first-run-switch-");
     let path = folder.path().join("state.json");
     let mut runtime = runtime_at(&path);
     let notifications = |enabled: bool| {
@@ -742,7 +742,7 @@ fn the_notification_switch_and_screen_intros_survive_a_save_and_a_restart() {
 #[test]
 fn the_old_shared_choice_migrates_and_each_notification_choice_survives_restart() {
     for old in [false, true] {
-        let folder = scratch_dir("herdr-core-notification-migration-");
+        let folder = scratch_dir("hide-core-notification-migration-");
         let path = folder.path().join("state.json");
         let mut runtime = runtime_at(&path);
         runtime.dispatch_json(&event(
@@ -783,7 +783,7 @@ fn the_old_shared_choice_migrates_and_each_notification_choice_survives_restart(
 
 #[test]
 fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications() {
-    let folder = scratch_dir("herdr-core-first-run-back-");
+    let folder = scratch_dir("hide-core-first-run-back-");
     let path = folder.path().join("state.json");
     let mut runtime = runtime_at(&path);
     report_here(&mut runtime, &first_run_pass());
@@ -841,7 +841,7 @@ fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications()
 
 #[test]
 fn setup_url_drafts_never_publish_or_restore_credentials_and_keep_clean_urls() {
-    let folder = scratch_dir("herdr-core-first-run-url-draft-");
+    let folder = scratch_dir("hide-core-first-run-url-draft-");
     let path = folder.path().join("state.json");
     let mut runtime = runtime_at(&path);
     report_here(&mut runtime, &first_run_pass());
@@ -908,7 +908,7 @@ fn setup_url_drafts_never_publish_or_restore_credentials_and_keep_clean_urls() {
 
 #[test]
 fn finishing_setup_clears_the_project_draft_before_saving() {
-    let folder = scratch_dir("herdr-core-first-run-finished-draft-");
+    let folder = scratch_dir("hide-core-first-run-finished-draft-");
     let path = folder.path().join("state.json");
     let mut runtime = runtime_at(&path);
     runtime.snapshot.ui_state.first_run = Some(FirstRun {

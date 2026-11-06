@@ -212,7 +212,7 @@ pub enum FileReopenResult {
 
 pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-reopen-closed".to_owned())
+        .name("hide-core-reopen-closed".to_owned())
         .spawn(move || {
             let node = context.node.as_ref();
             let folders = |path: &str| crate::node_access::is_directory(node, path);
@@ -247,7 +247,7 @@ pub fn spawn_file_reopen(
     channel: std::sync::Arc<dyn crate::node_access::NodeLink>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-file-reopen".to_owned())
+        .name("hide-core-file-reopen".to_owned())
         .spawn(move || {
             let ClosedItem::File { path, .. } = &request.item else {
                 return;
@@ -936,7 +936,7 @@ fn start_or_degrade_agent(
         let result = start_agent(
             engine,
             None,
-            &format!("herdr-core:{key}:agent:{index}:resume"),
+            &format!("hide-core:{key}:agent:{index}:resume"),
             pane_id,
             crate::agent_start::ShellStart::Plain,
             &name,
@@ -964,7 +964,7 @@ fn start_or_degrade_agent(
     if let Err(message) = start_agent(
         engine,
         None,
-        &format!("herdr-core:{key}:agent:{index}:fresh"),
+        &format!("hide-core:{key}:agent:{index}:fresh"),
         pane_id,
         crate::agent_start::ShellStart::Plain,
         &name,

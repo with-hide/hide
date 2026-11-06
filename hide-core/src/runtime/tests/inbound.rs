@@ -312,7 +312,7 @@ fn a_node_s_agents_are_reached_only_through_its_link() {
         let mut runtime = shared.lock().unwrap();
         let socket = std::env::temp_dir()
             .join(format!(
-                "herdr-core-inbound-own-{}.sock",
+                "hide-core-inbound-own-{}.sock",
                 std::process::id()
             ))
             .to_string_lossy()

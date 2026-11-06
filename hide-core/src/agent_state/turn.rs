@@ -1053,7 +1053,7 @@ pub mod push {
 
     /// The states a notification announces; the wire value is also the key of
     /// the phone's translated word for it. The last two are the human delivery
-    /// causes (`herdr_core::delivery::worker::HumanNoticeKind`).
+    /// causes (`hide_core::delivery::worker::HumanNoticeKind`).
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum NoticeState {
         NeedsYou,

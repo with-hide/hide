@@ -27,7 +27,7 @@
 //! A shell starts as Herdr started its own by default (Herdr's `auto` mode):
 //! a login shell on macOS and not on Linux. Other Unix shells, and an
 //! integration that cannot be installed, get an explicit ordinary launch
-//! with Plain readiness (`herdr-core`'s `agent_start`). On macOS the same
+//! with Plain readiness (`hide-core`'s `agent_start`). On macOS the same
 //! hided executable replaces itself with that shell using its login argv0;
 //! Linux starts it directly. Neither route invents shell-specific flags.
 //!
@@ -80,7 +80,7 @@ const POWERSHELL_COMMAND: &str = concat!(
 /// How long another build's folder stays after a pane was last started
 /// with it. A shell reads its later startup files only once a question in
 /// an earlier one is answered, which can be long after a start stopped
-/// waiting for it (`herdr-core`'s `agent_start::SHELL_WAIT`, 30 s), and one
+/// waiting for it (`hide-core`'s `agent_start::SHELL_WAIT`, 30 s), and one
 /// that finds the folder gone starts without the user's own files.
 #[cfg(unix)]
 const UNUSED_FOR: Duration = Duration::from_secs(60 * 60);

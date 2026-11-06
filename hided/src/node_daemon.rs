@@ -183,7 +183,7 @@ impl NodeDaemon {
         let core_alias: Arc<str> = placement.alias.as_str().into();
         let boundary = Arc::new(Boundary::for_node(
             home,
-            herdr_core::node::NodeId::parse(&identity.node)?,
+            hide_core::node::NodeId::parse(&identity.node)?,
         )?);
         let browser = NodeBrowser::new(server.browser_relay_port);
         let role = Arc::new(NodeRole::start_for_screens(
@@ -570,7 +570,7 @@ mod tests {
         std::fs::create_dir_all(&checkout).unwrap();
         std::fs::write(checkout.join("a.txt"), "a").unwrap();
         let boundary = Arc::new(
-            Boundary::for_node(&home, herdr_core::node::NodeId::parse("test-node").unwrap())
+            Boundary::for_node(&home, hide_core::node::NodeId::parse("test-node").unwrap())
                 .unwrap(),
         );
         let follow = roots_follow(Arc::clone(&boundary));

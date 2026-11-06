@@ -549,7 +549,7 @@ impl Runtime {
         };
         let device = target.to_owned();
         let spawned = thread::Builder::new()
-            .name("herdr-core-device-catalog".to_owned())
+            .name("hide-core-device-catalog".to_owned())
             .spawn(move || {
                 let (answers, failure) = ask_facts(channel.as_ref(), &missing);
                 let Some(runtime) = context.runtime.upgrade() else {
@@ -714,7 +714,7 @@ impl Runtime {
         };
         let device = target.to_owned();
         let spawned = thread::Builder::new()
-            .name("herdr-core-device-worktrees".to_owned())
+            .name("hide-core-device-worktrees".to_owned())
             .spawn(move || {
                 let answer =
                     ask_worktrees(channel.as_ref(), &device, &wanted, &reuse, &bases, notes);
@@ -1120,7 +1120,7 @@ impl Runtime {
         };
         let (target, folder) = (device.to_owned(), requested.clone());
         let spawned = thread::Builder::new()
-            .name("herdr-core-device-registration".to_owned())
+            .name("hide-core-device-registration".to_owned())
             .spawn(move || {
                 let answer = ask();
                 let Some(runtime) = context.runtime.upgrade() else {

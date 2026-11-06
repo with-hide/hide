@@ -124,7 +124,7 @@ impl Keys {
 }
 
 fn diagnostic(connection: Option<u32>, reason: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component":"mobile_relay", "kind":"relay.closed", "connection":connection, "reason":reason,
     }));
 }

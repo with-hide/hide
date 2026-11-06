@@ -152,7 +152,7 @@ pub fn github_snapshot(state_dir: &Path) -> PathBuf {
 
 /// What each pane's agent hook last reported about its session (runtime,
 /// hook version, subagent counts), restored when the daemon starts; its
-/// owner is the core's hook facts (`herdr_core::agent_hooks`).
+/// owner is the core's hook facts (`hide_core::agent_hooks`).
 pub fn hook_facts(state_dir: &Path) -> PathBuf {
     state_dir.join("hook-facts.json")
 }

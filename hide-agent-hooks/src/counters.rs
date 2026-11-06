@@ -30,7 +30,7 @@ const RUNNING_LIMIT: usize = 256;
 const FINISHED_LIMIT: usize = 256;
 /// The sessions one pane's file keeps; the one heard from least recently
 /// goes first. The core's facts keep the same sessions by this constant
-/// (`herdr-core`'s `agent_hooks::facts`).
+/// (`hide-core`'s `agent_hooks::facts`).
 pub const SESSIONS_PER_PANE: usize = 8;
 
 /// What one pane's session has spawned.

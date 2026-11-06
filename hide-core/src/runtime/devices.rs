@@ -551,7 +551,7 @@ impl Runtime {
         );
         let worker_device_id = device_id.to_owned();
         let spawned = thread::Builder::new()
-            .name(format!("herdr-core-device-test-{device_id}"))
+            .name(format!("hide-core-device-test-{device_id}"))
             .spawn(move || {
                 let report = transport.capability_test("device-connection-test");
                 let Some(runtime) = context.runtime.upgrade() else {

@@ -1145,7 +1145,7 @@ pub(crate) fn assert_same_facts(agent: &str, transcript: &LabelTranscript) {
 const LETTER_JSON: &str = r"\nHide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1\n";
 
 /// The doorbell's line that wakes a pane for that letter, which carries no
-/// envelope (`herdr-core/src/delivery/bell.rs`).
+/// envelope (`hide-core/src/delivery/bell.rs`).
 const BELL: &str = "🦉 ci-lead 요청: CI 다시 봐줘 · hide inbox";
 
 /// The person's messages a conversation holds, and whether each is the

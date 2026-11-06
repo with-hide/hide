@@ -48,7 +48,7 @@ impl PaneSizes {
         let mut panes = self.lock();
         if !panes.contains_key(pane) && panes.len() >= MAX_PANES {
             if !self.full.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "pane_sizes",
                     "kind": "pane_sizes.full",
                     "pane_id": pane,

@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
-use herdr_core::workspace_control::Action;
+use hide_core::workspace_control::Action;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -332,7 +332,7 @@ fn request_query(
 /// `hide links`: a read, answered without a shell.
 pub fn request_links(
     credential: &mut Credential,
-    query: &herdr_core::links::query::LinksQuery,
+    query: &hide_core::links::query::LinksQuery,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -353,11 +353,11 @@ pub fn request_links(
 /// it, and the exchange waits a little past that for the refusal.
 pub fn request_session(
     credential: &mut Credential,
-    command: &herdr_core::links::session_command::SessionCommand,
+    command: &hide_core::links::session_command::SessionCommand,
 ) -> Result<Value, String> {
     let timeout = match command {
-        herdr_core::links::session_command::SessionCommand::Read { .. } => {
-            herdr_core::links::session_command::READ_TIMEOUT + Duration::from_secs(15)
+        hide_core::links::session_command::SessionCommand::Read { .. } => {
+            hide_core::links::session_command::READ_TIMEOUT + Duration::from_secs(15)
         }
         _ => Duration::from_secs(30),
     };
@@ -381,24 +381,24 @@ pub fn request_session(
 /// and running it again adds nothing twice.
 pub fn request_memory(
     credential: &mut Credential,
-    command: &herdr_core::memory_command::MemoryCommand,
+    command: &hide_core::memory_command::MemoryCommand,
 ) -> Result<Value, String> {
     let (action, timeout) = match command {
-        herdr_core::memory_command::MemoryCommand::Add { .. } => {
-            (true, herdr_core::memory_command::ADD_TIMEOUT)
+        hide_core::memory_command::MemoryCommand::Add { .. } => {
+            (true, hide_core::memory_command::ADD_TIMEOUT)
         }
-        herdr_core::memory_command::MemoryCommand::Show { .. }
-        | herdr_core::memory_command::MemoryCommand::Forget { .. }
-        | herdr_core::memory_command::MemoryCommand::Undo { .. }
-        | herdr_core::memory_command::MemoryCommand::Placed { .. }
-        | herdr_core::memory_command::MemoryCommand::Building { .. }
-        | herdr_core::memory_command::MemoryCommand::Unbuilt { .. }
-        | herdr_core::memory_command::MemoryCommand::Outdated { .. }
-        | herdr_core::memory_command::MemoryCommand::Skipped { .. }
-        | herdr_core::memory_command::MemoryCommand::Stale { .. }
-        | herdr_core::memory_command::MemoryCommand::Release { .. }
-        | herdr_core::memory_command::MemoryCommand::Recheck { .. } => (true, TIMEOUT),
-        herdr_core::memory_command::MemoryCommand::Search { .. } => (false, TIMEOUT),
+        hide_core::memory_command::MemoryCommand::Show { .. }
+        | hide_core::memory_command::MemoryCommand::Forget { .. }
+        | hide_core::memory_command::MemoryCommand::Undo { .. }
+        | hide_core::memory_command::MemoryCommand::Placed { .. }
+        | hide_core::memory_command::MemoryCommand::Building { .. }
+        | hide_core::memory_command::MemoryCommand::Unbuilt { .. }
+        | hide_core::memory_command::MemoryCommand::Outdated { .. }
+        | hide_core::memory_command::MemoryCommand::Skipped { .. }
+        | hide_core::memory_command::MemoryCommand::Stale { .. }
+        | hide_core::memory_command::MemoryCommand::Release { .. }
+        | hide_core::memory_command::MemoryCommand::Recheck { .. } => (true, TIMEOUT),
+        hide_core::memory_command::MemoryCommand::Search { .. } => (false, TIMEOUT),
     };
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -420,7 +420,7 @@ pub fn request_memory(
 /// change repeated changes nothing more.
 pub fn request_mission(
     credential: &mut Credential,
-    command: &herdr_core::missions::MissionCommand,
+    command: &hide_core::missions::MissionCommand,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -441,7 +441,7 @@ pub fn request_mission(
 /// changes nothing more.
 pub fn request_plan(
     credential: &mut Credential,
-    command: &herdr_core::plans::PlanCommand,
+    command: &hide_core::plans::PlanCommand,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -484,9 +484,9 @@ pub fn request_agent_catalog(
 /// duplicate or an unknown device, never applied twice.
 pub fn request_device(
     credential: &mut Credential,
-    command: &herdr_core::device_command::DeviceCommand,
+    command: &hide_core::device_command::DeviceCommand,
 ) -> Result<Value, String> {
-    let action = !matches!(command, herdr_core::device_command::DeviceCommand::List);
+    let action = !matches!(command, hide_core::device_command::DeviceCommand::List);
     credential.run(|path, after| {
         let reference = read_reference(path)?;
         let request_id = fresh_request_id()?;
@@ -679,7 +679,7 @@ pub fn request_ps(credential: &mut Credential, all: bool) -> Result<Value, Strin
 /// no shell needed.
 pub fn request_pane(
     credential: &mut Credential,
-    command: &herdr_core::pane_command::PaneCommand,
+    command: &hide_core::pane_command::PaneCommand,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -700,7 +700,7 @@ pub fn request_pane(
 /// long as the host's recheck and removal; the daemon's own wait ends first.
 pub fn request_worktree_remove(
     credential: &mut Credential,
-    command: &herdr_core::worktree_command::WorktreeRemove,
+    command: &hide_core::worktree_command::WorktreeRemove,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -711,7 +711,7 @@ pub fn request_worktree_remove(
             json!({"type":"worktree_remove","request_id":request_id,"command":command}),
             &request_id,
             true,
-            herdr_core::worktree_command::REMOVE_WAIT + Duration::from_secs(20),
+            hide_core::worktree_command::REMOVE_WAIT + Duration::from_secs(20),
             after,
         )
     })
@@ -742,7 +742,7 @@ pub fn request_agent_action(
 /// Losing the final capability claim cannot turn durable success into retry.
 pub fn request_delivery(
     credential: &mut Credential,
-    command: herdr_core::delivery::Command,
+    command: hide_core::delivery::Command,
     hint: Option<&str>,
 ) -> Result<Value, String> {
     // A spawn creates a worktree, starts an agent and hands it its brief,
@@ -750,8 +750,8 @@ pub fn request_delivery(
     // makes several calls over SSH besides; running it again after a timeout
     // returns the same agent either way.
     let timeout = match &command {
-        herdr_core::delivery::Command::Agents {
-            command: herdr_core::coordination::Command::Spawn { machine, .. },
+        hide_core::delivery::Command::Agents {
+            command: hide_core::coordination::Command::Spawn { machine, .. },
         } => {
             if machine.is_some() {
                 REMOTE_SPAWN_TIMEOUT
@@ -782,12 +782,12 @@ pub fn request_delivery(
 /// 1,250 ms a hook gives Memory (`hide_agent_hooks::memory::MEMORY_BUDGET`).
 const MEMORY_WITHIN: Duration = Duration::from_millis(1_200);
 /// The prompt a hook piped in: at most
-/// `herdr_core::memory_hook::PROMPT_LIMIT_BYTES`, its valid UTF-8 start.
+/// `hide_core::memory_hook::PROMPT_LIMIT_BYTES`, its valid UTF-8 start.
 pub fn read_memory_prompt(input: impl std::io::Read) -> Result<String, String> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
     input
-        .take(herdr_core::memory_hook::PROMPT_LIMIT_BYTES as u64)
+        .take(hide_core::memory_hook::PROMPT_LIMIT_BYTES as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| "prompt_unreadable".to_owned())?;
     Ok(match String::from_utf8(bytes) {
@@ -849,7 +849,7 @@ fn hook_request(
     };
     let sent = send(&caller, &request_id, command, deadline);
     if sent.reference_missing {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "workspace_cli",
             "kind": "hook.reference_missing",
             "request_id": request_id,
@@ -858,7 +858,7 @@ fn hook_request(
     }
     sent.answer.map_err(|failure| {
         if failure.step {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "workspace_cli",
                 "kind": "hook.request_failed",
                 "request_id": request_id,
@@ -2189,7 +2189,7 @@ mod tests {
         let shell = i32::try_from(std::process::id()).unwrap();
         let attestation = crate::pane_auth::Attestation::pane(
             "w1:p1",
-            herdr_core::workspace_control::Context {
+            hide_core::workspace_control::Context {
                 device_id: "local".to_owned(),
                 workspace_id: "workspace".to_owned(),
                 checkout_id: "checkout".to_owned(),

@@ -1027,7 +1027,7 @@ impl Fixture {
         self.event("retry_connect", json!({"target_id":DEVICE}))
     }
 
-    pub fn ledger(&self) -> Result<herdr_core::delivery::ledger::Ledger> {
+    pub fn ledger(&self) -> Result<hide_core::delivery::ledger::Ledger> {
         let path = self.state.join("delivery-ledger.json");
         if !path.exists() {
             return Ok(Default::default());

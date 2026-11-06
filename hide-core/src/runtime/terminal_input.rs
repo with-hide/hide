@@ -651,7 +651,7 @@ impl super::Runtime {
         let worker_origin = origin.clone();
         let pane = pane_id.to_owned();
         let spawned = thread::Builder::new()
-            .name("herdr-core-shell-reading".to_owned())
+            .name("hide-core-shell-reading".to_owned())
             .spawn(move || {
                 let still_waiting = || {
                     live.runtime.upgrade().is_some_and(|runtime| {

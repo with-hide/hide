@@ -119,7 +119,7 @@ impl PaneApiRoute {
 /// on that mutex.
 pub fn spawn_pane_find(route: PaneApiRoute, request: PaneFindRequest) -> Result<(), String> {
     route.spawn(
-        "herdr-core-pane-find",
+        "hide-core-pane-find",
         move |engine, engine_pane_id| run_pane_find(engine, engine_pane_id, &request),
         |runtime, pane_id, result| runtime.ingest_pane_find(pane_id, result),
     )
@@ -137,7 +137,7 @@ pub(crate) fn spawn_agent_find(
 ) -> Result<(), String> {
     let core_pane_id = route.pane_id.clone();
     route.spawn(
-        "herdr-core-agent-find",
+        "hide-core-agent-find",
         move |engine, engine_pane_id| {
             open_agent_find(engine, engine_pane_id, find, &gate, &core_pane_id)
         },

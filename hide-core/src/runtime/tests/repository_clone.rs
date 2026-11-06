@@ -72,7 +72,7 @@ fn shared_runtime() -> SharedRuntime {
     let shared = SharedRuntime::new(runtime());
     let socket_path = std::env::temp_dir()
         .join(format!(
-            "herdr-core-clone-{}-{}.sock",
+            "hide-core-clone-{}-{}.sock",
             std::process::id(),
             NEXT_RUNTIME_STATE_ID.fetch_add(1, Ordering::Relaxed)
         ))

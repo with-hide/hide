@@ -127,7 +127,7 @@ pub fn read(state_dir: &Path, own_node: &str) -> Result<Option<Placement>, Strin
     let placement: Placement = serde_json::from_slice(&bytes).map_err(|error| {
         format!("the core placement record is not one this build reads: {error}")
     })?;
-    herdr_core::node::NodeId::parse(&placement.node)
+    hide_core::node::NodeId::parse(&placement.node)
         .map_err(|error| format!("the core placement record names no node: {error}"))?;
     if placement.node == own_node {
         return Err("the core placement record names this machine".to_owned());

@@ -16,7 +16,7 @@ pub(crate) fn spawn(
     let republish = Arc::new(RepublishFlags::default());
     let worker_republish = Arc::clone(&republish);
     let worker = thread::Builder::new()
-        .name("herdr-core-session-sync".to_owned())
+        .name("hide-core-session-sync".to_owned())
         .spawn(move || {
             run_coordinator(
                 context,
@@ -867,7 +867,7 @@ fn spawn_focus_readback(
     let runtime = context.runtime.clone();
     let notifier = context.notifier.clone();
     thread::Builder::new()
-        .name("herdr-core-focus-readback".to_owned())
+        .name("hide-core-focus-readback".to_owned())
         .spawn(move || {
             struct Slot(Weak<Mutex<Runtime>>, bool);
             impl Drop for Slot {

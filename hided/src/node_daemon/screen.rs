@@ -75,7 +75,7 @@ pub(super) async fn screen(
     if desktop {
         state.desktop_screens.fetch_sub(1, Ordering::SeqCst);
     }
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_daemon",
         "kind": "screen.ended",
         "connection": connection,
@@ -228,7 +228,7 @@ async fn control_link(
         if let Some(answer) = answer {
             let _ = (state.answer_sign_in)(connection, answer.question, answer.reply);
         } else {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "core_link.sign_in_malformed",
             }));
@@ -248,7 +248,7 @@ async fn control_link(
         }
         None => Err("a core_link event names disconnect, reconnect or retry".to_owned()),
     };
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_daemon",
         "kind": "core_link.control",
         "action": action.map(|action| format!("{action:?}").to_lowercase()),
@@ -292,7 +292,7 @@ async fn attached(
     let relay = match relay {
         Ok(relay) => relay,
         Err(message) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "screen.relay_failed",
                 "connection": connection,
@@ -587,7 +587,7 @@ impl ScreenRelay {
                             )) => {
                                 if !lock(&shared.backlog).push(frame) {
                                     // Logged now: the screen may not read for a while.
-                                    herdr_core::diagnostic!(json!({
+                                    hide_core::diagnostic!(json!({
                                         "component": "node_daemon",
                                         "kind": "screen.fell_behind",
                                         "connection": connection,

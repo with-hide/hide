@@ -191,7 +191,7 @@ pub(super) fn start(
         installing: Vec::new(),
     };
     std::thread::Builder::new()
-        .name("herdr-core-desk".into())
+        .name("hide-core-desk".into())
         .spawn(move || worker.run(received))?;
     Ok(Handle { orders })
 }
@@ -379,7 +379,7 @@ impl Worker {
         let orders = self.orders.clone();
         let stop = Arc::clone(&self.stop);
         let spawned = std::thread::Builder::new()
-            .name("herdr-core-desk-install".into())
+            .name("hide-core-desk-install".into())
             .spawn(move || {
                 let result = install::install(&root, adapter, &npm, &stop).map(|_| ());
                 let _ = orders.send(Order::Installed(adapter, result));

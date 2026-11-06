@@ -511,7 +511,7 @@ impl RecordedStatistics {
 }
 
 pub(crate) fn runtime() -> Runtime {
-    let state = scratch_dir("herdr-core-runtime-");
+    let state = scratch_dir("hide-core-runtime-");
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         home: None,

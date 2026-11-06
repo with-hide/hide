@@ -137,7 +137,7 @@ pub(crate) fn reopen(
 
 pub(crate) fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-pane-reopen".into())
+        .name("hide-core-pane-reopen".into())
         .spawn(move || {
             let result = reopen(context.engine.as_ref(), context.node.as_ref(), &request);
             let Some(runtime) = context.runtime.upgrade() else {

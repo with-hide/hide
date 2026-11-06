@@ -99,7 +99,7 @@ impl Runtime {
             }));
         }
         let spawned = thread::Builder::new()
-            .name("herdr-core-device-engine".to_owned())
+            .name("hide-core-device-engine".to_owned())
             .spawn(move || {
                 let mover = local.zip(machine).and_then(|(local, machine)| {
                     let engine_dir =

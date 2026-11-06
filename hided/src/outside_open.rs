@@ -9,7 +9,7 @@
 //!
 //! The path passes through and is neither kept nor logged here.
 
-use herdr_core::workspace_control::{Action, ExternalKind};
+use hide_core::workspace_control::{Action, ExternalKind};
 use serde::Deserialize;
 use serde_json::Value;
 

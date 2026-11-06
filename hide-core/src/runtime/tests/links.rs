@@ -707,7 +707,7 @@ fn open_event(target: serde_json::Value) -> Vec<u8> {
 
 #[test]
 fn opening_a_pull_request_reads_its_sessions_on_the_panels_own_revision() {
-    let home = scratch_dir("herdr-core-links-home-");
+    let home = scratch_dir("hide-core-links-home-");
     claude_session(home.path(), "s-maker", CREATED + 1_000);
     let mut runtime = links_runtime(vec![pull_request(7, "4-task", &[3])], true);
     runtime.own_node = Arc::new(hide_node::Local::new(Some(home.path().to_path_buf())));
@@ -1017,7 +1017,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         let changed_connector = Arc::clone(&replacement_connector);
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let arm_start = Arc::clone(&armed);
-        let transition = ConnectTransition::new(armed, "herdr-core-checkout-tab-create");
+        let transition = ConnectTransition::new(armed, "hide-core-checkout-tab-create");
         let on_call = Arc::clone(&transition);
         let old_focus = std::sync::Mutex::new("wake-pane".to_owned());
         let old = FakeEngine::start(move |method, params| {
@@ -1349,7 +1349,7 @@ fn native_fork_current_journey(kind: &'static str) {
         let started_name = std::sync::Mutex::new(String::new());
         let confirm_runtime = shared.weak();
         let confirm_reads = std::sync::atomic::AtomicUsize::new(0);
-        let transition = ConnectTransition::new(armed, "herdr-core-agent-fork");
+        let transition = ConnectTransition::new(armed, "hide-core-agent-fork");
         let on_call = Arc::clone(&transition);
         let old = FakeEngine::start(move |method, params| {
             on_call.on_call();
@@ -1882,8 +1882,8 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
         record.actor.pane_id = pane.into();
         record
     };
-    let state = scratch_dir("herdr-core-statistics-state-");
-    let home = scratch_dir("herdr-core-statistics-home-");
+    let state = scratch_dir("hide-core-statistics-state-");
+    let home = scratch_dir("hide-core-statistics-home-");
     let path = state.path().join("state.json");
     let statistics = Arc::new(RecordedStatistics::default());
 

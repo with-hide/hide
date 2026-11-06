@@ -1,7 +1,7 @@
 // Partly derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr,
 // commit 2ecf19a), the shell quoting in src/platform/{macos,linux,mod}.rs
 // and `quote_windows_command_line_arg` of src/platform/windows.rs, extracted
-// from herdr-core/src/engine/own/shell_line.rs.
+// from hide-core/src/engine/own/shell_line.rs.
 // Copyright 2025 herdr contributors. Licensed under the Apache License,
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: shared single-quote escaping, with PowerShell's four
@@ -10,7 +10,7 @@
 //! How a word is written so that a shell reads it back unchanged: the one
 //! single-quoting rule each shell family gets, shared by the hooks' installed
 //! commands (`hide-agent-hooks`), the core's own engine's start and resume
-//! lines (`herdr-core`, `engine/own/shell_line.rs`) and the notice a node's
+//! lines (`hide-core`, `engine/own/shell_line.rs`) and the notice a node's
 //! pane prints before its shell (`hide-node`), and the word of a Windows
 //! command line a program run directly reads back (`windows_argument`).
 //! Whether a word may stay bare is each caller's own rule; the escaping

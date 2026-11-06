@@ -441,7 +441,7 @@ pub(crate) fn start_agent(
     match crate::agent_start::start_at_shell_reusing_name(
         engine,
         Some(node),
-        &format!("herdr-core:agent-sleep:{}:wake", request.pane_id),
+        &format!("hide-core:agent-sleep:{}:wake", request.pane_id),
         crate::agent_start::ShellStart::Plain,
         &start,
         crate::agent_start::START_ANSWER_WAIT,
@@ -550,7 +550,7 @@ fn spawn_end_within(
     drain_limit: Duration,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-agent-sleep".into())
+        .name("hide-core-agent-sleep".into())
         .spawn(move || {
             let result = end_after_drain(&context, &pane_id, &kind, drain_limit);
             let Some(runtime) = context.runtime.upgrade() else {
@@ -571,7 +571,7 @@ fn spawn_end_within(
 
 pub(crate) fn spawn_wake(context: SleepTarget, request: WakeRequest) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-agent-wake".into())
+        .name("hide-core-agent-wake".into())
         .spawn(move || {
             let outcome = start_agent(
                 context.engine.as_ref(),

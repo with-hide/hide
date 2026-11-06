@@ -137,7 +137,7 @@ pub fn spawn_workspace_creation(
     base_registrations: Vec<WorkspaceRegistration>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-workspace-create".to_owned())
+        .name("hide-core-workspace-create".to_owned())
         .spawn(move || {
             let started = Instant::now();
             let request_path = path.clone();

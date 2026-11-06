@@ -64,7 +64,7 @@ impl Runtime {
         self.snapshot.status.ssh_hosts.state = "loading".to_owned();
         let devices = Arc::clone(&self.devices);
         let spawned = thread::Builder::new()
-            .name("herdr-core-ssh-hosts".to_owned())
+            .name("hide-core-ssh-hosts".to_owned())
             .spawn(move || {
                 // A panic still settles the slot, which is the only one: a
                 // listing left `loading` would join every later request.

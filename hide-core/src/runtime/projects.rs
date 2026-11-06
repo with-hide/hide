@@ -5278,7 +5278,7 @@ impl Runtime {
         };
         let id = registration.id.clone();
         let spawned = thread::Builder::new()
-            .name("herdr-core-row-registration".to_owned())
+            .name("hide-core-row-registration".to_owned())
             .spawn(move || {
                 let answer = ask();
                 let Some(runtime) = context.runtime.upgrade() else {

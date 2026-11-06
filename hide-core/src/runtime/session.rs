@@ -4649,7 +4649,7 @@ impl Runtime {
         let worker_operation = operation.clone();
         let worker_target = target.clone();
         match thread::Builder::new()
-            .name(format!("herdr-core-explorer-{}", operation.kind.as_str()))
+            .name(format!("hide-core-explorer-{}", operation.kind.as_str()))
             .spawn(move || {
                 let mut operation = worker_operation;
                 let result = files::run_explorer_operation(

@@ -145,7 +145,7 @@ impl Runtime {
         let machine = Arc::clone(&entry.machine);
         let key = place.clone();
         let spawned = thread::Builder::new()
-            .name("herdr-core-herdr-import-look".into())
+            .name("hide-core-herdr-import-look".into())
             .spawn(move || {
                 let seen =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.look()))
@@ -225,7 +225,7 @@ impl Runtime {
                 }
                 let machine = Arc::clone(&entry.machine);
                 let spawned = thread::Builder::new()
-                    .name("herdr-core-herdr-import-dismiss".into())
+                    .name("hide-core-herdr-import-dismiss".into())
                     .spawn(move || machine.dismiss());
                 if let Err(error) = spawned {
                     crate::diagnostic!(serde_json::json!({
@@ -272,7 +272,7 @@ impl Runtime {
         let machine = Arc::clone(&entry.machine);
         let key = place.clone();
         let spawned = thread::Builder::new()
-            .name("herdr-core-herdr-import-take".into())
+            .name("hide-core-herdr-import-take".into())
             .spawn(move || {
                 // A move that panics still answers, so the step is not held
                 // on its spinner.

@@ -19,7 +19,7 @@ use crate::runtime::Runtime;
 
 pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-agent-fork".to_owned())
+        .name("hide-core-agent-fork".to_owned())
         .spawn(move || {
             // Includes pane creation and the start acknowledgment, so this
             // input wait never extends the engine's start deadline.
@@ -191,7 +191,7 @@ fn run_agent_fork_with_registration(
             .then(|| {
                 crate::agent_start::shell_launch(
                     Some(node),
-                    &format!("herdr-core:fork:{}:start", request.name),
+                    &format!("hide-core:fork:{}:start", request.name),
                 )
             })
             .flatten();
@@ -259,7 +259,7 @@ fn run_agent_fork_with_registration(
         let started = start_agent_checked(
             mutation_engine,
             Some(node),
-            &format!("herdr-core:fork:{}:start", request.name),
+            &format!("hide-core:fork:{}:start", request.name),
             &child_pane_id,
             shell,
             &request.name,

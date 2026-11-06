@@ -119,7 +119,7 @@ impl Runtime {
         state.reading = true;
         let home = state.home.clone();
         let spawned = thread::Builder::new()
-            .name("herdr-core-agent-definitions".to_owned())
+            .name("hide-core-agent-definitions".to_owned())
             .spawn(move || {
                 let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     hide_kit::agent_definitions::read(&home)

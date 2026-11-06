@@ -644,7 +644,7 @@ impl Runtime {
                 let ended_device = device.clone();
                 run.when_ended(move || {
                     let spawned = thread::Builder::new()
-                        .name("herdr-core-device-attempt-ended".to_owned())
+                        .name("hide-core-device-attempt-ended".to_owned())
                         .spawn(move || {
                             if let Some(runtime) = runtime.upgrade()
                                 && let Ok(mut guard) = runtime.lock()
@@ -665,7 +665,7 @@ impl Runtime {
             HostStart::Arrived { .. } => (None, Vec::new()),
         };
         let spawned = thread::Builder::new()
-            .name("herdr-core-device-host".to_owned())
+            .name("hide-core-device-host".to_owned())
             .spawn(move || {
                 let close_context = context.clone();
                 let close_device = device.clone();

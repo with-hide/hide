@@ -41,7 +41,7 @@
 //! retain the checked path for UI identity, while actual file I/O uses opened
 //! checkout-root capabilities supplied from this boundary.
 
-use herdr_core::node::NodeId;
+use hide_core::node::NodeId;
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
@@ -162,10 +162,10 @@ pub struct Entry {
     pub path: String,
     pub is_directory: bool,
     /// The entry's own inode in a checkout listing, which a trash of the
-    /// row confirms; decimal text on the wire (`herdr_core::inode_text`).
+    /// row confirms; decimal text on the wire (`hide_core::inode_text`).
     #[serde(
         skip_serializing_if = "Option::is_none",
-        serialize_with = "herdr_core::inode_text::serialize"
+        serialize_with = "hide_core::inode_text::serialize"
     )]
     pub inode: Option<u64>,
 }

@@ -143,7 +143,7 @@ fn live_runtime(payload: SessionSnapshotPayload) -> Runtime {
     runtime.restore_hint_pending = false;
     let socket_path = std::env::temp_dir()
         .join(format!(
-            "herdr-core-tree-close-{}-{}.sock",
+            "hide-core-tree-close-{}-{}.sock",
             std::process::id(),
             NEXT_RUNTIME_STATE_ID.fetch_add(1, Ordering::Relaxed)
         ))

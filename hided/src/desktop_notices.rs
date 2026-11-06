@@ -1,6 +1,6 @@
 //! The desktop app's agent notifications (PRD first-run-onboarding D-09,
 //! B31-B38): the phone push's notification transitions
-//! (`herdr_core::agent_state::push::Transitions`) run a second time for the
+//! (`hide_core::agent_state::push::Transitions`) run a second time for the
 //! desktop windows, independent of the Mobile setting.
 //!
 //! They judge the projection the mobile follower already reads off the core's
@@ -16,8 +16,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use herdr_core::agent_state::phone::{AgentKey, Projection};
-use herdr_core::agent_state::push::{Notice, Transitions};
+use hide_core::agent_state::phone::{AgentKey, Projection};
+use hide_core::agent_state::push::{Notice, Transitions};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
@@ -67,7 +67,7 @@ impl DesktopNotices {
     fn turned(&self, on: bool) {
         self.wanted.store(on, Ordering::SeqCst);
         self.lock().reset();
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "desktop_notices", "kind": "desktop_notices.demand", "on": on,
         }));
     }
@@ -92,7 +92,7 @@ impl DesktopNotices {
         if notices.is_empty() && seen.is_empty() {
             return;
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "desktop_notices", "kind": "desktop_notice.judged",
             "agents": notices.iter().map(|notice| notice.key.tag()).collect::<Vec<_>>(),
             "cleared": seen.iter().map(AgentKey::tag).collect::<Vec<_>>(),
@@ -128,7 +128,7 @@ fn frame<'a>(notices: &[Notice], clear: impl Iterator<Item = &'a AgentKey>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use herdr_core::agent_state::phone::project;
+    use hide_core::agent_state::phone::project;
 
     fn rest(group: &str, demand: &str) -> Value {
         json!({

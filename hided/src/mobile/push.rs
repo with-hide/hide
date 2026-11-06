@@ -27,8 +27,8 @@ use serde_json::{Value, json};
 use super::projection::AgentKey;
 use super::store::{PushMode, PushSubscription};
 #[cfg(test)]
-use herdr_core::agent_state::push::VANISHED_TTL;
-pub use herdr_core::agent_state::push::{Notice, NoticeState, Transitions};
+use hide_core::agent_state::push::VANISHED_TTL;
+pub use hide_core::agent_state::push::{Notice, NoticeState, Transitions};
 
 const RECORD_SIZE: u32 = 4096;
 // aes128gcm adds a 16-byte salt, 4-byte record size, 1-byte key length,

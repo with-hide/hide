@@ -221,7 +221,7 @@ pub fn spawn_worktree_preflight(
     id: u64,
     outside: Vec<String>,
 ) -> Result<(), String> {
-    thread::Builder::new().name("herdr-core-worktree-preflight".into()).spawn(move || {
+    thread::Builder::new().name("hide-core-worktree-preflight".into()).spawn(move || {
         let Some(runtime) = target.runtime.upgrade() else { return; };
         let request = match runtime.lock() {
             Ok(guard) => guard.worktree_preflight_request(id),
@@ -262,7 +262,7 @@ pub fn spawn_worktree_close(
 ) -> Result<(), String> {
     let context = target.clone();
     thread::Builder::new()
-        .name("herdr-core-worktree-close".into())
+        .name("hide-core-worktree-close".into())
         .spawn(move || {
             let result = close_checkout_panes_for_removal(
                 context.engine.as_ref(),
@@ -437,7 +437,7 @@ pub fn spawn_workspace_close(
     pane_ids: Vec<String>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-workspace-close".into())
+        .name("hide-core-workspace-close".into())
         .spawn(move || {
             let result = close_checkout_panes(
                 context.engine.as_ref(),
@@ -476,7 +476,7 @@ pub fn spawn_worktree_open(
     pane_id: Option<String>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-worktree-open".into())
+        .name("hide-core-worktree-open".into())
         .spawn(move || {
             let result = open_worktree(
                 context.engine.as_ref(),
@@ -663,7 +663,7 @@ impl PurposeMirror {
     ) -> Result<Self, String> {
         let (sender, receiver) = sync_channel(Self::QUEUE_CAPACITY);
         let worker = thread::Builder::new()
-            .name("herdr-core-purpose-mirror".to_owned())
+            .name("hide-core-purpose-mirror".to_owned())
             .spawn(move || {
                 let git = NodeGit(node.as_ref());
                 while let Ok(message) = receiver.recv() {
@@ -1017,7 +1017,7 @@ fn spawn_worktree_task(
     + 'static,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-worktree-create".into())
+        .name("hide-core-worktree-create".into())
         .spawn(move || {
             let result = prepare(&context, &mut request).and_then(|()| {
                 create_worktree_observing_purpose(
@@ -1063,7 +1063,7 @@ pub fn spawn_purpose_write(
     request: PurposeTaskRequest,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-purpose-write".into())
+        .name("hide-core-purpose-write".into())
         .spawn(move || {
             let git = NodeGit(context.node.as_ref());
             let result = write_purpose(context.engine.as_ref(), &git, &request);
@@ -1146,7 +1146,7 @@ pub(crate) fn spawn_issue_write(
     previous: Option<String>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-issue-write".into())
+        .name("hide-core-issue-write".into())
         .spawn(move || {
             let result = (|| {
                 let issue = match read {
@@ -1189,7 +1189,7 @@ pub fn spawn_remote_purpose_write(
     request: PurposeTaskRequest,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-remote-purpose-write".into())
+        .name("hide-core-remote-purpose-write".into())
         .spawn(move || {
             let git = EngineOnly;
             let result = write_purpose(context.engine.as_ref(), &git, &request);
@@ -1514,7 +1514,7 @@ fn launch_with_prompt_checked(
 
 pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-task-agent-start".into())
+        .name("hide-core-task-agent-start".into())
         .spawn(move || {
             let saved = context.runtime.upgrade().and_then(|runtime| {
                 runtime
@@ -1658,7 +1658,7 @@ fn launch_agent(
     match crate::agent_start::start_at_shell_checked(
         engine,
         pane_node,
-        &format!("herdr-core:task:{id}:agent"),
+        &format!("hide-core:task:{id}:agent"),
         shell,
         &start,
         crate::agent_start::START_ANSWER_WAIT,
@@ -1748,7 +1748,7 @@ pub fn spawn_checkout_tab_create(
     request: CheckoutTabRequest,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-checkout-tab-create".into())
+        .name("hide-core-checkout-tab-create".into())
         .spawn(move || open_tab_and_start_agent(&target, &request))
         .map(|_| ())
         .map_err(|error| format!("checkout tab worker could not be started: {error}"))
@@ -1760,7 +1760,7 @@ pub(crate) fn spawn_targeted_checkout_start(
     saved: std::sync::mpsc::Receiver<Result<(), String>>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-checkout-tab-create".into())
+        .name("hide-core-checkout-tab-create".into())
         .spawn(move || {
             let result = saved
                 .recv_timeout(Duration::from_secs(10))
@@ -1809,7 +1809,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
     } else {
         crate::agent_start::shell_launch(
             node.as_deref(),
-            &format!("herdr-core:task:{}:tab", request.id),
+            &format!("hide-core:task:{}:tab", request.id),
         )
     };
     let result: Result<WorktreeTaskOutcome, ControlFailure> = (|| {
@@ -2098,7 +2098,7 @@ pub struct HomeStartRequest {
 /// off the runtime lock; the lock is taken only to publish each step.
 pub fn spawn_home_start(target: TabTarget, request: HomeStartRequest) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-home-start".into())
+        .name("hide-core-home-start".into())
         .spawn(move || {
             let HomeStartRequest {
                 id,
@@ -2133,7 +2133,7 @@ pub fn spawn_home_link_sync(
     host: Arc<dyn crate::node_access::NodeLink>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-home-link-sync".into())
+        .name("hide-core-home-link-sync".into())
         .spawn(move || {
             let synced = sync_home(host.as_ref(), &projects);
             if let Some(runtime) = runtime.upgrade()
@@ -2206,7 +2206,7 @@ pub fn spawn_branch_migration(
     request: WorktreeTaskRequest,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-branch-migrate".into())
+        .name("hide-core-branch-migrate".into())
         .spawn(move || {
             let runner = NodeGit(host.as_ref());
             let result = migrate_branch(context.engine.as_ref(), host.as_ref(), &runner, &request);
@@ -2291,7 +2291,7 @@ fn create_worktree_observing_purpose(
         let launch = request.agent_kind.as_ref().and_then(|_| {
             crate::agent_start::shell_launch(
                 Some(host),
-                &format!("herdr-core:task:{}:worktree", request.id),
+                &format!("hide-core:task:{}:worktree", request.id),
             )
         });
         let tab = replace_tab(

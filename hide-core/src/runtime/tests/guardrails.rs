@@ -429,7 +429,7 @@ fn a_project_shown_from_an_engine_workspace_is_guarded_without_a_registration() 
 
 #[test]
 fn the_start_writes_this_machines_policy_and_a_save_lands_in_its_file() {
-    let home = scratch_dir("herdr-core-guardrails-home-");
+    let home = scratch_dir("hide-core-guardrails-home-");
     let mut runtime = fixture();
     runtime.own_node = Arc::new(hide_node::Local::new(Some(home.path().to_path_buf())));
     runtime.set_guardrails_own_file(true);
@@ -458,7 +458,7 @@ fn job_policy(job: &crate::runtime::guardrails::Publication) -> Policy {
 
 #[test]
 fn a_core_on_a_relocated_state_folder_writes_no_policy_and_still_saves() {
-    let home = scratch_dir("herdr-core-guardrails-relocated-");
+    let home = scratch_dir("hide-core-guardrails-relocated-");
     let mut runtime = fixture();
     runtime.own_node = Arc::new(hide_node::Local::new(Some(home.path().to_path_buf())));
     let shared = SharedRuntime::new(runtime);

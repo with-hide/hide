@@ -258,7 +258,7 @@ fn testing_an_unconnected_device_reports_the_way_out() {
 }
 
 pub(super) fn runtime_with_home() -> Runtime {
-    let folder = scratch_dir("herdr-core-devices-");
+    let folder = scratch_dir("hide-core-devices-");
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         home: None,

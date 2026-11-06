@@ -1,7 +1,7 @@
 //! Participant registration and child creation use the daemon's same durable
 //! store and pane capability as the mailbox.
 use crate::env::Env;
-use herdr_core::{coordination::Command, delivery::Command as Delivery};
+use hide_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
 pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
@@ -142,10 +142,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
         "register" => {
             let host_scope = take("--host-scope")?;
             let session = take("--session")?;
-            if !herdr_core::delivery::valid_session(&session) {
+            if !hide_core::delivery::valid_session(&session) {
                 return Err(format!(
                     "--session takes a native session id or session file path of at most {} bytes that does not start with -",
-                    herdr_core::delivery::SESSION_LIMIT
+                    hide_core::delivery::SESSION_LIMIT
                 ));
             }
             let instance = take("--instance")?;
@@ -170,7 +170,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
             let plan_node = take("--plan-node").ok();
             if plan_node
                 .as_deref()
-                .is_some_and(|key| key.starts_with('-') || !herdr_core::dag::valid_key(key))
+                .is_some_and(|key| key.starts_with('-') || !hide_core::dag::valid_key(key))
             {
                 return Err("--plan-node takes a step key of your plan".into());
             }
@@ -284,11 +284,11 @@ fn checked_brief(brief: String) -> Result<String, String> {
     if brief.trim().is_empty() {
         return Err("The brief is blank".into());
     }
-    if brief.len() > herdr_core::delivery::BODY_LIMIT {
+    if brief.len() > hide_core::delivery::BODY_LIMIT {
         return Err(format!(
             "The brief is {} bytes; a brief holds at most {} bytes",
             brief.len(),
-            herdr_core::delivery::BODY_LIMIT
+            hide_core::delivery::BODY_LIMIT
         ));
     }
     Ok(brief)
@@ -661,7 +661,7 @@ mod tests {
         assert!(read_brief_file(file.to_str().unwrap()).is_err());
         assert!(spawn(&["--brief", "x", "--brief-file", "briefs/api.md"]).is_err());
         assert!(spawn(&["--brief", " \n "]).is_err());
-        let long = "x".repeat(herdr_core::delivery::BODY_LIMIT + 1);
+        let long = "x".repeat(hide_core::delivery::BODY_LIMIT + 1);
         assert!(spawn(&["--brief", &long]).is_err());
         assert!(USAGE.contains("[--brief <text> | --brief-file <path>]"));
         assert!(SPAWN_HELP.contains("--brief-file <path>"));

@@ -158,7 +158,7 @@ impl Catalog {
         let route_device = (!local).then(|| device_id.to_owned());
         let push = |catalog: &mut Self, id: String, place: Option<String>, path: Option<String>| {
             if catalog.targets.len() >= MAX_TARGETS {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_phone", "kind": "start.targets_capped", "cap": MAX_TARGETS,
                 }));
                 return;
@@ -502,7 +502,7 @@ impl Desk {
             .await
             .unwrap_or_else(|error| Err(error.to_string()));
         if let Err(message) = sent {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "start.dispatch_failed", "phone_id": phone_id, "message": message,
             }));
             self.settle(phone_id, request_id, None);
@@ -550,7 +550,7 @@ impl Desk {
             }
             Answer::Failed { reason } => reply(false, Some(reason)),
         };
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "mobile_phone", "kind": "start.answered", "phone_id": phone_id,
             "request_id": request_id, "ok": frame["ok"],
             "reason": frame["reason"],

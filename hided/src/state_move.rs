@@ -125,7 +125,7 @@ pub fn move_legacy(
 pub fn log_left_behind(legacy: Option<&Path>, state_dir: &Path) {
     let Some(legacy) = legacy else { return };
     if std::fs::symlink_metadata(legacy).is_ok() {
-        herdr_core::diagnostic!(serde_json::json!({
+        hide_core::diagnostic!(serde_json::json!({
             "component": "hided",
             "kind": "state.legacy_left",
             "legacy": legacy.display().to_string(),

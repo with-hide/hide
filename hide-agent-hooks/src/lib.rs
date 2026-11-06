@@ -6,7 +6,7 @@
 //! append one without touching anybody else's, how to judge what is currently
 //! installed, and how to report that judgement.
 //!
-//! It is a separate crate rather than a module of `herdr-core` because the
+//! It is a separate crate rather than a module of `hide-core` because the
 //! risk it carries is a file-system risk, and folding it into the crate that
 //! owns `Mutex<Runtime>` would put a `settings.json` write behind the same
 //! lock as the render snapshot and drag the FFI boundary into the tests that

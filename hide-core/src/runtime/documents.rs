@@ -421,7 +421,7 @@ impl Runtime {
             return;
         };
         let spawned = thread::Builder::new()
-            .name("herdr-core-file-open".to_owned())
+            .name("hide-core-file-open".to_owned())
             .spawn(move || {
                 let result = files::open_document(channel.as_ref(), &root, &path);
                 let Some(runtime) = context.runtime.upgrade() else {
@@ -906,7 +906,7 @@ impl Runtime {
         };
         let worker_tab = tab_id.to_owned();
         let spawned = thread::Builder::new()
-            .name("herdr-core-file-save".to_owned())
+            .name("hide-core-file-save".to_owned())
             .spawn(move || {
                 let outcome = files::save_document(
                     channel.as_ref(),
@@ -1087,7 +1087,7 @@ impl Runtime {
         self.sync_save_snapshot(tab_id);
         let worker_tab = tab_id.to_owned();
         let spawned = thread::Builder::new()
-            .name("herdr-core-file-settle".to_owned())
+            .name("hide-core-file-settle".to_owned())
             .spawn(move || {
                 let result = files::revision_now(channel.as_ref(), &place);
                 let Some(runtime) = context.runtime.upgrade() else {

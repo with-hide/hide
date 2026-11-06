@@ -332,7 +332,7 @@ fn desk_archives_an_idle_session_without_a_card() {
 #[test]
 fn an_archive_that_cannot_be_saved_closes_nothing() {
     let mut runtime = archive_runtime(&[]);
-    let blocker = scratch_dir("herdr-core-archive-unsaved-");
+    let blocker = scratch_dir("hide-core-archive-unsaved-");
     let file = blocker.path().join("file");
     std::fs::write(&file, "").unwrap();
     runtime.state_path = file.join("core-state.json");
@@ -698,7 +698,7 @@ fn a_partial_close_keeps_what_closed_and_lists_it_once_the_root_is_gone() {
     // A retry whose save fails leaves the record as it was: the open root
     // at its head and what closed before, still one tree that loads back.
     let saved_path = runtime.state_path.clone();
-    let blocker = scratch_dir("herdr-core-archive-retry-unsaved-");
+    let blocker = scratch_dir("hide-core-archive-retry-unsaved-");
     let file = blocker.path().join("file");
     std::fs::write(&file, "").unwrap();
     runtime.state_path = file.join("core-state.json");

@@ -211,7 +211,7 @@ mod unix {
             other => panic!("an unattended attempt went on: {:?}", other.err()),
         }
         // The core's row refuses an unattended attempt's question at once and
-        // shows nothing (herdr-core `ssh_sign_in`); the attempt then ends ssh.
+        // shows nothing (hide-core `ssh_sign_in`); the attempt then ends ssh.
         assert_eq!(unattended.asked().len(), 1);
         assert!(!known.exists() || std::fs::read_to_string(&known).unwrap().is_empty());
 
@@ -259,7 +259,7 @@ mod unix {
             refused.err()
         );
         // The core's row refuses an unattended attempt's question at once and
-        // shows nothing (herdr-core `ssh_sign_in`); the attempt then ends ssh.
+        // shows nothing (hide-core `ssh_sign_in`); the attempt then ends ssh.
         assert_eq!(unattended.asked().len(), 1);
 
         let row = Row::answering(vec![text("wrong"), text("fixture passphrase")]);

@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use herdr_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy};
+use hide_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy};
 use hide_node::ssh::transfer::FileCopy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -55,7 +55,7 @@ pub struct ExportedProject {
 impl Export {
     pub fn new(
         intent: &str,
-        source: &herdr_core::ReleaseSource,
+        source: &hide_core::ReleaseSource,
         target: &str,
         labels: Value,
         home: &Path,
@@ -157,7 +157,7 @@ pub fn remove_staging(state_dir: &Path, intent: &str) -> Result<(), String> {
 pub fn back_change(
     peer: &Peer,
     own_node: &str,
-    registration: herdr_core::DeviceRegistration,
+    registration: hide_core::DeviceRegistration,
     peer_engine_socket: String,
     own_engine_socket: String,
 ) -> OwnerChange {
@@ -191,8 +191,8 @@ pub fn recorded_device(previous: Option<&Journal>, peer_node: &str) -> Option<St
 /// `wanted` picks; none when the folder holds no such registration.
 pub fn kept_registration(
     state_dir: &Path,
-    wanted: impl Fn(&herdr_core::DeviceRegistration) -> bool,
-) -> Option<herdr_core::DeviceRegistration> {
+    wanted: impl Fn(&hide_core::DeviceRegistration) -> bool,
+) -> Option<hide_core::DeviceRegistration> {
     let root = hide_kit::layout::moved_out(state_dir);
     let entries = std::fs::read_dir(&root).ok()?;
     for entry in entries.flatten() {
@@ -309,7 +309,7 @@ pub fn pull(
         let pulled = copy::digest(&staging).map_err(|refusal| local(refusal.to_string()))?;
         wanted = manifest.differs(&pulled);
         if wanted.is_empty() {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "core_move",
                 "kind": "copy.pulled",
                 "intent": journal.intent,
@@ -365,7 +365,7 @@ pub fn rekey(state_dir: &Path, journal: &Journal) -> Result<IdTable, MoveFailure
         reason: refusal.reason,
     };
     let outcome = node_migration::reown(&staging, &journal.change, &ids).map_err(failed)?;
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "core_move",
         "kind": "staging.reowned",
         "intent": journal.intent,

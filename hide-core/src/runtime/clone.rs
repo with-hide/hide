@@ -230,7 +230,7 @@ fn spawn_clone(
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-repository-clone".to_owned())
+        .name("hide-core-repository-clone".to_owned())
         .spawn(move || {
             let runtime = context.runtime.clone();
             let notifier = context.notifier.clone();

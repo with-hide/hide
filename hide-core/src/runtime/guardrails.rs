@@ -272,7 +272,7 @@ impl Runtime {
         let notifier = context.notifier;
         let worker_device = device.to_owned();
         let spawned = thread::Builder::new()
-            .name("herdr-core-guardrails".into())
+            .name("hide-core-guardrails".into())
             .spawn(move || {
                 // A worker that ends any other way than by finding nothing to
                 // write (a panic, a poisoned lock) leaves its machine free for

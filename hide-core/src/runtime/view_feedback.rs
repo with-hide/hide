@@ -1624,7 +1624,7 @@ impl Runtime {
         let stop = Arc::clone(&self.view_feedback.stop);
         let effects = Arc::clone(&self.effects);
         match thread::Builder::new()
-            .name("herdr-core-view-feedback".into())
+            .name("hide-core-view-feedback".into())
             .spawn(move || feedback_worker(context, effects, stop))
         {
             Ok(worker) => {

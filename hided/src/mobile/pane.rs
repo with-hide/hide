@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use herdr_core::engine::{EngineError, EngineHandle};
+use hide_core::engine::{EngineError, EngineHandle};
 use hide_node_link::terminal::{InputPermitError, TerminalNode, wait_for_input_permit};
 
 const TIMEOUT: Duration = Duration::from_secs(5);

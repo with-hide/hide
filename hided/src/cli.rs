@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use herdr_core::workspace_control::{Action, Edge};
+use hide_core::workspace_control::{Action, Edge};
 use hide_platform::process;
 
 use crate::env::{self, Env};
@@ -12,7 +12,7 @@ use crate::state_file::{self, DaemonState};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandKind {
-    Delivery(herdr_core::delivery::Command),
+    Delivery(hide_core::delivery::Command),
     /// `hide import herdr [--yes]`: what this machine's Herdr session would
     /// bring into Hide's own engine, and with `--yes` the move (PRD
     /// engine-bundle-4-herdr-removal B17).
@@ -22,7 +22,7 @@ pub enum CommandKind {
     /// `hide agent spawn … --brief-file <path>`: the spawn, whose brief is
     /// read from `path` in the caller's account when it runs.
     AgentSpawnBriefFile {
-        command: herdr_core::delivery::Command,
+        command: hide_core::delivery::Command,
         path: String,
     },
     /// `hide mission …`: a Conductor's mission (PRD software-factory-conductor).
@@ -120,13 +120,13 @@ pub enum CommandKind {
         request_id: Option<String>,
     },
     /// `hide links`: a read of the link record (PRD link-graph D-19).
-    Links(herdr_core::links::query::LinksQuery),
+    Links(hide_core::links::query::LinksQuery),
     /// `hide session list|record|read`: the Project's sessions, narrowed in
     /// three steps (PRD agent-session-read D-01).
     Session(crate::session_cli::Cli),
     /// `hide memory show|search|add|forget|undo|placed|building|unbuilt|outdated|skipped|stale|release`
     /// (PRD project-memory-v2 D-03, D-11; PRD memory-stale-cards).
-    Memory(herdr_core::memory_command::MemoryCommand),
+    Memory(hide_core::memory_command::MemoryCommand),
 }
 
 const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]";
@@ -521,7 +521,7 @@ fn parse_catalog(args: &[String]) -> Result<CommandKind, String> {
 }
 
 fn parse_links<'a>(iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
-    use herdr_core::links::query::{LinksQuery, QueryTarget};
+    use hide_core::links::query::{LinksQuery, QueryTarget};
     let mut all_projects = false;
     let mut words = Vec::new();
     for word in iter {
@@ -561,28 +561,28 @@ fn parse_links<'a>(iter: impl Iterator<Item = &'a String>) -> Result<CommandKind
 }
 
 fn parse_memory<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
-    use herdr_core::memory_command::MemoryCommand;
+    use hide_core::memory_command::MemoryCommand;
     let verb = iter.next().map(String::as_str);
     let words = iter.map(String::as_str).collect::<Vec<_>>();
     let rest = words.join(" ");
     let command = match (verb, words.as_slice()) {
-        (Some("show"), [card]) => herdr_core::memory_command::parse_card(card)
+        (Some("show"), [card]) => hide_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Show { number }),
-        (Some("forget"), [card]) => herdr_core::memory_command::parse_card(card)
+        (Some("forget"), [card]) => hide_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Forget { number }),
-        (Some("undo"), [card]) => herdr_core::memory_command::parse_card(card)
+        (Some("undo"), [card]) => hide_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Undo { number }),
-        (Some("release"), [card]) => herdr_core::memory_command::parse_card(card)
+        (Some("release"), [card]) => hide_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Release { number }),
-        (Some("recheck"), [card]) => herdr_core::memory_command::parse_card(card)
+        (Some("recheck"), [card]) => hide_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Recheck { number }),
         (Some("placed"), [card, path]) => {
-            herdr_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
+            hide_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
                 number,
                 path: (*path).to_owned(),
             })
         }
-        (Some("building"), [card, branch, path]) => herdr_core::memory_command::parse_card(card)
+        (Some("building"), [card, branch, path]) => hide_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Building {
                 number,
                 branch: (*branch).to_owned(),
@@ -591,7 +591,7 @@ fn parse_memory<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comman
         (Some(verb @ ("outdated" | "skipped" | "unbuilt" | "stale")), [card, reason @ ..])
             if !reason.is_empty() =>
         {
-            herdr_core::memory_command::parse_card(card).map(|number| {
+            hide_core::memory_command::parse_card(card).map(|number| {
                 let reason = reason.join(" ");
                 match verb {
                     "skipped" => MemoryCommand::Skipped { number, reason },
@@ -887,7 +887,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
         CommandKind::WorkspaceRemove(cli) => crate::worktree_cli::run(&env, cli),
         CommandKind::Delivery(command) => {
-            if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {
+            if matches!(&command, hide_core::delivery::Command::Agents { .. }) {
                 crate::agent_cli::run(&env, command)
             } else {
                 crate::delivery_cli::run(&env, command)
@@ -1007,14 +1007,14 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
 
 /// Prints a `hide memory` answer as text an agent reads; a refusal prints
 /// its reason and next action as one JSON line and exits non-zero (B8, B16).
-fn memory(env: &Env, command: &herdr_core::memory_command::MemoryCommand) -> Result<(), String> {
-    use herdr_core::memory_command::{MemoryCommand, next_action};
+fn memory(env: &Env, command: &hide_core::memory_command::MemoryCommand) -> Result<(), String> {
+    use hide_core::memory_command::{MemoryCommand, next_action};
     if !command.valid() {
         let reason = match command {
             MemoryCommand::Add { .. } => "memory_text_too_long",
             MemoryCommand::Placed { .. } => "memory_path_not_found",
             MemoryCommand::Building { branch, .. }
-                if !herdr_core::memory_command::branch_name(branch) =>
+                if !hide_core::memory_command::branch_name(branch) =>
             {
                 "memory_branch_not_found"
             }
@@ -1047,10 +1047,10 @@ fn memory(env: &Env, command: &herdr_core::memory_command::MemoryCommand) -> Res
 }
 
 fn memory_text(
-    command: &herdr_core::memory_command::MemoryCommand,
+    command: &hide_core::memory_command::MemoryCommand,
     result: &serde_json::Value,
 ) -> String {
-    use herdr_core::memory_command::MemoryCommand;
+    use hide_core::memory_command::MemoryCommand;
     let text = |value: &serde_json::Value| value.as_str().unwrap_or_default().to_owned();
     match command {
         MemoryCommand::Show { .. } => {
@@ -1251,7 +1251,7 @@ fn parse_workspace_memory(words: &[&str]) -> Result<CommandKind, String> {
     if !matches!(*event, "SessionStart" | "UserPromptSubmit")
         || runtime.is_empty()
         || runtime.chars().any(char::is_control)
-        || !herdr_core::delivery::valid_session(session)
+        || !hide_core::delivery::valid_session(session)
     {
         return Err(WORKSPACE_MEMORY_USAGE.to_owned());
     }
@@ -1279,7 +1279,7 @@ fn json_memory_hook_ask(
 
 /// Prints the record's answer as one line; a refusal prints its reason and
 /// next action and exits non-zero (B42, B43).
-fn links(env: &Env, query: &herdr_core::links::query::LinksQuery) -> Result<(), String> {
+fn links(env: &Env, query: &hide_core::links::query::LinksQuery) -> Result<(), String> {
     let mut credential = match crate::workspace_cli::Credential::acquire(env) {
         Ok(credential) => credential,
         Err(reason) => return query_refusal(&reason, bootstrap_next_action(&reason), true),
@@ -2317,7 +2317,7 @@ fn open_path_result(answer: &serde_json::Value) -> Result<serde_json::Value, Str
         let reason = answer["reason"].as_str().unwrap_or("project_open_failed");
         let next = answer["next_action"]
             .as_str()
-            .unwrap_or_else(|| herdr_core::project_open::next_action(reason));
+            .unwrap_or_else(|| hide_core::project_open::next_action(reason));
         return Err(open_path_refusal(reason, next));
     }
     let result = answer["result"].clone();
@@ -2354,7 +2354,7 @@ fn open_path_next_action(reason: &str) -> &'static str {
         "request_timeout" => {
             "Run it again: a folder already added is only brought forward, never added twice"
         }
-        other => herdr_core::project_open::next_action(other),
+        other => hide_core::project_open::next_action(other),
     }
 }
 
@@ -2813,7 +2813,7 @@ fn wait_healthy(
         Ok(healthy) => Ok(healthy),
         Err(Waited::Timeout(detail)) => Err(ConnectError::NoResponse(detail)),
         Err(Waited::Exited(status)) => {
-            let refusal = herdr_core::diagnostics::newest_record(
+            let refusal = hide_core::diagnostics::newest_record(
                 &env.state_dir.join("core-state.json"),
                 |record| refused_by(record, pid, spawned_at),
             );
@@ -3607,7 +3607,7 @@ mod tests {
 
     #[test]
     fn workspace_memory_reads_at_most_the_prompt_limit_and_keeps_whole_characters() {
-        let limit = herdr_core::memory_hook::PROMPT_LIMIT_BYTES;
+        let limit = hide_core::memory_hook::PROMPT_LIMIT_BYTES;
         let long = "가".repeat(limit);
         let read = crate::workspace_cli::read_memory_prompt(long.as_bytes()).unwrap();
         assert!(
@@ -3743,7 +3743,7 @@ mod tests {
 
     #[test]
     fn memory_reads_a_card_name_and_joins_words_and_text() {
-        use herdr_core::memory_command::MemoryCommand;
+        use hide_core::memory_command::MemoryCommand;
         let parse = |line: &[&str]| {
             parse_args(&line.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
         };
@@ -3841,7 +3841,7 @@ mod tests {
 
     #[test]
     fn memory_answers_read_as_text_with_the_files_a_card_cites() {
-        use herdr_core::memory_command::MemoryCommand;
+        use hide_core::memory_command::MemoryCommand;
         let shown = memory_text(
             &MemoryCommand::Show { number: 3 },
             &serde_json::json!({
@@ -3975,7 +3975,7 @@ mod tests {
 
     #[test]
     fn links_reads_one_target_and_has_no_write_command() {
-        use herdr_core::links::query::{LinksQuery, QueryTarget};
+        use hide_core::links::query::{LinksQuery, QueryTarget};
         let parse = |line: &[&str]| {
             parse_args(&line.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
         };

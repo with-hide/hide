@@ -855,7 +855,7 @@ impl ReadyBranch {
         use crate::suggestions::notebook::{LineId, Outcome};
         use crate::suggestions::store::ProjectLocation;
         use crate::suggestions::worker::{ProjectRef, SuggestionClient};
-        let folder = scratch_dir("herdr-core-branch-merge-");
+        let folder = scratch_dir("hide-core-branch-merge-");
         let repo = folder.path().join("repo");
         let origin = folder.path().join("origin.git");
         std::fs::create_dir_all(&repo).unwrap();
@@ -1327,7 +1327,7 @@ struct OfferedCard {
 
 fn offered_card() -> OfferedCard {
     use hide_memory::{AnalysisBatch, Candidate, CandidateKind, CandidateRelation, MemoryStore};
-    let folder = scratch_dir("herdr-core-offered-card-");
+    let folder = scratch_dir("hide-core-offered-card-");
     let root = std::fs::canonicalize(folder.path())
         .unwrap()
         .to_string_lossy()
@@ -1534,7 +1534,7 @@ fn a_pressed_memory_row_reads_working_before_its_write_runs() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let offered = offered_card();
-    let ledger = scratch_dir("herdr-core-press-ledger-");
+    let ledger = scratch_dir("hide-core-press-ledger-");
     let (_worker, client) = crate::delivery::worker::Worker::spawn(
         Arc::downgrade(&offered.runtime),
         crate::handle::ChangeNotifier::noop(),

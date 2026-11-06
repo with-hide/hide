@@ -63,7 +63,7 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                     digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
                 }) && session
                     .as_ref()
-                    .is_none_or(|session| herdr_core::delivery::valid_session(session))
+                    .is_none_or(|session| hide_core::delivery::valid_session(session))
                     // A tool event's ask names its session.
                     && (*point == hide_node_link::panes::PullPoint::Prompt || session.is_some())
             }
@@ -86,7 +86,7 @@ pub(crate) fn answer(
         } => delivery(
             core,
             cap,
-            herdr_core::delivery::Command::Pull {
+            hide_core::delivery::Command::Pull {
                 prompt_digest: prompt_digest.clone(),
                 session: session.clone(),
                 point: *point,
@@ -142,7 +142,7 @@ fn valid_status(report: &hide_node_link::panes::HookStatusReport) -> bool {
         && report
             .session
             .as_ref()
-            .is_none_or(|session| herdr_core::delivery::valid_session(session))
+            .is_none_or(|session| hide_core::delivery::valid_session(session))
 }
 
 /// Records the hook's report on the pane the proof named. Only a caller
@@ -160,7 +160,7 @@ fn status(
         .and_then(|_| core.hook_status(&cap.context.device_id, &cap.pane_id, report.clone()))
         .map(|()| json!({"recorded": true}))
         .map_err(|reason| {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "agent_hooks",
                 "kind": "status.refused",
                 "pane": cap.pane_id,
@@ -177,7 +177,7 @@ fn workspace_info(core: &CoreHandle, cap: &Capability, desktop: bool) -> Result<
         .workspace_query(
             &cap.context.device_id,
             &cap.pane_id,
-            herdr_core::workspace_control::Query::Info,
+            hide_core::workspace_control::Query::Info,
         )
         .map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
     if result.context != cap.context {
@@ -202,8 +202,8 @@ fn memory_ask(
     runtime: &str,
     session: &str,
     prompt: &str,
-) -> Option<herdr_core::memory_hook::Ask> {
-    herdr_core::memory_hook::Ask::from_wire(
+) -> Option<hide_core::memory_hook::Ask> {
+    hide_core::memory_hook::Ask::from_wire(
         &json!({"event":event,"runtime":runtime,"session":session,"prompt":prompt}),
     )
 }
@@ -211,7 +211,7 @@ fn memory_ask(
 pub(crate) fn delivery(
     core: &CoreHandle,
     cap: &Capability,
-    command: herdr_core::delivery::Command,
+    command: hide_core::delivery::Command,
     hint: Option<String>,
 ) -> Result<Value, Failure> {
     core.prepare_delivery(
@@ -231,11 +231,11 @@ pub(crate) fn delivery(
 pub(crate) fn memory(
     core: &CoreHandle,
     cap: &Capability,
-    ask: &herdr_core::memory_hook::Ask,
+    ask: &hide_core::memory_hook::Ask,
 ) -> Result<Value, Failure> {
-    let deadline = Instant::now() + herdr_core::memory_hook::WITHIN;
+    let deadline = Instant::now() + hide_core::memory_hook::WITHIN;
     let scope = core.memory_scope(&cap.context, deadline).map_err(|reason| {
-        herdr_core::diagnostic!(json!({"component":"memory","kind":"hook.unavailable","pane":cap.pane_id,"device":cap.context.device_id,"reason":reason}));
+        hide_core::diagnostic!(json!({"component":"memory","kind":"hook.unavailable","pane":cap.pane_id,"device":cap.context.device_id,"reason":reason}));
     });
     memory_answer(core.state_dir(), scope, ask, deadline)
 }
@@ -246,20 +246,20 @@ pub(crate) fn memory(
 /// is one small bounded file, outside Memory's deadline.
 fn memory_answer(
     state_dir: &std::path::Path,
-    scope: Result<herdr_core::memory_hook::Scope, ()>,
-    ask: &herdr_core::memory_hook::Ask,
+    scope: Result<hide_core::memory_hook::Scope, ()>,
+    ask: &hide_core::memory_hook::Ask,
     deadline: Instant,
 ) -> Result<Value, Failure> {
     let global = ask
         .starts_session()
-        .then(|| herdr_core::global_instruction::for_session(state_dir))
+        .then(|| hide_core::global_instruction::for_session(state_dir))
         .flatten();
     let answer = match (scope, global) {
-        (Ok(scope), global) => herdr_core::memory_hook::HookContext {
+        (Ok(scope), global) => hide_core::memory_hook::HookContext {
             global,
-            ..herdr_core::memory_hook::answer(&scope, ask, deadline)
+            ..hide_core::memory_hook::answer(&scope, ask, deadline)
         },
-        (Err(()), Some(global)) => herdr_core::memory_hook::global_only(global),
+        (Err(()), Some(global)) => hide_core::memory_hook::global_only(global),
         (Err(()), None) => {
             return Err((
                 "memory_unavailable".to_owned(),
@@ -279,7 +279,7 @@ fn memory_answer(
 mod tests {
     use super::*;
 
-    fn ask(event: &str) -> herdr_core::memory_hook::Ask {
+    fn ask(event: &str) -> hide_core::memory_hook::Ask {
         memory_ask(event, "claude", "s-1", "").unwrap()
     }
 
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn a_session_start_gets_the_global_instruction_without_memory() {
         let state = tempfile::tempdir().unwrap();
-        let deadline = Instant::now() + herdr_core::memory_hook::WITHIN;
+        let deadline = Instant::now() + hide_core::memory_hook::WITHIN;
         assert_eq!(
             memory_answer(state.path(), Err(()), &ask("SessionStart"), deadline)
                 .unwrap_err()

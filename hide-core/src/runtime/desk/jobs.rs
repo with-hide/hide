@@ -381,7 +381,7 @@ impl Runtime {
         let command = job.command.clone();
         let started = intent.clone();
         let spawned = std::thread::Builder::new()
-            .name("herdr-core-desk-start".into())
+            .name("hide-core-desk-start".into())
             .spawn(move || {
                 let result = crate::coordination::run(client, authority, actor, command);
                 handle.apply(|runtime| runtime.desk_queued_started(&started, result));
@@ -1756,7 +1756,7 @@ impl Runtime {
         let pane = target.pane_id.clone();
         let asked = intent.to_owned();
         let started = std::thread::Builder::new()
-            .name("herdr-core-desk-watch".into())
+            .name("hide-core-desk-watch".into())
             .spawn(move || {
                 let result = prepared.run(std::time::Duration::from_secs(5)).map(|_| ());
                 handle.apply(move |runtime| runtime.desk_watch_answered(&asked, &pane, result));

@@ -1076,7 +1076,7 @@ fn never(_: &Value) -> bool {
 
 /// Writes the core's own state file with one registration, which is what makes
 /// a directory a checkout and so what gives hided a root to check against. The
-/// file is the shape herdr-core persists: flat, schema 1, no nesting.
+/// file is the shape hide-core persists: flat, schema 1, no nesting.
 fn seed_registration(state_dir: &std::path::Path, id: &str, path: &std::path::Path) {
     std::fs::write(
         state_dir.join("core-state.json"),

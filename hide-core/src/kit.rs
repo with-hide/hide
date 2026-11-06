@@ -215,7 +215,7 @@ pub(crate) fn spawn_device_worker(
     device_id: String,
 ) -> std::io::Result<()> {
     thread::Builder::new()
-        .name("herdr-core-device-kit".into())
+        .name("hide-core-device-kit".into())
         .spawn(move || {
             loop {
                 let Some(core) = runtime.upgrade() else {

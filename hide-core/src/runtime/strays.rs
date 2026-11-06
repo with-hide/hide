@@ -286,7 +286,7 @@ fn spawn_stray_prompt(
 ) -> Result<(), String> {
     let core_pane_id = route.pane_id.clone();
     route.spawn(
-        "herdr-core-stray-prompt",
+        "hide-core-stray-prompt",
         move |engine, engine_pane_id| {
             let _admission = gate
                 .admit(&core_pane_id)

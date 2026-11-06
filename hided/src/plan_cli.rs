@@ -9,7 +9,7 @@
 //! next write in the same turn and an approval lets it through (D-30).
 
 use crate::env::Env;
-use herdr_core::plans::{PlanCommand, PlanInput, StepStatus, next_action};
+use hide_core::plans::{PlanCommand, PlanInput, StepStatus, next_action};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

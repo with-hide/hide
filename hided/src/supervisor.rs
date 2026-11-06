@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use herdr_core::node_migration::{self, copy};
+use hide_core::node_migration::{self, copy};
 use hide_node_link::device::SshProblem;
 use serde_json::json;
 
@@ -78,7 +78,7 @@ pub async fn run(env: Env) -> Result<(), String> {
     let lock = state_file::acquire_lock(&env.state_dir).map_err(|error| error.to_string())?;
     // The process's records go beside its state from its start, so a move
     // resumed before any role runs is logged where its roles log.
-    if let Err(error) = herdr_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
+    if let Err(error) = hide_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
         eprintln!(
             "{}",
             json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
@@ -325,7 +325,7 @@ fn give_back_pending(
         copy::unplace(
             state_dir,
             &crate::core_move::target::incoming(state_dir, intent),
-            &herdr_core::hide_ai_settings_path(home),
+            &hide_core::hide_ai_settings_path(home),
         )
         .map_err(|refusal| refusal.to_string())?;
         held.remove()?;
@@ -374,9 +374,9 @@ async fn stop_core(state_dir: &Path, running: RunningDaemon) {
     }
     // The records queued before it first, then this one at once, which a
     // drain that timed out leaves written too.
-    herdr_core::diagnostics::drain();
-    if let Err(error) = herdr_core::diagnostics::record_now(
-        &state_dir.join(herdr_core::node_migration::CORE_STATE),
+    hide_core::diagnostics::drain();
+    if let Err(error) = hide_core::diagnostics::record_now(
+        &state_dir.join(hide_core::node_migration::CORE_STATE),
         record,
     ) {
         eprintln!("the unconfirmed stop could not be logged: {error}");
@@ -394,7 +394,7 @@ fn log(kind: &str, fields: serde_json::Value) {
     if let (Some(record), Some(fields)) = (record.as_object_mut(), fields.as_object()) {
         record.extend(fields.clone());
     }
-    herdr_core::diagnostic!(record);
+    hide_core::diagnostic!(record);
 }
 
 /// What a wait on the peer does with a failure asking again cannot change.
@@ -624,7 +624,7 @@ async fn resume_forward(env: &Env, seat: &seat::Seat) -> Result<Role, Halt> {
             }
         };
     }
-    let node = herdr_core::node::NodeId::of_this_machine()?;
+    let node = hide_core::node::NodeId::of_this_machine()?;
     if placement::read(&env.state_dir, node.as_str())?.is_some() {
         return Ok(Role::Node(
             crate::start_node_role(env.clone(), seat.parts()).await?,
@@ -669,7 +669,7 @@ pub(super) fn stopped_on_ssh(moves: &MoveControl, ssh: Option<SshProblem>, alias
     moves.update(|view| {
         view.alias = ssh.map(|_| alias.to_owned());
         view.ssh_problem =
-            ssh.map(|problem| herdr_core::DeviceProblem::of(problem).code().to_owned());
+            ssh.map(|problem| hide_core::DeviceProblem::of(problem).code().to_owned());
     });
 }
 
@@ -729,7 +729,7 @@ async fn prepare(
     }
     // This machine's own setting, which moves with the core: not a login
     // of the machine taking it.
-    let asks = match herdr_core::hide_ai_asks(&env.home) {
+    let asks = match hide_core::hide_ai_asks(&env.home) {
         Ok(asks) => asks,
         Err(detail) => {
             failed.push(FailedCheck {
@@ -858,7 +858,7 @@ async fn prepare(
     // Hide AI settings move with the core and are never merged.
     match (
         &inspected.ai,
-        herdr_core::stored_hide_ai_settings(&env.home),
+        hide_core::stored_hide_ai_settings(&env.home),
     ) {
         (Ok(None), _) => {}
         (Ok(Some(theirs)), Ok(Some(ours))) if *theirs == ours => {}
@@ -973,7 +973,7 @@ async fn forward(
     let steps = {
         let (state_dir, settings, remote, moves) = (
             env.state_dir.clone(),
-            herdr_core::hide_ai_settings_path(&env.home),
+            hide_core::hide_ai_settings_path(&env.home),
             Arc::clone(&remote),
             Arc::clone(&moves),
         );
@@ -1490,7 +1490,7 @@ async fn commit(env: &Env, moves: &MoveControl, mut journal: Journal, remote: &A
     let finished = {
         let (state_dir, settings, remote, journal) = (
             env.state_dir.clone(),
-            herdr_core::hide_ai_settings_path(&env.home),
+            hide_core::hide_ai_settings_path(&env.home),
             Arc::clone(remote),
             journal.clone(),
         );
@@ -1502,7 +1502,7 @@ async fn commit(env: &Env, moves: &MoveControl, mut journal: Journal, remote: &A
                 std::fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
             }
             driver::finish_target(&remote, &journal).map_err(|failure| format!("{failure:?}"))?;
-            let node = herdr_core::node::NodeId::of_this_machine()?;
+            let node = hide_core::node::NodeId::of_this_machine()?;
             placement::update(&state_dir, node.as_str(), |placement| {
                 placement.move_intent = None;
             })?;

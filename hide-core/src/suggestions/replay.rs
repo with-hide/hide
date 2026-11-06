@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! HIDE_SUGGESTIONS_REPLAY_PROJECTS=/path/to/repo:/path/to/other \
-//!   scripts/verify-cargo.sh test-scoped -p herdr-core --lib \
+//!   scripts/verify-cargo.sh test-scoped -p hide-core --lib \
 //!   suggestions::replay -- --ignored --nocapture
 //! ```
 //!

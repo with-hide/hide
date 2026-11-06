@@ -374,7 +374,7 @@ fn drop_oversized(state: &mut HubState, pane: &str, bytes: usize, full: bool) {
             client.wake.notify_one();
         }
     }
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "terminal_hub",
         "kind": "terminal.frame_too_long",
         "pane_id": pane.as_ref(),
@@ -394,7 +394,7 @@ fn await_full(client: &mut Client, ring: &mut PaneRing, pane: &Arc<str>, cause: 
         .redraw
         .entry(Arc::clone(pane))
         .or_insert_with(Instant::now);
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "terminal_hub",
         "kind": "terminal.redraw_wanted",
         "pane_id": pane.as_ref(),
@@ -484,7 +484,7 @@ impl OutputSink for TerminalHub {
                 let dropped = *unsent;
                 *unsent = 0;
                 freed.extend(client.queue.clear(&pane));
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "terminal_hub",
                     "kind": "terminal.output_overflow",
                     "pane_id": pane.as_ref(),
@@ -588,7 +588,7 @@ impl HubClient {
                 return false;
             };
             if now.duration_since(*since) >= REDRAW_PENDING_LIMIT {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "terminal_hub",
                     "kind": "terminal.redraw_unanswered",
                     "pane_id": pane.as_ref(),
@@ -642,7 +642,7 @@ impl HubClient {
             self.hub.epoch
         ));
         if !redraws.is_empty() {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "terminal_hub",
                 "kind": "terminal.redraw_requested",
                 "panes": redraws.len(),

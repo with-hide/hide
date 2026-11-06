@@ -1953,7 +1953,7 @@ fn every_consuming_reopen_result_removes_only_its_request_key() {
     );
 
     let folder = tempfile::Builder::new()
-        .prefix("herdr-core-reopen-file-result-")
+        .prefix("hide-core-reopen-file-result-")
         .tempdir_in("/tmp")
         .unwrap();
     let root = folder.path().to_path_buf();

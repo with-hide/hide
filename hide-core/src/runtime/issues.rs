@@ -776,7 +776,7 @@ impl Runtime {
             .clone()
             .ok_or_else(|| "No worker is available for this request".to_owned())?;
         thread::Builder::new()
-            .name(format!("herdr-core-{name}"))
+            .name(format!("hide-core-{name}"))
             .spawn(move || {
                 let answer = work();
                 let Some(runtime) = context.runtime.upgrade() else {

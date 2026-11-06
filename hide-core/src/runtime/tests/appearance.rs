@@ -31,7 +31,7 @@ pub(super) fn runtime_at(path: &std::path::Path) -> Runtime {
 /// A new folder for a state file, and that file's path in it; the test keeps
 /// the folder across the restarts it makes.
 fn state_path(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    let folder = scratch_dir(&format!("herdr-core-appearance-{name}-"));
+    let folder = scratch_dir(&format!("hide-core-appearance-{name}-"));
     let path = folder.path().join("state.json");
     (folder, path)
 }

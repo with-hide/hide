@@ -8,11 +8,11 @@
 //! (`admit`), so a command or option cannot reach a caller without reaching
 //! the contract, and the tests below hold each parser to what the table says
 //! it takes. The answer schemas come from the core's answer types
-//! (`herdr_core::delivery::answer`). `hide contract --json` prints the
+//! (`hide_core::delivery::answer`). `hide contract --json` prints the
 //! document and `hide version --json` its digest, and `contracts/hide-cli.json`
 //! is the committed copy a review sees change.
 
-use herdr_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS};
+use hide_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS};
 use serde_json::{Map, Value, json};
 
 /// The document's own format; a caller that reads another refuses it.
@@ -32,7 +32,7 @@ pub enum Input {
     /// characters, not starting with `-`.
     Key,
     /// A native session id or session file path: non-empty, at most
-    /// `herdr_core::delivery::SESSION_LIMIT` bytes, without control
+    /// `hide_core::delivery::SESSION_LIMIT` bytes, without control
     /// characters, not starting with `-`.
     Session,
     /// A letter body: not blank, at most `BODY_LIMIT` bytes.
@@ -565,8 +565,8 @@ pub const COMMANDS: &[Spec] = &[
         options: &[
             repeated(
                 "--key",
-                OneOf(&herdr_core::engine::keys::PaneKey::NAMES),
-                herdr_core::pane_command::KEYS_LIMIT,
+                OneOf(&hide_core::engine::keys::PaneKey::NAMES),
+                hide_core::pane_command::KEYS_LIMIT,
             ),
             switch("--enter"),
             switch("--paste"),
@@ -1341,7 +1341,7 @@ fn body() -> Value {
             "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
             "session": format!(
                 "non-empty, at most {} bytes, no control characters, does not start with -",
-                herdr_core::delivery::SESSION_LIMIT
+                hide_core::delivery::SESSION_LIMIT
             ),
             "body": format!("not blank, at most {BODY_LIMIT} bytes"),
             "approval": "not blank, at most 256 bytes, no control characters",
@@ -1351,7 +1351,7 @@ fn body() -> Value {
             "json": "a JSON document of the shape hide mission help or hide task help shows",
             "paste_text": format!(
                 "non-empty, at most {} bytes, no control characters but line breaks (LF, CR) and tabs",
-                herdr_core::pane_command::TEXT_LIMIT
+                hide_core::pane_command::TEXT_LIMIT
             ),
             "one_of": "one of the listed values",
         },
@@ -1377,7 +1377,7 @@ fn body() -> Value {
 /// commands' envelopes, whose mission object is documented by `hide
 /// mission help` and the snapshot it is drawn from.
 fn answers() -> Value {
-    let mut answers = herdr_core::delivery::answer::answer_schemas();
+    let mut answers = hide_core::delivery::answer::answer_schemas();
     let object = json!({"type": "object"});
     let shape = |fields: &[&str]| {
         let properties: Map<String, Value> = fields
@@ -1419,12 +1419,12 @@ fn answers() -> Value {
     map.insert("device_removed".into(), shape(&["device_id"]));
     map.insert(
         "device_retried".into(),
-        herdr_core::device_command::retried_schema(),
+        hide_core::device_command::retried_schema(),
     );
-    for (name, schema) in herdr_core::pane_command::answer_schemas() {
+    for (name, schema) in hide_core::pane_command::answer_schemas() {
         map.insert(name.into(), schema);
     }
-    for (name, schema) in herdr_core::worktree_command::answer_schemas() {
+    for (name, schema) in hide_core::worktree_command::answer_schemas() {
         map.insert(name.into(), schema);
     }
     answers

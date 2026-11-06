@@ -3188,7 +3188,7 @@ impl Reader {
         }
         let (jobs, receiver) = channel::<ReaderJob>();
         let thread = std::thread::Builder::new()
-            .name("herdr-core-labels-reader".to_owned())
+            .name("hide-core-labels-reader".to_owned())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
                     let job = match job {

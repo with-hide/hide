@@ -73,7 +73,7 @@ pub fn spawn_close_capture(
     request: CloseCaptureRequest,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-close-capture".to_owned())
+        .name("hide-core-close-capture".to_owned())
         .spawn(move || {
             let result = capture_close_item(context.engine.as_ref(), &request);
             let Some(runtime) = context.runtime.upgrade() else {
@@ -100,7 +100,7 @@ pub(crate) fn spawn_saved_close_effect(
     effect: CloseEffectRequest,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-saved-close".into())
+        .name("hide-core-saved-close".into())
         .spawn(move || {
             let gate = crate::agent_sleep_engine::dormant_close_gate(&context, &effect);
             let engine = context.engine.gated(gate);
@@ -465,7 +465,7 @@ pub fn spawn_close_status_checks(
     requests: Vec<CloseStatusCheckRequest>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("herdr-core-close-status-check".to_owned())
+        .name("hide-core-close-status-check".to_owned())
         .spawn(move || {
             let result = fetch_session(context.engine.as_ref());
             let Some(runtime) = context.runtime.upgrade() else {

@@ -1,10 +1,10 @@
 //! `hide device list|add|remove|retry`: the SSH devices of Settings ›
 //! Devices, for an agent the operator asked to add, connect or remove one.
-//! The core answers (`herdr_core::device_command`); this file reads the
+//! The core answers (`hide_core::device_command`); this file reads the
 //! words, waits on a retry's outcome when asked, and prints the answer, as
 //! one JSON line with `--json` and as lines for a person without.
 use crate::env::Env;
-use herdr_core::device_command::DeviceCommand;
+use hide_core::device_command::DeviceCommand;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -162,7 +162,7 @@ fn outcome(env: &Env, device_id: &str, mut device: Value) -> Result<Value, Refus
             // Removed while the attempt ran.
             .ok_or_else(|| Refused::Answer {
                 code: "device_unknown".to_owned(),
-                message: herdr_core::device_command::next_action("device_unknown").to_owned(),
+                message: hide_core::device_command::next_action("device_unknown").to_owned(),
             })?;
     }
     Ok(device)
