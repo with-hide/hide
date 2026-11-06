@@ -24,12 +24,12 @@ use std::time::{Duration, Instant};
 use herdr_core::address;
 use herdr_core::engine::EngineHandle;
 use herdr_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
+use hide_agent_hooks::hook_request::install::{self, PaneRequest};
 use hide_node::pane_proof::{PaneIdentity, caller_directory, descends_from, process_start};
 use hide_node::ssh::RemoteHost;
 use hide_node_link::panes::StreamCaller;
 use hide_node_link::protocol::Call;
 use hide_platform::fs::private;
-use serde::Deserialize;
 use serde_json::json;
 
 use crate::core::CoreHandle;
@@ -738,23 +738,6 @@ impl Drop for Registry {
     }
 }
 
-/// A bootstrap request has no authority until the kernel peer PID is shown
-/// to be a descendant of the shell Herdr owns for this pane, or, failing
-/// that, to have its working directory inside a registered checkout. The
-/// pane id may be absent for a caller that has none.
-#[derive(Deserialize)]
-pub struct BootstrapRequest {
-    #[serde(default)]
-    pub pane_id: String,
-    pub nonce: String,
-    #[serde(default)]
-    pub one_shot: bool,
-    /// The Hide installation the caller's pane names (`HIDE_INSTALL`), when
-    /// it names one: only that installation's daemon may answer for it.
-    #[serde(default)]
-    pub install: Option<String>,
-}
-
 /// The installation this daemon is (`hide_host::kit::running_install`), the
 /// one its own panes name; `None` for a build run from anywhere else, whose
 /// panes name none.
@@ -788,7 +771,10 @@ impl Attestation {
     }
 }
 
-/// The bootstrap's attestation. The pane path runs unchanged first; any
+/// The bootstrap's attestation: a request ([`PaneRequest`]) has no authority
+/// until the kernel peer PID is shown to be a descendant of the shell the
+/// engine owns for its pane, or, failing that, to have its working directory
+/// inside a registered checkout. The pane path runs unchanged first; any
 /// pane failure, including a Herdr socket hided never had, hands the caller
 /// to the checkout fallback, whose reason is the bootstrap's answer when it
 /// fails too. Returns the pane reason alongside a checkout-bound attestation.
@@ -796,7 +782,7 @@ impl Attestation {
 #[cfg_attr(not(unix), allow(dead_code))]
 fn attest_bootstrap(
     peer: i32,
-    request: &BootstrapRequest,
+    request: &PaneRequest,
     herdr: Option<&EngineHandle>,
     core: &CoreHandle,
     own: Option<&str>,
@@ -806,14 +792,7 @@ fn attest_bootstrap(
     if matches!(Caller::parse(&request.pane_id), Caller::Checkout { .. }) {
         return Err("invalid_request");
     }
-    // A pane another installation started is that installation's, even when
-    // its folder is a checkout this daemon also registered: binding it here
-    // by its folder would run its calls against another Hide.
-    if let Some(install) = request.install.as_deref()
-        && own != Some(install)
-    {
-        return Err(hide_agent_hooks::hook_request::install::OTHER_INSTALL);
-    }
+    install::refuse_other(request, own)?;
     let pane = if request.pane_id.is_empty() {
         Err("pane_not_connected")
     } else {
@@ -1193,22 +1172,20 @@ fn answer_bootstrap(
         .take(hide_node_link::panes::HOOK_REQUEST_LIMIT as u64 + 1)
         .read_line(&mut line)
         .map_err(|_| "invalid_request");
-    if read.is_ok()
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&line)
-        && value.get("hook").is_some()
+    let parsed = read
+        .ok()
+        .and_then(|_| serde_json::from_str::<PaneRequest>(&line).ok());
+    if let Some(request) = &parsed
+        && let Some(hook) = &request.hook
     {
         let result = (|| {
             if line.len() > hide_node_link::panes::HOOK_REQUEST_LIMIT {
                 return Err("invalid_request");
             }
-            let request: BootstrapRequest =
-                serde_json::from_value(value.clone()).map_err(|_| "invalid_request")?;
-            let hook: hide_node_link::panes::HookRequest =
-                serde_json::from_value(value["hook"].clone()).map_err(|_| "invalid_request")?;
-            if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(&hook) {
+            if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) = attest_bootstrap(peer, &request, herdr, core, own_install())?;
+            let (attestation, _) = attest_bootstrap(peer, request, herdr, core, own_install())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1226,10 +1203,8 @@ fn answer_bootstrap(
                     return Err("pane_changed");
                 }
             }
-            let mut answer = crate::hook_request::answer(core, &cap, &hook, desktop);
-            // The answer names this daemon's installation, which a hook in a
-            // pane that names one requires (`hook_request::install::confirm`).
-            answer["install"] = json!(own_install());
+            let mut answer = crate::hook_request::answer(core, &cap, hook, desktop);
+            install::stamp(&mut answer, own_install());
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err("response_too_large");
             }
@@ -1268,9 +1243,7 @@ fn answer_bootstrap(
                 Err("invalid_request")
             }
         })
-        .and_then(|_| {
-            serde_json::from_str::<BootstrapRequest>(&line).map_err(|_| "invalid_request")
-        })
+        .and(parsed.ok_or("invalid_request"))
         .and_then(|request| {
             let (attestation, pane_reason) =
                 attest_bootstrap(peer, &request, herdr, core, own_install())?;
@@ -1306,7 +1279,9 @@ fn answer_bootstrap(
     };
     let answer = match (&result, &wire) {
         (Ok(_), Some(reference)) => {
-            json!({"ok": true, "reference": reference, "install": own_install()})
+            let mut answer = json!({"ok": true, "reference": reference});
+            install::stamp(&mut answer, own_install());
+            answer
         }
         (Ok(_), None) => json!({"ok": false, "reason": "reference_unavailable"}),
         (Err(reason), _) => json!({"ok": false, "reason": reason}),
@@ -2019,10 +1994,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let core = CoreHandle::bare(directory.path());
         let peer = std::process::id() as i32;
-        let request = |pane_id: &str| BootstrapRequest {
+        let request = |pane_id: &str| PaneRequest {
             pane_id: pane_id.to_owned(),
             nonce: format!("{:032x}", 7),
             one_shot: true,
+            hook: None,
             install: None,
         };
         // A stale pane id with no Herdr socket used to answer pane_unavailable
