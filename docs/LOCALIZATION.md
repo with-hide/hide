@@ -43,11 +43,11 @@ Text that a helper composes outside a render uses the `translate` function of `c
 A module the desktop host imports (`host.ts` and everything it reaches) stays free of the translator and names a label by key, as `revealExternal.ts` does.
 Where `UI_BEHAVIOR.md` quotes shipped Korean wording (`요청`, `정리`, `맡기기`), that is the Korean catalog text; English and the other languages read their own catalog entries.
 The core sends a code, never an English sentence, for what the screen words: an agent's `status_code` (`working`, `question`, `sleep_failed`, ...) is named by `agents.status.*` through `statusText` in `web/src/agentStatus.ts`, a GitHub `failure_category` by `issueSettings.gh*`, and the machine the core runs on as a device row with no `label` and its system in `host.platform`, which every shell words as This Mac, This PC or This computer (`systemMachineKey` in `web/src/screenMachine.ts`), the phone's start sheet included, which reads a null `place` as Home and a null `device_label` as that machine, named from the catalog's `core_platform`.
-A delivery notice for a person is a `HumanNoticeKind` plus the names it concerns: the phone words it from its state key (`mobile.notice.*`, relayed to the service worker with the other notification words), while Herdr's own notification, which has no translating screen, shows the English title and body whose tail names the `hide request show` command.
+A delivery notice for a person is a `HumanNoticeKind` plus the names it concerns: the phone words it from its state key (`mobile.notice.*`, relayed to the service worker with the other notification words), while the engine's own notification, which has no translating screen, shows the English title and body whose tail names the `hide request show` command.
 Where the core still sends a sentence as data (a `reason` or `message` in a snapshot), the client does not translate it; each such family stays a boundary until it is converted to a code the catalogs can name, and a family's conversion removes its English from the wire in the same change.
 A failure the core publishes as `last_error` is worded by its `kind` through `coreErrorText` in `web/src/coreError.ts`, with the catalog sentences in `web/src/i18n/resources/coreErrors.ts`; the same module words this machine's `status.herdr.state` and a device's `RemoteStatus.state`, and `web/src/startReason.ts` words the codes an agent start's reason carries.
-The `message` beside a kind, Herdr's `message` and a device's `message` are diagnostic detail (Herdr's protocol answer, a socket path, an io error): the store's diagnostics, Settings' Recent list and the core's `error.reported` log keep them, the About tab's details show them untranslated, and no other screen draws them (design principle 13).
-Hide's install kit sends each part's and each agent piece's `why` (`hide_kit::PartWhy`: a cause, and the one path, name or version its sentence names) and a machine's `unavailable` as a code; `web/src/kitWhy.ts` words them from `web/src/i18n/resources/kitReasons.ts`, along with a saved Herdr profile's `connect_refusal`, and the kit's English `reason` stays in its report for the log and the `hide` CLI, never on the snapshot.
+The `message` beside a kind, the engine status's `message` and a device's `message` are diagnostic detail (the engine's answer, a socket path, an io error): the store's diagnostics, Settings' Recent list and the core's `error.reported` log keep them, the About tab's details show them untranslated, and no other screen draws them (design principle 13).
+Hide's install kit sends each part's and each agent piece's `why` (`hide_kit::PartWhy`: a cause, and the one path, name or version its sentence names) and a machine's `unavailable` as a code; `web/src/kitWhy.ts` words them from `web/src/i18n/resources/kitReasons.ts`, along with a saved machine profile's `connect_refusal`, and the kit's English `reason` stays in its report for the log and the `hide` CLI, never on the snapshot.
 
 A Local issue that was not made, changed or read, and a pull request's issue that was not made or linked, carry an `IssueFailure` (`local_issue.*` or `pr_link.*`, with the limit its sentence names) on `issue_work.update` and `pr_work.link`, and a Local issue's read failure is a `local_issue.*` code in `issue_work.detail.message`; `web/src/issueFailure.ts` words them from `web/src/i18n/resources/issueReasons.ts`, an unknown code leaves the headline alone, and the core's English reason goes to the `pr_link.failed` and issue diagnostics.
 ⌘K's GitHub search answers with a code (`github_search.failed`, `github_search.query_empty`, `github_search.query_too_long`) or, beside results that skipped repositories, `github_search.partial`, and a checkout's issue link names where it came from as a code (`manual`, `pane_token`, `branch_setting`, `pr_body`, `branch_name`).
@@ -110,10 +110,10 @@ One row is one thing the screen names. A word in the last column is not used for
 
 | Thing | en | ko | ja | zh-CN | Not |
 | --- | --- | --- | --- | --- | --- |
-| A machine running Herdr | device | 기기 | デバイス | 设备 | 디바이스, 장치, マシン (the platform names `This Mac`, `This PC` and `This computer` stay as `common.*` says; Korean writes `Mac` in Latin letters) |
+| A machine that runs panes | device | 기기 | デバイス | 设备 | 디바이스, 장치, マシン (the platform names `This Mac`, `This PC` and `This computer` stay as `common.*` says; Korean writes `Mac` in Latin letters) |
 | One terminal of a tab | pane | 터미널 (`pane` only in `pane ID` and commands) | ペイン | 窗格 | 페인, pane in a sentence, 패널, 面板 |
 | A project's folder on a device | checkout | 체크아웃 | チェックアウト | 检出目录 | checkout, 작업 폴더 |
-| Herdr's workspace | workspace | 작업공간 (the tab named `Workspace` keeps its name) | ワークスペース | 工作区 | 워크스페이스 |
+| The engine's workspace | workspace | 작업공간 (the tab named `Workspace` keeps its name) | ワークスペース | 工作区 | 워크스페이스 |
 | Git worktree | worktree | 워크트리 | ワークツリー | 工作树 | worktree |
 | An agent started by another | child agent | 자식 에이전트 (count: 개) | 子エージェント | 子智能体 | 하위, 형제 as a heading |
 | A tab's document or browser page | view | 뷰 | ビュー | 视图 | 화면 |
@@ -169,7 +169,7 @@ The audit at the time the guard landed read every non-test source under `web/src
 ## Verification owners
 
 `runtime::tests::appearance` checks all four choices, reset, invalid events, restart, stale UI saves, and preservation of invalid stored values, and that Hide AI's output language follows the choice, the system language and the invalid-value fallback.
-`web/e2e/interface-language.spec.ts` drives the selector against a private daemon and Herdr, with separate Korean and Japanese browser contexts.
+`web/e2e/interface-language.spec.ts` drives the selector against a private daemon and engine fixture, with separate Korean and Japanese browser contexts.
 It checks shared choices, four-language headings, refresh, daemon restart, system reset, unsupported-system fallback and invalid-store diagnostics.
 It also checks Overview scope labels, sidebar tabs, navigation command labels and unchanged shortcut keycaps in all four languages.
 Catalog, translator and locale unit tests remain beside their modules.
