@@ -32,6 +32,14 @@ SAVERS = {
     ('web-e2e.yml', 'e2e'): "${{ github.ref == 'refs/heads/main' && inputs.shards == 1 }}",
 }
 
+# A job that builds the relay and still compiles the tool itself, with the reason.
+# The phone job publishes to production behind a test that holds every action it
+# runs to a pinned commit (test_phone_release.py); the action's own cache step is
+# a mutable tag, and a restored binary would build what is published.
+UNRESTORED = {
+    ('release-candidate.yml', 'phone'): 'its actions are pinned to a commit',
+}
+
 # What a `run` step calls to reach the relay WebAssembly build. `package
 # assemble` assembles the app from binaries `package compile` built, and
 # `e2e-list` only lists tests, so neither builds the shell.
@@ -74,6 +82,8 @@ class RelayToolsCache(unittest.TestCase):
             build = first_index(steps, lambda step: BUILDS.search(step.get('run') or ''))
             if build is None:
                 continue
+            if (workflow, job) in UNRESTORED:
+                continue
             with self.subTest(workflow=workflow, job=job):
                 restore = first_index(steps, lambda step: step.get('uses') == ACTION)
                 self.assertIsNotNone(restore, f'{workflow} {job} builds the relay without {ACTION}')
@@ -83,6 +93,7 @@ class RelayToolsCache(unittest.TestCase):
         for workflow, job, steps in jobs_with_steps():
             if first_index(steps, lambda step: step.get('uses') == ACTION) is None:
                 continue
+            self.assertNotIn((workflow, job), UNRESTORED)
             with self.subTest(workflow=workflow, job=job):
                 self.assertIsNotNone(first_index(steps, lambda step: BUILDS.search(step.get('run') or '')))
 
