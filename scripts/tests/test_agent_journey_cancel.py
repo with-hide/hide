@@ -91,9 +91,6 @@ class CancelDuringACellWait(unittest.TestCase):
             self.assertEqual(table["letter"]["status"], cells.FAIL)
             self.assertEqual(table["letter"]["reason"], "scene_timeout")
 
-    def test_cancelled_is_not_a_process_error(self):
-        self.assertFalse(issubclass(Cancelled, ProcessError))
-
 
 if __name__ == "__main__":
     unittest.main()

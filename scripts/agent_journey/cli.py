@@ -728,8 +728,9 @@ def main(argv=None):
                     # run's cap while the next agents run.
                     launch, environment, port = services[key]
                     try:
-                        agent["opencode_service"] = opencode_service.stop(launch, environment, port,
-                                                                          str(runtime.home), runtime.owner)
+                        with owner.teardown():
+                            agent["opencode_service"] = opencode_service.stop(launch, environment, port,
+                                                                              str(runtime.home), runtime.owner)
                     except Exception as error:
                         agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
     except Exception as error:
