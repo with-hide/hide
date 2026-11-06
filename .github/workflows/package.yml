@@ -362,10 +362,13 @@ jobs:
       # the deb forgot to depend on is only missed on a bare system, such as
       # a WSL distribution; this one has nothing but what the deb pulls in.
       # Node is the runner's own, mounted, so apt installs nothing else.
+      # `--init` reaps the daemons `hide stop` ends: bash execs the last
+      # command, so no shell is left as PID 1 to reap them, and an unreaped
+      # daemon reads as still running to the smoke's end check.
       - name: Install the deb in a bare Ubuntu and start it without a window
         timeout-minutes: 15
         run: |
-          docker run --rm -v "$PWD:/w" -v "$(readlink -f "$(command -v node)"):/usr/local/bin/node:ro" -w /w ubuntu:24.04 bash -euo pipefail -c '
+          docker run --rm --init -v "$PWD:/w" -v "$(readlink -f "$(command -v node)"):/usr/local/bin/node:ro" -w /w ubuntu:24.04 bash -euo pipefail -c '
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -q
             apt-get install -y -q --no-install-recommends "/w/desktop/out/release/hide-v'"$HIDE_VERSION"'-linux-x64.deb"
