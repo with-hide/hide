@@ -697,6 +697,28 @@ impl Panes {
         running
     }
 
+    /// What may still run of an ended record, for keeping the record: what
+    /// [`Self::still_running`] finds, and every pid its end left that is
+    /// alive even when the program's session was read, since a survivor can
+    /// leave the session before it is read. A pid is counted without its
+    /// start time, so a reused one only keeps a record longer; this is not
+    /// asked before a start, which a reused pid would then refuse.
+    fn may_still_run(&self, record: &PaneRecord) -> Vec<u32> {
+        let mut running = self.still_running(record);
+        if !self.of_another_boot(record) {
+            running.extend(
+                record
+                    .end
+                    .iter()
+                    .flat_map(|end| end.left.iter().copied())
+                    .filter(|pid| hide_platform::process::is_alive(*pid)),
+            );
+            running.sort_unstable();
+            running.dedup();
+        }
+        running
+    }
+
     fn start_holder(
         &self,
         request: &StartRequest,
@@ -1007,7 +1029,7 @@ impl Panes {
         }
         // A record goes only once nothing it names runs: a replacement that
         // finds its record gone starts afresh (`reserve`).
-        let left = self.still_running(&current);
+        let left = self.may_still_run(&current);
         if !left.is_empty() {
             return Err(ForgetRefusal::ProcessesRun(left));
         }
@@ -1081,7 +1103,7 @@ impl Panes {
                 // So does one whose pane left processes running: a record goes
                 // only once nothing it names runs, which lets a replacement
                 // that finds its record gone start afresh (`reserve`).
-                let left = self.still_running(record);
+                let left = self.may_still_run(record);
                 if !left.is_empty() {
                     self.emit(
                         "pane_holder.ended_kept",
@@ -2041,6 +2063,14 @@ mod tests {
             record::write(&layout::pane_record(&panes.state_dir, pane), &ended).unwrap();
         };
         write("left", 1, vec![survivor]);
+        // Its program is gone, so its session reads empty or not at all; the
+        // survivor its end names keeps the record either way.
+        let gone = StandIn::start();
+        let program = gone.identity();
+        drop(gone);
+        let mut left = panes.record("left").unwrap().unwrap();
+        left.program = Some(program);
+        record::write(&layout::pane_record(&panes.state_dir, "left"), &left).unwrap();
         for n in 0..ENDED_KEPT {
             write(&format!("e{n}"), 2 + n as u64, Vec::new());
         }
