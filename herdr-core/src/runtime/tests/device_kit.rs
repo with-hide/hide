@@ -2672,15 +2672,19 @@ fn device_connect_statistics_count_a_ready_device_once_across_reconnects() {
 /// a change of outcome is sent, so its retries count as one failure.
 #[test]
 fn device_connect_statistics_send_only_a_changed_outcome() {
-    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
     let shared = with_consent(None);
     let statistics = Arc::new(DeviceStatistics::default());
     let helper = KitDevice::answering(Ok(installed()));
+    let unreachable = crate::remote::EstablishError::Ssh(hide_node_link::device::SshFailure {
+        problem: hide_node_link::device::SshProblem::Unreachable,
+        detail: "ssh: connect to host 192.0.2.1 port 22: Operation timed out".to_owned(),
+    });
     let fail = |times: usize| {
         let mut runtime = shared.lock().unwrap();
         for _ in 0..times {
             runtime.begin_device_connect(DEVICE);
-            runtime.fail_device_connect_install(DEVICE);
+            runtime.fail_device_connect(DEVICE, &unreachable);
         }
     };
     let ready = || {
@@ -2703,7 +2707,9 @@ fn device_connect_statistics_send_only_a_changed_outcome() {
     settle(&shared);
     fail(2);
     let failed = Event::DeviceConnected {
-        outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+        outcome: DeviceOutcome::Failed(DeviceFailure::Ssh(
+            hide_node_link::device::SshProblem::Unreachable,
+        )),
         platform: DevicePlatform::Unknown,
     };
     assert_eq!(
@@ -2723,7 +2729,7 @@ fn device_connect_statistics_send_only_a_changed_outcome() {
 /// the next connection is an attempt of its own that can succeed.
 #[test]
 fn device_connect_statistics_settle_failure_and_retry_once() {
-    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
     let helper = KitDevice::answering(Err("private kit failure detail".to_owned()));
     let shared = with_consent(Some(helper.clone()));
     let statistics = Arc::new(DeviceStatistics::default());
@@ -2739,7 +2745,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
     assert_eq!(
         *statistics.0.lock().unwrap(),
         [Event::DeviceConnected {
-            outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+            outcome: DeviceOutcome::Failed(DeviceFailure::KitFailed),
             platform: DevicePlatform::MacosAarch64,
         }]
     );
@@ -2771,7 +2777,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
         *statistics.0.lock().unwrap(),
         [
             Event::DeviceConnected {
-                outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+                outcome: DeviceOutcome::Failed(DeviceFailure::KitFailed),
                 platform: DevicePlatform::MacosAarch64,
             },
             Event::DeviceConnected {
@@ -2785,7 +2791,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
 /// A failure before SSH can report a platform still has one bounded outcome.
 #[test]
 fn device_connect_statistics_include_early_install_failure() {
-    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
     let mut runtime = runtime();
     let statistics = Arc::new(DeviceStatistics::default());
     runtime.product_analytics = Some(statistics.clone());
@@ -2801,7 +2807,7 @@ fn device_connect_statistics_include_early_install_failure() {
     assert_eq!(
         *statistics.0.lock().unwrap(),
         [Event::DeviceConnected {
-            outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+            outcome: DeviceOutcome::Failed(DeviceFailure::NoTransport),
             platform: DevicePlatform::Unknown,
         }]
     );

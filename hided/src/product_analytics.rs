@@ -329,13 +329,13 @@ mod tests {
             nodes: herdr_core::product_analytics::MissionSize::TwoToThree,
         });
         let first = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
-        use herdr_core::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform};
+        use herdr_core::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform};
         let ready = Event::DeviceConnected {
             outcome: DeviceOutcome::Ready,
             platform: DevicePlatform::LinuxAarch64,
         };
         let failed = Event::DeviceConnected {
-            outcome: DeviceOutcome::Failed(DeviceFailedStep::Download),
+            outcome: DeviceOutcome::Failed(DeviceFailure::Download),
             platform: DevicePlatform::MacosAarch64,
         };
         worker.client.capture(ready);
@@ -427,6 +427,7 @@ mod tests {
         let mut device_failed = common;
         device_failed["outcome"] = "failed".into();
         device_failed["failed_step"] = "download".into();
+        device_failed["failure"] = "download".into();
         device_failed["platform"] = "macos-aarch64".into();
         assert_eq!(fifth["properties"], device_failed);
         for body in [

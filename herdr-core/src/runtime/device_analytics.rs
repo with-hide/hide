@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use super::Runtime;
-use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+use crate::product_analytics::{DeviceFailure, DeviceOutcome, DevicePlatform, Event};
 use crate::remote::EstablishError;
 
 const MAX_ATTEMPTS: usize = 128;
@@ -68,14 +68,20 @@ impl Runtime {
     }
 
     pub(super) fn fail_device_connect(&mut self, device: &str, error: &EstablishError) {
-        let step = match error {
+        let failure = match error {
             EstablishError::Download { os, arch, .. } => {
                 self.device_connect_platform(device, os, arch);
-                DeviceFailedStep::Download
+                DeviceFailure::Download
             }
-            _ => DeviceFailedStep::Install,
+            EstablishError::Connect(_) => DeviceFailure::Connect,
+            EstablishError::Ssh(failure) => DeviceFailure::Ssh(failure.problem),
+            EstablishError::Stopped(_) => DeviceFailure::MachineStopped,
+            EstablishError::IdentityChanged { .. } => DeviceFailure::IdentityChanged,
+            EstablishError::Unsupported(_) => DeviceFailure::Unsupported,
+            EstablishError::Install(_) => DeviceFailure::Install,
+            EstablishError::Helper(_) => DeviceFailure::Helper,
         };
-        self.finish_device_connect(device, DeviceOutcome::Failed(step));
+        self.finish_device_connect(device, DeviceOutcome::Failed(failure));
     }
 
     pub(crate) fn complete_device_connect_kit(
@@ -93,13 +99,14 @@ impl Runtime {
         }
         let outcome = match report {
             Ok(report) if report.refused.is_none() => DeviceOutcome::Ready,
-            Ok(_) | Err(_) => DeviceOutcome::Failed(DeviceFailedStep::Install),
+            Ok(_) => DeviceOutcome::Failed(DeviceFailure::KitRefused),
+            Err(_) => DeviceOutcome::Failed(DeviceFailure::KitFailed),
         };
         self.finish_device_connect(device, outcome);
     }
 
-    pub(super) fn fail_device_connect_install(&mut self, device: &str) {
-        self.finish_device_connect(device, DeviceOutcome::Failed(DeviceFailedStep::Install));
+    pub(super) fn fail_device_connect_before_link(&mut self, device: &str, failure: DeviceFailure) {
+        self.finish_device_connect(device, DeviceOutcome::Failed(failure));
     }
 
     fn finish_device_connect(&mut self, device: &str, outcome: DeviceOutcome) {
