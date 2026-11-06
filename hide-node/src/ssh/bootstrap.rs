@@ -82,12 +82,24 @@ const POWERSHELL: &str = "powershell.exe -NoProfile -NonInteractive -Command";
 /// overlapped streams instead where the link's pipes are overlapped, as
 /// Windows OpenSSH's are (`bootstrap.ps1`).
 ///
+/// It turns PowerShell's module auto-loading off and imports the one module
+/// the wrapper and the script use (`Write-Output`, `New-Object`, `Add-Type`)
+/// by name. Auto-loading finds a cmdlet by reading every module on the
+/// module path, which an account's module analysis cache answers when it is
+/// warm; with that cache unusable, a fresh CI runner's 260 modules took a
+/// first `Write-Output` 12 to 38 s, saying nothing meanwhile, and the
+/// per-user cache never warmed between starts (with-hide/hide-private#580).
+/// The import by name costs under a second cold, and a cmdlet outside it
+/// fails at once by name instead of starting that scan.
+///
 /// It travels as plain words inside every shell's quotes at once, so it holds
 /// no character any of them would read there (checked by a test): no quote,
 /// none of `cmd.exe`'s `& | < > ^ %`, no `!` (csh's history), no `\` (fish's
 /// escape) and no backtick. It is readable PowerShell rather than an encoded
 /// one, which Windows' malware scan refuses beside the `sh` words.
 const POWERSHELL_WRAPPER: &str = "
+$PSModuleAutoLoadingPreference=[Management.Automation.PSModuleAutoLoadingPreference]::None;
+Import-Module Microsoft.PowerShell.Utility;
 $i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput();
 $b=[Text.Encoding]::ASCII.GetBytes(((Write-Output HIDE1 script powershell) -join [char]9)+[char]10);
 $o.Write($b,0,$b.Length);$o.Flush();
