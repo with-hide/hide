@@ -13,6 +13,7 @@
 //! Titles and kinds follow codex-acp (D-04).
 
 use agent_client_protocol_schema::v1::{PlanEntryStatus, ToolKind};
+use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
 use super::Lines;
@@ -114,6 +115,7 @@ fn item(item: &Value, paginated: bool, cwd: &str, thread: &mut Thread) {
             thread.call(
                 Call::new(id, "exec_command", ToolKind::Execute)
                     .title(command.clone())
+                    .shell(HookDialect::Codex)
                     .input(&serde_json::json!({ "command": command })),
             );
             let failed = item["exit_code"].as_i64().is_some_and(|code| code != 0)
@@ -290,7 +292,9 @@ fn legacy(kind: &str, payload: &Value, cwd: &str, thread: &mut Thread) {
                         Value::String(command) => command.clone(),
                         _ => command_line(&arguments["command"]),
                     };
-                    Call::new(id, name, ToolKind::Execute).title(command)
+                    Call::new(id, name, ToolKind::Execute)
+                        .title(command)
+                        .shell(HookDialect::Codex)
                 }
                 "view_image" => {
                     let path = arguments["path"].as_str().unwrap_or_default();
@@ -304,7 +308,11 @@ fn legacy(kind: &str, payload: &Value, cwd: &str, thread: &mut Thread) {
         }
         "local_shell_call" => {
             let command = command_line(&payload["action"]["command"]);
-            thread.call(Call::new(id, "shell", ToolKind::Execute).title(command));
+            thread.call(
+                Call::new(id, "shell", ToolKind::Execute)
+                    .title(command)
+                    .shell(HookDialect::Codex),
+            );
         }
         "custom_tool_call" if payload["name"] == "apply_patch" => {
             let patch = payload["input"].as_str().unwrap_or_default();

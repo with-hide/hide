@@ -465,7 +465,11 @@ impl super::Read {
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
         let input = item.pointer("/state/input");
-        self.note_call(input, called);
+        let syntax = crate::call_shell::syntax(
+            hide_agent_adapter::HookDialect::OpenCode,
+            item.get("name").and_then(Value::as_str).unwrap_or_default(),
+        );
+        self.note_call(input, syntax, called);
         let output = item
             .pointer("/state/content")
             .and_then(Value::as_array)
@@ -485,6 +489,7 @@ impl super::Read {
         let made = super::made_by(
             item.get("name").and_then(Value::as_str),
             input,
+            syntax,
             item,
             &output,
         );

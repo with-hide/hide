@@ -16,6 +16,9 @@
 //! only as a hash of its path and a search as a hash of its pattern, so
 //! neither a path nor a pattern (which may hold a token) leaves the reader.
 
+use crate::call_shell;
+use hide_agent_adapter::HookDialect;
+use hide_shell::Syntax;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -252,9 +255,10 @@ impl ToolTracker {
 }
 
 /// The kind of a call: a shell command's program, with its subcommand when
-/// it names one, or else the tool's own name.
-pub fn head(tool: &str, command: Option<&str>) -> String {
-    let named = command.and_then(command_head);
+/// it names one, or else the tool's own name. `syntax` is the syntax of the
+/// shell that ran the command (`crate::call_shell`).
+pub fn head(tool: &str, command: Option<&str>, syntax: Syntax) -> String {
+    let named = command.and_then(|command| command_head(command, syntax));
     let head = named.unwrap_or_else(|| tool.trim().to_owned());
     let mut end = head.len().min(HEAD_LIMIT);
     while !head.is_char_boundary(end) {
@@ -264,24 +268,21 @@ pub fn head(tool: &str, command: Option<&str>) -> String {
 }
 
 /// What runs first in `line` that is not only a change of place or of
-/// environment (`cd`, `export`, an assignment).
-fn command_head(line: &str) -> Option<String> {
-    hide_shell::simple_commands(line, hide_shell::Syntax::Posix)
+/// environment (`cd`, `Set-Location`, `export`, an assignment).
+fn command_head(line: &str, syntax: Syntax) -> Option<String> {
+    hide_shell::simple_commands(line, syntax)
         .into_iter()
         .find_map(|words| {
             let mut words = words.into_iter().skip_while(|word| {
                 hide_shell::is_assignment(word) || hide_shell::is_prefix(word, false)
             });
-            let program = words.next()?;
-            let program = program
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or(&program)
-                .to_owned();
-            if matches!(
-                program.as_str(),
-                "cd" | "pushd" | "popd" | "export" | "set" | "source" | "." | "unset" | "true"
-            ) || program.is_empty()
+            let program = syntax.program(&words.next()?);
+            if syntax.changes_folder(&program).is_some()
+                || matches!(
+                    program.as_str(),
+                    "popd" | "export" | "set" | "source" | "." | "unset" | "true"
+                )
+                || program.is_empty()
             {
                 return None;
             }
@@ -299,14 +300,14 @@ fn command_head(line: &str) -> Option<String> {
         })
 }
 
-/// The reads and searches a call made: a shell command's by its words, or
-/// a read or search tool's by its name and its path or pattern.
-fn uses(tool: &str, input: Option<&Value>) -> Vec<ToolUse> {
+/// The reads and searches a call made: a shell command's by its words, in
+/// `syntax`, or a read or search tool's by its name and its path or pattern.
+fn uses(tool: &str, input: Option<&Value>, syntax: Syntax) -> Vec<ToolUse> {
     let Some(input) = input else {
         return Vec::new();
     };
     if let Some(line) = command_of(input) {
-        return shell_uses(&line);
+        return shell_uses(&line, syntax);
     }
     let text = |keys: &[&str]| {
         keys.iter()
@@ -330,10 +331,10 @@ fn uses(tool: &str, input: Option<&Value>) -> Vec<ToolUse> {
 
 /// The files a shell line reads and the patterns it searches for, from the
 /// programs that do only that: `cat`, `head`, `sed -n` and the like, and
-/// `rg`, `grep`, `find` and the like.
-fn shell_uses(line: &str) -> Vec<ToolUse> {
+/// `rg`, `grep`, `find` and the like, read in `syntax`.
+fn shell_uses(line: &str, syntax: Syntax) -> Vec<ToolUse> {
     let mut uses = Vec::new();
-    for words in hide_shell::simple_commands(line, hide_shell::Syntax::Posix) {
+    for words in hide_shell::simple_commands(line, syntax) {
         let mut words = words.into_iter().skip_while(|word| {
             hide_shell::is_assignment(word) || hide_shell::is_prefix(word, false)
         });
@@ -341,8 +342,7 @@ fn shell_uses(line: &str) -> Vec<ToolUse> {
             continue;
         };
         let args = words.collect::<Vec<_>>();
-        let program = program.rsplit(['/', '\\']).next().unwrap_or(&program);
-        match program {
+        match syntax.program(&program).as_str() {
             "head" | "tail" => uses.extend(operands(&args, &["-n", "-c"]).map(read)),
             "cat" | "less" | "more" | "bat" | "nl" => uses.extend(operands(&args, &[]).map(read)),
             "sed"
@@ -503,10 +503,11 @@ pub(crate) fn claude(item: &Value) -> Vec<ToolStep> {
                 (Some("assistant"), Some("tool_use")) => {
                     let name = block.get("name").and_then(Value::as_str)?;
                     let input = block.get("input");
+                    let syntax = call_shell::syntax(HookDialect::ClaudeCode, name);
                     Some(ToolStep::Call {
                         call: call_id(block.get("id"))?,
-                        head: head(name, input.and_then(command_of).as_deref()),
-                        uses: uses(name, input),
+                        head: head(name, input.and_then(command_of).as_deref(), syntax),
+                        uses: uses(name, input, syntax),
                     })
                 }
                 (Some("user"), Some("tool_result")) => Some(ToolStep::Result {
@@ -538,22 +539,30 @@ pub(crate) fn codex(item: &Value) -> Vec<ToolStep> {
                 .get("arguments")
                 .and_then(Value::as_str)
                 .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok());
+            let syntax = call_shell::syntax(HookDialect::Codex, name);
             Some(ToolStep::Call {
                 call: call()?,
-                head: head(name, arguments.as_ref().and_then(command_of).as_deref()),
-                uses: uses(name, arguments.as_ref()),
+                head: head(
+                    name,
+                    arguments.as_ref().and_then(command_of).as_deref(),
+                    syntax,
+                ),
+                uses: uses(name, arguments.as_ref(), syntax),
             })
         })(),
         Some("custom_tool_call") => (|| {
             let name = payload.get("name").and_then(Value::as_str)?;
             let script = payload.get("input").and_then(Value::as_str);
+            // The script's commands run through `exec_command`, in the
+            // session's shell.
+            let syntax = call_shell::syntax(HookDialect::Codex, "exec_command");
             Some(ToolStep::Call {
                 call: call()?,
-                head: head(name, script.and_then(script_command).as_deref()),
+                head: head(name, script.and_then(script_command).as_deref(), syntax),
                 uses: script
                     .into_iter()
                     .flat_map(script_commands)
-                    .flat_map(|command| shell_uses(&command))
+                    .flat_map(|command| shell_uses(&command, syntax))
                     .collect(),
             })
         })(),
@@ -671,10 +680,11 @@ pub(crate) fn pi(item: &Value) -> Vec<ToolStep> {
             .filter_map(|block| {
                 let name = block.get("name").and_then(Value::as_str)?;
                 let arguments = block.get("arguments");
+                let syntax = call_shell::syntax(HookDialect::Pi, name);
                 Some(ToolStep::Call {
                     call: call_id(block.get("id"))?,
-                    head: head(name, arguments.and_then(command_of).as_deref()),
-                    uses: uses(name, arguments),
+                    head: head(name, arguments.and_then(command_of).as_deref(), syntax),
+                    uses: uses(name, arguments, syntax),
                 })
             })
             .collect(),
@@ -700,10 +710,11 @@ pub(crate) fn grok(item: &Value) -> Vec<ToolStep> {
             .and_then(Value::as_str)
             .unwrap_or("tool");
         let input = update.get("rawInput");
+        let syntax = call_shell::syntax(HookDialect::Grok, "run_terminal_command");
         steps.push(ToolStep::Call {
             call: call.clone(),
-            head: head(name, input.and_then(command_of).as_deref()),
-            uses: uses(name, input),
+            head: head(name, input.and_then(command_of).as_deref(), syntax),
+            uses: uses(name, input, syntax),
         });
     }
     if matches!(kind, Some("tool_call" | "tool_call_update")) {
@@ -731,10 +742,11 @@ pub(crate) fn opencode_part(part: &Value) -> Option<ToolStep> {
     };
     let tool = part.get("tool").and_then(Value::as_str)?;
     let input = part.pointer("/state/input");
+    let syntax = call_shell::syntax(HookDialect::OpenCode, tool);
     Some(ToolStep::Both {
-        head: head(tool, input.and_then(command_of).as_deref()),
+        head: head(tool, input.and_then(command_of).as_deref(), syntax),
         failed,
-        uses: uses(tool, input),
+        uses: uses(tool, input, syntax),
     })
 }
 
@@ -742,6 +754,31 @@ pub(crate) fn opencode_part(part: &Value) -> Option<ToolStep> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // The lines below are POSIX shell lines; the PowerShell ones name their
+    // syntax.
+    fn head(tool: &str, command: Option<&str>) -> String {
+        super::head(tool, command, Syntax::Posix)
+    }
+
+    fn shell_uses(line: &str) -> Vec<ToolUse> {
+        super::shell_uses(line, Syntax::Posix)
+    }
+
+    #[test]
+    fn a_powershell_command_is_named_and_counted_in_its_own_syntax() {
+        let powershell = |line| super::head("PowerShell", Some(line), Syntax::PowerShell);
+        assert_eq!(powershell(r"Set-Location .\web; pnpm build"), "pnpm build");
+        assert_eq!(
+            powershell(r"sl web; & 'C:\x\GIT.EXE' push origin"),
+            "git push"
+        );
+        assert_eq!(powershell(r"cd .\web"), "PowerShell");
+        assert_eq!(
+            super::shell_uses(r"CAT .\src\a.ts", Syntax::PowerShell),
+            [read(r".\src\a.ts")]
+        );
+    }
 
     #[test]
     fn a_command_is_named_by_its_program_and_subcommand() {

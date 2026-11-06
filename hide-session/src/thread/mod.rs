@@ -42,7 +42,7 @@ mod hide_call;
 mod opencode;
 mod pi;
 
-pub use hide_call::{HideCall, ViewKind, hide_call, spawned_agent};
+pub use hide_call::{HideCall, ViewKind, hide_call, recorded_syntax, spawned_agent};
 
 use crate::source::frame::{Forward, Frame};
 use build::Thread;

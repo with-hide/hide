@@ -20,40 +20,8 @@ pub struct Call {
     pub command: String,
     pub cwd: Option<PathBuf>,
     /// The syntax of the shell that runs `command`, which every guard reads
-    /// it in ([`shell_syntax`]).
+    /// it in (`hide_session::call_shell::syntax`).
     pub syntax: Syntax,
-}
-
-/// The syntax of the shell a runtime's shell tool `tool` runs its command
-/// in on this system. The tool decides it, not the shell of the pane the
-/// agent runs in: an agent starts a shell of its own for each call. This is
-/// the one place it is decided; a guard reads the call in the syntax it is
-/// handed and never guesses (docs/agent-hooks.md, Which shell reads a call).
-pub fn shell_syntax(dialect: HookDialect, tool: &str) -> Syntax {
-    syntax_on(dialect, tool, cfg!(windows))
-}
-
-fn syntax_on(dialect: HookDialect, tool: &str, windows: bool) -> Syntax {
-    match dialect {
-        // Claude Code names the shell in the tool: `Bash` runs in Git Bash
-        // on Windows (and is not registered where Git Bash is missing), and
-        // `PowerShell` in PowerShell on every system (tools reference,
-        // "PowerShell tool").
-        HookDialect::ClaudeCode if tool == "PowerShell" => Syntax::PowerShell,
-        HookDialect::ClaudeCode => Syntax::Posix,
-        // Codex runs every command in the session's shell, PowerShell on
-        // Windows (codex-rs shell_detect `default_user_shell`); Grok in pwsh or
-        // Windows PowerShell; Cursor and agy are read the same way on
-        // Windows, unconfirmed by a capture (docs/INSTALL.md).
-        HookDialect::Codex | HookDialect::Grok | HookDialect::Cursor | HookDialect::Antigravity
-            if windows =>
-        {
-            Syntax::PowerShell
-        }
-        // OpenCode's, Pi's and omp's bash tool runs a POSIX shell, Git Bash on
-        // Windows.
-        _ => Syntax::Posix,
-    }
 }
 
 /// Claude Code's, Codex's and Cursor's payload: snake_case keys.
@@ -132,7 +100,7 @@ pub fn read_call(payload: &[u8], truncated: bool, dialect: HookDialect) -> Optio
             return Some(Call {
                 command,
                 cwd: args.cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
-                syntax: shell_syntax(dialect, "run_command"),
+                syntax: hide_session::call_shell::syntax(dialect, "run_command"),
             });
         }
         HookDialect::Grok => {
@@ -168,7 +136,7 @@ pub fn read_call(payload: &[u8], truncated: bool, dialect: HookDialect) -> Optio
     Some(Call {
         command,
         cwd: cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
-        syntax: shell_syntax(dialect, &tool),
+        syntax: hide_session::call_shell::syntax(dialect, &tool),
     })
 }
 
@@ -314,7 +282,7 @@ mod tests {
             Some(Call {
                 command: "npm test".into(),
                 cwd: Some(PathBuf::from("/work/project")),
-                syntax: shell_syntax(HookDialect::Grok, "run_terminal_command"),
+                syntax: hide_session::call_shell::syntax(HookDialect::Grok, "run_terminal_command"),
             })
         );
         assert_eq!(
@@ -346,7 +314,7 @@ mod tests {
             Some(Call {
                 command: "npm install".into(),
                 cwd: Some(PathBuf::from("/project/web")),
-                syntax: shell_syntax(HookDialect::Cursor, "Shell"),
+                syntax: hide_session::call_shell::syntax(HookDialect::Cursor, "Shell"),
             })
         );
         assert_eq!(
@@ -389,56 +357,10 @@ mod tests {
         );
     }
 
-    /// Which shell each runtime's shell tool runs a command in, per system:
-    /// Claude Code's tools reference (Bash in Git Bash, PowerShell tool),
-    /// Codex's shell detection (PowerShell on Windows), Grok's hooks guide
-    /// (pwsh or Windows PowerShell), and Cursor's and agy's read the same way.
+    /// A Codex call is read in the shell Codex runs it in on this system
+    /// (`hide_session::call_shell`, which holds the whole table).
     #[test]
-    fn the_shell_syntax_is_the_one_the_tool_runs_on_its_system() {
-        use HookDialect::*;
-        let table = [
-            (ClaudeCode, "Bash", Syntax::Posix, Syntax::Posix),
-            (
-                ClaudeCode,
-                "PowerShell",
-                Syntax::PowerShell,
-                Syntax::PowerShell,
-            ),
-            (Codex, "Bash", Syntax::Posix, Syntax::PowerShell),
-            (
-                Grok,
-                "run_terminal_command",
-                Syntax::Posix,
-                Syntax::PowerShell,
-            ),
-            (Grok, "Bash", Syntax::Posix, Syntax::PowerShell),
-            (Cursor, "Shell", Syntax::Posix, Syntax::PowerShell),
-            (
-                Antigravity,
-                "run_command",
-                Syntax::Posix,
-                Syntax::PowerShell,
-            ),
-            (OpenCode, "bash", Syntax::Posix, Syntax::Posix),
-            (Pi, "bash", Syntax::Posix, Syntax::Posix),
-            (Omp, "bash", Syntax::Posix, Syntax::Posix),
-        ];
-        for (dialect, tool, elsewhere, windows) in table {
-            assert_eq!(
-                syntax_on(dialect, tool, false),
-                elsewhere,
-                "{dialect:?} {tool}"
-            );
-            assert_eq!(
-                syntax_on(dialect, tool, true),
-                windows,
-                "{dialect:?} {tool} on Windows"
-            );
-            assert_eq!(
-                shell_syntax(dialect, tool),
-                if cfg!(windows) { windows } else { elsewhere }
-            );
-        }
+    fn a_codex_call_carries_the_syntax_of_its_system() {
         let codex = read_call(
             br#"{"tool_name":"Bash","tool_input":{"command":"ii .\\out.png"}}"#,
             false,

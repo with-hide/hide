@@ -137,7 +137,7 @@ pub fn read_hook(payload: &[u8], truncated: bool, dialect: HookDialect) -> Optio
 
 /// What `tool` of `dialect`'s runtime with `input` does, for a hook payload
 /// and for the scripts of OpenCode, Pi and omp alike. A shell call carries
-/// the syntax its tool runs in, as `pre_tool::shell_syntax` decides it.
+/// the syntax its tool runs in, as `hide_session::call_shell::syntax` decides it.
 pub fn action(dialect: HookDialect, tool: &str, input: &Value) -> Option<Action> {
     if SHELL_TOOLS.contains(&tool) {
         return COMMAND_KEYS
@@ -146,7 +146,7 @@ pub fn action(dialect: HookDialect, tool: &str, input: &Value) -> Option<Action>
             .and_then(Value::as_str)
             .map(|command| Action::Shell {
                 command: command.to_owned(),
-                syntax: crate::pre_tool::shell_syntax(dialect, tool),
+                syntax: hide_session::call_shell::syntax(dialect, tool),
             });
     }
     let paths = paths(input);

@@ -290,7 +290,7 @@ pub fn write_policy(home: &Path, policy: &Policy) -> std::io::Result<()> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     /// A shell call, with the syntax of the shell that runs it
-    /// (`pre_tool::shell_syntax`), which every guard reads it in.
+    /// (`hide_session::call_shell::syntax`), which every guard reads it in.
     Shell {
         command: String,
         syntax: hide_shell::Syntax,
