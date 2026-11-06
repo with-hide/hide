@@ -2933,7 +2933,7 @@ mod tests {
         let change: OwnerChange = serde_json::from_str(written).unwrap();
         assert_eq!(
             change.old_owner_engine_socket,
-            "/Users/fixture/.config/herdr/herdr.sock"
+            "/Users/alice/.config/herdr/herdr.sock"
         );
         assert_eq!(
             change.new_owner_engine_socket,
