@@ -73,8 +73,6 @@ def measure(journey):
     try:
         journey.runtime.wait(lambda: panes(journey.runtime) - before, FORK_SECONDS)
     except ProcessError as error:
-        if journey.runtime.owner.cancelled.is_set():
-            raise
         record["pane_wait"] = str(error)
     # Only this agent runs, so every pane that appeared since is the fork's,
     # marked by Hide or not; the journey closes each one with the agent's.
@@ -87,8 +85,6 @@ def measure(journey):
     try:
         turn, read, value = journey.turn_in(opened[0], record.setdefault("prompt", {}))
     except ProcessError as error:
-        if journey.runtime.owner.cancelled.is_set():
-            raise
         # The fork's own screen, not its source's, says why it took no turn.
         journey.settle(CELL, (cells.FAIL, str(error)), journey.evidence(CELL, record), pane=opened[0])
         return
@@ -99,8 +95,6 @@ def measure(journey):
     try:
         journey.daemon.wait(forked, FORK_SECONDS, "a row forked from the source with a session of its own")
     except ProcessError as error:
-        if journey.runtime.owner.cancelled.is_set():
-            raise
         record["fork_wait"] = str(error)
     rest = journey.daemon.snapshot() or {}
     row = record["row"] = forked_row(rest, journey.pane)
