@@ -185,21 +185,38 @@ pub(crate) fn standing(
     }
 }
 
-/// Whether unconfirmed `input` may be typed again now: someone answered the
-/// agent's screen since the last typing (`Observation::answered_at_unix_ms`:
-/// the operator's keys, a phone reply, or a parent's `hide pane send` that
-/// landed whole, never one that stopped partway), input has been quiet
-/// for the quiet period, the agent rests (`composer_readable`), and typings
-/// are left. Text and Enter on a choice screen can pick an option, so an
-/// unanswered screen is never typed into again; the composer is read empty
-/// right before the typing as well (`composer::forced_clear`).
+/// Whether unconfirmed `input` may be typed again now, once its agent's
+/// composer reads empty: someone answered the agent's screen since the last
+/// typing (`Observation::answered_at_unix_ms`: the operator's keys, a phone
+/// reply, or a parent's `hide pane send` that landed whole, never one that
+/// stopped partway), or nothing the agent did since shows it took the text
+/// ([`unmoved_since_typing`]); input has been quiet for the quiet period, the
+/// agent rests (`composer_readable`), and typings are left. Text and Enter on
+/// a choice screen can pick an option, so a screen that moved and that
+/// nobody answered is never typed into again; the composer is read empty
+/// right before the typing as well (`composer::shows`), and the engine types
+/// only into a program that reads keys.
 pub(crate) fn retype_due(input: &TypedInput, observation: &Observation, now: u64) -> bool {
     matches!(
         standing(input, Some(observation), now),
         Standing::Unconfirmed { .. }
     ) && input.attempts < INPUT_ATTEMPTS
-        && observation.answered_at_unix_ms > input.typed_at_unix_ms
+        && (observation.answered_at_unix_ms > input.typed_at_unix_ms
+            || unmoved_since_typing(input, observation))
         && composer_readable(observation, now)
+}
+
+/// Whether nothing moved on the agent's pane since `input`'s last typing:
+/// neither Herdr's state nor the core's turn changed after it
+/// (`ProjectedTurn::changed_at`), and Herdr has not read it working since
+/// (`Observation::entered_working_at_unix_ms`). A program that dropped the
+/// text while it started leaves its composer empty with nothing moved; one
+/// that took it works on it, and a screen that took it changes the state.
+pub(crate) fn unmoved_since_typing(input: &TypedInput, observation: &Observation) -> bool {
+    observation.entered_working_at_unix_ms <= input.typed_at_unix_ms
+        && observation
+            .projected_turn()
+            .is_some_and(|projected| projected.changed_at(observation) <= input.typed_at_unix_ms)
 }
 
 /// Whether the composer of an agent whose input is unconfirmed may be read
@@ -403,14 +420,24 @@ mod tests {
     }
 
     #[test]
-    fn unconfirmed_input_is_typed_again_only_after_someone_answered_the_screen() {
+    fn unconfirmed_input_is_typed_again_when_nothing_moved_or_someone_answered_the_screen() {
         let input = typed(1_000);
         let now = 100_000;
-        // Nobody touched the pane since the typing: never typed blindly again.
-        assert!(!retype_due(&input, &observation("idle", 0, 500), now));
+        // Nothing moved since the typing: the program dropped it, so it is
+        // typed again.
+        assert!(retype_due(&input, &observation("idle", 0, 500), now));
+        // The state changed after the typing and nobody answered: a screen
+        // may have taken it, so it is not typed blindly again.
+        assert!(!retype_due(&input, &observation("idle", 2_000, 500), now));
+        // Herdr read it working since: it took the text.
+        let worked = Observation {
+            entered_working_at_unix_ms: 1_500,
+            ..observation("idle", 0, 500)
+        };
+        assert!(!retype_due(&input, &worked, now));
         // Keys reached the pane, but too recently.
         assert!(!retype_due(&input, &observation("idle", 0, now - 1), now));
-        let answered = observation("idle", 0, now - crate::delivery::INPUT_QUIET_MS);
+        let answered = observation("idle", 2_000, now - crate::delivery::INPUT_QUIET_MS);
         assert!(retype_due(&input, &answered, now));
         // No typing left.
         let spent = TypedInput {

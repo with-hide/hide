@@ -737,8 +737,10 @@ mod tests {
     }
 
     /// The parent of a child whose brief is unconfirmed, with a fake engine
-    /// answering by `herdr`: the brief was typed at `BRIEF_AT` and judged
-    /// unconfirmed with nobody having answered the child's screen.
+    /// answering by `herdr`: the brief was typed at `BRIEF_AT`, the child's
+    /// state moved right after, and it was judged unconfirmed with nobody
+    /// having answered the child's screen, so only an answer lets it be
+    /// typed again.
     fn unconfirmed_brief(
         herdr: Arc<std::sync::Mutex<SendEngine>>,
     ) -> (
@@ -750,14 +752,15 @@ mod tests {
         use crate::delivery::typed::{RECORD_WAIT_MS, REREAD_WAIT_MS};
         const BRIEF_AT: u64 = 100_000;
         let (root, mut runtime, _) = crate::runtime::typed_input::tests::spawned(false, BRIEF_AT);
+        crate::runtime::typed_input::tests::child_reads(&mut runtime, "idle", None, BRIEF_AT + 1);
         let fake = crate::engine::fake::FakeEngine::start(send_answers(herdr));
         runtime.live = Some(fake.live());
-        let asked = BRIEF_AT + RECORD_WAIT_MS;
+        let asked = BRIEF_AT + 1 + RECORD_WAIT_MS;
         runtime.typed_input_work(asked);
         runtime.take_session_rereads();
         let work = runtime.typed_input_work(asked + REREAD_WAIT_MS);
         assert_eq!(
-            work[0].resubmit.as_ref().map(|resubmit| resubmit.answered),
+            work[0].resubmit.as_ref().map(|resubmit| resubmit.retype),
             Some(false)
         );
         let context = runtime
@@ -779,7 +782,7 @@ mod tests {
         runtime.lock().unwrap().typed_input_work(quiet)[0]
             .resubmit
             .as_ref()
-            .map(|resubmit| resubmit.answered)
+            .map(|resubmit| resubmit.retype)
     }
 
     /// The landed part of a partial send, as its refusal's `sent` detail.
