@@ -183,6 +183,11 @@ pub struct Frame {
     /// wrap when the row after it is written; shared with the capture's last
     /// frame, and with the frame before while no row's wrap moved.
     pub wrapped: Option<Arc<[bool]>>,
+    /// Whether each row's last cell carries a hyperlink that the next row
+    /// does not carry on (see [`link_ends`]): the program marked a link that
+    /// ends at the row's edge. Known on every system, since it is read from
+    /// the cells; shared with the frame before while no row's answer moved.
+    pub link_ends: Arc<[bool]>,
     pub cursor: Cursor,
 }
 
@@ -220,6 +225,8 @@ pub struct Capture {
     /// The rows' wraps as this capture reads them, before they are compared
     /// with the last frame's.
     wrap_bits: Vec<bool>,
+    /// The rows' link ends, the same way.
+    link_bits: Vec<bool>,
 }
 
 impl Capture {
@@ -234,6 +241,7 @@ impl Capture {
             frame: None,
             wraps: true,
             wrap_bits: Vec::new(),
+            link_bits: Vec::new(),
         })
     }
 
@@ -356,15 +364,50 @@ impl Capture {
                     _ => Arc::from(self.wrap_bits.as_slice()),
                 },
             );
+        link_ends(&lines, &mut self.link_bits);
+        let link_ends = match previous.as_ref().map(|frame| &frame.link_ends) {
+            Some(last) if **last == *self.link_bits => Arc::clone(last),
+            _ => Arc::from(self.link_bits.as_slice()),
+        };
         let frame = Frame {
             cols,
             rows,
             lines,
             wrapped,
+            link_ends,
             cursor,
         };
         self.frame = Some(frame.clone());
         Ok(frame)
+    }
+}
+
+/// Fills `into` with whether each of `lines` ends with a link the next one
+/// does not carry on: its last written cell (the trailing half of a wide
+/// character skipped) is not blank and carries a hyperlink, and the next
+/// row's first cell that is not blank carries another or none, or there is
+/// no next row. An agent's TUI breaks its long lines itself, so a link it
+/// broke across rows carries the same address on both, while a link that
+/// fills its row exactly does not reach the next row's first word; a soft
+/// wrap cannot tell those apart in such a pane. One cell per row, and the
+/// next row's leading blanks only behind a row that ends with a link.
+fn link_ends(lines: &[Arc<Row>], into: &mut Vec<bool>) {
+    into.clear();
+    for (index, row) in lines.iter().enumerate() {
+        let last = row.cells().iter().rev().find(|cell| cell.width > 0);
+        let link = last
+            .filter(|cell| !row.text(cell).trim().is_empty())
+            .and_then(|cell| row.link(cell));
+        let ends = link.is_some_and(|link| {
+            lines.get(index + 1).is_none_or(|next| {
+                let first = next
+                    .cells()
+                    .iter()
+                    .find(|cell| cell.width > 0 && !next.text(cell).trim().is_empty());
+                first.and_then(|cell| next.link(cell)) != Some(link)
+            })
+        });
+        into.push(ends);
     }
 }
 

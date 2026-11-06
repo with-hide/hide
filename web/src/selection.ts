@@ -7,10 +7,11 @@
 // therefore assembled here the way a native terminal would:
 // trailing whitespace trimmed from every row, and a row whose last cell is
 // non-blank read as continuing onto the next row, joined with no break.
-// Where the pane's holder said which rows soft-wrap (`paneRowWraps` in
-// `terminalWrap.ts`, the same answer a link's join reads), a full row the
-// holder said ends with a line break is kept apart; without it, and in an
-// agent's pane, a hard line that exactly fills the width is joined too. The copy is then dedented: the
+// Where the pane's holder said a row does not run on (`paneRowWraps` in
+// `terminalWrap.ts`, the same answer a link's join reads: a line break in a
+// pane with no agent, or a link that ends at the row's edge), a full row is
+// kept apart; where nothing was said, as for an agent's own line break, a
+// hard line that exactly fills the width is joined too. The copy is then dedented: the
 // leading whitespace every non-blank line shares is a margin the program
 // drew, not text, while the indentation lines have relative to one another
 // is kept (user: "그 줄 앞에 공백있으면 앞에서 trim까지 해줘"). A single line
@@ -63,10 +64,11 @@ export function rowContinues(cells: CellRow): boolean {
  * The copied text for `rows`, the selected rows top to bottom, taking the
  * first row from `startColumn` and the last row up to `endColumn`
  * (exclusive); a row between is taken whole. `wraps`, beside `rows`, says
- * whether each soft-wraps, or is null when the last-column rule holds. A
- * rectangular selection is not represented.
+ * whether each runs on into the next (null for a row, or for all of them,
+ * where the last-column rule holds). A rectangular selection is not
+ * represented.
  */
-export function selectionToText(rows: CellRow[], startColumn: number, endColumn: number, wraps: boolean[] | null = null): string {
+export function selectionToText(rows: CellRow[], startColumn: number, endColumn: number, wraps: (boolean | null)[] | null = null): string {
   let text = "";
   rows.forEach((cells, index) => {
     const from = index === 0 ? startColumn : 0;

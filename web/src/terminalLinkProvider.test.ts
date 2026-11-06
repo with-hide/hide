@@ -4,7 +4,7 @@ import type { CellRow } from "./selection";
 import { useShellStore } from "./store";
 import { linkCandidates, TOKEN_CANDIDATES } from "./terminalLinks";
 import type { AgentRow, SnapshotRest } from "./snapshot";
-import { followWraps } from "./terminalWrap";
+import { followWraps, LINK_END_OSC, WRAP_OSC } from "./terminalWrap";
 import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import { PROBE_CACHE_CAP, PROBE_NEW_LIMIT, PROBE_TTL_MS, clearProbeCache, osc8Handler, owningCheckout, paneContext, pathLookups, probePaths, registerTerminalLinks, resolveGroups } from "./terminalLinkProvider";
 
@@ -358,10 +358,10 @@ it("a ⌘-click on macOS and a Ctrl-click elsewhere still hand a link to the ope
   expect(actions.openLink.mock.calls).toEqual([["https://example.test/a", true, "w1:p1"], ["https://example.test/a", true, "w1:p1"], ["https://example.test/a", true, "w1:p1"]]);
 });
 
-/** A terminal of `cols` columns showing `rows`, following the wraps its stream says; `say` feeds one. */
+/** A terminal of `cols` columns showing `rows`, following the row bits its stream says; `say` feeds soft wraps, `sayLinkEnds` link ends. */
 function screenShowing(rows: string[], cols: number) {
   let provider: ILinkProvider | undefined;
-  let wrapHandler: ((data: string) => boolean | Promise<boolean>) | undefined;
+  const handlers = new Map<number, (data: string) => boolean | Promise<boolean>>();
   const lines = rows.map((text) => {
     const cells = [...text];
     return { getCell: (x: number) => ({ getWidth: () => 1, getChars: () => cells[x] ?? "" }) };
@@ -370,7 +370,7 @@ function screenShowing(rows: string[], cols: number) {
     cols,
     rows: rows.length,
     buffer: { active: { length: rows.length, getLine: (y: number) => lines[y] } },
-    parser: { registerOscHandler: (_ident: number, callback: (data: string) => boolean) => { wrapHandler = callback; return { dispose() {} }; } },
+    parser: { registerOscHandler: (ident: number, callback: (data: string) => boolean) => { handlers.set(ident, callback); return { dispose() {} }; } },
     hasSelection: () => false,
     registerLinkProvider: (given: ILinkProvider) => {
       provider = given;
@@ -380,14 +380,16 @@ function screenShowing(rows: string[], cols: number) {
   followWraps(term);
   return {
     term,
-    say: (data: string) => wrapHandler!(data),
+    say: (data: string) => handlers.get(WRAP_OSC)!(data),
+    sayLinkEnds: (data: string) => handlers.get(LINK_END_OSC)!(data),
     texts: (y: number) => new Promise<string[]>((resolve) => provider!.provideLinks(y, (links) => resolve((links ?? []).map((link) => link.text)))),
   };
 }
 
 // hide-private issue 312, decided per pane: a pane with no agent follows
 // the holder's wraps; an agent's TUI hard-wraps its own long lines, so its
-// pane keeps the last-column rule.
+// line breaks say nothing and its pane keeps the last-column rule where its
+// links say nothing either.
 describe("a URL that fills its row", () => {
   const rows = ["http://127.0.0.1:41811/a.html", "osc8 label"];
   const url = "http://127.0.0.1:41811/a.html";
@@ -416,5 +418,58 @@ describe("a URL that fills its row", () => {
     } finally {
       useShellStore.setState({ agents: before });
     }
+  });
+});
+
+/** Runs `body` with an agent in pane `w1:p1`. */
+async function inAgentPane(body: () => Promise<void>) {
+  const before = useShellStore.getState().agents;
+  useShellStore.setState({ agents: [{ pane_id: "w1:p1" } as AgentRow] });
+  try {
+    await body();
+  } finally {
+    useShellStore.setState({ agents: before });
+  }
+}
+
+// hide-private issue 591: the rows Claude Code 2.1.318 drew at 60 columns
+// for a URL it broke across two rows and for one exactly as wide as its row
+// with a word on the next line, and the link ends the holder says for them
+// (`hide-holder/tests/fixtures/claude-code-urls.ansi`, pinned by
+// `encode::tests::a_link_an_agent_broke_runs_on_and_one_that_fills_its_row_ends`).
+describe("a URL in an agent's pane", () => {
+  const broken = "https://example.com/agent-broke-this-url/aaaaaaaaaa/bbbbbbbbbb/cccccccccc/dddddddddd/end";
+  const full = "https://example.com/fills-the-row-exactly-xxxxxxxxxxxxxxxx";
+  const rows = [
+    "⏺ Long: https://example.com/agent-broke-this-url/aaaaaaaaaa/",
+    "  bbbbbbbbbb/cccccccccc/dddddddddd/end",
+    "",
+    "  Full:",
+    `  ${full}`,
+    "  nextword after it",
+    ...Array<string>(24).fill(""),
+  ];
+
+  it("ends where the agent's link ended, and stays one link where the agent broke it", async () => {
+    const screen = screenShowing(rows, 60);
+    registerTerminalLinks(screen.term, "w1:p1", { hovered: false }, () => ({ openLink: vi.fn(), openTerminalPath: vi.fn() }));
+    await inAgentPane(async () => {
+      screen.say("60;30;");
+      // No link end said: the last-column rule joins the word on.
+      expect(await screen.texts(6)).toEqual([`${full}nextword`]);
+      screen.sayLinkEnds("60;30;01");
+      expect(await screen.texts(5)).toEqual([full]);
+      expect(await screen.texts(6)).toEqual([]);
+      expect(await screen.texts(1)).toEqual([broken]);
+      expect(await screen.texts(2)).toEqual([broken]);
+    });
+  });
+
+  it("reads the link ends in a pane whose holder says no soft wraps", async () => {
+    const screen = screenShowing(rows, 60);
+    registerTerminalLinks(screen.term, "w1:p1", { hovered: false }, () => ({ openLink: vi.fn(), openTerminalPath: vi.fn() }));
+    screen.sayLinkEnds("60;30;01");
+    expect(await screen.texts(6)).toEqual([]);
+    expect(await screen.texts(2)).toEqual([broken]);
   });
 });

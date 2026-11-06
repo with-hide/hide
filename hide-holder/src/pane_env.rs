@@ -4,8 +4,9 @@
 // contributors. Licensed under the Apache License, Version 2.0; see NOTICE at
 // the repository root.
 // Changed by Hide: the terminal says it is Hide's (`TERM_PROGRAM=hide`, no
-// version), every `HERDR_*` variable is removed rather than set, and fish's
-// reflow variable is not set.
+// version) and that it shows hyperlinks (`FORCE_HYPERLINK=1`), every
+// `HERDR_*` variable is removed rather than set, and fish's reflow variable
+// is not set.
 
 //! The environment a pane's program starts with: the terminal the holder
 //! emulates, and nothing that names another terminal, another pane or the
@@ -20,6 +21,11 @@ const TERM: &str = "xterm-256color";
 const COLORTERM: &str = "truecolor";
 /// What a program reads to know which terminal runs it.
 const TERM_PROGRAM: &str = "hide";
+/// That the terminal shows OSC 8 hyperlinks, which Hide's does: the
+/// `supports-hyperlinks` convention, which Claude Code reads (it knows no
+/// `TERM_PROGRAM=hide`). An agent that marks its links tells the shell where
+/// a URL it broke across rows ends (`encode::LINK_END_OSC`).
+const FORCE_HYPERLINK: &str = "1";
 
 /// Handles of the outer terminal that started the daemon, never of this pane.
 const OUTER_TERMINAL: [&str; 13] = [
@@ -61,6 +67,7 @@ pub fn apply(command: &mut CommandBuilder) {
     command.env("TERM", TERM);
     command.env("COLORTERM", COLORTERM);
     command.env("TERM_PROGRAM", TERM_PROGRAM);
+    command.env("FORCE_HYPERLINK", FORCE_HYPERLINK);
     let herdr: Vec<String> = command
         .iter_full_env_as_str()
         .map(|(key, _)| key)
@@ -100,6 +107,7 @@ mod tests {
         assert_eq!(env.get("TERM_PROGRAM"), Some(&"hide"));
         assert_eq!(env.get("TERM"), Some(&"xterm-256color"));
         assert_eq!(env.get("COLORTERM"), Some(&"truecolor"));
+        assert_eq!(env.get("FORCE_HYPERLINK"), Some(&"1"));
         assert!(
             env.keys()
                 .all(|key| !key.to_ascii_uppercase().starts_with("HERDR_")),
