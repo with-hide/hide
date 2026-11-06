@@ -227,7 +227,7 @@ export async function setAgentAsking(daemon: Pick<Daemon, "origin" | "token">, p
  * returns its pane.
  */
 export async function spawnRoot(
-  fixture: AgentFixture,
+  fixture: Pick<AgentFixture, "runAs">,
   daemon: Pick<Daemon, "origin" | "token">,
   from: string,
   { name, repo, branch = "main", session, kind = "claude", nativeArgs = [] }: { name: string; repo: string; branch?: string; session?: string; kind?: string; nativeArgs?: string[] },
