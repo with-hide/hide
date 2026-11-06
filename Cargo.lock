@@ -1021,45 +1021,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "herdr-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "cap-std",
- "hex",
- "hide-agent-adapter",
- "hide-agent-hooks",
- "hide-ai",
- "hide-desk",
- "hide-host",
- "hide-kit",
- "hide-memory",
- "hide-node",
- "hide-node-link",
- "hide-platform",
- "hide-project",
- "hide-screen-rules",
- "hide-session",
- "hide-shell",
- "jiff",
- "libc",
- "md5",
- "percent-encoding",
- "regex",
- "regress",
- "rusqlite",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "unicode-normalization",
- "workspace-hack",
-]
-
-[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1111,6 +1072,45 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
+name = "hide-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "cap-std",
+ "hex",
+ "hide-agent-adapter",
+ "hide-agent-hooks",
+ "hide-ai",
+ "hide-desk",
+ "hide-host",
+ "hide-kit",
+ "hide-memory",
+ "hide-node",
+ "hide-node-link",
+ "hide-platform",
+ "hide-project",
+ "hide-screen-rules",
+ "hide-session",
+ "hide-shell",
+ "jiff",
+ "libc",
+ "md5",
+ "percent-encoding",
+ "regex",
+ "regress",
+ "rusqlite",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "unicode-normalization",
  "workspace-hack",
 ]
 
@@ -1385,10 +1385,10 @@ dependencies = [
  "cap-std",
  "futures-util",
  "getrandom 0.2.16",
- "herdr-core",
  "hex",
  "hide-agent-adapter",
  "hide-agent-hooks",
+ "hide-core",
  "hide-desk",
  "hide-host",
  "hide-kit",

@@ -1,11 +1,8 @@
 [package]
-name = "herdr-core"
+name = "hide-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
-
-[lib]
-name = "herdr_core"
 
 [dependencies]
 hide-agent-adapter = { path = "../hide-agent-adapter" }

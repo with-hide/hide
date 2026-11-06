@@ -16,7 +16,7 @@ path = "src/bin/hide.rs"
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 # The session-start rules `hide guide` prints (`guide.rs`).
 hide-agent-hooks = { path = "../hide-agent-hooks" }
-herdr-core = { path = "../herdr-core" }
+hide-core = { path = "../hide-core" }
 # Where Desk's Codex finds the operator's own sign-in (`hide_desk::codex`).
 hide-desk = { path = "../hide-desk" }
 hide-host = { path = "../hide-host" }
@@ -42,7 +42,7 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 futures-util = "=0.3.34"
 # Web Push: VAPID signing and RFC 8291 encryption (ring), and the POST to the
 # push service (ureq over rustls). Both are already in the build through
-# hide-memory and herdr-core.
+# hide-memory and hide-core.
 ring = "=0.17.14"
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 # A device pane's command stream arrives as bytes over its node link and is
