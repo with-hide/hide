@@ -313,9 +313,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         find: Some(FindDialect::ClaudeTranscript),
         usage: UsageDeclaration {
             limits: LimitDeclaration {
-                five_hour: Support::Supported(LimitSource::ClaudeUsageText),
-                weekly: Support::Supported(LimitSource::ClaudeUsageText),
-                scoped: Support::Supported(LimitSource::ClaudeUsageText),
+                five_hour: Support::Supported(LimitSource::ClaudeUsage),
+                weekly: Support::Supported(LimitSource::ClaudeUsage),
+                scoped: Support::Supported(LimitSource::ClaudeUsage),
                 monthly: absent(
                     AbsenceKind::NoSuchData,
                     "The agent has no independent subscription window.",

@@ -13,7 +13,7 @@
         "support": "supported",
         "detail": {
           "type": "limit",
-          "source": "claude_usage_text"
+          "source": "claude_usage"
         }
       },
       "models": {
@@ -44,7 +44,7 @@
         "support": "supported",
         "detail": {
           "type": "limit",
-          "source": "claude_usage_text"
+          "source": "claude_usage"
         }
       },
       "session": {
@@ -65,7 +65,7 @@
         "support": "supported",
         "detail": {
           "type": "limit",
-          "source": "claude_usage_text"
+          "source": "claude_usage"
         }
       }
     }

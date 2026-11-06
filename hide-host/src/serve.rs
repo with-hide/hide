@@ -2460,7 +2460,7 @@ mod tests {
     fn a_device_refuses_the_core_machine_s_requests_unrun() {
         let requests = [
             r#"{"id":1,"op":"gh","cwd":null,"args":["auth","status"]}"#,
-            r#"{"id":2,"op":"usage_limit_fetch","source":"claude_usage_text","root":"/"}"#,
+            r#"{"id":2,"op":"usage_limit_fetch","source":"claude_usage","root":"/"}"#,
             r#"{"id":3,"op":"usage_limit_fetch","source":"codex_usage","root":"/"}"#,
             r#"{"id":4,"op":"hello"}"#,
         ];

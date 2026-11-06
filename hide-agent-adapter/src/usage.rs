@@ -49,7 +49,9 @@ pub enum AbsenceKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LimitSource {
-    ClaudeUsageText,
+    /// Claude Code's account usage endpoint, read with Claude Code's own
+    /// login, or `claude -p /usage` when that read fails.
+    ClaudeUsage,
     CodexUsage,
     /// `agy -p "/usage" --output-format json`, which asks agy's server for
     /// its weekly buckets without a model call.
@@ -71,21 +73,16 @@ pub enum Presence {
 }
 
 impl LimitSource {
-    pub const ALL: [Self; 3] = [
-        Self::ClaudeUsageText,
-        Self::CodexUsage,
-        Self::AntigravityUsage,
-    ];
+    pub const ALL: [Self; 3] = [Self::ClaudeUsage, Self::CodexUsage, Self::AntigravityUsage];
 
+    /// Every source answers a weekly window; a five-hour or monthly one
+    /// exists only on the plans that have it: Claude's endpoint answers a
+    /// null five-hour window, and `/usage` prints no `Current session` line,
+    /// for a plan without one.
     pub const fn presence(self, window: WindowKind) -> Presence {
-        match (self, window) {
-            (Self::ClaudeUsageText, WindowKind::FiveHour | WindowKind::Weekly)
-            | (Self::CodexUsage | Self::AntigravityUsage, WindowKind::Weekly) => Presence::Always,
-            (Self::CodexUsage | Self::AntigravityUsage, WindowKind::FiveHour)
-            | (
-                Self::ClaudeUsageText | Self::CodexUsage | Self::AntigravityUsage,
-                WindowKind::Monthly,
-            ) => Presence::PlanDependent,
+        match window {
+            WindowKind::Weekly => Presence::Always,
+            WindowKind::FiveHour | WindowKind::Monthly => Presence::PlanDependent,
         }
     }
 }

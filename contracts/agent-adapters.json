@@ -4,15 +4,15 @@
       "limits": {
         "five_hour": {
           "support": "supported",
-          "detail": "claude_usage_text"
+          "detail": "claude_usage"
         },
         "weekly": {
           "support": "supported",
-          "detail": "claude_usage_text"
+          "detail": "claude_usage"
         },
         "scoped": {
           "support": "supported",
-          "detail": "claude_usage_text"
+          "detail": "claude_usage"
         },
         "monthly": {
           "support": "unsupported",
