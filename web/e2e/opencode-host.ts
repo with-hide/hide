@@ -28,24 +28,6 @@ fs.mkdirSync(folder, { recursive: true });
 // The pane's hide reaches the fixture daemon, as the operator's reaches theirs.
 process.env.HIDE_STATE_DIR = config.stateDir;
 
-// What Herdr's OpenCode integration reported for the pane: its state and, from its TUI plugin, the session
-// the pane selected (session_start_source "select"). Herdr took them only once it had detected the agent in
-// the pane, so the stand-in reported again until Herdr listed its session. No fixture sets config.herdr
-// any more, so announce below no longer runs.
-const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
-  .result.agents.find((agent) => agent.pane_id === pane)?.agent_session?.value;
-function announce() {
-  for (let attempt = 1; listed() !== session; attempt += 1) {
-    if (attempt > 50) throw new Error("Herdr never took the stand-in's session");
-    const seq = Date.now() * 1000 + attempt * 2;
-    execFileSync(config.herdr, ["pane", "report-agent", pane, "--source", "herdr:opencode", "--agent", "opencode",
-      "--state", "idle", "--agent-session-id", session, "--seq", String(seq)], { timeout: 10000 });
-    execFileSync(config.herdr, ["pane", "report-agent-session", pane, "--source", "herdr:opencode", "--agent", "opencode",
-      "--agent-session-id", session, "--session-start-source", "select", "--seq", String(seq + 1)], { timeout: 10000 });
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
-}
-
 const info = (id, parentID) => ({ id, slug: id, projectID: "prj_fixture", directory: process.cwd(), ...(parentID ? { parentID } : {}),
   title: "New session", version: "1.18.30", time: { created: Date.now(), updated: Date.now() } });
 const sessions = { [session]: info(session) };
@@ -97,8 +79,7 @@ const run = {
 };
 
 (async () => {
-  // The plugin's own report below is how Hide learns the session; announce is for a Herdr CLI no fixture names now.
-  if (config.herdr) announce();
+  // The plugin's own report below is how Hide learns the session.
   // OpenCode 1.x runs the default definition's server.
   const { server } = (await import(pathToFileURL(config.plugin).href)).default;
   const hooks = await server({ client, directory: process.cwd() });
@@ -121,7 +102,7 @@ const run = {
 });
 `;
 
-export type HostConfig = { herdr?: string; stateDir: string; plugin: string; dir: string };
+export type HostConfig = { stateDir: string; plugin: string; dir: string };
 
 /** Writes the stand-in as `opencode` in `bin`, configured by `config`. */
 export function installOpenCodeHost(bin: string, config: HostConfig): string {
