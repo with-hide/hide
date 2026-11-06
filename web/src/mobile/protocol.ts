@@ -121,6 +121,8 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   conductor: { present: boolean; takes_answers: boolean; name: string; agent_kind: string; agent: AgentKey | null };
   started_at_unix_ms: number | null;
   stale: boolean;
+  /** A finished mission's steps hided left out to keep the frame within one relay message; `nodes` is empty then. */
+  nodes_omitted?: number;
 };
 
 /** One project the PR tab lists pull requests of, with how its GitHub reads stand (`hided/src/mobile/prs.rs`, `PhoneProject`). */
@@ -257,9 +259,10 @@ export type ServerFrame =
    * `interface_language` is the core's explicit choice as stored (en, ko, zh-CN, ja), or null while the phone follows its own language.
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.
    */
-  | { type: "agents"; groups: AgentGroup[]; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
-  /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read. */
-  | { type: "missions"; items: PhoneMission[]; failed: boolean }
+  /** `omitted` counts the agents hided left out to keep the frame within one relay message. */
+  | { type: "agents"; groups: AgentGroup[]; omitted?: number; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
+  /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read; `omitted` counts the ones past the frame's caps. */
+  | { type: "missions"; items: PhoneMission[]; failed: boolean; omitted?: number }
   /** hided's answer to `answer_mission`; what the core does with it comes back on the mission itself. */
   | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */

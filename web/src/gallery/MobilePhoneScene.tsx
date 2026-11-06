@@ -20,7 +20,7 @@ import { RELEASE_MISSION, phoneMissions } from "./mobilePhoneMissionsData";
 import { AGENT_PR, FAILED_PR, READY_PR, phoneFeedback, phonePrs } from "./mobilePhonePrsData";
 import { PHONE_LOOK_SCENES, PHONE_MAC, PHONE_ROOM, phoneDevices, phoneGroups, phoneLookDetail, phoneLookGroups, seedPairedMac, type PhoneLookScene } from "./mobilePhoneSceneData";
 
-export type PhoneSceneState = "phone-list" | "phone-devices" | "phone-missions" | "phone-mission" | PhonePrScene | PhoneLookScene;
+export type PhoneSceneState = "phone-list" | "phone-list-cut" | "phone-devices" | "phone-missions" | "phone-missions-cut" | "phone-mission" | PhonePrScene | PhoneLookScene;
 
 /** The pull request tab's own scenes: the list, a page, the merge confirmation and the hand-over sheet. */
 const PHONE_PR_SCENES = ["phone-prs", "phone-pr", "phone-pr-agent", "phone-pr-merge", "phone-pr-delegate"] as const;
@@ -38,7 +38,10 @@ const CATALOG = {
 };
 
 /** The scene names this component draws: the list, the device sheet, the missions tab and a mission, the PR tab and the 볼 것 tab with its viewers. */
-export const PHONE_SCENES: readonly string[] = ["phone-list", "phone-devices", "phone-missions", "phone-mission", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
+export const PHONE_SCENES: readonly string[] = ["phone-list", "phone-list-cut", "phone-devices", "phone-missions", "phone-missions-cut", "phone-mission", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
+
+/** The `-cut` states: a list hided cut to fit one relay message, with the line that counts what it left out. */
+const CUT = { agents: 37, missions: 3 };
 
 const noop = () => {};
 
@@ -46,6 +49,7 @@ const noop = () => {};
 export function MobilePhoneScene({ state, language, theme, scale, offline }: { state: PhoneSceneState; language: string; theme: string; scale: number; offline: boolean }) {
   const [ready] = useState(() => { seedPairedMac(); return true; });
   const devicesOpen = state === "phone-devices";
+  const cut = state.endsWith("-cut");
   const look = (PHONE_LOOK_SCENES as readonly string[]).includes(state) ? (state as PhoneLookScene) : null;
   useFollowInterfaceLanguage(language);
   useLayoutEffect(() => {
@@ -57,8 +61,9 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
     patch({
       screen: "app", connected: !offline, unreachable: offline, macName: PHONE_MAC, otherPhones: 0, groups, devices: phoneDevices(groups), childrenOpen: {}, foldsOpen: {},
       detail: look ? phoneLookDetail(look) : null,
-      tab: state === "phone-missions" || state === "phone-mission" ? "missions" : state.startsWith("phone-pr") ? "prs" : "agents",
-      missions: phoneMissions(), missionsFailed: false, missionOpen: state === "phone-mission" ? RELEASE_MISSION : null,
+      agentsOmitted: cut ? CUT.agents : 0,
+      tab: state.startsWith("phone-mission") ? "missions" : state.startsWith("phone-pr") ? "prs" : "agents",
+      missions: phoneMissions(), missionsFailed: false, missionsOmitted: cut ? CUT.missions : 0, missionOpen: state === "phone-mission" ? RELEASE_MISSION : null,
       missionFolds: state === "phone-mission" ? { [`done:${RELEASE_MISSION}`]: true } : {}, missionDrafts: {}, missionAnswer: null, missionAnswerError: null,
       prs, prOpen: prKey, prPending: null, prNotice: null, prDelegated: null,
       prConfirm: state === "phone-pr-merge" && page ? confirmOf(page) : null,
@@ -76,7 +81,7 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
       usePhone.setState(before, true);
       document.documentElement.style.removeProperty("--interface-scale");
     };
-  }, [state, theme, scale, look, offline]);
+  }, [state, theme, scale, look, offline, cut]);
   return (
     <TooltipProvider>
       <div className={state === "phone-mission" || state === "phone-prs" || state in PR_PAGE ? "h-screen w-full bg-background text-foreground" : "min-h-screen w-full bg-background text-foreground"} data-gallery-scene="mobile" data-scene-ready={ready ? "true" : undefined}>
@@ -84,7 +89,7 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
           <div className="h-screen">
             <Detail onBack={noop} />
           </div>
-        ) : state === "phone-missions" ? <MissionsScreen /> : state === "phone-mission" ? <MissionDetail /> : state === "phone-prs" ? <PrsScreen /> : state in PR_PAGE ? <PrDetail /> : <ListScreen hosted picker={{ room: PHONE_ROOM, open: devicesOpen }} />}
+        ) : state === "phone-missions" || state === "phone-missions-cut" ? <MissionsScreen /> : state === "phone-mission" ? <MissionDetail /> : state === "phone-prs" ? <PrsScreen /> : state in PR_PAGE ? <PrDetail /> : <ListScreen hosted picker={{ room: PHONE_ROOM, open: devicesOpen }} />}
       </div>
     </TooltipProvider>
   );

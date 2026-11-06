@@ -108,6 +108,7 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
   const connected = usePhone((s) => s.connected);
   const unreachable = usePhone((s) => s.unreachable);
   const groups = usePhone((s) => s.groups);
+  const omitted = usePhone((s) => s.agentsOmitted);
   const devices = usePhone((s) => s.devices);
   const installHint = usePhone((s) => s.installHint);
   const relayError = usePhone((s) => s.relayError);
@@ -169,6 +170,9 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
             </section>
           );
         })}
+        {groups && omitted > 0 ? (
+          <p className="px-xl py-md text-body text-muted-foreground" data-phone-agents-omitted={omitted}>{t("mobile.omitted", { count: omitted })}</p>
+        ) : null}
       </div>
       <TabBar active="agents" />
       <StartSheet />
