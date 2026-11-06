@@ -36,8 +36,7 @@ use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
     Gate, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof, PaneSession,
-    PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake,
-    Zoom,
+    PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake, Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
