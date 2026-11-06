@@ -37,23 +37,6 @@ path = "junit.xml"
 filter = 'binary_id(hided::it) & test(/^remote_delivery::/)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
-# The remote-core journeys (hided/tests/it/remote_core.rs) start two hided
-# and two nodes' pane holders over SSH; several wait out a 30 to 60 s bound of the
-# product on purpose (a node's link returning, a screen held while its core
-# is away), so the default guard would end a healthy journey at 120 s on a
-# loaded runner. They get the remote mailbox's 240 s, and two hung attempts
-# still end inside their step's 10-minute limit.
-[[profile.ci.overrides]]
-filter = 'binary_id(hided::it) & test(/^remote_core::/)'
-slow-timeout = { period = "60s", terminate-after = 4 }
-
-# The core-move journeys (hided/tests/it/core_move.rs) run the remote-core
-# shape and wait out the move's own bounds (a 30 s link, a 60 s pending
-# lease), so they get the same guard.
-[[profile.ci.overrides]]
-filter = 'binary_id(hided::it) & test(/^core_move::/)'
-slow-timeout = { period = "60s", terminate-after = 4 }
-
 # A Windows core's ssh walks (hided/tests/it/windows_ssh_device.rs) send
 # this build's programs over the runner's loopback ssh, uncompressed through
 # `ssh.exe`'s input, at 4 to 10 MiB/s (300 MiB for the Linux walk). In their
