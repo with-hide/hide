@@ -1682,9 +1682,7 @@ impl Runtime {
     }
 
     /// Puts the tab in its checkout's `◆ Desk` group, made when missing,
-    /// without changing the screen in front (B20): the group in front stays,
-    /// unless the tab is the one it shows, which the front then follows into
-    /// the group rather than leaving the screen to another tab or to none.
+    /// leaving the group in front as it was (B20).
     fn desk_place_in_group(&mut self, path: &str, tab: &str) -> bool {
         let key = (self.node.as_str().to_owned(), path.to_owned());
         let Some(store) = self.workspace_views.as_mut() else {
@@ -1692,7 +1690,6 @@ impl Runtime {
         };
         let view = store.views.entry(&key.0, &key.1);
         let selected = view.agent_groups.selected.clone();
-        let shown = view.selected_agent_layout().active() == Some(tab);
         let group = match view
             .agent_groups
             .items
@@ -1717,10 +1714,7 @@ impl Runtime {
         let moved = view
             .move_agent_to_group(tab, Some(&group), super::super::unix_milliseconds())
             .is_ok();
-        // A move selects its target group; only the tab on screen keeps that.
-        if !(moved && shown) {
-            view.agent_groups.selected = selected;
-        }
+        view.agent_groups.selected = selected;
         self.prune_agent_group_canvases(&key);
         self.persist_workspace_views();
         moved
