@@ -25,7 +25,7 @@ const OPENCODE_AI_ABSENCE: CapabilityAbsence = CapabilityAbsence {
 const RETIRED_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Cursor is retired from active support; only historical conversation reading remains.",
     evidence: "docs/agent-hooks.md",
-    would_change: "Restore active support with a pinned Herdr integration and measured context and title contracts.",
+    would_change: "Restore active support with hooks Hide installs and measured context and title contracts.",
 };
 
 use usage::{
