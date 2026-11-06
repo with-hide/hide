@@ -242,7 +242,7 @@ fn start_once(program: &Path, args: &[&str]) {
         match OwnedChild::spawn(&mut command) {
             Ok(mut child) => {
                 let started = Instant::now();
-                if !ended_by(&mut child, deadline) {
+                let Some(status) = ended_by(&mut child, deadline) else {
                     let stalled = stalled(child.id(), started);
                     let _ = child.kill_tree();
                     panic!(
@@ -250,21 +250,13 @@ fn start_once(program: &Path, args: &[&str]) {
                          invocation: {stalled}",
                         program.display()
                     );
-                }
-                let output = child.capture_until(deadline, 1).unwrap_or_else(|error| {
-                    panic!(
-                        "{} did not end its first start with {args:?}, which must be a one-shot \
-                         invocation: {error:?}",
-                        program.display()
-                    )
-                });
+                };
                 // A CLI or interpreter may reject --help normally. A signal
                 // before main is not a completed first start.
                 assert!(
-                    output.status.code().is_some(),
-                    "{} first start was killed: {:?}",
-                    program.display(),
-                    output.status
+                    status.code().is_some(),
+                    "{} first start was killed: {status:?}",
+                    program.display()
                 );
                 break;
             }
@@ -278,15 +270,17 @@ fn start_once(program: &Path, args: &[&str]) {
     }
 }
 
-/// Whether `child` has exited by `deadline`, asked while it still runs so
-/// that a start that has not can be described alive.
+/// The status `child` exited with by `deadline`, or `None` while it still
+/// runs there, asked without ending it so that a start that has not ended
+/// can be described alive. The status is the child's own: on Unix asking
+/// reaps it, and nothing may ask its pid again.
 #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
-fn ended_by(child: &mut OwnedChild, deadline: Instant) -> bool {
+fn ended_by(child: &mut OwnedChild, deadline: Instant) -> Option<std::process::ExitStatus> {
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return true,
+            Ok(Some(status)) => return Some(status),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Ok(None) => return false,
+            Ok(None) => return None,
             Err(error) => panic!("the first start's state could not be read: {error}"),
         }
     }
