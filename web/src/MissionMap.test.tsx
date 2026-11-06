@@ -32,7 +32,7 @@ function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
 }
 
 function mission(extra: Partial<Mission> = {}): Mission {
-  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = [], more: Partial<SnapshotRest> = {}, agents: AgentRow[] = []) {
@@ -100,7 +100,7 @@ it("reads top down as the head, 내 차례 only when the operator has something 
 });
 
 it("ends the head with the mission's verification strength to read, not to change, and says none for a mission from before it", async () => {
-  const strong = await mount({ items: [mission({ nodes: [node("a")], strength: "thorough", other_vendor: true })] });
+  const strong = await mount({ items: [mission({ nodes: [node("a")], strength: "thorough" })] });
   try {
     const stat = strong.q('[data-mission-stat="strength"]');
     expect(stat?.textContent).toBe("Verification Thorough");
@@ -1066,7 +1066,7 @@ it("runs every mission's map down until the operator turns it across with →, w
     expect(map.events).toEqual([{ schema_version: 2, kind: "conductor_settings_set", payload: { map_flow: "across" } }]);
     // The map turns on the core's echo, not before it, and fits again.
     expect(flow()).toBe("down");
-    await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, ui_state: { ...state.rest!.ui_state!, conductor_settings: { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", other_vendor: true, clean_merged: true, map_flow: "across" } } } })));
+    await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, ui_state: { ...state.rest!.ui_state!, conductor_settings: { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", clean_merged: true, map_flow: "across" } } } })));
     expect([flow(), option("across").dataset.state, map.q("[data-mission-canvas]")!.dataset.missionCanvas]).toEqual(["across", "on", "fit"]);
   } finally { await map.unmount(); }
 });

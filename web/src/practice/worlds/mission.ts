@@ -295,7 +295,7 @@ function mission(model: MissionModel): Mission | null {
   const landed = plan.filter((part) => part.pr !== null && model.stage >= part.end).map((part) => part.key);
   return {
     id: MISSION_ID, title: title(), workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
-    status, scope: "pr", cap: 2, exempt: false, strength: "normal", other_vendor: true,
+    status, scope: "pr", cap: 2, exempt: false, strength: "normal",
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: title(), agent_kind: "claude", session: null, present: true, takes_answers: true },
     nodes: plan.map((part) => node(model, part)), merge_order: plan.filter((part) => part.pr !== null).sort((a, b) => a.pr! - b.pr!).map((part) => part.key), landing_order: landed, stack_waiting: 0, check: "pnpm test:e2e", github: "practice-bot",

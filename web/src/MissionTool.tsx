@@ -20,7 +20,7 @@ import { groupMissions, CLOSED_SHOWN, missionEntry, missionPillKey, projectMissi
 import { missionCells, missionCounts, type TurnItem } from "./missions";
 import { useWorkerEscalation } from "./missionWorkers";
 import { frontProject } from "./projectStatus";
-import { CandidateAdd, CandidateRows, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
+import { CandidateAdd, CandidateRows, CapControl, ConductorError, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
 import type { Mission, MissionNode, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -297,7 +297,6 @@ function ClosedRow({ mission, selected, actions }: { mission: Mission; selected:
 function DefaultsSummary({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const settings = useShellStore((s) => s.rest?.ui_state?.conductor_settings) ?? DEFAULT_CONDUCTOR;
-  const verify = [t(`mission.strength.${settings.default_strength}`), settings.other_vendor ? t("missionTool.otherVendor") : null].filter(Boolean).join(" · ");
   return (
     <section className="mt-auto flex flex-col gap-xs border-t border-border px-md py-sm text-caption" aria-label={t("missionTool.defaults")} data-mission-defaults-summary="true">
       <div className="flex items-center justify-between text-muted-foreground">
@@ -309,7 +308,7 @@ function DefaultsSummary({ actions }: { actions: Actions }) {
       </div>
       <Fact label={t("missionTool.cap")} value={t("missionTool.capValue", { count: settings.concurrency })} />
       <Fact label={t("missionTool.scope")} value={t(`mission.scope.${settings.default_scope}`)} />
-      <Fact label={t("missionTool.verify")} value={verify} />
+      <Fact label={t("missionTool.verify")} value={t(`mission.strength.${settings.default_strength}`)} />
     </section>
   );
 }
@@ -337,7 +336,6 @@ function Defaults({ actions }: { actions: Actions }) {
       <Setting label={t("conductor.cap")}><CapControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.scope")} stacked><ScopeControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.strength")} stacked><StrengthControl settings={settings} send={send} /></Setting>
-      <Setting label={t("conductor.otherVendor")}><OtherVendorControl settings={settings} send={send} /></Setting>
       <ConductorError error={error} />
       <section className="flex min-w-0 flex-col" aria-label={t("conductor.candidates")} data-conductor-candidates={String(settings.candidates.length)}>
         <div className="flex items-center justify-between gap-xs">

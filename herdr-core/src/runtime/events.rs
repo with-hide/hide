@@ -989,8 +989,6 @@ pub(super) struct ConductorSettingsSetPayload {
     #[serde(default)]
     pub(super) default_strength: Option<crate::missions::Strength>,
     #[serde(default)]
-    pub(super) other_vendor: Option<bool>,
-    #[serde(default)]
     pub(super) clean_merged: Option<bool>,
     #[serde(default)]
     pub(super) map_flow: Option<crate::missions::MapFlow>,
@@ -4069,9 +4067,6 @@ impl Runtime {
                 }
                 if let Some(strength) = payload.default_strength {
                     settings.default_strength = strength;
-                }
-                if let Some(other_vendor) = payload.other_vendor {
-                    settings.other_vendor = other_vendor;
                 }
                 if let Some(clean_merged) = payload.clean_merged {
                     settings.clean_merged = clean_merged;

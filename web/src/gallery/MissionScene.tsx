@@ -292,7 +292,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const mission: Mission = withCoreWaits({
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
-    scope: "pr", cap: 4, exempt: shown === "exempt", strength: "normal", other_vendor: true,
+    scope: "pr", cap: 4, exempt: shown === "exempt", strength: "normal",
     conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor", takes_answers: true },
     nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"],
     // The order the core gives what is left: the merge order first, then the plan's (`mission_landing::landing_order`).
@@ -335,7 +335,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       { agent: "claude", model: "Sonnet 5.5", effort: "low", purpose: "리뷰, 문서" },
       { agent: "pi", effort: null, purpose: "짧은 조사" },
       { agent: "grok", effort: null, purpose: "" },
-    ], default_strength: "normal", other_vendor: true, clean_merged: true } },
+    ], default_strength: "normal", clean_merged: true } },
   } as unknown as SnapshotRest;
   if (remote) {
     rest.navigator!.devices!.push({ id: "mini", kind: "remote", label: shown === "remote-long" ? "맥 미니 · 빌드와 검증을 맡는 작업실의 데스크톱" : "Mac mini" } as Device);

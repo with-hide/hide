@@ -39,7 +39,7 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 
 ## 1. Before the plan
 
-- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, the verification strength (`default_strength`) and whether checkers are a different kind of agent than the worker (`other_vendor`).
+- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates and the verification strength (`default_strength`).
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
   Name such an agent's model from its candidate's fixed model, or from `cli_default_model`.
@@ -136,7 +136,7 @@ Hide enforces none of it: the gate holds only each node's own lines, the check c
 - After the last round the strength allows, a serious finding still open is fixed in the node; a minor or rare-case one goes to the report as a follow-up.
 - A minor finding that blocks nothing gets no push of its own: the worker gathers them and sends them with the next push the node needs.
 - Choose every checker from the worker candidates in Settings › Mission, as you choose workers; with no candidates, among the agents installed here.
-  With the mission's `other_vendor` true, prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); with it false, any candidate.
+  Prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); when the candidates have none, any candidate.
 - A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers` in `hide mission show --json`) instead: follow them, or name a strength in the next plan.
 
 ## Cutting the mission and briefing a worker
@@ -236,7 +236,7 @@ Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a 
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
 - A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a `request` letter naming it, once per pull request, reason and commit.
 - When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request or branch is not in main, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
-- While the operator's Settings › Mission keeps `머지되면 작업 공간 정리` on (the default), Hide removes a done node's worktree and its build cache once GitHub says its pull request merged, when the tree is clean and no agent or running program is in it; the branch always stays, and a worktree with changes or in use stays for the operator. Off, Hide deletes no file.
+- While the operator's Settings › Mission keeps `머지되면 워크트리 정리` on (the default), Hide removes a done node's worktree and its build cache once GitHub says its pull request merged, when the tree is clean and no agent or running program is in it; the branch always stays, and a worktree with changes or in use stays for the operator. Off, Hide deletes no file.
 
 What is not certain is raised on the node to you first, with a letter naming the node and why: a pull request merged while a line is missing or failed, a worker that ended with the node not done, a pull request closed without its merge with no other open, a pull request the worker opened that no node holds, a worker Hide could not wake, and a close Hide could not make.
 Settle it by recording the line, skipping it with its reason, attaching the pull request with `--pr`, setting the node's status or dropping it; that takes the raise off the operator's turn too.
