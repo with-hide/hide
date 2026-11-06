@@ -16,9 +16,9 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { MissionStartGuide } from "./MissionStartGuide";
 import { MissionTakeOver } from "./MissionTakeOver";
-import { groupMissions, CLOSED_SHOWN, missionEntry, missionPillKey, projectMissions, rowLine, shownMission, STATE_PILL, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
-import { attentionReasonText, missionCells, missionCounts, workerEscalation, type TurnItem } from "./missions";
-import { allAgents, agentsByPane } from "./paneAgents";
+import { groupMissions, CLOSED_SHOWN, missionEntry, missionPillKey, projectMissions, rowLine, rowLineText, shownMission, STATE_PILL, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
+import { missionCells, missionCounts, type TurnItem } from "./missions";
+import { useWorkerEscalation } from "./missionWorkers";
 import { frontProject } from "./projectStatus";
 import { CandidateAdd, CandidateRows, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
 import type { Mission, MissionNode, Workspace } from "./snapshot";
@@ -35,15 +35,12 @@ import { useUiStore } from "./ui";
 /** The front project's missions, each in its group, with the worker rows the `내 차례` rule reads; null while the record cannot be read. */
 export function useProjectMissions(project: Workspace | null): MissionEntry[] | null {
   const missions = useShellStore((s) => s.rest?.missions);
-  const local = useShellStore((s) => s.agents);
-  const remote = useShellStore((s) => s.rest?.status?.remote);
+  const escalationOf = useWorkerEscalation();
   return useMemo(() => {
     if (missions?.failed) return null;
     if (!project) return [];
-    const rows = agentsByPane(allAgents(local, remote));
-    const escalationOf = (node: MissionNode) => workerEscalation(node.pane_id ? rows.get(node.pane_id) : null);
     return projectMissions(missions?.items ?? [], project).map((mission) => missionEntry(mission, escalationOf));
-  }, [missions, project, local, remote]);
+  }, [missions, project, escalationOf]);
 }
 
 /** The rail icon's number (D-08, B2): open missions of the front project with anything in their `내 차례`. */
@@ -233,34 +230,23 @@ function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   );
 }
 
-/** The row's one line (B6), as `rowLine` decides it and the phone's list words it too. */
+/** The row's one line (B6): `rowLine` decides it and `rowLineText` words it, as on the phone; this adds the worker's mark and the PR marks. */
 function RowLine({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
   const line = rowLine(mission, turn);
   if (!line) return null;
   switch (line.kind) {
-    case "decision":
-      return <Line data="decision">{line.text}</Line>;
-    // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
-    case "takeover":
-      return <Line data="takeover">{line.left > 0 ? t("missionTool.takeoverLeft", { count: line.left }) : t("missionTool.takeoverReport")}</Line>;
-    case "worker_blocked":
-      return <Line data="worker_blocked">{line.node.title} · {line.line ?? t(`mission.turn.cause.${line.cause}`)}</Line>;
-    case "attention":
-      return <Line data="attention">{line.node.title} · {attentionReasonText(line.attention.reason, line.attention.pr, t)}</Line>;
     case "landing":
       return <LandingLine nodes={line.nodes} join={line.join} />;
-    case "planning":
-      return <Line data="planning">{t("mission.planning")}</Line>;
-    case "now": {
-      const title = line.others > 0 ? t("mission.line.others", { title: line.first.title, count: line.others }) : line.first.title;
+    case "now":
       return (
         <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-mission-row-line="now">
           {line.first.worker ? <AgentMark kind={line.first.worker.agent} /> : null}
-          <span className="min-w-0 truncate">{t("missionTool.now", { title })}</span>
+          <span className="min-w-0 truncate">{rowLineText(line, t)}</span>
         </span>
       );
-    }
+    default:
+      return <Line data={line.kind}>{rowLineText(line, t)}</Line>;
   }
 }
 

@@ -4,8 +4,9 @@
 // what waits on the operator is `turnItems`, the same rule the map's
 // `내 차례` draws, so the list, the number and the map never disagree.
 
+import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { liveNodes, missionCounts, missionOpen, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
+import { attentionReasonText, liveNodes, missionCounts, missionOpen, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
 import type { DetailSlot, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
@@ -124,4 +125,29 @@ export function rowLine<M extends MissionBrief>(mission: M, turn: TurnItem<M["no
   const live = liveNodes(mission);
   const [first] = live;
   return first ? { kind: "now", first, others: live.length - 1 } : null;
+}
+
+/**
+ * The row's one line in words (B6; PRD mobile-companion-ui B31), the same on
+ * both lists: the desktop draws marks around some of it (the worker's mark
+ * before `지금:`, each change's PR mark in `머지 순서`), the phone the words.
+ */
+export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFunction<"translation">): string {
+  switch (line.kind) {
+    case "decision":
+      return line.text;
+    // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
+    case "takeover":
+      return line.left > 0 ? t("missionTool.takeoverLeft", { count: line.left }) : t("missionTool.takeoverReport");
+    case "worker_blocked":
+      return `${line.node.title} · ${line.line ?? t(`mission.turn.cause.${line.cause}`)}`;
+    case "attention":
+      return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t)}`;
+    case "landing":
+      return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => (node.pr != null ? `#${node.pr}` : node.title)).join(" → ")}`;
+    case "planning":
+      return t("mission.planning");
+    case "now":
+      return t("missionTool.now", { title: line.others > 0 ? t("mission.line.others", { title: line.first.title, count: line.others }) : line.first.title });
+  }
 }

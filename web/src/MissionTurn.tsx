@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AttentionChoices } from "./components/mission-attention";
 import { MissionPrMark } from "./components/mission-pr";
@@ -6,10 +6,9 @@ import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
-import { attentionReasonText, turnItems, workerEscalation, type TurnItem } from "./missions";
-import { allAgents, agentsByPane } from "./paneAgents";
+import { attentionReasonText, turnItems, type TurnItem } from "./missions";
+import { useWorkerEscalation } from "./missionWorkers";
 import type { Mission, MissionNode } from "./snapshot";
-import { useShellStore } from "./store";
 
 // What only the operator can do in a mission now, above its map (PRD
 // mission-map-git-criteria D-03, D-18, B18, B20, B25; PRD mission-node-simple
@@ -21,11 +20,9 @@ import { useShellStore } from "./store";
 
 export function MissionTurn({ mission, device, actions, onSelect }: { mission: Mission; device: string | null; actions: Actions; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const local = useShellStore((s) => s.agents);
-  const remote = useShellStore((s) => s.rest?.status?.remote);
-  const rows = useMemo(() => agentsByPane(allAgents(local, remote)), [local, remote]);
+  const escalationOf = useWorkerEscalation();
   // A mission no Conductor holds says so on its Conductor row, with 이어받기 there (PRD mission-tool B13).
-  const items = turnItems(mission, (node) => workerEscalation(node.pane_id ? rows.get(node.pane_id) : null)).filter((item) => item.kind !== "takeover");
+  const items = turnItems(mission, escalationOf).filter((item) => item.kind !== "takeover");
   if (items.length === 0) return null;
   return (
     <section aria-label={t("mission.turn", { count: items.length })} className="flex min-w-0 flex-col gap-xs px-md pb-sm" data-mission-turn={items.map((item) => item.kind).join(" ")}>

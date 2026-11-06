@@ -3,8 +3,10 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { planNowLine } from "../plans";
-import { attentionWords, cardLine, missionOpen, missionPulls, missionResultCounts, stageWord, summaryGroups } from "../missions";
-import type { Mission, MissionNode } from "../snapshot";
+import type { TFunction } from "i18next";
+import { attentionReasonText, cardLine, holdReason, missionOpen, missionPulls, missionResultCounts, stageWord, summaryGroups, type HoldReason } from "../missions";
+import { useWorkerEscalation } from "../missionWorkers";
+import type { Mission, MissionAttentionTo, MissionNode } from "../snapshot";
 import { formatElapsed } from "./elapsed";
 import { MissionPrMark } from "./mission-pr";
 import { Button } from "./ui/button";
@@ -40,18 +42,20 @@ export function SummaryRow({ name, field, children }: { name: string; field: str
 
 function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const { attention, working, done } = summaryGroups(mission);
+  const escalationOf = useWorkerEscalation();
+  const { attention, working, done } = summaryGroups(mission, escalationOf);
   const pulls = missionPulls(mission);
   return (
     <>
       {attention.length > 0 ? (
         <SummaryRow name={t("mission.summary.attention", { count: attention.length })} field="attention">
           {attention.map((node) => {
-            const words = attentionWords(node, t);
+            const reason = holdReason(mission, node, escalationOf);
+            const words = reason ? holdWords(reason, t) : null;
             return (
               <span key={node.key} className="flex min-w-0 flex-col">
                 <NodeName node={node} onSelect={onSelect} />
-                {words ? <span className="truncate text-caption text-mission-hold" title={words.why} data-mission-summary-attention={node.attention?.to}>! {words.who} · {words.why}</span> : null}
+                {words ? <span className="truncate text-caption text-mission-hold" title={words.why} data-mission-summary-attention={words.to} data-mission-summary-hold={reason?.kind}>! {words.who} · {words.why}</span> : null}
               </span>
             );
           })}
@@ -83,6 +87,22 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
       </SummaryRow>
     </>
   );
+}
+
+/**
+ * Who a held node waits on and why, as `내 차례` words it: a raised node's
+ * own reason, a raised worker's line or cause, and the decision; the last
+ * two are the operator's turn.
+ */
+function holdWords(reason: HoldReason, t: TFunction<"translation">): { to: MissionAttentionTo; who: string; why: string } {
+  switch (reason.kind) {
+    case "attention":
+      return { to: reason.attention.to, who: t(`mission.attention.to.${reason.attention.to}`), why: attentionReasonText(reason.attention.reason, reason.attention.pr, t) };
+    case "worker":
+      return { to: "operator", who: t("mission.attention.to.operator"), why: reason.escalation.line ?? t(`mission.turn.cause.${reason.escalation.cause}`) };
+    case "decision":
+      return { to: "operator", who: t("mission.attention.to.operator"), why: t("missionTool.pill.decision") };
+  }
 }
 
 function ClosedRows({ mission }: { mission: Mission }) {
