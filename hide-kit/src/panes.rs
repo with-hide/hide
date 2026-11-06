@@ -292,6 +292,8 @@ impl std::fmt::Display for CloseError {
 pub enum ForgetRefusal {
     NotEnded(Phase),
     HolderRuns(Identity),
+    /// The holder is gone but processes of its pane still run.
+    ProcessesRun(Vec<u32>),
     RecordUnreadable(Unreadable),
     Failed(String),
 }
@@ -301,6 +303,7 @@ impl std::fmt::Display for ForgetRefusal {
         match self {
             Self::NotEnded(phase) => write!(f, "the pane is {phase:?}, not ended"),
             Self::HolderRuns(holder) => write!(f, "its holder {} still runs", holder.pid),
+            Self::ProcessesRun(pids) => write!(f, "processes of the pane still run: {pids:?}"),
             Self::RecordUnreadable(why) => write!(f, "{why}"),
             Self::Failed(why) => write!(f, "{why}"),
         }
@@ -621,12 +624,18 @@ impl Panes {
         }
     }
 
+    /// Whether `record` was written in another boot of the machine, so
+    /// nothing it names runs in this one. A record or a folder whose boot is
+    /// not known is not of another boot.
+    fn of_another_boot(&self, record: &PaneRecord) -> bool {
+        record.boot.is_some() && self.boot.is_some() && record.boot != self.boot
+    }
+
     /// Whether an earlier start of a pane still holds its id. Read under the
     /// lock, so it looks only at the record and the processes it names.
     fn state_of(&self, existing: &PaneRecord) -> Earlier {
         let runs = existing.holder.is_some_and(|holder| holder.runs());
-        let other_boot =
-            existing.boot.is_some() && self.boot.is_some() && existing.boot != self.boot;
+        let other_boot = self.of_another_boot(existing);
         match existing.phase {
             Phase::Reserved => Earlier::Lives,
             Phase::Ended if self.still_running(existing).is_empty() => Earlier::Over,
@@ -655,7 +664,7 @@ impl Panes {
     /// cannot be read, the pids its end says were left that are still alive.
     /// Nothing of another boot runs in this one.
     fn still_running(&self, existing: &PaneRecord) -> Vec<u32> {
-        if existing.boot.is_some() && self.boot.is_some() && existing.boot != self.boot {
+        if self.of_another_boot(existing) {
             return Vec::new();
         }
         let left = || {
@@ -685,6 +694,28 @@ impl Panes {
         }
         running.sort_unstable();
         running.dedup();
+        running
+    }
+
+    /// What may still run of an ended record, for keeping the record: what
+    /// [`Self::still_running`] finds, and every pid its end left that is
+    /// alive even when the program's session was read, since a survivor can
+    /// leave the session before it is read. A pid is counted without its
+    /// start time, so a reused one only keeps a record longer; this is not
+    /// asked before a start, which a reused pid would then refuse.
+    fn may_still_run(&self, record: &PaneRecord) -> Vec<u32> {
+        let mut running = self.still_running(record);
+        if !self.of_another_boot(record) {
+            running.extend(
+                record
+                    .end
+                    .iter()
+                    .flat_map(|end| end.left.iter().copied())
+                    .filter(|pid| hide_platform::process::is_alive(*pid)),
+            );
+            running.sort_unstable();
+            running.dedup();
+        }
         running
     }
 
@@ -996,6 +1027,12 @@ impl Panes {
         {
             return Err(ForgetRefusal::HolderRuns(holder));
         }
+        // A record goes only once nothing it names runs: a replacement that
+        // finds its record gone starts afresh (`reserve`).
+        let left = self.may_still_run(&current);
+        if !left.is_empty() {
+            return Err(ForgetRefusal::ProcessesRun(left));
+        }
         self.remove_pane_files(pane);
         std::fs::remove_file(&path).map_err(|error| ForgetRefusal::Failed(error.to_string()))
     }
@@ -1046,7 +1083,7 @@ impl Panes {
                     ended.push((
                         record.end.as_ref().map_or(0, |end| end.at_unix_ms),
                         pane.clone(),
-                        record.holder,
+                        record,
                     ))
                 }
                 _ => live += 1,
@@ -1054,12 +1091,23 @@ impl Panes {
         }
         if ended.len() > ENDED_KEPT {
             ended.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
-            for (_, pane, holder) in &ended[..ended.len() - ENDED_KEPT] {
+            for (_, pane, record) in &ended[..ended.len() - ENDED_KEPT] {
                 // A holder still exiting keeps its record until it is gone.
-                if let Some(holder) = holder.filter(|holder| holder.runs()) {
+                if let Some(holder) = record.holder.filter(|holder| holder.runs()) {
                     self.emit(
                         "pane_holder.ended_kept",
                         json!({ "pane": pane, "holder": holder.pid, "reason": "holder_runs" }),
+                    );
+                    continue;
+                }
+                // So does one whose pane left processes running: a record goes
+                // only once nothing it names runs, which lets a replacement
+                // that finds its record gone start afresh (`reserve`).
+                let left = self.may_still_run(record);
+                if !left.is_empty() {
+                    self.emit(
+                        "pane_holder.ended_kept",
+                        json!({ "pane": pane, "left": left, "reason": "processes_run" }),
                     );
                     continue;
                 }
@@ -1261,21 +1309,33 @@ impl Panes {
     /// Judges one record and does what it calls for.
     fn judge(&self, owner: &Owner, current: &PaneRecord) -> Judgment {
         let pane = current.pane.clone();
-        let judgment = if current.owner != self.owner {
-            Judgment::OtherOwner(current.clone())
-        } else if current.protocol < OLDEST_HOLDER_VERSION {
-            Judgment::Unsupported(current.clone())
-        } else if current.boot.is_some() && self.boot.is_some() && current.boot != self.boot {
+        let judgment = if self.of_another_boot(current) {
             // Nothing a record of another boot names runs in this one; its
-            // pids and start times may name processes of this boot.
+            // pids and start times may name processes of this boot. With no
+            // process left to guard, the record is this folder's to settle
+            // whatever owner it names: the owner is the folder's volume and
+            // number, and macOS may number a volume anew at each boot, which
+            // left every record of the earlier boot unjudged.
+            let mine = PaneRecord {
+                owner: self.owner.clone(),
+                ..current.clone()
+            };
             let ended = if current.phase == Phase::Ended && !current.cancelled() {
                 // A boot fence forbids process cleanup, not the completed
                 // outcome: changing ProgramExited to MachineRestarted would
                 // make node recovery start a shell the user already ended.
-                Judgment::Ended(current.clone())
+                if mine == *current {
+                    Judgment::Ended(mine)
+                } else {
+                    match self.write_if_unchanged(current, &mine) {
+                        Ok(()) => Judgment::Ended(mine),
+                        Err(why) => Judgment::Unsettled(why),
+                    }
+                }
             } else {
-                self.end_record(
+                self.finish_record(
                     current,
+                    mine,
                     End::new(
                         EndReason::MachineRestarted,
                         "the record is from an earlier boot of the machine",
@@ -1285,6 +1345,10 @@ impl Panes {
             // No process of another boot holds a lock in this one.
             self.remove_stale_socket(&pane, Duration::ZERO);
             ended
+        } else if current.owner != self.owner {
+            Judgment::OtherOwner(current.clone())
+        } else if current.protocol < OLDEST_HOLDER_VERSION {
+            Judgment::Unsupported(current.clone())
         } else if current.phase == Phase::Ended && current.cancelled() {
             let mut closing = current.clone();
             closing.phase = Phase::Closing;
@@ -1447,7 +1511,13 @@ impl Panes {
     /// Writes `current` as ended with `end`, if it has not changed since it
     /// was read, and answers its judgment.
     fn end_record(&self, current: &PaneRecord, end: End) -> Judgment {
-        let mut ended = current.clone();
+        self.finish_record(current, current.clone(), end)
+    }
+
+    /// [`Self::end_record`] writing `base` ended in place of `current`, as
+    /// long as the record is still `current`.
+    fn finish_record(&self, current: &PaneRecord, base: PaneRecord, end: End) -> Judgment {
+        let mut ended = base;
         ended.finish(end);
         // Every caller established that no holder of this boot remains and
         // completed its leftover cleanup before this exact-record CAS.
@@ -1938,6 +2008,90 @@ mod tests {
             assert!(ended.cancelled());
             assert!(holder.runs(), "a previous boot does not own this process");
         }
+    }
+
+    /// 2026-11-06: macOS numbered the state folder's volume anew after a
+    /// reboot, so every record named another owner and was left unjudged;
+    /// the restore took the panes as running and started none. A record of
+    /// an earlier boot is settled as this folder's whatever owner it names,
+    /// and a process of this boot that reuses its pid is left alone.
+    #[test]
+    fn a_record_of_an_earlier_boot_is_settled_here_whatever_owner_it_names() {
+        let home = tempfile::tempdir().unwrap();
+        let mut panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+        panes.boot = Some("current-boot".to_owned());
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let stand_in = StandIn::start();
+        let holder = stand_in.identity();
+        let mut earlier = reserved(&panes, Some(holder), Phase::Running);
+        earlier.boot = Some("previous-boot".to_owned());
+        earlier.owner = "1000012:12a9ed47".to_owned();
+        record::write(&layout::pane_record(&panes.state_dir, "p1"), &earlier).unwrap();
+
+        let found = panes.reconcile(&owner, Duration::from_secs(5));
+        let Some(Judgment::Ended(ended)) = found.panes.get("p1") else {
+            panic!("the earlier boot's record was not settled: {found:?}");
+        };
+        assert_eq!(
+            ended.end.as_ref().unwrap().reason,
+            EndReason::MachineRestarted
+        );
+        let kept = panes.record("p1").unwrap().unwrap();
+        assert_eq!(kept.owner, panes.owner(), "the record is this folder's now");
+        assert_eq!(kept.phase, Phase::Ended);
+        assert!(holder.runs(), "a process of this boot is not the record's");
+    }
+
+    /// A replacement that finds its record gone starts afresh, so a record
+    /// whose holder is gone but whose pane left processes running is never
+    /// dropped by the ended-record cap nor forgotten: dropping it would let
+    /// a restart run a second shell beside them.
+    #[test]
+    fn an_ended_record_whose_pane_left_processes_running_is_neither_dropped_nor_forgotten() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let stand_in = StandIn::start();
+        let survivor = stand_in.identity().pid;
+        let write = |pane: &str, at: u64, left: Vec<u32>| {
+            let mut ended = reserved(&panes, None, Phase::Ended);
+            ended.pane = pane.to_owned();
+            let mut end = End::new(EndReason::HolderFailed, "test");
+            end.at_unix_ms = at;
+            end.left = left;
+            ended.end = Some(end);
+            record::write(&layout::pane_record(&panes.state_dir, pane), &ended).unwrap();
+        };
+        write("left", 1, vec![survivor]);
+        // Its program is gone, so its session reads empty or not at all; the
+        // survivor its end names keeps the record either way.
+        let gone = StandIn::start();
+        let program = gone.identity();
+        drop(gone);
+        let mut left = panes.record("left").unwrap().unwrap();
+        left.program = Some(program);
+        record::write(&layout::pane_record(&panes.state_dir, "left"), &left).unwrap();
+        for n in 0..ENDED_KEPT {
+            write(&format!("e{n}"), 2 + n as u64, Vec::new());
+        }
+
+        let scan = panes.scan().unwrap();
+        assert_eq!(panes.count_live_for(&owner, &scan), 0);
+        assert!(
+            panes.record("left").unwrap().is_some(),
+            "dropped over a survivor"
+        );
+        assert!(
+            panes.record("e0").unwrap().is_some(),
+            "kept past the cap, as a running holder's record is"
+        );
+        assert!(matches!(
+            panes.forget(&owner, "left"),
+            Err(ForgetRefusal::ProcessesRun(pids)) if pids == vec![survivor]
+        ));
+        drop(stand_in);
+        panes.forget(&owner, "left").unwrap();
+        assert!(panes.record("left").unwrap().is_none());
     }
 
     #[test]
