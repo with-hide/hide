@@ -1,9 +1,12 @@
 import { expect, test as base, type Page } from "@playwright/test";
 
 // Throwaway probe (with-hide/hide-private#466): each test registered 20 times.
-const test = (title: string, body: Parameters<typeof base>[1]) => {
-  for (let run = 1; run <= 20; run++) base(`${title} #${run}`, body);
-};
+const test = Object.assign(
+  (title: string, body: Parameters<typeof base>[1]) => {
+    for (let run = 1; run <= 20; run++) base(`${title} #${run}`, body);
+  },
+  { setTimeout: (timeout: number) => base.setTimeout(timeout) },
+);
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
