@@ -59,13 +59,8 @@ pub use requests::Request;
 /// counts, and so does one that cannot be read, since it may name a holder.
 pub const HOLDER_CAP: usize = 128;
 
-/// The most ended records kept for their reasons; past it the finished go
-/// before the interrupted, oldest first (`count_live_for`).
+/// The most ended records kept for their reasons; past it the oldest go.
 pub const ENDED_KEPT: usize = 128;
-
-// Every interrupted record was a holder under the cap, so the ended records
-// kept can hold all of them at once.
-const _: () = assert!(HOLDER_CAP <= ENDED_KEPT);
 
 /// The most record files a reconcile or a start reads; a folder holding more
 /// is reported rather than read.
@@ -1041,13 +1036,7 @@ impl Panes {
     }
 
     /// The records not ended, and the ones that cannot be read, which may
-    /// name a holder. Ended records past [`ENDED_KEPT`] go: finished ones
-    /// first, oldest first, then interrupted ones, oldest first. An
-    /// interrupted record is one a restore may still start again in place
-    /// (it names the incarnation it replaces), and closing the finished
-    /// panes of that same restore writes them newer ends; at most
-    /// [`HOLDER_CAP`] panes ran, so at most that many are interrupted at
-    /// once and none of them goes while the bound holds.
+    /// name a holder. Ended records past [`ENDED_KEPT`] go, oldest first.
     fn count_live_for(&self, owner: &Owner, scan: &[(String, RecordRead)]) -> usize {
         let mut live = 0;
         let mut ended = Vec::new();
@@ -1061,11 +1050,6 @@ impl Panes {
                         }) =>
                 {
                     ended.push((
-                        !record.cancelled()
-                            && record
-                                .end
-                                .as_ref()
-                                .is_some_and(|end| !end.reason.closes_the_pane()),
                         record.end.as_ref().map_or(0, |end| end.at_unix_ms),
                         pane.clone(),
                         record.holder,
@@ -1075,10 +1059,8 @@ impl Panes {
             }
         }
         if ended.len() > ENDED_KEPT {
-            ended.sort_by(|left, right| {
-                (left.0, left.1, &left.2).cmp(&(right.0, right.1, &right.2))
-            });
-            for (_, _, pane, holder) in &ended[..ended.len() - ENDED_KEPT] {
+            ended.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
+            for (_, pane, holder) in &ended[..ended.len() - ENDED_KEPT] {
                 // A holder still exiting keeps its record until it is gone.
                 if let Some(holder) = holder.filter(|holder| holder.runs()) {
                     self.emit(
@@ -2016,45 +1998,6 @@ mod tests {
         assert_eq!(kept.owner, panes.owner(), "the record is this folder's now");
         assert_eq!(kept.phase, Phase::Ended);
         assert!(holder.runs(), "a process of this boot is not the record's");
-    }
-
-    /// 2026-11-06: closing the finished panes of a restore wrote them newer
-    /// ends, so the cap on ended records dropped the interrupted ones the
-    /// same restore was about to start again. The finished go first.
-    #[test]
-    fn the_ended_records_past_the_cap_are_the_finished_ones_before_any_interrupted() {
-        let home = tempfile::tempdir().unwrap();
-        let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
-        let owner = panes.acquire(Duration::ZERO).unwrap();
-        let write = |pane: &str, reason: EndReason, at: u64| {
-            let mut ended = reserved(&panes, None, Phase::Ended);
-            ended.pane = pane.to_owned();
-            let mut end = End::new(reason, "test");
-            end.at_unix_ms = at;
-            ended.end = Some(end);
-            record::write(&layout::pane_record(&panes.state_dir, pane), &ended).unwrap();
-        };
-        let interrupted: Vec<String> = (0..10).map(|n| format!("i{n}")).collect();
-        for (n, pane) in interrupted.iter().enumerate() {
-            write(pane, EndReason::MachineRestarted, 1_000 + n as u64);
-        }
-        for n in 0..ENDED_KEPT {
-            write(&format!("f{n}"), EndReason::Terminated, 2_000 + n as u64);
-        }
-
-        let scan = panes.scan().unwrap();
-        assert_eq!(panes.count_live_for(&owner, &scan), 0);
-        for pane in &interrupted {
-            assert!(panes.record(pane).unwrap().is_some(), "{pane} was dropped");
-        }
-        let finished = (0..ENDED_KEPT)
-            .filter(|n| panes.record(&format!("f{n}")).unwrap().is_some())
-            .count();
-        assert_eq!(finished, ENDED_KEPT - interrupted.len());
-        assert!(
-            panes.record("f0").unwrap().is_none(),
-            "the oldest finished goes first"
-        );
     }
 
     #[test]

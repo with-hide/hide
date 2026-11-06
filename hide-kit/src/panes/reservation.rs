@@ -73,10 +73,16 @@ impl Panes {
             if !left.is_empty() {
                 return Err(StartRefusal::EarlierRuns(left));
             }
-        } else if previous.is_some() {
-            return Err(StartRefusal::Failed(
-                "the replaced reservation is missing".to_owned(),
-            ));
+        } else if let Some(previous) = previous {
+            // A record goes only once nothing it names runs, so a replaced
+            // incarnation whose record is gone (the ended-record cap dropped
+            // it, or a person deleted it) holds nothing: the pane starts
+            // afresh under a new incarnation. Refusing it left a rebooted
+            // pane closed for good once its record was dropped.
+            self.emit(
+                "pane_holder.replaced_record_missing",
+                serde_json::json!({ "pane": pane, "incarnation": previous }),
+            );
         }
         let count = self.count_live_for(owner, &self.scan().map_err(StartRefusal::Failed)?);
         // A replacement already has its place in the record bound.
@@ -392,6 +398,30 @@ mod tests {
             ),
             Err(StartRefusal::Conflict(_))
         ));
+        assert_eq!(panes.record("p1").unwrap().unwrap(), next);
+    }
+
+    /// 2026-11-06: the ended-record cap dropped the records of 44 rebooted
+    /// panes before their restarts replaced them, and each restart was
+    /// refused for good. A replaced record that is gone names nothing that
+    /// runs, so the pane starts again under a new incarnation.
+    #[test]
+    fn a_replacement_whose_record_was_dropped_starts_the_pane_afresh() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let cwd = hide_platform::path::to_wire(home.path()).unwrap();
+        let request = owner.issue("p1", DIGEST).unwrap();
+        let first = panes.reserve(&request, "p1", DIGEST, &cwd, None).unwrap();
+        drop(request);
+        std::fs::remove_file(layout::pane_record(&panes.state_dir, "p1")).unwrap();
+
+        let request = owner.issue("p1", DIGEST).unwrap();
+        let next = panes
+            .reserve(&request, "p1", DIGEST, &cwd, Some(first.incarnation))
+            .unwrap();
+        assert!(next.incarnation > first.incarnation);
+        assert_eq!(next.phase, Phase::Reserved);
         assert_eq!(panes.record("p1").unwrap().unwrap(), next);
     }
 

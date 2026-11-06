@@ -1215,7 +1215,10 @@ impl Holders {
 /// restarted, the holder was lost or failed) or whose start never finished
 /// is not, nor one whose record names no reason.
 fn finished(reason: Option<EndReason>) -> bool {
-    reason.is_some_and(EndReason::closes_the_pane)
+    matches!(
+        reason,
+        Some(EndReason::ProgramExited | EndReason::Terminated | EndReason::TreeEndUnconfirmed)
+    )
 }
 
 #[cfg(test)]
