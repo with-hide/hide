@@ -315,9 +315,10 @@ pub struct Woken {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
-    /// The review line failed `warn_review_fails` times in a row.
+    /// The review line failed `mission_health::REVIEW_FAILS_THAT_WARN` times
+    /// in a row.
     ReviewFails,
-    /// The node worked `warn_quiet_minutes` with no push and its pull
+    /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
     /// request does not just wait on others.
     NoPush,
 }
@@ -941,6 +942,14 @@ impl MissionNode {
         self.worked_at_unix_ms = Some(now);
     }
 
+    /// A change at work delivered by pull request: the node a push is asked
+    /// of, whose quiet without one can warn its Conductor.
+    pub fn asks_push(&self) -> bool {
+        self.status == NodeStatus::Working
+            && self.kind == NodeKind::Change
+            && self.delivery == Some(Delivery::Pr)
+    }
+
     /// When the node's time without a push counts from: its last push, or
     /// when it went to work if that is later. None for a node that never
     /// worked.
@@ -1220,14 +1229,6 @@ pub struct ConductorSettings {
     /// Read live by every mission; a value kept before it reads as on.
     #[serde(default = "default_clean_merged")]
     pub clean_merged: bool,
-    /// How many failed reviews in a row warn a mission's Conductor about the
-    /// node (with-hide/hide-private#552). Read live by every mission.
-    #[serde(default = "default_warn_review_fails")]
-    pub warn_review_fails: u8,
-    /// How many minutes a node at work goes with no push before its
-    /// Conductor is warned. Read live by every mission.
-    #[serde(default = "default_warn_quiet_minutes")]
-    pub warn_quiet_minutes: u16,
     /// Which way every mission's map runs, chosen on the map itself. Left
     /// out while it is the default, so a build from before it still reads
     /// the rest of Settings › Mission until the operator turns a map.
@@ -1261,8 +1262,6 @@ impl Default for ConductorSettings {
             default_strength: Strength::Normal,
             other_vendor: default_other_vendor(),
             clean_merged: default_clean_merged(),
-            warn_review_fails: default_warn_review_fails(),
-            warn_quiet_minutes: default_warn_quiet_minutes(),
             map_flow: MapFlow::Down,
         }
     }
@@ -1313,19 +1312,6 @@ fn default_clean_merged() -> bool {
     true
 }
 
-fn default_warn_review_fails() -> u8 {
-    2
-}
-
-fn default_warn_quiet_minutes() -> u16 {
-    90
-}
-
-/// The range of `warn_review_fails`.
-pub const WARN_REVIEW_FAILS: std::ops::RangeInclusive<u8> = 1..=10;
-/// The range of `warn_quiet_minutes`: ten minutes to a day.
-pub const WARN_QUIET_MINUTES: std::ops::RangeInclusive<u16> = 10..=1440;
-
 fn default_cap() -> u8 {
     DEFAULT_CAP
 }
@@ -1370,11 +1356,6 @@ impl ConductorSettings {
         if self.candidates.len() > CANDIDATE_LIMIT {
             return Err("conductor_settings.too_many_candidates".into());
         }
-        if !WARN_REVIEW_FAILS.contains(&self.warn_review_fails)
-            || !WARN_QUIET_MINUTES.contains(&self.warn_quiet_minutes)
-        {
-            return Err("conductor_settings.warning_out_of_range".into());
-        }
         for candidate in &self.candidates {
             check_worker(
                 &candidate.agent,
@@ -1391,22 +1372,22 @@ impl ConductorSettings {
         Ok(())
     }
 
-    /// The thresholds a node's warnings are judged by.
-    pub(crate) fn warn_rule(&self) -> crate::mission_health::WarnRule {
-        crate::mission_health::WarnRule {
-            review_fails: u32::from(self.warn_review_fails),
-            quiet_ms: u64::from(self.warn_quiet_minutes) * 60_000,
-        }
-    }
-
     /// Reads the value `core-state.json` keeps. One kept before verification
     /// strength has `checkers` instead: it reads as `normal`, with the
     /// toggle off when the operator had turned another company off for the
-    /// review or the verify default, the only way either was ever off.
+    /// review or the verify default, the only way either was ever off. One
+    /// kept while the two warning thresholds were stored has
+    /// `warn_review_fails` and `warn_quiet_minutes`, which nothing could
+    /// change from their defaults; they are dropped, since the thresholds
+    /// are now fixed (`mission_health::REVIEW_FAILS_THAT_WARN`,
+    /// `QUIET_THAT_WARNS_MS`).
     pub(crate) fn from_stored(mut value: serde_json::Value) -> Result<Self, String> {
-        let stored = value
-            .as_object_mut()
-            .and_then(|fields| fields.remove("checkers"));
+        let fields = value.as_object_mut();
+        let stored = fields.and_then(|fields| {
+            fields.remove("warn_review_fails");
+            fields.remove("warn_quiet_minutes");
+            fields.remove("checkers")
+        });
         let mut settings: Self =
             serde_json::from_value(value).map_err(|error| error.to_string())?;
         if let Some(stored) = stored {

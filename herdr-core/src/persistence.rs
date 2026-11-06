@@ -1950,30 +1950,29 @@ mod tests {
         );
     }
 
-    /// with-hide/hide-private#552: Settings › Mission kept before the
-    /// warnings reads their thresholds as two failed reviews and ninety
-    /// minutes, and one outside their range is not kept.
+    /// Settings › Mission kept while it stored the two warning thresholds,
+    /// which no edit could change, still loads with every other field it
+    /// kept, a value outside their old range too, and is saved without them.
     #[test]
-    fn mission_settings_from_before_the_warnings_read_their_thresholds() {
-        let stored = |settings: &str| {
-            format!(
+    fn mission_settings_kept_with_the_warning_thresholds_load_without_them() {
+        for warnings in [
+            r#""warn_review_fails":2,"warn_quiet_minutes":90"#,
+            r#""warn_quiet_minutes":0"#,
+        ] {
+            let source = format!(
                 r#"{{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
-                "conductor_settings":{settings}}}"#
-            )
-        };
-        let (state, _sizes, disposition) = decode(
-            stored(r#"{"concurrency":3,"default_scope":"merge","candidates":[],"default_strength":"fast","other_vendor":false,"clean_merged":true}"#)
-                .as_bytes(),
-        );
-        assert_eq!(disposition, LoadDisposition::Loaded);
-        let rule = state.conductor_settings.warn_rule();
-        assert_eq!((rule.review_fails, rule.quiet_ms), (2, 90 * 60_000));
-        let (state, _sizes, disposition) = decode(
-            stored(r#"{"concurrency":3,"default_scope":"merge","candidates":[],"warn_quiet_minutes":0}"#)
-                .as_bytes(),
-        );
-        assert_ne!(disposition, LoadDisposition::Loaded);
-        assert_eq!(state.conductor_settings.concurrency, 4);
+                "conductor_settings":{{"concurrency":3,"default_scope":"merge","candidates":[],"default_strength":"fast","other_vendor":false,"clean_merged":true,{warnings}}}}}"#
+            );
+            let (state, _sizes, disposition) = decode(source.as_bytes());
+            assert_eq!(disposition, LoadDisposition::Loaded, "{warnings}");
+            let settings = &state.conductor_settings;
+            assert_eq!(settings.concurrency, 3);
+            assert_eq!(settings.default_scope, crate::missions::MissionScope::Merge);
+            assert_eq!(settings.default_strength, crate::missions::Strength::Fast);
+            assert!(!settings.other_vendor);
+            let saved = serde_json::to_string(settings).unwrap();
+            assert!(!saved.contains("warn_"), "{saved}");
+        }
     }
 
     #[test]

@@ -499,15 +499,11 @@ pub(crate) fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
     !pull.badge.is_settled() && !pull.is_draft && needs(pull).is_empty()
 }
 
-/// The thresholds a node's warnings are judged by, Settings › Mission's
-/// (with-hide/hide-private#552).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WarnRule {
-    /// The review's failures in a row that warn.
-    pub review_fails: u32,
-    /// How long a node at work goes with no push before it warns.
-    pub quiet_ms: u64,
-}
+/// The review's failures in a row that warn a node's Conductor
+/// (with-hide/hide-private#552). Fixed: no Settings row sets it.
+pub(crate) const REVIEW_FAILS_THAT_WARN: u32 = 2;
+/// How long a node at work goes with no push before its Conductor is warned.
+pub(crate) const QUIET_THAT_WARNS_MS: u64 = 90 * 60_000;
 
 /// A change to the warnings a node carries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -524,7 +520,8 @@ pub(crate) enum WarnAct {
 
 /// How the warnings of `mission`'s nodes change at `now` (with-hide/hide-private#552):
 /// a node at work in a running mission warns once its review failed
-/// `review_fails` times in a row, and once it went `quiet_ms` with no push
+/// `REVIEW_FAILS_THAT_WARN` times in a row, and once it went
+/// `QUIET_THAT_WARNS_MS` with no push
 /// while it had work of its own, a change by pull request whose pull request
 /// does not just wait on others. The first goes when the review passes or
 /// is skipped, the second when a new push arrives, and both when the node
@@ -535,7 +532,6 @@ pub(crate) fn warn_acts(
     mission: &Mission,
     pulls: Option<&GithubProjectSnapshot>,
     now: u64,
-    rule: WarnRule,
 ) -> Vec<WarnAct> {
     let runs = matches!(
         mission.status,
@@ -545,7 +541,7 @@ pub(crate) fn warn_acts(
     for (at, node) in mission.nodes.iter().enumerate() {
         let works = runs && node.status == NodeStatus::Working && node.kind != NodeKind::External;
         let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
-        let fails = works && node.review_fails() >= rule.review_fails.max(1);
+        let fails = works && node.review_fails() >= REVIEW_FAILS_THAT_WARN;
         match standing(WarningKind::ReviewFails) {
             Some(_) if !fails => acts.push(WarnAct::Clear {
                 node: at,
@@ -567,9 +563,8 @@ pub(crate) fn warn_acts(
                 });
             }
             None if works
-                && node.kind == NodeKind::Change
-                && node.delivery == Some(Delivery::Pr)
-                && quiet.is_some_and(|since| now.saturating_sub(since) >= rule.quiet_ms)
+                && node.asks_push()
+                && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
                 && worker_waits(node, pulls) == Some(false) =>
             {
                 acts.push(WarnAct::Raise {
@@ -1020,10 +1015,6 @@ mod tests {
         assert_eq!(evaluate(&m, &running()), [Act::Done { node: 0 }]);
     }
 
-    const RULE: WarnRule = WarnRule {
-        review_fails: 2,
-        quiet_ms: 90 * 60_000,
-    };
     const MINUTE: u64 = 60_000;
 
     /// A running mission's one change at work since 0, with a review line
@@ -1069,10 +1060,10 @@ mod tests {
     fn a_review_failed_twice_in_a_row_warns_until_it_passes() {
         let mut m = reviewed();
         m.nodes[0].criteria[1].fails_in_a_row = 1;
-        assert!(warn_acts(&m, None, 10, RULE).is_empty());
+        assert!(warn_acts(&m, None, 10).is_empty());
         m.nodes[0].criteria[1].fails_in_a_row = 2;
         assert_eq!(
-            warn_acts(&m, None, 10, RULE),
+            warn_acts(&m, None, 10),
             [WarnAct::Raise {
                 node: 0,
                 kind: WarningKind::ReviewFails,
@@ -1082,10 +1073,10 @@ mod tests {
         // Standing, a third failure raises nothing more.
         m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
         m.nodes[0].criteria[1].fails_in_a_row = 3;
-        assert!(warn_acts(&m, None, 10, RULE).is_empty());
+        assert!(warn_acts(&m, None, 10).is_empty());
         m.nodes[0].criteria[1].fails_in_a_row = 0;
         assert_eq!(
-            warn_acts(&m, None, 10, RULE),
+            warn_acts(&m, None, 10),
             [WarnAct::Clear {
                 node: 0,
                 kind: WarningKind::ReviewFails,
@@ -1098,9 +1089,9 @@ mod tests {
     #[test]
     fn a_change_ninety_minutes_without_a_push_warns_until_the_next_push() {
         let mut m = reviewed();
-        assert!(warn_acts(&m, None, 90 * MINUTE - 1, RULE).is_empty());
+        assert!(warn_acts(&m, None, 90 * MINUTE - 1).is_empty());
         assert_eq!(
-            warn_acts(&m, None, 90 * MINUTE, RULE),
+            warn_acts(&m, None, 90 * MINUTE),
             [WarnAct::Raise {
                 node: 0,
                 kind: WarningKind::NoPush,
@@ -1108,10 +1099,10 @@ mod tests {
             }]
         );
         m.nodes[0].warnings.push(warn(WarningKind::NoPush, 0));
-        assert!(warn_acts(&m, None, 200 * MINUTE, RULE).is_empty());
+        assert!(warn_acts(&m, None, 200 * MINUTE).is_empty());
         m.nodes[0].pushed_at_unix_ms = Some(100 * MINUTE);
         assert_eq!(
-            warn_acts(&m, None, 101 * MINUTE, RULE),
+            warn_acts(&m, None, 101 * MINUTE),
             [WarnAct::Clear {
                 node: 0,
                 kind: WarningKind::NoPush,
@@ -1119,8 +1110,8 @@ mod tests {
         );
         // Counted again from that push.
         m.nodes[0].warnings.clear();
-        assert!(warn_acts(&m, None, 189 * MINUTE, RULE).is_empty());
-        assert_eq!(warn_acts(&m, None, 190 * MINUTE, RULE).len(), 1);
+        assert!(warn_acts(&m, None, 189 * MINUTE).is_empty());
+        assert_eq!(warn_acts(&m, None, 190 * MINUTE).len(), 1);
     }
 
     /// with-hide/hide-private#552: a pull request that only waits on CI, a
@@ -1134,13 +1125,13 @@ mod tests {
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
         let late = 120 * MINUTE;
         let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
-        assert!(warn_acts(&m, Some(&waiting), late, RULE).is_empty());
-        assert!(warn_acts(&m, None, late, RULE).is_empty());
+        assert!(warn_acts(&m, Some(&waiting), late).is_empty());
+        assert!(warn_acts(&m, None, late).is_empty());
         let mut failing = waiting.clone();
         failing.pull_requests[0].checks = PullRequestChecks::Failed;
-        assert_eq!(warn_acts(&m, Some(&failing), late, RULE).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
-        assert_eq!(warn_acts(&m, Some(&waiting), late, RULE).len(), 1);
+        assert_eq!(warn_acts(&m, Some(&waiting), late).len(), 1);
     }
 
     /// with-hide/hide-private#552: only a node at work in a running mission
@@ -1156,7 +1147,7 @@ mod tests {
         ];
         m.nodes[0].status = NodeStatus::Done;
         assert_eq!(
-            warn_acts(&m, None, 100 * MINUTE, RULE),
+            warn_acts(&m, None, 100 * MINUTE),
             [
                 WarnAct::Clear {
                     node: 0,
@@ -1172,12 +1163,12 @@ mod tests {
         m.nodes[0].criteria[1].fails_in_a_row = 0;
         m.nodes[0].status = NodeStatus::Working;
         m.nodes[0].back_to_work(100 * MINUTE);
-        assert!(warn_acts(&m, None, 189 * MINUTE, RULE).is_empty());
+        assert!(warn_acts(&m, None, 189 * MINUTE).is_empty());
         m.status = MissionStatus::Cancelled;
-        assert!(warn_acts(&m, None, 300 * MINUTE, RULE).is_empty());
+        assert!(warn_acts(&m, None, 300 * MINUTE).is_empty());
         m.status = MissionStatus::Running;
         m.nodes[0].kind = NodeKind::Research;
         m.nodes[0].delivery = None;
-        assert!(warn_acts(&m, None, 300 * MINUTE, RULE).is_empty());
+        assert!(warn_acts(&m, None, 300 * MINUTE).is_empty());
     }
 }
