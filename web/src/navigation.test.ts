@@ -16,7 +16,7 @@ const project = (id: string, device: string, pinned = false) => ({ agent_scope: 
 });
 
 describe("All projects", () => {
-  it("lists this machine first and a device that cannot answer without counts", () => {
+  it("puts this machine first and says why a device cannot answer", () => {
     const rest = {
       navigator: {
         devices: [
@@ -28,14 +28,10 @@ describe("All projects", () => {
       ui_state: { workspace_registrations: [{ id: "r", label: "r", path: "/r", device_id: "mini", pinned: false }] },
       status: { remote: [{ target_id: "mini", state: "unreachable", message: null }] },
     } as unknown as SnapshotRest;
-    const agents = [{ pane_id: "a-pane", group: "needs_you" }] as never;
-    const [local, mini] = mainSections(rest, agents);
-    expect(local?.projects.map((row) => row.id)).toEqual(["b", "a"]);
-    expect(local?.projects[1]?.counts?.needs_you).toBe(1);
-    expect(local?.projects[1]?.workspaceCount).toBe(1);
+    const [local, mini] = mainSections(rest);
+    expect(local?.device.id).toBe("local");
     expect(mini?.availability).toEqual({ state: "unavailable", text: "Hide cannot reach mini", retry: "connect" });
-    expect(mini?.projects.map((row) => [row.id, row.counts, row.workspaceCount])).toEqual([["r", null, null]]);
-    // The sidebar's All projects row counts the same list without building it.
+    // The sidebar's All projects row counts this machine's catalog and the device's registrations.
     expect(allProjectsCount(rest)).toBe(3);
   });
 });
@@ -46,10 +42,8 @@ describe("All projects while this machine's Herdr does not answer", () => {
       navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [project("a", "local")] },
       status: { herdr: { state: "unreachable", message: "Herdr did not answer" } },
     } as unknown as SnapshotRest;
-    const [local] = mainSections(rest, []);
+    const [local] = mainSections(rest);
     expect(local?.availability.state).toBe("unavailable");
-    expect(local?.projects[0]?.counts).toBeNull();
-    expect(local?.projects[0]?.workspaceCount).toBe(1);
   });
 });
 
@@ -88,12 +82,12 @@ describe("a Project's Overview", () => {
 });
 
 describe("Main's order", () => {
-  it("puts pinned Projects first, then sorts by name", () => {
+  it("lists Projects in the core's order, pinned ones as the sidebar lists them", () => {
     const rest = {
-      navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [project("c", "local"), project("a", "local"), project("b", "local", true)] },
+      navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [project("Beta", "local", true), project("alpha", "local", true), project("c", "local")] },
       status: { herdr: { state: "connected" } },
     } as unknown as SnapshotRest;
-    expect(mainSections(rest, [])[0]?.projects.map((row) => row.id)).toEqual(["b", "a", "c"]);
+    expect(boardProjects(rest, []).map((row) => row.workspace.id)).toEqual(["Beta", "alpha", "c"]);
   });
 });
 
@@ -308,7 +302,7 @@ describe("an open from Main or an Overview", () => {
   });
 });
 
-const mainSections: typeof drawMainSections = (rest, agents, device) => drawMainSections(rest ? legacyRest(rest, agents) : null, agents, device);
+const mainSections = (rest: SnapshotRest | null, device?: string) => drawMainSections(rest ? legacyRest(rest, []) : null, device);
 
 
 it("keeps different duplicate rows in physical sections", async () => {

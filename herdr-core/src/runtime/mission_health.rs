@@ -567,7 +567,6 @@ impl Runtime {
     /// operator's. A mission whose device does not answer is left as it is
     /// (B29). Whether the book changed.
     pub(crate) fn warn_missions(&mut self, now: u64) -> bool {
-        let rule = self.snapshot.ui_state.conductor_settings.warn_rule();
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &self.missions.book.missions[index];
@@ -575,7 +574,7 @@ impl Runtime {
                 continue;
             }
             let pulls = self.mission_pulls(mission);
-            let acts = warn_acts(mission, pulls, now, rule);
+            let acts = warn_acts(mission, pulls, now);
             let untold = mission
                 .nodes
                 .iter()

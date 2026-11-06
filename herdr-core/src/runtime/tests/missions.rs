@@ -5828,7 +5828,7 @@ fn a_merge_with_a_line_unmet_is_raised_to_the_conductor_once() {
         (
             AttentionReason::MergedUnproven,
             Some(7),
-            crate::runtime::missions::AttentionTo::Conductor
+            crate::missions::AttentionTo::Conductor
         )
     );
     let raised = |runtime: &Runtime| {
@@ -5896,7 +5896,7 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
         node_view(&runtime, "fix")
             .attention
             .map(|attention| attention.to),
-        Some(crate::runtime::missions::AttentionTo::Operator)
+        Some(crate::missions::AttentionTo::Operator)
     );
     assert!(runtime.claim_mission_notices().is_empty());
 
@@ -7190,6 +7190,73 @@ fn warnings_of(runtime: &Runtime) -> (Vec<crate::missions::WarningKind>, Vec<Str
         })
         .collect();
     (kinds, letters)
+}
+
+/// `hide mission show` prints what the core decided a node waits on: a
+/// planned node the nodes before it, then nothing, a working one its first
+/// line not met with a failed line its worker's, then its pull request's
+/// merge, and a decision that stopped it before any of those.
+#[test]
+fn a_node_waits_on_what_the_core_decides_from_its_lines_and_its_decision() {
+    use crate::missions::WaitingOn;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let mut plan = criteria_plan();
+    plan["plan"]["nodes"][1]["depends_on"] = json!(["fix"]);
+    command(&mut runtime, "sender", plan).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    let waits = |runtime: &Runtime, key: &str| node_view(runtime, key).waiting_on;
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Start));
+    assert_eq!(
+        waits(&runtime, "docs"),
+        Some(WaitingOn::Nodes {
+            keys: vec!["fix".into()]
+        })
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Worker));
+    assert!(node_view(&runtime, "fix").asks_push);
+    assert!(!node_view(&runtime, "docs").asks_push);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Review));
+    let mut failed = record_of("fix", "review", json!({}));
+    failed["pass"] = json!(false);
+    command(&mut runtime, "reviewer", failed).unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Worker));
+    met_fix(&mut runtime);
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Merge));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?", "node": "fix"}),
+    )
+    .unwrap();
+    assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Decision));
+    assert_eq!(
+        waits(&runtime, "docs"),
+        Some(WaitingOn::Nodes {
+            keys: vec!["fix".into()]
+        })
+    );
 }
 
 /// with-hide/hide-private#552 c2: the review failing twice in a row warns

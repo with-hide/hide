@@ -3,6 +3,7 @@
 // not answer, one waiting on its merge order, and finished and cancelled ones
 // past the three the list shows. Every name, number and time is made up.
 import type { ConductorSettings, Mission, MissionNode } from "../snapshot";
+import { withCoreWaits } from "./missionWaits";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -12,7 +13,7 @@ function node(key: string, title: string, extra: Partial<MissionNode> = {}): Mis
 }
 
 function mission(id: string, title: string, workspace: string, path: string, extra: Partial<Mission>): Mission {
-  return { id, title, workspace_id: workspace, project: path, checkout_path: path, device_id: "local", status: "running", scope: "pr", cap: 3, exempt: false, strength: "normal", other_vendor: true, conductor: { pane_id: "w1:p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 0, started_at_unix_ms: null, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return withCoreWaits({ id, title, workspace_id: workspace, project: path, checkout_path: path, device_id: "local", status: "running", scope: "pr", cap: 3, exempt: false, strength: "normal", other_vendor: true, conductor: { pane_id: "w1:p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 0, started_at_unix_ms: null, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra });
 }
 
 const claude = { agent: "claude", model: "Opus", effort: "high" };

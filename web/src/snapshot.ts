@@ -1520,7 +1520,17 @@ export type MissionNode = {
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
   warnings?: MissionNodeWarning[];
+  /** A push is asked of it (`MissionNode::asks_push`): a change at work delivered by pull request. */
+  asks_push?: boolean;
+  /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
+  waiting_on?: MissionWaitingOn | null;
 };
+
+/** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
+export type MissionWaitingOn =
+  | { kind: "attention"; to: MissionAttentionTo; reason: MissionAttentionReason }
+  | { kind: "nodes"; keys: string[] }
+  | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
 /** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
 export type MissionWarningKind = "review_fails" | "no_push";
@@ -1651,7 +1661,7 @@ export type PlansSnapshot = { items: PlanView[] };
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
 /** Which way every mission's map runs: what a node waits on above it, or to its left. */
 export type MissionMapFlow = "down" | "across";
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number; map_flow?: MissionMapFlow };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean; map_flow?: MissionMapFlow };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };
