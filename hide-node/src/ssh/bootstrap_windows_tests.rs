@@ -40,6 +40,8 @@ struct Device {
     dir: tempfile::TempDir,
     /// The process of the latest connection.
     pid: std::cell::Cell<u32>,
+    /// When the latest connection started.
+    connected: std::cell::Cell<Option<Instant>>,
 }
 
 impl Device {
@@ -47,6 +49,7 @@ impl Device {
         let device = Self {
             dir: tempfile::tempdir().unwrap(),
             pid: std::cell::Cell::new(0),
+            connected: std::cell::Cell::new(None),
         };
         std::fs::create_dir(device.home()).unwrap();
         device
@@ -126,9 +129,50 @@ impl Device {
         let child = hide_platform::process::OwnedChild::spawn(&mut command)
             .unwrap_or_else(|error| panic!("{shell:?} did not start: {error}"));
         self.pid.set(child.id());
+        self.connected.set(Some(Instant::now()));
         UnaskedStart::new(
             ChildLink::start("device:test", child, None).unwrap(),
             hide_node_link::device::Cancel::default(),
+        )
+    }
+
+    /// The latest connection's probe, which fails the test with what the
+    /// connection's processes were doing when it found no answer in time.
+    fn probe(&self, pipe: &mut UnaskedStart) -> Facts {
+        probe(pipe, soon()).unwrap_or_else(|error| {
+            panic!(
+                "{error:?}; it last said {:?}; {}",
+                pipe.last_error(),
+                self.stalled()
+            )
+        })
+    }
+
+    /// Each process of the latest connection, the login shell first, with
+    /// the processor time it used against the time the connection ran, so a
+    /// PowerShell building its module analysis cache (`POWERSHELL_WRAPPER`)
+    /// reads apart from one that waits, and the cache path it was given.
+    fn stalled(&self) -> String {
+        let shell = self.pid.get();
+        let ran = self.connected.get().map(|at| at.elapsed());
+        let mut pids = vec![shell];
+        pids.extend(hide_platform::process::descendants(shell).unwrap_or_default());
+        let processes: Vec<String> = pids
+            .into_iter()
+            .map(|pid| {
+                let name = hide_platform::process::name_of(pid)
+                    .unwrap_or_else(|error| format!("unnamed ({error})"));
+                let worked = hide_platform::process::cpu_time(pid).map_or_else(
+                    |error| format!("unknown ({error})"),
+                    |time| format!("{time:.1?}"),
+                );
+                format!("{name} {pid} used {worked} of processor")
+            })
+            .collect();
+        format!(
+            "{} in {ran:.1?} since the connection started; PSModuleAnalysisCachePath={:?}",
+            processes.join(", "),
+            std::env::var_os("PSModuleAnalysisCachePath")
         )
     }
 
@@ -254,9 +298,7 @@ fn every_login_shell_of_a_windows_sshd_reaches_the_powershell_script() {
     for shell in SHELLS {
         let device = Device::new();
         let mut pipe = device.connect_through(shell);
-        let facts = probe(&mut pipe, soon()).unwrap_or_else(|error| {
-            panic!("{shell:?}: {error:?}; it last said {:?}", pipe.last_error())
-        });
+        let facts = device.probe(&mut pipe);
         assert_eq!(facts.home, Device::wire(&device.home()), "{shell:?}");
         assert_eq!(
             (facts.os.as_str(), facts.arch.as_str()),
@@ -289,7 +331,7 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
     let packages = device.packages();
     let install_once = || {
         let mut pipe = device.connect();
-        let facts = probe(&mut pipe, soon()).unwrap();
+        let facts = device.probe(&mut pipe);
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
         install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap()
     };
@@ -332,7 +374,7 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
 fn an_install_cut_off_mid_file_leaves_no_half_file_in_use() {
     let device = Device::new();
     let mut pipe = device.connect();
-    let facts = probe(&mut pipe, soon()).unwrap();
+    let facts = device.probe(&mut pipe);
     let root = format!("{}/.hide/helper", facts.home);
     let [kind, _] = &step(&mut pipe, &format!("root\t{root}\n"), soon()).unwrap()[..] else {
         panic!("the root step did not answer");
@@ -391,7 +433,7 @@ fn an_install_under_a_folder_others_can_change_or_a_link_is_refused() {
         ("~/link/helper", "is a link"),
     ] {
         let mut pipe = device.connect();
-        let facts = probe(&mut pipe, soon()).unwrap();
+        let facts = device.probe(&mut pipe);
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
         let Err(EstablishError::Install(reason)) = install(&mut pipe, root, &facts.home, &payload)
         else {
@@ -414,7 +456,7 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
     let packages = device.packages();
     let install_once = || {
         let mut pipe = device.connect();
-        let facts = probe(&mut pipe, soon()).unwrap();
+        let facts = device.probe(&mut pipe);
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
         install(&mut pipe, "~/.hide/helper", &facts.home, &payload)
     };
@@ -480,7 +522,7 @@ fn the_helper_starts_on_the_same_pipes() {
     device.echoing_program(&script);
     let bytes = std::fs::read(&script).unwrap();
     let mut pipe = device.connect();
-    let facts = probe(&mut pipe, soon()).unwrap();
+    let facts = device.probe(&mut pipe);
     let [kind, _] = &step(
         &mut pipe,
         &format!("root\t{}/.hide/helper\n", facts.home),
@@ -504,7 +546,7 @@ fn the_helper_starts_on_the_same_pipes() {
     assert_eq!(read_step(&mut pipe, soon()).unwrap(), ["ok"]);
 
     let mut pipe = device.connect();
-    let facts = probe(&mut pipe, soon()).unwrap();
+    let facts = device.probe(&mut pipe);
     let mut asked = format!("root\t{}/.hide/helper\n", facts.home);
     asked.push_str(&format!("held\t1\nv1/helper.cmd\t{}\n", digest(&bytes)));
     pipe.send(asked.as_bytes(), soon()).unwrap();
@@ -538,7 +580,7 @@ fn the_helper_starts_on_the_same_pipes() {
     // folder from Windows) writes the account's own.
     let own = device.own_home();
     let mut pipe = device.connect();
-    let facts = probe(&mut pipe, soon()).unwrap();
+    let facts = device.probe(&mut pipe);
     let mut asked = format!("root\t{}/.hide/helper\n", facts.home);
     asked.push_str(&format!("held\t1\nv1/helper.cmd\t{}\n", digest(&bytes)));
     pipe.send(asked.as_bytes(), soon()).unwrap();
@@ -579,7 +621,7 @@ fn the_helper_starts_on_the_same_pipes() {
 fn a_command_answers_its_status_and_output_and_the_next_step_follows() {
     let device = Device::new();
     let mut pipe = device.connect();
-    probe(&mut pipe, soon()).unwrap();
+    device.probe(&mut pipe);
     let ran = run(
         &mut pipe,
         &words(&["cmd.exe", "/c", "echo out&(echo err)1>&2&exit /b 3"]),
@@ -655,7 +697,7 @@ fn a_command_past_its_cap_is_ended_with_everything_it_started() {
     let pid_file = device.home().join("writer.pid");
     let powershell = system32(r"WindowsPowerShell\v1.0\powershell.exe");
     let mut pipe = device.connect();
-    probe(&mut pipe, soon()).unwrap();
+    device.probe(&mut pipe);
     // `cmd` starts the writer in the background and ends at once; its words
     // travel in the command line rather than a batch file, which `cmd`
     // would read in the console's code page.
@@ -719,7 +761,7 @@ fn a_command_that_ends_leaves_nothing_it_started_running() {
     .unwrap();
     let pid_file = device.home().join("sleeper.pid");
     let mut pipe = device.connect();
-    probe(&mut pipe, soon()).unwrap();
+    device.probe(&mut pipe);
     let ran = run(
         &mut pipe,
         &words(&[
@@ -761,7 +803,7 @@ fn a_command_that_ends_leaves_nothing_it_started_running() {
 fn a_file_goes_whole_into_a_private_folder_and_comes_back_whole() {
     let device = Device::new();
     let mut pipe = device.connect();
-    probe(&mut pipe, soon()).unwrap();
+    device.probe(&mut pipe);
     let bytes: Vec<u8> = (0..200_000_u32).map(|index| (index % 251) as u8).collect();
     let remote = device.home().join(r"moved\deep\file");
     let spelled = Device::wire(&remote);
@@ -821,7 +863,7 @@ fn attach_hands_the_pipes_to_the_core_program() {
     let state = device.state();
 
     let mut pipe = device.connect();
-    probe(&mut pipe, soon()).unwrap();
+    device.probe(&mut pipe);
     attach(
         &mut pipe,
         &Device::wire(&program),
@@ -832,7 +874,7 @@ fn attach_hands_the_pipes_to_the_core_program() {
     assert_eq!(line(&mut pipe), "third:state");
 
     let mut pipe = device.connect();
-    probe(&mut pipe, soon()).unwrap();
+    device.probe(&mut pipe);
     assert!(matches!(
         attach(&mut pipe, "C:/no/such/hided.exe", None),
         Err(StepError::Refused(_))

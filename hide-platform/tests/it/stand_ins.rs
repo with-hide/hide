@@ -241,6 +241,16 @@ fn start_once(program: &Path, args: &[&str]) {
             .stderr(Stdio::null());
         match OwnedChild::spawn(&mut command) {
             Ok(mut child) => {
+                let started = Instant::now();
+                if !ended_by(&mut child, deadline) {
+                    let stalled = stalled(child.id(), started);
+                    let _ = child.kill_tree();
+                    panic!(
+                        "{} did not end its first start with {args:?}, which must be a one-shot \
+                         invocation: {stalled}",
+                        program.display()
+                    );
+                }
                 let output = child.capture_until(deadline, 1).unwrap_or_else(|error| {
                     panic!(
                         "{} did not end its first start with {args:?}, which must be a one-shot \
@@ -266,4 +276,35 @@ fn start_once(program: &Path, args: &[&str]) {
             Err(error) => panic!("{} could not start: {error}", program.display()),
         }
     }
+}
+
+/// Whether `child` has exited by `deadline`, asked while it still runs so
+/// that a start that has not can be described alive.
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn ended_by(child: &mut OwnedChild, deadline: Instant) -> bool {
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => return false,
+            Err(error) => panic!("the first start's state could not be read: {error}"),
+        }
+    }
+}
+
+/// What a first start that missed its deadline was doing at it: its pid, the
+/// processor time it used against the time it ran, so a working process
+/// reads apart from a waiting one, and the module analysis cache a Windows
+/// PowerShell was given, whose cold build is the wait its first cmdlet pays
+/// (`hide-node/src/ssh/bootstrap.rs`, POWERSHELL_WRAPPER).
+fn stalled(pid: u32, started: Instant) -> String {
+    let ran = started.elapsed();
+    let worked = hide_platform::process::cpu_time(pid).map_or_else(
+        |error| format!("unknown ({error})"),
+        |time| format!("{time:.1?}"),
+    );
+    format!(
+        "pid {pid} used {worked} of processor in {ran:.1?}; PSModuleAnalysisCachePath={:?}",
+        std::env::var_os("PSModuleAnalysisCachePath")
+    )
 }

@@ -1272,6 +1272,14 @@ pub fn start_time(pid: u32) -> io::Result<u64> {
     sys::start_time(pid)
 }
 
+/// How much processor time `pid` has used so far, in user and kernel mode
+/// together. Read beside the time a process has run, it says whether a
+/// process that missed a deadline was working or waiting. `NotFound` when
+/// `pid` does not exist.
+pub fn cpu_time(pid: u32) -> io::Result<Duration> {
+    sys::cpu_time(pid)
+}
+
 /// The directory `pid` is working in, as the kernel reports it. `NotFound`
 /// when the process is gone, `PermissionDenied` when the system refuses to
 /// say, `Unsupported` on Windows.
@@ -4184,6 +4192,43 @@ mod sys {
     }
 
     #[cfg(target_os = "macos")]
+    #[allow(deprecated)] // libc's mach_timebase_info, which the mach2 crate would only repeat
+    pub(super) fn cpu_time(pid: u32) -> io::Result<Duration> {
+        // SAFETY: an all-zero `proc_taskinfo` is a valid value.
+        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+        // SAFETY: `proc_pidinfo` writes at most `size` bytes into a value we
+        // own, and reports how many it wrote.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTASKINFO,
+                0,
+                (&mut info as *mut libc::proc_taskinfo).cast(),
+                size,
+            )
+        };
+        if written != size {
+            return Err(mac::error_for_missing_info());
+        }
+        // The totals are in the machine's absolute time units, which are
+        // nanoseconds on Intel and not on Apple silicon.
+        let mut timebase = libc::mach_timebase_info { numer: 0, denom: 0 };
+        // SAFETY: `timebase` is writable.
+        let read = unsafe { libc::mach_timebase_info(&mut timebase) };
+        if read != 0 || timebase.denom == 0 {
+            return Err(io::Error::other(
+                "the machine's time base could not be read",
+            ));
+        }
+        let units = u128::from(info.pti_total_user) + u128::from(info.pti_total_system);
+        let nanos = units * u128::from(timebase.numer) / u128::from(timebase.denom);
+        Ok(Duration::from_nanos(
+            u64::try_from(nanos).unwrap_or(u64::MAX),
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
     pub(super) fn rss(pid: u32) -> io::Result<u64> {
         // SAFETY: an all-zero `proc_taskinfo` is a valid value.
         let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
@@ -4342,6 +4387,21 @@ mod sys {
     #[cfg(target_os = "linux")]
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
         linux::field(&linux::fields(pid)?, 19)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn cpu_time(pid: u32) -> io::Result<Duration> {
+        // `utime` and `stime`, in clock ticks.
+        let fields = linux::fields(pid)?;
+        let ticks = linux::field::<u64>(&fields, 11)? + linux::field::<u64>(&fields, 12)?;
+        // SAFETY: a plain call.
+        let per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if per_second <= 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Duration::from_nanos(
+            ticks.saturating_mul(1_000_000_000) / per_second as u64,
+        ))
     }
 
     #[cfg(target_os = "linux")]
@@ -6138,6 +6198,30 @@ mod sys {
 
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
         started_at(&open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?)
+    }
+
+    pub(super) fn cpu_time(pid: u32) -> io::Result<Duration> {
+        let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: the handle is open and every output is writable.
+        let read = unsafe {
+            GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user)
+        };
+        if read == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Both are counts of 100 ns.
+        let units =
+            |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        Ok(Duration::from_nanos(
+            units(kernel)
+                .saturating_add(units(user))
+                .saturating_mul(100),
+        ))
     }
 
     pub(super) fn name_of(pid: u32) -> io::Result<String> {
