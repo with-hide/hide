@@ -22,6 +22,23 @@ describe("selectionToText", () => {
     expect(selectionToText(rows, 0, 29, null)).toBe("http://127.0.0.1:41811/a.htmlosc8 label");
   });
 
+  // hide-private issue 591: Claude Code's rows for a URL it broke and one
+  // that fills its row, with the link end the holder says for row 4 (as
+  // `terminalLinkProvider.test.ts` draws them).
+  it("keeps a full row whose link ended apart and joins a URL an agent broke", () => {
+    const rows = [
+      row("⏺ Long: https://example.com/agent-broke-this-url/aaaaaaaaaa/", 60),
+      row("  bbbbbbbbbb/cccccccccc/dddddddddd/end", 60),
+      row("", 60),
+      row("  Full:", 60),
+      row("  https://example.com/fills-the-row-exactly-xxxxxxxxxxxxxxxx", 60),
+      row("  nextword after it", 60),
+    ];
+    const wraps = [null, null, null, null, false, null];
+    expect(selectionToText(rows.slice(3), 0, 60, wraps.slice(3))).toBe("Full:\nhttps://example.com/fills-the-row-exactly-xxxxxxxxxxxxxxxx\nnextword after it");
+    expect(selectionToText(rows.slice(0, 2), 0, 60, wraps.slice(0, 2))).not.toContain("\n");
+  });
+
   it("joins a row that fills its width onto the next without a break", () => {
     const rows = [row("abcdefghijkl", 12), row("mnop", 12), row("next", 12)];
     expect(selectionToText(rows, 0, 12)).toBe("abcdefghijklmnop\nnext");

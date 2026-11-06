@@ -21,6 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { linkCandidates } from "../../web/src/terminalLinks";
+import { holderSoftWraps, nativeWindowCapture, revealMenuLabel } from "../../web/e2e/platform-fixture";
 import { toPage } from "../src/main/wirePath";
 import { focusTab, openProject, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
@@ -442,13 +443,12 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   // split pane the full lane so opening Agent Views cannot wrap the URL.
   await zoomPane(page, paneId);
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(`${origin}/a.html`.length);
-  // A Windows holder says no soft wraps (docs/INSTALL.md, What each system
-  // supports), so there a blank row keeps the URL apart from the next word
-  // should it reach the grid's right edge.
+  // Where the holder says no soft wraps, a blank row keeps the URL apart
+  // from the next word should it reach the grid's right edge.
   await print(page, paneId, [
     "html src/report.HTML:2",
     `${origin}/a.html`,
-    ...(process.platform === "win32" ? [""] : []),
+    ...(holderSoftWraps ? [] : [""]),
     `osc8 \u001b]8;;${pathToFileURL(html).href}#L2\u001b\\HTML source label\u001b]8;;\u001b\\`,
     "folder ./src",
     "plain MENU-END",
@@ -463,7 +463,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
     .filter((child) => "webContents" in child)
     .some((child) => (child as Electron.WebContentsView).webContents.getTitle() === "Terminal HTML"))).toBe(true);
   await screenshot(page, "terminal-html-rendered");
-  if (process.platform === "darwin") await nativeCapture("terminal-html-rendered-native");
+  await nativeCapture("terminal-html-rendered-native");
 
   await page.mouse.click(point.x, point.y, { button: "right" });
   await expect(page.getByRole("menuitem", { name: "Open in browser", exact: true })).toBeVisible();
@@ -473,7 +473,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await expect(page.locator('[data-view-tab-bar] [role="tab"][data-tab-kind="file"][aria-label*="report.HTML"]')).toBeVisible();
   await expect(page.locator(".cm-activeLine").first()).toHaveText("<h1>Rendered terminal report</h1>");
   await screenshot(page, "terminal-html-source");
-  if (process.platform === "darwin") await nativeCapture("terminal-html-source-native");
+  await nativeCapture("terminal-html-source-native");
 
   point = await pointOf(page, paneId, "HTML source label", { offset: 2 });
   await hoverLink(page, paneId, point);
@@ -482,8 +482,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await expect.poll(copied).toBe(toPage(fs.realpathSync(html)));
   point = await pointOf(page, paneId, "src/report.HTML:2", { offset: 2 });
   await page.mouse.click(point.x, point.y, { button: "right" });
-  const reveal = process.platform === "darwin" ? "Reveal in Finder" : process.platform === "win32" ? "Reveal in File Explorer" : "Open Containing Folder";
-  await page.getByRole("menuitem", { name: reveal, exact: true }).click();
+  await page.getByRole("menuitem", { name: revealMenuLabel, exact: true }).click();
   expect(await opened()).toEqual([{ how: "reveal", target: fs.realpathSync(html) }]);
 
   point = await pointOf(page, paneId, `${origin}/a.html`, { offset: 3 });
@@ -519,11 +518,12 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
 // hide-private issue 312: a URL exactly as wide as the pane that ends
 // with a line break stays one link when the next line starts with a word,
 // and a URL the terminal carried onto the next row is still one link. The
-// pane runs a shell, not an agent, so the holder's soft-wrap rows decide. A
-// Windows holder says none (ConPTY places a wrapped line's rows itself and
-// does not reliably leave a soft wrap), so there the full-width URL still
-// joins the next word (docs/INSTALL.md, What each system supports) and only
-// the wrap is checked.
+// pane runs a shell, not an agent, so the holder's soft-wrap rows decide
+// for a plain URL; where the holder says none (`holderSoftWraps`), the
+// full-width URL still joins the next word. A URL its program marked
+// (OSC 8, as Claude Code and Codex mark theirs, issue 591) ends where its
+// mark ends on every system, which the holder says itself. A drag copy
+// reads the same rows.
 test("a URL that fills its row is not joined to the next line, and one that wraps is one link", { tag: "@platform" }, async () => {
   ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
@@ -537,25 +537,44 @@ test("a URL that fills its row is not joined to the next line, and one that wrap
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
   const cols = await paneCols(page, paneId);
   const fills = `${origin}/a.html?pad=`.padEnd(cols, "x");
+  const marked = `${origin}/c.html?pad=`.padEnd(cols, "z");
   // One full row, then the rest on the next row alone.
   const wraps = `${`${origin}/b.html?pad=`.padEnd(cols, "y")}TAILEND`;
   expect(fills.length).toBe(cols);
-  await print(page, paneId, [fills, "osc8 label", wraps, "WRAP-END"], "WRAP-END");
+  await print(page, paneId, [fills, "osc8 label", `\u001b]8;;${marked}\u001b\\${marked}\u001b]8;;\u001b\\`, "marked word", wraps, "WRAP-END"], "WRAP-END");
   // The rows below are read at the width they were printed at.
   expect(await paneCols(page, paneId)).toBe(cols);
 
-  let point: { x: number; y: number };
-  if (process.platform !== "win32") {
-    point = await pointOf(page, paneId, fills, { offset: 3 });
-    await hoverLink(page, paneId, point);
-    await page.mouse.click(point.x, point.y, { button: "right" });
-    await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
-    await expect.poll(copied).toBe(fills);
+  let point = await pointOf(page, paneId, fills, { offset: 3 });
+  await hoverLink(page, paneId, point);
+  await page.mouse.click(point.x, point.y, { button: "right" });
+  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+  await expect.poll(copied).toBe(holderSoftWraps ? fills : `${fills}osc8`);
+  point = await pointOf(page, paneId, "marked word", { offset: 1 });
+  await page.mouse.move(point.x, point.y);
+  await quietFor(page, 500, "the word after a full-width marked URL is no link");
+  await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).not.toHaveClass(/xterm-cursor-pointer/);
+  if (holderSoftWraps) {
     point = await pointOf(page, paneId, "osc8 label", { offset: 1 });
     await page.mouse.move(point.x, point.y);
     await quietFor(page, 500, "the word after a full-width URL is no link");
     await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).not.toHaveClass(/xterm-cursor-pointer/);
   }
+
+  // A drag from past the marked word back to before the first URL copies
+  // the rows apart where they end. The pane's first column is under the
+  // resize grab, so the press starts at the other end.
+  const pressAt = await pointOf(page, paneId, "marked word", { offset: 11 });
+  const first = await cellPoint(page, paneId, { row: (await cellOf(page, paneId, fills)).row, column: 0 });
+  const cell = (await page.locator(`[data-terminal="${paneId}"] .xterm-screen`).boundingBox())!.width / cols;
+  await page.mouse.move(pressAt.x, pressAt.y);
+  await page.mouse.down();
+  await page.mouse.move(first.x - cell, first.y, { steps: 8 });
+  await page.mouse.up();
+  const ended = holderSoftWraps ? "\n" : "";
+  await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneSelection(id), paneId))
+    .toBe(`${fills}${ended}osc8 label\n${marked}\nmarked word`);
+  await page.mouse.click(pressAt.x, pressAt.y);
 
   point = await pointOf(page, paneId, "TAILEND", { offset: 2 });
   await hoverLink(page, paneId, point);
@@ -565,10 +584,10 @@ test("a URL that fills its row is not joined to the next line, and one that wrap
   await screenshot(page, "terminal-url-wrap");
 });
 
-/** A current native frame of this exact candidate, without activating any app. */
+/** A current native frame of this exact candidate, without activating any app, where the system can take one. */
 async function nativeCapture(name: string): Promise<void> {
   const dir = process.env.HIDE_E2E_SCREENSHOT_DIR;
-  if (!dir) return;
+  if (!dir || !nativeWindowCapture) return;
   fs.mkdirSync(dir, { recursive: true });
   const pid = app!.process().pid!;
   const script = 'ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))).filter(w => w.kCGWindowLayer === 0 && w.kCGWindowOwnerPID === ' + pid + ').map(w => ({id:w.kCGWindowNumber,pid:w.kCGWindowOwnerPID})))';

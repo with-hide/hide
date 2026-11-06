@@ -6,7 +6,8 @@
 // ratatui frames, skips a row the capture shares unchanged, starts a full
 // screen with a display reset so any earlier state of the receiver is gone,
 // splits a screen between rows into fragments of at most `MAX_FRAGMENT`
-// bytes, writes overline, says which rows soft-wrap (`WRAP_OSC`), and drops
+// bytes, writes overline, says which rows soft-wrap (`WRAP_OSC`) and which
+// end with a link (`LINK_END_OSC`), and drops
 // the drawn cursor, the surface patches, the profiling and the IME anchor
 // repeat, which only Herdr's own client uses.
 
@@ -25,9 +26,12 @@
 //! last sent, also says which rows soft-wrap, as [`WRAP_OSC`], unless the
 //! pane cannot know (a Windows pane, `Capture::without_wraps`): the cells are
 //! placed with autowrap off, so the receiver cannot tell a row the program's
-//! text ran past from one it ended with a line break. A program's own OSC
-//! never reaches the receiver, since a fragment is drawn from the parsed
-//! cells, so only the holder writes this one.
+//! text ran past from one it ended with a line break. The same fragments say,
+//! as [`LINK_END_OSC`] on every system, which rows end with a hyperlink the
+//! next row does not carry on (`Frame::link_ends`), which tells a link an
+//! agent's TUI broke across rows from one that filled its row. A program's
+//! own OSC never reaches the receiver, since a fragment is drawn from the
+//! parsed cells, so only the holder writes these.
 
 use std::cmp;
 use std::io::Write;
@@ -51,8 +55,15 @@ const RESET: &[u8] = b"\x1b[?1049l\x1b[!p\x1b[?7l\x1b[?5l\x1b[r\x1b[0m\x1b[H\x1b
 /// (`web/src/terminalWrap.ts`); a terminal that does not know it drops it.
 pub const WRAP_OSC: u16 = 7719;
 
-/// The most bytes [`WRAP_OSC`] takes: its frame, two sizes, a digit per four rows.
-const MAX_WRAP: usize = 24 + hide_holder_protocol::MAX_ROWS as usize / 4;
+/// The private OSC that says which rows end with a hyperlink the next row
+/// does not carry on (`Frame::link_ends`), in [`WRAP_OSC`]'s form:
+/// `ESC ] 7720 ; <cols> ; <rows> ; <hex> ESC \`. The web shell reads it
+/// (`web/src/terminalWrap.ts`); a terminal that does not know it drops it.
+pub const LINK_END_OSC: u16 = 7720;
+
+/// The most bytes [`WRAP_OSC`] or [`LINK_END_OSC`] takes: its frame, two
+/// sizes, a digit per four rows.
+const MAX_ROW_BITS: usize = 24 + hide_holder_protocol::MAX_ROWS as usize / 4;
 
 /// The most bytes one cell can encode to: a move, the longest attributes,
 /// a hyperlink closed and opened, and its text.
@@ -66,7 +77,7 @@ const _: () = assert!(
     MAX_CELL * hide_holder_protocol::MAX_COLS as usize
         + SYNC_START.len()
         + RESET.len()
-        + MAX_WRAP
+        + 2 * MAX_ROW_BITS
         + TAIL
         < MAX_FRAGMENT
 );
@@ -105,8 +116,9 @@ impl Encoder {
                 out.push(RESET);
                 out.push(b"\x1b[?25l");
                 if let Some(wrapped) = &frame.wrapped {
-                    write_wrapped(&mut out, &frame, wrapped);
+                    write_rows(&mut out, WRAP_OSC, &frame, wrapped);
                 }
+                write_rows(&mut out, LINK_END_OSC, &frame, &frame.link_ends);
                 write_all_cells(&mut out, &frame);
                 self.shape = 0;
                 wrote = true;
@@ -118,7 +130,11 @@ impl Encoder {
                     .as_ref()
                     .filter(|_| frame.wrapped != previous.wrapped)
                 {
-                    write_wrapped(&mut out, &frame, wrapped);
+                    write_rows(&mut out, WRAP_OSC, &frame, wrapped);
+                    wrote = true;
+                }
+                if frame.link_ends != previous.link_ends {
+                    write_rows(&mut out, LINK_END_OSC, &frame, &frame.link_ends);
                     wrote = true;
                 }
                 wrote |= write_changed_cells(&mut out, &frame, previous);
@@ -341,19 +357,20 @@ fn write_changed_cells(out: &mut Pieces, frame: &Frame, previous: &Frame) -> boo
     wrote
 }
 
-/// Writes [`WRAP_OSC`] for `frame`.
-fn write_wrapped(out: &mut Pieces, frame: &Frame, wrapped: &[bool]) {
-    let mut bytes = Vec::with_capacity(24 + wrapped.len() / 4);
-    let _ = write!(bytes, "\x1b]{WRAP_OSC};{};{};", frame.cols, frame.rows);
-    let used = wrapped
+/// Writes `bits`, one per row of `frame`, as the private OSC `osc`
+/// ([`WRAP_OSC`] or [`LINK_END_OSC`]).
+fn write_rows(out: &mut Pieces, osc: u16, frame: &Frame, bits: &[bool]) {
+    let mut bytes = Vec::with_capacity(24 + bits.len() / 4);
+    let _ = write!(bytes, "\x1b]{osc};{};{};", frame.cols, frame.rows);
+    let used = bits
         .iter()
-        .rposition(|wraps| *wraps)
+        .rposition(|set| *set)
         .map_or(0, |last| last / 4 + 1);
-    for digit in wrapped.chunks(4).take(used) {
+    for digit in bits.chunks(4).take(used) {
         let bits = digit
             .iter()
             .enumerate()
-            .fold(0u8, |bits, (j, wraps)| bits | (u8::from(*wraps) << j));
+            .fold(0u8, |bits, (j, set)| bits | (u8::from(*set) << j));
         bytes.push(b"0123456789abcdef"[usize::from(bits)]);
     }
     bytes.extend_from_slice(b"\x1b\\");
@@ -401,13 +418,124 @@ mod tests {
     }
 
     fn wrap_sequences(encoded: &Encoded) -> Vec<String> {
+        sequences(encoded, WRAP_OSC)
+    }
+
+    fn link_end_sequences(encoded: &Encoded) -> Vec<String> {
+        sequences(encoded, LINK_END_OSC)
+    }
+
+    fn sequences(encoded: &Encoded, osc: u16) -> Vec<String> {
         let text = String::from_utf8_lossy(&encoded.pieces.concat()).into_owned();
-        text.match_indices("\x1b]7719;")
+        text.match_indices(&format!("\x1b]{osc};"))
             .map(|(at, _)| {
                 let rest = &text[at + 2..];
                 rest[..rest.find("\x1b\\").unwrap()].to_owned()
             })
             .collect()
+    }
+
+    /// What Claude Code 2.1.318 wrote at 60 columns, told the terminal shows
+    /// links (`FORCE_HYPERLINK=1`, as a pane is), replying with a URL longer
+    /// than its row and one exactly as wide as its row followed by a word on
+    /// the next line: its message as written, from its first mark to the
+    /// end of that word's line. It breaks the long URL itself, so neither
+    /// row soft-wraps, and marks each piece with the whole address.
+    const CLAUDE_URLS: &[u8] = include_bytes!("../tests/fixtures/claude-code-urls.ansi");
+
+    fn row_text(frame: &Frame, y: usize) -> String {
+        let row = &frame.lines[y];
+        row.cells()
+            .iter()
+            .map(|cell| row.text(cell))
+            .collect::<String>()
+    }
+
+    // with-hide/hide-private#591: in an agent's pane the link, not the wrap,
+    // says where a URL ends. `web/src/terminalLinkProvider.test.ts` draws
+    // these rows and this sequence.
+    #[test]
+    fn a_link_an_agent_broke_runs_on_and_one_that_fills_its_row_ends() {
+        let mut pane = pane(60, 30);
+        pane.feed(CLAUDE_URLS, &mut Vec::new());
+        let frame = pane.take(true).unwrap();
+        assert!(
+            row_text(&frame, 0)
+                .ends_with("Long: https://example.com/agent-broke-this-url/aaaaaaaaaa/")
+        );
+        assert!(row_text(&frame, 1).starts_with("  bbbbbbbbbb/cccccccccc/dddddddddd/end "));
+        assert!(
+            row_text(&frame, 4)
+                .ends_with("https://example.com/fills-the-row-exactly-xxxxxxxxxxxxxxxx")
+        );
+        assert!(row_text(&frame, 5).starts_with("  nextword after it "));
+        assert_eq!(frame.wrapped.as_deref(), Some(&[false; 30][..]));
+        let encoded = Encoder::default().encode(frame, true);
+        // Row 4 ends its link; row 0's runs on into row 1.
+        assert_eq!(link_end_sequences(&encoded), ["7720;60;30;01"]);
+    }
+
+    #[test]
+    fn a_delta_says_the_link_ends_again_only_when_they_change() {
+        let mut pane = pane(29, 4);
+        let mut encoder = Encoder::default();
+        pane.feed(b"plain", &mut Vec::new());
+        assert_eq!(
+            link_end_sequences(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7720;29;4;"]
+        );
+        pane.feed(
+            format!("\r\x1b]8;;{URL}\x1b\\{URL}\x1b]8;;\x1b\\\r\n").as_bytes(),
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            link_end_sequences(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7720;29;4;1"]
+        );
+        // Output that moves no link end carries no link end bytes.
+        pane.feed(b"label", &mut Vec::new());
+        let unchanged = encoder.encode(pane.take(false).unwrap(), false);
+        assert!(!unchanged.pieces.is_empty());
+        assert!(link_end_sequences(&unchanged).is_empty());
+        // The same address carried on at the next row's first word: no end.
+        pane.feed(
+            format!("\r\x1b]8;;{URL}\x1b\\tail\x1b]8;;\x1b\\").as_bytes(),
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            link_end_sequences(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7720;29;4;"]
+        );
+    }
+
+    #[test]
+    fn a_link_that_ends_short_of_the_edge_or_on_the_last_row_is_read_as_the_cells_say() {
+        let mut pane = pane(29, 3);
+        // A linked word short of the edge ends nothing; one filling the last row ends there.
+        pane.feed(
+            format!(
+                "\x1b]8;;{URL}\x1b\\short\x1b]8;;\x1b\\\r\n\n\x1b]8;;{URL}\x1b\\{URL}\x1b]8;;\x1b\\"
+            )
+            .as_bytes(),
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            link_end_sequences(&Encoder::default().encode(pane.take(true).unwrap(), true)),
+            ["7720;29;3;4"]
+        );
+    }
+
+    #[test]
+    fn a_pane_without_wraps_still_says_its_link_ends() {
+        let mut pane = pane(29, 4);
+        pane.without_wraps();
+        pane.feed(
+            format!("\x1b]8;;{URL}\x1b\\{URL}\x1b]8;;\x1b\\\r\nlabel").as_bytes(),
+            &mut Vec::new(),
+        );
+        let encoded = Encoder::default().encode(pane.take(true).unwrap(), true);
+        assert!(wrap_sequences(&encoded).is_empty());
+        assert_eq!(link_end_sequences(&encoded), ["7720;29;4;1"]);
     }
 
     // The URL of with-hide/hide-private#312 fills a 29-column row exactly.
@@ -504,9 +632,13 @@ mod tests {
     #[test]
     fn a_program_cannot_write_the_wrap_sequence_itself() {
         let mut pane = pane(29, 4);
-        pane.feed(b"\x1b]7719;29;4;f\x1b\\short", &mut Vec::new());
+        pane.feed(
+            b"\x1b]7719;29;4;f\x1b\\\x1b]7720;29;4;f\x1b\\short",
+            &mut Vec::new(),
+        );
         let encoded = Encoder::default().encode(pane.take(true).unwrap(), true);
         assert_eq!(wrap_sequences(&encoded), ["7719;29;4;"]);
+        assert_eq!(link_end_sequences(&encoded), ["7720;29;4;"]);
     }
 
     #[test]

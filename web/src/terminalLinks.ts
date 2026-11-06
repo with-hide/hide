@@ -10,12 +10,13 @@
 // short followed by one that starts at the left edge is two lines, as `ls`
 // prints them. Every way to join the pieces is offered longest first, and the
 // existence check decides which spelling is real. A URL cannot be checked, so
-// it joins only at the terminal's edge, and only across a real soft wrap when
-// the pane's holder said which rows soft-wrap (`terminalWrap.ts`): a URL that
-// fills its row and ends with a line break is not joined to the next row's
-// first word (hide-private issue 312). Without that fact a row that reaches
-// its last column is read as continuing, as before; `terminalWrap.ts` says
-// when the fact applies.
+// it joins only at the terminal's edge, and never across a row the pane's
+// holder said does not run on (`terminalWrap.ts`): a URL that fills its row
+// and ends with a line break in a shell's pane (hide-private issue 312), or
+// whose link the agent ended there (issue 591), is not joined to the next
+// row's first word. Where nothing was said a row that reaches its last
+// column is read as continuing, as before; `terminalWrap.ts` says when each
+// fact applies.
 
 import { rowContinues, type CellRow } from "./selection";
 
@@ -85,10 +86,10 @@ function rowRuns(cells: CellRow, row: number): Run[] {
  * Every link that may cover row `at`, one group per token on that row. A
  * group's candidates are the ways to join that token with its neighbours on
  * the rows around it, longest first; the caller takes the first that holds.
- * `wraps`, beside `rows`, says whether each row soft-wraps onto the next, or
- * is null when that is not known.
+ * `wraps`, beside `rows`, says whether each row runs on into the next, null
+ * for a row, or for all of them, where that is not known.
  */
-export function linkCandidates(rows: CellRow[], at: number, wraps: boolean[] | null = null): LinkCandidate[][] {
+export function linkCandidates(rows: CellRow[], at: number, wraps: (boolean | null)[] | null = null): LinkCandidate[][] {
   const runsByRow = new Map<number, Run[]>();
   const runsOf = (row: number) => {
     let runs = runsByRow.get(row);
@@ -144,25 +145,25 @@ function spellingLength(candidate: LinkCandidate): number {
 
 /**
  * How a token piece's row runs into the next piece: `edge` when the row's
- * text reaches its last column and, where the holder said, soft-wraps there;
- * `ended` when it reaches the last column of a row the holder said ends with
- * a line break; `margin` into a TUI's indentation; null when the pieces
+ * text reaches its last column and, where the holder said, runs on there;
+ * `ended` when it reaches the last column of a row the holder said does not
+ * run on; `margin` into a TUI's indentation; null when the pieces
  * cannot join. A wrap counts only at a row whose text reaches its last
  * column: a soft-wrapped row that ends in blanks ends the token there.
  */
-function rowBreak(rows: CellRow[], wraps: boolean[] | null, piece: Run, next: Run): "edge" | "ended" | "margin" | null {
+function rowBreak(rows: CellRow[], wraps: (boolean | null)[] | null, piece: Run, next: Run): "edge" | "ended" | "margin" | null {
   if (rowContinues(rows[piece.row] ?? [])) return wraps?.[piece.row] === false ? "ended" : "edge";
   return next.start > 0 ? "margin" : null;
 }
 
-function joined(rows: CellRow[], wraps: boolean[] | null, pieces: Run[]): LinkCandidate[] {
+function joined(rows: CellRow[], wraps: (boolean | null)[] | null, pieces: Run[]): LinkCandidate[] {
   const raw = pieces.map((piece) => piece.text).join("");
   if (raw.length > MAX_TEXT) return [];
   const breaks = pieces.slice(0, -1).map((piece, index) => rowBreak(rows, wraps, piece, pieces[index + 1]!));
   if (breaks.includes(null)) return [];
   return interpretations(raw).flatMap((parsed) => {
     // A URL joins only where the row's text ran on: never at a TUI's margin
-    // or across a line break the holder said; a path's existence decides.
+    // or across a row the holder said ends; a path's existence decides.
     if (parsed.target.kind === "url" && breaks.some((kind) => kind === "margin" || kind === "ended")) return [];
     const spans = trimSpans(rows, pieces, parsed.lead, parsed.trail);
     return spans ? [{ spans, text: parsed.text, target: parsed.target, original: parsed.original }] : [];

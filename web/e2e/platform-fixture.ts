@@ -13,6 +13,21 @@ export type { WindowsProcess };
 export const fixtureExecutable = (name: string): string => `${name}${process.platform === "win32" ? ".exe" : ""}`;
 
 /**
+ * Whether a pane's holder says which rows soft-wrap (`WRAP_OSC`,
+ * `web/src/terminalWrap.ts`). A Windows holder says none: ConPTY places a
+ * wrapped line's rows itself and does not reliably leave a soft wrap
+ * (docs/INSTALL.md, What each system supports), so there a plain URL that
+ * fills its row is read as running on into the next.
+ */
+export const holderSoftWraps = process.platform !== "win32";
+
+/** The label the item that hands a file to the system's file manager has here (`revealLabel`, `web/src/revealExternal.ts`). */
+export const revealMenuLabel = ({ darwin: "Reveal in Finder", win32: "Reveal in File Explorer", linux: "Open Containing Folder" } as Record<string, string>)[process.platform] ?? "Show in File Manager";
+
+/** Whether a spec can capture its candidate's own native window: `screencapture -l` and the CoreGraphics window list are macOS's. */
+export const nativeWindowCapture = process.platform === "darwin";
+
+/**
  * Puts the fixture's own programs in `bin` (the `claude` stand-in, and on
  * Windows the opener and the process lister the fixtures call) and returns
  * the PATH every fixture pane and daemon runs with, `bin` first and the

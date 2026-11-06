@@ -15,6 +15,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "../../web/e2e/engine-fixture";
 import { enterWorkspace, showExplorer, showTool } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
+import { revealMenuLabel } from "../../web/e2e/platform-fixture";
 import { afterCleanup } from "../../web/e2e/worker-owned";
 import { connectHome, fitWindow, hostLog, isolate, launchShell, screenshot, test, type Isolated } from "./fixture";
 
@@ -102,7 +103,7 @@ async function openMenu(page: Page, target: Locator, name: string): Promise<Loca
 
 // @platform: The reveal is labelled and handed over by the system's file manager: Finder, File Explorer or the Linux file manager.
 test("reveal: Explorer, History, a View tab and a sidebar row hand the item to the OS file manager under the OS's label", { tag: "@platform" }, async () => {
-  const label = ({ darwin: "Reveal in Finder", win32: "Reveal in File Explorer", linux: "Open Containing Folder" } as Record<string, string>)[process.platform] ?? "Show in File Manager";
+  const label = revealMenuLabel;
 
   const launched = await launchShell(run.env);
   app = launched.app;
