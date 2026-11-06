@@ -2590,4 +2590,35 @@ mod tests {
             (Some(false), Some("unknown_kind"))
         );
     }
+
+    /// A newer bundle under the same phone protocol may send a request this
+    /// Hide predates (`docs/ARCHITECTURE.md`, the phone app): it is answered
+    /// with a refusal that names it, never dropped or taken for another.
+    #[tokio::test]
+    async fn a_request_this_hide_predates_is_refused_by_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let (frames, _received) = mpsc::channel::<Value>(8);
+        let mut open = Open::default();
+        let projection = Arc::new(sleeping_projection(None));
+        let later = json!({"type": "later_screen", "request_id": "r-1"});
+        let refused = handle(
+            &mobile,
+            1,
+            "phone-1",
+            &later,
+            &mut open,
+            &frames,
+            &projection,
+        )
+        .await;
+        assert_eq!(
+            refused,
+            Some(
+                json!({"type": "refused_request", "request": "later_screen", "reason": "not_allowed"})
+            )
+        );
+        mobile.shutdown().await;
+    }
 }
