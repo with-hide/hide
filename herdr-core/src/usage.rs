@@ -299,7 +299,7 @@ impl UsageDriver {
                     .limit_sources()
                     .map(|source| {
                         let root = match source {
-                            LimitSource::ClaudeUsageText => paths.claude_cwd.clone(),
+                            LimitSource::ClaudeUsage => paths.claude_cwd.clone(),
                             LimitSource::CodexUsage => paths.codex_home.clone(),
                             // agy's `/usage` reads no workspace; it runs in
                             // Hide's own folder as Claude's does.
@@ -404,7 +404,7 @@ mod tests {
     fn source() -> SourceRead {
         SourceRead {
             agent: "claude",
-            source: LimitSource::ClaudeUsageText,
+            source: LimitSource::ClaudeUsage,
             worker: BackgroundRead::on_change(Duration::ZERO, |_: &u64| unreachable!()),
             attempt: 0,
             pending: false,

@@ -7,7 +7,7 @@ use hide_agent_adapter::usage::{LimitSource, Presence};
 
 pub(super) fn parse(source: LimitSource, body: &str, now_s: u64) -> Result<LimitReading, Cause> {
     match source {
-        LimitSource::ClaudeUsageText => claude::parse(body, now_s),
+        LimitSource::ClaudeUsage => claude::parse(body, now_s),
         LimitSource::CodexUsage => codex::parse(body, now_s),
         LimitSource::AntigravityUsage => antigravity::parse(body, now_s),
     }

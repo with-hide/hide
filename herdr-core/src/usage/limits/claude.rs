@@ -1,9 +1,99 @@
 use super::*;
 use crate::usage::retry::parse_http_month;
 use crate::zoneinfo::{Zone, civil_from_days, days_from_civil, days_in_month};
+use serde_json::Value;
 const RESET_HORIZON_SECONDS: i64 = 8 * 86_400;
 
-pub(super) fn parse(text: &str, now_s: u64) -> Result<LimitReading, Cause> {
+/// What the core's own node read for Claude Code: the account endpoint's
+/// windows (`usage_api`), or the text `/usage` printed when that read failed
+/// (`usage_text`).
+pub(super) fn parse(body: &str, now_s: u64) -> Result<LimitReading, Cause> {
+    let value: Value = serde_json::from_str(body).map_err(|_| Cause::FormatChanged)?;
+    if let Some(windows) = value.get("usage_api") {
+        return parse_api(windows, now_s);
+    }
+    match value.get("usage_text").and_then(Value::as_str) {
+        Some(text) => parse_text(text, now_s),
+        None => Err(Cause::FormatChanged),
+    }
+}
+
+/// The endpoint's windows as the node copied them: `five_hour` and
+/// `seven_day` for all models, null when the plan has no such window, and
+/// `scoped`, the weekly windows of one model each.
+fn parse_api(value: &Value, now_s: u64) -> Result<LimitReading, Cause> {
+    let mut windows = Vec::new();
+    for (name, kind) in [
+        ("five_hour", WindowKind::FiveHour),
+        ("seven_day", WindowKind::Weekly),
+    ] {
+        if let Some(window) = value.get(name).filter(|window| !window.is_null()) {
+            windows.push(WindowReading {
+                kind,
+                scope: Scope::All,
+                outcome: api_outcome(kind, window),
+            });
+        }
+    }
+    let scoped = value.get("scoped").and_then(Value::as_array);
+    for window in scoped.into_iter().flatten() {
+        // A window scoped to something other than a model has no row.
+        let Some(label) = window.get("label").and_then(Value::as_str) else {
+            continue;
+        };
+        if label.len() > 64 {
+            return Err(Cause::Capped);
+        }
+        if windows.len() >= 16 {
+            return Err(Cause::Capped);
+        }
+        let scope = Scope::Model {
+            label: label.into(),
+        };
+        let outcome = api_outcome(WindowKind::Weekly, window);
+        if let Some(previous) = windows
+            .iter_mut()
+            .find(|w: &&mut WindowReading| w.kind == WindowKind::Weekly && w.scope == scope)
+        {
+            previous.outcome = WindowOutcome::Unreadable {
+                cause: Cause::FormatChanged,
+            };
+        } else {
+            windows.push(WindowReading {
+                kind: WindowKind::Weekly,
+                scope,
+                outcome,
+            });
+        }
+    }
+    complete(LimitSource::ClaudeUsage, windows, now_s)
+}
+
+/// A percent from 0 to 100 and an RFC 3339 reset; a zero five-hour window
+/// with no reset has not started, and anything else missing is unreadable.
+fn api_outcome(kind: WindowKind, window: &Value) -> WindowOutcome {
+    let used = window
+        .get("used_percent")
+        .and_then(Value::as_f64)
+        .filter(|n| n.is_finite() && (0.0..=100.0).contains(n));
+    let reset = window
+        .get("resets_at")
+        .and_then(Value::as_str)
+        .and_then(hide_session::parse_rfc3339);
+    match (used, reset) {
+        (Some(used_percent), Some(resets_at_s)) => WindowOutcome::Open {
+            used_percent,
+            resets_at_s,
+        },
+        (Some(0.0), None) if kind == WindowKind::FiveHour => WindowOutcome::NotStarted,
+        _ => WindowOutcome::Unreadable {
+            cause: Cause::FormatChanged,
+        },
+    }
+}
+
+/// The text `claude -p /usage` prints.
+fn parse_text(text: &str, now_s: u64) -> Result<LimitReading, Cause> {
     let mut windows = Vec::new();
     let mut recognized = false;
     let mut valid_lines = 0;
@@ -87,7 +177,7 @@ pub(super) fn parse(text: &str, now_s: u64) -> Result<LimitReading, Cause> {
     if valid_lines == 0 {
         return Err(Cause::FormatChanged);
     }
-    complete(LimitSource::ClaudeUsageText, windows, now_s)
+    complete(LimitSource::ClaudeUsage, windows, now_s)
 }
 
 /// One `Current week …` line, as printed: `Current week (<scope>): <n>%
