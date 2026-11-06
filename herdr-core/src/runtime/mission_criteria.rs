@@ -18,8 +18,7 @@ use crate::missions::{
     NodeStatus,
 };
 use crate::model::{
-    CheckoutSnapshot, CiEnd, GithubProjectSnapshot, PullRequestBadge, PullRequestChecks,
-    PullRequestSnapshot,
+    CheckoutSnapshot, CiEnd, GithubProjectSnapshot, PullRequestBadge, PullRequestSnapshot,
 };
 
 /// Whether `pull` is merged, so its head is the work that reached main.
@@ -112,9 +111,9 @@ impl Runtime {
             && !has_ci
         {
             let known = pull_in(pulls, number).is_some_and(|pull| {
-                pull.checks == PullRequestChecks::None
+                pull.ci_end() == CiEnd::NoChecks
                     // A merged pull request's checks are no longer read.
-                    || (merged(pull) && pull.checks == PullRequestChecks::Unknown)
+                    || (merged(pull) && pull.ci_end() == CiEnd::Unread)
             });
             if !known {
                 out.push("ci".into());

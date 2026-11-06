@@ -6169,6 +6169,7 @@ impl PullRequestSnapshot {
                 CiEnd::Ended(CiResult::Cancelled)
             }
             PullRequestChecks::Failed => CiEnd::Ended(CiResult::Failed),
+            // Unreachable: pending is unfinished.
             PullRequestChecks::Pending => CiEnd::Running,
         }
     }
