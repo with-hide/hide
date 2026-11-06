@@ -4,8 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  DEVICE_KITS, assertDeviceExecutable, deviceAsset, deviceHelperResources, prepareDeviceBundles, readDeviceBundles, stageDeviceKit,
+  CANDIDATE_KITS, DEVICE_KITS, assertDeviceExecutable, deviceAsset, deviceHelperResources, makeCandidateKits, makeDeviceKit,
+  readDeviceKit, stageDeviceKit, writeDeviceManifest,
 } from "./device-helpers.mjs";
+import { recordReleaseBinaries } from "./release-binaries.mjs";
 import { execFileSync } from "node:child_process";
 
 const identity = { commit: "a".repeat(40), version: "1.2.3", order: "42" };
@@ -35,58 +37,132 @@ function artifacts() {
   return root;
 }
 
-// The Mac package publishes the one set of bundles a run made beside its installers, and takes them
-// only when they are that set; no app carries their manifest (with-hide/hide-private#501).
-describe("bundles one run made, as a package takes them", () => {
-  function made() {
-    const root = artifacts();
-    const out = path.join(root, "bundles");
-    return { out, manifest: prepareDeviceBundles(root, identity, out) };
+/**
+ * `compile (windows)`'s artifact as `device bundles` downloads it, with the
+ * ConPTY runtime fetch-conpty.py writes beside it; minimal PE headers stand
+ * in for the compiled programs.
+ */
+function windowsCompile(root, record = identity) {
+  const input = path.join(root, "windows-compile");
+  const binaries = path.join(input, "target", "release");
+  fs.mkdirSync(binaries, { recursive: true });
+  fs.mkdirSync(path.join(input, "desktop", "out"), { recursive: true });
+  const kit = DEVICE_KITS["windows-x86_64"];
+  const names = ["hided", "hide", "hide-agent-hooks", "hide-holder"].map((name) => `${name}${kit.suffix}`);
+  for (const name of names) fs.writeFileSync(path.join(binaries, name), program(kit.header, name));
+  recordReleaseBinaries(path.join(input, "desktop", "out", "release-binaries.json"), binaries, names, record);
+  for (const name of Object.keys(kit.runtime)) {
+    const target = path.join(input, ...name.split("/"));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, `runtime ${name}`);
   }
+  return input;
+}
 
-  it("takes the manifest of bundles made for this source, version and order", () => {
-    const { out, manifest } = made();
-    expect(readDeviceBundles(out, identity)).toBe(manifest);
+/** Every candidate producer's output under one `out`, as `device bundles` lays it out. */
+function candidateOutput() {
+  const out = artifacts();
+  fs.renameSync(path.join(out, "linux-x86_64"), path.join(out, "x"));
+  fs.mkdirSync(path.join(out, "device-helpers"));
+  fs.renameSync(path.join(out, "x"), path.join(out, "device-helpers", "linux-x86_64"));
+  fs.renameSync(path.join(out, "linux-aarch64"), path.join(out, "device-helpers", "linux-aarch64"));
+  windowsCompile(out);
+  return out;
+}
+
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const listed = (archive) => execFileSync("tar", ["-tzf", path.basename(archive)], { cwd: path.dirname(archive), encoding: "utf8" }).trim().split("\n").sort();
+
+// A release candidate makes every kit but the Mac one once, from the bytes its
+// producers built, and no manifest (with-hide/hide-private#501 N3).
+describe("the kits a release candidate makes", () => {
+  it("archives both Linux kits and the Windows kit from their builds, and writes no manifest", () => {
+    const out = candidateOutput();
+    const output = path.join(out, "device-bundles");
+    const entries = makeCandidateKits(out, identity, output);
+    expect(Object.keys(entries).sort()).toEqual(["linux-aarch64", "linux-x86_64", "windows-x86_64"]);
+    expect(CANDIDATE_KITS.sort()).toEqual(Object.keys(entries).sort());
+    expect(fs.readdirSync(output).sort()).toEqual(Object.values(entries).map((entry) => entry.asset).sort());
+    const windows = entries["windows-x86_64"];
+    expect(windows.asset).toBe("hide-device-windows-x86_64-1.2.3.tar.gz");
+    expect(listed(path.join(output, windows.asset))).toEqual([
+      "hide-agent-hooks.exe", "hide-holder.exe", "hide.exe", "hided.exe",
+      "holder-conpty/arm64/OpenConsole.exe", "holder-conpty/conpty-files.json", "holder-conpty/conpty.dll", "holder-conpty/x64/OpenConsole.exe",
+    ]);
+    // The Windows kit's programs are the compile artifact's bytes, as the Windows app ships them.
+    expect(windows.files["hided.exe"].sha256).toBe(sha256(fs.readFileSync(path.join(out, "windows-compile/target/release/hided.exe"))));
+    expect(windows.files["holder-conpty/conpty.dll"].sha256).toBe(sha256("runtime holder-conpty/conpty.dll"));
+    expect(listed(path.join(output, entries["linux-aarch64"].asset))).toEqual(["hide", "hide-agent-hooks", "hide-holder", "hided"]);
+    for (const entry of Object.values(entries)) {
+      const archive = fs.readFileSync(path.join(output, entry.asset));
+      expect([entry.sha256, entry.size]).toEqual([sha256(archive), archive.length]);
+    }
   });
 
-  it.each(["commit", "version", "order"])("refuses bundles made for another %s", (key) => {
-    const { out } = made();
-    expect(() => readDeviceBundles(out, { ...identity, [key]: key === "commit" ? "b".repeat(40) : "99" })).toThrow("identity mismatch");
+  it.each(["commit", "version", "order"])("makes no kit from Windows binaries compiled for another %s", (key) => {
+    const out = candidateOutput();
+    fs.rmSync(path.join(out, "windows-compile"), { recursive: true });
+    windowsCompile(out, { ...identity, [key]: key === "commit" ? "b".repeat(40) : "99" });
+    expect(() => makeCandidateKits(out, identity, path.join(out, "device-bundles"))).toThrow("compile them again");
   });
 
-  it("refuses an archive that changed after its manifest was made, or is missing", () => {
-    const { out, manifest } = made();
-    const { platforms } = JSON.parse(fs.readFileSync(manifest, "utf8"));
-    const archive = path.join(out, platforms["linux-x86_64"].asset);
-    const bytes = fs.readFileSync(archive);
-    bytes[bytes.length - 1] ^= 0xff;
-    fs.writeFileSync(archive, bytes);
-    expect(() => readDeviceBundles(out, identity)).toThrow("digest mismatch");
-    fs.rmSync(archive);
-    expect(() => readDeviceBundles(out, identity)).toThrow();
+  it("makes no kit from a changed Windows binary or without the ConPTY runtime", () => {
+    const changed = candidateOutput();
+    fs.appendFileSync(path.join(changed, "windows-compile/target/release/hide-holder.exe"), "changed");
+    expect(() => makeCandidateKits(changed, identity, path.join(changed, "device-bundles"))).toThrow("differs from what compile recorded");
+    const bare = candidateOutput();
+    fs.rmSync(path.join(bare, "windows-compile/holder-conpty"), { recursive: true });
+    expect(() => makeCandidateKits(bare, identity, path.join(bare, "device-bundles"))).toThrow();
   });
 });
 
-describe("Mac device helper inputs", () => {
-  it("publishes separate four-program archives and a small manifest of their final bytes", () => {
-    const root = artifacts();
-    const out = path.join(root, "bundles");
-    const file = prepareDeviceBundles(root, identity, out);
-    expect(fs.statSync(file).size).toBeLessThan(16 * 1024);
+// The private publisher adds the Mac kit from the signed programs and writes
+// the release's manifest over all four with these exports.
+describe("a release's manifest over every kit", () => {
+  function release() {
+    const out = candidateOutput();
+    const output = path.join(out, "device-bundles");
+    const entries = makeCandidateKits(out, identity, output);
+    const mac = path.join(out, "mac");
+    fs.mkdirSync(mac);
+    for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder"]) fs.writeFileSync(path.join(mac, name), program(DEVICE_KITS["macos-aarch64"].header, name));
+    entries["macos-aarch64"] = makeDeviceKit("macos-aarch64", mac, identity.version, output);
+    return { out, output, entries };
+  }
+
+  it("names every contract kit with this identity, and a core's stage takes each kit from it", () => {
+    const { out, output, entries } = release();
+    const file = writeDeviceManifest(output, identity, entries);
     const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    expect(fs.statSync(file).size).toBeLessThan(16 * 1024);
     expect(manifest).toMatchObject({ format: 4, ...identity });
-    expect(Object.keys(manifest.platforms).sort()).toEqual(["linux-aarch64", "linux-x86_64"]);
-    for (const [platform, bundle] of Object.entries(manifest.platforms)) {
-      expect(bundle.asset).toBe(`hide-device-${platform}-1.2.3.tar.gz`);
-      const archive = fs.readFileSync(path.join(out, bundle.asset));
-      expect(bundle.sha256).toBe(createHash("sha256").update(archive).digest("hex"));
-      expect(bundle.size).toBe(archive.length);
-      expect(execFileSync("tar", ["-tzf", bundle.asset], { cwd: out, encoding: "utf8" }).trim().split("\n").sort())
-        .toEqual(["hide", "hide-agent-hooks", "hide-holder", "hided"].sort());
-      expect(Object.values(bundle.files).every((f) => f.size === 64 && /^[0-9a-f]{64}$/.test(f.sha256))).toBe(true);
+    expect(Object.keys(manifest.platforms).sort()).toEqual(Object.keys(DEVICE_KITS).sort());
+    for (const [platform, entry] of Object.entries(manifest.platforms)) {
+      expect(readDeviceKit(platform, path.join(output, entry.asset), identity.version)).toEqual(entry);
     }
-    expect(fs.readdirSync(out).sort()).toEqual(["device-bundles.json", ...Object.values(manifest.platforms).map((b) => b.asset)].sort());
+    expect(stageDeviceKit(file, path.join(output, entries["macos-aarch64"].asset), path.join(out, "developer")))
+      .toEqual(["hide-agent-hooks-macos-aarch64", "hide-holder-macos-aarch64", "hide-macos-aarch64", "hided-macos-aarch64"]);
   });
+
+  it("refuses a manifest short of a kit, or over an archive that changed after its entry was read", () => {
+    const { output, entries } = release();
+    const { ["macos-aarch64"]: mac, ...short } = entries;
+    expect(() => writeDeviceManifest(output, identity, short)).toThrow("names every kit");
+    const archive = path.join(output, mac.asset);
+    const bytes = fs.readFileSync(archive);
+    bytes[bytes.length - 1] ^= 0xff;
+    fs.writeFileSync(archive, bytes);
+    expect(() => writeDeviceManifest(output, identity, entries)).toThrow("differs from its entry");
+  });
+
+  it("refuses a kit archive under another release's name", () => {
+    const { output, entries } = release();
+    const entry = entries["linux-x86_64"];
+    expect(() => readDeviceKit("linux-x86_64", path.join(output, entry.asset), "1.2.4")).toThrow("is not the linux-x86_64 kit of 1.2.4");
+  });
+});
+
+describe("Linux device helper inputs", () => {
   it("offers all eight Linux kit programs under names the SSH payload can select", () => {
     const files = deviceHelperResources(artifacts(), identity).map(([name]) => name);
     expect(files.sort()).toEqual([

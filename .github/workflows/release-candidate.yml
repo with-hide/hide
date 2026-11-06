@@ -239,27 +239,41 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The kits `device bundles` made, and the builds it made them from, at
+      # the paths it read them (desktop/scripts/device-helpers.mjs,
+      # candidateKitSources), so every kit program is checked against the
+      # build recorded for this source, version and order.
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-bundles
+          path: agents/runs/release-candidate/kits/device-bundles
+          digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
           name: hide-device-helper-linux-x86_64
-          path: agents/runs/release-candidate/device-helpers/linux-x86_64
+          path: agents/runs/release-candidate/kits/device-helpers/linux-x86_64
           digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
           name: hide-device-helper-linux-aarch64
-          path: agents/runs/release-candidate/device-helpers/linux-aarch64
+          path: agents/runs/release-candidate/kits/device-helpers/linux-aarch64
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-windows-release-binaries
+          path: agents/runs/release-candidate/kits/windows-compile
           digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
           name: hide-macos-release-binaries
           path: agents/runs/release-candidate/macos-binaries
           digest-mismatch: error
-      - name: Record the candidate's source, its device helpers and its Mac binaries
+      - name: Record the candidate's source, its device kits and its Mac binaries
         env:
           RECEIPT: ${{ needs.validate.outputs.receipt }}
         run: |
           printf '%s\n' "$RECEIPT" > "$RUNNER_TEMP/source.json"
-          node scripts/release-candidate.mjs builds "$RUNNER_TEMP/source.json" agents/runs/release-candidate/device-helpers agents/runs/release-candidate/macos-binaries > agents/runs/release-candidate/candidate.json
+          node scripts/release-candidate.mjs builds "$RUNNER_TEMP/source.json" agents/runs/release-candidate/kits agents/runs/release-candidate/macos-binaries > agents/runs/release-candidate/candidate.json
           echo 'Signed-in providers: not measured on CI; the release measures them on the Mac. Fixture and fake-model checks run beside this receipt, and the run succeeds only when they pass.' >> "$GITHUB_STEP_SUMMARY"
           echo 'The verify run this receipt names was not awaited; the publish requires that it concluded success.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7

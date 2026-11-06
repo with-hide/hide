@@ -12,10 +12,8 @@
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
-// system's cargo build. A release Mac or Windows app carries the manifest of
-// the two Linux device bundles a run made from device-helpers.yml at this
-// exact source, version and build order, publishing the archives
-// separately; a local package carries none (see below).
+// system's cargo build. No package carries or publishes a device kit (see
+// below).
 //
 // `package.mjs compile` stops after the web shell and the release binaries,
 // recording them in desktop/out/release-binaries.json, and `package.mjs
@@ -38,7 +36,7 @@ import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
-import { DEVICE_BUNDLE_MANIFEST, DEVICE_KITS, readDeviceBundles } from "./device-helpers.mjs";
+import { DEVICE_BUNDLE_MANIFEST, DEVICE_KITS } from "./device-helpers.mjs";
 import { checkReleaseBinaries, recordReleaseBinaries, RELEASE_PROGRAMS } from "./release-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -119,24 +117,12 @@ if (phase !== "assemble") {
 // names it in HIDE_BUILD_ORDER, or is refused.
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
-// No app carries a device kit or its manifest: a core of any system fetches
-// the manifest from its own release and the kits it names
-// (with-hide/hide-private#501 decision 1, hide-node/src/ssh/kit/). Until the
-// private publisher makes the release's kits itself, a release's Mac
-// package publishes the kits this run's `device-bundles` job made, as they
-// are, beside its installers; it checks them before the native release
-// build, or before the app is assembled from compiled binaries. A local
-// package (no HIDE_VERSION) publishes nothing: its `-main.` version has no
-// release, and the Linux helpers build only on Linux runners, so asking for
-// them would leave a source build on a Mac waiting (with-hide/hide#2041).
-const deviceBundles = path.join(out, "device-bundles");
-const releasing = Boolean(process.env.HIDE_VERSION);
-const publishesDeviceKits = platform === "darwin" && releasing && phase !== "compile";
-const identity = { version, commit, order };
-if (publishesDeviceKits && !fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST))) {
-  throw new Error(`the ${version} release needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
-}
-const deviceManifest = publishesDeviceKits ? readDeviceBundles(deviceBundles, identity) : null;
+// No app carries a device kit or its manifest, and no package publishes one:
+// a core of any system fetches the manifest from its own release and the
+// kits it names (with-hide/hide-private#501 decision 1,
+// hide-node/src/ssh/kit/), which the release candidate makes and the private
+// publisher places beside the installers (docs/BUILD.md, Device helper
+// release bundles).
 const cargoRelease = path.join(repo, "target", "release");
 const releaseBinaries = RELEASE_PROGRAMS.map((name) => `${name}${exe}`);
 if (phase === "assemble") {
@@ -327,13 +313,6 @@ for (const devicePlatform of Object.keys(DEVICE_KITS)) {
 // The installers wrap the app as it stands; a Developer ID build's dmg is
 // signed and notarized there too.
 const installers = await buildInstallers({ app: bundle, version, out: release, signing });
-if (deviceManifest) {
-  const manifest = JSON.parse(fs.readFileSync(deviceManifest, "utf8"));
-  // The archives and their manifest are release assets once, beside the Mac app.
-  for (const { asset } of Object.values(manifest.platforms)) fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
-  fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
-  console.log(`device_manifest_bytes=${fs.statSync(deviceManifest).size}`);
-}
 // What a downloader of the update gets is the zip, so Gatekeeper judges the app expanded from it.
 if (signing?.mode === "developer-id") {
   const zip = Object.values(installers).find((file) => file.endsWith(".zip"));

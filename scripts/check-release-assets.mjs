@@ -179,11 +179,10 @@ export async function verifyAssets(tag, directory, { sourceSha } = {}) {
   // A core takes a device's kit only from a manifest that names every
   // platform of the contract (hide-node/src/ssh/kit/manifest.rs), so a
   // release short of a kit is refused here rather than published with
-  // device connections a core would refuse. The pointer to N3 goes when the
-  // release producers make every kit (with-hide/hide-private#501).
+  // device connections a core would refuse.
   const missingKits = deviceKitAssetNames(tag.slice(1)).filter((name) => !actual.includes(name));
   if (missingKits.length) {
-    throw new Error(`this release lacks device kits a core needs: ${missingKits.join(", ")}; every platform in contracts/device-kits.json needs its kit on the release, and the release producers make them only from with-hide/hide-private#501 N3 (release-kits)`);
+    throw new Error(`this release lacks device kits a core needs: ${missingKits.join(", ")}; every platform in contracts/device-kits.json needs its kit on the release: the candidate's \`device bundles\` job makes the Linux and Windows kits and the private publisher the Mac kit and the manifest`);
   }
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     const missing = expected.filter((name) => !actual.includes(name));
