@@ -163,8 +163,10 @@ impl HostAttempt {
 
 /// A connection attempt that reached the device's node.
 pub(super) enum HostReady {
-    Dialed(Established),
-    Arrived(NodeReady),
+    /// Both boxed: the two carry records of very different sizes, and the
+    /// value only moves between the worker and the runtime.
+    Dialed(Box<Established>),
+    Arrived(Box<NodeReady>),
 }
 
 impl HostReady {
@@ -710,12 +712,12 @@ impl Runtime {
                         } else {
                             client
                                 .establish(&consent, &retirement_projects, attempt)
-                                .map(HostReady::Dialed)
+                                .map(|established| HostReady::Dialed(Box::new(established)))
                         };
                         (result, None)
                     }
                     HostStart::Arrived { node, hear_close } => {
-                        (Ok(HostReady::Arrived(node)), Some((hear_close, on_close)))
+                        (Ok(HostReady::Arrived(Box::new(node))), Some((hear_close, on_close)))
                     }
                 };
                 if let Ok(HostReady::Dialed(established)) = &result
@@ -1008,10 +1010,10 @@ impl Runtime {
                             helper_path,
                             upload,
                             kit,
-                        } = established;
+                        } = *established;
                         (node, Some((identity, installed, helper_path, upload)), kit)
                     }
-                    HostReady::Arrived(node) => (node, None, None),
+                    HostReady::Arrived(node) => (*node, None, None),
                 };
                 self.ingest_device_machine_id(
                     device_id,

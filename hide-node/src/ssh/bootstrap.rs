@@ -170,6 +170,8 @@ hs=yes;
 if command -v sha256sum >/dev/null 2>&1; then sum() { sha256sum < "$1" | cut -d ' ' -f 1; };
 elif command -v shasum >/dev/null 2>&1; then sum() { shasum -a 256 < "$1" | cut -d ' ' -f 1; };
 else hs=none; sum() { echo none; }; fi;
+gz=-; if command -v gzip >/dev/null 2>&1; then gz=gzip; fi;
+unpack() { case $1 in zput) gzip -dc 2>/dev/null || { cat >/dev/null; return 1; };; *) cat;; esac; };
 safe() { set -- $(ls -ldn -- "$1" 2>/dev/null); case ${1:-} in d*) ;; *) return 3;; esac; [ "${3:-}" = "$uid" ] || [ "${3:-}" = 0 ] || return 1; case $1 in ?????w*|????????w*) ;; *) return 0;; esac; [ "$3" = 0 ] || return 2; case $1 in ?????????[tT]*) return 0;; esac; return 2; };
 mine() { set -- $(ls -ldn -- "$1" 2>/dev/null); [ "${3:-}" = "$uid" ] || return 1; case ${1:-} in ?????w*|????????w*) return 1;; esac; return 0; };
 store() { { (umask 077; mkdir -p -- "${1%/*}") && cat > "$1"; } || { cat > /dev/null; return 1; }; };
@@ -177,7 +179,7 @@ below() { u=$root; ur=$1; while :; do up=${ur%%/*}; case $up in ''|.|..) ub="$1 
 o= e= x= t=;
 trap 'rm -f -- ${o:+"$o"} ${e:+"$e"} ${x:+"$x"} ${t:+"$t"}' EXIT;
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 141' PIPE; trap 'exit 143' TERM;
-say probe "$me" "${HOME:-}" "$(uname -s)" "$(uname -m)" "${mid:--}" "$hs";
+say probe "$me" "${HOME:-}" "$(uname -s)" "$(uname -m)" "${mid:--}" "$hs" "$gz";
 root=;
 while IFS=$T read -r cmd a b c d; do
 case $cmd in
@@ -193,9 +195,9 @@ root=$r; say root "$r";;
 held) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; i=0;
 while [ "$i" -lt "$a" ] && IFS=$T read -r rel dig; do i=$((i+1)); f=$root/$rel; if below "$rel" && [ -f "$f" ] && [ ! -L "$f" ] && mine "$f" && [ "$(sum "$f")" = "$dig" ]; then say held "$rel"; fi; done;
 say end;;
-put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; below "$a" make || { head -c "$d" >/dev/null; say fail "$ub"; continue; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
+put|zput) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; below "$a" make || { head -c "$d" >/dev/null; say fail "$ub"; continue; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
 find "${f%/*}" -maxdepth 1 -name '.upload-*' -mmin +10 -exec rm -f {} + 2>/dev/null;
-if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
+if head -c "$d" | unpack "$cmd" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
 below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
 case ${b:--} in -) ;; *) { (umask 077; mkdir -p -- "$b") && HOME=$b && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $b could not be made"; exit 65; };; esac;
@@ -290,6 +292,11 @@ pub(crate) struct Facts {
     /// reads it there. A consent binds to it (D-09), so a machine that
     /// reports none is refused before anything is installed.
     pub machine_id: String,
+    /// Whether the account unpacks a gzip stream (`gzip` on a POSIX device,
+    /// .NET on Windows), so an install sends its files packed
+    /// (with-hide/hide-private#582); a device without it takes them as they
+    /// are.
+    pub unpacks: bool,
 }
 
 #[derive(Debug)]
@@ -336,7 +343,7 @@ fn answer(line: &[u8]) -> Option<Vec<String>> {
 }
 
 fn read_probe(fields: &[String]) -> Result<Facts, String> {
-    let [step, user, home, system, machine, id, digest] = fields else {
+    let [step, user, home, system, machine, id, digest, unpack] = fields else {
         return Err(format!(
             "The device answered an unreadable probe: {fields:?}"
         ));
@@ -385,6 +392,7 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
         os,
         arch,
         machine_id,
+        unpacks: unpack == "gzip",
     })
 }
 
@@ -425,12 +433,17 @@ pub(crate) struct Installed {
 
 /// Puts `payload` in its version folder under `helper_root` (`~/` is the
 /// account's home), sending only the files the device does not already hold
-/// whole.
+/// whole, each packed with gzip when the device `unpacks` it
+/// ([`Facts::unpacks`]): the link, not the device's disk, is what an install
+/// waits on (with-hide/hide-private#582). The digest a file is checked
+/// against is its own, so a stream that did not unpack whole fails as a file
+/// that did not arrive.
 pub(crate) fn install(
     pipe: &mut dyn Pipe,
     helper_root: &str,
     home: &str,
     payload: &Payload,
+    unpacks: bool,
 ) -> Result<Installed, EstablishError> {
     let deadline = Instant::now() + INSTALL_TIMEOUT;
     let failed = |reason: String| EstablishError::Install(reason);
@@ -489,17 +502,32 @@ pub(crate) fn install(
             continue;
         }
         let mode = if file.executable { "700" } else { "600" };
+        let packed = if unpacks {
+            let started = Instant::now();
+            let packed = pack(&file.bytes)
+                .map_err(|error| failed(format!("{relative} could not be packed: {error}")))?;
+            upload.pack_ms += started.elapsed().as_millis() as u64;
+            Some(packed)
+        } else {
+            None
+        };
+        let (step, wire) = match &packed {
+            Some(packed) => ("zput", packed.as_slice()),
+            None => ("put", file.bytes.as_slice()),
+        };
         send(
             pipe,
             format!(
-                "put\t{relative}\t{}\t{mode}\t{}\n",
+                "{step}\t{relative}\t{}\t{mode}\t{}\n",
                 file.digest,
-                file.bytes.len()
+                wire.len()
             )
             .as_bytes(),
             deadline,
         )?;
-        send(pipe, &file.bytes, deadline)?;
+        send(pipe, wire, deadline)?;
+        upload.bytes += file.bytes.len() as u64;
+        upload.wire += wire.len() as u64;
         match read_step(pipe, deadline)?.as_slice() {
             [kind] if kind == "ok" => {
                 upload.sent += 1;
@@ -527,6 +555,19 @@ pub(crate) fn install(
         fresh,
         upload,
     })
+}
+
+/// `bytes` as one gzip member, at the fast level: a program packs to about
+/// a third, and a slower level saves little more on the link for much more
+/// of the node's time.
+fn pack(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut packer = flate2::write::GzEncoder::new(
+        Vec::with_capacity(bytes.len() / 2),
+        flate2::Compression::fast(),
+    );
+    packer.write_all(bytes)?;
+    packer.finish()
 }
 
 /// Starts the helper in place of the script; from its answer on, the pipes
@@ -573,13 +614,14 @@ pub(crate) fn start(
 
 /// Puts this build in its version folder under `root` on a machine that
 /// already runs a build of Hide's (a core update, PRD core-host-node-move
-/// B10), sending only the files it lacks or holds damaged. Answers where the
-/// build's `hided` is.
+/// B10), sending only the files it lacks or holds damaged, packed as
+/// [`install`] packs them. Answers where the build's `hided` is.
 pub(crate) fn install_build(
     pipe: &mut dyn Pipe,
     root: &str,
     home: &str,
     payload: Payload,
+    unpacks: bool,
 ) -> Result<String, EstablishError> {
     if !payload.missing.is_empty() {
         return Err(EstablishError::Install(format!(
@@ -587,7 +629,7 @@ pub(crate) fn install_build(
             payload.missing.join("; ")
         )));
     }
-    install(pipe, root, home, &payload).map(|installed| installed.helper_path)
+    install(pipe, root, home, &payload, unpacks).map(|installed| installed.helper_path)
 }
 
 /// Why a step of a connection to a core's machine did not finish. After

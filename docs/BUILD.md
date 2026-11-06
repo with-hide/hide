@@ -31,6 +31,7 @@ Hide's own merged-worktree cleanup had grown a step that forked `bash` to comput
 An agent worktree is built a few times and discarded, which never repays an incremental cache; what it does instead is grow one per worktree, and those had reached 1.5 GB.
 Debug output is what makes a stale worktree expensive, because nothing strips it: a debug `hided` measures about 165 MB, with no debug info, against 24 MB for the release binary.
 `sha2` is built at `opt-level = 3` in dev builds too: a development daemon installs its own debug `hided` and `hide` (about 140 MB each) on a device over SSH and takes each file's SHA-256 here first, and unoptimized that digest took longer than the remote mailbox lane waits for a ready device; the SSH itself is the system `ssh`, which no build compiles.
+`miniz_oxide` and `crc32fast` are too, for the same install's gzip packing (with-hide/hide-private#582): unoptimized, packing one 276 MiB debug `hided` took 10.6 s, optimized 0.8 s.
 
 ## A debug build is kept small
 

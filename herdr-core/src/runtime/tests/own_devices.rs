@@ -87,7 +87,11 @@ fn connect(shared: &Mutex<Runtime>, connected: hide_node_link::device::Establish
     let mut runtime = shared.lock().unwrap();
     runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let generation = runtime.device_host_generation(DEVICE);
-    runtime.ingest_host_established(DEVICE, generation, Ok(hosts::HostReady::Dialed(connected)));
+    runtime.ingest_host_established(
+        DEVICE,
+        generation,
+        Ok(hosts::HostReady::Dialed(Box::new(connected))),
+    );
     generation
 }
 

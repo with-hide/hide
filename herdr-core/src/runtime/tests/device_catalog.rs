@@ -710,9 +710,8 @@ fn a_reconnected_device_keeps_its_panes_in_their_checkouts_until_its_helper_answ
     runtime.ingest_host_established(
         TARGET,
         generation,
-        Ok(hosts::HostReady::Dialed(super::device_kit::established(
-            device.clone(),
-            None,
+        Ok(hosts::HostReady::Dialed(Box::new(
+            super::device_kit::established(device.clone(), None),
         ))),
     );
     // The new connection's helper has not answered: nothing moved.
@@ -887,9 +886,8 @@ fn a_retried_device_rereads_its_worktrees_when_its_helper_is_up_before_its_sessi
     runtime.ingest_host_established(
         TARGET,
         generation,
-        Ok(hosts::HostReady::Dialed(super::device_kit::established(
-            CatalogDevice::new(),
-            None,
+        Ok(hosts::HostReady::Dialed(Box::new(
+            super::device_kit::established(CatalogDevice::new(), None),
         ))),
     );
     runtime.ingest_remote_session(TARGET, Ok(session(workspaces)));

@@ -17,14 +17,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::Instant;
 
-use hide_node_link::device::{Refusal, SshFailure, SshProblem};
+use hide_node_link::device::{Cancel, Refusal, SshFailure, SshProblem};
 use hide_platform::process::{RunFailure, run_to_end};
 
-/// How long `ssh -G` and `ssh -V` may take; `-G` runs the configuration's
-/// `Match exec` commands, the operator's own.
-const QUERY_DEADLINE: Duration = Duration::from_secs(10);
 /// What Hide sets when the configuration leaves it at OpenSSH's default
 /// (B28): a dial that gets no answer gives up, and a link whose network went
 /// away ends within a minute instead of hanging until TCP gives up.
@@ -275,14 +272,19 @@ impl SshProgram {
         command
     }
 
-    /// What `ssh -V` reports, read once per program.
-    pub fn version(&self) -> Result<Version, SshFailure> {
+    /// What `ssh -V` reports, read once per program. Like every question
+    /// an attempt asks ssh, it waits for an answer until the attempt's
+    /// `until` (the time ssh has to connect) or its cancel, never a clock of
+    /// its own: the first start of a program on a busy or newly booted
+    /// machine can take seconds, and that is the connection still
+    /// connecting, not ssh failing (with-hide/hide-private#584).
+    pub fn version(&self, until: Instant, cancel: &Cancel) -> Result<Version, SshFailure> {
         if let Some((_, version)) = lock(&VERSIONS).iter().find(|(path, _)| path == &self.path) {
             return Ok(*version);
         }
         let mut command = Command::new(&self.path);
         command.arg("-V");
-        let finished = self.query(&mut command, "ssh -V")?;
+        let finished = self.query(&mut command, "ssh -V", until, cancel)?;
         // `-V` prints on standard error.
         let said = format!("{}{}", finished.stderr, finished.stdout);
         let version = said
@@ -302,11 +304,18 @@ impl SshProgram {
         Ok(version)
     }
 
-    /// What `ssh -G` resolves `alias` to.
-    pub fn resolve(&self, alias: &str) -> Result<Resolved, SshFailure> {
+    /// What `ssh -G` resolves `alias` to, waited for as [`Self::version`]
+    /// is; it runs the configuration's `Match exec` commands, which the dial
+    /// runs again under the same clock.
+    pub fn resolve(
+        &self,
+        alias: &str,
+        until: Instant,
+        cancel: &Cancel,
+    ) -> Result<Resolved, SshFailure> {
         let mut command = self.command();
         command.args(["-G", "--"]).arg(alias);
-        let finished = self.query(&mut command, "ssh -G")?;
+        let finished = self.query(&mut command, "ssh -G", until, cancel)?;
         if !finished.succeeded() {
             return Err(SshFailure {
                 problem: SshProblem::Unclassified,
@@ -338,13 +347,20 @@ impl SshProgram {
         args
     }
 
+    /// Runs one question to its end, until `until` or the attempt's cancel,
+    /// which ends the child at once.
     fn query(
         &self,
         command: &mut Command,
         what: &str,
+        until: Instant,
+        cancel: &Cancel,
     ) -> Result<hide_platform::process::Finished, SshFailure> {
-        let stop = std::sync::atomic::AtomicBool::new(false);
-        match run_to_end(command, QUERY_DEADLINE, &stop) {
+        match run_to_end(
+            command,
+            until.saturating_duration_since(Instant::now()),
+            cancel.flag(),
+        ) {
             Ok(finished) if finished.stdout.len() + finished.stderr.len() <= QUERY_OUTPUT_LIMIT => {
                 Ok(finished)
             }
@@ -355,12 +371,17 @@ impl SshProgram {
             Err(RunFailure::Start(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 Err(missing(&self.path))
             }
+            // The attempt's one clock ran out, not a clock of this question's.
             Err(RunFailure::TimedOut) => Err(SshFailure {
                 problem: SshProblem::Unclassified,
                 detail: format!(
-                    "{what} did not answer within {} s",
-                    QUERY_DEADLINE.as_secs()
+                    "{what} did not answer within the {} s ssh has to connect",
+                    super::session::SIGN_IN_TIMEOUT.as_secs()
                 ),
+            }),
+            Err(RunFailure::Stopped) => Err(SshFailure {
+                problem: SshProblem::Unclassified,
+                detail: format!("{what} was stopped: the attempt was cancelled"),
             }),
             Err(error) => Err(SshFailure {
                 problem: SshProblem::Unclassified,
@@ -590,6 +611,7 @@ pub fn classify(ending: &Ending<'_>) -> SshFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn resolved(extra: &str) -> Resolved {
         Resolved::read(&format!(
@@ -910,6 +932,49 @@ mod tests {
             browser_waited: false,
         });
         assert_eq!(old.problem, SshProblem::OpenSshOld);
+    }
+
+    /// An ssh that has not answered its first question yet is the attempt
+    /// still connecting (with-hide/hide-private#584): the question waits on
+    /// the attempt's own clock, here far away, and the attempt's cancel is
+    /// what ends it, with the child it started.
+    #[cfg(unix)]
+    #[test]
+    fn a_question_ssh_has_not_answered_waits_for_the_attempt_and_ends_with_its_cancel() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let started = dir.path().join("started");
+        let ssh = dir.path().join("ssh");
+        // The late answer is the subject: a first start that takes its time.
+        std::fs::write(
+            &ssh,
+            format!("#!/bin/sh\n: > '{}'\nexec sleep 600\n", started.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let program = SshProgram::new(ssh, dir.path());
+        let cancel = Cancel::default();
+        let asked = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || program.version(Instant::now() + Duration::from_secs(60), &cancel)
+        });
+        let hang_guard = Instant::now() + Duration::from_secs(60);
+        while !started.exists() {
+            assert!(
+                Instant::now() < hang_guard,
+                "the stand-in ssh never started"
+            );
+            #[allow(clippy::disallowed_methods)] // a bounded poll for the stand-in's start
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !asked.is_finished(),
+            "the question gave up before the attempt did"
+        );
+        cancel.cancel();
+        let failure = asked.join().unwrap().unwrap_err();
+        assert_eq!(failure.problem, SshProblem::Unclassified);
+        assert!(failure.detail.contains("cancelled"), "{}", failure.detail);
     }
 
     /// With no desk, ssh runs with BatchMode and asks nothing: a new server

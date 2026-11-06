@@ -357,12 +357,6 @@ impl DialedTransport for SshDevice {
             cancel,
             on_close,
         } = attempt;
-        stage("resolve");
-        let version = self.program.version().map_err(EstablishError::Ssh)?;
-        let resolved = self
-            .program
-            .resolve(&self.alias)
-            .map_err(EstablishError::Ssh)?;
         let cancelled = || cancel.is_cancelled();
         let _turn = DIALING
             .admit(Instant::now() + TURN_WITHIN, Some(&cancelled))
@@ -378,6 +372,24 @@ impl DialedTransport for SshDevice {
                     ),
                 })
             })?;
+        // One clock for everything ssh does before the start script answers
+        // (with-hide/hide-private#584): its version, what the alias resolves
+        // to and the sign-in. A slow first start of ssh on a busy machine
+        // reads connecting on the row until then, and a cancel ends it.
+        let until = Instant::now() + session::SIGN_IN_TIMEOUT;
+        stage("resolve");
+        let asked = |failure: SshFailure| {
+            if cancel.is_cancelled() {
+                ended()
+            } else {
+                EstablishError::Ssh(failure)
+            }
+        };
+        let version = self.program.version(until, &cancel).map_err(asked)?;
+        let resolved = self
+            .program
+            .resolve(&self.alias, until, &cancel)
+            .map_err(asked)?;
         let (mut pipe, facts) = session::sign_in(
             &Dial {
                 program: &self.program,
@@ -386,6 +398,7 @@ impl DialedTransport for SshDevice {
                 version,
                 askpass: self.askpass.as_deref(),
                 target: &target,
+                until,
             },
             Arc::clone(&sign_in),
             wake,
@@ -424,6 +437,7 @@ impl DialedTransport for SshDevice {
                 &consent.helper_root,
                 home.as_deref().unwrap_or(&facts.home),
                 &payload,
+                facts.unpacks,
             )?;
             stage("start");
             bootstrap::start(&mut *pipe, &installed.helper_relative, home.as_deref())?;

@@ -642,13 +642,26 @@ fn folder_bytes(folder: &Path) -> u64 {
         .sum()
 }
 
-/// Prints what a first connection took to upload `bytes`.
+/// Prints what a first connection took to upload `bytes`: the files' own
+/// size, what crossed the link for them and the time the core spent packing
+/// them (with-hide/hide-private#582), and holds that both devices took the
+/// build packed.
 fn report_first(label: &str, took: Duration, connected: &Established, bytes: u64) {
-    let mib = bytes as f64 / 1_048_576.0;
+    let mib = |bytes: u64| bytes as f64 / 1_048_576.0;
+    let upload = &connected.upload;
     println!(
-        "{label}: connected in {took:?}, upload={:?}, {mib:.1} MiB at {:.1} MiB/s overall",
-        connected.upload,
-        mib / took.as_secs_f64()
+        "{label}: connected in {took:?}, upload={upload:?}, {:.1} MiB of files as {:.1} MiB on the link, packed in {} ms, {:.1} MiB/s of files overall",
+        mib(upload.bytes),
+        mib(upload.wire),
+        upload.pack_ms,
+        mib(upload.bytes) / took.as_secs_f64()
+    );
+    // The kit folder's size, which the runs before packing printed as the
+    // upload's.
+    println!("{label}: the kit folder holds {:.1} MiB", mib(bytes));
+    assert!(
+        upload.wire < upload.bytes,
+        "the build was not sent packed: {upload:?}"
     );
 }
 
