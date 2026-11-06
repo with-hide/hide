@@ -63,6 +63,11 @@ pub(crate) const SHELL_WAIT: Duration = Duration::from_secs(30);
 /// so how long it holds the start's name while no agent shows. Long, because
 /// typing a long first prompt into a slow shell takes most of it.
 pub(crate) const AGENT_START_DEADLINE: Duration = Duration::from_secs(120);
+/// How long a caller waits for the answer to a start that waits out
+/// [`AGENT_START_DEADLINE`]: a little longer, so a slow start is not
+/// reported as an unanswered one.
+pub(crate) const START_ANSWER_WAIT: Duration =
+    Duration::from_secs(AGENT_START_DEADLINE.as_secs() + 5);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 

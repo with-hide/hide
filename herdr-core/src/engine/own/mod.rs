@@ -36,8 +36,8 @@ use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
     Gate, Notified, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof,
-    PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong, StartedAgent,
-    Wait, Wake, Zoom,
+    PaneSession, PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake,
+    Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -1316,10 +1316,7 @@ fn delivery_of(
             .and_then(crate::engine::tokens::session_digest),
         status: agent.live.status.as_str().to_owned(),
         state_change_seq: agent.live.seq,
-        readiness: Readiness::of(
-            Some(agent.interactive()),
-            Some(agent.launch_pending(std::time::Instant::now())),
-        ),
+        readiness: agent.readiness(std::time::Instant::now()),
     }
 }
 
@@ -1924,7 +1921,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .agent
             .as_ref()
             .filter(|agent| agent.listed(now))
-            .filter(|agent| agent.interactive() && !agent.launch_pending(now))
+            .filter(|agent| agent.takes_input(now))
             .map_or(agents::Status::Unknown, |agent| agent.live.status)
             .as_str()
             .to_owned())
@@ -2280,7 +2277,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.interactive() || agent.launch_pending(std::time::Instant::now()) {
+            if !agent.takes_input(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),
@@ -2379,6 +2376,7 @@ mod tests {
     use crate::sidebar::SessionSnapshotPayload;
 
     use super::*;
+    use crate::engine::Readiness;
 
     type TerminateHold = (
         String,
@@ -3916,8 +3914,9 @@ mod tests {
     fn age_start(engine: &OwnEngine, pane: &str, by: std::time::Duration) {
         let mut topology = engine.topology();
         let agent = topology.pane_mut(pane).unwrap().agent.as_mut().unwrap();
-        let started = agent.live.started.as_mut().unwrap();
-        *started -= by;
+        let started = agent.live.started.unwrap() - by;
+        agent.live.started = Some(started);
+        agent.live.settles_from = Some(started);
     }
 
     fn running(program: &str, screen: hide_node_link::holders::ScreenState) -> PaneFacts {

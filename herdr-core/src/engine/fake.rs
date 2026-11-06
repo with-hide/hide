@@ -133,10 +133,21 @@ pub(crate) fn delivery_agent(agent: &Value) -> DeliveryAgent {
             .and_then(tokens::session_digest),
         status: text("agent_status").unwrap_or_else(|| "unknown".to_owned()),
         state_change_seq: agent["state_change_seq"].as_u64().unwrap_or_default(),
-        readiness: Readiness::of(
+        readiness: readiness(
             agent["interactive_ready"].as_bool(),
             agent["launch_pending"].as_bool(),
         ),
+    }
+}
+
+/// A fixture agent's readiness from its Herdr-shaped flags: launching while
+/// `launch_pending`, not ready when `interactive_ready` is false, and ready
+/// otherwise, including a fixture that names neither.
+fn readiness(interactive_ready: Option<bool>, launch_pending: Option<bool>) -> Readiness {
+    match (interactive_ready, launch_pending) {
+        (_, Some(true)) => Readiness::Launching,
+        (Some(false), _) => Readiness::NotReady,
+        _ => Readiness::Ready,
     }
 }
 

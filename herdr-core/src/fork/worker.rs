@@ -22,7 +22,7 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
         .name("herdr-core-agent-fork".to_owned())
         .spawn(move || {
             // Includes pane creation and the start acknowledgment, so this
-            // input wait never extends the engine's 120-second start reservation.
+            // input wait never extends the engine's start deadline.
             let input_deadline =
                 Instant::now() + crate::agent_start::AGENT_START_DEADLINE - Duration::from_secs(5);
             finish_fork_worker(&context, &request.parent_pane_id, || {
