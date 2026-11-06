@@ -356,10 +356,9 @@ impl SshProgram {
         until: Instant,
         cancel: &Cancel,
     ) -> Result<hide_platform::process::Finished, SshFailure> {
-        let started = Instant::now();
         match run_to_end(
             command,
-            until.saturating_duration_since(started),
+            until.saturating_duration_since(Instant::now()),
             cancel.flag(),
         ) {
             Ok(finished) if finished.stdout.len() + finished.stderr.len() <= QUERY_OUTPUT_LIMIT => {
@@ -372,11 +371,12 @@ impl SshProgram {
             Err(RunFailure::Start(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 Err(missing(&self.path))
             }
+            // The attempt's one clock ran out, not a clock of this question's.
             Err(RunFailure::TimedOut) => Err(SshFailure {
                 problem: SshProblem::Unclassified,
                 detail: format!(
-                    "{what} did not answer within {} s",
-                    started.elapsed().as_secs()
+                    "{what} did not answer within the {} s ssh has to connect",
+                    super::session::SIGN_IN_TIMEOUT.as_secs()
                 ),
             }),
             Err(RunFailure::Stopped) => Err(SshFailure {
@@ -956,7 +956,7 @@ mod tests {
         let cancel = Cancel::default();
         let asked = std::thread::spawn({
             let cancel = cancel.clone();
-            move || program.version(Instant::now() + Duration::from_secs(600), &cancel)
+            move || program.version(Instant::now() + Duration::from_secs(60), &cancel)
         });
         let hang_guard = Instant::now() + Duration::from_secs(60);
         while !started.exists() {
