@@ -1,0 +1,82 @@
+# TEMPORARY, removed before review: repeats the pane holder's tests and the
+# hide-platform process and ipc contracts 20 times on every system, with no
+# retry, so a flaky test fails here (with-hide/hide-private#585, #616).
+name: holder repeat
+
+on:
+  push:
+    branches: [fix/flaky-holder]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repeat:
+    name: repeat (${{ matrix.system }} ${{ matrix.shard }})
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        system: [linux, macos, windows]
+        shard: [a, b, c, d]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: workspace
+          save: false
+      - name: Prepare the build inputs
+        timeout-minutes: 10
+        run: python3 scripts/prepare-vt-inputs.py
+      - name: Install cargo-nextest
+        timeout-minutes: 3
+        run: bash scripts/install-nextest.sh
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the holder tests' xterm
+        timeout-minutes: 3
+        run: bash scripts/verify-web.sh install holder
+      - name: Fetch the pinned ConPTY runtime
+        id: conpty
+        if: matrix.system == 'windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $folder = (python scripts/fetch-conpty.py | Select-Object -Last 1).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "folder=$folder" >> $env:GITHUB_OUTPUT
+      - name: Build
+        timeout-minutes: 30
+        run: bash scripts/verify-cargo.sh nextest -p hide-holder -p hide-holder-protocol -p hide-platform --no-run
+      - name: Five rounds of this shard (four shards make 20)
+        timeout-minutes: 75
+        env:
+          HIDE_HOLDER_CONPTY: ${{ steps.conpty.outputs.folder }}
+        run: |
+          failed=0
+          for round in 1 2 3 4 5; do
+            echo "::group::round $round"
+            if ! bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --no-fail-fast \
+                -p hide-holder -p hide-holder-protocol \
+                -p hide-platform -E 'package(hide-holder) | package(hide-holder-protocol) | (package(hide-platform) & (test(/^process::/) | test(/^ipc::/)))'; then
+              failed=$((failed + 1))
+              echo "::error::round $round failed"
+            fi
+            echo "::endgroup::"
+          done
+          echo "rounds failed: $failed of 5"
+          test "$failed" -eq 0
