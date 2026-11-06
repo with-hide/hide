@@ -362,7 +362,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     expect(agentFrames() - idleStart).toBeLessThanOrEqual(1);
     await screenshot(phone, "mobile-phone-list");
 
-    // The agent's conversation: Herdr reports one's Claude session, whose
+    // The agent's conversation: the pane reports one's Claude session, whose
     // transcript holds 70 turns with tool output and injected context among them.
     const transcript = path.join(claudeProjects(fixture), "e2e", `${SESSION}.jsonl`);
     fs.mkdirSync(path.dirname(transcript), { recursive: true });

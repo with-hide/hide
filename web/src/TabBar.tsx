@@ -25,7 +25,7 @@ import { composingKey } from "./keys";
 // The sole Agent tab rendering unit, reused by every local and device area.
 const NONE: AsyncOperation[] = [];
 
-/** Phases of a close the core is still confirming with Herdr (`operations.rs`). */
+/** Phases of a close the core is still confirming with the engine (`operations.rs`). */
 const IN_FLIGHT = new Set(["transmitting", "awaiting_topology", "unknown"]);
 
 export function AgentDraftTab({ id, interaction, actions, number = null }: { id: string; interaction: AreaTabInteraction; actions: Actions; number?: number | null }) {
@@ -34,7 +34,7 @@ export function AgentDraftTab({ id, interaction, actions, number = null }: { id:
   return <TabButton entry={{ id, source_id: id, kind: "herdr", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
 }
 
-/** "closing…" while the core is still confirming a close with Herdr. */
+/** "closing…" while the core is still confirming a close with the engine. */
 export function closingSuffix(targetId: string, kind: "tab.close" | "pane.close", operations: AsyncOperation[]): boolean {
   return operations.some((op) => op.kind === kind && op.target_id === targetId && IN_FLIGHT.has(op.phase));
 }

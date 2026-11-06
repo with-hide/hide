@@ -154,7 +154,7 @@ describe("search entries across devices (PRD home-device-rail B40)", () => {
 });
 
 describe("an agent by its pane's Herdr id", () => {
-  // Ids as `herdr pane list` prints them; mini's pane is that device's own, scoped by the core.
+  // Ids as the engine names panes (`w9J:p52`); mini's pane is that device's own, scoped by the core.
   const withIds = (local: string[], mini: string) => {
     const rest = structuredClone(TWO_DEVICES);
     rest.navigator!.agents = local.map((pane, index) => (legacyAgentRow({ ...REST.navigator!.agents![0]!, id: `a${index}`, pane_id: pane, device_pane_id: pane, identity_label: `Agent ${index}` })));
@@ -187,7 +187,7 @@ describe("an agent by its pane's Herdr id", () => {
 });
 
 describe("an agent by its Herdr name", () => {
-  // Names as `hide agent spawn --name` and `herdr agent rename` give them; mini's agent is that device's own.
+  // Names as `hide agent spawn --name` gives them; mini's agent is that device's own.
   const named = (local: string | undefined, mini: string | undefined) => {
     const rest = structuredClone(TWO_DEVICES);
     rest.navigator!.agents = [{ ...REST.navigator!.agents![0]!, herdr_name: local }, REST.navigator!.agents![1]!];

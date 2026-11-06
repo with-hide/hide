@@ -66,7 +66,7 @@ struct StoredUiState {
     project_settings: BTreeMap<String, crate::project_settings::ProjectSettings>,
     /// The folded-by-default agent tree's open rows. The former
     /// `collapsed_agent_pane_ids` key is ignored on load and dropped on the
-    /// next write: the ids it held name panes of some earlier Herdr server,
+    /// next write: the ids it held name panes of the earlier Herdr server,
     /// and a first launch after the upgrade starts every parent folded
     /// (PRD D-11).
     #[serde(default)]
@@ -203,7 +203,7 @@ struct StoredUiState {
     /// each row's wait starts over once.
     #[serde(default)]
     request_verbs: BTreeMap<String, crate::request_view::VerbRecord>,
-    /// Each pane's last reported terminal size, as (rows, cols). Herdr sizes
+    /// Each pane's last reported terminal size, as (rows, cols). The engine sizes
     /// a pane's PTY from the attach, so a launch that already knows a pane's
     /// size attaches at it and takes one full frame instead of one at a guess
     /// and a second after the resize. Absent in a store written before that,

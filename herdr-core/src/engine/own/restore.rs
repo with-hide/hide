@@ -258,7 +258,7 @@ fn was_cut(catalog: &Catalog, home: &Path, resume: &Resume) -> bool {
 /// and effort its pane's launch record keeps when the record describes it
 /// (`launch_describes`, the rule a pane's row reads the record by). A saved
 /// choice the agent does not take is refused with why, as a restart Hide
-/// makes of it on Herdr refuses it, rather than resumed on another model.
+/// made of it on Herdr refused it, rather than resumed on another model.
 fn with_launch_choice(
     mut argv: Vec<String>,
     launches: &BTreeMap<String, PaneLaunch>,
@@ -788,12 +788,13 @@ impl OwnEngine<'static> {
                 cut().insert(resume.pane.clone(), resume.kind.clone());
             }
             match engine.resume_agent(resume, shell) {
-                Ok(()) => crate::diagnostic!(serde_json::json!({
+                Ok(by_file) => crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "agent.resumed",
                     "pane_id": resume.pane,
                     "agent": resume.kind,
                     "by_session": resume.session.is_some(),
+                    "by_file": by_file,
                     "cut": resume.cut,
                 })),
                 Err(why) => {
@@ -843,14 +844,20 @@ impl OwnEngine<'static> {
 
     /// Waits for `resume`'s pane's shell as every start into a shell waits
     /// for it, as `shell` says it has finished starting, then records the
-    /// agent as started and types its resume.
-    fn resume_agent(&self, resume: &Resume, shell: ShellStart) -> Result<(), String> {
-        // The longest of the shells' lines, as a start is bounded.
-        let longest = shell_line::longest(|shell| {
-            shell_line::resume_command(&resume.argv, &resume.shown, shell)
-        })
-        .ok_or_else(|| "the resume names no program".to_owned())?;
+    /// agent as started and types its resume, its program named by the file
+    /// the pane's node starts it from, as a wake's is
+    /// (`start_prompt::start_program`); whether it was is what it answers.
+    fn resume_agent(&self, resume: &Resume, shell: ShellStart) -> Result<bool, String> {
         let node = self.node().ok().map(|node| &**node as &dyn NodeLink);
+        let file = node
+            .zip(resume.argv.first())
+            .and_then(|(node, program)| crate::start_prompt::start_program(node, program));
+        let argv = agents::named_by_file(resume.argv.clone(), file.as_ref());
+        let by_file = argv.first() != resume.argv.first();
+        // The longest of the shells' lines, as a start is bounded.
+        let longest =
+            shell_line::longest(|shell| shell_line::resume_command(&argv, &resume.shown, shell))
+                .ok_or_else(|| "the resume names no program".to_owned())?;
         crate::agent_start::wait_for_shell(
             self,
             node,
@@ -871,14 +878,15 @@ impl OwnEngine<'static> {
             .map_err(|error| error.to_string())?;
         let shell = shell_line::shell_of(group.shell_name(), self.shared.windows)
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
-        let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
+        let line = shell_line::resume_command(&argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;
         self.type_agent_start(
             &resume.pane,
             PaneAgent::started(&resume.kind, resume.name.as_deref(), resume.session.clone()),
             &line,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+        Ok(by_file)
     }
 
     /// Where a saved pane whose folder was `cwd` starts again: there, or in

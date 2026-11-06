@@ -155,7 +155,7 @@ pub(crate) type Answer<T> = Result<T, EngineError>;
 /// met it reads the engine again before it asks for the change twice.
 pub(crate) trait Engine: Send + Sync {
     /// The engine's name where a diagnostic says which engine moved
-    /// something: `herdr` or `own_engine`.
+    /// something: `own_engine`.
     fn name(&self) -> &'static str;
     /// This engine, with every call first passing `gate`.
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a>;
@@ -167,15 +167,13 @@ pub(crate) trait Engine: Send + Sync {
     fn changes(&self, wake: Wake);
     /// The agent definitions the operator's folder holds now, read by the
     /// core: what an engine that starts and reads agents itself starts,
-    /// recognizes and reads them by. Herdr knows its own agents and ignores
-    /// it.
+    /// recognizes and reads them by.
     fn set_agent_definitions(&self, _catalog: Arc<hide_agent_adapter::definition::Catalog>) {}
     /// The session the hook of the `kind` agent in `pane` reported, proved
     /// to come from that pane (PRD engine-bundle-3-core-owns D-9, D-16): an
     /// engine that starts and resumes agents itself keeps it as the pane's
     /// agent's session, saved with the pane, so a reboot resumes that
-    /// conversation. Herdr learns a pane's session from its own integration
-    /// and ignores it. Answers true once for the first session of an agent
+    /// conversation. Answers true once for the first session of an agent
     /// the engine resumed after its turn was cut off under it (PRD
     /// engine-bundle-4-herdr-removal D-22), which the core then tells.
     fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<bool> {
@@ -509,7 +507,7 @@ type GateCheck<'a> = dyn Fn() -> Result<(), EngineError> + Send + Sync + 'a;
 /// the id alone, `place` takes whatever lock its record needs (the runtime's,
 /// for a spawn's record) and lets it go, and only then does the holder
 /// start. A holder that does not start is [`Placement::withdraw`]n in the
-/// same call. Herdr names a pane only once it runs, so it never places one
+/// same call. An engine that names a pane only once it runs never places one,
 /// and the caller records the pane after the call, as before (D-2).
 pub(crate) trait Placement: Send + Sync {
     /// Records `pane`; a refusal leaves the pane unmade and is the call's.

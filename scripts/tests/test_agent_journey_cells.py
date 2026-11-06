@@ -151,7 +151,7 @@ class Verdicts(unittest.TestCase):
                   {"role": "assistant", "text": "JOURNEY-1", "at": 12_300}]
         status, reason = cells.turn_verdict([("working", 10_500), ("stopped", 12_400)], events, "JOURNEY-1")
         self.assertEqual((status, reason), (cells.PASS, "row read working, then idle after the answer"))
-        # A turn Herdr never saw working passes on the idle after its answer, and says so with its length.
+        # A turn the screen never read as working passes on the idle after its answer, and says so with its length.
         status, reason = cells.turn_verdict([("unknown", 9_000), ("stopped", 13_000)], events, "JOURNEY-1")
         self.assertEqual(status, cells.PASS)
         self.assertIn("working not seen: a turn shorter than Herdr's detection, 2.3 s", reason)

@@ -28,7 +28,7 @@ WAKE_SECONDS = 150
 ATTACH_SECONDS = 30
 TURN_POLL_SECONDS = 1
 # The moments a turn's trace keeps: each change of the row's activity, up to
-# this many, with the screen and Herdr's reading at that change.
+# this many, with the screen and the engine's reading at that change.
 TURN_TRACE_CAP = 8
 # The grid the journey's one view of a pane draws at.
 VIEW_COLS, VIEW_ROWS = 120, 40
@@ -274,10 +274,10 @@ class Journey:
         return self.runtime.agent(self.pane)
 
     def turn_moment(self, activity):
-        """The row's `activity` as it changed, with Herdr's reading of the
+        """The row's `activity` as it changed, with the engine's reading of the
         agent and the pane's visible screen at that moment: a row that never
         reads idle again says, from these, whether the agent still showed a
-        turn or Herdr kept reading one on an idle screen (with-hide/hide-private#309)."""
+        turn or the engine kept reading one on an idle screen (with-hide/hide-private#309)."""
         moment = {"at_ms": int(time.time() * 1000), "activity": activity}
         try:
             agent = self.engine_agent() or {}
@@ -309,7 +309,7 @@ class Journey:
         if answer["path"] not in self.paths:
             self.paths.append(answer["path"])
         # A path session is the journey's own when it named one, else the
-        # one Herdr reported in the pane, as a fork's is.
+        # one reported in the pane, as a fork's is.
         return {"session": (self.session or value) if kind == "path" else value, "path": answer["path"],
                 "events": answer["events"]}
 
@@ -320,7 +320,7 @@ class Journey:
         daemon's frames carried since `since`, so a turn that ended before
         this wait began is still read. Returns (verdict, read, observed).
         A `trace` list gets, at each change of the row's activity, what the
-        pane showed and what Herdr read then (`turn_moment`)."""
+        pane showed and what the engine read then (`turn_moment`)."""
         end = time.monotonic() + seconds
         last = None
         while True:

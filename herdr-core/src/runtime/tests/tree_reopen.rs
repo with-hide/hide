@@ -116,7 +116,7 @@ fn close_tree(runtime: &mut Runtime) {
     );
 }
 
-/// Herdr answers the capture of every close that started, as a pane close
+/// The engine answers the capture of every close that started, as a pane close
 /// records it for Reopen closed.
 fn capture_started(runtime: &mut Runtime) {
     let requests = runtime
@@ -162,7 +162,7 @@ fn capture_started(runtime: &mut Runtime) {
     }
 }
 
-/// Runs the tree close to its end the way Herdr answers it: each started
+/// Runs the tree close to its end the way the engine answers it: each started
 /// close is captured, then its pane leaves the session and the delivery
 /// read.
 fn closed_tree() -> Runtime {
@@ -204,7 +204,7 @@ fn member_pane(member: &crate::recent_closed::TreeMember) -> &str {
     &pane.pane_id
 }
 
-/// Herdr answers each member's reopen in turn, `fail` refusing that pane's;
+/// The engine answers each member's reopen in turn, `fail` refusing that pane's;
 /// returns the members started, in order.
 fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
     let members = the_entry(runtime);
@@ -397,7 +397,7 @@ fn one_reopen_brings_a_closed_tree_back_with_its_registrations_and_parents() {
         .iter()
         .map(|(pane, session)| (pane.as_str(), session.as_str()))
         .collect::<Vec<_>>();
-    // Herdr lists each reopened agent under the name it was started with.
+    // The engine lists each reopened agent under the name it was started with.
     let node = runtime.node.as_str().to_owned();
     runtime.observe_delivery_laid(
         &node,

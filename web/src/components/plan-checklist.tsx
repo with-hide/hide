@@ -6,7 +6,7 @@ import { Button } from "./ui/button";
 import { Hint } from "./ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { childNow, childPlanOf, evidenceWords, planChecklist, stepDelegationWord, type StepMarkWord } from "../plans";
+import { childNow, childPlanOf, evidenceWords, planChecklist, stepDelegationWord, stepLeft, type StepMarkWord } from "../plans";
 import type { PlanDelegation, PlanStep, PlanView } from "../snapshot";
 import { useShellStore } from "../store";
 
@@ -121,10 +121,11 @@ function StepTail({ step, now }: { step: PlanStep; now: boolean }) {
   const word = stepDelegationWord(step);
   if (word) return <DelegationWord word={word} />;
   if (now) return <span className="shrink-0 text-micro font-semibold text-mission-working">{t("plan.current")}</span>;
-  if (step.status === "done" && step.evidence) {
-    return <span className="shrink-0 font-mono text-micro text-mission-done" data-step-evidence={step.evidence.kind}>{evidenceWords(step.evidence)}</span>;
+  const left = stepLeft(step);
+  if (left?.kind === "evidence") {
+    return <span className="shrink-0 font-mono text-micro text-mission-done" data-step-evidence={left.evidence.kind}>{evidenceWords(left.evidence)}</span>;
   }
-  if (step.status === "done" && step.delegation && (!step.output || step.output === "none")) {
+  if (left?.kind === "report") {
     return <span className="shrink-0 text-micro text-muted-foreground" data-step-evidence="report">{t("plan.delegation.report")}</span>;
   }
   if (step.delegation && step.status !== "done") return null;

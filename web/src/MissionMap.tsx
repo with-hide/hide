@@ -6,6 +6,7 @@ import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./Dependen
 import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
 import { ConductorRow } from "./components/mission-conductor-row";
+import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
@@ -49,9 +50,8 @@ import {
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionMapFlow, MissionNode, MissionStatus } from "./snapshot";
+import type { Mission, MissionEvent, MissionMapFlow, MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
-import type { MessageKey } from "./i18n/catalogs";
 import type { TFunction } from "i18next";
 
 // A mission's page in the lane's 보기 slot (PRD mission-map-git-criteria
@@ -105,58 +105,60 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
   );
   const node = selected ? mission.nodes.find((candidate) => candidate.key === selected)! : null;
   return (
-    <div ref={rootRef} className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} onKeyDown={onKeyDown}>
-      <div ref={pageRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-mission-scroll="true">
-        <Head mission={mission} actions={actions} />
-        {/* A finished mission leads with what it left (B20); its report's line follows, then its Conductor. */}
-        {!open ? <ResultTiles mission={mission} /> : null}
-        {!open ? <PullList mission={mission} onSelect={select} /> : null}
-        {mission.report && !open ? <ReportLine mission={mission} /> : null}
-        <ConductorRow mission={mission} actions={actions} />
-        <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
-        {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
-        {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
-        {mission.nodes.length === 0 ? (
-          <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
-        ) : (
-          <div className={cn("flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:flex-1 mission-wide:flex-row", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-values={mission.stale ? "stale" : "live"}>
-            <div
-              className="flex min-w-0 flex-col mission-wide:min-h-0 mission-wide:flex-1"
-              onClick={onMapClick}
-              data-mission-map="true"
-            >
-              <MissionMapCanvas wide={wide} page={page} flow={flow} onFlow={(next) => actions.setConductorSettings({ map_flow: next })}>
-                <Graph
-                  actions={actions}
-                  flow={flow}
-                  mission={mission}
-                  events={log?.events ?? null}
-                  end={end}
-                  selected={selected}
-                  onSelect={(key) => {
-                    select(selected === key ? null : key);
-                    const picked = selected === key ? undefined : mission.nodes.find((one) => one.key === key);
-                    if (picked) onNode?.(picked);
-                  }}
-                />
-              </MissionMapCanvas>
-            </div>
-            {/* The column beside the map: a pick's panel, else the mission's summary (B19, B30, B31). */}
-            <div
-              ref={panel}
-              className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:w-(--size-mission-side) mission-wide:shrink-0 mission-wide:overflow-auto mission-wide:border-l mission-wide:border-t-0"
-              data-mission-panel={node?.key}
-            >
-              {node ? (
-                <MissionNodePanel mission={mission} node={node} events={log?.events ?? null} end={end} onSelect={select} onClose={() => select(null)} actions={actions} />
-              ) : (
-                <MissionSummary mission={mission} onSelect={select} />
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+    <MapPage
+      pageRef={rootRef}
+      scrollRef={pageRef}
+      data={{ "data-mission": mission.id, "data-mission-status": mission.status, "data-mission-stale": mission.stale || undefined }}
+      scrollData={{ "data-mission-scroll": "true" }}
+      onKeyDown={onKeyDown}
+    >
+      <Head mission={mission} actions={actions} />
+      {/* A finished mission leads with what it left (B20); its report's line follows, then its Conductor. */}
+      {!open ? <ResultTiles mission={mission} /> : null}
+      {!open ? <PullList mission={mission} onSelect={select} /> : null}
+      {mission.report && !open ? <ReportLine mission={mission} /> : null}
+      <ConductorRow mission={mission} actions={actions} />
+      <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
+      {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
+      {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
+      {mission.nodes.length === 0 ? (
+        <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
+      ) : (
+        <MapSplit
+          dimmed={mission.stale}
+          data={{ "data-mission-values": mission.stale ? "stale" : "live" }}
+          onMapClick={onMapClick}
+          mapData={{ "data-mission-map": "true" }}
+          map={
+            <MissionMapCanvas wide={wide} page={page} flow={flow} onFlow={(next) => actions.setConductorSettings({ map_flow: next })}>
+              <Graph
+                actions={actions}
+                flow={flow}
+                mission={mission}
+                events={log?.events ?? null}
+                end={end}
+                selected={selected}
+                onSelect={(key) => {
+                  select(selected === key ? null : key);
+                  const picked = selected === key ? undefined : mission.nodes.find((one) => one.key === key);
+                  if (picked) onNode?.(picked);
+                }}
+              />
+            </MissionMapCanvas>
+          }
+          sideRef={panel}
+          sideData={{ "data-mission-panel": node?.key }}
+          side={
+            /* The column beside the map: a pick's panel, else the mission's summary (B19, B30, B31). */
+            node ? (
+              <MissionNodePanel mission={mission} node={node} events={log?.events ?? null} end={end} onSelect={select} onClose={() => select(null)} actions={actions} />
+            ) : (
+              <MissionSummary mission={mission} onSelect={select} />
+            )
+          }
+        />
+      )}
+    </MapPage>
   );
 }
 
@@ -180,15 +182,6 @@ function useWide(root: HTMLElement | null): boolean {
   return wide;
 }
 
-/** The pill's words and colour: the operator's merge waits in the decision colour, a finished mission is grey (D-02). */
-export const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
-  planning: { key: STATE_PILL.planning, tone: STATE_PILL_TONE.planning },
-  running: { key: STATE_PILL.running, tone: STATE_PILL_TONE.running },
-  merge_wait: { key: STATE_PILL.merge_wait, tone: STATE_PILL_TONE.merge_wait },
-  done: { key: STATE_PILL.done, tone: STATE_PILL_TONE.done },
-  cancelled: { key: STATE_PILL.cancelled, tone: STATE_PILL_TONE.cancelled },
-};
-
 /**
  * The head, one line (B24): the mission's state, its time, a cell per node,
  * `n / m` and its verification strength, which only the Conductor changes. A
@@ -202,11 +195,10 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { done, total } = missionCounts(mission);
   const took = mission.started_at_unix_ms != null && mission.closed_at_unix_ms != null ? formatElapsed(language, mission.closed_at_unix_ms - mission.started_at_unix_ms) : null;
   const time = took ? t("mission.elapsed.total", { elapsed: took }) : running ? t("mission.elapsed.running", { elapsed: running }) : null;
-  const pill = PILL[mission.status];
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs px-md py-sm text-body" data-mission-summary="true">
-      <WorkPill tone={pill.tone} done={mission.status === "done"} data-mission-pill={mission.status}>
-        {t(pill.key)}
+      <WorkPill tone={STATE_PILL_TONE[mission.status]} done={mission.status === "done"} data-mission-pill={mission.status}>
+        {t(STATE_PILL[mission.status])}
       </WorkPill>
       {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
       {mission.nodes.length > 0 ? (

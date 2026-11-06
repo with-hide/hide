@@ -1,7 +1,7 @@
 use super::*;
 use std::time::Duration;
 
-/// The most tabs Hide can have created and not yet seen leave Herdr. A tab
+/// The most tabs Hide can have created and not yet seen leave the engine. A tab
 /// past it is placed by its pane cwd and the crossing is reported.
 const CREATED_TAB_CHECKOUT_LIMIT: usize = 64;
 /// How long a created tab's pane may keep reporting a cwd outside its
@@ -16,7 +16,7 @@ const CREATED_TAB_BIRTH_WINDOW_MS: u64 = 30_000;
 pub(crate) type BirthClock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 /// The checkout a tab Hide created was created for. The creation intent named
-/// it, so it outranks the pane cwd, which Herdr reports from birth and never
+/// it, so it outranks the pane cwd, which the engine reports from birth and never
 /// announces settling.
 pub(super) struct CreatedTabCheckout {
     path: String,
@@ -174,21 +174,21 @@ impl Runtime {
     }
 
     /// Registers the exact value a creation worker is about to write before
-    /// the Herdr token request can publish an event to the purpose mirror.
+    /// the engine token request can publish an event to the purpose mirror.
     pub(crate) fn begin_created_purpose_write(&mut self, path: &str, purpose: &str) {
         let path = workspace::comparison_by_names(Path::new(path));
         self.created_purpose_writes_in_flight
             .insert(path, purpose.to_owned());
     }
 
-    /// Groups the session's working directories under the Herdr workspace that
+    /// Groups the session's working directories under the engine workspace that
     /// owns them. Shared with the session-sync coordinator so a catalog
     /// precomputed outside the runtime lock is built from the same inputs.
     ///
     /// Layouts carry the workspace a pane belongs to and `panes` carries its
     /// directory, so the two together give each workspace the set of
     /// repositories it actually occupies without asking git anything.
-    /// The Herdr workspaces and the directories their panes occupy, as the
+    /// The engine workspaces and the directories their panes occupy, as the
     /// project catalog sees them.
     ///
     /// Every path a catalog of `payload` and the created tabs' clamps read.
@@ -211,7 +211,7 @@ impl Runtime {
     /// What the core's own node says of `wanted`, asked from inside the
     /// runtime. Only a runtime the sync coordinator does not feed asks this
     /// way: a fixture, a test, and the registrations-only catalog before
-    /// Herdr first answers. A failed ask is logged and the previous answer
+    /// the engine first answers. A failed ask is logged and the previous answer
     /// stands, read by names where it is silent.
     pub(super) fn ask_paths(&self, wanted: BTreeSet<String>) -> Arc<workspace::PathIndex> {
         match workspace::PathIndex::ask(self.own_node.as_ref(), wanted) {
@@ -249,9 +249,9 @@ impl Runtime {
         }
     }
 
-    /// Every directory the session's panes occupy, and each checkout Herdr
+    /// Every directory the session's panes occupy, and each checkout the engine
     /// attached a workspace to with the repository it reports it in, as
-    /// Herdr reported them: what the core's own node is asked about before a
+    /// the engine reported them: what the core's own node is asked about before a
     /// catalog is built.
     pub(crate) fn session_paths(payload: &SessionSnapshotPayload) -> BTreeSet<String> {
         payload
@@ -271,8 +271,8 @@ impl Runtime {
             .collect()
     }
 
-    /// The session's Herdr workspaces with the directories their panes
-    /// occupy and the checkout Herdr attached each to, each in comparison
+    /// The session's engine workspaces with the directories their panes
+    /// occupy and the checkout the engine attached each to, each in comparison
     /// form as `paths` gives it.
     pub fn session_spaces(
         payload: &SessionSnapshotPayload,
@@ -353,14 +353,14 @@ impl Runtime {
                     .and_then(|agent| agent.cwd.clone())
             })
             .map(|cwd| cwd.trim().to_owned())
-            // Herdr reports `/` for a pane whose process has exited, which
+            // The engine reports `/` for a pane whose process has exited, which
             // says where the pane is not rather than where it is. Treating it
             // as a directory produced an unnamed checkout row with no panes
             // under it.
             .filter(|cwd| !cwd.is_empty() && cwd != "/")
     }
-    /// Rebuilds the navigator from the Herdr workspaces the session reports
-    /// and any registration Herdr has no workspace for. Registrations are
+    /// Rebuilds the navigator from the engine workspaces the session reports
+    /// and any registration the engine has no workspace for. Registrations are
     /// durable metadata only: removing one never removes a checkout or ends a
     /// remote process.
     pub(super) fn reconcile_session_catalog(
@@ -458,9 +458,9 @@ impl Runtime {
         let projected_agents = project_agents(payload.clone()).agents;
         let listening_ports = self.listening_ports.entries.clone();
 
-        // Every workspace's whole tab list, in Herdr's order, before any of it
+        // Every workspace's whole tab list, in the engine's order, before any of it
         // is split across checkouts. A tab whose layout has not arrived yet is
-        // in it, because Herdr counts it when it indexes a move. Rebuilt whole
+        // in it, because the engine counts it when it indexes a move. Rebuilt whole
         // each reconcile so a closed workspace leaves no stale order behind.
         self.herdr_worktrees = payload
             .workspaces
@@ -490,13 +490,13 @@ impl Runtime {
             present || !created.seen
         });
 
-        // Herdr's tab order is the navigator's tab order. A layout is the
+        // The engine's tab order is the navigator's tab order. A layout is the
         // per-tab detail looked up by tab id, never what decides where a tab
         // sits: layouts arrive in the order each tab was first drawn, so a tab
-        // Herdr moved kept its original place forever and a tab that redrew
+        // the engine moved kept its original place forever and a tab that redrew
         // never moved back.
         let mut placed_tabs: BTreeMap<&str, usize> = BTreeMap::new();
-        // Herdr's own labels, kept per checkout while they are still raw. The
+        // The engine's own labels, kept per checkout while they are still raw. The
         // snapshot's tabs carry the formatted form, so the free number has to
         // be taken here or read back out of display text later.
         let mut raw_tab_labels: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -511,7 +511,7 @@ impl Runtime {
             };
             // A tab Hide created belongs to the checkout it was created for.
             // Its pane cwd is a birth value until the shell has entered the
-            // start folder, and Herdr sends no event when it settles, so
+            // start folder, and the engine sends no event when it settles, so
             // reading it placed a new tab under another checkout until the
             // next unrelated publish (#400). A checkout no longer in the
             // catalog is reported once, and the tab falls back to the pane
@@ -691,7 +691,7 @@ impl Runtime {
             }
         }
 
-        // Each checkout's owner is read off Herdr's own binding and Hide's
+        // Each checkout's owner is read off the engine's own binding and Hide's
         // mark, never off where its tabs sit (PRD checkout-workspace-binding
         // D-06); this session already carries both, so it costs no call.
         let owner_facts = payload
@@ -724,13 +724,13 @@ impl Runtime {
             }
         }
 
-        // Herdr names one active tab per workspace. Hide owns which tab is
+        // The engine names one active tab per workspace. Hide owns which tab is
         // visible, so that name is what Hide reconciles against rather than
         // what it obeys: it confirms a switch Hide made, or it is an operator
         // focusing a tab outside Hide and Hide follows it and says so.
-        // A checkout is keyed by path, so two Herdr workspaces at one path
+        // A checkout is keyed by path, so two engine workspaces at one path
         // land in one checkout with one active tab each. The view is kept
-        // per Herdr workspace for that reason: folding it to one tab per
+        // per engine workspace for that reason: folding it to one tab per
         // checkout let the last workspace in payload order overwrite the
         // others, and a tab focus on any other workspace was then never
         // confirmed and always followed back.
@@ -810,7 +810,7 @@ impl Runtime {
         self.refresh_device_snapshots();
         self.feed_usage_projects();
         // An agent belongs to the device whose project holds its pane. The
-        // project label is no longer Herdr's workspace label once a
+        // project label is no longer the engine's workspace label once a
         // registration covers the repository, so labels cannot be the key.
         for device in &mut self.snapshot.navigator.devices {
             device.agent_count = crate::agent_state::device_catalog_count(
@@ -832,14 +832,14 @@ impl Runtime {
     ///
     /// The two kinds of entry have different owners. A file tab's slot is
     /// Hide's, so a move that only rearranges file slots is committed here and
-    /// nothing is sent to Herdr. The relative order of Herdr's tabs is Herdr's,
+    /// nothing is sent to the engine. The relative order of the engine's tabs is the engine's,
     /// so a move that changes it is a request: the arrangement is held until
-    /// Herdr reports the order it actually has, and a refusal leaves the strip
-    /// on the order Herdr last reported.
+    /// the engine reports the order it actually has, and a refusal leaves the strip
+    /// on the order the engine last reported.
     pub(super) fn reorder_tab(&mut self, payload: ReorderTabPayload) -> bool {
         // Only the legacy single-surface host still arranges local strip
         // entries. The web host persists Agent order through agent_layout;
-        // never let an obsolete local request move Herdr's tabs there.
+        // never let an obsolete local request move the engine's tabs there.
         if self.separate_view_areas()
             && self.snapshot.navigator.workspaces.iter().any(|workspace| {
                 workspace.id == payload.workspace_id && workspace.remote_target_id.is_none()
@@ -853,7 +853,7 @@ impl Runtime {
             return true;
         }
         // The checkout is this machine's or a device's; a device's strip is
-        // placed by the same rule, and its Herdr tabs move on its own Herdr.
+        // placed by the same rule, and its engine tabs move on its own engine.
         let local = self
             .snapshot
             .navigator
@@ -955,7 +955,7 @@ impl Runtime {
         let desired_herdr = herdr_ids(&desired);
 
         if current_herdr == desired_herdr {
-            // Only slots Hide owns changed, so Herdr has nothing to do and the
+            // Only slots Hide owns changed, so the engine has nothing to do and the
             // arrangement is the operator's the moment they drop it.
             self.pending_tab_move.remove(&payload.checkout_id);
             self.checkout_tab_order
@@ -969,14 +969,14 @@ impl Runtime {
             return true;
         }
 
-        // Herdr indexes a move inside the workspace that owns the tab, so the
-        // drag - not the checkout - decides whether Herdr hears about it. What
+        // The engine indexes a move inside the workspace that owns the tab, so the
+        // drag - not the checkout - decides whether the engine hears about it. What
         // matters is the moved tab's own workspace subsequence: a drag that
-        // only steps over tabs belonging to another Herdr workspace changes
-        // nothing Herdr can see, and the strip settles locally.
+        // only steps over tabs belonging to another engine workspace changes
+        // nothing the engine can see, and the strip settles locally.
         //
         // Deciding this per checkout is what refused every drag in a checkout
-        // whose tabs come from two Herdr workspaces, which is the ordinary
+        // whose tabs come from two engine workspaces, which is the ordinary
         // arrangement for a repository opened twice.
         let workspace_orders = match device.as_deref() {
             None => self.herdr_workspace_tab_order.clone(),
@@ -1059,7 +1059,7 @@ impl Runtime {
                 // The order asked for is the moved tab's own workspace's, the
                 // same subsequence the request was indexed in. Holding the
                 // checkout's mixed order here would wait for an interleaving
-                // Herdr never reports once a checkout draws tabs from two
+                // the engine never reports once a checkout draws tabs from two
                 // workspaces, and the drag would snap back and stay back.
                 herdr_order: desired_owned.clone(),
                 target_id: moved.source_id.clone(),
@@ -1084,9 +1084,9 @@ impl Runtime {
                 moved.source_id
             ),
         );
-        // Herdr answers with its own workspace's tabs, so the order to check
+        // The engine answers with its own workspace's tabs, so the order to check
         // the answer against is the moved tab's workspace subsequence, never
-        // the checkout's mixed order. A device's Herdr names its tabs without
+        // the checkout's mixed order. A device's engine names its tabs without
         // the device scope the strip carries.
         let herdr_id = |tab_id: &str| match device.as_deref() {
             None => Some(tab_id.to_owned()),
@@ -1133,7 +1133,7 @@ impl Runtime {
         true
     }
 
-    /// The device's Herdr control and its connection generation, when the
+    /// The device's engine control and its connection generation, when the
     /// device can take a tab move now.
     fn device_tab_move_carrier(&self, target: &str) -> Result<(TabMoveCarrier, u64), String> {
         let connected = self
@@ -1184,12 +1184,12 @@ impl Runtime {
         true
     }
     /// Rewrites every checkout's tab strip, this machine's and each device's,
-    /// from the Herdr and editor tabs it currently holds.
+    /// from the engine and editor tabs it currently holds.
     pub(super) fn rebuild_tab_strips(&mut self) {
         let editor_tabs = &self.snapshot.editor.tabs;
         let order = &mut self.checkout_tab_order;
         let pending = &mut self.pending_tab_move;
-        // Which Herdr workspace each tab belongs to, so a strip slot is
+        // Which engine workspace each tab belongs to, so a strip slot is
         // refilled from that workspace's order rather than from a flat one.
         let owners = &tab_owners(&self.herdr_workspace_tab_order);
         let mut live_checkouts = BTreeSet::new();
@@ -1263,7 +1263,7 @@ impl Runtime {
     }
 
     /// Places a device's checkout strips by the rule this machine's follow:
-    /// the device's Herdr tabs in its host's order, its file tabs in the
+    /// the device's engine tabs in its host's order, its file tabs in the
     /// slots the operator put them in (`place_checkout_strip`).
     pub(super) fn place_device_strips(
         &mut self,
@@ -1365,15 +1365,15 @@ impl Runtime {
         self.apply_pull_requests();
         self.refresh_worktree_projection();
     }
-    /// Decides which tab each checkout shows, given what Herdr says is active
+    /// Decides which tab each checkout shows, given what the engine says is active
     /// and what Hide has already chosen.
     ///
-    /// Hide owns the visible tab, so Herdr's name is read four ways:
+    /// Hide owns the visible tab, so the engine's name is read four ways:
     /// it agrees with Hide and confirms a switch in flight; it disagrees while
     /// Hide's notification is still unconfirmed, and Hide keeps its own value
-    /// until Herdr answers; it disagrees with nothing in flight, which is an
+    /// until the engine answers; it disagrees with nothing in flight, which is an
     /// operator focusing that tab outside Hide, so Hide follows it and reports
-    /// the tab and where the change came from; or Herdr names no tab in this
+    /// the tab and where the change came from; or the engine names no tab in this
     /// checkout, and Hide keeps showing what it was showing.
     ///
     /// A checkout that has tabs always ends with one of them visible. Leaving
@@ -1390,19 +1390,19 @@ impl Runtime {
         let mut clear_group_pane = false;
         // A changed value or a new focus event is an action to follow. Repeated
         // projections of the same event are only state; a later explicit focus
-        // on the same Herdr tab still carries a fresh intent after creation.
+        // on the same engine tab still carries a fresh intent after creation.
         let herdr_focus_moved = herdr.focused_tab_id != self.herdr_focused_tab_seen
             || herdr
                 .focus_event
                 .as_ref()
                 .is_some_and(|event| self.herdr_tab_focus_seen.as_ref() != Some(event));
         // Raw close/status snapshots have no stream stamp. They cannot make a
-        // previously consumed event fresh; a new replica has a new generation.
+        // previously consumed event fresh; a new engine has a new generation.
         if let Some(event) = &herdr.focus_event {
             self.herdr_tab_focus_seen = Some(event.clone());
         }
         self.herdr_focused_tab_seen = herdr.focused_tab_id.clone();
-        // Herdr's moves since the last session answer Hide's requests in
+        // The engine's moves since the last session answer Hide's requests in
         // the order they were sent; a focus move among them is not followed.
         let answered = self.take_tab_focus_answers(herdr, herdr_moves, herdr_focus_moved);
         let asks = self.tab_asks();
@@ -1489,7 +1489,7 @@ impl Runtime {
                     );
                     // A promoted draft may name a newly opened owner before
                     // its catalog arrives. With no visible tab, the selected
-                    // slot still owns the screen; Herdr's old tab cannot
+                    // slot still owns the screen; the engine's old tab cannot
                     // replace it while that creation becomes visible.
                     let missing_visible_tab =
                         self.visible_tab_ids.get(&checkout.id).is_none_or(|id| {
@@ -1574,7 +1574,7 @@ impl Runtime {
                 let outstanding = asks.outstanding_in(&checkout.id);
                 // The tab holding the selected pane, when it is in this
                 // checkout. With no tab of its own yet, Hide shows the tab the
-                // keyboard is in rather than one Herdr remembers, so a restore
+                // keyboard is in rather than one the engine remembers, so a restore
                 // draws the layout it attaches.
                 let selected_tab = selected_pane_id.as_deref().and_then(|pane_id| {
                     checkout
@@ -1584,7 +1584,7 @@ impl Runtime {
                         .and_then(|tab| tab.id.clone())
                         .filter(|id| has_tab(id))
                 });
-                // A pending tab Herdr has not listed yet (one just created)
+                // A pending tab the engine has not listed yet (one just created)
                 // keeps its claim on the checkout instead of being replaced
                 // by whichever tab is drawn while it arrives.
                 let pending_tab_unlisted = pending_tab.as_deref().is_some_and(|tab_id| {
@@ -1593,7 +1593,7 @@ impl Runtime {
                         .iter()
                         .any(|tab| tab.id.as_deref() == Some(tab_id))
                 });
-                // Herdr arriving at a tab Hide asked for and has since moved
+                // The engine arriving at a tab Hide asked for and has since moved
                 // off is that request's answer, recorded where it would have
                 // been followed.
                 if focus_answered
@@ -1634,7 +1634,7 @@ impl Runtime {
                         (Some(hide_tab), Some(herdr_tab)) if hide_tab == herdr_tab => {
                             Some(hide_tab)
                         }
-                        // Hide's own answer, or Herdr about to be moved again by
+                        // Hide's own answer, or the engine about to be moved again by
                         // a request still outstanding: neither is followed.
                         (Some(hide_tab), Some(_)) if focus_answered || outstanding => {
                             Some(hide_tab)
@@ -1661,7 +1661,7 @@ impl Runtime {
                         (Some(hide_tab), None) => Some(hide_tab),
                         // With no value of its own yet, Hide takes the first of:
                         // the tab it asked for, the tab holding the keyboard,
-                        // the tab Herdr has focused, a tab Herdr shows in any of
+                        // the tab the engine has focused, a tab the engine shows in any of
                         // the checkout's workspaces, the first tab.
                         (None, herdr_tab) => pending_tab
                             .clone()
@@ -1700,7 +1700,7 @@ impl Runtime {
                         // empty. Its later first checkout restores the saved
                         // group before navigator focus has a checkout yet.
                         // Only that unchosen, request-free start may replace
-                        // the temporary Herdr keyboard here.
+                        // the temporary engine keyboard here.
                         let restoring_without_focus = restored_agent_tab.is_some()
                             && self.snapshot.navigator.focused_checkout_id.is_none()
                             && self.snapshot.ui_state.focused_checkout_id.is_none()
@@ -1743,7 +1743,7 @@ impl Runtime {
             self.operator_focused_pane_id = None;
         } else if let Some(pane_id) = follow_pane {
             self.select_terminal_pane(Some(pane_id));
-            // Herdr moved the keyboard, not the operator. The read record
+            // The engine moved the keyboard, not the operator. The read record
             // follows only a focus the operator made in Hide.
             self.operator_focused_pane_id = None;
         }
@@ -1836,12 +1836,12 @@ impl Runtime {
         );
         true
     }
-    /// Stops waiting on a view-state notification Herdr never answered.
+    /// Stops waiting on a view-state notification the engine never answered.
     ///
     /// The value Hide chose is kept: the operator's tab and pane are Hide's,
-    /// and a silent Herdr is a reason to report, not a reason to move the
+    /// and a silent engine is a reason to report, not a reason to move the
     /// screen out from under them. Dropping the wait is what lets the next
-    /// Herdr event be read as an external focus rather than as a late answer.
+    /// engine event be read as an external focus rather than as a late answer.
     pub(super) fn expire_pending_view_focus(&mut self, now_unix_ms: u64) -> bool {
         let tab_timed_out = self.expire_tab_focus_requests(now_unix_ms);
         // A socket control already has its own bounded transport wait.
@@ -1954,7 +1954,7 @@ impl Runtime {
         }
     }
     /// Applies a live session-sync result: projected agents on success, an
-    /// explicit Herdr status on failure. Returns whether the snapshot changed.
+    /// explicit engine status on failure. Returns whether the snapshot changed.
     pub fn ingest_session(
         &mut self,
         fetched: Result<SessionSnapshotPayload, SessionFetchError>,
@@ -1962,7 +1962,7 @@ impl Runtime {
         self.ingest_session_with_catalog(fetched, None)
     }
     /// Applies the authoritative session projection for one configured remote
-    /// Herdr target. The last valid session remains visible through a stale or
+    /// the engine target. The last valid session remains visible through a stale or
     /// disconnected interval, while status always names the current failure.
     pub fn ingest_remote_session(
         &mut self,
@@ -1991,12 +1991,12 @@ impl Runtime {
                 }
             }
         }
-        // The session is kept as Herdr sent it except for the cwds of tabs Hide
+        // The session is kept as the engine sent it except for the cwds of tabs Hide
         // created (`clamp_device_created_tabs`); the published one groups its
         // workspaces into the device's projects (`device_catalog`).
         let mut dropped_moves = Vec::new();
         if fetched.is_err() {
-            // The device's tab ids are its Herdr's own; a later connection may
+            // The device's tab ids are its engine's own; a later connection may
             // hand one to a tab Hide never created.
             self.created_device_tabs
                 .retain(|(target, _), _| target != target_id);
@@ -2004,7 +2004,7 @@ impl Runtime {
         let fetched = fetched.map(|mut raw| {
             self.clamp_device_created_tabs(target_id, &mut raw, None);
             self.settle_node_issue_tokens(target_id, &raw);
-            // Keep the complete core projection when Herdr's facts did not
+            // Keep the complete core projection when the engine's facts did not
             // move. Rebuilding raw rows would temporarily discard resolved
             // state and cross-device lineage, making every idle fetch publish.
             // Catalog/helper changes already refresh this published session.
@@ -2179,7 +2179,7 @@ impl Runtime {
     /// Reconciles the pane and checkout ids loaded from disk against the first
     /// live session, then retires the hint.
     ///
-    /// Persisted ids name a session that has already ended, so a pane Herdr no
+    /// Persisted ids name a session that has already ended, so a pane the engine no
     /// longer has is the expected case on launch rather than a fault. Dropping
     /// the unusable parts here lets the ordinary resolution below pick the
     /// session's own focus, and keeps `pane.projection_unavailable` meaning
@@ -2191,9 +2191,9 @@ impl Runtime {
         // A saved selection this session does not hold is gone, or was this
         // machine's under another core, which saved it as its device's and
         // so never at all (a core move's rekey says so, `focus_from_herdr`).
-        // Either way Herdr's own focus is where Hide left the keyboard last,
-        // since Hide tells Herdr every focus it takes, so the window opens on
-        // Herdr's pane and its checkout; with nothing saved, or Herdr's focus
+        // Either way the engine's own focus is where Hide left the keyboard last,
+        // since Hide tells the engine every focus it takes, so the window opens on
+        // the engine's pane and its checkout; with nothing saved, or the engine's focus
         // outside every checkout, the catalog's first checkout is the start.
         // Only a pane a catalog checkout holds: one outside every checkout
         // would leave a selected pane with no checkout to show it.
@@ -2313,12 +2313,12 @@ impl Runtime {
         )
     }
 
-    /// Ingests a session update whose focus is Herdr's own stream's, and
-    /// says whether a read of Herdr's focus has to follow.
+    /// Ingests a session update whose focus is the engine's own stream's, and
+    /// says whether a read of the engine's focus has to follow.
     ///
     /// The stream has no ordering cursor, so a focus that differs from the
     /// selected pane is not authority until a fresh read agrees. That read
-    /// waits on Herdr, so it never gates this update: the layout, the panes
+    /// waits on the engine, so it never gates this update: the layout, the panes
     /// and every other part of the update are taken now, and the differing
     /// focus (and the zoom of the pane it names) stays Hide's until
     /// [`Self::finish_pane_focus_readback`] hears the answer. At most one
@@ -2352,7 +2352,7 @@ impl Runtime {
         host_scope: Option<&str>,
         overlay: Option<crate::labels::overlay::LabelOverlay>,
     ) -> (bool, Option<PendingPaneFocusControl>) {
-        // Native state as Herdr listed it, before the ingest lays the pane
+        // Native state as the engine listed it, before the ingest lays the pane
         // moves and the overlay on it: no label adds UI timestamps to what
         // delivery sees, and the overlay is only consulted for what each
         // session read says the agent waits for.
@@ -2420,10 +2420,10 @@ impl Runtime {
     /// nothing and is not asked again until the next session update; an
     /// update that arrived while the read was out is that next update.
     ///
-    /// Herdr's focus on another pane is the readback doing its work: the
-    /// stream showed a move older than Herdr's focus, most often older than
-    /// Hide's own last focus. Only a readback Herdr could not answer while
-    /// it was still the latest is a failure, logged with Herdr's reason; one
+    /// The engine's focus on another pane is the readback doing its work: the
+    /// stream showed a move older than the engine's focus, most often older than
+    /// Hide's own last focus. Only a readback the engine could not answer while
+    /// it was still the latest is a failure, logged with the engine's reason; one
     /// a newer focus, selection or connection overtook ends quietly.
     pub(crate) fn finish_pane_focus_readback(
         &mut self,
@@ -2504,7 +2504,7 @@ impl Runtime {
         focus_check: SessionFocusCheck,
         pass: Option<super::delivery::ObservedPass>,
     ) -> bool {
-        // Sleeping agents Herdr no longer lists are drawn from their records
+        // Sleeping agents the engine no longer lists are drawn from their records
         // before anything below reads the agents (PRD agent-sleep B10).
         let mut fetched = fetched;
         let mut precomputed = precomputed;
@@ -2547,14 +2547,14 @@ impl Runtime {
             let unsettled = self.settle_created_tabs(payload, self.created_tab_clamps(), &paths);
             Self::clamp_created_tab_cwds(payload, &unsettled, &paths);
         } else {
-            // Herdr's tab ids are its own server's; a later connection may
+            // The engine's tab ids are its own server's; a later connection may
             // hand one to a tab Hide never created.
             self.created_tab_checkouts.clear();
             self.provisional_tabs.clear();
             self.read_ahead.clear();
         }
         // The session update is this runtime's only regular tick, so it is
-        // also where a notification Herdr never answered stops being pending.
+        // also where a notification the engine never answered stops being pending.
         // Doing it first lets this same update be read as an external focus
         // rather than as a late answer to a request that has gone quiet.
         let now_unix_ms = unix_milliseconds();
@@ -2587,7 +2587,7 @@ impl Runtime {
             );
         }
         // Only a focus that has left can be confirmed: a layout that arrives
-        // before then is Herdr from before the request, and taking it as the
+        // before then is the engine from before the request, and taking it as the
         // answer kept the focus from ever being sent (#629).
         let session_confirms_pending_pane = fetched.as_ref().ok().is_some_and(|payload| {
             let Some(pending) = self
@@ -2607,8 +2607,8 @@ impl Runtime {
                     && herdr_tabs.is_active_in_its_workspace(&layout.tab_id)
             })
         });
-        // What Hide draws ahead of Herdr is laid over the session only now,
-        // after every confirmation above has read Herdr's own layout, so
+        // What Hide draws ahead of the engine is laid over the session only now,
+        // after every confirmation above has read the engine's own layout, so
         // every reader below sees one layout and nothing Hide drew confirms
         // an operation (PRD instant-pane-topology D-07).
         if let Ok(payload) = fetched.as_mut() {
@@ -2673,7 +2673,7 @@ impl Runtime {
                 .collect::<HashSet<_>>()
         });
         if let Some(live_pane_ids) = live_pane_ids.as_ref() {
-            // A pane a read of Herdr's own showed is not gone before the
+            // A pane a read of the engine's own showed is not gone before the
             // stream first lays it out (`read_ahead.rs`).
             let read_ahead = self
                 .read_ahead
@@ -2780,7 +2780,7 @@ impl Runtime {
                         focused_checkout.is_some() && !focused_checkout_pane_set.contains(pane_id)
                     });
                 // The shell a running close made in its tab was read from
-                // Herdr directly, and the event stream can still be behind
+                // the engine directly, and the event stream can still be behind
                 // that read: an update without the shell, or with it before
                 // its folder is known, is not its end. The keyboard stays on
                 // it rather than fall back to the pane the close is taking.
@@ -2813,7 +2813,7 @@ impl Runtime {
                                 .or_else(|| {
                                     // The tab this pass has the checkout
                                     // showing is where the operator looks.
-                                    // Herdr's keyboard can be on another Agent
+                                    // The engine's keyboard can be on another Agent
                                     // area's tab, and landing there moves the
                                     // screen with it: a reopen's seed tab,
                                     // followed, went as its restored tab came
@@ -2842,9 +2842,9 @@ impl Runtime {
                                     })
                                 })
                                 .or_else(|| {
-                                    // A close moves Herdr's keyboard to another
+                                    // A close moves the engine's keyboard to another
                                     // tab, and the pane focus for it can arrive
-                                    // after this snapshot; the tab Herdr names now
+                                    // after this snapshot; the tab the engine names now
                                     // is where the operator is looking, not the
                                     // checkout's first pane.
                                     HerdrTabView::from_payload(&payload)
@@ -2870,7 +2870,7 @@ impl Runtime {
                         && focused_checkout.is_none();
                 // Once the user or persisted state chooses a pane, a session
                 // snapshot that omits that workspace must not silently retarget
-                // commands to Herdr's unrelated globally focused workspace.
+                // commands to the engine's unrelated globally focused workspace.
                 let draft_surface = self
                     .front_workspace_key()
                     .and_then(|key| {
@@ -2965,7 +2965,7 @@ impl Runtime {
                             && self.snapshot.ui_state.focused_checkout_id.is_some()));
                 let mut selection_changed = false;
                 if draft_surface {
-                    // The first session can have Herdr's keyboard before
+                    // The first session can have the engine's keyboard before
                     // path facts discover its checkout. A restored draft or
                     // empty group clears that fallback too, or alignment
                     // below would reveal the old pane's group again.
@@ -3195,15 +3195,15 @@ impl Runtime {
         changed
     }
     /// Moves the navigator to the checkout that owns a pane without emitting
-    /// a second Herdr command.
+    /// a second engine command.
     ///
     /// A relationship action is one intent. If its child belongs to another
     /// checkout, changing only the pane leaves reconciliation scoped to the
-    /// old checkout and the next session event rejects Herdr's confirmation.
+    /// old checkout and the next session event rejects the engine's confirmation.
     /// Moving the local context here lets the following `pane.focus` remain
     /// the single external effect.
     ///
-    /// A pane Hide made that Herdr has not laid out yet is its checkout's
+    /// A pane Hide made that the engine has not laid out yet is its checkout's
     /// already (`created_pane_place`): reading only the catalog left a
     /// fork's keyboard in a pane of a checkout not in front, where the
     /// projection waited on it or followed that checkout's own pane instead.
@@ -3322,17 +3322,17 @@ impl Runtime {
         }
     }
 
-    /// Moves the keyboard focus to a pane and tells Herdr afterwards.
+    /// Moves the keyboard focus to a pane and tells the engine afterwards.
     ///
     /// Hide owns the focused pane, so the focus ring and the first responder
-    /// move on this frame rather than on Herdr's confirming event. What Herdr
+    /// move on this frame rather than on the engine's confirming event. What the engine
     /// still owns is which panes exist and how they are split; this only says
     /// which of them has the keyboard.
     ///
     /// For an operator focus the pane also becomes the one the read record
     /// follows. The record is raised here rather than when the resulting
     /// layout lands, so one click on a Done row clears that row inside the
-    /// same dispatch. A focus that never reaches Herdr arms nothing.
+    /// same dispatch. A focus that never reaches the engine arms nothing.
     pub(super) fn focus_pane(
         &mut self,
         pane_id: String,
@@ -3438,9 +3438,9 @@ impl Runtime {
         // Rule 11: focusing the pane that already has the keyboard, with
         // nothing in flight, converges without a second notification. The
         // look itself still counts, so only the notification is skipped.
-        // Settled means Herdr's own layout agrees too. A checkout coming
-        // forward selects a pane locally without telling Herdr, and skipping
-        // the notification then let Herdr's next layout take the focus back.
+        // Settled means the engine's own layout agrees too. A checkout coming
+        // forward selects a pane locally without telling the engine, and skipping
+        // the notification then let the engine's next layout take the focus back.
         // A tab active only in a background workspace is not global focus.
         let herdr_agrees = self.layout_holding_pane(&pane_id).is_none_or(|layout| {
             layout.focused_pane_id == pane_id
@@ -3627,7 +3627,7 @@ impl Runtime {
     }
     /// Replaces the session's layouts wholesale from one session projection.
     ///
-    /// Herdr sends the whole session on every topology update, so a
+    /// The engine sends the whole session on every topology update, so a
     /// `layout_updated` for one tab arrives as a payload in which only that
     /// tab's entry differs; comparing the projected vector is what keeps the
     /// other tabs' entries and the revision they ride untouched.
@@ -3636,7 +3636,7 @@ impl Runtime {
             .into_iter()
             .map(|layout| self.draw_closes(layout))
             .collect::<Vec<_>>();
-        // Sorted by tab id, because Herdr's own order for the layouts array
+        // Sorted by tab id, because the engine's own order for the layouts array
         // carries no meaning - the tab list is what orders tabs - and a
         // reshuffle of it would otherwise restamp the revisioned section and
         // resend the whole navigator with it.
@@ -3680,7 +3680,7 @@ impl Runtime {
         // The rendered projection is compared on its own, because an
         // unchanged layout no longer implies an unchanged projection. Layouts
         // now survive a tab switch, so this runs for a tab whose geometry
-        // Herdr never altered while the panes it puts on the canvas still
+        // the engine never altered while the panes it puts on the canvas still
         // change. Returning the layout comparison alone would then withhold
         // the notification for a canvas that did change.
         let previous_pane_ids = self
@@ -3730,7 +3730,7 @@ impl Runtime {
         }
 
         // Hide owns the focused pane. An arriving layout confirms the focus
-        // Hide notified Herdr about, or - with nothing in flight - it is a
+        // Hide notified the engine about, or - with nothing in flight - it is a
         // focus made outside Hide and Hide follows it and says so. While a
         // notification is unconfirmed the layout's geometry is taken and its
         // focus is not, so the operator's click is not undone by the frame
@@ -3798,8 +3798,8 @@ impl Runtime {
             self.snapshot.terminal.pane_id = Some(layout.focused_pane_id.clone());
             self.snapshot.focused.pane_id = Some(layout.focused_pane_id.clone());
             self.release_operator_focus_if_moved(&previous_focus, &layout.focused_pane_id);
-            // Zoom is Herdr's, and its subject is the focused pane. While
-            // Hide keeps a focus Herdr has not confirmed, taking the zoom
+            // Zoom is the engine's, and its subject is the focused pane. While
+            // Hide keeps a focus the engine has not confirmed, taking the zoom
             // would hide the pane the operator just clicked behind another.
             self.snapshot.zoomed = layout.zoomed.then(|| layout.focused_pane_id.clone());
         }
@@ -3844,7 +3844,7 @@ impl Runtime {
                     .collect::<Vec<_>>();
         layout_changed || projection_changed
     }
-    /// Ends the wait on a pane focus Herdr refused, keeping the pane Hide
+    /// Ends the wait on a pane focus the engine refused, keeping the pane Hide
     /// chose and reporting the refusal.
     ///
     /// A refusal that names some other pane is not this wait's answer and
@@ -3889,9 +3889,9 @@ impl Runtime {
         );
     }
     /// The checkout and tab holding `pane_id`, or, for a pane Hide made that
-    /// Herdr has not laid out yet, the ones it was made in: a focus on a
-    /// fork's pane is a tab move Herdr then answers, and without it Herdr's
-    /// step through the source's tab on the way read as a tab Herdr chose.
+    /// the engine has not laid out yet, the ones it was made in: a focus on a
+    /// fork's pane is a tab move the engine then answers, and without it the engine's
+    /// step through the source's tab on the way read as a tab the engine chose.
     pub(super) fn checkout_tab_holding_pane(&self, pane_id: &str) -> Option<(String, String)> {
         let checkouts = || {
             self.snapshot
@@ -3917,7 +3917,7 @@ impl Runtime {
             })
     }
     /// Rule 11: whether repeating this view-state change would converge on
-    /// what the core already holds, so Herdr needs no second notification.
+    /// what the core already holds, so the engine needs no second notification.
     /// True when nothing is asked for, or what was asked last is this very
     /// target.
     pub(super) fn view_focus_settled_on(&self, slot: ViewFocusSlot, target_id: &str) -> bool {
@@ -3958,13 +3958,13 @@ impl Runtime {
     fn engine_name(&self) -> Option<&'static str> {
         self.live.as_ref().map(|live| live.engine.name())
     }
-    /// Drops the operator focus once Herdr moves focus off the pane the
+    /// Drops the operator focus once the engine moves focus off the pane the
     /// operator chose.
     ///
     /// The pane has to have been focused before it can be moved away from.
     /// Requiring that is what lets a requested focus survive the stale layout
     /// a tab brings forward on its way: bringing a checkout forward to reach
-    /// its pane makes Herdr report that tab's remembered pane first, and
+    /// its pane makes the engine report that tab's remembered pane first, and
     /// clearing on that would leave the clicked row unread.
     pub(super) fn release_operator_focus_if_moved(
         &mut self,
@@ -4079,7 +4079,7 @@ impl Runtime {
                         Some(device) => self.record_created_device_tab(device, tab_id, &path),
                     }
                 }
-                // Only this machine's Herdr reports the events the record
+                // Only this machine's engine reports the events the record
                 // times.
                 let timing_id = super::op_timing::task_create_op_id(id);
                 match (device.as_deref(), created_tab_id.as_deref()) {
@@ -4091,9 +4091,9 @@ impl Runtime {
                     (Some(_), _) => self.op_timings.finish(&timing_id, "device"),
                     (None, None) => self.op_timings.finish(&timing_id, "no_tab"),
                 }
-                // A tab made in a checkout this machine's Herdr already holds
+                // A tab made in a checkout this machine's engine already holds
                 // is drawn from this answer (D-04, D-05); a new worktree's
-                // workspace is Herdr's to report first.
+                // workspace is the engine's to report first.
                 if !adds_pane
                     && device.is_none()
                     && let Some(tab_id) = created_tab_id.as_deref()
@@ -4151,7 +4151,7 @@ impl Runtime {
                 // reads them; for an agent they wait for its start
                 // (`ingest_task_agent_result`).
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
-                // A new worktree's pane is in a workspace Herdr just opened,
+                // A new worktree's pane is in a workspace the engine just opened,
                 // which the catalog may not list yet; focused before, its
                 // checkout would never come forward (with-hide/hide-private#311).
                 let waits_for_local_catalog =
@@ -4188,7 +4188,7 @@ impl Runtime {
                     // result may still list the pane in its staging tab.
                     self.queue_start_focus(id, tab_id, pane_id.clone());
                 } else if should_focus {
-                    // Targeted creation intentionally did not focus Herdr.
+                    // Targeted creation intentionally did not focus the engine.
                     // Use the same ordered, acknowledged focus as a pane press.
                     self.focus_pane(pane_id, PaneFocusOrigin::Restore, None);
                     if self.snapshot.status.last_error.is_none()
@@ -4938,11 +4938,11 @@ impl Runtime {
             .then_some(self.live_generation)
     }
 
-    /// Lays on each row Herdr is still starting whether the start Hide made
+    /// Lays on each row the engine is still starting whether the start Hide made
     /// in its pane carried the operator's first prompt
     /// (`AgentStart::Starting`), a fact only the start request holds. The
     /// pane of the task start in flight is kept until its row settles or the
-    /// pane is gone, so neither order of the start's answer and Herdr's
+    /// pane is gone, so neither order of the start's answer and the engine's
     /// report leaves a starting row without it. One task starts at a time,
     /// so the set holds the few rows still starting; past
     /// `START_PROMPT_LIMIT` a pane is logged and left out, and its row closes
@@ -5001,7 +5001,7 @@ impl Runtime {
         {
             return None;
         }
-        // Herdr knows a device's pane by its own id, not the scoped one.
+        // The engine knows a device's pane by its own id, not the scoped one.
         let pane_id = operation.pane_id.as_deref()?;
         let pane_id = match operation.device_id.as_deref() {
             Some(device) => crate::address::pane_of(pane_id, device)?,
@@ -5094,7 +5094,7 @@ impl Runtime {
         };
         // The pane keeps the choice its agent started with, for the restarts
         // Hide makes of it, under the name the start gave the agent: the task
-        // worker names it from Herdr's own id for the pane.
+        // worker names it from the engine's own id for the pane.
         if let (crate::worktree_control::TaskAgentOutcome::Started, Some(launch)) =
             (&outcome, &launch)
             && let Some((pane_id, kind, name)) =
@@ -5387,10 +5387,10 @@ impl Runtime {
                 {
                     self.record_created_tab_checkout(tab_id, cwd);
                 }
-                // The tab is drawn from this answer, as one pane with Herdr's
-                // ids, until Herdr's layout replaces it (D-03, D-05). Opening
+                // The tab is drawn from this answer, as one pane with the engine's
+                // ids, until the engine's layout replaces it (D-03, D-05). Opening
                 // an owner may also make a workspace: keep the same pending
-                // state, but wait for Herdr to name that workspace to draw it.
+                // state, but wait for the engine to name that workspace to draw it.
                 let creation = match &action {
                     RemoteControlAction::CreateTab {
                         workspace_id,
@@ -5473,7 +5473,7 @@ impl Runtime {
                 // names where they are now, and the creation's answer is the
                 // older request: the new tab waits in the strip rather than
                 // taking the screen back from the tab they chose.
-                // An empty group selection sends no Herdr focus control,
+                // An empty group selection sends no engine focus control,
                 // so it has no newer lane serial. The captured placement
                 // still names the creation's group; another selected group
                 // keeps the screen while this tab joins its original group.
@@ -5534,7 +5534,7 @@ impl Runtime {
                     self.snapshot.focused.pane_id = Some(pane_id.clone());
                     self.snapshot.ui_state.selected_pane_id = Some(pane_id.clone());
                     // The tab was created with focus, so it is Hide's visible
-                    // tab from this acknowledgment and Herdr's `tab_focused`
+                    // tab from this acknowledgment and the engine's tab move
                     // is its confirmation. Without this the strip's active
                     // mark stayed where it was until the operator clicked the
                     // new tab a second time.
@@ -5562,10 +5562,10 @@ impl Runtime {
                         _ => self.discard_input_request(&origin, "not_shown"),
                     }
                 }
-                // Herdr publishes no event for focusing the tab it already
-                // shows, so a tab focus that lands where Herdr already was is
+                // The engine publishes no event for focusing the tab it already
+                // shows, so a tab focus that lands where the engine already was is
                 // settled by this answer; waiting for an event would hold
-                // every move Herdr makes until the deadline.
+                // every move the engine makes until the deadline.
                 if let RemoteControlAction::FocusTab { tab_id } = &action {
                     self.answer_tab_focus(tab_id);
                 }
@@ -5607,7 +5607,7 @@ impl Runtime {
             Err(error) => {
                 let message = error.message().to_owned();
                 // Hide keeps the tab it made visible. The refusal is reported
-                // and the wait ends, so the next Herdr event naming another
+                // and the wait ends, so the next engine event naming another
                 // tab is read as an external focus rather than a late answer.
                 if let RemoteControlAction::FocusTab { tab_id } = &action {
                     self.refuse_tab_focus(tab_id, &message, !error.is_ambiguous());
@@ -5644,9 +5644,9 @@ impl Runtime {
         }
         true
     }
-    /// Reads what Herdr did with a requested tab move.
+    /// Reads what the engine did with a requested tab move.
     ///
-    /// Herdr answers with the workspace's tab list in its new order, so the
+    /// The engine answers with the workspace's tab list in its new order, so the
     /// answer says whether the move landed as asked without waiting for the
     /// event. An answer that matches leaves the arrangement held until the
     /// order reaches the navigator; anything else drops it and says so, so a
@@ -5954,9 +5954,9 @@ impl Runtime {
 
     /// The checkout a reveal names, wherever the catalog carries it: one the
     /// navigator lists comes forward with the reveal (`focus_checkout`); one
-    /// of a device's Herdr session, a node's own checkout among them, is that
+    /// of a device's engine session, a node's own checkout among them, is that
     /// session's to bring forward, so the reveal moves no focus of the core's
-    /// and one behind waits for that Herdr (`reveal_when_in_front`).
+    /// and one behind waits for that engine (`reveal_when_in_front`).
     fn reveal_checkout(&self, workspace_id: &str, checkout_id: &str) -> Option<RevealCheckout> {
         let (workspace, checkout) = self.catalog_checkout(workspace_id, checkout_id)?;
         let comes_forward = self
@@ -5973,7 +5973,7 @@ impl Runtime {
     }
 
     /// A reveal into a device session's checkout that is not in front there,
-    /// as a path clicked on the Overview names: the device's Herdr is asked
+    /// as a path clicked on the Overview names: the device's engine is asked
     /// to bring the checkout forward, with the device, and the reveal runs
     /// once the sync sees it land (`attach_reveal`), so the click ends where
     /// one on this machine's checkout does. It dies with the request
@@ -6443,7 +6443,7 @@ impl Runtime {
     }
 
     /// Notes which created tabs report a cwd inside their checkout, read off
-    /// the session as Herdr sent it: from then on the cwd is where the shell
+    /// the session as the engine sent it: from then on the cwd is where the shell
     /// is, not where it was born.
     /// Returns the clamps of the tabs still on a birth value.
     fn settle_created_tabs(
@@ -6686,7 +6686,7 @@ impl Runtime {
     }
 
     /// Asks the local coordinator to read the session again now: the core
-    /// drew a created tab or a predicted pane geometry ahead of Herdr, or
+    /// drew a created tab or a predicted pane geometry ahead of the engine, or
     /// took one back, and the overlay rides the next ingest.
     pub(super) fn request_republish(&mut self) {
         #[cfg(test)]

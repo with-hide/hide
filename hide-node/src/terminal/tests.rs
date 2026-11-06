@@ -589,7 +589,7 @@ fn a_frame_at_a_foreign_grid_waits_for_a_full_frame_at_the_view_grid() {
     assert!(!written[1].2);
 }
 
-/// A control session asks Herdr for the grid the view reported, the one
+/// A control session asks the pane for the grid the view reported, the one
 /// the frame guard accepts, not an older settled size.
 #[test]
 fn a_control_session_attaches_at_the_grid_the_view_reported() {
@@ -630,9 +630,9 @@ fn retry_preserves_the_canvas_until_a_matching_replacement_frame() {
 }
 
 /// R6, R7. A pane keeps its session while its canvas is rebuilt, and the
-/// view that comes back has an empty grid; Herdr sends nothing more until
+/// view that comes back has an empty grid; the pane sends nothing more until
 /// the pane produces output. A size that did not change is not sent on, but
-/// one reported after a new view is, so Herdr draws a full frame for it.
+/// one reported after a new view is, so the pane draws a full frame for it.
 #[test]
 fn a_rebuilt_view_for_an_attached_pane_is_given_a_frame_to_draw() {
     let harness = harness(RetryPolicy::Automatic);
@@ -1401,7 +1401,7 @@ fn a_key_into_a_pane_the_keyboard_left_without_a_key_moves_it_back() {
             .is_ok_and(|report| matches!(report, TerminalReport::Input { focus: true, .. })),
         "a key into the keyboard's pane moved it"
     );
-    // Herdr moved the keyboard to p2 on its own; the screen still types
+    // The engine moved the keyboard to p2 on its own; the screen still types
     // into p1.
     harness.service.control(TerminalControl::Focus {
         pane: Some("w1:p2".into()),
@@ -1682,7 +1682,7 @@ fn panes_only_watched_or_woken_do_not_keep_a_new_pane_from_being_drawn() {
     assert!(!refused, "the view of a new pane was refused");
 }
 
-/// The core watches a pane Herdr just created before it attaches it; the
+/// The core watches a pane the engine just created before it attaches it; the
 /// pane's first frame still reports when it reached the screen.
 #[test]
 fn a_frame_watched_before_its_pane_attaches_is_reported_when_shown() {
@@ -1697,7 +1697,7 @@ fn a_frame_watched_before_its_pane_attaches_is_reported_when_shown() {
     );
 }
 
-/// A new view at the grid its session already runs at asks Herdr for the
+/// A new view at the grid its session already runs at asks the pane for the
 /// whole screen at the node, since the core sends no resize for a size that
 /// did not change; the next frame is that whole screen.
 #[test]
@@ -2404,7 +2404,7 @@ const VIEW: GridSize = GridSize {
     cols: 109,
 };
 
-/// Panes as a node with holders and no Herdr opens them: a pane whose holder
+/// Panes as a node with holders opens them: a pane whose holder
 /// was started keeps its own size, attached at [`HOLDER_SIZE`] unless a size
 /// is named, and every other pane is refused, as a daemon on the core's own
 /// engine refuses a pane whose holder it has not started yet.

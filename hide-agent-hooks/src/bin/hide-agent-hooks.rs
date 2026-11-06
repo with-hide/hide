@@ -375,7 +375,7 @@ fn basic_turn_event(
 /// A Grok or Cursor tool call: the guards' refusal in the agent's shape, or,
 /// when the call runs, the letters due while the agent works as the context
 /// the agent reads with the tool's result (PRD letters-to-busy-agents D-02),
-/// asked in a Herdr pane for the session the payload names and confirmed by
+/// asked in a pane Hide manages for the session the payload names and confirmed by
 /// the caller once printed. Only the tools the agent's matcher names reach
 /// this hook (`guidance`), so a letter waits through the others.
 fn basic_tool_call(
@@ -506,7 +506,7 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         // A subagent gets nothing of the pane's: no guidance, no Memory and
         // no letter, which are the pane's own session's. Its start and end,
         // a nested subagent's too, are counted under the pane's own
-        // conversation, the session Herdr reports for the pane.
+        // conversation, the session recorded for the pane.
         (HookEvent::SessionStart, Some(parent)) => {
             report(Change::Started(Some(&conversation)), reporter(parent), None)
         }
@@ -883,7 +883,7 @@ fn guard_refusal(
         }
     }
     // The project's guardrails come first, in any session of a guarded
-    // project, a Herdr pane or not (PRD agent-guardrails B22): they read only
+    // project, a pane Hide manages or not (PRD agent-guardrails B22): they read only
     // local files, and a call they refuse never reaches the daemon.
     if let Some(home) = &home
         && let Some(reason) =
@@ -1232,7 +1232,7 @@ impl<'a> Heard<'a> {
 
 /// Applies `change` to the event's session in the pane's record and reports
 /// the session's turn and counts to the core (`hide_agent_hooks::report`).
-/// Outside a Herdr pane there is no pane to describe, and an agent whose hook
+/// Outside a pane Hide manages there is no pane to describe, and an agent whose hook
 /// does not know its own runtime has nothing to report under.
 ///
 /// An event that changes no count and says no turn reports only when it

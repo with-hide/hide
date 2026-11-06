@@ -25,7 +25,7 @@ use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 pub const CONCURRENCY: usize = 4;
 
 /// Link control requests (`Call::is_control`: a greeting, a pane's proof
-/// answer or stream, a Herdr stream) the helper works on at once, on
+/// answer or stream, a link stream) the helper works on at once, on
 /// workers of their own, so they never wait behind machine calls; the core
 /// admits as many.
 pub const CONTROL_CONCURRENCY: usize = 4;
@@ -59,7 +59,7 @@ const MAX_REQUEST_BYTES: usize = 40 * 1024 * 1024;
 /// [`Terminals::line`] as they are read, never behind a request, and the
 /// service's own lines go out between the answers.
 pub trait Terminals: Send + Sync {
-    /// Starts the service over the node's own pane holders, with no Herdr,
+    /// Starts the service over the node's own pane holders,
     /// and answers those holders for the core's own engine (PRD
     /// engine-bundle-3-core-owns D-22); asked again, it answers the same
     /// holders.
@@ -696,7 +696,7 @@ fn session_read<T: serde::Serialize>(
 }
 
 /// A folder the core names for agy on this machine: its wire spelling, or
-/// the native one a checkout path Herdr reported keeps.
+/// the native one a checkout path the engine reported keeps.
 fn antigravity_folder(path: &str) -> Option<PathBuf> {
     crate::root::native_absolute(path)
 }
@@ -1310,7 +1310,7 @@ pub fn handle_with_progress(
             let home = env.home("antigravity_fork_home_unavailable")?;
             let cwd = antigravity_fork_cwd(&cwd)?;
             // A pane agy resumes in a folder it does not trust opens on its
-            // trust question, which Herdr reads as idle; `/fork` and Enter
+            // trust question, which the screen rules read as idle; `/fork` and Enter
             // would answer it.
             if !hide_ai::antigravity_trusts(Path::new(&home), &cwd) {
                 return Err(HostError::new(ErrorCode::Io, "antigravity_fork_untrusted"));

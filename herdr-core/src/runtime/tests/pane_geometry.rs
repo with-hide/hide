@@ -1,13 +1,13 @@
-//! Pane geometry drawn ahead of Herdr (PRD instant-pane-topology D-07..D-10,
+//! Pane geometry drawn ahead of the engine (PRD instant-pane-topology D-07..D-10,
 //! D-12, B11..B19) and the terminal grid that follows the drawing at once
 //! (PRD grid-ahead-of-herdr D-03..D-06, B1..B7).
 //!
-//! The fake Herdr records what left over the socket; each test hands the
-//! runtime Herdr's answers and session updates itself, and stands in for the
-//! coordinator's republish by ingesting the session Herdr last sent, so the
+//! The fake engine records what left over the socket; each test hands the
+//! runtime the engine's answers and session updates itself, and stands in for the
+//! coordinator's republish by ingesting the session the engine last sent, so the
 //! order under test never depends on the scheduler (docs/TESTING.md). The
 //! assertions read what the shell draws (`pane_layouts`, the tab's pane rows)
-//! and what reached Herdr or a pane's PTY.
+//! and what reached the engine or a pane's PTY.
 
 use super::control_order::diagnostic_messages;
 use super::*;
@@ -30,7 +30,7 @@ fn rect(x: u16, width: u16) -> SessionLayoutRect {
     }
 }
 
-/// The tab as Herdr sends it: one pane, or `LEFT | RIGHT` at `ratio`.
+/// The tab as the engine sends it: one pane, or `LEFT | RIGHT` at `ratio`.
 fn session(right: Option<f32>, zoomed: bool) -> SessionSnapshotPayload {
     let mut payload = tab_order_payload(CHECKOUT, &[TAB], &[TAB], TAB);
     if let Some(ratio) = right {
@@ -173,7 +173,7 @@ fn zoom_action(pane: &str) -> PaneControlAction {
 
 /// B8, D-06: a zoom's record counts the first frame after the resize its
 /// drawing sent, so the node is asked for that frame with the resize and
-/// not when Herdr accepts or applies the zoom; frames before the resize ask
+/// not when the engine accepts or applies the zoom; frames before the resize ask
 /// nothing and end nothing.
 #[test]
 fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it() {
@@ -228,7 +228,7 @@ fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it()
     shown(&mut runtime);
     runtime.ingest_session(Ok(session(Some(0.5), true)));
     assert_eq!(watches(&terminals), 0, "Herdr's layout asks for no watch");
-    // The snapshot carrying Herdr's layout is read for the browser.
+    // The snapshot carrying the engine's layout is read for the browser.
     let (_, records) = crate::diagnostics::capture(|| {
         runtime.snapshot_delta_payload(0);
     });
@@ -244,7 +244,7 @@ fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it()
 }
 
 /// B1, B5, B7: a zoom is drawn at the request and the grid its view then
-/// reports reaches the PTY at once; Herdr confirming the same layout moves
+/// reports reaches the PTY at once; the engine confirming the same layout moves
 /// nothing, and a layout drawn differently makes the view report once more,
 /// which goes out once.
 #[test]
@@ -284,7 +284,7 @@ fn a_zoom_sends_its_pty_size_at_the_drawing_and_nothing_more_when_herdr_confirms
         "the same layout confirmed sends nothing"
     );
 
-    // Herdr laid the tab out differently: the view reports the grid of the
+    // The engine laid the tab out differently: the view reports the grid of the
     // rectangle it was given, once.
     dispatch(
         &mut runtime,
@@ -315,7 +315,7 @@ fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
     assert_eq!(resizes(&terminals, LEFT), [(30, 40)]);
 }
 
-/// B11, grid-ahead-of-herdr B3: a split is drawn when Herdr names the new
+/// B11, grid-ahead-of-herdr B3: a split is drawn when the engine names the new
 /// pane: the pane split in half with the new one second, a row the canvas
 /// can draw it from, a terminal entry that attaches at its own view's size,
 /// and the grid the split pane's view reports for its half goes out at once.
@@ -346,7 +346,7 @@ fn a_split_is_drawn_with_the_pane_herdr_named_before_its_layout_arrives() {
         }),
     );
     assert!(runtime.take_republish_request());
-    // The coordinator's republish carries the session Herdr last sent.
+    // The coordinator's republish carries the session the engine last sent.
     runtime.ingest_session(Ok(session(None, false)));
     let layout = drawn(&runtime);
     assert_eq!(
@@ -517,7 +517,7 @@ fn operations_in_one_tab_wait_their_turn_and_the_ninth_waiting_is_refused() {
     );
 }
 
-/// B19: the operation sent after one Herdr confirmed waits for its own
+/// B19: the operation sent after one engine confirmed waits for its own
 /// layout; the layout that confirmed the one ahead of it is not its answer.
 #[test]
 fn the_next_operation_in_a_line_waits_for_its_own_layout() {
@@ -531,7 +531,7 @@ fn the_next_operation_in_a_line_waits_for_its_own_layout() {
     runtime.ingest_session(Ok(session(Some(0.5), true)));
     herdr.wait_for_calls(2, Duration::from_secs(5));
     answer(&mut runtime, zoom_action(LEFT), accepted());
-    // The coordinator's republish carries the layout Herdr last sent.
+    // The coordinator's republish carries the layout the engine last sent.
     runtime.ingest_session(Ok(session(Some(0.5), true)));
     let phases = runtime
         .pane_operations
@@ -555,7 +555,7 @@ fn the_next_operation_in_a_line_waits_for_its_own_layout() {
 }
 
 /// B16, B19, grid-ahead-of-herdr B6: a refusal drops what waited behind it
-/// and the tab is drawn as Herdr confirmed it; the grid that followed the
+/// and the tab is drawn as the engine confirmed it; the grid that followed the
 /// drawing goes back with the drawing, as one more resize.
 #[test]
 fn a_refused_operation_drops_the_line_behind_it_and_draws_what_herdr_confirmed() {
@@ -613,7 +613,7 @@ fn a_refused_operation_drops_the_line_behind_it_and_draws_what_herdr_confirmed()
     );
 }
 
-/// B14, D-12: Herdr answering that a zoom changed nothing ends it there, and
+/// B14, D-12: the engine answering that a zoom changed nothing ends it there, and
 /// the tab's next operation leaves at once.
 #[test]
 fn a_zoom_herdr_says_changed_nothing_ends_and_the_next_operation_leaves() {
@@ -632,7 +632,7 @@ fn a_zoom_herdr_says_changed_nothing_ends_and_the_next_operation_leaves() {
     assert_eq!(sent(&herdr, "toggle_zoom"), 2);
 }
 
-/// B17: an operation past its deadline draws what Herdr confirmed, drops the
+/// B17: an operation past its deadline draws what the engine confirmed, drops the
 /// line behind it, and does not hold the tab's next operation.
 #[test]
 fn an_operation_past_its_deadline_draws_what_herdr_confirmed_and_frees_the_tab() {
@@ -664,7 +664,7 @@ fn an_operation_past_its_deadline_draws_what_herdr_confirmed_and_frees_the_tab()
     );
 }
 
-/// B13, D-10: closing a pane while the tab's resize is with Herdr waits its
+/// B13, D-10: closing a pane while the tab's resize is with the engine waits its
 /// turn, is drawn gone at once, and starts when the resize is confirmed.
 #[test]
 fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
@@ -729,7 +729,7 @@ fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
 }
 
 /// D-10: a pane drawn alone because a close ahead took its sibling is still
-/// one of two panes in Herdr's tab, so ⌘W on it waits its turn in the line
+/// one of two panes in the engine's tab, so ⌘W on it waits its turn in the line
 /// rather than meeting the close in progress, and stays drawn until it runs.
 #[test]
 fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
@@ -808,7 +808,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
         "the last pane's close waits for it"
     );
 
-    // Herdr removes the right pane: once that session is applied, the close
+    // The engine removes the right pane: once that session is applied, the close
     // of the last pane starts from it, as a close of the tab's only pane,
     // and the same session read again does not cancel it.
     for operation in runtime.close_operations.values_mut() {
@@ -840,9 +840,9 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
     );
 }
 
-/// B1, B4, D-05: a new tab is drawn from Herdr's answer, as one pane with
-/// Herdr's ids in the requested checkout, and Herdr's own layout replaces it
-/// without the tab moving or the canvas changing; a tab Herdr never lays out
+/// B1, B4, D-05: a new tab is drawn from the engine's answer, as one pane with
+/// the engine's ids in the requested checkout, and the engine's own layout replaces it
+/// without the tab moving or the canvas changing; a tab the engine never lays out
 /// is taken back at the stage bound.
 #[test]
 fn a_created_tab_is_drawn_at_its_answer_until_herdr_lays_it_out() {
@@ -921,7 +921,7 @@ fn a_created_tab_is_drawn_at_its_answer_until_herdr_lays_it_out() {
     );
     assert_eq!(drawn_tab(&runtime), Some(provisional));
 
-    // A tab Herdr acknowledged but never lays out is taken back.
+    // A tab the engine acknowledged but never lays out is taken back.
     runtime.complete_lane_tab(
         create,
         Ok(live::RemoteControlOutcome::Acknowledged {

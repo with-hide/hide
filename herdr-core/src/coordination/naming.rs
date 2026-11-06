@@ -160,7 +160,7 @@ fn target(state: &ProjectionState, work: &Work, workspace: bool) -> Option<(Stri
 
 fn rename(engine: &dyn Engine, work: &Work, workspace: bool) -> Result<Outcome, String> {
     // Fresh read immediately before each target, including the second after a
-    // partial success. Herdr has no rename CAS, so a check-to-write race remains.
+    // partial success. The engine has no rename CAS, so a check-to-write race remains.
     let state = snapshot(engine)?;
     let Some((id, name, already_named)) = target(&state, work, workspace) else {
         return Ok(Outcome::Preserved);

@@ -91,7 +91,8 @@ CONTROL = re.compile(
     r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b(?:[\]PX^_][^\x07\x1b\n]*(?:\x07|\x1b\\)?|[ -/]*[0-~])?"
     r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]"
 )
-# Hand-written issues quote a title cut short ("Agent tabs shrink in stages...").
+# Hand-written issues quote a title cut short ("Agent tabs shrink in stages...");
+# only they match by this much of the name (`tracks`).
 MATCH_PREFIX = 20
 # A home folder in a quoted path names the account that ran it; an excerpt
 # goes to a public page. (The literals are split so the workstation-identity
@@ -255,9 +256,24 @@ def annotate(failed, write=print, title=FAILED_TITLE):
         write(f"::error title={escape_property(UNANNOTATED_TITLE)}::{len(failed) - ANNOTATED_TESTS}")
 
 
+# The `- Test:` line `new_issue` writes (`label_of`'s two forms). An issue
+# carrying it was filed by this script and names its test whole.
+FILED_TEST = re.compile(r'^- Test: `([^`\n]+)`(?: "(.*)")?$', re.M)
+
+
 def tracks(issue, test):
-    """Whether an open issue is about this test: its file and the start of its name appear in the body."""
+    """Whether an open issue is about this test.
+
+    An issue this script filed names its test whole, so only that exact file
+    and name match: a renamed test, or a sibling that starts the same way,
+    opens an issue of its own. A hand-written issue quotes a title cut short
+    ("Agent tabs shrink in stages..."), so it matches by the file and the
+    start of the name.
+    """
     body = issue.get("body") or ""
+    filed = FILED_TEST.search(body)
+    if filed:
+        return filed.groups() == ((test["file"], test["name"]) if test["file"] else (test["name"], None))
     if test["file"] and test["file"] not in body:
         return False
     name = test["name"] if not test["file"] else test["name"].split(" > ")[-1][:MATCH_PREFIX]

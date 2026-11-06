@@ -453,7 +453,7 @@ Hide holds no Claude token at any point and never opens the keychain itself; the
 The child receives exactly the variables `hide_platform::process::LOGIN_CHILD_VARIABLES` names (`hide_ai::USAGE_ENVIRONMENT`): `HOME`, `PATH`, `USER`, `LOGNAME` and `TMPDIR` on macOS and Linux, and `PATH`, `PATHEXT`, `SystemRoot`, `USERPROFILE`, `USERNAME`, `TEMP`, `TMP`, `APPDATA`, `LOCALAPPDATA`, `ComSpec`, `windir`, `SystemDrive`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramData`, `HOMEDRIVE`, `HOMEPATH` and `CLAUDE_CODE_GIT_BASH_PATH` on Windows, where Node reads its home from `USERPROFILE` and does not start without `SystemRoot`, and the Claude CLI needs Git Bash, which it finds through `CLAUDE_CODE_GIT_BASH_PATH` or `ProgramFiles`.
 It runs in Hide's state directory (`~/.hide/state` by default).
 `USER` is what lets the CLI find its keychain account; without it the CLI prints `/cost` text as if logged out.
-`HERDR_*` and `CLAUDECODE` are withheld on purpose, so even a hook that did run would see no Herdr pane.
+`HIDE_PANE_ID`, `HERDR_*` and `CLAUDECODE` are withheld on purpose, so even a hook that did run would see no pane of Hide's.
 `--setting-sources ''` reads none of the operator's settings, so none of their hooks or plugins runs for the read: a session-start hook may leave a folder in `~/.claude/session-env/` for every session, which Claude Code never removes, and on 2026-10-18 (claude 2.1.302) the read with the settings left one every five minutes and without them none, with the same windows in the answer.
 The read reaches no network: with every outbound connection denied (`sandbox-exec`, 2026-10-18) it answered the same windows, so a proxy or certificate the operator sets only in `settings.json`'s `env` block is not needed for it.
 A Hide AI request reads no settings either and does reach the network, so for it such a proxy has to be in the environment Hide is started with.
@@ -480,7 +480,7 @@ Each read starts agy's whole runtime, its language server included, and takes ab
 The parser (`herdr-core/src/usage/limits/antigravity.rs`) reads `/command/data/groups`: each group of models shares weekly buckets that say what fraction is left and when it refills, the `gemini-weekly` bucket is the account's weekly window, and every other group's weekly bucket is a window scoped to that group's models; agy has no five-hour or monthly window.
 A sign-in answer is `NotAuthenticated`, and a frame with no groups is `FormatChanged`.
 
-The child runs on a `BackgroundRead` worker, so the coordinator thread that applies every Herdr pane event never waits on it; one child runs at a time, and dropping the reader cancels a child still running at shutdown.
+The child runs on a `BackgroundRead` worker, so the coordinator thread that applies the engine's session events never waits on it; one child runs at a time, and dropping the reader cancels a child still running at shutdown.
 The failure event carries the provider and the failure kind only; no terminal text, token, or account identifier is logged or placed in a snapshot.
 
 For Codex, the core's own node reads `auth.json` under Codex's folder from the same resolver (`CODEX_HOME`, or `~/.codex` when it is unset or empty); a relative `CODEX_HOME`, which Codex reads against its own working folder, disables that read instead of falling back to `HOME`.

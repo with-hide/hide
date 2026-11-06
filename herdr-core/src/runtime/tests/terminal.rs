@@ -63,7 +63,7 @@ fn the_answer_to_an_attach_the_core_asked_for_is_kept_before_a_layout_holds_the_
     assert!(!runtime.request_terminal_control("w1:p9"));
 }
 
-/// with-hide/hide-private#464: a project's creation reads Herdr's session
+/// with-hide/hide-private#464: a project's creation reads the engine's session
 /// itself and shows the new pane before the event stream does. A session the
 /// stream publishes without that pane yet (its workspace held back while its
 /// first layout settles) keeps the pane's terminal and the size its view
@@ -136,7 +136,7 @@ fn a_pane_a_read_showed_first_keeps_its_terminal_until_the_stream_lays_it_out() 
 
 /// An answer for which no operation of this runtime is waiting (a late or a
 /// foreign one) moves nothing: only an operation Hide started is drawn ahead
-/// of Herdr.
+/// of the engine.
 #[test]
 fn pane_mutation_receipts_without_an_operation_move_nothing() {
     let mut runtime = runtime();
@@ -303,7 +303,7 @@ fn runtime_owner_conflict_observes_ignores_stale_delivery_and_reconnects_once() 
 }
 
 /// The shell used to draw an even grid of the tab's panes whenever it had
-/// no layout, which is a geometry Herdr never applied and which decides
+/// no layout, which is a geometry the engine never applied and which decides
 /// the PTY size. With every tab's layout in the snapshot there is nothing
 /// left for it to stand in for: the web pane grid draws the layout the
 /// snapshot carries for the tab or nothing, and nothing may bring the
@@ -436,9 +436,9 @@ fn scroll_offsets(herdr: &Fake) -> Vec<u64> {
         .collect()
 }
 
-/// B1, B2. A pane another client controls (another Herdr client on the
+/// B1, B2. A pane another client controls (another engine client on the
 /// same server) is observed, and an observer has no terminal writer; its wheel
-/// moves Herdr's viewport with `pane.scroll` instead of being dropped. One
+/// moves the engine's viewport with `pane.scroll` instead of being dropped. One
 /// request is in flight per pane, and the wheels that arrive meanwhile go
 /// out as one summed request when it lands.
 #[test]
@@ -466,7 +466,7 @@ fn a_wheel_on_an_observed_pane_moves_herdrs_viewport() {
     assert!(runtime.snapshot.status.last_error.is_none());
 }
 
-/// B3. When Herdr moves nothing for an observer (an alternate-screen program
+/// B3. When the engine moves nothing for an observer (an alternate-screen program
 /// has no history in the viewport, and only the controlling client's wheel
 /// reaches the program), the pane says another client holds its scrolling
 /// rather than dropping the wheel silently; a later wheel that moves clears
@@ -520,8 +520,8 @@ fn an_observed_wheel_herdr_cannot_move_shows_the_hold_until_one_moves() {
 }
 
 /// B3's marker says another client holds the pane's scrolling, so only
-/// Herdr's own answer may raise it. A pane with no route to its Herdr, or a
-/// Herdr that cannot be reached, logs the failed wheel and leaves the pane's
+/// the engine's own answer may raise it. A pane with no route to its engine, or a
+/// an engine that cannot be reached, logs the failed wheel and leaves the pane's
 /// transport state to say why; it never claims another client holds it.
 #[test]
 fn an_observed_wheel_that_cannot_reach_herdr_is_logged_not_held() {
@@ -555,8 +555,8 @@ fn an_observed_wheel_that_cannot_reach_herdr_is_logged_not_held() {
     }
 }
 
-/// B6. A device pane is searched through that device's Herdr under the id
-/// that Herdr knows it by; a device that is not connected answers the reason
+/// B6. A device pane is searched through that device's engine under the id
+/// that the engine knows it by; a device that is not connected answers the reason
 /// in the find bar instead of searching this machine.
 #[test]
 fn a_device_pane_is_searched_on_its_own_herdr() {
@@ -645,14 +645,14 @@ fn retiring_a_pane_clears_every_pane_keyed_terminal_state() {
     assert!(!runtime.viewport_scrolls.contains_key(pane));
     assert!(!runtime.panes_scroll_held.contains(pane));
     assert!(!runtime.panes_closing.contains(pane));
-    // Its node forgets it too, so an id Herdr reuses starts clean.
+    // Its node forgets it too, so an id the engine reuses starts clean.
     assert_eq!(
         terminals.take(),
         [TerminalControl::Forget { pane: pane.into() }]
     );
 }
 
-/// B1: the keyboard can leave a pane without a key (Herdr's own focus move,
+/// B1: the keyboard can leave a pane without a key (the engine's own focus move,
 /// a close focusing a neighbour, the editor taking it). The nodes hear where
 /// it went, so the operator's next key into the old pane moves it back.
 #[test]
@@ -678,7 +678,7 @@ fn the_nodes_hear_where_the_keyboard_went_without_a_key() {
     assert!(runtime.ingest_terminal_reports(vec![typed("w1:p1")]));
     runtime.snapshot_delta_payload(0);
     assert_eq!(focus_told(&terminals), [Some("w1:p1".to_owned())]);
-    // Herdr moved the keyboard on its own; the screen kept typing in p1.
+    // The engine moved the keyboard on its own; the screen kept typing in p1.
     runtime.snapshot.terminal.pane_id = Some("w1:p2".into());
     runtime.snapshot_delta_payload(0);
     assert_eq!(focus_told(&terminals), [Some("w1:p2".to_owned())]);
@@ -1324,7 +1324,7 @@ fn a_checkout_switch_keeps_the_other_checkouts_retained_and_released_entries() {
     );
 }
 
-/// AC15, R11, SC7. Herdr closes the PTY before it reports the pane gone,
+/// AC15, R11, SC7. The engine closes the PTY before it reports the pane gone,
 /// so the attach child ends while the pane is still drawn. Reading that as
 /// a transport failure is what flashed "terminal attach ended" over a pane
 /// the operator had just closed. The core tells the pane's node the close
@@ -1418,7 +1418,7 @@ fn close_projection_a_failure_on_a_living_pane_still_reports_ended() {
 }
 
 /// ⌘F on an agent with its own find hands the pane to that search where
-/// Herdr holds none of the pane's history (a full-screen agent), and opens
+/// the engine holds none of the pane's history (a full-screen agent), and opens
 /// Hide's find bar where it holds some (an agent drawing inline); each answer
 /// names the request that asked. Claude Code's transcript toggles on the key
 /// that opens it, so a second ⌘F inside it only starts a new search.

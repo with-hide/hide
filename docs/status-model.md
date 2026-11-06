@@ -1,6 +1,6 @@
 # Status Model
 
-How Herdr's raw agent state becomes a group in the sidebar and a count on a checkout row.
+How the engine's raw agent state becomes a group in the sidebar and a count on a checkout row.
 
 The state of an agent is five axes, not one word.
 What it needs from the operator, whether it is running, whether it has reported a completion, whether the operator has looked at it, and whose work it is are independent, and mixing them into one string is what made the same agent read differently in different views.
@@ -84,13 +84,12 @@ Input an agent has not confirmed follows the same path, laid on the pane rather 
 ## agent_status provenance and background waits
 
 The raw `agent_status` is the core's own engine's, with Herdr's names and meaning: each pane's holder reads its screen with its agent's definition-file rules, and the engine turns a stop after work into `done` and its `completion_seq` ([ARCHITECTURE.md](ARCHITECTURE.md#agents-on-the-cores-own-engine)); the core derives its axes in `agent_state/axes.rs`.
-The screen rules are Herdr's: for Claude Code and Codex, Herdr's [official agent reference](https://herdr.dev/docs/agents/) describes terminal-screen inference as the lifecycle source, rather than lifecycle state reported by their session hooks.
+The screen rules follow Herdr's: for Claude Code and Codex, Herdr's [official agent reference](https://herdr.dev/docs/agents/) describes terminal-screen inference as the lifecycle source, rather than lifecycle state reported by their session hooks.
 A native session reference or display-only hook token does not prove that a tool is running or that its command completed.
-Other integrations can have full lifecycle reporting, so this screen-inference statement is specific to those two agents, not every agent Herdr supports.
+Other integrations can have full lifecycle reporting, so this screen-inference statement is specific to those two agents, not every agent.
 
 Hide's current mapping calls raw `done` a reported completion and `idle` a ready stopped pane, as specified below.
 That is a presentation signal read from the screen, not a verified task outcome, successful test, exited background command or durable delivery receipt.
-The current upstream documentation also distinguishes semantic state waits from arbitrary command completion; its display/attention descriptions must not replace Hide's pinned wire mapping without checking the bundled schema and adapter.
 Use a command's own exit/result or an explicit coordination receipt when a workflow needs completion evidence, rather than treating a quiet pane or Done group as that evidence.
 
 [Issue #348](https://github.com/with-hide/hide/issues/348) records one actual run in which an agent waiting for a background command was read as `done`.
@@ -101,62 +100,61 @@ The existing [waiting-on-descendants rule](#a-quiet-row-that-waits) uses proven 
 
 ## Hide owns the read axis, at pane level
 
-Herdr's seen is tab-scoped.
-Its own documentation is explicit: focusing a tab, or targeting it with pane focus or agent focus, marks every pane in that tab seen.
+Herdr's seen was tab-scoped: focusing a tab, or targeting it with pane focus or agent focus, marked every pane in that tab seen.
 Three finished agents side by side in one tab therefore cleared together on a single click, which is the bug this model exists to fix.
+The engine keeps no seen state of its own, so the read axis is the only record of what the operator has looked at.
 
 So Hide keeps its own record instead.
-A pane is read when it has held Hide's keyboard focus since its last state change, and on the Herdr server the record was read on, a state change is Herdr's `state_change_seq` moving **or** the derived demand and activity pair changing.
-The pair matters because Herdr's sequence does not move when only the core's own label changes: an analysis that reads a question at the end of a turn arrives after the agent stopped, so the demand appears with the sequence where it was.
+A pane is read when it has held Hide's keyboard focus since its last state change, and on the engine the record was read on, a state change is the engine's `state_change_seq` moving **or** the derived demand and activity pair changing.
+The pair matters because the engine's sequence does not move when only the core's own label changes: an analysis that reads a question at the end of a turn arrives after the agent stopped, so the demand appears with the sequence where it was.
 The record is `pane_read_records` in the persisted UI state, keyed by pane id, so it survives a restart.
 A record is dropped only when the authoritative pane layout stops reporting that pane, scoped to the namespace that pass owns, so a temporarily incomplete agent list and a local sync can never drop a restored or remote pane's record.
 The same pass drops the descendant signals other records keep for that pane and the pane's saved completion.
 A corrupt store loads as an empty record, which reads as everything unread, and says so in a diagnostic; it is never silently treated as read.
 
-Nothing reads Herdr's `done` versus `idle` split to decide the read axis.
+Nothing reads the engine's `done` versus `idle` split to decide the read axis.
 This is enforced by `INV-herdr-unseen-token`.
 
-### Across a Herdr restart
+### Across an engine restart
 
-`state_change_seq` is Herdr's own count for one server process: a cold restart and a live handoff both start the count again and keep none of a pane's tokens.
-A restored server also reports each pane in steps, measured on the pinned 0.9.3: first at sequence 0, then `unknown` while it detects the agent again, then settled at a sequence of its own, which may land below, at or above the one before.
-So a sequence is compared only with one read on the same server, and no sequence value is taken as a restart signal.
+`state_change_seq` is the engine's own count for one daemon process: it starts again when the daemon starts, and the engine's save keeps a pane's tokens except the server mark (below).
+A restored pane reports in steps: first at sequence 0, then `unknown` until its holder has read the agent's screen again, then settled at a sequence of its own, which may land below, at or above the one before.
+So a sequence is compared only with one read on the same engine, and no sequence value is taken as a restart signal.
 
-Each record names the server it was read on (`PaneReadRecord::server`).
-Every connection Hide makes to a Herdr server, this machine's or a device's, starts with a fresh mark, and once a saved record or completion names that mark the lineage writer writes it on the pane as the `hide_server` token (`wire::SERVER_MARK_TOKEN`).
-A pane that carries a mark is on the server that mark names; a pane that carries none is on the server Hide is connected to now, because Herdr drops the mark with its server.
-So a hided restart against a running server finds its old mark and keeps comparing sequences, and a turn the agent finished while Hide was away is news.
-On the core's own engine the agents' sequences start again with the daemon, so the engine keeps every token of a pane it saved except this mark, and a restored pane is judged as a pane on a restarted Herdr server is (`own/topology.rs`, `Topology::from_saved`).
+Each record names the engine it was read on (`PaneReadRecord::server`).
+Every connection Hide makes to an engine, this machine's or a device's, starts with a fresh mark, and once a saved record or completion names that mark the lineage writer writes it on the pane as the `hide_server` token (`engine::tokens::SERVER_MARK_TOKEN`).
+A pane that carries a mark is on the engine that mark names; a pane that carries none is on the engine Hide is connected to now.
+The agents' sequences start again with the daemon, so the engine keeps every token of a pane it saved except this mark, and a restored pane is judged as a pane on another engine is (`own/topology.rs`, `Topology::from_saved`).
 
-A record saved on another server is carried over instead of compared.
-Each record holds its verdict (`PaneReadRecord::unread`), saved whenever it flips, and until the pane settles on the new server the row keeps that verdict.
-The first time the pane settles on the connection, a read record moves to the new server unless the pane shows something the operator had not read: another known agent session, a demand it did not have, or a change between working and stopped.
-A completion the restored server reports again is the one the record held, so a restored agent that reports `done` again stays read.
+A record saved on another engine is carried over instead of compared.
+Each record holds its verdict (`PaneReadRecord::unread`), saved whenever it flips, and until the pane settles on the new engine the row keeps that verdict.
+The first time the pane settles on the connection, a read record moves to the new engine unless the pane shows something the operator had not read: another known agent session, a demand it did not have, or a change between working and stopped.
+A completion the restored engine reports again is the one the record held, so a restored agent that reports `done` again stays read.
 An unread record stays unread through the restore and is decided again only when the operator reads the pane.
 Running the same pass twice changes nothing, and a second restart starts from the records the first one left.
 A record saved while its pane was still being restored (the operator looked during those steps) is carried the same way once the pane settles.
-Records written before this rule name no server, so Hide cannot tell which server they were read on; each is judged by sequence as before the first time its pane settles and then names that server.
-Reading such a record as read on a guess would lose news, so an upgrade whose first connection reaches a restored server (an app update hands Herdr's server over before the new daemon starts) can show a read row unread once.
+Records written before this rule name no engine, so Hide cannot tell which one they were read on; each is judged by sequence as before the first time its pane settles and then names that engine.
+Reading such a record as read on a guess would lose news, so an upgrade whose first connection reaches a restored pane with such a record can show a read row unread once.
 
-Regression owners: `a_read_pane_stays_read_through_a_restored_servers_steps`, `a_restored_pane_reporting_done_again_stays_read`, `a_pane_unread_before_a_restart_stays_unread`, `a_restored_pane_showing_something_new_is_unread`, `a_hide_restart_on_the_same_server_shows_work_done_while_away`, `a_childs_signal_through_a_restore_lights_its_parent_only_when_new` and `a_record_saved_before_servers_were_named_is_judged_by_sequence_once` in `sidebar.rs`, `a_device_pane_read_before_its_server_restarts_stays_read` for a device, `a_server_mark_is_written_once_and_rides_with_lineage_keys` for the writer, and `web/e2e/read-across-restart.spec.ts` against a real cold restart and live handoff.
+Regression owners: `a_read_pane_stays_read_through_a_restored_servers_steps`, `a_restored_pane_reporting_done_again_stays_read`, `a_pane_unread_before_a_restart_stays_unread`, `a_restored_pane_showing_something_new_is_unread`, `a_hide_restart_on_the_same_server_shows_work_done_while_away`, `a_childs_signal_through_a_restore_lights_its_parent_only_when_new` and `a_record_saved_before_servers_were_named_is_judged_by_sequence_once` in `sidebar.rs`, `a_device_pane_read_before_its_server_restarts_stays_read` for a device, `a_server_mark_is_written_once_and_rides_with_lineage_keys` for the writer, and `web/e2e/read-across-restart.spec.ts` against a real restart of hided.
 
 ## Completion is separate from stopped
 
 An agent can be stopped because it has completed a turn or because a newly opened pane is ready for its first instruction.
-A completion is `agent_status: done`, or `idle` with a `completion_seq`: Herdr turns `done` into `idle` when it marks the pane's tab seen and keeps `completion_seq` until the agent works again.
+A completion is `agent_status: done`, or `idle` with a `completion_seq`: the engine keeps `done` and its `completion_seq` until the agent works again, and the core also reads `idle` with a `completion_seq` as a completion, a shape the own engine does not produce.
 An `idle` lifecycle with no `completion_seq` reports a ready stopped pane and does not put it in Done, even though a missing read record still makes its read axis unread.
-Because Herdr's seen keeps the completion, an unread finished pane in a tab Herdr marked seen stays Done until the operator reads it in Hide.
-The completion fact is part of the pane read fingerprint, so a ready-to-completed transition becomes unread even when Herdr's process-local sequence does not move.
-Herdr's done/idle distinction supplies completion evidence only; Hide's own pane record remains the sole read authority.
+The engine has no seen state, so an unread finished pane stays Done until the operator reads it in Hide.
+The completion fact is part of the pane read fingerprint, so a ready-to-completed transition becomes unread even when the engine's process-local sequence does not move.
+The engine's done/idle distinction supplies completion evidence only; Hide's own pane record remains the sole read authority.
 
 A completion is news only when it appears.
-A record that holds a completion the row no longer shows still covers the row: a completion goes away only when the agent works again, which its own change already says, or when a restored server no longer reports it.
+A record that holds a completion the row no longer shows still covers the row: a completion goes away only when the agent works again, which its own change already says, or when a restarted engine no longer reports it.
 Any other change to the fingerprint (the agent working again, a state change between two looks, another session in the pane) still turns the row unread.
-Regression owners: `a_read_demand_stays_read_when_herdr_marks_its_tab_seen_after_focus_left` and `a_read_demand_turns_unread_again_only_for_news` in `sidebar.rs`, and `web/e2e/blocked-state.spec.ts`, which holds Herdr's focus at the socket so its seen lands after the operator moved on.
+Regression owners: `a_read_demand_stays_read_when_herdr_marks_its_tab_seen_after_focus_left` and `a_read_demand_turns_unread_again_only_for_news` in `sidebar.rs`, and `web/e2e/blocked-state.spec.ts`, which finishes a blocked and an unfinished turn after the operator moved on.
 
-A restored server reports neither `done` nor a `completion_seq` for a pane whose completion it lost; a restored Claude pane comes back `idle`.
-So Hide keeps the completions it saw (`pane_completions` in the persisted UI state, keyed by pane), each with the agent session, server mark and sequence it was last seen at.
-A saved completion keeps showing while the same session has not changed since: on its own server while the pane's sequence is the one it was saved at, and on a restored server when the pane first settles stopped.
+A restarted engine reports neither `done` nor a `completion_seq` for a pane whose completion it lost; a restored Claude pane comes back `idle`.
+So Hide keeps the completions it saw (`pane_completions` in the persisted UI state, keyed by pane), each with the agent session, engine mark and sequence it was last seen at.
+A saved completion keeps showing while the same session has not changed since: on its own engine while the pane's sequence is the one it was saved at, and on a restarted engine when the pane first settles stopped.
 It is kept before the lineage is built, so an ancestor sees the same descendant completion it saw before the restart.
 
 ## A descendant's change turns its ancestors unread
@@ -164,7 +162,7 @@ It is kept before the lineage is built, so an ancestor sees the same descendant 
 The fingerprint carries one more element: the outstanding demands and reported completions of the row's live descendants, each keyed by the descendant's pane (`PaneReadRecord::descendant_signals`).
 A descendant entering a question, approval or error, moving between those three, or finishing a turn adds a signal the record does not hold, and every ancestor row becomes unread through the same comparison its own state change would use; there is no second store, timer or event.
 A signal that goes away does not turn anything on: a question being answered, a finished child starting new work, or a child pane closing is trimmed from the record on the next projection, so the same descendant is news again the next time it asks or finishes.
-A signal is trimmed only when the descendant is settled and no longer sends it: while a restored server has not settled the descendant, or has not got its lineage tokens back, the record keeps it.
+A signal is trimmed only when the descendant is settled and no longer sends it: while a restored engine has not settled the descendant, or has not got its lineage tokens back, the record keeps it.
 Reading the ancestor records the signals it shows at that moment and nothing more.
 
 A descendant's signal never puts an ancestor in Needs You: a child's question leaves a working root in Working.
@@ -212,14 +210,14 @@ No new group value reaches the wire, so a decoder that does not know the field d
 | `wait` | The row waits for | Proven by |
 | --- | --- | --- |
 | `children` | A live descendant that is working, or stopped on a background task its session proves. Only a lineage root waits this way. | The lineage and the descendants' own axes |
-| `background` | A background command, monitor or task its own agent started and that is still running in the process that started it, on a turn the label did not read as finished | The session's own records, read for the Herdr state the label worker asked under (below) |
+| `background` | A background command, monitor or task its own agent started and that is still running in the process that started it, on a turn the label did not read as finished | The session's own records, read for the engine state the label worker asked under (below) |
 | `checks` | The running checks of a pull request the row is responsible for, or the GitHub read a turn that just printed a pull request's address set off (A row waiting on its checks, below) | GitHub's answer for the pull request, read by `gh`, and the turn's own sighting |
 | `reply` | A Hide `request` or `block` letter the row's session sent whose answer is still awaited and still being made: the recipient has not taken the letter in yet, or it is working, or it or a descendant of it is on a proven background task, or a descendant of it works | The delivery ledger (`Ledger::awaited_answers`) for the letter and whether it was taken in, and the recipient's row for the rest |
 
 A turn the label read as finished (`done`) is not hidden by the background tasks it left (status-marks D-16, B27): the row is Unread with the green dot, carries the count as `background_left`, and its line ends with `· 백그라운드 N` (`agents.line.backgroundLeft`), its hover and accessible name with `백그라운드 N개 남음`; the narrow row cuts the sentence and keeps that tail.
 The Done notification goes out as for any finished turn, and opening the row reads it; a task that wakes the agent starts a new turn, which decides the mark again.
 A `waiting` or `unfinished` verdict, or none (Hide AI off included), keeps the row in progress on its background tasks, and children, a reply being made or running checks keep it in progress whatever the verdict (B28).
-A merely ready or finished descendant is quiet, and one whose activity Herdr reports as unknown does not make its root wait, because a waiting state the projection cannot vouch for is not drawn.
+A merely ready or finished descendant is quiet, and one whose activity the engine reports as unknown does not make its root wait, because a waiting state the projection cannot vouch for is not drawn.
 A descendant holding a question, approval or error waits on its parent, not the other way round, so it does not make the root wait: it turns the root unread through the descendant signals above, and moves the root to Needs You only once one of the seven escalation causes raises it (Delegated escalation).
 A delegated row that waits on its own (`background` or `reply`) is Working, like a delegated row that is running, and its ancestors' counts take it as working; its root waits on it only while it waits on a background task, because a reply is made by the agent that answers, not by the row that asked; an ordinary delegated row that waits for nothing keeps Seen.
 
@@ -278,9 +276,9 @@ Hide or the daemon restarting is not a process boundary: the tracker is stored w
 The declaration is `SessionFormat::reports_wake_devices` in `hide-agent-adapter`, true for Claude Code alone.
 Codex writes no record when a session's command ends, and Grok, Pi, omp, Cursor and OpenCode keep no process boundary, so for them nothing proves a task is running and a label `waiting` with no device is a stop (below).
 A turn that just ended is not a stop until its session read lands.
-The wake read is bound to the Herdr state it was asked under, so from the moment Herdr reports the stop until that read lands nothing says whether a task will wake the agent.
+The wake read is bound to the engine state it was asked under, so from the moment the engine reports the stop until that read lands nothing says whether a task will wake the agent.
 The label worker owes that read (`PaneRecord::turn_end_owed`, not saved) and the overlay lays it as `RowFacts.turn_end_unread` for that state; the activity axis (`agent_activity`) keeps such a row Working, so no group, mark or phone notification is decided from a stop that may be taken back.
-It is owed only to an agent whose read reports background tasks, when its status goes from working to idle or done (or changes between them while still owed), and only while the read can run: Herdr marking a finished row seen, a daemon that restarts and finds its record read, and every other agent owe nothing.
+It is owed only to an agent whose read reports background tasks, when its status goes from working to idle or done (or changes between them while still owed), and only while the read can run: a daemon that restarts and finds its record read, and every other agent owe nothing.
 The hold ends on every path of the read and has no timer of its own: the read landing releases it, a read that fails (`ReadFailure`, itself bounded by `DEVICE_READ_TIMEOUT`) releases it with a `turn_end.unread` diagnostic, and the agent working again or a state with no session to read ends it.
 A session no read has proved yet carries no facts, so its first turn end is not held.
 The wait before the label's own verdict (`stopped_unfinished`) is not this gap: that verdict comes from an AI request that takes seconds, and holding the row for it would delay every Done.
@@ -289,24 +287,24 @@ Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_r
 
 ## Where each axis comes from
 
-Activity, completion and approval are judged in one order: the agent's hook first, then its session file, then Herdr (PRD engine-bundle-1 D-9).
+Activity, completion and approval are judged in one order: the agent's hook first, then its session file, then the engine (PRD engine-bundle-1 D-9).
 
 1. The turn the hook of the pane's own session last reported (`working`, `done`, `waiting` or `idle`; [agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), which the core keeps per pane and session (`agent_hooks::facts`) and lays on the agent as `SessionAgentPayload.hook`, never on the wire.
    `working` is Working; `done` is stopped with a completion; `waiting` is stopped with an approval demand; `idle` is stopped with no completion, the turn an interrupt ended.
-   It stands until the same session's next hook event, so Herdr's reading of the screen never overrides it: a turn waiting on a background command that Herdr reads as finished (#348) stays Working.
-   No timer ends it (design principle 13); a turn no hook reports the end of is ended by the signal the agent does give, or by the session file: a read under a later Herdr state than the one the turn was first laid under, with Herdr reading the agent at rest, that finds the turn interrupted (Claude Code's Esc, which sends no `Stop`) or completed ends it as resting or done ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)).
-   The facts go when Herdr lists no agent in the pane or the pane closes; an agent started again in its pane is followed by its new session's hook even while Herdr still names the session that ended ([agent-hooks.md](agent-hooks.md#which-session-is-the-panes)).
-2. The session file, for the waits no hook reports: a plan waiting for approval (below), with the hook's `working` standing in for Herdr's `working` when the session has a hook turn.
-3. Herdr's `agent_status` and `completion_seq`, only for a session whose hook has reported no turn: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
+   It stands until the same session's next hook event, so the engine's reading of the screen never overrides it: a turn waiting on a background command that the screen rules read as finished (#348) stays Working.
+   No timer ends it (design principle 13); a turn no hook reports the end of is ended by the signal the agent does give, or by the session file: a read under a later engine state than the one the turn was first laid under, with the engine reading the agent at rest, that finds the turn interrupted (Claude Code's Esc, which sends no `Stop`) or completed ends it as resting or done ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)).
+   The facts go when the engine lists no agent in the pane or the pane closes; an agent started again in its pane is followed by its new session's hook even while the engine still names the session that ended ([agent-hooks.md](agent-hooks.md#which-session-is-the-panes)).
+2. The session file, for the waits no hook reports: a plan waiting for approval (below), with the hook's `working` standing in for the engine's `working` when the session has a hook turn.
+3. The engine's `agent_status` and `completion_seq`, only for a session whose hook has reported no turn: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
 
 These ranks are decided once, in `agent_state::turn_projection` (activity, an approval prompt, a question or plan approval of the agent's own), and every consumer reads that answer: the row's axes, the letter doorbell and the tool-letter handover ([delivery.md](delivery.md#safe-intake-and-manual-fallback)), the confirmation of a brief or letter Hide sent, typed or through the agent's own way in, and the retype of a typed one ([delivery.md](delivery.md#input-an-agent-did-not-take)), and agent sleep through the row.
-A row the turn shows at rest is not by that a pane safe to type into: Herdr's blocked prompt and readiness, Hide's input clocks and the composer read stay the doorbell's own gate, which a typed input's composer read shares (`doorbell::unheld_turn`, `doorbell::takes_keys`).
-Regression owners: `runtime::tests::turn_authority`, which crosses the hook, Herdr and the session read and asserts both the row and the letter's hold, and `runtime::typed_input::tests::a_child_whose_hook_says_it_works_owes_no_record_while_herdr_reads_it_idle` with its reverse, which assert the typed input's notice and retype.
+A row the turn shows at rest is not by that a pane safe to type into: the engine's blocked prompt and readiness, Hide's input clocks and the composer read stay the doorbell's own gate, which a typed input's composer read shares (`doorbell::unheld_turn`, `doorbell::takes_keys`).
+Regression owners: `runtime::tests::turn_authority`, which crosses the hook, the engine and the session read and asserts both the row and the letter's hold, and `runtime::typed_input::tests::a_child_whose_hook_says_it_works_owes_no_record_while_herdr_reads_it_idle` with its reverse, which assert the typed input's notice and retype.
 
 An agent-list transport failure makes the retained telemetry unconfirmed while the topology stream remains connected.
 Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
 An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.
-A pane whose terminal failed to restore (Herdr's `restore_error`, the pane's `failed_terminal_id`, as when its folder was removed before a Herdr restart) runs no process, and Herdr reports its agent `unknown` for good.
+A pane whose terminal failed to start or restore (the engine's `restore_error`, the pane's `failed_terminal_id`, as when its folder was removed before a restart) runs no process, and the engine reports its agent `unknown` for good.
 Its agent is read as stopped, with no completion, demand, block or start, whatever its hook, session read or label last said (`axes.rs::reports_nothing`): the row is `idle` with the `quiet` mark, needs neither a close confirmation nor a status check, and folds under `끝난 자식` in a parent's close sheet and tree popover like any finished child, while the pane header's `restore_failed` notice says what happened.
 `sidebar::project_agents` lays that fact on each agent from its pane (`SessionAgentPayload::terminal_failed`) before any axis is read, so the row mark, the popovers, the close sheet and every local and remote close guard read one answer; none of them looks at the pane's failed terminal again.
 Regression owner: `runtime::tests::tree_close::a_child_whose_terminal_failed_to_restore_rests_and_never_blocks_its_parents_close`.
@@ -321,30 +319,30 @@ Demand has these sources:
   The current-session/current-state read carries the optional `user_turn` row fact, with `kind: question|plan_approval` and optional `content: {text, choices, truncated}`.
   Text is capped at 8 KiB, choices at eight and each choice at 256 UTF-8 bytes; cuts preserve character boundaries and set `truncated`.
   A correlated native result, a later human turn or an abort clears the pending question.
-  Codex 0.162.1 asks with `request_user_input_async`, whose tool returns `{"accepted":true}` at once while Codex keeps working, so that result answers nothing: the question stays open, as an unread Question in Needs You even while Herdr says the agent works (the demand axis does not read the activity), until a reply names it.
+  Codex 0.162.1 asks with `request_user_input_async`, whose tool returns `{"accepted":true}` at once while Codex keeps working, so that result answers nothing: the question stays open, as an unread Question in Needs You even while the engine says the agent works (the demand axis does not read the activity), until a reply names it.
   The reply is a user message `<send_user_message_question_reply>` carrying `questionItemId`, a JSON array `[tool, call, question number]`; each question of the call waits for its own reply, and the match is on that id, never on the question or answer text.
   That message is scaffolding like the other injected prefixes, so it is not a human turn and feeds no label as a request; a person's own message still ends the wait, and a turn that starts without one does not (the question outlives the turn that asked it).
   A reply whose id cannot be placed, or an async call whose arguments cannot be read, leaves the wait unknown rather than nothing.
   Missing content remains absent, and a failed, incomplete or older-state read publishes no structured fact; the independent letter hold stays unknown rather than assuming an answer.
   Native calls are bounded to eight per turn with 256-byte identities; exceeding the bound fails the read instead of dropping a pending question.
 - Approval is the hook's `waiting` turn: Claude Code's and Codex's `PermissionRequest`, Claude Code's `permission_prompt` and `elicitation_dialog` notifications, and an OpenCode permission ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), whether or not the operator has read it.
-  For a session whose hook has reported no turn, it is Herdr's `blocked` lifecycle; a hook that has reported the turn has said whether it waits, so Herdr's `blocked` no longer decides that session.
-- Approval is also a plan waiting for the operator's approval that Herdr reads as an ordinary stop, Codex's "Implement this plan?" (PRD codex-plan-approval-hold).
+  For a session whose hook has reported no turn, it is the engine's `blocked` lifecycle; a hook that has reported the turn has said whether it waits, so the engine's `blocked` no longer decides that session.
+- Approval is also a plan waiting for the operator's approval that the engine reads as an ordinary stop, Codex's "Implement this plan?" (PRD codex-plan-approval-hold).
   The core reads it from the session file, not the screen: the label worker's session read folds the agent's turn records into a turn tracker (`hide-session/src/turns.rs`), and a plan-mode turn that proposed a plan and finished, with no later turn or person's message, waits.
-  The answer holds only for the Herdr `state_change_seq` the read was asked under and the session it proved, it is laid on the row's facts (`RowFacts.awaiting_operator`, never on the wire) and resolved by `agent_state::agent_blocked`, and it is not shown while Herdr says the agent works, except for an agent kind whose adapter declares `waits_while_working` (`SessionFormat`).
-  Herdr reports Grok `working` while it waits for a plan approval or an answer, and Grok's waits are read from the session as it is now (`plan_mode.json`, a question call with no result yet) rather than inferred from how the last turn ended, so for Grok the wait holds the row, and raises a delegated child as `ChildBlocked`, whatever Herdr says; it clears on the next poll after the operator answers.
-  A wait no read has settled for the current state is not shown: the row shows what Herdr says, and the letter doorbell holds instead (`docs/delivery.md`, A menu Herdr reads as a stop).
+  The answer holds only for the engine's `state_change_seq` the read was asked under and the session it proved, it is laid on the row's facts (`RowFacts.awaiting_operator`, never on the wire) and resolved by `agent_state::agent_blocked`, and it is not shown while the engine says the agent works, except for an agent kind whose adapter declares `waits_while_working` (`SessionFormat`).
+  The engine reads Grok `working` while it waits for a plan approval or an answer, and Grok's waits are read from the session as it is now (`plan_mode.json`, a question call with no result yet) rather than inferred from how the last turn ended, so for Grok the wait holds the row, and raises a delegated child as `ChildBlocked`, whatever the engine says; it clears on the next poll after the operator answers.
+  A wait no read has settled for the current state is not shown: the row shows what the engine says, and the letter doorbell holds instead (`docs/delivery.md`, A menu the engine reads as a stop).
   It needs no Hide AI: agent summaries off, the read still runs.
   "No, stay in Plan mode" writes nothing to the session, so after that answer the row stays in Needs You until Codex's next turn starts.
-  The row's `blocked` value carries it, so it is held exactly like Herdr's `blocked` below, including close confirmation and agent sleep, and the Enter that approves it still counts as the operator's submit, since Codex writes the next turn's message from it.
+  The row's `blocked` value carries it, so it is held exactly like the engine's `blocked` below, including close confirmation and agent sleep, and the Enter that approves it still counts as the operator's submit, since Codex writes the next turn's message from it.
 
 - A block is the label's verdict that the turn stopped on a cause it can name in one line (`label.blocked`, see Task identity below): a disk with no room, a CI run that failed, a permission or login the agent cannot get, a tool that will not run.
   It is the Blocked state, carried on the existing `error` demand value (`demand`, `status_code` and the mark counts keep the wire name `error`; the word is Blocked), because a block is a demand on the operator's attention and no new value is needed.
   Like a question it exists only while the label is proven for the pane's current session, and it ends when the agent starts working again.
-  Herdr's own `blocked` lifecycle is the approval above, not this.
+  The engine's own `blocked` lifecycle is the approval above, not this.
 
 A question outranks an approval, and a block outranks both for the mark.
-Whether the operator has read a demand is Hide's own record, never Herdr's tab-scoped seen state.
+Whether the operator has read a demand is Hide's own record, never a tab-scoped seen state.
 
 ## The four groups
 
@@ -352,7 +350,7 @@ The sections are named for whose move is next: Needs You (`내 차례`) and Unre
 
 | Group | Membership |
 | --- | --- |
-| Needs You | An unread demand - question, approval or block - or a pane Herdr reports as blocked, or whose native question or plan waits for the operator, right now, or a question the core laid on the row (a plan review, a mission decision), or an operator-owned row with a View to look at |
+| Needs You | An unread demand - question, approval or block - or a pane the engine reports as blocked, or whose native question or plan waits for the operator, right now, or a question the core laid on the row (a plan review, a mission decision), or an operator-owned row with a View to look at |
 | Done (Unread) | No demand, stopped, completion reported, and unread |
 | Working | Running, or a quiet row waiting on a working descendant, a proven background task or a reply still being made |
 | Seen | Everything else: ready idle, read demands, read completions, unknown |
@@ -422,7 +420,7 @@ The status-check value is true only for Unknown activity with no demand and no b
 It prevents a destructive local or remote close from guessing that an unobserved agent is idle, and the caller-visible remedy is to refresh status before closing.
 An agent is starting while the engine still holds open the start it made of it (`launch_pending`), from a confirmed agent list, unless it works or the engine saw a turn of it end since the start (`completion_seq`; `agent_state::agent_starting`).
 The own engine holds a start open until its program takes input and its screen rests past the 3 s settle, so a row that already reads at rest, as a woken agent's does with the last run's screen and its hook's last report of a finished turn, is still `starting` (`시작 중`) rather than `idle` or `done`, and an agent read `unknown` in that time is `starting` too; it never needs a status check.
-Whether the start carried the operator's first prompt is the core's own fact from the start request (`AgentStart::Starting { first_prompt }`): the runtime keeps the pane of a task start whose kept launch has a prompt (`lay_start_prompts`) until Herdr reports that agent, the pane is gone or the start definitely failed, so the start's answer and Herdr's report may arrive in either order.
+Whether the start carried the operator's first prompt is the core's own fact from the start request (`AgentStart::Starting { first_prompt }`): the runtime keeps the pane of a task start whose kept launch has a prompt (`lay_start_prompts`) until the engine reports that agent, the pane is gone or the start definitely failed, so the start's answer and the engine's report may arrive in either order.
 A starting agent with a first prompt asks the ordinary Stop-work confirmation before its pane closes, because the agent took that prompt as its argument and a close would drop it without a word; one with no first prompt has been given nothing to do and closes at once.
 The record lives in the daemon's memory only, so a daemon restart inside the few seconds of a start closes that pane as one started with no prompt.
 A `hide agent spawn` brief is not a first prompt: it is submitted after the agent is ready, and a close before then refuses it back to its sender as `brief_not_submitted`.
@@ -452,11 +450,11 @@ The latter has no indentation, from hint, parent line, descendant contribution, 
 Its own demand and completion enter Needs You and Done normally, and closing the spawner leaves it running.
 The CLI's required `origin` field records the spawner in both modes (null for ordinary roots), but origin never enters the UI or any ownership calculation.
 PR and issue panels still find the independent session through its own branch records without a delegated-by line.
-Herdr records no lineage, so hided writes the four pane tokens through `pane.report_metadata`: `parent_pane` names the parent's pane id, `parent_machine` names its machine when the parent is remote, and `child_session` and `parent_session` are the original session digests.
+The engine records no lineage, so hided writes the four pane tokens through the engine (`Engine::report_pane_tokens`): `parent_pane` names the parent's pane id, `parent_machine` names its machine when the parent is remote, and `child_session` and `parent_session` are the original session digests.
 The value and lifetime contract is unchanged.
 A fork made with Fork agent or Fork agent to the side is the operator's own root, not the source's child: its registration has no parent, names the source as its `origin`, and carries the `forked` fact (`AgentRecord::forked`), so `hide agent show` and `hide agent list` print a null `parent` and the source as `origin` (PRD fork-operator-root B1, B19, D-12).
 Only the source's own live registration can register a parentless fork with itself as origin; any other caller is refused `parent_authority_required`.
-The source is registered when the fork's agent starts, and the fork once Herdr shows the fork's own session: Codex started as `codex fork <id>` reports its session only at its first turn, so a Codex fork left at rest has no session, no `forked_from` and no registration until the operator gives it a prompt.
+The source is registered when the fork's agent starts, and the fork once the engine shows the fork's own session: Codex started as `codex fork <id>` reports its session only at its first turn, so a Codex fork left at rest has no session, no `forked_from` and no registration until the operator gives it a prompt.
 Meanwhile the registration waits in the ledger, the source's consent kept as the wait, so the fork names the source as origin even when the source closed while it rested, and the wait ends with the fork's pane or agent ([delivery.md](delivery.md#a-registration-that-waits-for-its-agents-session)).
 A fork that cannot be recorded keeps running without its mark: when the source's registration or the wait is refused (`identity_waits_full` past 64 waits, `capacity` at the 2048 registrations the ledger holds, `registration_conflict`), the fork's row is an ordinary root of the operator's with no `forked_from`, the source shows nothing of it, and the refusal is logged as `fork` `registration_failed` with both panes.
 Nothing reaches the screen, by design principle 13 and because an alert is a PRD decision: the fork works, and no step the operator could take afterwards gives it the mark, since a fork is not asked again once a slot frees, so the log is where a lost mark is looked into.
@@ -466,8 +464,8 @@ They are read only while the fork's pane still runs `fork_session`, so a pane th
 Because none of these is a parent token, the fork has no depth, so the source gets no child, unread, Working, descendant mark, child count or subtree close from it, and the fork's own demand and completion enter Needs You and Done (B12, B13, B14).
 A fork of a fork names the fork it was made from, and a fork of a delegated child is still a root (B15, B16).
 A fork made before forks were roots keeps its parent and its old `fork` token, which nothing reads any more: it stays a child and wears no mark (D-09).
-The session tokens are lowercase hexadecimal SHA-256 digests of each original `agent_session.value`; this keeps even a path-valued session inside Herdr's 80-character token limit.
-A same-server relationship omits `parent_machine`.
+The session tokens are lowercase hexadecimal SHA-256 digests of each original `agent_session.value`; this keeps even a path-valued session short and two sessions apart.
+A same-machine relationship omits `parent_machine`.
 A changed child session clears all four tokens, while an absent session proves neither a valid relationship nor a session change.
 Ending registration leaves the tokens until the child pane changes or disappears.
 A registration ends by itself when the host's authoritative pane topology stops reporting its pane, as a read record is dropped, and never from an incomplete or stale read ([delivery.md](delivery.md#agent-registration-and-spawning)).
@@ -481,7 +479,7 @@ The operating-system identity is the platform UUID on macOS and the machine-id o
 `hide agent register`, delegated `hide agent spawn` and Hide's fork record the relationship, or for a fork its provenance, in the core's coordination ledger.
 A delegated `hide agent spawn --machine <device id>` child is a remote child of a local parent: its tokens are written on the device's pane and `parent_machine` names the spawner's machine, the same resolution as any cross-machine relationship above.
 The existing one-second agent refresh writes only panes whose tokens differ, with a complete reconciliation on startup or reconnect and an immediate write after spawn.
-The same writer writes the read axis's server mark ([Across a Herdr restart](#across-a-herdr-restart)), in the pane's lineage report when it has one.
+The same writer writes the read axis's server mark ([Across an engine restart](#across-an-engine-restart)), in the pane's lineage report when it has one.
 `engine/tokens.rs` names this contract for every engine; `wire.rs` and `agent_state/axes.rs` remain its readers.
 A connected device's immutable machine identity comes from its consented helper's connection greeting, outside the runtime mutex; an unavailable identity leaves the parent unresolved and records a diagnostic.
 A declaration whose machine cannot be matched stays a root and records one diagnostic for that pane instead of guessing.
@@ -489,11 +487,11 @@ A declaration whose machine cannot be matched stays a root and records one diagn
 A pane outlives the agent it hosted and the tokens outlive the agent with it, so a declaration is only a claim until the sessions prove it: it holds while the child's pane reports the `child_session` and the parent's pane the `parent_session`.
 `wire.rs` checks the child as it turns the tokens into a row, and `agent_state::apply_lineage` checks the parent because that is where both rows are known, on this machine or another.
 An agent that took over a pane is therefore a root, and a parent pane taken over by another agent adopts none of the old children: no line, no descendant mark, and no orphan hint, since the child was never that agent's.
-A pane Herdr reports without a session cannot prove a match, so its relationship does not hold until it reports the recorded session again, and a `parent_pane` without the session tokens is not a relationship at all.
+A pane the engine reports without a session cannot prove a match, so its relationship does not hold until it reports the recorded session again, and a `parent_pane` without the session tokens is not a relationship at all.
 A parent whose pane no longer lists an agent is a different case: the child stays an orphan root with its hint.
 
 An empty token is a cleared declaration, not a parent named by an empty string.
-The token is display-only in Herdr's own terms and dies with the pane, so a closed child leaves no edge behind, and a parent that has gone makes the child an orphan root.
+The token is display-only metadata and dies with the pane, so a closed child leaves no edge behind, and a parent that has gone makes the child an orphan root.
 
 Fork regression owners: `a_fork_registers_as_a_root_whose_origin_is_its_source` (`coordination/mod.rs`), `a_fork_names_its_source_under_fork_keys_and_never_as_a_parent` and `a_fork_that_is_woken_in_another_pane_names_its_source_there` (`coordination/lineage.rs`), `a_fork_names_its_source_and_stays_the_operators_own_work` (`runtime/tests/lineage.rs`), `a_fork_whose_session_arrives_late_registers_as_the_operators_root_from_its_source` and `a_fork_whose_pane_closes_or_agent_ends_before_its_session_ends_its_wait` (`runtime/tests/fork_registration.rs`), the decisions in `coordination/identity_wait.rs`, and `web/e2e/agent-fork.spec.ts`.
 
@@ -550,7 +548,7 @@ A read, non-blocked demand belongs to Seen unless the core places its running ac
 Disconnected presentation overrides the retained mark and text on every affected surface without modifying demand, activity, read records, or the last known group: the row draws no mark, is dimmed, and its line names the device (`<기기> 연결 끊김`).
 Unavailable-server tooltips describe the connection problem rather than presenting retained counts as current work.
 
-A sleeping agent of a kind that sleeps in its pane (Claude Code, Codex, Antigravity) keeps its row, name, place, lineage and badge while Herdr no longer lists it: the core draws the row from its own sleep record (`herdr-core/src/agent_sleep.rs`), because the pinned Herdr forgets an agent and its session reference once its process ends.
+A sleeping agent of a kind that sleeps in its pane (Claude Code, Codex, Antigravity) keeps its row, name, place, lineage and badge while the engine no longer lists it: the core draws the row from its own sleep record (`herdr-core/src/agent_sleep.rs`), because the engine lists an agent only while its program runs in the pane.
 Only a stopped agent of a kind that sleeps, on the core's machine or a node that dials it, with no demand and a reported conversation can sleep; the hours rule also wants it seen and off screen, a finished mission node's agents and `hide agent sleep` want it off screen, and the pane menu wants neither ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)); a delegated child sleeps by the same rule as its parent and keeps its place under it.
 A `request` or `block` letter wakes a sleeping agent exactly as Wake agent does, and its row passes from the moon through waking back to its own mark.
 Each such letter wakes it once: one that already rang or already woke it does not wake it again after a later sleep, and its hour runs through that sleep.
@@ -561,7 +559,7 @@ Its core-owned group is Seen, and it contributes no active pane, lineage, unread
 Saving and closing do not duplicate the existing live row; confirmed closure publishes the separate sleeping row, and an uncertain operation publishes its explicit status action.
 Wake resumes the saved native conversation in its own intent-marked tab, and current reader identity must confirm that conversation before the archived row is removed.
 A delegated child that held a registration wakes into the same registration, so its row returns under its parent and its parent's watch and letters still reach it ([delivery.md](delivery.md#agent-registration-and-spawning)); the sleeping row itself never carries lineage.
-A Cursor wake needs no session hook from Cursor: the core reports the resumed session to Herdr itself, so the row returns under its parent like any other kind's ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)).
+A Cursor wake needs no session hook from Cursor: the core reports the resumed session to the engine itself, so the row returns under its parent like any other kind's ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)).
 The Wake action is available only when this build declares the provider's resume capability.
 A record an older build saved names no checkout owner ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)), so its Wake is offered only while the project list shows its checkout; until then the row has no Wake and its reason says to open Hide on that computer and add the project if it is missing, and the Wake returns once the checkout is listed.
 A record this build saved wakes from the owner it kept, whatever the list shows.
@@ -634,9 +632,9 @@ Run evidence belongs under `agents/runs/`, never in `docs/`.
 
 ## Uninstrumented is not an unknown activity
 
-A pane whose agent Hide cannot see into is a different answer from a pane whose activity Herdr reports as `unknown`, and the two are kept apart on purpose.
+A pane whose agent Hide cannot see into is a different answer from a pane whose activity the engine reports as `unknown`, and the two are kept apart on purpose.
 
-- Activity `unknown` is Herdr saying it does not know what the process is doing. It is one of the three activity values and it groups like any other.
+- Activity `unknown` is the engine saying it does not know what the process is doing. It is one of the three activity values and it groups like any other.
 - Uninstrumented is Hide saying it cannot tell what that session has spawned. It is not an activity, it never changes a group, and it is projected as its own field beside the agent.
 
 The reason is resolved once, by `hide_agent_hooks::diagnosis::instrumentation`, in a fixed order: config unreadable, remote host, hooks not installed, session predates install, hook outdated, unknown.
@@ -651,7 +649,7 @@ An agent whose adapter declares no subagent count (`subagent_counts: None`: Pi a
 ### Not connected, and what fixes it
 
 A Claude Code or Codex pane whose session Hide does not hear also carries a connection (`PaneChildrenSnapshot.connection`), read from the same observation as the projection above (PRD settings-cleanup D-09, D-11, B26 to B31).
-It is judged by `sidebar::pane_connection` from `uninstrumented_code` for an awake agent whose native session Herdr has reported.
+It is judged by `sidebar::pane_connection` from `uninstrumented_code` for an awake agent whose native session the engine has recorded.
 A process detected before its native session is not a failed integration and carries no connection judgement yet, without a timer or an assumption that it connected.
 A sleeping agent has ended its process, so no hook can speak from its pane, and it carries no connection until it wakes.
 Settings counts sessions and never these connections, so a pane that needs a Reopen says so only in its own header.
@@ -667,8 +665,8 @@ Settings counts sessions and never these connections, so a pane that needs a Reo
 | `hooks_switched_off`, `unknown`, an agent with no hook, or an agent asleep | no connection, so no chip |
 | any of the above, for an agent whose read reports turns and whose session Hide's read refuses for a reason reading again cannot clear ([delivery.md](delivery.md#letters-while-the-agent-works)) | `session_unreadable` (letters and mission answers wait; no Reopen, which resumes the same session) |
 
-A Herdr live handoff or restart does not move a connected pane to `started_before_hide`: the hook reports to the core, which keeps what it reported in its own `hook-facts.json`, so nothing the instrumented judgement reads goes with Herdr's server, for a pane on a device as for this Mac's ([agent-hooks.md](agent-hooks.md#what-the-hook-returns-and-reports-back)).
-`can_reopen` is false for `setup_needed`, `update_agent`, an agent other than Claude Code and Codex, and a pane on another device, because a Reopen restarts a Claude Code or Codex session through this Mac's Herdr and changes no agent's version.
+A restart of the engine does not move a connected pane to `started_before_hide`: the hook reports to the core, which keeps what it reported in its own `hook-facts.json`, so nothing the instrumented judgement reads goes with the engine's session, for a pane on a device as for this Mac's ([agent-hooks.md](agent-hooks.md#what-the-hook-returns-and-reports-back)).
+`can_reopen` is false for `setup_needed`, `update_agent`, an agent other than Claude Code and Codex, and a pane on another device, because a Reopen restarts a Claude Code or Codex session through this Mac's engine and changes no agent's version.
 The `update_agent` reason is read from the machine's last kit report and the pane's agent kind on the projection pass that already judges the pane, so it adds no per-tick work; the sessions that wore it are remembered per machine (`Runtime::update_badges`) until they connect or end, so a session started on the old copy reads "restart to connect" once the update has put the piece in, and a session that never wore it keeps the rows below ([agent-hooks.md](agent-hooks.md#updating-an-agent-that-is-too-old)).
 The shared server is the machine's last kit read (`KitSnapshot::shares_codex_server`): a read that says the setting is on, or that a daemon still answers with the setting off, is what turns a Codex pane's reason into the shared server, and a later read that says neither turns it back into `started_before_hide` at once (PRD codex-daemon-apply D-07, B9).
 After a turn-off that answered `stop_failed`, only a read that says no daemon answers ends the shared server, so a daemon answer Hide could not read keeps the retry on offer (B7).
@@ -676,16 +674,16 @@ A kit read happens at launch and on each device connection, on a Reinstall, when
 Nothing else polls for a daemon, so one that another app starts later reaches the pane's reason at the next of those reads, not live.
 
 Reopen is one event, `pane_reopen { pane_id }`, and reuses the session-sleep path rather than a second one: the agent is ended the way sleep ends it and started again in the same pane with its own resume arguments, a Codex with `--no-daemon` first (`herdr-core/src/pane_reopen.rs`).
-Everything knowable before the agent is touched is refused before it is touched, so a refusal known at that point leaves the pane as it was: an agent that is working or waiting (`agent_busy`), a session Herdr never reported an id for or one with no resume arguments (`session_gone`), a Codex whose capability was never read (`codex_unread`), and a folder that is gone (`start_refused`).
+Everything knowable before the agent is touched is refused before it is touched, so a refusal known at that point leaves the pane as it was: an agent that is working or waiting (`agent_busy`), a session no id was ever reported for or one with no resume arguments (`session_gone`), a Codex whose capability was never read (`codex_unread`), and a folder that is gone (`start_refused`).
 The agent is read again just before it is signalled, because the list the decision used can be a second old: one that has started working or is waiting since is `agent_busy` too, with nothing signalled.
-Any other end Herdr or the agent refuses is `end_refused`, and a start Herdr refuses after the end is `start_refused`.
-The pinned Herdr keeps an ended agent's name for a moment, and refuses `agent.start` under it as `agent_name_taken` until it lets go; a Reopen, and a wake after a sleep, send the same start again on exactly that refusal for at most ten seconds (`agent_start::start_at_shell_reusing_name`), never before the end has been confirmed, and a name that is still held then is `start_refused`.
-Every other start takes that refusal as Herdr's answer, because its name is someone else's.
+Any other end the engine or the agent refuses is `end_refused`, and a start the engine refuses after the end is `start_refused`.
+The engine refuses a `start_agent` under a name another agent still holds as `agent_name_taken`, and an ended agent can hold its name for a moment; a Reopen, and a wake after a sleep, send the same start again on exactly that refusal for at most ten seconds (`agent_start::start_at_shell_reusing_name`), never before the end has been confirmed, and a name that is still held then is `start_refused`.
+Every other start takes that refusal as the engine's answer, because its name is someone else's.
 The core keeps one entry per pane, so a second press while one runs starts nothing; the pane's `connection.reopen` is `{"state":"pending"}` while it runs and `{"state":"failed","reason":<code>}` after a refusal, and the entry goes with the need for it: when the pane connects, when it leaves, or when it shows no chip.
 A start that lands publishes nothing more by itself: the session's own hook reaching Hide is what turns the chip off.
-A start refused after the end leaves the pane without an agent, so there is no chip to carry the failure: when the pane then has no agent row, the snapshot's `last_error` says once, as `pane_reopen.not_restarted`, that the agent was ended and could not be started again and that its conversation is kept; Herdr's words stay in the diagnostic, and the shell raises the failure as a notice that outlives `last_error` (`web/src/errorNotice.ts`, [UI_BEHAVIOR.md](UI_BEHAVIOR.md) on Reopen).
+A start refused after the end leaves the pane without an agent, so there is no chip to carry the failure: when the pane then has no agent row, the snapshot's `last_error` says once, as `pane_reopen.not_restarted`, that the agent was ended and could not be started again and that its conversation is kept; the engine's words stay in the diagnostic, and the shell raises the failure as a notice that outlives `last_error` (`web/src/errorNotice.ts`, [UI_BEHAVIOR.md](UI_BEHAVIOR.md) on Reopen).
 It is not started a second time, because the wait for the ended agent's name above is the one retry a start has, and a second identical start would learn nothing.
-Herdr's words for a refusal go to the diagnostic log (`pane_reopen.answered`), never to the screen.
+The engine's words for a refusal go to the diagnostic log (`pane_reopen.answered`), never to the screen.
 
 The Codex shared server is turned off by one more event, `codex_daemon_disable { device_id }` (`local` for this Mac), and only by it: no install pass ever does.
 The operator confirms it first, because it also stops the daemon that is running, which disconnects every Codex attached to it (PRD codex-daemon-apply D-04, D-11).
@@ -695,7 +693,7 @@ A failure before the setting went off leaves it as it was and stops nothing, whi
 A plain read of the kit says nothing about the request and keeps the last answer, and a machine whose setting is off with no daemon answering, or whose Codex has no such setting, has nothing to turn off.
 A Codex that Hide started runs with `--no-daemon`, is not attached to the daemon, and keeps running.
 
-Regression owners: `runtime::tests::agent_connection` (the connection per reason, Reopen coalescing and refusals, the request's lifecycle), `pane_reopen::tests` (the order of end and start against `FakeHerdr`), `runtime::tests::device_kit` (a device's turn-off over the confirmed connection only, its numbered runs), `hide-kit`'s `the_operators_request_turns_the_shared_daemon_off_once_and_says_so` and the stop tests beside it, and `hide_agent_hooks::codex_daemon::tests` (the stop through the account's own `CODEX_HOME`).
+Regression owners: `runtime::tests::agent_connection` (the connection per reason, Reopen coalescing and refusals, the request's lifecycle), `pane_reopen::tests` (the order of end and start against `FakeEngine`), `runtime::tests::device_kit` (a device's turn-off over the confirmed connection only, its numbered runs), `hide-kit`'s `the_operators_request_turns_the_shared_daemon_off_once_and_says_so` and the stop tests beside it, and `hide_agent_hooks::codex_daemon::tests` (the stop through the account's own `CODEX_HOME`).
 
 ## GitHub status in the Workspace row
 
@@ -711,7 +709,7 @@ A project's status is read once when a window first attaches, again five minutes
 When the operator looks at a project, the web shell sends `github_request` with `look` (the window gains focus or becomes visible, and a project is brought to the front; `web/src/githubLook.ts`), and the core reads that project again when its last answer worked and is at least 30 seconds old (`Runtime::read_when_looked_at`, `GITHUB_LOOK_AFTER`, the clock passed in), so a project the operator comes back to does not wait out the five minutes.
 A look is the stale re-read's ask and nothing more: it asks nothing while an ask is outstanding, for a project in failure backoff, one whose last read missed its pull requests, or one answered "no GitHub remote"; it never sets `loading`; it is honored only for the local Git project in front, and a look the core does not honor is silent (no error, no frame); a request that names `refresh` is a refresh whether or not it names `look`.
 While a window is attached, an advisory poll asks GitHub whether anything behind the marks changed, every 15 seconds for the project in front and once a minute for each other one, and only says so (`crate::github_poll`, `Runtime::ask_polled_changes`).
-It watches the projects whose last read worked and holds an open pull request, and the project in front even with none open, by the repository its read named, so a pull request opened elsewhere shows within the minute (PRD git-freshness D-10); the project in front first and at most eight (a count past that is written as `poll.over_limit` when it changes): the repository's open pull request list, and the check runs and commit status of the head commit of up to four open pull requests whose checks had not finished (`PullRequestSnapshot::checks_unfinished`: pending, or failed while a workflow run or check on the head still runs, the rule a mission's CI letter waits on), each by a conditional `gh api` read with the entity tag it last saw; a 304 means unchanged and costs no rate limit, and a tag seen for the first time is a baseline, not a change.
+It watches the projects whose last read worked and holds an open pull request, and the project in front even with none open, by the repository its read named, so a pull request opened elsewhere shows within the minute (PRD git-freshness D-10); the project in front first and at most eight (a count past that is written as `poll.over_limit` when it changes): the repository's open pull request list, and the check runs and commit status of the head commit of up to four open pull requests whose checks had not finished (`PullRequestSnapshot::checks_unfinished`: pending, or failed while a workflow run or check on the head still runs, the rule a mission's ci line and its CI letter wait on), each by a conditional `gh api` read with the entity tag it last saw; a 304 means unchanged and costs no rate limit, and a tag seen for the first time is a baseline, not a change.
 The check runs and the status of such a head commit are read the same way: a different tag only makes the poll read what the list adds up to (`passing`, `pending`, `failed`, by the rule the mark uses, GitHub Actions' runs read as [Checks of a head commit](#checks-of-a-head-commit) says) and whether anything on it still runs, and it counts a change only when that combined result or whether something runs, over the check runs and the status together, differs from the last one. One job of many finishing asks nothing; the last one finishing, a failure, or the last run ending behind a failure asks one read within the poll's interval for that project; another app's check or a status still running behind a failure of its own list is left to the five-minute read.
 The open list moves its tag for a comment, a label, a review or a new `updated_at` as well, so a different tag there is not enough: the poll then reads one digest of the list (each pull request's number, head commit and draft flag, `gh api --jq`) and counts it a change only when that digest differs from the last one, which a pull request opened, merged or closed, a push, or a draft flip does.
 A comment, a label, a review or an `updated_at` alone is left to the five-minute read and to a look.
@@ -799,7 +797,7 @@ A commit with more than 100 suites, or one GitHub does not know, is `Unknown` (t
 When the runs cannot be read, every open pull request reads `Unknown`, since nothing then says no run is queued on its head, so neither a pass nor no checks is known and a mission's `ci` line is kept; one `pull_requests.runs_unread` diagnostic names the repository, the heads and the reason, and the rest of the read stands.
 The card counts the same runs: its check counts, its failed checks by name and its running checks take GitHub Actions' jobs only from each workflow's unfinished runs, else from the run that decides it (the last cancelled one when every run was cancelled), each job placed in its run by the run number in the address GitHub gives it (`…/actions/runs/<run>/job/<job>`); a job whose address names no run is not shown to be the deciding run's and is not counted.
 The advisory poll and the settled recheck read a head the same way: the check runs list with GitHub Actions' runs left out of its verdict, then the same query for that one commit.
-Two facts beside the verdict are kept on an open pull request, core only: a failure that is only a workflow whose every run was cancelled, with nothing else failing (`PullRequestWork::checks_cancelled`), and a workflow run or check on the head that still runs, which a failure ranking first hides (`checks_running`); the verdict stays as it is, and a mission's CI letter waits for nothing to run and calls the first failure cancelled (`docs/missions.md` in with-hide/hide-private, its paragraph on pull request changes waking the Conductor).
+Two facts beside the verdict are kept on an open pull request, core only: a failure that is only a workflow whose every run was cancelled, with nothing else failing (`PullRequestWork::checks_cancelled`), and a workflow run or check on the head that still runs, which a failure ranking first hides (`checks_running`); the verdict stays as it is, and a mission's ci line and its CI letter read the head's CI as ended only once nothing runs, by one rule (`PullRequestSnapshot::ci_end`), the letter calling the first failure cancelled (`docs/missions.md` in with-hide/hide-private, its paragraph on pull request changes waking the Conductor).
 
 ### Pull request visual states
 
@@ -894,17 +892,17 @@ A Hide AI row for a home is on the phone's list, and in these transitions, only 
 
 Here “on” means Agent summaries is enabled and the current session has a proven label.
 Before a proven label exists, an unavailable provider or failed analysis adds no generated title or sentence; an existing proven label can remain while an analysis is unavailable.
-“Off” means Agent summaries is disabled, including Hide AI being off; native session facts, Herdr lifecycle, lineage, read state and notification settings still apply.
+“Off” means Agent summaries is disabled, including Hide AI being off; native session facts, engine lifecycle, lineage, read state and notification settings still apply.
 The table describes operator-owned roots; delegated rows and the seven escalation causes keep their ownership rules above.
 Sentences keep their original language in every mode.
 
 | Surface or condition | Hide AI on | Hide AI off |
 | --- | --- | --- |
-| Row title | Every adapter: manual title, then Hide AI goal, then proven native automatic title, then provider. See [Task identity](#task-identity). | Every adapter: manual title, then proven native automatic title, then provider. No Herdr workspace label or control name becomes a title. See [Task identity](#task-identity). |
+| Row title | Every adapter: manual title, then Hide AI goal, then proven native automatic title, then provider. See [Task identity](#task-identity). | Every adapter: manual title, then proven native automatic title, then provider. No workspace label or control name becomes a title. See [Task identity](#task-identity). |
 | Pending native question | The turn mark, Question, Needs You until answered, including after reading. Second line: turn-end `expected_reply`, otherwise the question's first non-empty line (40 characters including a truncation ellipsis), otherwise `progress`. | The same turn mark, Question and Needs You until answered; its first non-empty line supplies the second line without an AI call. With no question text the status word stands in. |
-| Plain-text question at the end of a turn, with no native wait | If the analysis identifies a question: the turn mark, Question, Needs You while unread, with `expected_reply`. Reading moves it to Seen unless it is still running; the request sentence remains until resolved. | Text alone creates no question, no turn mark and no Needs You. A stopped, unread Herdr `done` is in Unread with the plain dot, the word Stopped on hover and no sentence. A Herdr `idle` is Seen, not Unread. |
-| Approval / Herdr blocked pane / native plan wait | The turn mark, Approval, Needs You until answered, including after reading. The second line follows `expected_reply`, native question, then `progress`; a plan document's heading is never extracted as a sentence. | The same turn mark, Approval and Needs You; without a native question sentence the word Approval stands in, including for a plan document. |
-| AI-identified error or block with a named cause, without a native wait | The turn mark, Blocked, Needs You while unread; the second line is the cause in `progress`. Reading leaves the dimmed mark and cause in Seen unless it is running. | No cause is inferred from plain text and no Blocked mark is invented. Herdr's own lifecycle decides the group: an unread `done` is Done with no sentence, an `idle` is Seen. A native blocked pane still uses Approval above. |
+| Plain-text question at the end of a turn, with no native wait | If the analysis identifies a question: the turn mark, Question, Needs You while unread, with `expected_reply`. Reading moves it to Seen unless it is still running; the request sentence remains until resolved. | Text alone creates no question, no turn mark and no Needs You. A stopped, unread engine `done` is in Unread with the plain dot, the word Stopped on hover and no sentence. An engine `idle` is Seen, not Unread. |
+| Approval / engine blocked pane / native plan wait | The turn mark, Approval, Needs You until answered, including after reading. The second line follows `expected_reply`, native question, then `progress`; a plan document's heading is never extracted as a sentence. | The same turn mark, Approval and Needs You; without a native question sentence the word Approval stands in, including for a plan document. |
+| AI-identified error or block with a named cause, without a native wait | The turn mark, Blocked, Needs You while unread; the second line is the cause in `progress`. Reading leaves the dimmed mark and cause in Seen unless it is running. | No cause is inferred from plain text and no Blocked mark is invented. The engine's own lifecycle decides the group: an unread `done` is Done with no sentence, an `idle` is Seen. A native blocked pane still uses Approval above. |
 | Working second line | `progress`; with an unresolved demand, `expected_reply`, native question, then `progress`. A quiet working row's display can hide its sentence until hover or selection. | No generated progress; Working stands in when there is no sentence. A working row with a native question still carries that question. Proven background tasks, working children and replies still being made still supply Waiting independently of AI. |
 | Unread (unread) mark and second line | The green dot only for a finished verdict, the plain dot for work left or an unproven wait; the line leads with `끝남` or `일 남음` (an unproven wait is work left, D-17) and then `expected_reply`, otherwise `progress`, ending with `· 백그라운드 N` when a finished turn left background tasks (D-19). A turn that ended on its pull request's running checks is in progress until they end, and their end is the line. | The plain dot, no line; the word Stopped is said only on hover, in accessible names and in notifications. No inferred unfinished verdict; proven waits, running checks included, still prevent a premature stop. |
 | Seen second line | A read unresolved demand keeps its sentence; a read completion, idle or unknown row has none. | A native unresolved question keeps its question; ordinary read completion, idle and unknown rows have no sentence. |

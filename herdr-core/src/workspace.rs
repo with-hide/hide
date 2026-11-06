@@ -189,11 +189,11 @@ pub fn inspect_temporary(path: &str, device_id: &str, paths: &PathIndex) -> Work
     )
 }
 
-/// One Herdr workspace and the working directories its panes occupy.
+/// One engine workspace and the working directories its panes occupy.
 ///
-/// Herdr owns the workspace axis, so the navigator mirrors it rather than
+/// The engine owns the workspace axis, so the navigator mirrors it rather than
 /// inventing a second one. The checkouts under it come from where its panes
-/// actually are; the checkout Herdr attached it to only places a pane whose
+/// actually are; the checkout the engine attached it to only places a pane whose
 /// folder the node can no longer read.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionSpace {
@@ -210,8 +210,8 @@ pub struct SessionSpace {
     pub owner_mark: Option<String>,
 }
 
-/// The checkout Herdr attached a workspace to (`workspace.worktree`) and the
-/// repository Herdr reports it in, both in comparison form. Herdr recorded
+/// The checkout the engine attached a workspace to (`workspace.worktree`) and the
+/// repository the engine reports it in, both in comparison form. The engine recorded
 /// it when the checkout was opened, so it still names the repository of a
 /// checkout whose folder has since been removed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -233,9 +233,9 @@ pub struct EffectiveCheckoutPurpose<'a> {
     pub has_shadowed_purpose: bool,
 }
 
-/// The live purpose Herdr currently exposes for this checkout.
+/// The live purpose the engine currently exposes for this checkout.
 ///
-/// A repository can have more than one Herdr workspace. The later occupant
+/// A repository can have more than one engine workspace. The later occupant
 /// wins even when it has no token. Intersecting with the project's own
 /// workspace ids prevents a pane in a nested repository from claiming its
 /// ancestor checkout merely because its cwd sits below that path.
@@ -262,7 +262,7 @@ pub fn effective_checkout_purpose<'a>(
     })
 }
 
-/// The Herdr workspace a Set purpose operation mutates.
+/// The engine workspace a Set purpose operation mutates.
 ///
 /// Mutation authority stays separate from effective-value projection so a
 /// later policy cannot silently make Save target a different workspace.
@@ -546,10 +546,10 @@ pub fn build_catalog(
     paths: &PathIndex,
 ) -> Vec<WorkspaceSnapshot> {
     // A project is a repository: its main worktree is the identity and every
-    // worktree with a pane in it is a checkout under it. A Herdr workspace
+    // worktree with a pane in it is a checkout under it. An engine workspace
     // whose panes sit in two repositories contributes to two projects, and
-    // two Herdr workspaces in one repository are one project with both Herdr
-    // ids attached. Herdr closing a workspace with its last pane therefore
+    // two engine workspaces in one repository are one project with both the engine
+    // ids attached. The engine closing a workspace with its last pane therefore
     // never changes which row the user is looking at.
     let places = Places {
         paths,
@@ -569,10 +569,10 @@ pub fn build_catalog(
         }
     }
 
-    // A registration Herdr has no workspace for is somewhere the user can
-    // still start work, so it stays listed. One Herdr already occupies keeps
-    // the registration's identity and label with Herdr's workspace attached,
-    // so the row survives Herdr closing that workspace.
+    // A registration the engine has no workspace for is somewhere the user can
+    // still start work, so it stays listed. One engine already occupies keeps
+    // the registration's identity and label with the engine's workspace attached,
+    // so the row survives the engine closing that workspace.
     // A registration on another device names a path on that machine; this
     // machine's filesystem says nothing about it, so it is never inspected
     // here (PRD S5.5 B7). That device's catalog is its helper's to answer.
@@ -635,7 +635,7 @@ pub(crate) fn apply_primary_checkout(project: &mut WorkspaceSnapshot, primary_id
 ///
 /// The node's answer comes first. A path it cannot place, such as a checkout
 /// whose folder was removed, is placed by the deepest checkout holding it
-/// that Git's worktree list or Herdr's attached checkout still names; only a
+/// that Git's worktree list or the engine's attached checkout still names; only a
 /// path none of them places is a folder of its own. Nothing is placed by the
 /// shape of its name.
 struct Places<'a> {
@@ -697,7 +697,7 @@ impl Places<'_> {
     }
 }
 
-/// Folds a second Herdr workspace in the same repository into the project
+/// Folds a second engine workspace in the same repository into the project
 /// that already represents it.
 fn merge_space(existing: &mut WorkspaceSnapshot, incoming: WorkspaceSnapshot) {
     for id in incoming.session_workspace_ids {
@@ -733,10 +733,10 @@ fn apply_session_purposes(project: &mut WorkspaceSnapshot, spaces: &[SessionSpac
     }
 }
 
-/// Gives a Herdr-occupied project the identity and label of the registration
+/// Gives an engine-occupied project the identity and label of the registration
 /// that covers it. Checkout ids embed the project id, so they are re-keyed
 /// too; persisted focus on a registered checkout then resolves whether or not
-/// Herdr currently has a workspace there.
+/// the engine currently has a workspace there.
 fn adopt_registration(workspace: &mut WorkspaceSnapshot, registration: &WorkspaceRegistration) {
     workspace.id = registration.id.clone();
     workspace.label = registration.label.clone();
@@ -753,10 +753,10 @@ fn adopt_registration(workspace: &mut WorkspaceSnapshot, registration: &Workspac
     }
 }
 
-/// Projects one Herdr workspace onto the repositories its panes sit in, one
+/// Projects one engine workspace onto the repositories its panes sit in, one
 /// project per repository with a checkout per directory a pane occupies.
 ///
-/// This establishes the project rows and the checkouts Herdr can vouch for
+/// This establishes the project rows and the checkouts the engine can vouch for
 /// without git. Every other worktree of the repository is added by
 /// [`apply_worktrees`] from the worktree reader's answer, which is what makes
 /// a worktree with no terminal a row the operator can select and start one in.
@@ -768,7 +768,7 @@ fn inspect_space(node: &NodeId, space: &SessionSpace, places: &Places) -> Vec<Wo
         // the node from Git's files.
         let repository = places.place(cwd);
         let repository = repository.as_deref();
-        // A checkout only Git's list or Herdr's record places is one the
+        // A checkout only Git's list or the engine's record places is one the
         // node could not read; it says whether the folder is gone.
         let recorded_only = repository.is_some() && paths.place(cwd).is_none();
         let root_comparison = match repository {
@@ -1199,8 +1199,8 @@ fn checkout(
         agent_scope: Default::default(),
         branch_issue: git.issue,
         head_oid: git.head_oid,
-        // A checkout with no Herdr tabs yet: the first one the operator makes
-        // here is Tab 1. Reconcile overwrites this the moment Herdr reports any.
+        // A checkout with no engine tabs yet: the first one the operator makes
+        // here is Tab 1. Reconcile overwrites this the moment the engine reports any.
         next_tab_label: crate::model::next_tab_label(std::iter::empty()),
         id: checkout_id_for_path(workspace_id, path),
         workspace_id: workspace_id.to_owned(),
@@ -1424,9 +1424,9 @@ mod tests {
     }
 
     // The catalog is rebuilt on the session-sync coordinator, the thread that
-    // applies Herdr's events, from what the node said of its paths; the node
+    // applies the engine's events, from what the node said of its paths; the node
     // reads the repositories' own files (2026-09-10 audit: one git per fact
-    // held Herdr's events for seconds).
+    // held the engine's events for seconds).
     #[test]
     fn the_catalog_says_what_git_says_from_the_nodes_answer() {
         let (_scratch, root, worktree) = repository_with_worktree("no-spawn");
@@ -1562,7 +1562,7 @@ mod tests {
         assert_eq!(snapshot.checkouts.len(), 1);
         assert_eq!(snapshot.checkouts[0].branch.as_deref(), Some("main"));
 
-        // It becomes one once a Herdr workspace has a pane in it.
+        // It becomes one once an engine workspace has a pane in it.
         let occupied = catalog(
             &[],
             &[SessionSpace {
@@ -1633,7 +1633,7 @@ mod tests {
         assert_eq!(catalog[0].session_workspace_ids, vec!["w1".to_owned()]);
     }
 
-    /// Herdr closes a workspace together with its last pane. The project and
+    /// The engine closes a workspace together with its last pane. The project and
     /// checkout the user had selected must be the same rows afterwards, so a
     /// persisted focus keeps resolving and the checkout offers to start a new
     /// terminal instead of the app falling back to "no workspace".
@@ -1665,7 +1665,7 @@ mod tests {
         assert!(released[0].session_workspace_ids.is_empty());
     }
 
-    /// A Herdr workspace with panes in two repositories is two projects, and
+    /// An engine workspace with panes in two repositories is two projects, and
     /// each registration lands on its own repository.
     #[test]
     fn a_space_spanning_two_repositories_is_two_projects() {
@@ -1920,7 +1920,7 @@ mod tests {
     }
 
     /// The rule R1 replaces: a worktree is a row because git lists it, not
-    /// because Herdr has a pane in it. The worktree that has a pane keeps its
+    /// because the engine has a pane in it. The worktree that has a pane keeps its
     /// identity and gains the counts; the ones without become rows that can
     /// be selected and started in.
     #[test]
@@ -1982,7 +1982,7 @@ mod tests {
         assert_eq!(catalog[0].default_branch.as_deref(), Some("main"));
         let rows = &catalog[0].checkouts;
         assert_eq!(rows.len(), 3, "one row per worktree, none duplicated");
-        // The worktree Herdr already had a row for keeps that one row and
+        // The worktree the engine already had a row for keeps that one row and
         // gains the counts, rather than becoming a second row beside it.
         let occupied = &rows[0];
         assert_eq!(
@@ -2100,7 +2100,7 @@ mod tests {
     }
 
     /// A repository at `/repo` and a linked worktree of it whose folder was
-    /// removed while a Herdr workspace attached to it kept a pane there.
+    /// removed while an engine workspace attached to it kept a pane there.
     fn gone_checkout() -> (PathIndex, SessionSpace) {
         let paths = answered(&["/repo"], &["/worktrees/topic", "/worktrees/topic/src"]);
         let space = SessionSpace {
@@ -2226,7 +2226,7 @@ mod tests {
         assert_eq!(catalog.len(), 2);
     }
 
-    /// A Herdr workspace with one pane at `cwd` and no attached checkout.
+    /// An engine workspace with one pane at `cwd` and no attached checkout.
     fn space_in(id: &str, cwd: &str) -> SessionSpace {
         SessionSpace {
             id: id.to_owned(),

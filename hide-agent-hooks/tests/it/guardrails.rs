@@ -198,7 +198,7 @@ fn with_no_protection_on_nothing_is_refused_and_outside_a_pane_the_project_is_st
         assert_eq!(claude_reason(&run), None);
     }
     assert_eq!(machine.guard_log(), "");
-    // On, and the agent runs outside a Herdr pane: the project's protection
+    // On, and the agent runs outside a pane Hide manages: the project's protection
     // holds there too (B22), and the daemon is not asked.
     files_on(&machine);
     let run = machine.run_event("claude-code", "PreToolUse", &write, None, &[]);

@@ -2327,7 +2327,7 @@ fn ending_a_job_ends_its_leader_and_what_it_started_and_nothing_else() {
     bystander.kill_tree().unwrap();
 }
 
-/// A job that ended on its own between Herdr naming it and the end is told
+/// A job that ended on its own between the engine naming it and the end is told
 /// as such, not as a failure to end it.
 #[test]
 fn ending_a_job_whose_leader_has_ended_finds_it_gone() {

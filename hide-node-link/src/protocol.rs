@@ -564,7 +564,7 @@ pub enum Call {
         diffs: Vec<crate::git::DiffTarget>,
     },
     /// The project facts of a folder on this machine (`hide_project::facts`):
-    /// a Herdr pane's directory or a registered project's path, which the
+    /// a pane's directory or a registered project's path, which the
     /// daemon's catalog groups into projects with this device's id. Only
     /// facts are answered, never contents.
     Project {
@@ -898,7 +898,7 @@ pub enum Call {
     },
     /// Ends the job `leader` leads, a pane's foreground job, for agent sleep
     /// (`hide_platform::process::terminate_group`): `SIGTERM` to its process
-    /// group on Unix, and on Windows, where Herdr names the job by its first
+    /// group on Unix, and on Windows, where the job is named by its first
     /// process, that process and everything under it. A group of 1 or less
     /// is refused unsent, since kill(-0) and kill(-1) reach far more. The
     /// answer is a [`crate::process::GroupEnd`]: ended, with what was left
@@ -1066,7 +1066,7 @@ pub enum Call {
         scope: Option<hide_session::SessionReadScope>,
     },
     /// One page of the thread of the session an agent pane runs, named as
-    /// Herdr reports the pane's session (`hide_session::thread::read_pane_thread`):
+    /// the engine reports the pane's session (`hide_session::thread::read_pane_thread`):
     /// ACP session updates and the page's cursors, never a path.
     SessionThread {
         request: hide_session::thread::ThreadRequest,
@@ -1084,21 +1084,20 @@ pub enum Call {
         request: u64,
         answer: crate::panes::ProofAnswer,
     },
-    /// `pane_id`'s identity now, read from this node's Herdr and kernel, so
+    /// `pane_id`'s identity now, read from this node's pane holder and kernel, so
     /// the core can tell a credential's pane from a replaced one.
     PaneInspect {
         pane_id: String,
     },
     /// Starts this node's pane holders and the terminal service that shows
     /// their screens, over the node's own state folder, so the core's own
-    /// engine runs the machine's panes with no Herdr (PRD
+    /// engine runs the machine's panes (PRD
     /// engine-bundle-3-core-owns D-22): from then on the link's terminal
     /// lines reach that service, [`Call::Pane`] its holders, and a pane's
     /// `hide` is proved by the pane's holder record on the node's pane
     /// service, whose bootstrap socket it answers with
     /// ([`crate::panes::PanesStarted`]). Asking again while they run changes
-    /// nothing; a node whose terminals run on its Herdr refuses it, since
-    /// one node runs one engine's panes. Only a device's link carries it:
+    /// nothing. Only a device's link carries it:
     /// the core's own node is given its holders when it is made.
     HoldersStart,
     /// One request of the core's engine to this node's pane holders (start,
@@ -1209,10 +1208,10 @@ impl Call {
     }
 
     /// Whether this request is link control rather than machine work: a
-    /// greeting, a pane's proof answer or stream, or a Herdr stream. Each is
+    /// greeting, a pane's proof answer or stream, or a link stream. Each is
     /// short on the node, so both ends run them in a lane of their own, and
     /// four slow machine calls (a port scan, a disk walk) never hold a pane's
-    /// reply or a Herdr write behind them. One may still wait: a link write
+    /// reply or a stream write behind them. One may still wait: a link write
     /// to an end that stops reading holds its worker until the write
     /// deadline (`hide_host::link_bridge`, 5 s) and then ends that stream,
     /// so four such streams can hold the lane for one such window.

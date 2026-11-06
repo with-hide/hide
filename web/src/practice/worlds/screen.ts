@@ -63,7 +63,7 @@ function closePane(model: ScreenModel, id: string, confirmed: boolean): ScreenMo
 }
 
 /**
- * The newest close brought back in a new pane, as Herdr makes one, holding the
+ * The newest close brought back in a new pane, as the engine makes one, holding the
  * same agent continuing its conversation: in its tab where it stood when the
  * tab is as the close left it, beside the tab's focused pane when the tab
  * changed since, and as a tab of its own in its former group and place when

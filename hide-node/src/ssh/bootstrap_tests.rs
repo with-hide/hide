@@ -385,7 +385,7 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
 }
 
 /// B24: the helper starts in place of the script, on the same pipes, with
-/// the Herdr the registration names.
+/// the home folders the registration names.
 #[test]
 fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let device = Device::new();

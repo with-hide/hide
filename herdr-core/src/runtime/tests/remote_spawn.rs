@@ -2,8 +2,8 @@
 //! this machine makes its child on a connected device, the caller keeping the
 //! parent record, the authority and the watch.
 //!
-//! The device is a Herdr socket fake and a node double; this machine has no
-//! Herdr at all, so any child-side call that fell back to the caller's own
+//! The device is an engine socket fake and a node double; this machine has no
+//! the engine at all, so any child-side call that fell back to the caller's own
 //! machine would fail the spawn instead of passing unseen.
 
 use super::*;
@@ -77,7 +77,7 @@ impl NodeLink for Node {
             }
             // Where a new branch starts: the device's repository is on
             // `main` and has no fetched `origin/main`, so the start is left
-            // to Herdr.
+            // to the engine.
             Call::Git {
                 command: hide_node_link::git::GitCommand::CurrentBranch,
                 ..
@@ -108,7 +108,7 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
         "terminal_id": "device-terminal", "revision": 1, "focused": false,
         "agent_status": "idle", "agent": "codex", "name": "worker"});
     if !shows {
-        // Herdr holds the name for the start, and no agent ever showed.
+        // The engine holds the name for the start, and no agent ever showed.
         row.as_object_mut().unwrap().remove("agent");
         row["launch_pending"] = json!(true);
         return row;
@@ -217,13 +217,13 @@ struct Spawner {
     session: Arc<Mutex<Option<String>>>,
     /// Whether the device's agent shows at all once its start is typed.
     shows: Arc<AtomicBool>,
-    /// Whether Herdr still holds the name of a start whose agent did not show.
+    /// Whether the engine still holds the name of a start whose agent did not show.
     held: Arc<AtomicBool>,
     /// How many more reads of the pane show no first-prompt mark.
     unmarked: Arc<AtomicUsize>,
-    /// Whether Herdr refuses the next start.
+    /// Whether the engine refuses the next start.
     refused: Arc<AtomicBool>,
-    /// How many agent lists after the start Herdr fails to answer.
+    /// How many agent lists after the start the engine fails to answer.
     list_fails: Arc<AtomicUsize>,
     herdr: Fake,
     path: PathBuf,
@@ -330,7 +330,7 @@ fn spawner() -> Spawner {
         ));
     }
     // The caller is already a registered participant, so nothing of this
-    // machine's Herdr is needed to name it as the parent.
+    // machine's engine is needed to name it as the parent.
     let mut state = ledger::Ledger::default();
     crate::coordination::apply(
         &mut state,
@@ -494,7 +494,7 @@ fn desk_ask(spawner: &Spawner, intent: &str) -> Result<Value, String> {
             plan: None,
             parent: None,
             machine: Some(DEVICE.into()),
-            // The device's Herdr names its one agent `worker`.
+            // The device's engine names its one agent `worker`.
             name: "worker".into(),
             intent: intent.into(),
             kind: "codex".into(),
@@ -839,7 +839,7 @@ fn the_machine_is_part_of_the_intent() {
 }
 
 /// B6-B9: a device that cannot take the spawn is refused with a stable code
-/// and nothing is created: no spawn record, no call to the device's Herdr.
+/// and nothing is created: no spawn record, no call to the device's engine.
 #[test]
 fn a_device_that_cannot_take_the_spawn_is_refused_before_anything_is_made() {
     let spawner = spawner();
@@ -888,7 +888,7 @@ fn a_device_that_cannot_take_the_spawn_is_refused_before_anything_is_made() {
 #[test]
 fn the_callers_own_machine_is_no_machine() {
     let spawner = spawner();
-    // This machine has no Herdr here, so the spawn stops at its own context;
+    // This machine has no engine here, so the spawn stops at its own context;
     // what matters is that it was judged as a local spawn and not as a device.
     let own = spawner.spawn(Some("here"), Some(crate::node::TEST_NODE), "local");
     let none = spawner.spawn(Some("here"), None, "local");
@@ -902,7 +902,7 @@ fn the_callers_own_machine_is_no_machine() {
 }
 
 /// B5: a spawn that stopped after it created the pane resumes on the same
-/// intent, needing only the device's Herdr, and makes nothing twice.
+/// intent, needing only the device's engine, and makes nothing twice.
 #[test]
 fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
     let spawner = spawner();
@@ -942,10 +942,10 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
     );
 }
 
-/// A start Herdr typed whose agent never showed leaves the name held in the
-/// pane, and Herdr gives that name to whatever agent shows there until its
+/// A start the engine typed whose agent never showed leaves the name held in the
+/// pane, and the engine gives that name to whatever agent shows there until its
 /// deadline. Asking the same intent again types nothing while the name is
-/// held; once Herdr lets it go and the shell is back at rest, the start is
+/// held; once the engine lets it go and the shell is back at rest, the start is
 /// typed once more, and a second start that never shows is the answer: the
 /// agent did not start.
 #[test]
@@ -959,14 +959,14 @@ fn the_same_intent_types_its_start_once_more_only_after_herdr_lets_the_name_go()
         "native_identity_unavailable"
     );
     assert_eq!(starts(), 1);
-    // Herdr still holds the name: the agent may yet show, and nothing is
+    // The engine still holds the name: the agent may yet show, and nothing is
     // typed over it.
     assert_eq!(
         split_refusal(&ask().expect_err("held")).0,
         "native_identity_unavailable"
     );
     assert_eq!(starts(), 1);
-    // Herdr's deadline passed and the shell is at rest: typed once more.
+    // The engine's deadline passed and the shell is at rest: typed once more.
     spawner.held.store(false, Ordering::SeqCst);
     assert_eq!(
         split_refusal(&ask().expect_err("resent")).0,
@@ -1058,7 +1058,7 @@ fn a_caller_on_a_device_may_name_no_other_device() {
     assert!(runtime.spawn_target(crate::node::TEST_NODE, DEVICE).is_ok());
 }
 
-/// A device whose Herdr stops answering after the node passed the checks is
+/// A device whose engine stops answering after the node passed the checks is
 /// unavailable, not a raw transport error, and the same command continues
 /// the spawn once the device answers again.
 #[test]
@@ -1097,7 +1097,7 @@ fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() 
 }
 
 /// An agent on a device is refused by the spawn itself, before the intent is
-/// reserved and before anything is asked of any Herdr.
+/// reserved and before anything is asked of any engine.
 #[test]
 fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
     let spawner = spawner();
@@ -1158,8 +1158,8 @@ fn a_busy_spawn_lock_refuses_after_the_checks_and_creates_nothing() {
     assert!(spawner.spawn(Some("here"), Some(DEVICE), "busy").is_ok());
 }
 
-/// A device whose Herdr answers and refuses keeps the refusal's own code: only
-/// a Herdr that stopped answering makes the device unavailable.
+/// A device whose engine answers and refuses keeps the refusal's own code: only
+/// an engine that stopped answering makes the device unavailable.
 #[test]
 fn a_device_herdr_that_refuses_keeps_its_own_failure() {
     let spawner = spawner();
@@ -1187,7 +1187,7 @@ fn a_device_herdr_that_refuses_keeps_its_own_failure() {
 
 /// A Codex child spawned with no prompt rests without a session, so the
 /// spawn answers that it has not shown one and the registration waits in
-/// the ledger. Once Herdr shows the session the core binds the child to its
+/// the ledger. Once the engine shows the session the core binds the child to its
 /// parent with its watch, and the same intent asked again answers that one
 /// child, typing nothing.
 #[test]
@@ -1238,8 +1238,8 @@ fn a_child_that_reports_its_session_late_is_bound_by_the_core_and_its_intent_ans
     assert_eq!(spawner.count("start_agent"), 1);
 }
 
-/// A child whose first agent list after its start Herdr fails to answer, as
-/// a loaded Herdr does past the read's deadline, is still registered: the
+/// A child whose first agent list after its start the engine fails to answer, as
+/// a loaded engine does past the read's deadline, is still registered: the
 /// spawn reads again within its wait, so the child is bound on this answer
 /// and no running agent is left that nothing tracks.
 #[test]
@@ -1311,7 +1311,7 @@ fn a_late_child_whose_session_cannot_be_kept_ends_its_wait_and_its_pane_closes()
 
 /// Pi and omp name a session by its file path, which a deep checkout makes
 /// longer than 256 bytes: the child is spawned and kept in a ledger that reads
-/// back, up to Herdr's own 4096-byte bound for a session path.
+/// back, up to the engine's own 4096-byte bound for a session path.
 #[test]
 fn a_child_whose_session_passes_256_bytes_is_spawned_and_kept() {
     for bytes in [300, crate::delivery::SESSION_LIMIT] {
@@ -1353,8 +1353,8 @@ fn a_child_whose_session_cannot_be_kept_is_refused_and_its_pane_closed() {
 }
 
 /// `hide agent register` keeps a session past 256 bytes as a spawn does,
-/// and refuses one past Herdr's bound by the same reason before it asks
-/// Herdr anything.
+/// and refuses one past the engine's bound by the same reason before it asks
+/// the engine anything.
 #[test]
 fn an_explicit_registration_keeps_a_session_past_256_bytes() {
     let spawner = spawner();
@@ -1404,9 +1404,9 @@ fn an_explicit_registration_keeps_a_session_past_256_bytes() {
 }
 
 /// `hide mission take` registers the session taking the mission over from
-/// what this machine's Herdr reports of its pane, so the former Conductor's
+/// what this machine's engine reports of its pane, so the former Conductor's
 /// children have a registration to move to; asked again it answers the
-/// same registration without asking Herdr (B43).
+/// same registration without asking the engine (B43).
 #[test]
 fn a_session_registers_itself_once_from_its_own_pane() {
     let spawner = spawner();

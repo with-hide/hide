@@ -130,7 +130,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
       await expect(row.locator('[data-agent-status="question"]')).toHaveCount(0);
     }
     if (kind === "grok") {
-      // Herdr reads Grok's plan approval as working; Grok's own state is the wait.
+      // The pane's screen reads Grok's plan approval as working; Grok's own state is the wait.
       const observed = () => agents.find((agent) => agent.pane_id === sourcePane);
       setGrokPlanApproval(session, true);
       await expect.poll(() => observed()?.user_turn, { timeout: 30_000 }).toEqual({ kind: "plan_approval", content: { text: GROK_PLAN, choices: [], truncated: false } });
@@ -183,7 +183,7 @@ test("OpenCode's root session titles its row, waits on its question and wakes by
     const launches = () => fs.readFileSync(path.join(fixture.root, "opencode-launches.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     await withControl(daemon, async (control) => sendKeys(control, sourcePane, "opencode\r"));
     await expect.poll(() => fs.existsSync(database)).toBe(true);
-    // The double reports its own session: Herdr's integration report on Herdr, Hide's plugin on the own engine.
+    // The double reports its own session through Hide's plugin.
     await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, sourcePane)?.session_id === OPENCODE_ID ? true : undefined), `${sourcePane} on OpenCode's session`, 30_000));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page);

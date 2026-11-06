@@ -49,7 +49,7 @@ pub(crate) struct ProjectedPane {
     pub(crate) tokens: BTreeMap<String, Value>,
     pub(crate) label: Option<String>,
     /// The terminal's title without the activity glyph an agent turns in
-    /// front of it, as Herdr's stripped title reads it.
+    /// front of it, as the engine's stripped title reads it.
     pub(crate) terminal_title: Option<String>,
 }
 
@@ -58,9 +58,7 @@ pub(crate) struct ProjectedPane {
 #[cfg_attr(test, serde(default))]
 pub(crate) struct ProjectedAgent {
     pub(crate) pane_id: String,
-    /// The terminal the agent runs in, which no other Herdr server names; the
-    /// start settle keys Hide's own starts by it (`launch_settle.rs`,
-    /// herdrdev/herdr#3853) and goes with that workaround.
+    /// The terminal the agent runs in.
     pub(crate) terminal_id: String,
     pub(crate) name: Option<String>,
     pub(crate) workspace_id: String,
@@ -75,14 +73,12 @@ pub(crate) struct ProjectedAgent {
     pub(crate) lineage_session: Option<String>,
     pub(crate) state_change_seq: u64,
     /// Present while the agent's current stop finished work, whoever has
-    /// looked at it since: Herdr's `done` turning `idle` when it marks the
+    /// looked at it since: the engine's `done` turning `idle` when it marks the
     /// tab seen leaves it in place.
     pub(crate) completion_seq: Option<u64>,
-    /// Herdr still holds open the start it made of this agent
+    /// The engine still holds open the start it made of this agent
     /// (`agent.start`). It says, with no state reported yet, that the agent
-    /// is starting (`agent_state::agent_starting`), and the start settle
-    /// reads it while the agent is also at rest (`launch_settle.rs`, a
-    /// workaround for herdrdev/herdr#3853); it never reaches the shell.
+    /// is starting (`agent_state::agent_starting`); it never reaches the shell.
     pub(crate) launch_pending: bool,
     pub(crate) tokens: BTreeMap<String, Value>,
 }
@@ -93,13 +89,13 @@ pub(crate) struct ProjectedAgent {
 pub(crate) struct ProjectionState {
     #[cfg_attr(test, serde(skip))]
     pub(crate) tab_focus: Option<crate::sidebar::SessionTabFocus>,
-    /// Kept by the event replica; a snapshot read on its own has none.
+    /// Kept by the engine that published the session; a snapshot read on its own has none.
     #[cfg_attr(test, serde(skip))]
     pub(crate) tab_moves: Option<crate::sidebar::SessionTabMoves>,
     pub(crate) focused_pane_id: Option<String>,
-    /// Herdr's focused workspace, read from `session.snapshot` and kept
+    /// The engine's focused workspace, read from `session.snapshot` and kept
     /// current from the focus events. A `tab_focused` or `pane_focused` in
-    /// another workspace moves it too, because Herdr focuses the workspace
+    /// another workspace moves it too, because the engine focuses the workspace
     /// along with the tab and does not always send `workspace_focused` first.
     pub(crate) focused_workspace_id: Option<String>,
     pub(crate) workspaces: Vec<ProjectedWorkspace>,
@@ -198,7 +194,7 @@ impl ProjectionState {
                 terminal_title: crate::start_claim::public_label(pane.terminal_title.as_deref()),
             })
             .collect();
-        // Herdr order, not map order: the active tab id rides with the
+        // The engine order, not map order: the active tab id rides with the
         // workspace it belongs to, and the navigator reads it as the only
         // authority for which tab is active.
         let workspaces = self
@@ -234,7 +230,7 @@ impl ProjectionState {
     }
 }
 
-/// A Herdr label or terminal title that is present but blank carries no more
+/// An engine label or terminal title that is present but blank carries no more
 /// information than an absent one, and a header ladder that treated the two
 /// differently would show an empty title instead of falling through.
 pub(crate) fn non_blank(value: Option<&str>) -> Option<String> {
@@ -473,7 +469,7 @@ impl ProjectionState {
                         }
                     })
                     .collect::<Vec<_>>();
-                // The Herdr half of the strip in Herdr's order; the runtime
+                // The engine half of the strip in the engine's order; the runtime
                 // places the device's file tabs among them (`place_device_strips`).
                 let strip = StripTabSnapshot::from_herdr_tabs(&tabs);
                 let active_tab_id = Some(crate::address::scoped_tab_id(
@@ -534,7 +530,7 @@ impl ProjectionState {
                         active_tab_id,
                         strip,
                         next_tab_label,
-                        // A worktree workspace owns the checkout Herdr binds
+                        // A worktree workspace owns the checkout the engine binds
                         // it to, which is this row's path; a marked one is
                         // checked against its folder once grouped.
                         owner_workspace_id: workspace
@@ -585,9 +581,9 @@ impl ProjectionState {
         // projected panes by id, and the projection carries the remote form.
         crate::project_context::sort_projects(&mut workspaces, &agents);
 
-        // Keyed by checkout: the runtime groups a device's Herdr workspaces
+        // Keyed by checkout: the runtime groups a device's engine workspaces
         // into projects (`device_catalog`), and a checkout is the one id that
-        // still names a single Herdr workspace after that.
+        // still names a single engine workspace after that.
         let active_tab_ids = state
             .workspaces
             .iter()
@@ -638,7 +634,7 @@ impl ProjectionState {
                     .map(|pane_id| crate::address::scoped_pane_id(target_id, pane_id)),
                 pane_layouts,
                 // The core's hook facts, laid by the device's coordinator;
-                // Herdr's pane tokens carry none of them.
+                // the engine's pane tokens carry none of them.
                 pane_hook_tokens: BTreeMap::new(),
                 issue_tokens: crate::engine::tokens::IssueTokens {
                     panes: issue_tokens

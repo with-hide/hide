@@ -1,5 +1,5 @@
 //! PRD agent-sleep through the runtime's own events and session updates.
-//! The Herdr workers are not run here (their boundary has its own tests in
+//! The engine workers are not run here (their boundary has its own tests in
 //! `agent_sleep_herdr.rs`); what they hand back is fed in through the same
 //! `ingest_agent_sleep_*` calls a worker makes.
 
@@ -19,7 +19,7 @@ fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
 }
 
 /// The two-tab session with t1 in front, and, when `seq` is given, an
-/// idle Claude agent in t2 that Herdr lists with that state sequence.
+/// idle Claude agent in t2 that the engine lists with that state sequence.
 fn session(seq: Option<u64>) -> SessionSnapshotPayload {
     session_in(CHECKOUT, seq)
 }
@@ -120,7 +120,7 @@ fn a_sleep_whose_agent_left_the_session_before_its_end_landed_draws_its_row_on_t
     assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
 }
 
-// Herdr's replica can still list the agent when its sleep ends, and its
+// The engine can still list the agent when its sleep ends, and its
 // event stream brings the session that no longer does: the end asks for no
 // read of its own there.
 #[test]
@@ -198,7 +198,7 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
         .unwrap()
 }
 
-/// Herdr with no workspace open: an unregistered project whose last
+/// The engine with no workspace open: an unregistered project whose last
 /// workspace closed is no longer listed.
 fn no_workspaces() -> SessionSnapshotPayload {
     crate::sidebar::owned_label_fixture(serde_json::json!({
@@ -342,7 +342,7 @@ fn an_opencode_dormant_journey_refuses_a_changed_route_before_close_wake_or_star
     }
 }
 
-/// The same proof over OpenCode 2.0's tables: Herdr reports the session's id,
+/// The same proof over OpenCode 2.0's tables: the engine reports the session's id,
 /// and Hide proves it from `session_v2`, so sleep is not refused for want of
 /// a conversation.
 #[test]
@@ -1018,7 +1018,7 @@ fn a_dormant_sleep_keeps_the_choice_the_agent_was_started_with() {
     };
     for (recorded, saved) in [(Some(&launch), launch.clone()), (None, Default::default())] {
         let mut runtime = close_pane_runtime("pi");
-        // The name Hide started it under, which Herdr reports it by.
+        // The name Hide started it under, which the engine reports it by.
         runtime
             .snapshot
             .navigator
@@ -1048,7 +1048,7 @@ fn a_dormant_sleep_keeps_the_choice_the_agent_was_started_with() {
 
 /// Case (b) itself: an agent that slept in a linked worktree is woken through
 /// `worktree.open` from its repository's main worktree, and the workspace
-/// Herdr opens takes the worktree's branch name, while the list shows the
+/// the engine opens takes the worktree's branch name, while the list shows the
 /// repository but not the worktree (no window has read it).
 #[test]
 #[cfg(unix)]
@@ -1237,7 +1237,7 @@ fn a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_i
 }
 
 /// Wake is offered only where the wake can begin: over this machine's
-/// connection to Herdr.
+/// connection to the engine.
 #[test]
 fn a_sleeping_session_offers_wake_only_over_a_connection() {
     use crate::agent_sleep::DormantPhase;
@@ -1908,7 +1908,7 @@ fn failed_terminal_close_errors_keep_the_sleeping_row_and_failure() {
 }
 
 /// B14: a failed wake says why in plain words and offers Retry and Start
-/// new session; Herdr's own words stay in the log.
+/// new session; the engine's own words stay in the log.
 #[test]
 fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     let (mut runtime, _) = asleep();
@@ -1954,7 +1954,7 @@ fn a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again() {
     assert!(seen(&runtime) >= before);
 }
 
-/// Herdr answers a wake's start once it has typed the start line; a line the
+/// The engine answers a wake's start once it has typed the start line; a line the
 /// pane's shell never ran (a Windows prompt reading a leftover bracketed
 /// paste as keys) brings no agent, and the wake fails with a reason once the
 /// start's deadline has passed rather than reading waking for good.
@@ -2208,7 +2208,7 @@ impl SleepingChild {
         .unwrap();
         ledger.validate().unwrap();
         runtime.delivery_ledger = Ok(Arc::new(ledger));
-        // Herdr's panes are read once the ledger can judge a pane that left.
+        // The engine's panes are read once the ledger can judge a pane that left.
         runtime.observe_delivery_laid(&node, &awake(), Some("scope"), None);
 
         // The sleep saves the registration it closes the pane under.
@@ -2276,7 +2276,7 @@ impl SleepingChild {
             .unwrap();
     }
 
-    /// Herdr no longer lists the closed pane.
+    /// The engine no longer lists the closed pane.
     fn pane_closed(&self) {
         self.shared.lock().unwrap().observe_delivery_laid(
             &self.node,
@@ -2286,7 +2286,7 @@ impl SleepingChild {
         );
     }
 
-    /// The core started the conversation again in a new pane, which Herdr
+    /// The core started the conversation again in a new pane, which the engine
     /// lists as an agent of `session` and the session read shows. It runs
     /// under the caller's lock, so the caller can look at the wake before the
     /// store's own upkeep, which runs while a move is asked for, can pass.

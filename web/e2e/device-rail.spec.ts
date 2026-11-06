@@ -1,4 +1,4 @@
-// The device rail on an isolated pinned Herdr and hided (quick
+// The device rail on an isolated engine and hided (quick
 // device-rail-badges B1-B6 and quick device-rail-slack, replacing PRD
 // home-device-rail B1-B13): the rail is the sidebar's full-height left column,
 // shown with This Mac alone, and has no Inbox or footer device button, its

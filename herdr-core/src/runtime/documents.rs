@@ -115,7 +115,7 @@ type OpenResult = Result<(EditorDocumentSnapshot, DocumentPlace), OpenFailure>;
 
 impl Runtime {
     /// Every project the catalog carries: this machine's navigator, then each
-    /// device's Herdr session.
+    /// device's engine session.
     pub(super) fn catalog_workspaces(&self) -> impl Iterator<Item = &WorkspaceSnapshot> {
         let sessions = self
             .snapshot
@@ -128,7 +128,7 @@ impl Runtime {
     }
 
     /// A checkout by its ids wherever the catalog carries it: this machine's
-    /// and registered projects in the navigator, and each device's Herdr
+    /// and registered projects in the navigator, and each device's engine
     /// session. Device ids are scoped (`remote:<device>:…`), so one id never
     /// names checkouts on two machines.
     pub(super) fn catalog_checkout(
@@ -217,7 +217,7 @@ impl Runtime {
 
     /// The checkout the operator is looking at: this machine's focus while
     /// it is the selected device, otherwise the core's explicit device/path
-    /// choice. Herdr focus supplies the initial choice only.
+    /// choice. Engine focus supplies the initial choice only.
     pub(super) fn front_checkout(&self) -> Option<(&str, &str)> {
         let device = self
             .snapshot

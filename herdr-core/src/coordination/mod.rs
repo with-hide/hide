@@ -93,7 +93,7 @@ pub(crate) const SPAWN_LIMIT: usize = 4096;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
-    /// Registers the caller's own session from what Herdr reports of its
+    /// Registers the caller's own session from what the engine reports of its
     /// pane, or answers the registration it already has: `hide mission
     /// take` asks it first, so the former Conductor's children have a
     /// registration to move to (PRD software-factory-conductor B43).
@@ -421,7 +421,7 @@ pub struct AgentRecord {
     pub native_machine: String,
     pub session: String,
     pub instance: String,
-    /// Herdr's terminal incarnation, retained when a move changes the public pane id.
+    /// The engine's terminal incarnation, retained when a move changes the public pane id.
     pub terminal_id: Option<String>,
     pub pane: String,
     pub parent: Option<String>,
@@ -488,7 +488,7 @@ impl From<AgentRecord> for AgentRecordOnDisk {
 
 /// A name equal to the record's own id or to its pane is no name: the first is
 /// how an unnamed record is written, the second how an earlier build wrote a
-/// parent Herdr never named.
+/// parent the engine never named.
 impl From<AgentRecordOnDisk> for AgentRecord {
     fn from(disk: AgentRecordOnDisk) -> Self {
         let mut record = Self {
@@ -562,19 +562,19 @@ pub struct SpawnRecord {
     pub launch: hide_agent_adapter::LaunchChoice,
     pub path: Option<String>,
     pub pane: Option<String>,
-    /// The Herdr terminal `pane` ran when the spawn recorded it. A pane id
+    /// The engine terminal `pane` ran when the spawn recorded it. A pane id
     /// can name another pane later, so only this proves the pane is the
     /// spawn's own; a record written before it existed has none.
     #[serde(default)]
     pub terminal: Option<String>,
-    /// How many starts Herdr took for this spawn's agent in `pane`: the first
+    /// How many starts the engine took for this spawn's agent in `pane`: the first
     /// one, and at most one more when the first ended at the shell with no
     /// agent (`executor::spawn`).
     #[serde(default)]
     pub typed: u32,
     /// The shell `pane` was launched with Hide's integration in, by program
     /// name, so every start in it waits for that shell's first prompt; none
-    /// when the pane runs Herdr's own shell.
+    /// when the pane runs the engine's own shell.
     #[serde(default)]
     pub shell: Option<String>,
     pub child: Option<String>,
@@ -668,7 +668,7 @@ pub(crate) enum Mutation {
     BriefTyping {
         id: String,
     },
-    /// The typing `BriefTyping` reserved sent nothing (Herdr refused it):
+    /// The typing `BriefTyping` reserved sent nothing (the engine refused it):
     /// the brief's route is `typed` again, and the attempt stays spent.
     BriefUnsent {
         id: String,
@@ -720,7 +720,7 @@ pub(crate) enum Mutation {
         id: String,
         pane: String,
     },
-    /// Herdr took a start of the spawn's agent in its pane.
+    /// The engine took a start of the spawn's agent in its pane.
     Typed {
         id: String,
     },
@@ -731,7 +731,7 @@ pub(crate) enum Mutation {
     Complete {
         id: String,
     },
-    /// The agent Herdr took a start of has not shown its session yet: the
+    /// The agent the engine took a start of has not shown its session yet: the
     /// registration waits for it (`identity_wait`).
     AwaitIdentity {
         wait: identity_wait::IdentityWait,
@@ -778,7 +778,7 @@ impl AgentRecord {
 
 /// The one name `actor` goes by in the ledger and on the wire: its live
 /// registration's `wire_name`, else, for a pane that never registered, the
-/// only identifier Herdr gave it. The writing side (a letter's or a watch's
+/// only identifier the engine gave it. The writing side (a letter's or a watch's
 /// endpoints) and the reading side (`parent_name` in the lineage facts) both
 /// take it from here, so the envelope header and the name it is later matched
 /// against cannot drift.
@@ -1058,8 +1058,8 @@ fn key(value: &str) -> bool {
 }
 
 /// Whether a registration can keep `value` as its pane's native session, as
-/// Herdr reports it: an id, or for Pi and omp the session file's path, which a
-/// deep checkout makes longer than a key. Herdr keeps a path of up to
+/// the engine reports it: an id, or for Pi and omp the session file's path, which a
+/// deep checkout makes longer than a key. The engine keeps a path of up to
 /// `SESSION_LIMIT` bytes, and so does the ledger. The one rule for a
 /// registration's session, asked when the record is made and again when the
 /// ledger is saved or read.
@@ -1974,7 +1974,7 @@ fn adopt_mission_workers(
         }
     }
     // A child of the former Conductor that no start carries: one started
-    // through Herdr directly, or registered with it as its parent. A child a
+    // through the engine directly, or registered with it as its parent. A child a
     // start carries moved with its start above, or stays with it.
     if let Some(former) = former {
         let loose: Vec<String> = ledger
@@ -2131,11 +2131,11 @@ fn end_record(ledger: &mut Ledger, id: &str, now: u64) -> bool {
     live
 }
 
-/// Why the core ended a registration whose pane Herdr no longer has.
+/// Why the core ended a registration whose pane the engine no longer has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaneGone {
     /// The pane was in the host's previous in-sync read and is not in this
-    /// one: Herdr closed it, or moved it to another tab under a new id.
+    /// one: the engine closed it, or moved it to another tab under a new id.
     Left,
     /// The registration was made before this read's snapshot was asked for,
     /// and the snapshot lacks its pane.
@@ -2151,13 +2151,13 @@ impl PaneGone {
     }
 }
 
-/// One host's Herdr panes as its in-sync replica last published them. Only a
-/// replica that bootstrapped from a fresh `session.snapshot` and has applied
-/// every event since publishes, so a pane missing from it is closed; a
-/// replica that lost events or a host that is unreachable publishes nothing,
-/// and a stale read only ever lists more panes than exist.
+/// One host's engine panes as its last whole-session read listed them. Only a
+/// read of a fresh `session.snapshot` publishes, so a pane missing from it is
+/// closed; a host that is unreachable publishes nothing, and a stale read only
+/// ever lists more panes than exist.
 pub(crate) struct PaneRead {
-    /// The Herdr socket a local read came from; a remote device has one Herdr.
+    /// The local engine's socket path a local read came from; none for a remote
+    /// device.
     pub(crate) host_scope: Option<String>,
     /// The ledger's `next_id` before the snapshot was asked for: a
     /// registration below it existed, with its pane, before that snapshot.
@@ -2170,7 +2170,7 @@ pub(crate) struct PaneRead {
 /// The live registrations on `device` whose panes the new read lacks, given
 /// the panes of the read before it. A registration made after the snapshot
 /// was asked for, whose pane no read has listed yet, is left alone: its pane
-/// may be one the replica has not heard about.
+/// may be one the read has not heard about.
 pub(crate) fn gone_registrations(
     ledger: &Ledger,
     device: &str,
@@ -2238,9 +2238,9 @@ pub(crate) fn end_gone(
 pub(crate) struct Rebind {
     /// The execution the registration was held by when its pane closed.
     pub(crate) from: Actor,
-    /// The woken pane's execution, as Herdr reports it now.
+    /// The woken pane's execution, as the engine reports it now.
     pub(crate) to: Actor,
-    /// Herdr's own id of the woken pane, which a local actor spells the same.
+    /// The engine's own id of the woken pane, which a local actor spells the same.
     pub(crate) pane: String,
     pub(crate) terminal_id: Option<String>,
 }
@@ -2359,7 +2359,7 @@ mod tests {
             .unwrap()
             .into()
     }
-    /// A registration an earlier build made for a parent Herdr never named
+    /// A registration an earlier build made for a parent the engine never named
     /// holds its pane id as its name. Reading the ledger gives it none, so
     /// it is called by its registration id and by its screen title, never by
     /// the pane, and a name that is not a pane id is left alone.
@@ -3938,7 +3938,7 @@ mod tests {
     /// Pi and omp name a session by its file, in a folder named after the
     /// checkout's path, so a child in a deep checkout reports a session far
     /// past a key's 256 bytes; it binds and reads back like any other, up to
-    /// Herdr's own 4096-byte bound for a session path.
+    /// the engine's own 4096-byte bound for a session path.
     #[test]
     fn a_child_whose_session_is_a_deep_session_file_binds_and_reads_back() {
         let file = "2026-10-18T00-00-00-000Z_0199f0aa-1111-7222-8333-444455556666.jsonl";

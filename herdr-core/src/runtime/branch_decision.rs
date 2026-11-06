@@ -6,7 +6,7 @@
 //!
 //! Everything here runs on a worker thread, off `Mutex<Runtime>`: the git
 //! work is the node's, on the machine that holds the checkout (B25), and the
-//! panes are that machine's Herdr. Only `{base}에 바로 올리기` pushes, and
+//! panes are that machine's engine. Only `{base}에 바로 올리기` pushes, and
 //! only the base, to its upstream.
 
 use super::memory_promotion::{Retire, retire_attempt};
@@ -480,7 +480,7 @@ pub(super) fn read_ready(base: &str, facts: &BranchFacts) -> ReadyReading {
     summary(base, facts).map_or(ReadyReading::Unchanged, ReadyReading::Ready)
 }
 
-/// Whether a Project's agent stopped its turn: Herdr says its stop finished
+/// Whether a Project's agent stopped its turn: the engine says its stop finished
 /// work, and it asks nothing (a question, an approval or an error is still
 /// its turn). A fresh agent waiting for its first prompt is stopped without
 /// having worked, and its branch, still at the base, is not its answer.

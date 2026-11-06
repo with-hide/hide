@@ -26,7 +26,7 @@ use crate::workspace_views::{self, Tool, WorkspaceView, WorkspaceViews};
 pub(super) type WorkspaceKey = (String, String);
 
 /// How long a device choice the device accepted waits for its front to land.
-/// The landing is the device's Herdr moving its focus and the device then
+/// The landing is the device's engine moving its focus and the device then
 /// publishing its session over its link, which over a slow network can take
 /// longer than the answer did; a click that outlives this does nothing, and
 /// only the log says so (`workspace.choice_expired`).
@@ -50,13 +50,13 @@ struct PendingChoice {
     /// The checkout the device had in front when the request left; a move
     /// to any other than this one or `key` is a choice made elsewhere.
     device_front: Option<String>,
-    /// The answer gets `CLOSE_STAGE_TIMEOUT_MS`, as a Herdr-owned mutation's
+    /// The answer gets `CLOSE_STAGE_TIMEOUT_MS`, as an engine-owned mutation's
     /// does (PRD D-08), and the front landing after an acceptance
     /// `CHOICE_LANDING_TIMEOUT_MS`.
     deadline_at_unix_ms: u64,
     memory_project: Option<String>,
     acknowledged: bool,
-    /// Core checkout navigation has already landed, without a Herdr effect.
+    /// Core checkout navigation has already landed, without an engine effect.
     core_choice: bool,
     /// A path the operator clicked in the chosen checkout, revealed once it
     /// is in front (`Runtime::reveal_when_in_front`).
@@ -87,7 +87,7 @@ pub(super) struct WorkspaceViewStore {
         BTreeMap<String, (WorkspaceKey, Option<String>, String, Option<usize>)>,
     /// The Workspace the last sync saw in front.
     pub(super) front: Option<WorkspaceKey>,
-    /// Explicit checkout choices, independent of a remote Herdr's PTY focus.
+    /// Explicit checkout choices, independent of a remote engine's PTY focus.
     /// Rebuilt from the existing per-checkout last-used stamps on reload.
     pub(super) remote_front: HashMap<String, String>,
     /// One bounded acknowledgement slot for the last lane or tree width
@@ -463,7 +463,7 @@ impl Runtime {
     }
 
     /// The operator chose the Workspace in front: it is the one a reload or a
-    /// restart opens on (D-11). A front that only Herdr's own focus moved is
+    /// restart opens on (D-11). A front that only the engine's own focus moved is
     /// not, so a first run the operator spent on Main starts there again.
     pub(super) fn mark_front_chosen(&mut self) {
         if let Some(key) = self.front_workspace_key() {
@@ -485,7 +485,7 @@ impl Runtime {
         self.persist_workspace_views();
     }
 
-    /// A device request that chooses a Workspace: the device's Herdr moves
+    /// A device request that chooses a Workspace: the device's engine moves
     /// its front only when it accepts, so the choice is remembered when the
     /// sync sees the front land there, and a refusal remembers nothing.
     pub(super) fn choose_when_in_front(
@@ -545,7 +545,7 @@ impl Runtime {
     }
 
     /// Keeps same-event Memory/reveal payloads correlated with a checkout
-    /// choice that completed in core state, without waiting for Herdr focus.
+    /// choice that completed in core state, without waiting for engine focus.
     pub(super) fn remember_core_workspace_choice(
         &mut self,
         device: &str,
@@ -563,7 +563,7 @@ impl Runtime {
         }
     }
 
-    /// The path of the checkout a connected device's Herdr has in front.
+    /// The path of the checkout a connected device's engine has in front.
     fn device_front_path(&self, device_id: &str) -> Option<String> {
         let session = self
             .snapshot
@@ -702,7 +702,7 @@ impl Runtime {
     }
 
     /// The device refused the request, or its answer was lost: a later move
-    /// Herdr makes there on its own is not the operator's choice.
+    /// the engine makes there on its own is not the operator's choice.
     pub(super) fn drop_pending_choice(&mut self, device_id: &str, request_id: &str) {
         if let Some(store) = self.workspace_views.as_mut()
             && store.pending_choice.as_ref().is_some_and(|pending| {
@@ -932,7 +932,7 @@ impl Runtime {
 
     /// Brings the snapshot, the editor and the file in line with the front
     /// Workspace. It runs after every event that can move the screen and
-    /// before every snapshot read, so a front moved by Herdr or by a device's
+    /// before every snapshot read, so a front moved by the engine or by a device's
     /// own focus is followed too; terminal input and output and a document's
     /// keystrokes skip the pass after their event, so a keystroke costs the
     /// read's pass alone. With nothing changed it costs a catalog lookup of

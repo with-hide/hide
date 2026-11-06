@@ -86,7 +86,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const herdrState = useShellStore((s) => s.herdrState);
   const visible = useShellStore((s) => s.rest?.ui_state?.left_sidebar_visible ?? true);
-  // The row speaks for this machine's Herdr, so it is not shown over a
+  // The row speaks for this machine's engine, so it is not shown over a
   // selected SSH device's lists; that device's state is on the canvas.
   const remote = useShellStore((s) => focusedRemoteDevice(s.rest) !== null);
   const status = remote ? null : herdrRowLabel(herdrState, t);
@@ -387,7 +387,7 @@ function catalogLineOf(rest: SnapshotRest | null, t: TFunction<"translation">) {
 
 /**
  * The raised sections, held above the list, and the scope picker below them: the projects of the context on
- * screen. A selected SSH device lists its Herdr workspaces, one checkout
+ * screen. A selected SSH device lists its engine workspaces, one checkout
  * each; the inactive folds and pins are this machine's and are not drawn
  * there (docs/UI_BEHAVIOR.md: the remote context carries no pins). The row of
  * the scope the center shows is marked: a project on its Overview, or the

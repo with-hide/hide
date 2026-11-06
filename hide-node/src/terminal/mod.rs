@@ -1464,7 +1464,7 @@ impl Inner {
     /// writer in the order typed once the pane takes keys.
     fn replay(&mut self, pane: &str, request: &str, held: Vec<HeldChunk>, now: Instant) {
         if !self.panes.contains_key(pane) && self.requests.names(pane) {
-            // Herdr made the pane for keys the operator is already typing,
+            // The engine made the pane for keys the operator is already typing,
             // before the core asked for it to attach.
             self.panes.insert(pane.to_owned(), Pane::default());
         }

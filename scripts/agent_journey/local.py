@@ -87,7 +87,7 @@ ROUTES = {
     "grok": {
         "args": lambda home: [],
         # Grok 1.0.52 reads its configuration, hooks, folder trust, login and
-        # sessions from GROK_HOME (Herdr's integration names it too).
+        # sessions from GROK_HOME (Herdr's integration named it too).
         "env": lambda home: {"GROK_HOME": str(home / ".grok")},
         "unset": [],
         "sessions": lambda operator, home: home,

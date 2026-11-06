@@ -432,7 +432,7 @@ mod tests {
         row
     }
 
-    /// A delegated child of `kind` that Herdr reports as `status` and whose
+    /// A delegated child of `kind` that engine reports as `status` and whose
     /// session says it waits for the operator.
     fn waiting_child(kind: &str, status: &str) -> SidebarAgentSnapshot {
         let mut payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
@@ -475,7 +475,7 @@ mod tests {
         );
     }
 
-    /// Herdr keeps Grok `working` while it waits for a plan approval or an
+    /// The engine keeps Grok `working` while it waits for a plan approval or an
     /// answer, and what Grok waits for is read from its current state, so a
     /// delegated Grok child rises as blocked all the same.
     #[test]
@@ -489,7 +489,7 @@ mod tests {
     }
 
     /// Codex's plan menu is read from how the last turn ended, which says
-    /// nothing once Herdr reports the next turn running: that child is not
+    /// nothing once the engine reports the next turn running: that child is not
     /// held, and the same read holds it once it stops.
     #[test]
     fn a_codex_plan_menu_read_from_history_does_not_hold_a_working_child() {

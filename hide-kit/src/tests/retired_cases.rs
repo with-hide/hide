@@ -1,6 +1,6 @@
 //! The one-time retirement of the fifteen agents Hide stopped supporting
 //! (PRD settings-cleanup D-06, and Gemini CLI once the support list became
-//! the agents the pinned Herdr ships an integration for): only what the kit's
+//! the agents the pinned Herdr shipped an integration for): only what the kit's
 //! record names and what carries Hide's marker is taken, and a second pass
 //! changes nothing.
 

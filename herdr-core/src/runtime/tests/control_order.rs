@@ -1,7 +1,7 @@
-//! The order Hide's Herdr controls leave in, and what a late, replaced,
+//! The order Hide's engine controls leave in, and what a late, replaced,
 //! refused or lost answer to each one may change.
 //!
-//! The test decides the order (docs/TESTING.md): the fake Herdr records what
+//! The test decides the order (docs/TESTING.md): the fake engine records what
 //! actually left over the socket, and each test hands the runtime the answers
 //! itself, so the sequence under test never depends on the scheduler.
 
@@ -16,7 +16,7 @@ fn fake_herdr(_name: &str) -> Fake {
     })
 }
 
-/// A runtime on three tabs of one checkout whose Herdr is `herdr`. Its
+/// A runtime on three tabs of one checkout whose engine is `herdr`. Its
 /// workers cannot report back, so each answer reaches it only when the test
 /// calls `complete_lane_tab`.
 fn runtime_on(herdr: &Fake, checkout_path: &str) -> (Runtime, String) {
@@ -57,9 +57,9 @@ fn acknowledged() -> Result<RemoteControlOutcome, live::ControlFailure> {
 }
 
 /// Waits until the request `action` sends has reached `herdr`. The lane's
-/// worker sends it on its own thread, and Herdr answers only what it has
+/// worker sends it on its own thread, and the engine answers only what it has
 /// received; an answer handed over before that starts the next job while
-/// the first is still on its way, and the two can reach Herdr in either
+/// the first is still on its way, and the two can reach the engine in either
 /// order (issue 837).
 fn received(herdr: &Fake, action: &RemoteControlAction) {
     let (method, tab_id) = match action {
@@ -79,7 +79,7 @@ fn received(herdr: &Fake, action: &RemoteControlAction) {
     }
 }
 
-/// Herdr's answer to the control on the wire reaches the runtime. The lane's
+/// The engine's answer to the control on the wire reaches the runtime. The lane's
 /// worker would carry the next job on from here; the test does it, because
 /// its own workers cannot report back.
 fn answer(
@@ -161,7 +161,7 @@ fn focused_tabs(herdr: &Fake) -> Vec<String> {
         .collect()
 }
 
-/// Three clicks in a row send Herdr the first tab and the last one, in that
+/// Three clicks in a row send the engine the first tab and the last one, in that
 /// order, and the last is not sent until the first has been answered: a focus
 /// names where the operator is now, so the one in the middle is not worth a
 /// round trip, and two focuses on the wire at once can land in either order.
@@ -182,7 +182,7 @@ fn rapid_tab_focus_sends_the_first_and_the_latest_one_after_the_other() {
     herdr.wait_for_calls(1, Duration::from_secs(5));
     assert_eq!(focused_tabs(&herdr), ["w-order:t2"]);
 
-    // Only now does Herdr's answer to the first reach the runtime.
+    // Only now does the engine's answer to the first reach the runtime.
     answer(
         &mut runtime,
         &herdr,
@@ -201,7 +201,7 @@ fn rapid_tab_focus_sends_the_first_and_the_latest_one_after_the_other() {
     assert!(!runtime.control_lane.is_busy());
 }
 
-/// A focus replaced while it still waits never reached Herdr, so no answer to
+/// A focus replaced while it still waits never reached the engine, so no answer to
 /// it is on its way and none is remembered; one replaced after it was sent is.
 #[test]
 fn a_tab_focus_replaced_before_it_was_sent_leaves_no_late_answer_to_wait_for() {
@@ -220,7 +220,7 @@ fn a_tab_focus_replaced_before_it_was_sent_leaves_no_late_answer_to_wait_for() {
 
 /// An answer that never comes may still have been applied. The focus waiting
 /// behind it is not sent, because the lost one could land after it and put
-/// Herdr back; Hide keeps the tab the operator chose and says so, and the
+/// the engine back; Hide keeps the tab the operator chose and says so, and the
 /// next click starts a new request.
 #[test]
 fn a_lost_tab_focus_answer_does_not_release_the_focus_waiting_behind_it() {
@@ -266,7 +266,7 @@ fn a_lost_tab_focus_answer_does_not_release_the_focus_waiting_behind_it() {
     assert_eq!(focused_tabs(&herdr), ["w-order:t2", "w-order:t3"]);
 }
 
-/// Herdr refusing one focus neither blocks the lane nor takes the tab away
+/// The engine refusing one focus neither blocks the lane nor takes the tab away
 /// from the operator: the focus waiting behind it still goes out.
 #[test]
 fn a_refused_tab_focus_lets_the_next_control_through_and_keeps_the_tab() {
@@ -296,7 +296,7 @@ fn a_refused_tab_focus_lets_the_next_control_through_and_keeps_the_tab() {
     );
 }
 
-/// The operator presses New tab and, before Herdr answers, clicks another tab.
+/// The operator presses New tab and, before the engine answers, clicks another tab.
 /// Creation is sent first and the click after it; the click is the newer
 /// intent, so the created tab waits in the strip instead of taking the screen
 /// back when its answer arrives.
@@ -423,7 +423,7 @@ fn the_control_lane_refuses_what_passes_its_cap() {
 }
 
 /// A pane focus and a tab focus share the lane, so they leave in the order
-/// they were asked for instead of racing each other to Herdr.
+/// they were asked for instead of racing each other to the engine.
 #[test]
 fn a_tab_focus_waits_for_the_pane_focus_ahead_of_it() {
     let (mut runtime, checkout_id) =
@@ -464,7 +464,7 @@ fn a_tab_focus_waits_for_the_pane_focus_ahead_of_it() {
 
 /// A newer focus replaces the waiting one but queues behind whatever was
 /// accepted in between, so a tab created between two clicks still reaches
-/// Herdr before the focus that came after it.
+/// the engine before the focus that came after it.
 #[test]
 fn a_replacing_focus_queues_behind_the_control_accepted_between_the_two() {
     let herdr = fake_herdr("order-replace-position");
@@ -651,7 +651,7 @@ fn queued_move(runtime: &mut Runtime, checkout_id: &str, phase: &str) {
 }
 
 /// A move waiting behind another control has no clock running: its five
-/// seconds are the wait for Herdr, and Herdr has not been asked yet.
+/// seconds are the wait for the engine, and the engine has not been asked yet.
 #[test]
 fn a_queued_tab_moves_wait_for_herdr_starts_when_it_leaves() {
     let herdr = fake_herdr("order-move-deadline");
@@ -702,7 +702,7 @@ fn a_tab_move_that_is_no_longer_transmitting_is_not_sent() {
 }
 
 /// A pane click that joins a waiting turn goes behind what was accepted after
-/// that turn, so Herdr ends on what the operator did last.
+/// that turn, so the engine ends on what the operator did last.
 #[test]
 fn a_joining_pane_focus_queues_behind_the_control_accepted_after_the_turn() {
     let herdr = fake_herdr("order-pane-join");
@@ -767,7 +767,7 @@ fn a_lost_tab_focus_answer_does_not_release_the_pane_focus_behind_it() {
     );
 }
 
-/// A move accepted on one Herdr connection is not replayed on the next one:
+/// A move accepted on one engine connection is not replayed on the next one:
 /// its insert index names the order the first one showed.
 #[test]
 fn a_tab_move_queued_on_an_earlier_connection_is_not_sent() {
@@ -858,11 +858,11 @@ fn a_zoom_and_resize_in_other_tabs_start_while_an_unanswered_pane_focus_holds_th
     assert_eq!(runtime.control_lane.queued_len(), 0);
 }
 
-/// Herdr's session update that shows a pane operation's effect can reach the
+/// The engine's session update that shows a pane operation's effect can reach the
 /// runtime before the answer to the request does: the two travel on different
 /// threads, and on a slow runner the update wins (s2's zoom and resize on
 /// Windows). The answer then has to settle the operation from the topology it
-/// already holds, because Herdr sends nothing more once the layout stops
+/// already holds, because the engine sends nothing more once the layout stops
 /// moving, and an unsettled operation turns away every later zoom, resize and
 /// close in its tab until the deadline.
 #[test]
@@ -887,7 +887,7 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
     assert_eq!(runtime.pane_operations.len(), 1);
     herdr.wait_for_calls(1, Duration::from_secs(5));
 
-    // Herdr's update with the zoomed layout arrives while the request is
+    // The engine's update with the zoomed layout arrives while the request is
     // still unanswered.
     let mut payload = split();
     payload
@@ -922,7 +922,7 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
     assert_eq!(runtime.pane_operations.len(), 1);
 }
 
-/// Zoom has nothing to hide on a tab's only pane: Herdr answers it unchanged
+/// Zoom has nothing to hide on a tab's only pane: the engine answers it unchanged
 /// (`single_pane`), so no topology would ever confirm it, and the operation
 /// left waiting turned away every later split, zoom and close in the tab
 /// (⌘D did nothing in a tab zoomed hours earlier). Such a zoom is not sent;

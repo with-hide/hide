@@ -1,5 +1,5 @@
 // A project outside the daemon's home on this machine (PRD wsl-device B15,
-// B19-B21), against a private Herdr and hided: it is registered only once
+// B19-B21), against a private engine and hided: it is registered only once
 // confirmed, removing it removes that permission so adding it again asks
 // again, and once registered it makes, selects and reads a worktree like a
 // project inside home.
@@ -85,7 +85,7 @@ test("a project outside home is asked about again after its removal, and its wor
     // B20: removing it removes the permission, so adding it again asks again.
     // Removal closes the panes the core lists under the project, so it waits
     // for the first one: removed before the core had published it, the
-    // project lost its registration with Herdr's workspace still open there
+    // project lost its registration with its workspace still open there
     // (with-hide/hide-private#311).
     const id = await project.first().getAttribute("data-project");
     await expect.poll(() => registered.paned.has(id!), { timeout: 30_000 }).toBe(true);
@@ -97,7 +97,7 @@ test("a project outside home is asked about again after its removal, and its wor
     await sendEvent(page, daemon, "create_workspace", add(true));
     await expect.poll(() => registered.paths, { timeout: 30_000 }).toContain(toPage(repo));
 
-    // B19: the registered project makes a worktree where Herdr puts one,
+    // B19: the registered project makes a worktree where Hide puts one,
     // lists it under itself, and its files are read once it is selected.
     // The core reads a project's worktrees off its lock after registering it,
     // and a worktree asked for before that read is refused as one to ask for

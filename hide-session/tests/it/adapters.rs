@@ -442,7 +442,7 @@ fn claude_subagent_poll_counts_the_bytes_of_a_skipped_oversized_record() {
 
 /// PRD agent-blocked-state B18, D-26: only Claude Code's records prove a
 /// background task is running, and a device never outlives the process that
-/// started it. Every other agent reports none, so its wait stays Herdr's.
+/// started it. Every other agent reports none, so its wait stays what the agent's state says.
 mod wake_devices {
     use super::*;
     use serde_json::json;
@@ -1403,7 +1403,7 @@ pub(crate) mod omp {
         }
     }
 
-    /// Herdr reports an omp session as its file. The proof that names the
+    /// The engine reports an omp session as its file. The proof that names the
     /// pane's session from that file and the link reader name the same
     /// session, by the id in the header, so the core can key the link
     /// record's lineage by either.
@@ -2784,7 +2784,7 @@ pub(crate) mod pi {
         assert!(fork.subagents.is_empty());
     }
 
-    /// Herdr reports a Pi session as its file. The proof that names the
+    /// The engine reports a Pi session as its file. The proof that names the
     /// pane's session from that file and the link reader name the same
     /// session, by the id in the header, so the core can key the link
     /// record's lineage by either.

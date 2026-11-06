@@ -1987,7 +1987,7 @@ pub(crate) fn output_limited(
 /// Git's own rule for a new branch name, then a refusal when the branch
 /// already exists and no worktree holds it, asked before anything is created
 /// so a refused name leaves the repository untouched. A branch another
-/// worktree holds passes: Herdr's `worktree.create` answers Git's own
+/// worktree holds passes: adding the worktree answers Git's own
 /// "already used by worktree" refusal for it.
 pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> {
     // A leading `-` is refused first because Git would read it as an option.
@@ -2050,7 +2050,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
 }
 
 /// The real path of an existing directory, or `None`; how the core confirms
-/// that the folder Herdr says it created is there and is the one it listed.
+/// that the folder the engine says it created is there and is the one it listed.
 pub fn directory(path: &Path) -> Option<String> {
     let real = hide_platform::fs::identity::canonical(path).ok()?;
     real.is_dir().then(|| crate::root::wire(&real))

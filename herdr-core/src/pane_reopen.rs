@@ -10,7 +10,7 @@
 //! the operator once through `last_error` (`pane_reopen.not_restarted`), which
 //! the shell turns into a notice. Every call here runs on a worker thread,
 //! never under `Mutex<Runtime>`; the answer is a code the pane's popover turns
-//! into one line, and Herdr's own words stay in the diagnostic.
+//! into one line, and the engine's own words stay in the diagnostic.
 
 use std::thread;
 
@@ -349,7 +349,7 @@ mod tests {
         }
     }
 
-    /// A start Herdr refuses after the end is reported as one, with Herdr's
+    /// A start the engine refuses after the end is reported as one, with the engine's
     /// words kept for the log.
     #[test]
     fn a_refused_start_is_a_start_refused_with_herdrs_words_in_the_detail() {
@@ -411,7 +411,7 @@ mod tests {
         );
     }
 
-    /// Herdr keeps the ended agent's name for a moment, so the first starts
+    /// The engine keeps the ended agent's name for a moment, so the first starts
     /// are refused as `agent_name_taken`; the reopen waits that out instead
     /// of leaving the pane on its shell.
     #[test]

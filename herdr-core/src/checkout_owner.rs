@@ -1,8 +1,8 @@
-//! Which Herdr workspace owns a checkout (PRD checkout-workspace-binding).
+//! Which the engine workspace owns a checkout (PRD checkout-workspace-binding).
 //!
-//! A checkout has one owner Herdr workspace, read from Herdr rather than
+//! A checkout has one owner the engine workspace, read from the engine rather than
 //! inferred from where its tabs sit (D-06). For a Git checkout it is the
-//! workspace Herdr binds to that checkout path (`worktree.checkout_path`,
+//! workspace the engine binds to that checkout path (`worktree.checkout_path`,
 //! set only by `worktree.open` and `worktree.create`); a plain folder cannot
 //! be bound, so its owner is the live workspace carrying Hide's own mark, a
 //! workspace token whose value is a digest of the device and the folder
@@ -11,7 +11,7 @@
 //! still shows under the checkout its cwd names and is never moved (D-08).
 //!
 //! The owner is decided from the session Hide already receives, so a
-//! snapshot costs no Herdr call; only creating a tab in a checkout with no
+//! snapshot costs no engine call; only creating a tab in a checkout with no
 //! owner opens one (B16).
 
 pub(crate) mod open;
@@ -19,8 +19,8 @@ pub(crate) mod open;
 use sha2::{Digest, Sha256};
 
 /// The workspace token that marks a plain-folder workspace Hide opened as the
-/// folder's owner. Herdr drops workspace tokens on a server restart, so the
-/// next tab after one makes and marks a new owner.
+/// folder's owner. The engine keeps workspace tokens in its saved session, so
+/// an owner survives a restart.
 pub(crate) const OWNER_TOKEN: &str = "hide_owner";
 
 /// The mark a plain folder's owner carries: a stable digest of the device and
@@ -34,7 +34,7 @@ pub(crate) fn owner_mark(device_id: &str, path: &str) -> String {
         .collect()
 }
 
-/// A path as the owner rule compares it: Herdr and the catalog spell the same
+/// A path as the owner rule compares it: the engine and the catalog spell the same
 /// folder with or without a trailing slash.
 fn comparable(path: &str) -> &str {
     let trimmed = path.trim();
@@ -44,11 +44,11 @@ fn comparable(path: &str) -> &str {
     }
 }
 
-/// One Herdr workspace as the owner rule reads it.
+/// One engine workspace as the owner rule reads it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WorkspaceFacts<'a> {
     pub(crate) workspace_id: &'a str,
-    /// The checkout Herdr binds this workspace to, if it is a worktree
+    /// The checkout the engine binds this workspace to, if it is a worktree
     /// workspace.
     pub(crate) bound_path: Option<&'a str>,
     /// The value of this workspace's `hide_owner` token, if it has one.
@@ -87,7 +87,7 @@ pub(crate) fn owner_of<'a>(
 
 /// The owner of the checkout at `path` on the core's own node. A plain
 /// folder's owner opened before node ids existed carries the mark of the
-/// legacy `local` device until Herdr drops workspace tokens on a restart; it
+/// legacy `local` device; it
 /// is still this folder's owner, so no second one is opened (PRD
 /// core-host-node D-23, the transition path engineering principle 1 keeps).
 pub(crate) fn node_owner_of<'a>(
@@ -126,11 +126,11 @@ pub(crate) fn marked_folder<'a>(node: &str, mark: &str, path: &'a str) -> Option
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OwnerOpen {
     /// `worktree.open` on the checkout, from its repository's main worktree
-    /// (Herdr refuses a linked worktree opened from anywhere else): Herdr
+    /// (the engine refuses a linked worktree opened from anywhere else): the engine
     /// answers with the workspace it binds to that path, binding an unbound
     /// one already there or opening one, so a repeated or racing request
     /// converges on one owner (`already_open`). `label` names only a
-    /// workspace Herdr newly opened; one already there keeps its name.
+    /// workspace the engine newly opened; one already there keeps its name.
     Worktree {
         path: String,
         repository_root: String,
@@ -202,7 +202,7 @@ impl OwnerOpen {
     }
 
     /// The open workspace that is this checkout's owner, among the host's
-    /// workspaces: the one Herdr binds to the path, or the one carrying the
+    /// workspaces: the one engine binds to the path, or the one carrying the
     /// folder's mark.
     pub(crate) fn find_in<'a>(
         &self,
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn a_git_checkout_is_owned_by_the_workspace_herdr_binds_to_its_path_not_by_where_its_tabs_sit()
     {
-        // w8P holds the checkout's tabs but Herdr binds the path to w9J.
+        // w8P holds the checkout's tabs but the engine binds the path to w9J.
         let workspaces = [
             facts("w8P", None, None),
             facts("w9J", Some("/repo/"), None),
@@ -280,7 +280,7 @@ mod tests {
             facts("w3", None, Some(mark.as_str())),
         ];
         assert_eq!(owner_of("local", "/notes/", false, workspaces), Some("w3"));
-        // A workspace Herdr binds, or one marked for another device, is not it.
+        // A workspace the engine binds, or one marked for another device, is not it.
         assert_eq!(
             owner_of("local", "/notes", false, [workspaces[0], workspaces[1]]),
             None

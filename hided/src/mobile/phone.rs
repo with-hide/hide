@@ -470,7 +470,7 @@ fn conversation_failed(message: &str) {
 
 /// One pass over the pane's conversation: open its transcript and send the
 /// newest page, or send what the agent appended. The transcript comes back
-/// `None` when the pane has no conversation to show. A failed Herdr read
+/// `None` when the pane has no conversation to show. A failed pane read
 /// keeps an open transcript, so a slow answer does not flip the phone to
 /// the terminal.
 async fn conversation_step(
@@ -537,7 +537,7 @@ async fn conversation_step(
 }
 
 /// Reads the open pane's rows and answers only when their text or the asked
-/// line count changed. Herdr's read `revision` counts pane state, not output,
+/// line count changed. The engine's read `revision` counts pane state, not output,
 /// so it cannot say that new rows arrived.
 #[derive(Default)]
 struct RowsReader {
@@ -572,7 +572,7 @@ impl RowsReader {
                 let frame = json!({
                     "type": "rows", "device_id": key.device_id, "pane_id": key.pane_id,
                     "state": "ok", "text": rows.text, "lines": asked,
-                    // Herdr says whether it cut older rows off this read.
+                    // The engine says whether it cut older rows off this read.
                     "more": asked < pane::MAX_LINES && rows.truncated,
                 });
                 self.last = Some((rows.text, asked));
@@ -1134,7 +1134,7 @@ async fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projec
 /// The answer to a phone's `ping`: its own number back, so the phone knows
 /// hided is there. The page cannot see the protocol-level ping hided sends, so
 /// this is how a phone learns that a Mac gone to sleep stopped answering. It
-/// reads one in-memory record and nothing else: no core lock, no Herdr call.
+/// reads one in-memory record and nothing else: no core lock, no engine call.
 /// A phone no longer let in is told why instead, as it is when its socket is
 /// closed, and a ping without a number is refused and recorded.
 fn liveness(message: &Value, admitted: Result<(), &'static str>, phone_id: &str) -> Option<Value> {
@@ -1497,7 +1497,7 @@ async fn input(
         return answer(false, Some(problem));
     }
     // One claim per request id, taken before writing: a repeat that arrives
-    // while the first is still being written, or after Herdr's answer was
+    // while the first is still being written, or after the engine's answer was
     // lost, is answered from the claim and never written again (B27).
     match mobile.reserve_input(phone_id, request_id) {
         Reservation::Write => {}

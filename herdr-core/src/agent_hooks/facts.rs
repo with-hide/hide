@@ -3,21 +3,21 @@
 //! The hook reports through hided's hook request (`HookCommand::Status`),
 //! proven to come from the pane like every other hook request, and the core
 //! keeps the report here (PRD engine-bundle-1 D-7). Nothing is written to
-//! Herdr, so a Herdr handoff or restart loses nothing and needs no restore
+//! the engine, so an engine restart loses nothing and needs no restore
 //! (D-8).
 //!
 //! A pane can run more than one session's hooks: the operator's own Stop hook
 //! that starts `claude -p` runs Hide's hooks in the pane's environment. So a
 //! pane keeps the latest report of each session it heard from, at most
 //! [`SESSIONS_PER_PANE`], and a projection lays only the one for the session
-//! Herdr reports for the pane's agent; an agent whose session Herdr names by
+//! the engine reports for the pane's agent; an agent whose session the engine names by
 //! a path, or not at all, takes the session that reported last.
 //!
 //! A turn the hook reported stands until the same session's next hook event
-//! (`agent_state::axes`): Herdr's reading of the screen never overrides it,
+//! (`agent_state::axes`): the engine's reading of the screen never overrides it,
 //! and no timer ends it. A turn no hook reports the end of is ended by the
 //! signal the agent does give (Claude Code's `idle_prompt` notification after
-//! an interrupt, Codex's `Interrupt`), and a pane whose agent Herdr no longer
+//! an interrupt, Codex's `Interrupt`), and a pane whose agent the engine no longer
 //! lists drops its facts.
 //!
 //! The store has its own small lock, never held across I/O and always taken
@@ -40,7 +40,7 @@ use crate::latest_file::{LatestFile, read_capped};
 use crate::sidebar::{SessionAgentPayload, SessionSnapshotPayload};
 
 /// The panes the core keeps facts for. A pane leaves when its pane closes or
-/// its agent ends, so this bounds panes whose agents never appeared to Herdr.
+/// its agent ends, so this bounds panes whose agents never appeared to the engine.
 pub(crate) const PANE_LIMIT: usize = 1024;
 /// The sessions one pane keeps, the same number the hook's own file keeps;
 /// the one heard from least recently goes first.
@@ -58,7 +58,7 @@ struct SessionFact {
     counts: Option<HookCounts>,
     #[serde(skip)]
     turn: Option<HookTurn>,
-    /// Herdr's state sequence for the agent when `turn` was first laid on it:
+    /// The engine's state sequence for the agent when `turn` was first laid on it:
     /// a turn end the session read finds under a later state ended this
     /// turn, which no hook event of the session may follow (Claude Code's
     /// interruption, which sends neither `Stop` nor always `idle_prompt`).
@@ -70,7 +70,7 @@ struct SessionFact {
     /// the main turn's `Stop`).
     #[serde(skip)]
     waiting: Vec<String>,
-    /// Herdr's state sequence when `waiting` was last laid on the agent: a
+    /// The engine's state sequence when `waiting` was last laid on the agent: a
     /// session read under a later state that finds a call's result ends
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
@@ -85,15 +85,15 @@ const WAITING_LIMIT: usize = hide_agent_hooks::counters::WAITING_LIMIT;
 struct PaneFacts {
     /// Oldest first; the last is the session that reported last.
     sessions: Vec<SessionFact>,
-    /// A projection laid a session on an agent Herdr listed here, so a pane
+    /// A projection laid a session on an agent the engine listed here, so a pane
     /// that lists none afterwards has lost its agent.
     seen_agent: bool,
-    /// The session id Herdr last named for the pane's agent.
+    /// The session id the engine last named for the pane's agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     herdr_session: Option<String>,
-    /// A hook reported since Herdr last named another session for the pane:
+    /// A hook reported since the engine last named another session for the pane:
     /// the hook's session, proven to run in the pane, is then the pane's
-    /// current one even where Herdr still names an earlier one (an agent
+    /// current one even where the engine still names an earlier one (an agent
     /// started again in the same pane).
     #[serde(skip)]
     reported_since_herdr: bool,
@@ -122,7 +122,7 @@ impl HookFacts {
     /// The facts the last run saved under `path`, and that file for the
     /// saves to come. A missing file is a first run, which starts from the
     /// pane records the hooks keep on this machine (`seed`), so a pane whose
-    /// agent last reported to Herdr stays connected; any other reason a file
+    /// agent last reported to the engine stays connected; any other reason a file
     /// is not used is a diagnostic, and the next save replaces it.
     pub(crate) fn restore(
         path: PathBuf,
@@ -296,7 +296,7 @@ impl HookFacts {
             if let Some(named) = herdr_session(agent)
                 && facts.herdr_session.as_deref() != Some(named)
             {
-                // Herdr naming another session than before is newer than
+                // The engine naming another session than before is newer than
                 // every report so far; its first naming is not.
                 if facts.herdr_session.is_some() {
                     facts.reported_since_herdr = false;
@@ -352,7 +352,7 @@ impl HookFacts {
     }
 }
 
-/// The session id Herdr names for `agent`, when it names one by id.
+/// The session id the engine names for `agent`, when it names one by id.
 fn herdr_session(agent: &SessionAgentPayload) -> Option<&str> {
     agent
         .agent_session
@@ -362,8 +362,8 @@ fn herdr_session(agent: &SessionAgentPayload) -> Option<&str> {
 }
 
 /// Ends the hook's running or waiting turn when the session read, made under
-/// a later Herdr state than the one the turn was first laid under and with
-/// Herdr reading the agent at rest, finds the session's last turn ended. The
+/// a later engine state than the one the turn was first laid under and with
+/// the engine reading the agent at rest, finds the session's last turn ended. The
 /// read is the later fact, so the turn stands until the session's next hook
 /// event or that read, and no timer is involved (D-9).
 fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
@@ -396,7 +396,7 @@ fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
 }
 
 /// Ends each open approval whose call the session read, made under a later
-/// Herdr state than the one the approval was first laid under, finds a
+/// engine state than the one the approval was first laid under, finds a
 /// result for: the call ran, or the operator refused it in the dialog,
 /// which sends no hook event and lets the turn go on writing (D-9, D-10).
 fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
@@ -418,10 +418,10 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
 }
 
 /// The session fact that speaks for `agent`: of the agent's runtime, and the
-/// session Herdr reports for it when Herdr names one by id. Where none has
-/// that id and a hook reported since Herdr last changed the id it names, the
+/// session the engine reports for it when the engine names one by id. Where none has
+/// that id and a hook reported since the engine last changed the id it names, the
 /// session that reported last speaks: the hook proves its process runs in
-/// the pane, and Herdr can keep naming the session of an agent that ended
+/// the pane, and the engine can keep naming the session of an agent that ended
 /// there.
 fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
     let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
@@ -538,9 +538,9 @@ mod tests {
         laid.agents[0].hook
     }
 
-    /// An agent started again in its pane: Herdr can keep naming the session
+    /// An agent started again in its pane: the engine can keep naming the session
     /// that ended there, and the session the hook reported since speaks for
-    /// the pane until Herdr names yet another one.
+    /// the pane until the engine names yet another one.
     #[test]
     fn the_session_the_hook_reported_since_herdr_last_changed_its_id_speaks_for_the_pane() {
         let mut facts = HookFacts::default();
@@ -548,7 +548,7 @@ mod tests {
             .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Working)))
             .unwrap();
         assert_eq!(laid_turn(&mut facts, "s-old"), Some(HookTurn::Working));
-        // Herdr names another session after the report: Herdr is the newer
+        // The engine names another session after the report: the engine is the newer
         // word, and no fact of that session is kept.
         assert_eq!(laid_turn(&mut facts, "s-other"), None);
         // The hook reports again: its session speaks again.
@@ -556,7 +556,7 @@ mod tests {
             .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Done)))
             .unwrap();
         assert_eq!(laid_turn(&mut facts, "s-other"), Some(HookTurn::Done));
-        // A session Herdr names that has its own fact keeps speaking, even
+        // A session the engine names that has its own fact keeps speaking, even
         // when another session in the pane reported later (`claude -p`).
         facts
             .record("w1:p1", &report(Some("s-other"), Some(HookTurn::Waiting)))
@@ -620,7 +620,7 @@ mod tests {
         facts
             .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)))
             .unwrap();
-        // Before Herdr lists the agent, its pane keeps the report.
+        // Before the engine lists the agent, its pane keeps the report.
         let mut empty: SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [], "panes": [{"pane_id": "w1:p1"}]})).unwrap();
         lay(&mut facts, &mut empty);
@@ -711,7 +711,7 @@ mod tests {
     }
 
     /// The first run with no facts file starts from the records the hooks
-    /// kept while they reported to Herdr, so a running agent stays connected;
+    /// kept while they reported to the engine, so a running agent stays connected;
     /// a later run reads its own file and never those records again.
     #[test]
     fn a_first_run_keeps_the_panes_the_hooks_recorded_and_reads_them_once() {

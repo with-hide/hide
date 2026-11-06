@@ -67,7 +67,7 @@ fn fixture() -> (tempfile::TempDir, String, PathBuf) {
 }
 
 /// A runtime whose live context points back at itself, as the daemon's does,
-/// with a Herdr socket that does not exist.
+/// with an engine socket that does not exist.
 fn shared_runtime() -> SharedRuntime {
     let shared = SharedRuntime::new(runtime());
     let socket_path = std::env::temp_dir()

@@ -11,7 +11,7 @@
 //! of this account reach it; they are inside the core's trust boundary
 //! already (they can read its screen token). On it, the core and the node
 //! first trade one line each: the core names its node and build, the node
-//! names its own and its Herdr socket. A different build, this machine's own
+//! names its own. A different build, this machine's own
 //! node id, a device this core dials, or a node whose earlier link stands is
 //! refused with a reason line. Otherwise the core answers with the relay
 //! grant for the node's screens and the stream becomes the node's link.

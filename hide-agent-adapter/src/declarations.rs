@@ -506,7 +506,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 side: '│',
             },
             // `> ` on a console Grok takes for Windows' legacy one, which a
-            // Herdr pane on Windows is (`glyphs::prompt_arrow`).
+            // pane on Windows is (`glyphs::prompt_arrow`).
             marker: &["❯", ">"],
             trailer: 0,
             // The next prompt Grok predicts after a turn, drawn as ghost text
@@ -961,9 +961,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
         memory: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
-        // Herdr 0.9.3 reads agy's permission question as an approval, but
-        // its folder-trust question is unmeasured, and a bell's Enter into a
-        // dialog Herdr reads as `idle` would answer it; letters reach agy on
+        // The screen rules (Herdr 0.9.3's) read agy's permission question as an
+        // approval, but its folder-trust question is unmeasured, and a bell's
+        // Enter into a dialog the rules read as `idle` would answer it; letters reach agy on
         // its next prompt instead (PRD antigravity-first-class D-06), and
         // while it works on a later model call of the turn, which its
         // `PreInvocation` hook runs before and Hide answers with the letters

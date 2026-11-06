@@ -11,7 +11,7 @@
 // this file (split, close, resize, laying out) is Hide's own.
 
 //! A tab's pane tree and the rules that change it, the one place both the
-//! core's own engine and the drawing ahead of Herdr read them (PRD
+//! core's own engine and the drawing ahead of the engine read them (PRD
 //! engine-bundle-3-core-owns D-4): a split puts the new pane second at its
 //! ratio (0.5 unless asked), a close puts the closed pane's sibling in its
 //! parent's place, a resize moves the innermost split of its axis that holds
@@ -132,7 +132,7 @@ pub(crate) fn split_leaf_at(
 }
 
 /// Removes `pane` and puts its sibling in the parent's place. Returns the
-/// sibling's first leaf, the pane Herdr focuses when the closed one had focus.
+/// sibling's first leaf, the pane that takes focus when the closed one had focus (as in Herdr).
 pub(crate) fn remove_leaf(node: &mut PaneLayoutNodeSnapshot, pane: &str) -> Option<String> {
     let PaneLayoutNodeSnapshot::Split { first, second, .. } = node else {
         return None;

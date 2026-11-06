@@ -200,7 +200,7 @@ impl Runtime {
         self.register_home(device, &synced.home);
         // The agent may write every linked project through its link (D-02,
         // D-08); supported CLIs take the real folders as extra roots. The helper
-        // links no folder whose path Herdr could not pass (`control_character`).
+        // links no folder whose path the engine could not pass (`control_character`).
         let folders: Vec<String> = synced
             .links
             .iter()
@@ -216,7 +216,7 @@ impl Runtime {
             .and_then(|workspace| workspace.checkouts.first())
             .map(|checkout| checkout.next_tab_label.clone())
             .unwrap_or_else(|| crate::model::next_tab_label(std::iter::empty()));
-        // A Folder owner is found by its mark when Herdr already has it open,
+        // A Folder owner is found by its mark when the engine already has it open,
         // so the same request serves the first tab and every later one.
         let host = TabHost::Open(crate::checkout_owner::OwnerOpen::for_checkout(
             device,

@@ -12,7 +12,7 @@ const CATALOG_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 const CATALOG_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 /// How long `hide <path>` waits for its registration: a device's helper
 /// judges the folder within 15 s (`REGISTRABLE_TIMEOUT`), and this machine's
-/// opens a Herdr workspace, which answers in seconds.
+/// opens a workspace in the engine, which answers in seconds.
 pub(crate) const PROJECT_OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// How often `hide <path>` reads its receipt again while it waits.
 const PROJECT_OPEN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -1375,7 +1375,7 @@ fn owner_loop(
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>)
     // Every device's panes run on the core's own engine too, in pane
-    // holders the device's node runs, with no Herdr on the device (PRD
+    // holders the device's node runs (PRD
     // engine-bundle-3-core-owns D-22).
     .with_device_home(device_home);
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);

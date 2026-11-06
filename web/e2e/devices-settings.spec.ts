@@ -1,4 +1,4 @@
-// Settings > Devices on an isolated pinned Herdr and hided (PRD settings-cleanup
+// Settings > Devices on an isolated engine and hided (PRD settings-cleanup
 // B50, B54, B55, B56, B66): a device row is one line with Test and a ⋯ menu,
 // Add device is one button above the list, Connection details holds what a
 // healthy row no longer shows, and Revoke and Remove ask before they act. The

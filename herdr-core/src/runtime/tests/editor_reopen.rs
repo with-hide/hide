@@ -35,7 +35,7 @@ fn tab_layouts_update_only_the_tab_whose_layout_changed() {
     }
 }
 
-/// A layout Herdr has already sent still moves the canvas when it belongs
+/// A layout the engine has already sent still moves the canvas when it belongs
 /// to another tab. The return value is what fires the change notifier, so
 /// it has to report the projection that was rebuilt and not only the
 /// geometry that was compared. Before layouts survived a tab switch the
@@ -341,7 +341,7 @@ fn tab_strip_appends_a_reopened_file_nowhere_and_a_new_herdr_tab_at_the_end() {
     open_file(&mut runtime, &checkout_id, &file);
     assert_eq!(strip_ids(&runtime, &checkout_id), opened);
 
-    // A Herdr tab created next to an open file goes to the end of the
+    // An engine tab created next to an open file goes to the end of the
     // strip, not in front of the file that was there first.
     let grown = ["w-order:t1", "w-order:t2", "w-order:t3"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
@@ -391,7 +391,7 @@ fn tab_strip_keeps_a_file_in_its_slot_while_herdr_reorders_around_it() {
     open_file(&mut runtime, &checkout_id, &file);
     let file_entry = strip_ids(&runtime, &checkout_id)[2].clone();
 
-    // The operator dropped the file tab between the two Herdr tabs. The
+    // The operator dropped the file tab between the two engine tabs. The
     // move itself is the reorder event's job; what matters here is that
     // the slot the file took is the slot it keeps.
     runtime.checkout_tab_order.insert(
@@ -417,7 +417,7 @@ fn tab_strip_keeps_a_file_in_its_slot_while_herdr_reorders_around_it() {
         ]
     );
 
-    // Herdr swapped its two tabs. They swap slots; the file does not move.
+    // The engine swapped its two tabs. They swap slots; the file does not move.
     let moved = ["w-order:t2", "w-order:t1"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
         &checkout_path,
@@ -451,7 +451,7 @@ fn tab_strip_reorder_moves_a_file_tab_without_asking_herdr() {
     let file_entry = strip_ids(&runtime, &checkout_id)[2].clone();
 
     // There is no live connection in this fixture, so a move that reached
-    // Herdr would fail loudly. Landing silently is the assertion.
+    // the engine would fail loudly. Landing silently is the assertion.
     assert!(reorder_tab(&mut runtime, &checkout_id, &file_entry, 1));
     assert_eq!(
         strip_ids(&runtime, &checkout_id),

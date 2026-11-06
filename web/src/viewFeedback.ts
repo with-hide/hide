@@ -57,7 +57,7 @@ export function viewOnlyCount(feedback: ViewFeedback | undefined, displayId: str
   return commentsOn(feedback, displayId).filter((comment) => comment.group === group).length;
 }
 
-/** A recipient group's key for a View an agent opened: its machine and Herdr terminal; `""` for nobody. */
+/** A recipient group's key for a View an agent opened: its machine and engine pane; `""` for nobody. */
 export function noRecipient(group: ViewFeedbackGroup | null): boolean {
   return !group?.recipient;
 }

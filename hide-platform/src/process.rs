@@ -1401,7 +1401,7 @@ fn is_console_host(pid: u32) -> bool {
 /// A single-child cmd or PowerShell wrapper is followed to the program it
 /// waits for; any other program leads its descendants ([`group_members`]).
 /// An unreadable process table or live child identity is an error, never
-/// evidence that the shell runs alone. Herdr reads a
+/// evidence that the shell runs alone. Herdr read a
 /// Windows pane's foreground the same way, from the shell down. `NotFound`
 /// when `shell` has ended.
 #[cfg(windows)]

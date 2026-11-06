@@ -790,7 +790,7 @@ fn an_instrumented_pane_with_no_children_is_a_different_answer_from_one_hide_can
     );
 
     // The hook only ever answered for in-process subagents. Pane children come
-    // from Herdr's lineage, so an uninstrumented parent still lists them.
+    // from the engine's lineage, so an uninstrumented parent still lists them.
     let uninstrumented_parent = crate::sidebar::project_pane_children(
         &rows,
         "parent",
@@ -873,7 +873,7 @@ fn split_lineage_payload() -> crate::sidebar::SessionSnapshotPayload {
     crate::sidebar::owned_label_fixture(split_lineage_json()).expect("session payload")
 }
 
-/// A parent and its delegated child split in one tab, as Herdr reports them
+/// A parent and its delegated child split in one tab, as the engine reports them
 /// before Hide moves the child.
 pub(super) fn split_lineage_json() -> serde_json::Value {
     crate::sidebar::lineage_fixture_value(serde_json::json!({
@@ -965,7 +965,7 @@ fn a_tab_holding_only_delegated_children_is_kept_off_the_strip() {
 }
 
 /// PRD D-16: a strip entry is named after its one agent, and a tab with two
-/// agents or none keeps the Herdr label alone.
+/// agents or none keeps the engine label alone.
 #[test]
 fn a_strip_entry_carries_its_one_agents_identity_and_mark() {
     let mut runtime = runtime();
@@ -978,7 +978,7 @@ fn a_strip_entry_carries_its_one_agents_identity_and_mark() {
             .find(|entry| entry.source_id == tab_id)
             .cloned()
     };
-    // Two agents share the tab: the label stays what Herdr said.
+    // Two agents share the tab: the label stays what the engine said.
     assert_eq!(
         entry(&runtime, "t1")
             .expect("the tab is on the strip")
@@ -1038,7 +1038,7 @@ fn a_strip_entry_carries_its_one_agents_identity_and_mark() {
 
 #[test]
 fn a_move_herdr_declined_is_an_error_rather_than_a_silent_success() {
-    // Herdr reports a refusal as an unchanged move with a reason, not as an
+    // The engine reports a refusal as an unchanged move with a reason, not as an
     // error, so the decision has to read `changed` rather than assume that a
     // successful request moved anything.
     let moved = |changed: bool, reason: Option<&str>, created: Option<&str>| {
@@ -1564,7 +1564,7 @@ fn a_quiet_root_waits_in_working_while_a_descendant_works_and_not_on_one_that_as
         "a closed child no longer holds the root"
     );
 
-    // A child Herdr cannot classify does not make the root wait.
+    // A child the engine cannot classify does not make the root wait.
     ingest_lineage(
         &mut runtime,
         &[
@@ -1795,7 +1795,7 @@ fn a_pane_whose_session_ended_draws_no_counts_even_though_its_tokens_remain() {
     let installed = hook_status_of(Some(hide_agent_hooks::HookStatus::Installed {
         version: hide_agent_hooks::HOOK_VERSION,
     }));
-    // Herdr's pane metadata is durable, so the last session's tokens are
+    // The engine's pane metadata is durable, so the last session's tokens are
     // still on the pane after it exits.
     let leftover = crate::agent_hooks::PaneHookTokens {
         version: Some(hide_agent_hooks::HOOK_VERSION),
@@ -1928,7 +1928,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
         "a hook whose last report landed has no failure to show"
     );
 
-    // A hook that ran and was refused by Herdr looks, pane by pane, exactly
+    // A hook that ran and was refused by the engine looks, pane by pane, exactly
     // like a session that started first. The recorded failure is what the
     // Settings screen shows instead of the restart advice.
     let mut refused = runtime
@@ -2790,7 +2790,7 @@ fn a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply() {
     assert_eq!(wait_of(&rows, "child"), None);
 }
 
-/// A source and its fork as Herdr lists them once the fork's pane names the
+/// A source and its fork as the engine lists them once the fork's pane names the
 /// source (`lineage::desired`); `fork_session` is the fork's own session.
 fn fork_rows(fork_session: &str) -> Vec<SidebarAgentSnapshot> {
     let session = crate::sidebar::fixture_lineage_session();

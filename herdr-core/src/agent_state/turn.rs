@@ -455,7 +455,7 @@ pub(crate) fn is_waiting_for_operator(agent: &SidebarAgentSnapshot) -> bool {
 }
 
 /// A session plan approval Enter starts the person's next request, unlike
-/// an Enter at Herdr's ordinary blocked prompt. Preserve the observed status
+/// an Enter at the engine's ordinary blocked prompt. Preserve the observed status
 /// when present and the existing row fallback when it is not.
 pub(crate) fn submit_answers_prompt(
     agent: &SidebarAgentSnapshot,
@@ -749,7 +749,7 @@ fn first_line_cut(text: &str) -> Option<String> {
 /// agent switcher's candidate list.
 ///
 /// Group order first, then most recent activity descending, then the order
-/// Herdr sent the rows in. The sort is stable, so that third key costs
+/// the engine sent the rows in. The sort is stable, so that third key costs
 /// nothing, and re-running it on an already ordered list is the identity
 /// (engineering rule 11).
 ///
@@ -768,7 +768,7 @@ pub(crate) fn sort_agents(agents: &mut [SidebarAgentSnapshot]) {
 
 /// Most recent activity first, by the rows' ordering keys
 /// (`SidebarAgentSnapshot::last_activity`): thirteen digits of epoch
-/// milliseconds sort above Herdr's zero-padded sequence, so a row with a
+/// milliseconds sort above the engine's zero-padded sequence, so a row with a
 /// time always stands above one with only a sequence. Every surface that
 /// orders rows by recency, a phone's mixed devices included, compares with
 /// this.

@@ -36,7 +36,7 @@ fn acked(runtime: &Runtime) -> Vec<(String, u64)> {
 #[test]
 fn an_operator_focus_is_answered_with_its_number_whatever_the_core_did_with_it() {
     let (mut runtime, _checkout) = tab_order_runtime("/tmp/hide-operator-focus");
-    // No live Herdr: the core refuses the focus (`pane.control_unavailable`),
+    // No live engine: the core refuses the focus (`pane.control_unavailable`),
     // and the page is still waiting for the answer.
     runtime.dispatch_json(&numbered_focus_event(
         "w-order:t1:p",

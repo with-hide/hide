@@ -287,7 +287,7 @@ impl<'a> Sources<'a> {
     }
 
     /// The list of the session that `row` hosts or that `session` names, and
-    /// of every descendant: the live ones by Herdr's lineage, the ended ones
+    /// of every descendant: the live ones by the engine's lineage, the ended ones
     /// by the record's. `recorded` is what the link record keeps, freshest
     /// first. An empty list still says whether the walk went past its cap.
     pub(crate) fn pulls(
@@ -453,7 +453,7 @@ impl<'a> Sources<'a> {
     /// The section of `record`: its session's list, capped as its row's is,
     /// cut into groups, and the count the cap left out. Each direct child's
     /// whole subtree says which of the list it holds; one reached through no
-    /// named child (a live child Herdr has not named a session for yet) stays
+    /// named child (a live child the engine has not named a session for yet) stays
     /// in this session's group, so the section holds exactly the list.
     fn groups(&self, record: &SessionRecord, recorded: &[&Recorded]) -> (Vec<PrGroup>, Capped) {
         let all = self.pulls(None, Some(&record.session), recorded);
@@ -593,7 +593,7 @@ mod tests {
         format!("https://github.com/acme/app/pull/{number}")
     }
 
-    /// Live rows `(pane, session, children)`, as Herdr projects its agents.
+    /// Live rows `(pane, session, children)`, as the engine projects its agents.
     fn rows(
         live: &[(&str, &str, &[&str])],
     ) -> (Vec<SidebarAgentSnapshot>, Vec<Option<SessionIdentity>>) {

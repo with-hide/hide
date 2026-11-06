@@ -58,7 +58,7 @@ fn semantic_selection_preserves_large_sections_and_legacy_complete_rest() {
 }
 
 /// The rest wire names each field it carries, so a field added to a section's
-/// snapshot and not to its wire list never reached the shell (the Herdr
+/// snapshot and not to its wire list never reached the shell (the engine
 /// takeover's status did not, PRD herdr-takeover B1).
 #[test]
 fn the_complete_rest_carries_every_field_of_each_section() {
@@ -258,7 +258,7 @@ fn one_daemon_creates_the_core_once_and_never_replaces_it() {
     );
 }
 
-/// R6, AC12. Herdr publishes a session snapshot on every event and on
+/// R6, AC12. The engine publishes a session snapshot on every event and on
 /// every agent refresh, and the wire has to be sized by what changed. A
 /// republish that moved nothing must leave the reader's cursor current, or
 /// the whole navigator, ui state and status sections ride the next

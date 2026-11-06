@@ -1,4 +1,4 @@
-//! Pane-scoped queries and actions against the live Herdr projection.
+//! Pane-scoped queries and actions against the live engine projection.
 
 use super::{AreaIntent, Runtime};
 use crate::view_layout::DisplayKind;

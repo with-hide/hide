@@ -1,7 +1,6 @@
 import { createLegacyDraft } from "./group-start-helper";
 // Approved group-tabs B3/B5-B10/B12/B18/B21/B23: the topology the daemon
-// publishes is the oracle for whether a blank tab starts anything; the tests
-// that hold or lose an engine's answer to a start run on Herdr's socket.
+// publishes is the oracle for whether a blank tab starts anything.
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";

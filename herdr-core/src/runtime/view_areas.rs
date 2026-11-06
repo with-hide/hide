@@ -2498,7 +2498,7 @@ impl Runtime {
     /// this process that its files can be read (contract 5). Files are read
     /// on the document worker like any open; a file that cannot be read
     /// becomes an unavailable tab that says why. Diffs show at once. Nothing
-    /// is started in Herdr, and nothing takes the screen: the tree was
+    /// is started in the engine, and nothing takes the screen: the tree was
     /// published already, and each display binds to its tab when it lands.
     pub(super) fn restore_view_displays(&mut self, key: &WorkspaceKey) {
         let Some(front) = self.front_checkout_owned() else {

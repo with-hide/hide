@@ -25,7 +25,7 @@ pub const HELPER_BINARY_NAME: &str = if cfg!(windows) {
 /// The pane's `hide_hooks` reporting protocol. Raise it only when older
 /// reports cannot be interpreted: changing an installed command must not
 /// disconnect an already-running pane whose reports are still valid.
-/// Version 8's reports still read the same when they reach the core through
+/// Version 8's reports still read the same when they began to reach the core through
 /// hided instead of through Herdr, so moving the path kept it.
 pub const HOOK_VERSION: u32 = 8;
 
