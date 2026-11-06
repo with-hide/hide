@@ -6,14 +6,14 @@
 //! used where the host reports it.
 //!
 //! The file is plain JavaScript that is also valid TypeScript, in a `.ts`
-//! file as Herdr's own extension for these agents is, so both hosts load it
+//! file as Herdr's own extension for these agents was, so both hosts load it
 //! from their user extension folder without a build step. Each prompt and
 //! shell call asks the helper (`hide-agent-hooks pi|omp <operation>`,
 //! `src/plugin/helper.rs`), and it tells the helper its version, so a file
 //! another build wrote does nothing (B13).
 //!
 //! It goes only into the default agent folders, the ones Herdr's integration
-//! uses; an omp profile or a `PI_CODING_AGENT_DIR` folder gets none (PRD
+//! used; an omp profile or a `PI_CODING_AGENT_DIR` folder gets none (PRD
 //! non-goal).
 
 use hide_agent_adapter::AgentId;

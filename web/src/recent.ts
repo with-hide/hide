@@ -2,9 +2,9 @@
 // session.
 //
 // One recent-use order over every surface the shell holds, across every
-// device, project and checkout: this machine's Herdr tabs and the View-area
+// device, project and checkout: this machine's engine tabs and the View-area
 // displays (file, diff and browser) of each checkout's Workspace, each
-// connected device's Herdr tabs (PRD home-device-rail D-16), and the page's
+// connected device's engine tabs (PRD home-device-rail D-16), and the page's
 // shared Overview page and its scope, once the
 // operator has been on them.
 // Recent Panels walks it; Recent Projects walks the projects in the order
@@ -29,7 +29,7 @@ import type { Screen } from "./ui";
 import { activeDisplay, areasOf } from "./viewLayout";
 import { workspaceViewOf } from "./workspace";
 
-/** A Herdr tab, or what a View-area display shows. */
+/** An engine tab, or what a View-area display shows. */
 export type SurfaceKind = "herdr" | ViewDisplaySnapshot["kind"];
 
 const AGENT_SURFACE = "herdr";
@@ -42,7 +42,7 @@ export type Surface = {
   deviceId: string;
   workspaceId: string;
   checkoutId: string;
-  /** The Herdr tab id, or the display id within its checkout's Workspace. */
+  /** The engine tab id, or the display id within its checkout's Workspace. */
   id: string;
   /** A display's name as its View area last drew it; a tab's comes from the snapshot. */
   label: string;
@@ -121,8 +121,8 @@ function frontLayoutOf(rest: SnapshotRest | null, checkout: Checkout) {
 
 /**
  * The surface the operator is using now: the focused checkout's active
- * display while the View area is the one in use, else its visible Herdr
- * tab; over a device in front, the tab that device's Herdr shows.
+ * display while the View area is the one in use, else its visible engine
+ * tab; over a device in front, the tab that device's engine shows.
  * `viewInUse` is the page's answer (`keyboardOwner`), since only the page
  * knows where the keyboard is.
  */
@@ -169,7 +169,7 @@ export function focusSignature(rest: SnapshotRest | null): string {
 
 /**
  * Every entry the session still holds, in the navigator's order: each
- * checkout's Herdr tabs, a connected device's after this machine's, the front Workspace's displays as the snapshot
+ * checkout's engine tabs, a connected device's after this machine's, the front Workspace's displays as the snapshot
  * carries them, and the displays remembered for a checkout not in front,
  * which the snapshot does not carry and which the core checks on commit;
  * then the remembered screens that still exist.
@@ -178,7 +178,7 @@ export function availableEntries(rest: SnapshotRest | null, remembered: readonly
   const entries: RecentEntry[] = [];
   for (const { deviceId, checkout } of allCheckouts(rest)) {
     for (const tab of checkout.tabs) if (tab.id) entries.push(tabSurface(checkout, tab.id, deviceId));
-    // A device's View displays are not in the snapshot, so only its Herdr tabs are entries.
+    // A device's View displays are not in the snapshot, so only its engine tabs are entries.
     if (deviceId !== localDeviceId(rest)) continue;
     const layout = frontLayoutOf(rest, checkout);
     if (layout) {
@@ -420,7 +420,7 @@ export function paneItem(rest: SnapshotRest | null, paneId: string): CycleItem |
 
 /**
  * A Recent Panels row: a tab holding exactly one agent pane is called by
- * that agent and carries its status mark; any other tab keeps its Herdr
+ * that agent and carries its status mark; any other tab keeps its engine
  * label, and a display its own name. A Project's Overview is called by its
  * Project and is gone with it; a device's Home Overview reads as the sidebar's
  * Home row does, `Home` over the project count.

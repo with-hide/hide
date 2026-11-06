@@ -64,7 +64,7 @@ pub const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(10);
 /// the link as gone: three heartbeats.
 pub const HEARTBEAT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Which shell a pane runs, as its Herdr terminal and the shell's pid and
+/// Which shell a pane runs, as its terminal and the shell's pid and
 /// start: the identity a bootstrap checks a caller against.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PaneIdentity {
@@ -142,8 +142,8 @@ pub enum NodeEvent {
     /// [`HEARTBEAT`], so the attach role on the core's machine ends a link
     /// whose node fell silent (PRD core-host-node-remote-core B20).
     Ping,
-    /// Base64 bytes the node read from a stream's end (its Herdr or its
-    /// browser relay) on a stream the core opened with `link_open`.
+    /// Base64 bytes the node read from a stream's end (the
+    /// browser relay or a loopback server) on a stream the core opened with `link_open`.
     LinkData { stream: u64, data: String },
     /// A stream's end closed a stream the core opened, or the node did at
     /// one of its caps; `reason` says which, never what the stream carried.
@@ -161,7 +161,7 @@ pub enum NodeEvent {
 /// Who opened a stream, as the node proved it when the stream opened: the
 /// process using a credential the node issued for `pane_id`,
 /// descended from that pane's shell, whose identity the node read from its
-/// Herdr then. The core checks the stream's command against it rather than
+/// pane holder then. The core checks the stream's command against it rather than
 /// asking [`crate::protocol::Call::PaneInspect`], and only for a credential
 /// the same link vouched for the same pane.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

@@ -1106,7 +1106,7 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
 }
 
 /// `base` joined with `parts`, each folder checked in turn: the kit keeps
-/// code there that launchd and Herdr run as this account, so a folder that
+/// code there that launchd and the agents run as this account, so a folder that
 /// is a link, belongs to another account or that others can write to is
 /// refused rather than trusted. With `create`, a missing folder is made 0700;
 /// without it, a missing folder ends the check, since nothing below it can be
@@ -1197,7 +1197,7 @@ pub(crate) fn write_atomically(
         .map_err(|error| format!("{} could not be written: {error}", path.display()))
 }
 
-// The suite drives the kit against a stand-in Herdr on a Unix socket and with
+// The suite drives the kit against a stand-in daemon on a Unix socket and with
 // shell scripts for the programs it installs, so it runs where those do; the
 // Windows kit is tested with the device helper that installs it there.
 #[cfg(all(test, unix))]

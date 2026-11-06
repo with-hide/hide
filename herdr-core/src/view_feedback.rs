@@ -3,10 +3,10 @@
 //!
 //! An agent that opens a View is its opener (D-02, D-03): the View tab wears
 //! its logo and the comments the operator leaves on the View go to it in one
-//! letter (D-08). The opener is kept by the agent's Herdr terminal and native
-//! session, never by its pane id, because a restarted Herdr server gives the
-//! same pane id to another shell (D-23, B40); the pane is found again each
-//! time it is needed.
+//! letter (D-08). The opener is kept by the agent's engine terminal and native
+//! session, never by its pane id, because a pane id can come to name another shell
+//! (Herdr gave the same id to another shell after a restart; D-23, B40); the
+//! pane is found again each time it is needed.
 //!
 //! Comments belong to the checkout's entry in `workspace-views.json`, keyed
 //! by what they were left on (a file, a diff, a page address), so closing a
@@ -37,20 +37,20 @@ pub const WAITING_SENDS: usize = 16;
 /// A screenshot's staged name: a UUID and its extension.
 pub const SHOT_NAME_BYTES: usize = 64;
 
-/// The agent that last opened a View (D-03), by what survives a Herdr
-/// restart: the machine, the Herdr terminal and the native session.
+/// The agent that last opened a View (D-03), by what survives an engine
+/// restart: the machine, the engine terminal and the native session.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Opener {
-    /// The machine whose Herdr runs the agent.
+    /// The machine whose engine runs the agent.
     pub device_id: String,
-    /// The Herdr terminal the agent ran in when it opened the View.
+    /// The engine terminal the agent ran in when it opened the View.
     pub terminal_id: String,
     /// The digest of the agent's native session (`lineage_session`), which
     /// finds the agent again in another pane (D-10, B19).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     /// The native session id `Reopen and send` resumes (D-10, B20), when
-    /// Herdr recorded one.
+    /// the engine recorded one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
     /// The session's file, for an agent whose resume Hide proves by the file
@@ -138,7 +138,7 @@ where
 }
 
 /// The session a pane stands for in the Files strip (PRD session-files
-/// D-10): its machine, its Herdr terminal and the native session of the
+/// D-10): its machine, its engine terminal and the native session of the
 /// agent in it, absent for a plain shell.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionScope {

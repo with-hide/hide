@@ -4,12 +4,12 @@
 //! D-10, D-20).
 //!
 //! A Workspace is one checkout on one device, keyed by the device id and the
-//! checkout path, because a Herdr workspace id is not stable across a Herdr
-//! restart and one checkout can hold tabs from several Herdr workspaces. The
+//! checkout path, because an engine workspace id names a workspace, not a checkout,
+//! and one checkout can hold tabs from several engine workspaces. The
 //! state is Hide's own presentation - the right lane's two columns (the
 //! viewing column with the checkout's documents, the tool column beside the
 //! rail), its pin, the four widths, and the View area tree with its
-//! displays ([`crate::view_layout`]) - and never a terminal layout: Herdr
+//! displays ([`crate::view_layout`]) - and never a terminal layout: the engine
 //! keeps panes, splits and zoom. Whether an unpinned lane is floating over
 //! the agents right now, and an expanded lane, are the shell's own moment
 //! and are never stored (D-11).

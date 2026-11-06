@@ -43,7 +43,7 @@ pub struct OwnerChange {
     pub new_owner_was: String,
     /// The registration the result keeps for the old owner.
     pub old_owner_registration: crate::model::DeviceRegistration,
-    /// Each machine's Herdr socket, which names it in the ledger's host
+    /// Each machine's engine socket path, which names it in the ledger's host
     /// scopes while it owns the core. Both are required: a scope naming a
     /// machine whose socket is unknown would keep its old id unnoticed.
     pub old_owner_herdr_socket: String,
@@ -61,7 +61,7 @@ impl OwnerChange {
         }
     }
 
-    /// A Herdr-scoped id (`pane`, `tab`): unqualified for the owner,
+    /// An engine-scoped id (`pane`, `tab`): unqualified for the owner,
     /// `remote:<device>:<kind>:<raw>` for every other machine.
     fn scoped(&self, kind: Kind, id: &str) -> Option<String> {
         if let Some(raw) = Scoped::strip(id, &self.new_owner_was, kind) {
@@ -402,7 +402,7 @@ impl Mapper<'_> {
                     swap_own(value, own, devices, self.change)?;
                 }
                 // The old core held the new owner as a device, whose
-                // selection is that machine's own Herdr focus and is never
+                // selection is that machine's own engine focus and is never
                 // saved, so the new core opens there.
                 value["focus_from_herdr"] = Value::Bool(true);
                 // A recent entry is its checkout: one whose checkout neither

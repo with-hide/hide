@@ -337,7 +337,7 @@ impl Core {
         // before the engine's first publish reaches the cleanup (PRD
         // engine-bundle-4-herdr-removal D-25). Read once, at the start: every
         // move or import starts the core role again, which reads it again,
-        // and a workspace Herdr makes meanwhile is numbered apart from the
+        // and a workspace the engine makes meanwhile is numbered apart from the
         // engine's (D-26), so nothing the cleanup sees until then is one.
         let herdr_held = own_engine
             .as_ref()
@@ -548,7 +548,7 @@ impl Core {
             notifier.notify();
         }
         // History reads through each checkout's own host, so it runs whether
-        // or not this machine has a Herdr session.
+        // or not this machine has an engine session.
         let changes =
             match crate::changes::ChangesPump::spawn(Arc::downgrade(&runtime), notifier.clone()) {
                 Ok(pump) => Some(pump),
@@ -562,7 +562,7 @@ impl Core {
                 }
             };
         // The background fetch asks each repository's own node, so it runs
-        // whether or not this machine has a Herdr session.
+        // whether or not this machine has an engine session.
         let fetch = match crate::fetch::FetchPump::spawn(Arc::downgrade(&runtime), notifier.clone())
         {
             Ok(pump) => Some(pump),

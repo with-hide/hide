@@ -109,7 +109,7 @@ pub struct MissionView {
 }
 
 /// Where the operator's answer is (B26, B28): accepted and not yet tried,
-/// waiting for the Conductor's turn, or typed without Herdr confirming it
+/// waiting for the Conductor's turn, or typed without the engine confirming it
 /// arrived, kept until the operator sends it again. A typed answer takes
 /// its decision away, so it has no state of its own.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

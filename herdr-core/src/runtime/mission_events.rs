@@ -52,7 +52,7 @@ pub(crate) struct AnswerWork {
 }
 
 /// Why the doorbell could not confirm what it types, a letter's bell or a
-/// mission's answer: it failed before the text was typed, or after Herdr was
+/// mission's answer: it failed before the text was typed, or after the engine was
 /// asked to type it, when the text may already be in the conversation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SendFailure {
@@ -555,7 +555,7 @@ impl Runtime {
     /// has been gone for `ABSENT_GRACE_MS` is dropped here: the banner goes
     /// back to before it was sent and the history says it was not delivered
     /// (D-30, B39). A shorter absence, such as the panes not yet read after
-    /// a restart or a Herdr reconnect, only waits, as a letter does.
+    /// a restart or an engine reconnect, only waits, as a letter does.
     pub(crate) fn mission_answers_due(&mut self) -> Vec<AnswerWork> {
         let now = super::memory::now_ms();
         let language = self.interface_language();
@@ -649,7 +649,7 @@ impl Runtime {
         judge(current, work.patience(), super::memory::now_ms())
     }
 
-    /// The doorbell is about to ask Herdr to type the answer: from here it
+    /// The doorbell is about to ask the engine to type the answer: from here it
     /// may reach the conversation, so the book holds it as unconfirmed
     /// before the prompt, and a stop before the reply leaves it for the
     /// operator to send again rather than typing it twice (B26).
@@ -698,7 +698,7 @@ impl Runtime {
     /// history as the operator's, from the banner, and takes the decision
     /// away with it (B29); one that failed before
     /// it was typed goes back with its reason so the operator can answer
-    /// again (B28); one Herdr took without confirming it is kept as
+    /// again (B28); one the engine took without confirming it is kept as
     /// unconfirmed, and only the operator sends it again (B26).
     pub(crate) fn mission_answer_sent(
         &mut self,
@@ -817,7 +817,7 @@ pub(crate) fn close_events(before: &Mission, after: &Mission, now: u64) -> Vec<M
 
 /// How long a Conductor may be missing before an answer waiting for it is
 /// dropped as not delivered: longer than a restart takes to read the panes
-/// again, or a Herdr reconnect.
+/// again, or an engine reconnect.
 const ABSENT_GRACE_MS: u64 = 30_000;
 
 /// Ends a mission's decision with the mission (B29, D-30): clears the

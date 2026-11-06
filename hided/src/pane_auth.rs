@@ -3,7 +3,7 @@
 //! reads; other commands use `/ws`.
 //!
 //! A caller is bound one of two ways. A process descending from the shell
-//! Herdr runs for the named pane gets a pane-bound capability that records
+//! the pane's holder runs for the named pane gets a pane-bound capability that records
 //! the pane's terminal identity and shell birth and dies with the pane. A
 //! local process that is not such a descendant (a Codex tool shell run by
 //! the shared `codex app-server` daemon, whose parent is launchd) is bound
@@ -739,7 +739,7 @@ impl Drop for Registry {
 }
 
 /// A bootstrap request has no authority until the kernel peer PID is shown
-/// to be a descendant of the shell Herdr owns for this pane, or, failing
+/// to be a descendant of the shell the pane's holder runs for this pane, or, failing
 /// that, to have its working directory inside a registered checkout. The
 /// pane id may be absent for a caller that has none.
 #[derive(Deserialize)]
@@ -789,7 +789,7 @@ impl Attestation {
 }
 
 /// The bootstrap's attestation. The pane path runs unchanged first; any
-/// pane failure, including a Herdr socket hided never had, hands the caller
+/// pane failure, including an engine hided never had, hands the caller
 /// to the checkout fallback, whose reason is the bootstrap's answer when it
 /// fails too. Returns the pane reason alongside a checkout-bound attestation.
 // Only the Unix bootstrap socket serves it (`serve`); its tests run everywhere.
@@ -802,7 +802,7 @@ fn attest_bootstrap(
     own: Option<&str>,
 ) -> Result<(Attestation, Option<&'static str>), &'static str> {
     // The encoded checkout caller is hided's own key for the core; a request
-    // never names one, whatever Herdr's pane namespace holds in the future.
+    // never names one, whatever the engine's pane namespace holds in the future.
     if matches!(Caller::parse(&request.pane_id), Caller::Checkout { .. }) {
         return Err("invalid_request");
     }
@@ -1029,7 +1029,7 @@ fn proved_shell(proof: &herdr_core::engine::PaneProof) -> Result<Binding, &'stat
 
 /// Whether the process `peer` runs in the pane `binding` proves: it is the
 /// pane's shell or descends from it, however deep (an agent the shell runs,
-/// and a `hide` command that agent runs), the way a Herdr pane's caller is
+/// and a `hide` command that agent runs), the way a Herdr pane's caller was
 /// found.
 fn caller_in_pane(peer: i32, binding: &Binding) -> Result<(), &'static str> {
     let Binding::Pane { shell_pid, .. } = binding else {
@@ -1420,7 +1420,7 @@ mod tests {
             Err("pane_changed"),
             "a pid whose start the record does not name is another process"
         );
-        // Herdr names only the pid; the system's start time binds it.
+        // A proof that names only the pid: the system's start time binds it.
         assert!(proved_shell(&proof(None)).is_ok());
     }
 
@@ -2025,7 +2025,7 @@ mod tests {
             one_shot: true,
             install: None,
         };
-        // A stale pane id with no Herdr socket used to answer pane_unavailable
+        // A stale pane id with no engine used to answer pane_unavailable
         // before the fallback ran; the fallback's own answer is the proof it ran
         // (this test's cwd is inside no registered checkout).
         assert_eq!(

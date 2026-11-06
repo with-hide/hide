@@ -157,7 +157,7 @@ it("lists this PC's WSL distributions first and adds one under the core's name w
   const name = q("[data-device-label]") as HTMLInputElement;
   expect(name.value).toBe("WSL Ubuntu");
   expect(name.hasAttribute("disabled")).toBe(true);
-  // The bridged Herdr is the core's to find: no socket to type for a distribution.
+  // The bridged engine is the core's to find: no socket to type for a distribution.
   expect(q("[data-device-socket]")).toBeNull();
   expect(q('[data-add-device-installs="true"]')?.querySelectorAll("li")).toHaveLength(3);
   await act(async () => { q('[data-add-device="true"]')?.click(); });

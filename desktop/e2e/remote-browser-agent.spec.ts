@@ -3,7 +3,7 @@
 // and drives the display the same way a local pane does, and fails with the
 // Workspace commands' own reason when no desktop is attached (PRD
 // hide-browser-cli B34, B40). Setup as in remote-workspace.spec.ts: the two
-// Herdr servers, daemon, helper install and desktop profile are private, and
+// SSH pane fixtures, daemon, helper install and desktop profile are private, and
 // the device sessions get the private HOME desktop/e2e/device-home.ts proves.
 import { expect } from "@playwright/test";
 import { spawn } from "node:child_process";

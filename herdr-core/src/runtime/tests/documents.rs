@@ -246,7 +246,7 @@ impl Fixture {
     }
 
     /// The checkout as a node that dials this core holds it: in the node's
-    /// Herdr session rather than the navigator, in front there while the
+    /// engine session rather than the navigator, in front there while the
     /// node is the device in front.
     fn in_node_session(self) -> Self {
         {
@@ -395,7 +395,7 @@ fn a_device_file_is_read_on_a_worker_and_shows_as_a_tab_when_it_arrives() {
 /// A terminal link to a file of a node's own checkout, which a window on
 /// that node prints: the checkout is in the node's session, so the reveal
 /// finds it there, reads the file through the node and moves no focus of the
-/// core's, since the node's Herdr owns that checkout's focus.
+/// core's, since the node's engine owns that checkout's focus.
 #[test]
 fn a_file_of_a_nodes_checkout_in_front_is_revealed_through_the_node() {
     let f = Fixture::new().in_node_session();
@@ -419,7 +419,7 @@ fn a_file_of_a_nodes_checkout_in_front_is_revealed_through_the_node() {
 }
 
 /// Group-tabs B28 makes checkout navigation core-owned: an empty checkout
-/// can read its file immediately without a Herdr workspace or focus request.
+/// can read its file immediately without an engine workspace or focus request.
 #[test]
 fn a_file_of_a_nodes_checkout_behind_is_revealed_without_a_herdr_focus_ack() {
     let (f, requests, _held) = behind_reveal("documents-node-reveal");
@@ -581,7 +581,7 @@ fn other_checkout(runtime: &Runtime) -> String {
         .clone()
 }
 
-/// The node's Herdr moved its front to `checkout`, and the sync ran.
+/// The node's engine moved its front to `checkout`, and the sync ran.
 fn land(runtime: &mut Runtime, checkout: &str) {
     let session = runtime.snapshot.status.remote[0].session.as_mut().unwrap();
     let workspace = session
@@ -1147,7 +1147,7 @@ fn a_slow_local_read_blocks_nothing_and_a_reveal_moves_only_when_it_lands() {
 }
 
 /// A device file tab is drawn in that device checkout's strip, after the
-/// host's Herdr tabs, and a session sync that brings only Herdr's tabs keeps
+/// host's engine tabs, and a session sync that brings only the engine's tabs keeps
 /// it there without announcing a change on every poll.
 #[test]
 fn a_device_file_tab_joins_the_device_strip_and_survives_session_syncs() {

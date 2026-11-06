@@ -10,7 +10,7 @@ use hide_platform::fs::identity;
 use hide_platform::path::{self, PathError, RelPath};
 
 /// A checkout folder with a cased name and `src/main.rs` in it, spelled
-/// without a `\\?\` prefix (the spelling a shell and Herdr report).
+/// without a `\\?\` prefix (the spelling a shell and the engine report).
 fn checkout() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = identity::canonical(dir.path()).unwrap().join("Checkout");

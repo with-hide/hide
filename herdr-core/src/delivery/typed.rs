@@ -1,7 +1,7 @@
 //! Input Hide typed into an agent, and the agent's own record that it took
 //! it (`docs/delivery.md`, Input an agent did not take).
 //!
-//! Herdr can report an agent ready for input while a screen of the agent's
+//! The engine can report an agent ready for input while a screen of the agent's
 //! own (a hooks review, an update notice, a trust question) takes whatever is
 //! typed, so a successful `agent.prompt` proves only that the text reached
 //! the pane. Input is taken once the agent itself records it: its prompt
@@ -141,9 +141,9 @@ pub(crate) enum Standing {
     /// the session read's facts yet (`Observation::projected_turn`). Nothing
     /// moves on it, and the last verdict stands (`Runtime::input_standing`).
     /// A state ends it, never a timer: the next agent list, asked every
-    /// second while Herdr's stream stands, lays the turn of a fresh read; a
+    /// second while the engine runs, lays the turn of a fresh read; a
     /// stale read ends with the list that confirms the agents again, and
-    /// until then the row shows the pane's activity unknown; a pane Herdr
+    /// until then the row shows the pane's activity unknown; a pane the engine
     /// no longer lists leaves the observations and takes its input with it.
     Unsettled,
     /// Typed, and the agent rested without its record for
@@ -153,7 +153,7 @@ pub(crate) enum Standing {
 
 /// Where `input` stands by `observation` of the pane it was typed into.
 /// Whether the agent works is the core's turn (`agent_state::turn_projection`,
-/// the answer the row and the doorbell read), never Herdr's own status: an
+/// the answer the row and the doorbell read), never the engine's own status: an
 /// agent the turn reads at rest, or in a state no source names, rests.
 pub(crate) fn standing(
     input: &TypedInput,
@@ -204,7 +204,7 @@ pub(crate) fn retype_due(input: &TypedInput, observation: &Observation, now: u64
 
 /// Whether the composer of an agent whose input is unconfirmed may be read
 /// now: the core's turn reads it at rest with nothing of its own waiting,
-/// Herdr knows its state and lets keys in (the doorbell's gate,
+/// the engine knows its state and lets keys in (the doorbell's gate,
 /// `doorbell::unheld_turn` and `doorbell::takes_keys`), and nobody typed
 /// there for the quiet period, so what it shows is what was left there.
 pub(crate) fn composer_readable(observation: &Observation, now: u64) -> bool {
@@ -353,7 +353,7 @@ mod tests {
             observed_generation: 0,
             unreadable: None,
         }
-        // The core's turn, from Herdr's state alone, as the pass lays it.
+        // The core's turn, from the engine's state alone, as the pass lays it.
         .laid(None, None)
     }
 

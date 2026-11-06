@@ -1557,7 +1557,7 @@ fn a_pressed_memory_row_reads_working_before_its_write_runs() {
     );
     assert!(!offered.press(&mut guard), "a second press is the same one");
     drop(guard);
-    // No Herdr serves this test, so the agent cannot start.
+    // No engine serves this test, so the agent cannot start.
     wait_for("m1 to end failed on its row", || {
         let row = OfferedCard::row(&mut offered.runtime.lock().unwrap());
         assert_ne!(row.state, SuggestionState::New, "back at its button");

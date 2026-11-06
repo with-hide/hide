@@ -7,7 +7,7 @@
 //!
 //! - A creation request. After the operator asks for a new tab or a split,
 //!   the screen sends keys against the request rather than a pane. They wait
-//!   here until Herdr's answer names the new pane and are then written to it
+//!   here until the engine's answer names the new pane and are then written to it
 //!   in order; a refused or failed creation discards them. A request the
 //!   core has not told this node about yet is held as pending too, because
 //!   the screen's keys reach the node on their own path and can arrive before
@@ -448,7 +448,7 @@ impl Requests {
         }
     }
 
-    /// Herdr's answer named `pane_id`: what was held is handed back, in
+    /// The engine's answer named `pane_id`: what was held is handed back, in
     /// order, to be written before anything typed later.
     pub(super) fn resolve(
         &mut self,

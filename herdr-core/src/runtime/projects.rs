@@ -510,7 +510,7 @@ impl Runtime {
 
     /// A registration can name a folder inside its Git checkout. The
     /// navigator workspace path may have been projected as the repository
-    /// root after Herdr occupies it, so use the registration's own path.
+    /// root after the engine occupies it, so use the registration's own path.
     /// Linked worktree rows use their own checkout root.
     pub(super) fn focused_changes_root_path(&self) -> Option<String> {
         let (workspace_id, checkout_id) = self.front_checkout()?;
@@ -692,7 +692,7 @@ impl Runtime {
     }
 
     /// The in-use facts of a project's checkouts. A node's panes are named
-    /// as its own Herdr names them, which the worker asks; a pane this core
+    /// as its own engine names them, which the worker asks; a pane this core
     /// cannot name there leaves its checkout unverified, never idle.
     fn checkout_facts(
         &self,
@@ -735,7 +735,7 @@ impl Runtime {
 
     /// What the cleanup worker needs to know about a Git project's
     /// checkouts, copied under the lock so the worker reads nothing of the
-    /// runtime while it inspects the disk and Herdr, with the node the
+    /// runtime while it inspects the disk and the engine, with the node the
     /// project is on (`None` for this machine).
     pub(crate) fn cleanup_input(
         &self,
@@ -810,8 +810,8 @@ impl Runtime {
         Some((node.map(str::to_owned), input))
     }
 
-    /// Where a cleanup of `root` runs: this machine's Herdr and node, or
-    /// node `node`'s Herdr and link, with its merge proofs read by the
+    /// Where a cleanup of `root` runs: this machine's engine and node, or
+    /// node `node`'s engine and link, with its merge proofs read by the
     /// repository's name here (D-16).
     fn cleanup_place(
         &mut self,
@@ -2250,7 +2250,7 @@ impl Runtime {
 
     /// The project root and branch of a linked worktree row whose folder is
     /// gone and that Git's last answer for its repository no longer lists:
-    /// Herdr's panes in that folder are all that keep the row.
+    /// The engine's panes in that folder are all that keep the row.
     fn unlisted_missing_worktree(
         &self,
         device: Option<&str>,
@@ -2394,7 +2394,7 @@ impl Runtime {
         self.close_worktree_then_remove(id, device, path, outside)
     }
 
-    /// The panes of a checkout a removal closes, by the ids its own Herdr
+    /// The panes of a checkout a removal closes, by the ids its own engine
     /// uses: this machine's as they are, a device's without their scope.
     fn checkout_pane_ids(&self, device: Option<&str>, checkout_path: &str) -> Vec<String> {
         let workspaces = match device {
@@ -2567,7 +2567,7 @@ impl Runtime {
         id
     }
 
-    /// One local registration choice; no filesystem or Herdr work under the lock.
+    /// One local registration choice; no filesystem or the engine work under the lock.
     pub(super) fn set_primary_checkout(&mut self, payload: SetPrimaryCheckoutPayload) -> bool {
         let registration_index = self
             .snapshot
@@ -2646,7 +2646,7 @@ impl Runtime {
 
     /// Pins or unpins a project (D-07, D-08). The row moves at once and the
     /// registration is persisted on the existing off-lock save; the same
-    /// value again changes nothing and writes nothing. A row Herdr shows
+    /// value again changes nothing and writes nothing. A row the engine shows
     /// without a registration is registered by its pin (PRD
     /// sidebar-context-menus D-14), so pinning it stays one event.
     pub(super) fn set_workspace_pinned(&mut self, payload: WorkspacePinSetPayload) -> bool {
@@ -2731,12 +2731,12 @@ impl Runtime {
         true
     }
 
-    /// The registration a row Herdr shows without one would take: the id,
+    /// The registration a row the engine shows without one would take: the id,
     /// label, root and device the row already carries, so nothing is read
     /// from disk under the lock and the next catalog rebuild adopts it under
     /// the same id. A device's row qualifies only once its helper grouped it
     /// under its root (`device_catalog::project_id`); before that its id
-    /// names one Herdr workspace, which no registration can keep.
+    /// names one engine workspace, which no registration can keep.
     fn unregistered_row_registration(
         &self,
         workspace_id: &str,
@@ -2776,7 +2776,7 @@ impl Runtime {
         })
     }
 
-    /// Registers a row Herdr shows without a registration and pins it, in
+    /// Registers a row the engine shows without a registration and pins it, in
     /// the event that asked for the pin. A device's row its helper has not
     /// grouped yet stays as it is, with the reason in the log: the operator
     /// can pin it again once the device's catalog is ready.
@@ -2844,12 +2844,12 @@ impl Runtime {
 
     /// `Remove project…` (D-09, D-11). A project with no pane loses its
     /// registration at once, as before. One with panes has them closed on a
-    /// worker thread that waits for Herdr to confirm; only that confirmation
+    /// worker thread that waits for the engine to confirm; only that confirmation
     /// removes the registration, so a timeout leaves the project registered
     /// with the reason in the error banner and a retry starts from whatever
-    /// panes remain. A row Herdr shows without a registration (PRD
+    /// panes remain. A row the engine shows without a registration (PRD
     /// sidebar-context-menus D-14) has only its panes to close; the row then
-    /// leaves with Herdr's workspace.
+    /// leaves with the engine's workspace.
     pub(super) fn remove_workspace(&mut self, payload: RemoveWorkspacePayload) -> bool {
         // A pin or a closing pane still waiting to register this row is
         // superseded: its answer finds nothing to apply.
@@ -2912,14 +2912,14 @@ impl Runtime {
     }
 
     /// A project's checkout folders and the panes in them, by the ids its
-    /// own Herdr uses.
+    /// own engine uses.
     fn project_panes(
         &self,
         workspace_id: &str,
         device: Option<&str>,
     ) -> (Vec<String>, Vec<String>) {
         // A device's project lists its panes in that device's session, by
-        // scoped ids; Herdr there closes them by its own.
+        // scoped ids; the engine there closes them by its own.
         let rows = match device {
             Some(device) => self
                 .snapshot
@@ -2953,7 +2953,7 @@ impl Runtime {
     }
 
     /// Closes a project's panes on the close worker, which answers whether
-    /// Herdr confirmed them gone; only that removes the registration.
+    /// the engine confirmed them gone; only that removes the registration.
     pub(super) fn close_project_panes(
         &mut self,
         workspace_id: String,
@@ -2996,7 +2996,7 @@ impl Runtime {
         true
     }
 
-    /// The device of a row Herdr shows without a registration, when one has
+    /// The device of a row the engine shows without a registration, when one has
     /// this id: this machine's navigator first, then each device's session.
     fn unregistered_row_device(&self, workspace_id: &str) -> Option<String> {
         if self
@@ -3019,7 +3019,7 @@ impl Runtime {
         })
     }
 
-    /// The worker's answer to `remove_workspace`: Herdr confirmed every pane
+    /// The worker's answer to `remove_workspace`: the engine confirmed every pane
     /// gone, or it did not in time. Only the first removes the registration.
     pub fn ingest_workspace_close_result(
         &mut self,
@@ -3099,7 +3099,7 @@ impl Runtime {
             })
     }
 
-    /// Drops the registration and its row. Files, worktrees and Herdr
+    /// Drops the registration and its row. Files, worktrees and the engine
     /// workspaces are never touched here.
     pub(super) fn retire_workspace_registration(&mut self, workspace_id: &str) -> bool {
         let local_path = self
@@ -3165,7 +3165,7 @@ impl Runtime {
         // The focused checkout and the selected pane leave with the project;
         // kept, they would name a checkout no catalog carries and the sync
         // would report `pane.projection_unavailable` every tick instead of
-        // moving to the next project, exactly as after a Herdr restart
+        // moving to the next project, exactly as after an engine restart
         // (`consume_restore_hint`).
         let focus_leaves_with_workspace = self
             .snapshot
@@ -3227,8 +3227,8 @@ impl Runtime {
         true
     }
 
-    /// `closed_pane_ids` are the panes Herdr confirmed gone; the navigator can
-    /// still list them until Herdr's close events are applied, so only a pane
+    /// `closed_pane_ids` are the panes the engine confirmed gone; the navigator can
+    /// still list them until the engine's close events are applied, so only a pane
     /// outside that set counts as one that appeared during the confirmation.
     pub fn ingest_worktree_close_result(
         &mut self,
@@ -3284,7 +3284,7 @@ impl Runtime {
                             })
                     })
             };
-            // The close worker names a device's panes by Herdr's own ids.
+            // The close worker names a device's panes by the engine's own ids.
             let workspaces = match device {
                 Some(device) => self
                     .snapshot
@@ -3515,7 +3515,7 @@ impl Runtime {
         self.refresh_worktree_projection();
     }
 
-    /// This machine's Herdr and file host, for a worktree task here.
+    /// This machine's engine and file host, for a worktree task here.
     pub(super) fn local_worktree_target(
         &self,
     ) -> Result<crate::worktree_control::WorktreeTarget, String> {
@@ -3527,8 +3527,8 @@ impl Runtime {
             .ok_or_else(|| "A live engine connection is required".to_owned())
     }
 
-    /// A device's Herdr and file helper, for a worktree task there. Both
-    /// have to be up: Herdr creates and closes the panes, the helper checks
+    /// A device's engine and file helper, for a worktree task there. Both
+    /// have to be up: the engine creates and closes the panes, the helper checks
     /// and removes on the device's disk.
     pub(super) fn device_worktree_target(
         &mut self,
@@ -4218,7 +4218,7 @@ impl Runtime {
     /// `create_worktree`, on a new branch or, `existing_branch`, on a branch
     /// that already exists in the repository or on its `origin` (a pull
     /// request's, PRD overview-lenses-prs D-46), on this machine or a node's
-    /// through its link and its Herdr (D-29).
+    /// through its link and its engine (D-29).
     pub(super) fn start_worktree_task(
         &mut self,
         mut payload: CreateWorktreePayload,
@@ -4403,7 +4403,7 @@ impl Runtime {
         true
     }
 
-    /// Writes the live Herdr token first and the branch-description mirror
+    /// Writes the live engine token first and the branch-description mirror
     /// second on the task-operation worker. The runtime lock is held only for
     /// validating the target and publishing the receipt.
     pub(super) fn set_checkout_purpose(&mut self, payload: SetCheckoutPurposePayload) -> bool {
@@ -4575,7 +4575,7 @@ impl Runtime {
 
     /// `New agent here ▸ Terminal only / Claude / Codex` and the empty
     /// group's `Start agent…`: one tab with the checkout as its cwd, in the
-    /// checkout's own Herdr workspace, through the task operation slot the
+    /// checkout's own engine workspace, through the task operation slot the
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
@@ -4871,7 +4871,7 @@ impl Runtime {
             label,
             host,
             // The result selects its target only if it is still visible.
-            // Herdr must not move focus behind a group the user selected.
+            // The engine must not move focus behind a group the user selected.
             focus: !payload.stay_behind && prepared.is_none(),
         };
         let target = if local {
@@ -5012,7 +5012,7 @@ impl Runtime {
             })
     }
 
-    /// Where a new tab in one local checkout goes: its owner Herdr workspace,
+    /// Where a new tab in one local checkout goes: its owner engine workspace,
     /// or that owner opened first (PRD checkout-workspace-binding D-07). A
     /// workspace that merely holds the checkout's tabs is never the answer
     /// (D-08).
@@ -5163,12 +5163,12 @@ impl Runtime {
         true
     }
 
-    /// Herdr closes a workspace with its last pane, and a project that exists
-    /// only as that Herdr workspace would vanish from the sidebar with it.
+    /// The engine closes a workspace with its last pane, and a project that exists
+    /// only as that engine workspace would vanish from the sidebar with it.
     /// The user asked to close a pane, not to forget the project, so the
     /// project is registered at its repository path first. The path-keyed
     /// project id is unchanged by this, and the row stays selectable with
-    /// its "start new terminal" control once Herdr's workspace is gone.
+    /// its "start new terminal" control once the engine's workspace is gone.
     pub(super) fn retain_project_before_last_pane_closes(&mut self, pane_id: &str) {
         let Some(project) = self.snapshot.navigator.workspaces.iter().find(|workspace| {
             workspace.remote_target_id.is_none()
@@ -5210,7 +5210,7 @@ impl Runtime {
         self.register_row_once_judged(registration, RowRegistration::Retain);
     }
 
-    /// Registers `registration`, a row Herdr shows without one, once the
+    /// Registers `registration`, a row the engine shows without one, once the
     /// row's machine has judged its folder by the registration rule with no
     /// confirmation (`Call::Registrable`, `hide_host::register`), off the
     /// runtime lock. A folder outside that machine's home, or one whose
@@ -5413,7 +5413,7 @@ impl Runtime {
     }
 
     /// A row whose last pane is closing, registered so the project stays
-    /// listed once Herdr's workspace is gone.
+    /// listed once the engine's workspace is gone.
     fn retain_registration(&mut self, registration: crate::model::WorkspaceRegistration) -> bool {
         if self
             .snapshot
@@ -5437,7 +5437,7 @@ impl Runtime {
             .workspace_registrations
             .push(registration);
         // The project id is path-keyed, so registering changes nothing the
-        // sidebar shows while the row is drawn; the sync that follows Herdr's
+        // sidebar shows while the row is drawn; the sync that follows the engine's
         // workspace_closed rebuilds the catalog off the runtime lock. An
         // answer that lands after that sync finds the row gone, and asks the
         // coordinator to read the session again so the rebuild includes it.
@@ -5455,7 +5455,7 @@ impl Runtime {
     }
 }
 
-/// Why a row Herdr shows without a registration is being registered.
+/// Why a row the engine shows without a registration is being registered.
 #[derive(Clone, Copy, Debug)]
 enum RowRegistration {
     /// The operator pinned it.

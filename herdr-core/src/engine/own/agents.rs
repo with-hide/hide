@@ -31,7 +31,7 @@ use crate::engine::answers::PaneSessionKind;
 
 /// How long a start the engine typed may take to show its program in the
 /// pane's foreground before it is taken as a start that did not happen:
-/// the deadline Hide gives Herdr's starts.
+/// the deadline Hide gave Herdr's starts.
 pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT_START_DEADLINE;
 
 /// How long after its start an agent the engine started is first taken as

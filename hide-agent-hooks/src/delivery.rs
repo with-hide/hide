@@ -168,9 +168,10 @@ pub fn valid_sha256_digest(digest: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The longest native session a letter pull carries: Herdr takes an agent
-/// session of up to 4096 bytes, and Pi and omp report theirs as a session file path, which on a deep checkout passes 250
-/// bytes (PRD pi-omp-extension D-05).
+/// The longest native session a letter pull carries: the engine takes an
+/// agent session of up to 4096 bytes, and Pi and omp report theirs as a
+/// session file path, which on a deep checkout passes 250 bytes (PRD
+/// pi-omp-extension D-05).
 pub const SESSION_LIMIT: usize = 4096;
 
 /// Whether a session id or session file path may travel as a `hide` argument.
@@ -229,7 +230,7 @@ pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failur
 
 /// Keeps the pull's plan summary in the pane's record for the pre-tool
 /// hook, and adds its line to what the agent reads (PRD hide-plan D-14,
-/// D-30). Outside a Herdr pane, or without the session, nothing is kept.
+/// D-30). Outside a pane Hide manages, or without the session, nothing is kept.
 fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
     let raw = intake.plan_context.take();
     let plan = raw.and_then(|raw| {

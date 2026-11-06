@@ -193,10 +193,10 @@ pub fn parse_card(value: &str) -> Option<u64> {
 /// (PRD memory-stale-cards D-10 as amended).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemoryCaller {
-    /// A Herdr pane no agent runs in: a person at its shell.
+    /// An engine pane no agent runs in: a person at its shell.
     Person,
-    /// A Herdr pane an agent runs in, with the agent's Memory provider and
-    /// session when Herdr knows them.
+    /// An engine pane an agent runs in, with the agent's Memory provider and
+    /// session when the engine knows them.
     Agent(Option<(String, String)>),
     /// A caller bound by its working folder: a terminal outside every pane,
     /// or a tool shell of Codex's shared app-server daemon, which Hide cannot

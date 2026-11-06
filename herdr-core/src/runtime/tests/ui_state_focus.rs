@@ -3,9 +3,9 @@
 //! The shell's `ui_state_update` carries its last copy of the UI state, and a
 //! choice made since (a click on another pane, another checkout, another
 //! device) can already have overtaken that copy. The keyboard's pane, the
-//! checkout and the device move on their own events, which tell Herdr; a save
+//! checkout and the device move on their own events, which tell the engine; a save
 //! moves none of them. Issue 672: a save built before a pane click put the
-//! core back on the pane the operator had left, and following Herdr back to
+//! core back on the pane the operator had left, and following the engine back to
 //! the clicked pane later took the keyboard from the tab-name field the
 //! operator was typing in.
 
@@ -21,7 +21,7 @@ enum Anchor {
 
 /// Two checkouts, each with one pane, and a second device; the core starts on
 /// checkout A, its pane, and this machine. A pane focus is refused without a
-/// live Herdr, so the runtime has one.
+/// live engine, so the runtime has one.
 fn fixture() -> Runtime {
     let mut runtime = live_runtime();
     runtime.snapshot.navigator.workspaces = vec![

@@ -66,7 +66,7 @@ fn started(label: &str, agent: bool) -> Runtime {
     runtime
 }
 
-/// t1 carries `label` as Herdr holds it, given by someone other than the
+/// t1 carries `label` as the engine holds it, given by someone other than the
 /// operator's Rename: a spawn, or a Rename before Hide recorded them.
 fn started_unrenamed(label: &str, agent: bool) -> Runtime {
     let (runtime, _) = live_tab_order_runtime(PATH);
@@ -77,7 +77,7 @@ fn started_unrenamed(label: &str, agent: bool) -> Runtime {
     runtime
 }
 
-/// The operator renames t1 to `label` and Herdr accepts it.
+/// The operator renames t1 to `label` and the engine accepts it.
 fn rename(runtime: &mut Runtime, label: &str) {
     runtime.rename_tab(RenameTabPayload {
         request_id: format!("rename {label}"),
@@ -129,7 +129,7 @@ fn tab_t1(runtime: &Runtime) -> Option<TabSnapshot> {
         .cloned()
 }
 
-/// The capture Herdr answers, as a pane close records it for Reopen.
+/// The capture the engine answers, as a pane close records it for Reopen.
 fn captured(runtime: &mut Runtime) -> crate::recent_closed::capture::CloseEffectRequest {
     let request = the_close(runtime).request.clone();
     let item = ClosedItem::Pane {
@@ -202,7 +202,7 @@ fn closing_a_named_tabs_last_agent_keeps_the_tab_its_name_and_its_place() {
     );
 }
 
-/// Herdr's event stream can lag the read that showed the shell: an update
+/// The engine's event stream can lag the read that showed the shell: an update
 /// from before it still has the agent pane, focused, and no shell. The
 /// keyboard stays on the shell rather than go back to the pane the close is
 /// taking, where it would stay once that pane is gone.
@@ -283,7 +283,7 @@ fn only_the_operators_rename_makes_a_tab_named() {
 }
 
 /// A tab the operator named comes back named from Reopen closed tab, under
-/// the tab id Herdr gives it.
+/// the tab id the engine gives it.
 #[test]
 fn a_reopened_tab_the_operator_named_is_named_again() {
     let mut runtime = started("Planning", true);
@@ -417,7 +417,7 @@ fn retry_reuses_the_shell_in_the_tab_and_makes_another_only_when_it_is_gone() {
     assert!(runtime.close_precondition_failure(operation).is_none());
 }
 
-/// The worker made the shell but could not hand it over (Herdr's answer was
+/// The worker made the shell but could not hand it over (the engine's answer was
 /// lost): the failure names the shell, and Retry closes beside it instead of
 /// refusing the tab as changed or making a second one.
 #[test]
@@ -462,7 +462,7 @@ fn a_shell_handed_over_after_the_close_moved_on_still_counts_for_retry() {
             .is_err()
     );
 
-    // Herdr's events show the shell; the status check found the agent pane
+    // The engine's events show the shell; the status check found the agent pane
     // still open.
     runtime.ingest_session(Ok(session("Planning", true, &[AGENT, SHELL])));
     runtime.close_operations.get_mut(&key).unwrap().phase = "refused".into();

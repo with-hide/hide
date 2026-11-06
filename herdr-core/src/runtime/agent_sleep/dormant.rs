@@ -1209,7 +1209,7 @@ impl Runtime {
             self.snapshot.ui_state.agent_sleep.dormant.remove(&id);
             // The woken pane keeps the choice for the agent's next restart.
             // It is kept here, where the wake is confirmed once, because
-            // Herdr can show the woken agent before the start's own answer.
+            // the engine can show the woken agent before the start's own answer.
             if let Some(pane) = record.wake_pane_id.as_deref() {
                 let name = agent_sleep_herdr::dormant_wake_name(&agent_sleep_herdr::DormantWork {
                     id: id.clone(),

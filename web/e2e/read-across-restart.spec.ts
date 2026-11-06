@@ -1,9 +1,7 @@
 // A row the operator read stays read and a Done row nobody read stays Done
-// when hided restarts, on either engine. A Herdr server that restarts or
-// hands off numbers its panes' states afresh and keeps none of the tokens
-// Hide wrote on them, so the core judges a restored pane against what it
-// saved, not against Herdr's new numbers (docs/status-model.md, Across a
-// Herdr restart); the two tests that restart that server are Herdr's own.
+// when hided restarts. The core's own engine numbers its agents' states
+// afresh with the daemon, so the core judges a restored pane against what it
+// saved, not against the engine's new numbers (docs/status-model.md).
 import { expect, test, type Page } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { elsewhereTab, finishUnseenTurn } from "./fixture-agents";

@@ -26,7 +26,7 @@ use serde_json::json;
 /// How long a promotion may stay running with no agent: past it the start
 /// was cut short (Hide quit between writing the state and the spawn). It
 /// outlasts the spawn's own answer, which takes up to two starts, each held
-/// by Herdr until its deadline and asked again on the next check.
+/// by the engine until its deadline and asked again on the next check.
 pub(super) const START_GRACE_MS: u64 =
     2 * crate::agent_start::AGENT_START_DEADLINE.as_millis() as u64 + 3 * TRACK_INTERVAL_MS;
 /// How much earlier than the attempt's start a pull request may say it was
@@ -183,7 +183,7 @@ pub(super) struct PromotionTracking {
     /// Each settled attempt whose agent and worktree are not yet retired,
     /// with what a check has already written about it (`Tried`).
     /// An attempt a retire could not finish for a reason that may pass (the
-    /// machine away, Herdr refusing) stays here and is tried on the next
+    /// machine away, the engine refusing) stays here and is tried on the next
     /// check; one kept for what it holds is left until the next start.
     retiring: HashMap<Retire, RetireNote>,
     /// Whether a check has looked for attempts settled before this run
@@ -193,7 +193,7 @@ pub(super) struct PromotionTracking {
 
 /// What a check has learned about retiring an attempt, in the order a check
 /// tries them: not tried yet, waiting for a machine that is away (written
-/// once), then refused by Herdr or the node (written once).
+/// once), then refused by the engine or the node (written once).
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Tried {
     #[default]
@@ -1121,7 +1121,7 @@ fn track_promotions(
                 })
                 .collect(),
         );
-        // The Herdr and node of each machine, to close a failed attempt's
+        // The engine and node of each machine, to close a failed attempt's
         // panes and retire a settled one's, used off the lock.
         let mut reach = HashMap::new();
         for node in nodes {
@@ -1394,7 +1394,7 @@ enum Adoption<S> {
     NotStarted(S, String),
     /// The spawn failed for another reason, which says nothing of whether
     /// the agent started: it is not asked for again, and the attempt is
-    /// judged by what Herdr and GitHub show.
+    /// judged by what the engine and GitHub show.
     Dropped,
 }
 
@@ -1552,7 +1552,7 @@ fn release_attempt(
             return Ok("kept");
         }
         let panes = panes_in(engine, &path)?;
-        // An agent there, or a start whose name Herdr still holds, may yet
+        // An agent there, or a start whose name the engine still holds, may yet
         // do the attempt's work: nothing of it is closed.
         let agents = agents_listed(engine)?;
         if agents.iter().any(|agent| panes.contains(&agent.pane_id)) {
@@ -1677,7 +1677,7 @@ pub(super) enum Retired {
     /// The agent is ended, and the worktree stays for what it holds. Nothing
     /// is retried until the next start: what holds it is the operator's.
     Kept,
-    /// Herdr or the node refused, which may pass: tried again on the next
+    /// The engine or the node refused, which may pass: tried again on the next
     /// check.
     Failed,
 }
@@ -2932,7 +2932,7 @@ pub(super) mod tests {
             .unwrap();
         assert_eq!(remote.machine.as_deref(), Some("node-elsewhere"));
         // A failed attempt there is released by that node or not at all,
-        // never by this Mac's Herdr reading the other machine's folder.
+        // never by this Mac's engine reading the other machine's folder.
         assert!(remote.engine.is_none() && remote.node.is_none());
 
         let mut store = MemoryStore::open(&root.path().join("memory.sqlite3")).unwrap();
@@ -3158,12 +3158,12 @@ pub(super) mod tests {
     }
 
     /// The repository a failed attempt leaves: its worktrees by branch, the
-    /// panes Herdr runs in them, and how many commits each branch holds.
+    /// panes the engine runs in them, and how many commits each branch holds.
     #[derive(Default)]
     struct Repository {
         worktrees: std::collections::BTreeMap<String, String>,
         panes: Vec<(String, String)>,
-        /// The panes Herdr shows an agent, or a held start's name, in.
+        /// The panes the engine shows an agent, or a held start's name, in.
         agents: Vec<String>,
         /// The panes of the attempt's own agent, named as Hide names it.
         attempt_agents: Vec<String>,

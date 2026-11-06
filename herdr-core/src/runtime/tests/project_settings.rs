@@ -790,7 +790,7 @@ fn a_remote_memory_visit_whose_front_never_landed_in_time_opens_nothing_later() 
     );
 }
 
-/// The device "mini" connected with its Herdr's front on its one checkout,
+/// The device "mini" connected with its engine's front on its one checkout,
 /// at `path`.
 fn mini_in_front_at(runtime: &mut Runtime, path: &str) {
     let mut project = workspace(

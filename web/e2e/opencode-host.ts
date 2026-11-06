@@ -1,10 +1,9 @@
 // A stand-in for OpenCode (PRD opencode-plugin D-13): a small program run as
-// `opencode` in a pane of the private Herdr that loads the plugin Hide's kit
+// `opencode` in a pane of the private engine that loads the plugin Hide's kit
 // wrote, the way OpenCode loads a file from its plugins folder, and calls its
 // hooks with OpenCode 1.18.30's shapes (`hide-agent-hooks/tests/fixtures/
-// opencode/events-1.18.30.json`). It tells Herdr what it is the way Herdr's
-// own OpenCode integration does (`pane report-agent` with its session id), so
-// Herdr lists the pane as an OpenCode agent.
+// opencode/events-1.18.30.json`). Hide's plugin is what reports the session,
+// so the pane is listed as an OpenCode agent.
 //
 // The spec drives it through numbered command files in the pane's folder and
 // reads each answer from the file of the same number; a command runs in the
@@ -29,10 +28,10 @@ fs.mkdirSync(folder, { recursive: true });
 // The pane's hide reaches the fixture daemon, as the operator's reaches theirs.
 process.env.HIDE_STATE_DIR = config.stateDir;
 
-// Herdr's OpenCode integration reports the pane's state and, from its TUI plugin, the session the pane
-// selected (session_start_source "select"); Herdr takes them only once it has detected the agent in the
-// pane, so the stand-in reports again until Herdr lists its session. Its sequence numbers are the
-// integration's, time-based, so a report is never older than one Herdr already took.
+// What Herdr's OpenCode integration reported for the pane: its state and, from its TUI plugin, the session
+// the pane selected (session_start_source "select"). Herdr took them only once it had detected the agent in
+// the pane, so the stand-in reported again until Herdr listed its session. No fixture sets config.herdr
+// any more, so announce below no longer runs.
 const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
   .result.agents.find((agent) => agent.pane_id === pane)?.agent_session?.value;
 function announce() {
@@ -98,7 +97,7 @@ const run = {
 };
 
 (async () => {
-  // Only a Herdr pane is told what runs in it; on the core's own engine the plugin's own report below is how Hide learns the session.
+  // The plugin's own report below is how Hide learns the session; announce is for a Herdr CLI no fixture names now.
   if (config.herdr) announce();
   // OpenCode 1.x runs the default definition's server.
   const { server } = (await import(pathToFileURL(config.plugin).href)).default;

@@ -98,7 +98,7 @@ pub struct Inspection {
     /// The brain state files the folder holds.
     pub brain: Vec<String>,
     pub handover: Option<Handover>,
-    /// The Herdr socket its core would own; none when it finds no Herdr.
+    /// The scope its core would own (once a Herdr socket); none when its engine names none.
     pub herdr_socket: Option<String>,
     /// Its Hide AI settings as stored there, `Ok(None)` when none are, and
     /// `Err` when they could not be read.

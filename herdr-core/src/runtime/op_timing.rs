@@ -212,7 +212,7 @@ impl OpTimings {
 
     /// A resize of `pane_id` went out: every record waiting for its frame
     /// after a resize now counts the next one, once the shell has been
-    /// given its layout, drawn ahead or applied from Herdr (an operation
+    /// given its layout, drawn ahead or applied from the engine (an operation
     /// with no prediction is never drawn). A record given neither yet is
     /// one the shell cannot have fitted to, so the resize is another's.
     /// Says whether any record started waiting, so the caller asks the
@@ -271,7 +271,7 @@ impl OpTimings {
         }
     }
 
-    /// Herdr's layout applied operation `id`.
+    /// The engine's layout applied operation `id`.
     pub(super) fn applied(&mut self, id: &str, at: Instant) {
         self.stamp(id, Stage::Applied, at);
     }

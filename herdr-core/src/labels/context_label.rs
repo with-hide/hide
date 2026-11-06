@@ -219,7 +219,7 @@ fn start_schema(limits: LabelLimits) -> Value {
 }
 
 /// `end` takes only the six ways a stopped turn can stand: approval comes
-/// from Herdr's own blocked state and a pull request's wait from GitHub,
+/// from the engine's own blocked state and a pull request's wait from GitHub,
 /// never from inference. The prompt's length rule and this shape are what
 /// keep the answer short; no provider takes a token ceiling.
 fn end_schema(limits: LabelLimits) -> Value {
@@ -356,7 +356,7 @@ impl From<StoppedEnd> for LabelEnd {
     }
 }
 
-/// A Herdr pane id (`w9J:pGP`) or a delivery agent id (`agent-7112`): a
+/// An engine pane id (`w9J:pGP`) or a delivery agent id (`agent-7112`): a
 /// handle, never the name of the work (D-09, B17).
 static HANDLE: LazyLock<Regex> = LazyLock::new(|| {
     // No word boundary after the handle: Korean particles attach to it

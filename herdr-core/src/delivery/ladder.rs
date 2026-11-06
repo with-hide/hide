@@ -28,7 +28,7 @@ pub(crate) struct InputTarget {
 /// Why an agent was not ready for input within its wait ([`ready`]).
 #[derive(Debug)]
 pub(crate) enum NotReady {
-    /// Herdr refused the read's parameters.
+    /// The engine refused the read's parameters.
     Request(String),
     /// The pane's agent could not be read.
     Unread(String),
@@ -36,10 +36,10 @@ pub(crate) enum NotReady {
     Late(String),
 }
 
-/// Waits until Herdr reports the agent `name` in `pane` ready for input,
+/// Waits until the engine reports the agent `name` in `pane` ready for input,
 /// the moment an input that did not ride the start is typed after the
 /// agent's screen is drawn; `wait` bounds it.
-#[allow(clippy::disallowed_methods)] // a production wait on Herdr's readiness, bounded by the deadline
+#[allow(clippy::disallowed_methods)] // a production wait on the engine's readiness, bounded by the deadline
 pub(crate) fn ready(
     engine: &dyn Engine,
     pane: &str,
@@ -97,7 +97,7 @@ pub(crate) fn deliver(engine: &dyn Engine, target: &InputTarget, text: &str) -> 
 /// Why a submission that failed typed nothing, or `None` when it may have:
 /// a request the engine could not take and a refusal the engine makes before
 /// it writes leave the agent's input untouched, so the doorbell may ring
-/// again. Any other refusal, such as Herdr's `timeout` while it waits after
+/// again. Any other refusal, such as the engine's `timeout` while it waits after
 /// the submission, a failed connection, and an answer that never came or
 /// could not be read may follow a submission that arrived.
 fn not_typed(error: &EngineError) -> Option<&'static str> {
@@ -114,7 +114,7 @@ fn not_typed(error: &EngineError) -> Option<&'static str> {
 }
 
 /// The refusals an engine answers `agent.prompt` with before it writes
-/// anything: Herdr's `agent_blocked` ("returns `agent_blocked` without
+/// anything: the engine's `agent_blocked` ("returns `agent_blocked` without
 /// sending input", its socket API), and the core's own engine's three
 /// (`engine::own`'s `prompt_agent`).
 const REFUSED_BEFORE_TYPING: &[&str] = &["agent_blocked", "agent_not_ready", "empty_agent_prompt"];

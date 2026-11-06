@@ -6,7 +6,7 @@
 # All but one are driven by the session-sync coordinator thread. The changes
 # reader is driven by its own pump (`ChangesPump` in `changes.rs`), which the
 # core starts once: History reads each checkout through that checkout's host,
-# so a device's History must not wait on this machine's Herdr session.
+# so a device's History must not wait on this machine's session sync.
 #
 # Both properties are structural, so they are asserted structurally: the
 # runtime module holds the mutex, so it must fork nothing; and the readers'
@@ -22,7 +22,7 @@ readers=(changes ports worktrees github github_poll disk ai usage)
 # `gh pr list` takes seconds, `du` over a build tree takes longer, and the AI
 # probe starts a `codex app-server` child and runs `claude auth status`, and
 # the usage reader runs `claude -p /usage` for seconds; run inline, any of
-# them would be that much added latency on every Herdr pane event.
+# them would be that much added latency on every pane event.
 worker_readers=(changes worktrees github github_poll disk ai usage)
 
 # 1. The module that holds the mutex, its runtime submodules, and the file
@@ -94,7 +94,7 @@ for reader in "${worker_readers[@]}"; do
     module="herdr-core/src/${reader}.rs"
 
     # 4. The slow readers hand their subprocess to a worker thread rather than
-    #    running it on the thread that applies every Herdr event.
+    #    running it on the thread that applies every engine event.
     if ! grep -q 'BackgroundRead' "$module"; then
         printf '%s no longer runs its subprocess on a worker thread\n' "$module" >&2
         exit 1

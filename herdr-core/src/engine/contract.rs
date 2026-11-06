@@ -1056,7 +1056,7 @@ fn an_own_engine_pane_names_itself_and_proves_its_recorded_shell() {
         "the record names the shell by the start the system gives it"
     );
     // A start that typed into this pane checks it by the same record, with
-    // no node or Herdr socket to ask.
+    // no node or engine socket to ask.
     let inspected = engine
         .inspect_pane(WAIT, &pane)
         .expect("the own engine answers for its pane");

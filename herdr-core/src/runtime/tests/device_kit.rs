@@ -246,7 +246,7 @@ fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
 }
 
 /// B13: a connected device's kit is installed by the connection pass, with
-/// the consent's command folder and the registration's Herdr socket, and its
+/// the consent's command folder and the registration's engine socket, and its
 /// row shows each part the way This Mac's does.
 #[test]
 fn a_connected_device_shows_its_kit_and_retirement_failure_with_recovery() {
@@ -1080,7 +1080,7 @@ fn removing_a_connected_device_takes_its_kit_off_and_then_closes_the_helper() {
     assert!(!shared.lock().unwrap().device_kit_removing(DEVICE));
 }
 
-/// Two registrations that reach one account on one machine (two Herdr
+/// Two registrations that reach one account on one machine (two engine
 /// servers there) share its hooks, `hide` link and helper root, so removing
 /// one leaves the kit for the other and only closes its own helper.
 #[test]
@@ -2189,7 +2189,7 @@ pub(super) fn node_ready(
 
 const PANE: &str = "remote:studio:pane:w1:p1";
 
-/// The device's Herdr session showing one pane in front, as its session sync
+/// The device's engine session showing one pane in front, as its session sync
 /// would publish it.
 fn session_with_pane() -> RemoteSessionSnapshot {
     let pane_id = PANE;
@@ -2321,7 +2321,7 @@ fn helper_failed() -> Result<hosts::HostReady, hide_node_link::device::Establish
     ))
 }
 
-/// A device's Herdr session that answers again means the machine can be
+/// A device's engine session that answers again means the machine can be
 /// reached, so the helper link's retry is due now instead of at the end of a
 /// wait grown while the machine was away; the wait after it keeps doubling,
 /// and a session that flaps while the helper keeps failing moves the retry

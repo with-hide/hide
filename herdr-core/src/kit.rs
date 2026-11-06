@@ -4,10 +4,10 @@
 //! the launch pass, the operator's Reinstall, and periodic kit and hook reads
 //! while Settings is on screen. It takes its job under the runtime lock and
 //! makes the node call with the lock released. The node does every file
-//! write, Herdr call and child process (`hide_host::kit`). It does not live
+//! write, the engine call and child process (`hide_host::kit`). It does not live
 //! on the session-sync coordinator, because that thread exists only while
-//! this machine's Herdr answers, and the kit's other parts install whether or
-//! not Herdr is running.
+//! this machine's engine answers, and the kit's other parts install whether or
+//! not the engine is running.
 //!
 //! The core closes its own node when it stops, which ends a child the kit is
 //! waiting on; dropping the pump then joins the thread (engineering rule 14).

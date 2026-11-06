@@ -1,5 +1,5 @@
-//! The doorbell submits one short line through Herdr's `agent.prompt` so a
-//! pending letter reaches its resting or eligible working agent. Herdr has no
+//! The doorbell submits one short line through the engine's `agent.prompt` so a
+//! pending letter reaches its resting or eligible working agent. The engine has no
 //! atomic composer guard: memory facts and the native owner must agree, and
 //! an agent with a composer declaration must also read empty before typing.
 //! A held draft is released only by a confirmed version's positive empty
@@ -29,19 +29,19 @@ const QUIET_MS: u64 = 30_000;
 pub(crate) const MID_TURN_WAIT_MS: u64 = 5 * 60_000;
 const WORK_PER_PASS: usize = 8;
 const RPC_TIMEOUT: Duration = Duration::from_millis(500);
-/// Prompt submission acknowledges ordered PTY writes, including Herdr's
+/// Prompt submission acknowledges ordered PTY writes, including the engine's
 /// input-reader boundary. It needs more time than a state read, not a turn wait.
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A letter refused between its verdict and the input, or whose bell failed
 /// before anything was typed, is tried again in the same pane episode after
 /// this long, doubling up to `RETRY_LIMIT_MS`. The refusal or failure can
-/// come from a fact the episode does not carry, such as Herdr's readiness,
+/// come from a fact the episode does not carry, such as the engine's readiness,
 /// the letter itself or the delivery store's answer, so waiting for the
 /// episode to move could wait until the letter expires.
 const RETRY_FIRST_MS: u64 = 5_000;
 const RETRY_LIMIT_MS: u64 = 120_000;
 /// How long a pane whose letters wait on a possible draft rests, with no
-/// input hide routed and no change of Herdr status, before the operator is
+/// input hide routed and no change of the engine's status, before the operator is
 /// shown that they wait (`docs/delivery.md`, Delivering a held letter now).
 pub(crate) const WAITING_MARK_REST_MS: u64 = 120_000;
 
@@ -58,15 +58,15 @@ pub(crate) enum Hold {
     /// The agent works, and not yet long enough since the letter arrived for
     /// a mid-turn delivery (`MID_TURN_WAIT_MS`).
     Working,
-    /// Herdr reports a permission or selection menu.
+    /// The engine reports a permission or selection menu.
     Blocked,
     /// The agent's session says its last turn waits for the operator to
-    /// approve a plan, a menu Herdr reads as an ordinary stop.
+    /// approve a plan, a menu the engine reads as an ordinary stop.
     AwaitingOperator,
     /// The agent's session can say it waits for the operator, and no read of
-    /// it settled that for Herdr's current state.
+    /// it settled that for the engine's current state.
     SessionUnread,
-    /// Herdr reports a status that is not rest (or none at all).
+    /// The engine reports a status that is not rest (or none at all).
     Status,
     /// Input hide routed after the last submission and the last start of
     /// work: an unsent draft, a prompt Esc brought back, a recalled input.
@@ -74,7 +74,7 @@ pub(crate) enum Hold {
     /// Less than the quiet period since the last input or the last change of
     /// status.
     Quiet,
-    /// Herdr reports the agent not ready for input (`interactive_ready:
+    /// The engine reports the agent not ready for input (`interactive_ready:
     /// false`), or holds it at its blocked prompt while the core's turn,
     /// which a hook that reported the turn decides, shows no prompt.
     NotReady,
@@ -86,12 +86,12 @@ pub(crate) enum Hold {
     /// every waiting letter, and mid-turn the next bell waits until the agent
     /// has taken the letter it was typed for.
     Announced,
-    /// Herdr is still starting the agent it launched (`launch_pending`).
+    /// The engine is still starting the agent it launched (`launch_pending`).
     Launching,
-    /// Herdr's agent in the pane has another name, kind or native session
+    /// The engine's agent in the pane has another name, kind or native session
     /// than the one the verdict was read for.
     Identity,
-    /// Herdr's status or state sequence moved after the verdict.
+    /// The engine's status or state sequence moved after the verdict.
     Moved,
     /// Hide routed input to the pane after the verdict.
     Input,
@@ -146,9 +146,9 @@ pub(crate) fn bell_target(kind: &str) -> bool {
     hide_agent_adapter::adapter(kind).is_some_and(|row| row.bell)
 }
 
-/// Whether the agent's session read settled Herdr's current state (PRD
+/// Whether the agent's session read settled the engine's current state (PRD
 /// codex-plan-approval-hold D-06, D-07). Not a turn: a state no read settled
-/// holds the bell while the row shows what Herdr says.
+/// holds the bell while the row shows what the engine says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Turn {
     /// The agent's session read reports no turns, so it says nothing here.
@@ -199,9 +199,9 @@ impl Patience {
 /// has worked without a rest for as long as the letter waits (`Patience`).
 ///
 /// Whether the pane takes input now is apart from the turn, so a row shown
-/// at rest is never read as safe to type into: Herdr knows the agent's state
+/// at rest is never read as safe to type into: the engine knows the agent's state
 /// and does not hold it at its blocked prompt (where `agent.prompt`
-/// refuses); for an agent whose read reports turns, a read settled Herdr's
+/// refuses); for an agent whose read reports turns, a read settled the engine's
 /// current state; hide has routed no input for the quiet period and none
 /// newer than the last submission and the last start of work (input before
 /// either was consumed by it, a menu answer for one); and the pane still
@@ -251,12 +251,12 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
     Ok(())
 }
 
-/// The core's turn for a pane whose state Herdr knows, with no approval
+/// The core's turn for a pane whose state the engine knows, with no approval
 /// prompt and no question or plan approval of the agent's own waiting: the
 /// first half of the gate before Hide types into a pane, which the bell and
 /// a typed input's composer read share (`typed::composer_readable`).
 pub(crate) fn unheld_turn(observation: &Observation) -> Result<&ProjectedTurn, Hold> {
-    // Herdr confirms the state it reports by its sequence, and names no
+    // The engine confirms the state it reports by its sequence, and names no
     // state of an agent it does not know.
     match (observation.status.as_str(), observation.state_change_seq) {
         ("working", None) => return Err(Hold::Working),
@@ -273,18 +273,18 @@ pub(crate) fn unheld_turn(observation: &Observation) -> Result<&ProjectedTurn, H
     Ok(projected)
 }
 
-/// Whether Herdr lets keys into a pane whose turn allows typing: the second
+/// Whether the engine lets keys into a pane whose turn allows typing: the second
 /// half of that gate, apart from the turn.
 pub(crate) fn takes_keys(observation: &Observation) -> Result<(), Hold> {
-    // Herdr holds the pane at a prompt the turn does not show (a hook that
+    // The engine holds the pane at a prompt the turn does not show (a hook that
     // reported the turn outranks it on the screen), and refuses input there.
     if observation.status == "blocked" {
         return Err(Hold::NotReady);
     }
     // A kind that takes letters at its tools is typed into only at rest, and
-    // Herdr reads its own screens that take keys as work (Grok's plan
+    // the engine reads its own screens that take keys as work (Grok's plan
     // review), so a turn the core reads as ended is not typed into while
-    // Herdr says so.
+    // the engine says so.
     if observation.status == "working" && super::mailbox::tool_letters(&observation.actor.kind) {
         return Err(Hold::Working);
     }
@@ -436,8 +436,8 @@ pub(crate) fn run(runtime: Weak<Mutex<Runtime>>, client: Client, stop: Arc<Atomi
 
 impl Doorbell {
     /// One look at every pane with a pending letter, at most
-    /// `WORK_PER_PASS` of which reach Herdr. The verdict is memory only;
-    /// Herdr calls, the reservation and the input run off the lock.
+    /// `WORK_PER_PASS` of which reach the engine. The verdict is memory only;
+    /// the engine calls, the reservation and the input run off the lock.
     pub(crate) fn pass(
         &mut self,
         owner: &Mutex<Runtime>,
@@ -969,7 +969,7 @@ enum Resubmitted {
     Retyped,
 }
 
-/// Reads the composer of spawn `id`'s pane once Herdr reports the same agent
+/// Reads the composer of spawn `id`'s pane once the engine reports the same agent
 /// ready for input: still showing the brief, it gets the Enter it lost; empty
 /// after someone answered the screen, the brief is typed again; anything else
 /// holds. Either spends one of the brief's typings, reserved in the ledger
@@ -1210,10 +1210,10 @@ fn call_failure(error: EngineError) -> &'static str {
     }
 }
 
-/// Whether Herdr still reports the agent the verdict was read for, at the
-/// same status and sequence, and ready for input. Herdr reports readiness
+/// Whether the engine still reports the agent the verdict was read for, at the
+/// same status and sequence, and ready for input. The engine reports readiness
 /// only for an agent it started itself; an agent typed into a shell reports
-/// none, and the verdict's own facts decide it: Herdr has seen it at rest for
+/// none, and the verdict's own facts decide it: the engine has seen it at rest for
 /// the quiet period, it is the same agent and native session, and hide holds
 /// no draft or recent key for it.
 fn native_current(
@@ -1254,7 +1254,7 @@ fn native_current(
 /// What kept a pane from clearing the last checks before typing.
 #[derive(Clone, Copy)]
 enum NotClear {
-    /// Herdr no longer reports the agent the verdict was read for, ready.
+    /// The engine no longer reports the agent the verdict was read for, ready.
     Native(Hold),
     /// The composer did not read empty: [`super::composer::NOT_EMPTY`] or
     /// [`super::composer::UNCONFIRMED`].
@@ -1273,7 +1273,7 @@ impl NotClear {
 
 /// The last checks before the doorbell types into a pane, a letter's bell
 /// and an operator's mission answer alike, made off the lock right before
-/// the input: Herdr still reports the agent the verdict was read for, and
+/// the input: the engine still reports the agent the verdict was read for, and
 /// an agent with a composer declaration shows its composer empty now, since
 /// a delayed state update may cover a key the draft record has not seen
 /// (docs/delivery.md, Reading the composer). `forced` reads the composer of
@@ -1371,8 +1371,9 @@ fn deliver(
     }
     // The line is the one the reservation saved, so the prompt hook of the
     // turn it opens is recognized by it (`mailbox::rang`).
-    // Herdr owns submission for each input reader, including Windows paste
-    // bursts (herdrdev/herdr#3187). Raw pane input bypasses that contract.
+    // The engine owns submission for each input reader, including Windows paste
+    // bursts, as Herdr's `agent.prompt` did (herdrdev/herdr#3187). Raw pane
+    // input bypasses that contract.
     // The message the bell writes into the conversation is the letter's,
     // never the operator's request (PRD session-record-goal-flow D-19): the
     // label reads it as a letter from `sender` by this record, as it reads
@@ -1397,7 +1398,7 @@ fn sent(delivered: super::ladder::Delivered) -> Result<Outcome, SendFailure> {
 }
 
 /// Types one answer, after the same last checks a bell makes
-/// (`clear_to_type`): Herdr still reports the agent the verdict was read
+/// (`clear_to_type`): the engine still reports the agent the verdict was read
 /// for, its composer reads empty, the pane has not moved, and the answer
 /// still waits. Nothing is recorded as a letter's bell: the
 /// conversation reads it as the operator's own message (D-13). Once
@@ -1704,7 +1705,7 @@ mod tests {
     /// belled once the letter has waited five minutes of its work, counted
     /// from the later of its arrival and the start of the work; at once for
     /// a letter sent with `--now`; and never over a draft typed since the
-    /// work began, nor before Herdr confirmed the state.
+    /// work began, nor before the engine confirmed the state.
     #[test]
     fn a_working_pane_is_belled_after_the_wait_or_at_once_for_a_now_letter_and_never_over_a_draft()
     {
@@ -1748,7 +1749,7 @@ mod tests {
         pane.last_input_at_unix_ms = NOW - 35_000;
         assert_eq!(judge(&pane, urgent, NOW), Err(Hold::Draft));
         pane.last_input_at_unix_ms = NOW - 60_000;
-        // A working state Herdr has not confirmed waits.
+        // A working state the engine has not confirmed waits.
         pane.state_change_seq = None;
         pane.herdr("working");
         assert_eq!(judge(&pane, urgent, NOW), Err(Hold::Working));
@@ -1989,7 +1990,7 @@ mod tests {
         }
 
         /// The pane as the core observes it: working since `since`, confirmed
-        /// by Herdr, with no key typed since.
+        /// by the engine, with no key typed since.
         fn working_since(&self, since: u64) {
             crate::runtime::delivery::tests::observe_working_since(
                 &mut self.runtime.lock().unwrap(),
@@ -2487,7 +2488,7 @@ mod tests {
         }
     }
 
-    /// A ring whose Herdr call failed as the device's link went away is
+    /// A ring whose engine call failed as the device's link went away is
     /// tried again once the link is back, though the pane did not move.
     #[test]
     fn a_ring_lost_with_the_link_rings_once_the_link_returns() {
@@ -2546,7 +2547,7 @@ mod tests {
     }
 
     /// Review of #1954, P2: whether a pane rung in a turn may be rung again
-    /// is the core's turn, never Herdr's status. Herdr reads the pane idle at
+    /// is the core's turn, never the engine's status. The engine reads the pane idle at
     /// one sequence throughout. Within one turn at rest the pane names why
     /// the next letter waits; a turn the hook alone runs and ends rings it;
     /// and in a turn the hook alone runs, the next letter rings once the
@@ -2635,7 +2636,7 @@ mod tests {
     #[test]
     fn a_pane_herdr_reports_no_readiness_for_is_belled_at_rest_like_a_started_one() {
         // A pane the operator started by typing `codex` carries neither flag;
-        // one `herdr agent start` launched reports itself ready.
+        // one the engine started reports itself ready.
         for flags in [json!({}), json!({"interactive_ready": true})] {
             let bell = Bell::start(flags.clone());
             let records = bell.pass(&mut Doorbell::default(), now());
@@ -2707,7 +2708,7 @@ mod tests {
         assert_eq!(bell.attempts(), 1);
     }
 
-    /// The operator's answer to a mission's decision whose prompt Herdr
+    /// The operator's answer to a mission's decision whose prompt the engine
     /// refused or timed out may already be in the conversation: a later
     /// pass never types it again, and it waits for the operator to send it
     /// again (mission-plan-visibility B26).
@@ -2736,7 +2737,7 @@ mod tests {
         assert!(answer.unconfirmed);
     }
 
-    /// A submission Herdr refused before writing (`agent_blocked`, which it
+    /// A submission the engine refused before writing (`agent_blocked`, which it
     /// answers "without sending input") typed nothing, so its timer rings
     /// the bell again.
     #[test]
@@ -2757,7 +2758,7 @@ mod tests {
     }
 
     /// A failed submission may have written input before its answer was
-    /// lost. Herdr's submission timeout is not intake, and may not make a
+    /// lost. The engine's submission timeout is not intake, and may not make a
     /// timer type the same bell twice.
     #[test]
     fn a_timed_out_prompt_stays_pending_until_the_pane_moves() {
@@ -2864,7 +2865,7 @@ mod tests {
         assert_eq!(held(&bell.pass(&mut doorbell, start)), ["launch_pending"]);
         // The launch settles without the pane changing status or sequence.
         *bell.flags.lock().unwrap() = json!({"interactive_ready": true});
-        // Before the retry is due Herdr is not asked again.
+        // Before the retry is due the engine is not asked again.
         bell.pass(&mut doorbell, start + RETRY_FIRST_MS - 1);
         assert_eq!(bell.asked(), 1);
         assert!(bell.typed().is_empty());
@@ -3249,13 +3250,13 @@ mod tests {
     /// `tests/fixtures/composer`).
     const CODEX_EMPTY: &str =
         "\x1b[0m\x1b[1m› \x1b[0m\x1b[2mAsk Codex to do anything\x1b[0m\r\n\r\n  footer\r\n";
-    /// How the fake Herdr answers `pane.read`.
+    /// How the fake engine answers `pane.read`.
     #[derive(Clone, Copy)]
     enum ReadAnswer {
         Screen,
         /// The screen, marked cut.
         Truncated,
-        /// An error with this code, as a refusal or Herdr's own timeout.
+        /// An error with this code, as a refusal or the engine's own timeout.
         Refused(&'static str),
     }
 
@@ -3661,7 +3662,7 @@ mod tests {
         );
     }
 
-    /// Herdr reported the turn `working` before its prompt hook reached the
+    /// The engine reported the turn `working` before its prompt hook reached the
     /// core (seen live on Codex 0.163.0's first turn, 2026-10-21): the hook
     /// still marks the moment, so the version is checked once the turn ends.
     /// A hook after a key typed during the work is a queued prompt, and the
@@ -3730,7 +3731,7 @@ mod tests {
 
     /// Nothing but a screen read empty releases a draft: a refused or
     /// timed-out read, a cut screen, a screen with no composer where the
-    /// declaration puts it and a pane with no Herdr link each keep the hold,
+    /// declaration puts it and a pane with no engine link each keep the hold,
     /// type nothing and are logged once for the draft.
     #[test]
     fn a_read_that_shows_no_empty_composer_keeps_the_draft_hold() {

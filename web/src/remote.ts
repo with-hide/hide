@@ -1,6 +1,6 @@
 // The selected SSH device as the shell's context (PRD S5 B19). The core
-// already connects to the device, projects its Herdr session with ids scoped
-// to the target, attaches the panes of that Herdr's visible tab, and routes
+// already connects to the device, projects its engine session with ids scoped
+// to the target, attaches the panes of that engine's visible tab, and routes
 // `remote_control` to the exact host after checking every id against the
 // session. This module only reads that projection and builds the events, so
 // the sidebar, the strip, the canvas and every command resolve one context the
@@ -103,7 +103,7 @@ export function remoteView(session: RemoteSession | null, front?: WorkspaceView 
 
 /**
  * The view of `tabId` beside `view`'s: an Agent area of a node that dialed in
- * shows a tab other than the one its Herdr has in front, and the core attaches
+ * shows a tab other than the one its engine has in front, and the core attaches
  * that tab's panes too (`node_shown_agent_tabs`). The keyboard stays on the
  * front tab's pane, so no pane of another tab is drawn focused.
  */
@@ -168,7 +168,7 @@ export function projectsOf(workspaces: Workspace[]): Workspace[] {
   return listed;
 }
 
-/** The projects the sidebar lists: the selected host's Herdr workspaces, or this machine's projects, never the Home. */
+/** The projects the sidebar lists: the selected host's engine workspaces, or this machine's projects, never the Home. */
 export function contextWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return projectsOf(contextAllWorkspaces(rest));
 }

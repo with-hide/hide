@@ -19,13 +19,13 @@ pub enum Query {
 }
 
 /// Who is asking, as the transport proved it. hided hands the core one string
-/// in the pane-id slot: a pane descendant's pane id as Herdr reports it, or,
+/// in the pane-id slot: a pane descendant's pane id as the engine reports it, or,
 /// for a local process it could only bind to a checkout by its kernel-reported
 /// cwd, the encoded form `checkout:<key>:<canonical path>`. `key` is unique per
 /// issued capability so two callers in one checkout never share a retry record.
 /// A desktop window's browser gateway, acting for a CDP client on a page in
 /// that checkout, is `gateway:<key>:<canonical path>`, its key one per window.
-/// Herdr pane ids are `w..:p..` and remote ones `remote:<device>:pane:<id>`, so
+/// The engine pane ids are `w..:p..` and remote ones `remote:<device>:pane:<id>`, so
 /// neither prefix can collide with a pane. The Desk process (PRD Desk 1차)
 /// is [`DESK_CALLER`]: it has no pane and no checkout, and acts as Hide's own
 /// `hide:desk` identity in delivery commands alone.
@@ -189,7 +189,7 @@ pub struct View {
 pub struct ViewOpener {
     pub name: String,
     pub provider: String,
-    /// The agent's native session id, when Herdr recorded one; what
+    /// The agent's native session id, when the engine recorded one; what
     /// `--session <id>` matches.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,

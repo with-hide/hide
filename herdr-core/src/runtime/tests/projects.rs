@@ -120,7 +120,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
     let checkout = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0];
     assert_eq!(checkout.path, repository.to_string_lossy());
     checkout.base_branch = Some("main".to_owned());
-    // An occupied Herdr workspace is keyed by its Git root while the
+    // An occupied engine workspace is keyed by its Git root while the
     // registration retains the narrower folder as its actual scope.
     runtime.snapshot.navigator.workspaces[0].path = repository.to_string_lossy().into_owned();
     runtime.sync_changes_root_path();
@@ -1210,7 +1210,7 @@ fn remove_event(workspace_id: &str) -> Vec<u8> {
 }
 
 /// B11, B12, B14. A project with panes is not refused: the confirmation
-/// counts come from the snapshot, the registration survives until Herdr
+/// counts come from the snapshot, the registration survives until the engine
 /// confirms the closes, a timeout keeps it with the reason visible, and a
 /// repeat while the close runs starts nothing. Only the confirmation removes
 /// the row, and files are never touched.
@@ -1419,7 +1419,7 @@ fn removing_a_project_whose_creation_is_in_flight_is_refused() {
     );
 }
 
-/// B14. Without a live Herdr connection the panes cannot be closed, so the
+/// B14. Without a live engine connection the panes cannot be closed, so the
 /// registration stays and the banner says why instead of a half-removed row.
 #[test]
 fn removing_a_registration_with_panes_needs_a_live_connection() {
@@ -1644,7 +1644,7 @@ fn a_row_pinned_twice_while_its_machine_answers_is_registered_once() {
     assert!(registrations[0].pinned);
 }
 
-/// A closing last pane's registration that is answered after Herdr closed
+/// A closing last pane's registration that is answered after the engine closed
 /// the workspace still lands: the row is registered and the coordinator is
 /// asked to read the session again, so the rebuilt catalog draws it.
 #[test]
@@ -1666,7 +1666,7 @@ fn a_retain_answered_after_the_workspace_closed_asks_for_the_row_again() {
         .retain_project_before_last_pane_closes("w1:p1");
     wait_for("the check to be asked", || node.asked() == 1);
     {
-        // Herdr closes the workspace with its pane before the answer.
+        // The engine closes the workspace with its pane before the answer.
         let mut runtime = shared.lock().unwrap();
         let mut closed = context_payload();
         closed
@@ -1752,7 +1752,7 @@ fn a_late_answer_registers_nothing_after_the_row_is_removed_or_unpinned() {
     );
 }
 
-/// PRD sidebar-context-menus B3, D-14. A row Herdr shows without a
+/// PRD sidebar-context-menus B3, D-14. A row the engine shows without a
 /// registration is pinned by registering it with the id, label, root and
 /// device the row carries, in the same event, and the next catalog rebuild
 /// adopts that registration as the same one row. Unpinning a row that was
@@ -1833,7 +1833,7 @@ fn pinning_an_unregistered_row_registers_and_pins_it_in_one_event() {
 /// registration counts and closes its panes like a registered project's; a
 /// timeout says so without claiming a registration, a retry closes what
 /// remains, and success retires nothing because nothing was registered: the
-/// row leaves when Herdr drops its workspace.
+/// row leaves when the engine drops its workspace.
 #[test]
 fn removing_an_unregistered_row_closes_its_panes_and_registers_nothing() {
     let mut runtime = live_runtime();
@@ -2007,7 +2007,7 @@ fn a_cleanup_confirmation_only_selects_what_the_review_allows_and_runs_once() {
     runtime.cleanup = Some(review(None));
     assert!(!runtime.dispatch_json(&confirm(&["/w/blocked", "/w/busy", "/w/elsewhere"])));
     assert_eq!(runtime.cleanup.as_ref().unwrap().phase, "review");
-    // No Herdr here, so the worker cannot start; what matters is that the
+    // No engine here, so the worker cannot start; what matters is that the
     // accepted confirmation moved the phase away from `review` at once.
     assert!(runtime.dispatch_json(&confirm(&["/w/free", "/w/free"])));
     assert_ne!(runtime.cleanup.as_ref().unwrap().phase, "review");
@@ -2127,7 +2127,7 @@ fn overview_open_section_focuses_the_checkout_and_switches_the_panel_in_one_even
 /// B13, D-11. `New agent here` is one task operation in the slot the
 /// worktree sheet uses: the provider rides on it for the shell to start,
 /// a provider Hide has no launcher for is refused before anything is
-/// requested, and without a live Herdr the operation fails in place rather
+/// requested, and without a live engine the operation fails in place rather
 /// than hanging in `working`.
 #[test]
 fn agent_start_in_checkout_reports_through_the_task_operation_slot() {
@@ -2201,7 +2201,7 @@ fn agent_start_remembers_its_choice_and_answers_its_own_request() {
         Some("gpt-6-astra")
     );
 
-    // The operation failed without a live Herdr, which leaves the slot free.
+    // The operation failed without a live engine, which leaves the slot free.
     assert!(runtime.dispatch_json(&start("claude", "", "r3")));
     let choice = runtime.snapshot.ui_state.agent_start.clone();
     assert_eq!(choice.kind.as_deref(), Some("claude"));
@@ -2665,7 +2665,7 @@ fn a_pane_in_a_second_directory_projects_into_its_own_project() {
     let repository_path = "/private/tmp/hide-rebrand/hide";
     let checkout_path = "/private/tmp/hide-rebrand/worktrees/hide-rebrand";
     // Neither path is a git repository here, so each is its own
-    // project: a Herdr workspace spanning two directories is two rows,
+    // project: an engine workspace spanning two directories is two rows,
     // each keyed by its own path. (A real worktree folds into its main
     // repository's project; `workspace::tests` covers that with git.)
     let spaces = vec![workspace::SessionSpace {
@@ -2776,8 +2776,8 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
             owner_mark: None,
         },
     ];
-    // Two Herdr workspaces in one directory are one project; the selected
-    // pane, not the Herdr workspace id, decides which layout is projected.
+    // Two engine workspaces in one directory are one project; the selected
+    // pane, not the engine workspace id, decides which layout is projected.
     let workspace_id = workspace::workspace_id_for_path(Path::new(checkout_path));
     let checkout_id = workspace::checkout_id_for_path(&workspace_id, Path::new(checkout_path));
     runtime.snapshot.navigator.workspaces = workspace::build_catalog(
@@ -2906,7 +2906,7 @@ fn a_registration_herdr_already_has_a_workspace_for_is_listed_once() {
         &workspace::catalog_paths_here(&registrations, &spaces, &no_worktrees()),
     );
 
-    // The registration is the row's identity; the Herdr workspace is
+    // The registration is the row's identity; the engine workspace is
     // attached to it rather than replacing it.
     assert_eq!(catalog.len(), 1);
     assert_eq!(catalog[0].id, registrations[0].id);
@@ -2951,8 +2951,8 @@ fn a_row_outside_home_is_not_registered_by_a_pin_or_a_closing_pane() {
     assert!(runtime.snapshot.status.last_error.is_none());
 }
 
-/// The user's report: a project that exists only as a Herdr workspace,
-/// one tab, one pane. Closing that pane made Herdr close the workspace,
+/// The user's report: a project that exists only as an engine workspace,
+/// one tab, one pane. Closing that pane made the engine close the workspace,
 /// and the project vanished from the sidebar.
 #[test]
 fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
@@ -3021,7 +3021,7 @@ fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
     runtime.retain_project_before_last_pane_closes("w5:p1");
     assert_eq!(runtime.snapshot().ui_state.workspace_registrations.len(), 1);
 
-    // Herdr then drops the workspace with the pane.
+    // The engine then drops the workspace with the pane.
     let released: SessionSnapshotPayload = crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": [],
         "workspaces": [],
@@ -3295,7 +3295,7 @@ fn an_explicit_checkout_waits_without_rendering_stale_projection_when_catalog_is
             paths: Default::default(),
         }),
     ));
-    // Layout and transport metadata belong to Herdr's live pane, not to
+    // Layout and transport metadata belong to the engine's live pane, not to
     // the missing checkout selection. The shell cannot draw this pane:
     // it has neither the selected checkout nor a tab to look a layout up
     // for. Clearing retained metadata here would discard its warm terminal.
@@ -3320,7 +3320,7 @@ fn an_explicit_checkout_waits_without_rendering_stale_projection_when_catalog_is
         Some("pane.projection_unavailable")
     );
 
-    // Losing the catalog must not disable cleanup: Herdr subsequently
+    // Losing the catalog must not disable cleanup: the engine subsequently
     // removes the pane while that same checkout is still unavailable.
     let mut closed = payload;
     closed.panes.clear();
@@ -3378,8 +3378,8 @@ fn checkout_path_matching_uses_component_boundaries() {
     let _ = std::fs::remove_dir_all(sibling_path);
 }
 
-/// B2, B7: a projected project id is stable across Herdr sessions, but a
-/// reopened tab must target the Herdr workspace that actually owned it.
+/// B2, B7: a projected project id is stable across engine sessions, but a
+/// reopened tab must target the engine workspace that actually owned it.
 #[test]
 fn close_context_keeps_project_lookup_separate_from_session_workspace() {
     let mut runtime = runtime();
@@ -3487,7 +3487,7 @@ fn checkout_at(runtime: &Runtime, path: &str) -> (String, String) {
         .expect("the fixture checkout is listed")
 }
 
-/// B1, D-06..D-08: a new tab goes to the workspace Herdr binds to the
+/// B1, D-06..D-08: a new tab goes to the workspace the engine binds to the
 /// checkout, even while every tab the checkout shows sits in another, unbound
 /// workspace; with no bound workspace open, Hide opens one at the checkout.
 #[test]
@@ -3657,8 +3657,8 @@ fn a_tab_of_a_plain_folders_owner_stays_in_that_folder_while_its_pane_is_in_a_su
     let _ = std::fs::remove_dir_all(&path);
 }
 
-/// Herdr's list while it starts the agent a task started in `w1:p9`, as the
-/// pinned 0.9.5 answers: first with no agent kind, then with it.
+/// The engine's list while it starts the agent a task started in `w1:p9`, as
+/// Herdr v0.9.5 answers: first with no agent kind, then with it.
 fn starting_task_agent(
     kind: Option<&str>,
     status: &str,
@@ -3684,8 +3684,8 @@ fn starting_task_agent(
 }
 
 /// An agent a task starts with the operator's first prompt asks before its
-/// pane closes while Herdr is still starting it, whichever of the start's
-/// answer and Herdr's report comes first; one started with no prompt closes
+/// pane closes while the engine is still starting it, whichever of the start's
+/// answer and the engine's report comes first; one started with no prompt closes
 /// at once. Both say Starting, and neither asks for a status check.
 #[test]
 fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prompt() {
@@ -3740,7 +3740,7 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
             starting,
             "{prompt:?} before the start's answer"
         );
-        // The start's answer lands before Herdr reports the agent.
+        // The start's answer lands before the engine reports the agent.
         assert!(
             runtime
                 .ingest_task_agent_result(id, crate::worktree_control::TaskAgentOutcome::Started)
@@ -3756,7 +3756,7 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
             starting,
             "{prompt:?} after the start's answer"
         );
-        // Herdr reports the agent: what it does decides from here on.
+        // The engine reports the agent: what it does decides from here on.
         assert!(runtime.ingest_session(Ok(starting_task_agent(Some("claude"), "idle", 1, false))));
         assert_eq!(
             row(&runtime),
@@ -4035,7 +4035,7 @@ fn a_client_cannot_claim_a_worktree_removal_finished() {
     ));
 }
 
-/// Herdr confirms the panes gone before the navigator applies the close, so
+/// The engine confirms the panes gone before the navigator applies the close, so
 /// the pane just closed is still listed when the confirmation lands. Only a
 /// pane that was not among those closed stops the removal.
 #[test]

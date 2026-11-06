@@ -707,7 +707,7 @@ impl Runtime {
     }
 
     /// A user visit remains newer even after returning to the original empty
-    /// group or draft, which needs no Herdr focus turn of its own.
+    /// group or draft, which needs no engine focus turn of its own.
     pub(super) fn supersede_start_navigation(&mut self) {
         if let Some(active) = self.task_start_focus.as_mut() {
             active.global_focus = None;

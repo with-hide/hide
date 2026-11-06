@@ -1,4 +1,4 @@
-//! The creation requests keys are sent against before Herdr names their pane
+//! The creation requests keys are sent against before the engine names their pane
 //! (PRD instant-pane-topology D-11), as the core decides them.
 //!
 //! After the operator asks for a new tab or a split, the screen sends keys
@@ -6,7 +6,7 @@
 //! them (PRD core-host-node-terminal D-15). The core keeps each request's
 //! row, which the shell's mark follows, and tells the node what became of it:
 //! opened, answered with a pane, or discarded. The only pane a request's keys
-//! can reach is the one Herdr's answer for that request names.
+//! can reach is the one the engine's answer for that request names.
 //!
 //! A new tab or split runs a shell, and until the shell's line editor reads,
 //! its terminal is in canonical mode on macOS and Linux: the kernel echoes
@@ -65,7 +65,7 @@ pub(super) enum InputOrigin {
     /// A fork of the agent in this source pane; its keys go to the fork once
     /// the fork's agent has started.
     Fork(String),
-    /// Refused before it reached Herdr; nothing answers it.
+    /// Refused before it reached the engine; nothing answers it.
     Refused,
 }
 
@@ -82,13 +82,13 @@ struct InputRequest {
     origin: InputOrigin,
     state: InputRequestState,
     /// Whether a session layout has carried the pane this request names. A
-    /// pane that leaves the layouts after that is gone, and Herdr can give
+    /// pane that leaves the layouts after that is gone, and the engine can give
     /// its id to another pane, so the request stops routing to it.
     laid_out: bool,
     /// The pane this pending request's keys wait for (`InputRequestSnapshot`).
     held_for: Option<String>,
     /// When it opened, about when its first key was typed; none for a
-    /// creation refused before it reached Herdr.
+    /// creation refused before it reached the engine.
     opened: Option<Instant>,
     input_lost: bool,
 }
@@ -181,7 +181,7 @@ impl InputRequests {
         });
     }
 
-    /// Herdr's answer for `origin` named `pane_id`: the request is ready and
+    /// The engine's answer for `origin` named `pane_id`: the request is ready and
     /// the node writes what it held to that pane. False when no pending
     /// request has this origin.
     pub(super) fn resolve(&mut self, origin: &InputOrigin, pane_id: &str) -> bool {
@@ -217,7 +217,7 @@ impl InputRequests {
     }
 
     /// The pane a pending request's keys wait for exists and has the
-    /// keyboard, before Herdr's answer makes the request ready. Returns
+    /// keyboard, before the engine's answer makes the request ready. Returns
     /// whether a row changed.
     pub(super) fn hold_for(&mut self, origin: &InputOrigin, pane_id: &str) -> bool {
         let Some(request) = self.requests.iter_mut().find(|request| {
@@ -275,7 +275,7 @@ impl InputRequests {
         true
     }
 
-    /// A creation the core refused before it reached Herdr: its request is
+    /// A creation the core refused before it reached the engine: its request is
     /// recorded as discarded, so the shell's mark ends and keys already sent
     /// against it are dropped rather than delivered anywhere. Returns whether
     /// a row was added.
@@ -310,9 +310,9 @@ impl InputRequests {
         true
     }
 
-    /// Marks a request's pane laid out once Herdr's own layout carries it.
-    /// Only Herdr's layout counts: a pane Hide draws ahead may expire
-    /// before Herdr lays it out, and its keys must still reach it then.
+    /// Marks a request's pane laid out once the engine's own layout carries it.
+    /// Only the engine's layout counts: a pane Hide draws ahead may expire
+    /// before the engine lays it out, and its keys must still reach it then.
     pub(super) fn mark_laid_out(&mut self, in_herdr_layout: impl Fn(&str) -> bool) {
         for request in &mut self.requests {
             if !request.laid_out && request.pane().is_some_and(&in_herdr_layout) {
@@ -349,7 +349,7 @@ impl InputRequests {
         !gone.is_empty()
     }
 
-    /// Whether a creation's answer named `pane_id` and Herdr's layout has not
+    /// Whether a creation's answer named `pane_id` and the engine's layout has not
     /// carried it yet: the pane is not gone, it has not arrived.
     pub(super) fn awaits_layout(&self, pane_id: &str) -> bool {
         self.requests
@@ -417,14 +417,14 @@ impl InputRequests {
 /// `HELD_INPUT_MAX_AGE_MS` of receiving it, and the first key arrives about
 /// when the request opens; every read is cut to what is left of the wait, so
 /// it ends with a second to spare for the core's own lag and a local socket's
-/// connect, and a wait that runs out still writes every key. A creation Herdr
+/// connect, and a wait that runs out still writes every key. A creation the engine
 /// answers later than this gets no wait ([`ShellWait::Late`]).
 const SHELL_READING_WAIT: Duration = Duration::from_secs(2);
 const _: () = assert!(SHELL_READING_WAIT.as_millis() + 1_000 <= HELD_INPUT_MAX_AGE_MS as u128);
 /// Between two reads of the shell: also the longest a key waits after its
 /// shell reads.
 const SHELL_READING_POLL: Duration = Duration::from_millis(50);
-/// The longest one read of Herdr or of the node takes, cut to what is left
+/// The longest one read of the engine or of the node takes, cut to what is left
 /// of the wait.
 const SHELL_READ_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -441,7 +441,7 @@ pub(super) enum ShellWait {
     /// The wait ran out while the pane's shell could not be read (its last
     /// read's failure); the keys go in as they are.
     Unreadable(String),
-    /// Herdr named the pane only after the wait's bound (a split behind
+    /// The engine named the pane only after the wait's bound (a split behind
     /// another operation, a Task's tab after its worktree): the keys go in
     /// at once, since waiting would make the oldest too old to be written.
     Late,
@@ -471,7 +471,7 @@ fn reads_keys(group: &PaneProcessGroup, input: LineInput) -> bool {
 }
 
 /// Reads once whether the shell of `pane_id` reads keys itself, asking
-/// Herdr for the shell and `node`, the machine that runs it, for its
+/// the engine for the shell and `node`, the machine that runs it, for its
 /// terminal, each within what is left before `deadline`.
 fn shell_reads_keys(
     engine: &dyn Engine,
@@ -493,7 +493,7 @@ fn shell_reads_keys(
     let group = engine
         .pane_processes(Wait::Each(timeout), pane_id)
         .map_err(crate::live::failed("pane.process_info"))?;
-    // A pane whose shell Herdr has not named yet is still starting.
+    // A pane whose shell the engine has not named yet is still starting.
     let Some(shell) = group.shell_pid else {
         return Ok(false);
     };
@@ -509,7 +509,7 @@ fn shell_reads_keys(
 
 /// Waits until `deadline` for the shell of `pane_id` to read keys itself,
 /// cutting every read to what is left; a read that fails is read again, as
-/// a shell Herdr has only just started can fail one. `None` once
+/// a shell the engine has only just started can fail one. `None` once
 /// `still_waiting` says nothing waits for it any more (a pane that closed
 /// discards its request).
 fn wait_for_shell_reading(
@@ -585,7 +585,7 @@ impl super::Runtime {
 
     /// After a creation event: a request the event opened stays as it is; a
     /// local task start opens one for its task; anything else was refused
-    /// before reaching Herdr and is recorded as discarded.
+    /// before reaching the engine and is recorded as discarded.
     pub(super) fn settle_creation_request(&mut self, request_id: &str) -> bool {
         let task = self
             .snapshot
@@ -612,7 +612,7 @@ impl super::Runtime {
         changed
     }
 
-    /// Herdr's answer for `origin` named `pane_id`: the node writes what was
+    /// The engine's answer for `origin` named `pane_id`: the node writes what was
     /// typed for the request to that pane, ahead of anything typed later and
     /// without moving the keyboard.
     pub(super) fn resolve_input_request(&mut self, origin: &InputOrigin, pane_id: &str) {
@@ -621,13 +621,13 @@ impl super::Runtime {
         }
     }
 
-    /// Herdr's answer for `origin` named `pane_id`, a new pane running a
+    /// The engine's answer for `origin` named `pane_id`, a new pane running a
     /// shell: the request's keys keep waiting, held for that pane, until its
     /// shell reads keys itself, and are then written to it
     /// ([`Self::ingest_shell_wait`]). The wait runs on a worker, never
     /// under the lock.
     pub(super) fn resolve_input_request_at_shell(&mut self, origin: &InputOrigin, pane_id: &str) {
-        // Without a Herdr to ask, the shell cannot be read: the keys go now.
+        // Without an engine to ask, the shell cannot be read: the keys go now.
         let Some(live) = self.live.clone() else {
             return self.resolve_input_request(origin, pane_id);
         };
@@ -868,7 +868,7 @@ mod tests {
         requests.open("r1", origin.clone(), Instant::now());
         requests.hold_for(&origin, "w1:p2");
         assert!(requests.waits_for(&origin, "w1:p2"));
-        // Herdr named the pane and has not laid it out: it has not arrived.
+        // The engine named the pane and has not laid it out: it has not arrived.
         assert!(requests.awaits_layout("w1:p2"));
         assert!(!requests.follow_panes(|_| false, |_| false));
         requests.mark_laid_out(|pane| pane == "w1:p2");
@@ -978,7 +978,7 @@ mod tests {
         assert_eq!(node.reads(), 3, "it waited through both canonical reads");
     }
 
-    /// A shell Herdr has only just started can fail a read; the wait reads
+    /// A shell the engine has only just started can fail a read; the wait reads
     /// it again rather than writing the keys into its line mode.
     #[test]
     fn a_failed_read_is_read_again_within_the_wait() {

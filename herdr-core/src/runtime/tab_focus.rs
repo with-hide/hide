@@ -1,61 +1,61 @@
-//! The tab moves Hide has sent Herdr and not yet seen answered.
+//! The tab moves Hide has sent the engine and not yet seen answered.
 //!
-//! Hide owns the visible tab and tells Herdr afterwards. Herdr's session
-//! stream has no cursor naming the request an event answers, so whether a
-//! Herdr move is Hide's own answer or somebody focusing a tab outside Hide is
+//! Hide owns the visible tab and tells the engine afterwards. The engine's session
+//! has no cursor naming the request a move answers, so whether an
+//! engine move is Hide's own answer or somebody focusing a tab outside Hide is
 //! read from one list: the tab moves that have left the control lane and not
 //! been answered, in the order they left. Two facts give that order meaning.
-//! The lane sends one control at a time and the next only after Herdr has
-//! answered, so Herdr applies the requests in the order they were sent; and
-//! Herdr delivers its events in order within a subscription (Socket API,
-//! Event subscriptions), so the moves they make arrive in that order too.
-//! The replica keeps those moves, one per `tab_focused`, and each session
-//! carries the ones it has not been read with (`SessionTabMoves`): a session
-//! ending on t2 cannot say whether Herdr went t2 or t2, t3, t2.
+//! The lane sends one control at a time and the next only after the engine has
+//! answered, so the engine applies the requests in the order they were sent; and
+//! the engine records each tab it moves to in the order it moved
+//! (`SessionTabMoves`), so the moves they make arrive in that order too.
+//! The engine keeps those moves, and each session
+//! carries the ones it has not been read with: a session
+//! ending on t2 cannot say whether the engine went t2 or t2, t3, t2.
 //!
 //! The rest is derived from the list:
 //!
-//! - Each Herdr move answers the earliest request on its tab, and every
+//! - Each engine move answers the earliest request on its tab, and every
 //!   request sent before that one has been applied already, so they leave
 //!   with it. A session alone never answers anything: until the moves of
-//!   earlier requests have arrived it shows Herdr from before them.
-//! - A request for the tab Herdr shows moves nothing, and the pinned Herdr
-//!   publishes no event for it, so its answer is the whole answer. Herdr
-//!   does publish one for any other tab, another workspace's active tab
-//!   included, so which tab Herdr shows is one value, not one per workspace;
+//!   earlier requests have arrived it shows the engine from before them.
+//! - A request for the tab the engine shows moves nothing, and the engine
+//!   records no move for it, so its answer is the whole answer. The engine
+//!   does record one for any other tab, another workspace's active tab
+//!   included, so which tab the engine shows is one value, not one per workspace;
 //!   each request records it as it leaves (the tab of the request before it,
 //!   or with none outstanding, the tab the last session showed).
 //! - A refused request leaves at once and moved nothing, so the request
-//!   after it takes over where Herdr was; a lost or silent one waits out the
-//!   deadline, since Herdr may still apply it.
-//! - Herdr moving on its own is followed only when nothing Hide asked for in
+//!   after it takes over where the engine was; a lost or silent one waits out the
+//!   deadline, since the engine may still apply it.
+//! - The engine moving on its own is followed only when nothing Hide asked for in
 //!   that checkout is outstanding, sent or still waiting on the lane.
 //! - When moves were dropped between two sessions (more than
-//!   `TAB_FOCUS_LIMIT`, or a new replica after a reconnect), the tabs newly
+//!   `TAB_FOCUS_LIMIT`, or a new engine count after a reconnect), the tabs newly
 //!   active since the last session stand in for them.
 //!
 //! A request still waiting on the lane is not in the list. The lane holds it
 //! (and the pane focus intent its turn will send), and nothing of it can
-//! reach Herdr until it leaves.
+//! reach the engine until it leaves.
 
 use super::control_lane::LaneJob;
 use super::*;
 
-/// One tab move sent to Herdr and not yet answered.
+/// One tab move sent to the engine and not yet answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TabFocusRequest {
     pub(super) checkout_id: String,
     pub(super) tab_id: String,
-    /// The tab Herdr shows just before applying this request, as Hide knew
+    /// The tab the engine shows just before applying this request, as Hide knew
     /// when it left.
     herdr_before: Option<String>,
-    /// The pane focus that moves Herdr to this tab; `None` for a tab focus
+    /// The pane focus that moves the engine to this tab; `None` for a tab focus
     /// or a creation.
     pub(super) pane_control_serial: Option<u64>,
     /// A successful pane control on this connection, while its stream move
     /// is still outstanding. Unknown answers never confirm a retry.
     pub(super) pane_focus_confirmed: bool,
-    /// When it left, or for a pane focus when Herdr answered it.
+    /// When it left, or for a pane focus when the engine answered it.
     pub(super) requested_at_unix_ms: u64,
 }
 
@@ -65,17 +65,17 @@ impl TabFocusRequest {
     }
 }
 
-/// Outstanding tab asks as `(checkout, tab)`, in the order Herdr applies
+/// Outstanding tab asks as `(checkout, tab)`, in the order the engine applies
 /// them (`Runtime::tab_asks`).
 pub(super) struct TabAsks(Vec<(String, String)>);
 
 impl TabAsks {
-    /// Whether Hide has asked Herdr for this tab and not yet seen it answered.
+    /// Whether Hide has asked the engine for this tab and not yet seen it answered.
     pub(super) fn asked(&self, tab_id: &str) -> bool {
         self.0.iter().any(|(_, tab)| tab == tab_id)
     }
 
-    /// Whether Hide has a tab move outstanding in this checkout: Herdr is
+    /// Whether Hide has a tab move outstanding in this checkout: the engine is
     /// about to be moved again, so a move it makes now is not followed.
     pub(super) fn outstanding_in(&self, checkout_id: &str) -> bool {
         self.0.iter().any(|(checkout, _)| checkout == checkout_id)
@@ -100,16 +100,16 @@ impl Runtime {
         }
     }
 
-    /// A pane focus leaves the lane. A pane in a tab Herdr is not showing
-    /// moves Herdr's tab too, and Herdr reports that move after answering
-    /// the focus; one in the tab Herdr shows is settled by the answer.
+    /// A pane focus leaves the lane. A pane in a tab the engine is not showing
+    /// moves the engine's tab too, and the engine reports that move after answering
+    /// the focus; one in the tab the engine shows is settled by the answer.
     pub(super) fn send_pane_focus_tab(&mut self, pane_id: &str, serial: u64) {
         if let Some((checkout_id, tab_id)) = self.checkout_tab_holding_pane(pane_id) {
             self.send_tab_move(checkout_id, tab_id, Some(serial));
         }
     }
 
-    /// Herdr created a tab with focus as part of the creation Hide asked
+    /// The engine created a tab with focus as part of the creation Hide asked
     /// for. When the session Hide last read already shows it, its move has
     /// arrived and nothing more of it will.
     pub(super) fn send_created_tab(&mut self, checkout_id: String, tab_id: String) {
@@ -145,14 +145,14 @@ impl Runtime {
     }
 
     /// The control carrying the tab focus for `tab_id` never ran, so nothing
-    /// of it reached Herdr.
+    /// of it reached the engine.
     pub(super) fn unsend_tab_focus(&mut self, tab_id: &str) {
         if let Some(index) = self.tab_focus_index(tab_id) {
             self.withdraw_tab_move(index);
         }
     }
 
-    /// The pane focus `serial` moves no tab: Herdr refused it, its pane went,
+    /// The pane focus `serial` moves no tab: the engine refused it, its pane went,
     /// or its control never ran.
     pub(super) fn drop_pane_focus_tab(&mut self, serial: Option<u64>) {
         if let Some(index) = serial.and_then(|serial| {
@@ -164,7 +164,7 @@ impl Runtime {
         }
     }
 
-    /// Removes a request that moved nothing; Herdr is where it was before
+    /// Removes a request that moved nothing; the engine is where it was before
     /// it, so the request after it starts from there.
     fn withdraw_tab_move(&mut self, index: usize) -> TabFocusRequest {
         let withdrawn = self.tab_focus_requests.remove(index);
@@ -174,14 +174,14 @@ impl Runtime {
         withdrawn
     }
 
-    /// Herdr answered the tab focus for `tab_id`.
+    /// The engine answered the tab focus for `tab_id`.
     pub(super) fn answer_tab_focus(&mut self, tab_id: &str) {
         if let Some(index) = self.tab_focus_index(tab_id) {
             self.settle_where_herdr_already_was(index);
         }
     }
 
-    /// Herdr answered the pane focus `serial`. A move still to come gets
+    /// The engine answered the pane focus `serial`. A move still to come gets
     /// its deadline from this answer.
     pub(super) fn answer_pane_focus_tab(&mut self, serial: u64) {
         let Some(index) = self
@@ -207,7 +207,7 @@ impl Runtime {
                 .is_some_and(|request| request.pane_focus_confirmed && request.tab_id == tab_id)
     }
 
-    /// Herdr refused the tab focus for `tab_id`, or its answer was lost.
+    /// The engine refused the tab focus for `tab_id`, or its answer was lost.
     /// A refusal moved nothing; a lost answer may still have been applied,
     /// so it waits out its deadline. Only the newest ask is reported: an
     /// older one is not what the screen shows. A refusal with no request
@@ -224,8 +224,8 @@ impl Runtime {
         }
     }
 
-    /// Stops waiting on tab moves Herdr never reported. The value Hide chose
-    /// is kept; only the waiting stops, so Herdr's next move is read as its
+    /// Stops waiting on tab moves the engine never reported. The value Hide chose
+    /// is kept; only the waiting stops, so the engine's next move is read as its
     /// own. The move of a pane focus still running waits with it. Only the
     /// newest ask is reported.
     pub(super) fn expire_tab_focus_requests(&mut self, now_unix_ms: u64) -> bool {
@@ -255,13 +255,13 @@ impl Runtime {
         true
     }
 
-    /// Takes the moves Herdr has made since the last session as answers and
+    /// Takes the moves the engine has made since the last session as answers and
     /// returns the requests they answered, each move answering the earliest
     /// request on its tab with every request sent before it. A snapshot read
     /// outside the event stream has no moves and answers nothing; the
     /// stream's next session brings them. When some were dropped while a
     /// request waited, the tabs newly active since the last session, and
-    /// Herdr's focus arriving at a tab, stand in for them, and the gap is
+    /// the engine's focus arriving at a tab, stand in for them, and the gap is
     /// recorded; with nothing waiting, a reconnect's new count is no gap.
     pub(super) fn take_tab_focus_answers(
         &mut self,
@@ -329,7 +329,7 @@ impl Runtime {
     }
 
     /// Every tab move Hide has asked for and not seen answered, in the
-    /// order Herdr will apply them: the sent ones, then those still waiting
+    /// order the engine will apply them: the sent ones, then those still waiting
     /// on the lane. Collected once for a pass that asks about each checkout.
     pub(super) fn tab_asks(&self) -> TabAsks {
         TabAsks(
@@ -372,14 +372,14 @@ impl Runtime {
     }
 
     /// The newest sent tab focus for `tab_id`: the lane runs one control at
-    /// a time, so the one Herdr is answering is the last that left.
+    /// a time, so the one the engine is answering is the last that left.
     fn tab_focus_index(&self, tab_id: &str) -> Option<usize> {
         self.tab_focus_requests
             .iter()
             .rposition(|request| request.pane_control_serial.is_none() && request.tab_id == tab_id)
     }
 
-    /// Ends the request at `index` when Herdr was already on its tab as it
+    /// Ends the request at `index` when the engine was already on its tab as it
     /// applied it, and says whether it did.
     fn settle_where_herdr_already_was(&mut self, index: usize) -> bool {
         let request = &self.tab_focus_requests[index];

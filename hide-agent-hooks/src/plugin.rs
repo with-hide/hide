@@ -6,7 +6,7 @@
 //! agent loads from a folder at startup and runs inside its own process, so
 //! Hide's instrumentation for them is that module: it asks this crate's
 //! helper (`hide-agent-hooks <agent> <operation>`, `src/plugin/helper.rs`)
-//! and does nothing outside a Herdr pane or once the helper is gone.
+//! and does nothing outside a pane Hide manages or once the helper is gone.
 //!
 //! The file is Hide's alone, so ownership is the file's first line:
 //! `// <marker>@<version> sha256=<hash of the rest>`. A file without it is
@@ -277,7 +277,7 @@ fn remove_if_empty(folder: &Path) -> Result<(), String> {
 }
 
 impl PluginFile {
-    /// The agent's own folder, the one Herdr's integration for it uses too.
+    /// The agent's own folder, the one Herdr's integration for it used too.
     pub fn config_directory(&self, home: &Path) -> PathBuf {
         self.config.adapter().install_home(home)
     }

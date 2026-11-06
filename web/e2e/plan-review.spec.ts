@@ -1,4 +1,4 @@
-// A session's own plan as the operator meets it, on an isolated pinned Herdr
+// A session's own plan as the operator meets it, on an isolated engine
 // and hided (PRD hide-plan B4-B7, B11, B13, B14): the real `hide task`
 // commands from the agent's own pane change the core's record, a plan put up
 // for review asks the operator on the pane's band and the chip says Review,

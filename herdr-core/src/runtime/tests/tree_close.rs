@@ -11,7 +11,7 @@ pub(super) const A: &str = "/private/tmp/hide-tree-close-a";
 pub(super) const B: &str = "/private/tmp/hide-tree-close-b";
 
 /// The session with every pane in `present`; `status` overrides an agent's
-/// Herdr status by pane. With `shared`, the siblings p2 and p4 share tab t2.
+/// the engine status by pane. With `shared`, the siblings p2 and p4 share tab t2.
 pub(super) fn tree_payload(present: &[&str], status: &[(&str, &str)]) -> SessionSnapshotPayload {
     tree_payload_in(present, status, false)
 }
@@ -137,7 +137,7 @@ pub(super) fn tree_runtime(status: &[(&str, &str)]) -> Runtime {
     live_runtime(tree_payload(&EVERY, status))
 }
 
-/// A runtime connected to a Herdr that takes every request, showing `payload`.
+/// A runtime connected to an engine that takes every request, showing `payload`.
 fn live_runtime(payload: SessionSnapshotPayload) -> Runtime {
     let mut runtime = runtime();
     runtime.restore_hint_pending = false;
@@ -310,9 +310,9 @@ fn a_pane_already_gone_counts_as_closed_and_an_unlisted_descendant_stays_open() 
 }
 
 // A child whose terminal failed to restore (its folder was removed, say) has
-// no process: Herdr reports it `unknown` for good, and no status check could
+// no process: the engine reports it `unknown` for good, and no status check could
 // ever settle it. Its row is at rest, so the parent's close sheet lists it as
-// a finished child and Close all goes through; a live pane Herdr cannot read
+// a finished child and Close all goes through; a live pane the engine cannot read
 // still refuses (the test below).
 #[test]
 fn a_child_whose_terminal_failed_to_restore_rests_and_never_blocks_its_parents_close() {
@@ -699,7 +699,7 @@ fn settle_held(runtime: &mut Runtime, range: std::ops::Range<usize>) {
     runtime.promote_close_reservations();
 }
 
-/// Herdr has taken `pane`'s close, so the topology confirms it rather than
+/// The engine has taken `pane`'s close, so the topology confirms it rather than
 /// cancelling a close that never left.
 fn sent(runtime: &mut Runtime, pane: &str) {
     runtime
@@ -891,7 +891,7 @@ fn an_unresolved_close_fails_its_same_tab_sibling_at_once_and_a_retry_waits_for_
     let second = if first == "w1:p2" { "w1:p4" } else { "w1:p2" };
     assert_eq!(tree_phase(&runtime, second).as_deref(), Some("waiting"));
 
-    // Herdr's answer is lost and the status check cannot tell: the record
+    // The engine's answer is lost and the status check cannot tell: the record
     // stays unknown until the operator checks again, which refuses any
     // second close in that tab.
     let operation = runtime

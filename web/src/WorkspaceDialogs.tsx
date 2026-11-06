@@ -183,9 +183,9 @@ function OutsideAgents({ actions, subtree, what, targetDevice }: { actions: Acti
 /**
  * `Remove project…` on any device: the panes the core counted close first,
  * then only the registration goes. The row leaving the registrations is the
- * answer; a refusal or a close that failed is the core's error. A row Herdr
- * shows without a registration has only its panes to close, so its answer is
- * the row leaving the list with Herdr's workspace (PRD sidebar-context-menus D-14).
+ * answer; a refusal or a close that failed is the core's error. A row the
+ * engine shows without a registration has only its panes to close, so its answer is
+ * the row leaving the list with the engine's workspace (PRD sidebar-context-menus D-14).
  */
 function RemoveProjectDialog({ actions, workspace, listed, onClose }: { actions: Actions; workspace: Workspace; listed: boolean; onClose: () => void }) {
   const { t } = useInterfaceTranslation();

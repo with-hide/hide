@@ -561,7 +561,7 @@ fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
             dialect.choice_arguments(&LaunchChoice::default()).unwrap(),
             Vec::<String>::new()
         );
-        // A glob in a model id stays one literal argument (Herdr quotes it).
+        // A glob in a model id stays one literal argument (the engine quotes it).
         let model = dialect.choice_arguments(&choice(Some("opus[1m]"), None));
         if takes_model.contains(&row.id) {
             assert_eq!(model.unwrap(), ["--model", "opus[1m]"], "{}", row.id);

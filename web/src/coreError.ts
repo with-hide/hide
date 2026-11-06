@@ -1,5 +1,5 @@
 // The one wording of a failure the core published as `last_error`. The core
-// names what went wrong by `kind`; its `message` is diagnostic detail (Herdr's
+// names what went wrong by `kind`; its `message` is diagnostic detail (the engine's
 // protocol answer, a path, an io error) that the store's diagnostics and the
 // core's `error.reported` log keep, and the screen never draws it (design
 // principle 13). A kind worded here gets its catalog sentence; any other kind,
@@ -164,7 +164,7 @@ const HERDR_STATES = new Map<string, MessageKey>([
   ["unconfigured", "coreError.herdr.unconfigured"],
 ]);
 
-/** Why this machine's Herdr does not answer, from `status.herdr.state`; its `message` is the About tab's and the log's. */
+/** Why this machine's engine does not answer, from `status.herdr.state`; its `message` is the About tab's and the log's. */
 export function herdrStateText(state: string, t: TFunction<"translation">): string {
   return t(HERDR_STATES.get(state) ?? "coreError.herdr.other");
 }

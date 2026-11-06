@@ -618,7 +618,7 @@ pub struct Answer {
     /// decision (`settle_typed_answers`), so it is never typed again.
     #[serde(default, skip_serializing)]
     pub delivered: bool,
-    /// Typing it may have reached the conversation without Herdr saying so:
+    /// Typing it may have reached the conversation without the engine saying so:
     /// it is not typed again until the operator sends it again (B26).
     #[serde(default)]
     pub unconfirmed: bool,
@@ -798,7 +798,7 @@ pub struct MissionNode {
 pub struct NodeLaunch {
     /// The worker's registration the launch was proven for.
     pub agent_id: String,
-    /// The agent kind, in Herdr's spelling.
+    /// The agent kind, in the engine's spelling.
     pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,

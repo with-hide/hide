@@ -527,7 +527,7 @@ impl Runtime {
         }
 
         // The Workspace that holds the agent or tab the request chooses,
-        // which is in front only once the device's Herdr has moved there.
+        // which is in front only once the device's engine has moved there.
         let agent_workspace_key = self
             .separate_view_areas()
             .then(|| self.remote_request_workspace_key(&target_id, &session, &payload.request))
@@ -614,7 +614,7 @@ impl Runtime {
                     return false;
                 };
                 // Opening a checkout brings its most recent tab forward from
-                // whichever Herdr workspace holds it; only a checkout with no
+                // whichever engine workspace holds it; only a checkout with no
                 // tab opens its owner (D-13).
                 let tab = session
                     .active_tab_ids
@@ -1149,7 +1149,7 @@ impl Runtime {
                     .as_ref()
                     .filter(|settings| settings.enabled && settings.chosen)
                     .map(|settings| {
-                        // The usage rows are keyed by the agent's Herdr name,
+                        // The usage rows are keyed by the agent's engine name,
                         // which is not the provider id for every agent (agy
                         // runs the `antigravity` provider).
                         settings
@@ -1176,7 +1176,7 @@ impl Runtime {
         }
     }
 
-    /// Starts the read axis's view of a new connection to one Herdr server:
+    /// Starts the read axis's view of a new connection to one engine:
     /// a mark no earlier connection wrote, and no pane settled yet. Every
     /// connect starts one, because a reconnect cannot tell whether the server
     /// it reaches is the one it lost; the panes' marks say that
@@ -1219,7 +1219,7 @@ impl Runtime {
     }
 
     /// The panes on one target's server that should carry this connection's
-    /// mark, by Herdr's own pane id: those whose saved read record or
+    /// mark, by the engine's own pane id: those whose saved read record or
     /// completion names it. The lineage writer writes the ones that do not.
     pub(crate) fn wanted_server_marks(&self, target_id: Option<&str>) -> BTreeMap<String, String> {
         let (connection, agents, device) = match target_id {
@@ -1299,10 +1299,10 @@ impl Runtime {
     /// on every row, then persists the record when it actually moved.
     ///
     /// This is the only place the read axis is decided, and the pane it reads
-    /// is the one the operator chose, not the one Herdr reports focused.
-    /// Herdr marks every pane in a tab seen the moment the tab is focused, so
-    /// three finished agents side by side would clear together; Hide keeps its
-    /// own pane-level record instead and never derives unread from Herdr's
+    /// is the one the operator chose, not the one the engine reports focused.
+    /// Marking every pane in a tab seen the moment the tab is focused would
+    /// clear three finished agents side by side together; Hide keeps its
+    /// own pane-level record instead and never derives unread from the engine's
     /// `done` or `idle`, nor from a focus it merely inherited.
     ///
     /// The record moves on a real state change or an operator focus, not on
@@ -1468,7 +1468,7 @@ impl Runtime {
             ReadRecordScope::Remote(target_id),
         );
         if changes.is_empty() && !pruned && !lineage_pruned {
-            // These copies were just projected from Herdr, not the previous
+            // These copies were just projected from the engine, not the previous
             // published snapshot. The caller compares the completed session;
             // applying read/status fields alone is not a new runtime change.
             return false;
@@ -1857,16 +1857,16 @@ impl Runtime {
     }
 
     /// Marks the tabs that exist only to hold delegated children, and asks
-    /// Herdr to move any child still sharing its parent's tab into one.
+    /// the engine to move any child still sharing its parent's tab into one.
     ///
     /// Detection is the same on every pass, so a child that arrives while
     /// Hide is running and a child already split when Hide started are the
-    /// same case and take the same path (PRD B1, B3, D-44). Herdr keeps
+    /// same case and take the same path (PRD B1, B3, D-44). The engine keeps
     /// owning split geometry and the PTY size, so the pane is really moved
     /// rather than merely left undrawn (PRD D-15).
     pub(super) fn relocate_delegated_child_panes(&mut self) -> bool {
-        // Where Herdr currently holds each pane. The layout is the only place
-        // that carries Herdr's own workspace and tab ids for a pane.
+        // Where the engine currently holds each pane. The layout is the only place
+        // that carries the engine's own workspace and tab ids for a pane.
         let placement = self
             .snapshot
             .pane_layouts
@@ -1924,10 +1924,10 @@ impl Runtime {
                 agent.id.clone(),
             ));
         }
-        // A move is done when Herdr's layout shows the child in its own tab,
-        // not when Herdr acknowledges the request: the acknowledgement can
+        // A move is done when the engine's layout shows the child in its own tab,
+        // not when the engine acknowledges the request: the acknowledgement can
         // arrive before that layout, and a pass in between would move the
-        // child a second time. A pane Herdr no longer reports can never
+        // child a second time. A pane the engine no longer reports can never
         // answer, so its record is dropped rather than held forever.
         self.pane_relocations_in_flight
             .retain(|pane_id, _| placement.contains_key(pane_id) && !settled.contains(pane_id));
@@ -1959,7 +1959,7 @@ impl Runtime {
 
     /// The panes of this machine's live agents that a spawn opened beside
     /// its caller (`hide agent spawn --beside`), which stay in the caller's
-    /// tab. Keyed by the spawn's child record, so a restarted Hide or Herdr
+    /// tab. Keyed by the spawn's child record, so a restarted Hide or the engine
     /// that rebinds the child to its pane keeps it there too.
     fn beside_spawned_panes(&self) -> std::collections::HashSet<&str> {
         let Ok(ledger) = self.delivery_ledger.as_ref() else {
@@ -2803,7 +2803,7 @@ impl Runtime {
                 })
     }
 
-    /// Herdr made the fork's pane, in its own tab (`Fork agent`) or beside
+    /// The engine made the fork's pane, in its own tab (`Fork agent`) or beside
     /// the source (`Fork agent to the side`). The keyboard goes to it now, as
     /// to a starting agent tab, unless the operator chose a view after the
     /// press: that is where they are, and the fork waits where it was put
@@ -2817,7 +2817,7 @@ impl Runtime {
         let Some(pending) = self.forks_in_flight.get_mut(source_pane_id) else {
             return false;
         };
-        // A pane the replaced Herdr made is not one this connection can place
+        // A pane the replaced engine made is not one this connection can place
         // or focus; the worker's own checks end that fork.
         if pending.generation != self.live_generation {
             self.push_diagnostic(
@@ -2848,9 +2848,9 @@ impl Runtime {
             .layout_holding_pane(source_pane_id)
             .map(|layout| layout.workspace_id.clone());
         let checkout_path = tab_id.and_then(|tab_id| self.place_fork_tab(source_pane_id, tab_id));
-        // The fork's pane is drawn from Herdr's answer, its own tab as a
+        // The fork's pane is drawn from the engine's answer, its own tab as a
         // created tab is and a split as a split Hide asked for is, so its
-        // checkout holds it before Herdr's layout lists it
+        // checkout holds it before the engine's layout lists it
         // (`created_pane_place`). A device's pane is drawn by that device.
         if !crate::address::is_device_scoped(source_pane_id) {
             match (tab_id, checkout_path.as_deref(), source_workspace_id) {
@@ -2978,7 +2978,7 @@ impl Runtime {
         let layout = view
             .group_layout_mut(group.as_deref())
             .expect("source group exists");
-        // Herdr's session can carry the tab before this answer does; the
+        // The engine's session can carry the tab before this answer does; the
         // reconcile appended it then, and it moves next to its source now.
         if layout.tree.display(tab_id).is_some() {
             let stamp = layout.tree.next_stamp(unix_milliseconds());
@@ -3472,7 +3472,7 @@ impl Runtime {
     }
 
     /// Names each agent by the project and checkout its pane sits in, as the
-    /// sidebar tree shows them. Herdr's own workspace label ("hide main") is
+    /// sidebar tree shows them. The engine's own workspace label ("hide main") is
     /// a launcher artifact that can span two repositories, so it is kept only
     /// for a pane the navigator has not placed.
     pub(super) fn place_agents_in_navigator(&self, agents: &mut [SidebarAgentSnapshot]) {
@@ -3749,7 +3749,7 @@ impl Runtime {
         changed | self.sync_request_rows()
     }
 
-    /// Logs the descendants whose activity Herdr cannot classify, once per
+    /// Logs the descendants whose activity the engine cannot classify, once per
     /// change in that count per row: they are left off the badge because a
     /// count the projection cannot vouch for is not drawn (PRD B7).
     pub(super) fn log_unknown_descendants(
@@ -3876,7 +3876,7 @@ pub(super) fn remote_checkout<'a>(
 /// so its header carries the same child row and Return as a pane on this
 /// machine (S6 B14-B16, B21). A device pane has no local hook tokens; the
 /// projection reports it as uninstrumented for in-process counts, while its
-/// Herdr-declared children are still known.
+/// engine-declared children are still known.
 fn sync_remote_pane_relations(session: &mut RemoteSessionSnapshot) -> bool {
     let agents = &session.agents;
     let mut changed = false;
@@ -3934,21 +3934,21 @@ pub(super) struct PendingFork {
     /// The order of the press among forks, so a later press keeps the
     /// keyboard from an earlier one that is still starting.
     pub(super) press: u64,
-    /// The Herdr connection the press was made on.
+    /// The engine connection the press was made on.
     pub(super) generation: u64,
     /// The control lane's last serial at the press. A view chosen after it is
     /// the operator's, and the fork does not take the keyboard from it.
     pub(super) issued_serial: u64,
     /// Who asked for it: only the operator's press takes the keyboard.
     pub(super) origin: super::events::ForkOrigin,
-    /// The fork's tab once Herdr named it, so a fork that fails leaves no
+    /// The fork's tab once the engine named it, so a fork that fails leaves no
     /// placement or drawing waiting for a tab that was closed.
     pub(super) tab_id: Option<String>,
-    /// The fork's pane once Herdr named it, so a failed split is taken back.
+    /// The fork's pane once the engine named it, so a failed split is taken back.
     pub(super) pane_id: Option<String>,
     /// The name the fork's tab is made with, which its drawing carries.
     pub(super) tab_label: Option<String>,
-    /// The fork's pane, once Herdr made it and it took the keyboard.
+    /// The fork's pane, once the engine made it and it took the keyboard.
     pub(super) focused: Option<String>,
     /// The source's agent kind and launch choice, and the name the fork
     /// starts under, which the fork's pane keeps once the fork started.

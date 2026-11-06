@@ -193,7 +193,7 @@ enum SendTo {
 impl Runtime {
     // ---- Openers ----
 
-    /// The agent in `pane_id` as a View's opener: its machine, its Herdr
+    /// The agent in `pane_id` as a View's opener: its machine, its engine
     /// terminal and its session. A pane with no agent, or one Hide holds no
     /// terminal for, opens Views as nobody (D-19).
     pub(super) fn opener_of_pane(&self, pane_id: &str) -> Option<Opener> {
@@ -248,7 +248,7 @@ impl Runtime {
 
     /// The agent an opener is now: the same terminal with the same session,
     /// else the same session in another pane (D-10). Never by pane id: a
-    /// restarted Herdr gives the id to another shell (B40).
+    /// restarted engine gives the id to another shell (B40).
     fn opener_now(&self, opener: &Opener) -> Option<&crate::model::SidebarAgentSnapshot> {
         let agents = self.machine_agents(&opener.device_id);
         let in_terminal = self
@@ -2219,7 +2219,7 @@ mod tests {
         };
         assert!(guard.opener_of_pane("sender").is_none());
         guard.stamp_control_opener(&key(), &checkout, &open, &view);
-        // A restarted Herdr gives the pane id to another shell: the mark
+        // A restarted engine gives the pane id to another shell: the mark
         // does not follow the id (B40)...
         guard.snapshot.navigator.agents = vec![agent("recipient", "another-session")];
         guard.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes[1].terminal_id =

@@ -1,8 +1,7 @@
 // The sidebar's row menus (PRD sidebar-context-menus D-11) on an isolated
 // engine and hided: a Git project with an agent in its main checkout and one
 // in a linked worktree. The
-// project row's menu lists the board's items and Pin pins it (on Herdr, a
-// project Herdr shows without a registration is registered by it too); New tab in main opens a terminal in the default checkout and brings
+// project row's menu lists the board's items and Pin pins it; New tab in main opens a terminal in the default checkout and brings
 // it to the front, where an explicit start creates its terminal; Set as default
 // checkout moves the home glyph and the first place to the worktree; the agent row's Copy session id puts the
 // session id on the clipboard, and its Close tab… closes that agent's tab.
@@ -322,7 +321,7 @@ test("the agent row's menu copies the session id and the agent's reference with 
     await screenshot(page, "sidebar-menus-agent-dark");
     await page.locator('[data-menu-item="copy_session_id"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(SESSION);
-    // The id `herdr pane list` names this pane by, the one ⌘K finds it by, inside the reference an agent reads.
+    // The pane id, as `$HERDR_PANE_ID` gives it, the one ⌘K finds it by, inside the reference an agent reads.
     menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
     await page.locator('[data-menu-item="copy_reference"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(new RegExp(`^@.+ \\(pane ${worktreePane} · 사이드바 메뉴 구현\\)$`));

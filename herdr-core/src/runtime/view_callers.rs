@@ -39,7 +39,7 @@ impl Runtime {
         self.agent_view_of(key).1.map(str::to_owned)
     }
 
-    /// The Herdr tab of a pane caller in the Workspace `key`; a checkout
+    /// The engine tab of a pane caller in the Workspace `key`; a checkout
     /// caller has none.
     pub(super) fn control_caller_tab(&self, key: &WorkspaceKey, caller_id: &str) -> Option<String> {
         let Caller::Pane(pane_id) = Caller::parse(caller_id) else {
@@ -75,7 +75,7 @@ impl Runtime {
     }
 
     /// The pane the operator is in on `device`, the device in front: this
-    /// machine's selected pane, or the pane a device's Herdr has focused,
+    /// machine's selected pane, or the pane a device's engine has focused,
     /// which the shell draws focused and follows (`remoteView` in
     /// `web/src/remote.ts`).
     pub(super) fn operator_pane(&self, device: &str) -> Option<&str> {
@@ -139,7 +139,7 @@ impl Runtime {
         }
     }
 
-    /// A tab that left Herdr takes only its pending reads with it.
+    /// A tab that left the engine takes only its pending reads with it.
     pub(super) fn prune_view_callers(&mut self, key: &WorkspaceKey, tabs: &[&str]) -> bool {
         self.prune_gui_reads(key, tabs)
     }

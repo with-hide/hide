@@ -411,7 +411,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
   /**
    * A project or checkout row. On a selected SSH device a project can hold
-   * several Herdr workspaces, and the checkout names the one to focus.
+   * several engine workspaces, and the checkout names the one to focus.
    */
   const focusCheckout = (workspaceId: string, checkoutId: string, expanded?: FocusCheckoutPayload["expanded"], projectExpanded?: boolean) => {
     const context = remoteContext(rest());
@@ -2515,7 +2515,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * Pins or unpins a project. A row Herdr shows without a registration is
+     * Pins or unpins a project. A row the engine shows without a registration is
      * registered with its device and root by the same event (PRD
      * sidebar-context-menus D-14), so pinning it is one action.
      */
@@ -2525,8 +2525,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A new tab in one checkout, brought to the front (PRD sidebar-context-menus
-     * D-08): the core focuses the checkout and asks Herdr for the tab in the
-     * same event. A device's checkout gets its tab on that device's Herdr.
+     * D-08): the core focuses the checkout and asks the engine for the tab in the
+     * same event. A device's checkout gets its tab on that device's engine.
      */
     newTabIn(deviceId: string, checkout: Checkout) {
       beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId: checkout.workspace_id });
@@ -2711,13 +2711,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A Recent Panels or Recent Projects commit: the surface comes forward in
      * its own checkout, bringing this machine and that Workspace to the front
-     * when they are not, as one event. A Herdr tab is a `focus_tab`; a display
+     * when they are not, as one event. An engine tab is a `focus_tab`; a display
      * is the checkout's `focus_checkout` naming it, and the keyboard follows
      * into the display once the core shows it.
      */
     openSurface(surface: Surface) {
       if (surface.deviceId !== localDeviceId(rest())) {
-        // A device's tab comes forward on that device's Herdr, bringing the device with it: one event for rail, sidebar and center (D-16).
+        // A device's tab comes forward on that device's engine, bringing the device with it: one event for rail, sidebar and center (D-16).
         const status = rest()?.status?.remote?.find((row) => row.target_id === surface.deviceId);
         const checkout = status?.session?.workspaces.flatMap((row) => row.checkouts).find((row) => row.id === surface.checkoutId);
         if (!checkout) return diagnostic(`recent: ${surface.checkoutId} is no longer open on ${surface.deviceId}`);
@@ -2747,9 +2747,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     reorderTab(stripId: string, toIndex: number) {
       // A device's strip is arranged by the core as this machine's is; a
-      // Herdr tab moves on the device's own Herdr (`reorder_tab`).
+      // engine tab moves on the device's own engine (`reorder_tab`).
       // A file slot moves with the device offline too; the core refuses a
-      // Herdr move while the device is not connected.
+      // engine move while the device is not connected.
       const context = remoteContext(rest());
       if (context) {
         const checkout = remoteView(context.session, rest()?.workspace_view)?.checkout;
@@ -3321,7 +3321,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * hands the question to the core, which opens the agent's search or
      * answers that this pane's find bar should open (`FindBar` acts on the
      * answer); any other pane's find bar opens now. The core searches a
-     * device pane through that device's Herdr.
+     * device pane through that device's engine.
      */
     openFind(target?: string) {
       if (ui().overlay === "find") {

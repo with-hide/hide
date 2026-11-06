@@ -1,5 +1,5 @@
-//! Live Herdr commands and pane byte transport. Session state synchronization
-//! lives in `session_sync` and uses the sequenced socket event stream.
+//! Live engine commands and pane byte transport. Session state synchronization
+//! lives in `session_sync`, which reads the engine's whole session on each wake.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
@@ -79,7 +79,7 @@ impl PaneResizeDirection {
 #[derive(Clone, Debug)]
 pub enum PaneControlAction {
     /// Fetches the authoritative layout containing a pane without changing
-    /// Herdr's global focus. Checkout navigation uses this to update directly
+    /// the engine's global focus. Checkout navigation uses this to update directly
     /// instead of waiting for the corresponding event-stream projection.
     Project {
         pane_id: String,
@@ -148,7 +148,7 @@ pub enum PaneControlOutcome {
     Acknowledged {
         created_pane_id: Option<String>,
     },
-    /// Herdr accepted the request and moved nothing: a zoom answered
+    /// The engine accepted the request and moved nothing: a zoom answered
     /// `zoom_changed: false` or a resize answered `changed: false`. No
     /// layout event follows, so the operation ends at this answer (PRD
     /// instant-pane-topology D-12).
@@ -177,7 +177,7 @@ pub enum RemoteControlAction {
         group_id: Option<Box<str>>,
         admission_id: Option<u64>,
     },
-    /// A new tab in a checkout whose owner Herdr workspace is not open: the
+    /// A new tab in a checkout whose owner the engine workspace is not open: the
     /// owner is opened first and the tab lands in it (`checkout_owner`).
     OpenOwner {
         owner: OwnerOpen,
@@ -190,12 +190,12 @@ pub enum RemoteControlAction {
     CloseTab {
         tab_id: String,
     },
-    /// Asks Herdr to put one of its tabs at a new place in its workspace.
+    /// Asks the engine to put one of its tabs at a new place in its workspace.
     ///
-    /// Herdr owns the order of its own tabs, so this is a request, not a
-    /// local edit: the strip keeps the order Herdr last reported until Herdr
+    /// The engine owns the order of its own tabs, so this is a request, not a
+    /// local edit: the strip keeps the order the engine last reported until the engine
     /// reports the new one. `expected_order` is the tab order the operator
-    /// asked for *within the single Herdr workspace that owns the moved tab*,
+    /// asked for *within the single engine workspace that owns the moved tab*,
     /// not across the checkout: a checkout can hold tabs from several
     /// workspaces, and `tab.move` answers with one workspace's list. It is
     /// carried so the acknowledgement can be checked against what was
@@ -203,15 +203,15 @@ pub enum RemoteControlAction {
     MoveTab {
         checkout_id: String,
         tab_id: String,
-        /// Herdr's insertion index, which counts positions in the tab list
+        /// The engine's insertion index, which counts positions in the tab list
         /// *before* the moved tab is taken out of it.
         insert_index: usize,
         expected_order: Vec<String>,
         /// Which reorder this request belongs to, so a result that a later
         /// drag has already superseded cannot cancel the newer one.
         generation: u64,
-        /// The Herdr connection that carried the request. A late response
-        /// from an older socket cannot settle a move on a reconnected host.
+        /// The connection that carried the request. A late response
+        /// from an older connection cannot settle a move on a reconnected host.
         connection_generation: u64,
     },
 }
@@ -237,12 +237,12 @@ pub enum RemoteControlOutcome {
         created_tab_id: Option<String>,
         created_pane_id: Option<String>,
     },
-    /// The workspace tab order Herdr reported back, in Herdr's order.
+    /// The workspace tab order the engine reported back, in the engine's order.
     TabsOrdered { tab_ids: Vec<String> },
 }
 
 /// A control result is either a known refusal or an answer that may have been
-/// lost after Herdr accepted the request. The runtime must never retry the
+/// lost after the engine accepted the request. The runtime must never retry the
 /// latter mutation without first reading fresh topology.
 #[derive(Clone, Debug)]
 pub(crate) enum ControlFailure {
@@ -396,7 +396,7 @@ pub(crate) fn execute_remote_control(
             ..
         } => {
             // `tab.move` answers with the workspace's whole tab list in its
-            // new order, so the caller can check what Herdr actually did
+            // new order, so the caller can check what the engine actually did
             // instead of assuming the request landed as asked.
             let tab_ids = engine
                 .move_tab(CONTROL_WAIT, tab_id, *insert_index)
@@ -463,7 +463,7 @@ fn execute_pane_control(
             direction,
             cwd,
         } => {
-            // The user split to work in the new pane, so Herdr focuses it as
+            // The user split to work in the new pane, so the engine focuses it as
             // part of the split and the pane_focused event lands the shell's
             // selection there with no second round trip.
             Some(
@@ -483,7 +483,7 @@ fn execute_pane_control(
             workspace_id,
             label,
         } => {
-            // The created tab is checked so a refusal Herdr reported as an
+            // The created tab is checked so a refusal the engine reported as an
             // unchanged move fails the action rather than reading as done.
             engine
                 .move_pane_to_new_tab(CONTROL_WAIT, pane_id, workspace_id, label)
@@ -557,7 +557,7 @@ pub(crate) fn start_agent(
             crate::agent_start::SHELL_STARTING,
             screen.as_deref().unwrap_or_default(),
         ),
-        // Herdr refused the pane as busy until the start's deadline: nothing
+        // The engine refused the pane as busy until the start's deadline: nothing
         // was typed, and the same intent asks again in the same pane.
         crate::agent_start::StartError::Herdr(EngineError::Refused { code, .. })
             if code == crate::agent_start::PANE_BUSY =>
@@ -568,7 +568,7 @@ pub(crate) fn start_agent(
     })
 }
 
-/// A spawn's start that Herdr refused as busy for its whole wait.
+/// A spawn's start that engine refused as busy for its whole wait.
 pub(crate) const PANE_BUSY_REFUSAL: &str = "pane_busy";
 
 #[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
@@ -723,27 +723,27 @@ fn execute_pane_focus(
     let response_timeout = Duration::from_secs(5);
     // These three responses share the established absolute read deadline and
     // 64 KiB frame cap. A lost mutation response has a different outcome from
-    // an authoritative read failing after Herdr already acknowledged it.
+    // an authoritative read failing after the engine already acknowledged it.
     engine
         .focus_pane(Wait::Small(response_timeout), pane_id)
         .map_err(mutation_failure("pane.focus"))?;
     confirm_pane_focus_with_timeout(engine, pane_id, response_timeout)
 }
 
-/// Herdr's answer to whether a pane holds its focus.
+/// The engine's answer to whether a pane holds its focus.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FocusReadback {
     /// The pane is focused in the tab its workspace shows.
     Confirmed,
-    /// Herdr's focus is on another pane or tab, so the move the stream showed
-    /// is not Herdr's focus now.
+    /// The engine's focus is on another pane or tab, so the move the stream showed
+    /// is not the engine's focus now.
     Elsewhere,
-    /// Herdr could not be read; its reason.
+    /// The engine could not be read; its reason.
     Unread(String),
 }
 
-/// Read current focus without producing another focus effect. Herdr's pinned
-/// event stream has no ordering cursor, so an external move needs this same
+/// Read current focus without producing another focus effect. Herdr's event
+/// stream had no ordering cursor, so an external move needs this same
 /// confirmation before an older queued layout can replace Hide's selection.
 pub(crate) fn confirm_pane_focus(engine: &dyn Engine, pane_id: &str) -> FocusReadback {
     match read_pane_focus(engine, pane_id, Duration::from_secs(5)) {
@@ -772,7 +772,7 @@ fn confirm_pane_focus_with_timeout(
     Ok(layout)
 }
 
-/// Herdr's layout of the tab holding `pane_id` and the tab its workspace
+/// The engine's layout of the tab holding `pane_id` and the tab its workspace
 /// shows.
 fn read_pane_focus(
     engine: &dyn Engine,
@@ -878,7 +878,7 @@ pub fn spawn_pane_control(context: LiveContext, action: PaneControlAction) -> Re
 
 /// Starts a pane control worker with the connection generation that created it.
 /// The generation is part of the operation identity, so a late answer from an
-/// older Herdr socket cannot settle a newer request for the same pane.
+/// older connection cannot settle a newer request for the same pane.
 pub fn spawn_pane_control_with_generation(
     context: LiveContext,
     action: PaneControlAction,
@@ -929,7 +929,7 @@ pub fn spawn_pane_control_with_generation(
 /// control, file node and admitted intent is checked again once connected.
 /// `current` checks current runtime facts and, for a saved group start, its
 /// owning node's terminal incarnation outside Runtime's mutex; its refusal
-/// answers in Herdr's place with its own code and [`SESSION_CHANGED`].
+/// answers in the engine's place with its own code and [`SESSION_CHANGED`].
 pub(crate) fn current_session<'a>(
     engine: &'a dyn Engine,
     current: &'a (dyn Fn() -> Result<(), String> + Sync),
@@ -942,8 +942,8 @@ pub(crate) fn current_session<'a>(
     }))
 }
 
-/// The message of the refusal [`current_session`] answers in Herdr's place,
-/// before anything reached Herdr: its `code` is Hide's own check's.
+/// The message of the refusal [`current_session`] answers in the engine's place,
+/// before anything reached the engine: its `code` is Hide's own check's.
 pub(crate) const SESSION_CHANGED: &str = "The session execution changed; refresh before retrying";
 
 pub fn spawn_remote_control(
@@ -1160,7 +1160,7 @@ fn recover_local_creation(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SessionFetchError {
-    /// The socket file itself does not exist: the herdr server is not running.
+    /// No engine runs where the core looked for it (`EngineError::NotRunning`).
     SocketMissing(String),
     /// The socket exists but the request failed (connect, timeout, IO).
     Unreachable(String),
@@ -1262,7 +1262,7 @@ pub fn project_layout_for_pane(
     project_layout(layout)
 }
 
-/// Every tab's layout in the session, in the order Herdr sent them, plus the
+/// Every tab's layout in the session, in the order the engine sent them, plus the
 /// tabs whose layout could not be read.
 ///
 /// One unreadable layout excludes only its own tab. Refusing the whole

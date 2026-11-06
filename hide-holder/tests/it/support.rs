@@ -22,7 +22,7 @@ use hide_platform::process::{ResidentCommand, is_alive, kill_tree, start_residen
 pub const HANG_LIMIT: Duration = Duration::from_secs(30);
 
 /// The variable naming the pinned ConPTY runtime folder on Windows: the
-/// `conpty` folder beside the pinned Herdr's `herdr.exe`.
+/// `holder-conpty` folder a package or `scripts/fetch-conpty.py --out` provides.
 pub const CONPTY_VARIABLE: &str = "HIDE_HOLDER_CONPTY";
 
 /// The role a pane's program plays, read by `role::play`.

@@ -1,11 +1,11 @@
 //! Linked worktrees removed outside Hide. A script, an agent or the operator
-//! that runs `git worktree remove` leaves the Herdr workspace that was open in
+//! that runs `git worktree remove` leaves the engine workspace that was open in
 //! the folder behind, its shells and finished agents still standing in a
 //! folder that is gone, and each such checkout stays a missing row under the
 //! sidebar's cleanup fold. After every catalog the runtime finds those this
 //! machine's node answered gone for, and when nothing in them is the
 //! operator's to keep (an agent at work or waiting, a tab they named) it
-//! starts the cleanup's own close of their panes off the lock; Herdr closes
+//! starts the cleanup's own close of their panes off the lock; the engine closes
 //! the workspace with its last pane, and the row goes with it.
 use super::Runtime;
 use crate::worktree_cleanup::{CleanupPlace, GoneCheckout};
@@ -14,7 +14,7 @@ use std::path::Path;
 
 impl Runtime {
     /// Starts the close of each gone worktree that may close now. Without a
-    /// live Herdr nothing is decided, so a close is never marked started
+    /// live engine nothing is decided, so a close is never marked started
     /// when it could not be.
     pub(super) fn close_gone_worktrees(&mut self) {
         let Some(context) = self.live.clone() else {
@@ -49,7 +49,7 @@ impl Runtime {
     ///
     /// Gone is the node's answer (`PathIndex::gone`: it was asked and found
     /// nothing there), never a row's `exists`, which also reads false for a
-    /// folder only Herdr or Git placed; the worker asks the node once more
+    /// folder only the engine or Git placed; the worker asks the node once more
     /// and closes only on `missing`. The panes' agents are judged as the
     /// cleanup judges them (`cleanup_facts`): any agent working, waiting on
     /// the operator, unreported, or with a busy descendant keeps the

@@ -3,7 +3,7 @@
 // shell sends for the operator's action (Add project, New tab, Split, Close,
 // a click on a pane or a tab, the start panel's start) and is read back from
 // the snapshot the daemon publishes, never from an engine's CLI, so a spec
-// says the same thing on Herdr and on the core's own engine.
+// says what the operator sees.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -35,11 +35,10 @@ export function sendKeys(control: HidedControl, pane: string, text: string): voi
 
 /**
  * Reports a grid for `pane` as the pane view does once it is drawn, for a
- * pane no page shows yet: on Herdr the daemon attaches a pane's terminal,
+ * pane no page shows yet: the daemon attaches a pane's terminal,
  * and so delivers keys typed into it, only once a view has sized it
- * (`hide-node` terminal, `waiting_size`); the core's own engine sizes its
- * panes itself. Never for a pane the page shows: its view's own size
- * would be replaced.
+ * (`hide-node` terminal, `waiting_size`). Never for a pane the page shows:
+ * its view's own size would be replaced.
  */
 export function viewPane(control: HidedControl, pane: string, { cols = 120, rows = 40 }: { cols?: number; rows?: number } = {}): void {
   control.send("terminal_viewport", { pane_id: pane, cols, rows, new_view: true });
@@ -343,7 +342,7 @@ function terminalReady(rest: Rest, pane: string): boolean {
 
 /**
  * Shows the tab that holds `pane`, as a click on its tab does, wherever the
- * navigator lists it: a tab nobody has shown is not attached on Herdr, so the
+ * navigator lists it: a tab nobody has shown is not attached, so the
  * keys typed into a pane of a spawned child's tab are dropped until it is.
  */
 export async function showTabOf(control: HidedControl, pane: string): Promise<void> {

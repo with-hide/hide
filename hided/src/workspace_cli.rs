@@ -1666,7 +1666,7 @@ mod tests {
     }
 
     /// A device's node and a pane's `hide` meet over the system's local
-    /// stream: the node sees the caller's pid and asks the pane's Herdr about
+    /// stream: the node sees the caller's pid and asks the pane's holder about
     /// it, and stopping the node removes it from this device.
     #[test]
     fn a_device_node_answers_this_device_until_it_stops() {

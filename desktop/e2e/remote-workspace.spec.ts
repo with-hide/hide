@@ -1,7 +1,7 @@
 // Real SSH-origin Workspace CLI acceptance. Run with an isolated sshd whose
 // port, key and known_hosts are supplied in HIDE_E2E_SSH_* and whose sessions
 // get the private HOME desktop/e2e/device-home.ts describes, because
-// connecting installs Hide's kit there; the two Herdr servers, daemon, helper
+// connecting installs Hide's kit there; the two SSH pane fixtures, daemon, helper
 // install and desktop profile remain private.
 // HIDE_E2E_SSH_PID plus HIDE_E2E_SSH_CONFIG enable the stalled-handshake
 // check only for an identified, test-owned sshd listener.
@@ -138,7 +138,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
   // The device's `hide` link goes here, never the account's own ~/.local/bin.
   run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "remote-bin");
   // Two aliases for the one isolated server: a second device registers under
-  // the second, with its own Herdr server, id and connections.
+  // the second, with its own pane fixture, id and connections.
   writeSshConfig(run.env.HOME!, ["isolated-workspace", "isolated-workspace-2"]);
   const deviceAccount = deviceHome();
   const bridge = deviceBridges(deviceAccount);

@@ -238,7 +238,7 @@ test("a saved Workspace still reopens when its initial catalog arrives after the
         const frame = JSON.parse(message);
         if (frame.type !== "snapshot") return;
         // The real first async-catalog frame: the saved choice still exists,
-        // Herdr is connected, but no confirmed catalog/View has arrived.
+        // The engine is connected, but no confirmed catalog/View has arrived.
         frame.payload.rest.navigator.workspaces = [];
         frame.payload.rest.workspace_view = null;
         frame.payload.rest.status.herdr.state = "connected";

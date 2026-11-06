@@ -254,7 +254,7 @@ test("a new session's first prompt carries the guidance and the letters in one h
   const { sessionFile: file, sessionId: id } = sample("before_agent_start").ctx;
   assert.equal(call.agent, AGENT);
   // `lost` counts calls an earlier budget gave up on; a loaded machine may add it. Letters know the session by its
-  // file, as Herdr does; Memory by the host's own id, which its session reader keys a receipt by.
+  // file, as Herdr did; Memory by the host's own id, which its session reader keys a receipt by.
   const { lost: _lost, ...input } = call.input;
   assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 15 });
   assert.equal(call.env.HIDE_PANE_ID, "w1:p1");
@@ -684,7 +684,7 @@ if (AGENT === "omp") {
     await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
     assert.equal(calls().filter((call) => call.operation === "prompt").length, 0);
 
-    // The main session's turn end reports again, so a Herdr that lost the counts gets them back.
+    // The main session's turn end reports again, so a core that lost the counts gets them back.
     const before = counts().length;
     await host.emit("agent_end", sample("agent_end").event, context("agent_end"));
     await until("subagents", before + 1);

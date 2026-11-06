@@ -711,7 +711,7 @@ struct Inner {
     readers: std::sync::OnceLock<hide_node_link::sessions::ReaderFeatures>,
     /// The protocol the node's Hello named.
     protocol: std::sync::OnceLock<u32>,
-    /// The streams to the node's own Herdr and its daemon's browser relay
+    /// The streams to the node's browser relay and loopback servers
     /// open on this link, for a node that dialed its core (`link_streams`).
     streams: link_streams::LinkStreams,
     /// The link runs over the attach role's local stream: a node that dialed

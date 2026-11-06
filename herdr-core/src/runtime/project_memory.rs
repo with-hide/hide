@@ -173,8 +173,8 @@ impl Runtime {
         };
         // The pane's agent on the caller's own machine: a node's pane is
         // found among that node's agents, never this machine's. A pane is a
-        // person's only while neither Herdr nor the delivery ledger names an
-        // agent in it, so an agent Herdr has not listed yet is never one.
+        // person's only while neither the engine nor the delivery ledger names an
+        // agent in it, so an agent the engine has not listed yet is never one.
         let caller_kind = match crate::workspace_control::Caller::parse(caller) {
             crate::workspace_control::Caller::Pane(pane) => match self
                 .machine_agents(device)

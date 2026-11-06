@@ -322,7 +322,7 @@ fn a_prompts_first_model_call_injects_the_panes_letter_and_then_confirms_it() {
         ]
     );
 
-    // Outside a Herdr pane the gap asks nothing and answers nothing.
+    // Outside a pane Hide manages the gap asks nothing and answers nothing.
     let outside = machine.run(
         "UserPromptSubmit",
         &json!({ "conversationId": CONVERSATION, "invocationNum": 2 }),
