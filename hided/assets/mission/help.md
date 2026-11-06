@@ -33,7 +33,7 @@ Every command prints one JSON line: `{"ok":true,"result":…}` or `{"ok":false,"
 A command that names no `--mission` acts on the mission you conduct.
 Running a command again changes nothing more, so after a timeout read `hide mission show` and decide.
 
-`hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, and ⚠ on a warned node).
+`hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
 `hide mission show <node>` reads that node in full: its finish lines with their evidence and verdicts, its pull requests and CI, its branch and last push, its warnings, its worker and the worker's newest letters.
 With `--json` it prints the record itself instead, `{"mission":…}`, or for one node `{"mission_id","node","letters"}` (`letters` is null when the ledger could not be read): the fields this guide names in backticks, such as a node's `criteria`, the mission's `strength` and an open question's `key`, are read there.
 
@@ -247,7 +247,7 @@ CI, review and merge waits call no one, and a worker waiting on them is not warn
 Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge is not quiet).
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review or a new push takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
-The two thresholds are the operator's, in Settings › Mission (`warn_review_fails`, `warn_quiet_minutes` in `hide mission settings`).
+The two thresholds are fixed: two failed reviews in a row and 90 minutes with no push.
 
 ### Finish lines
 

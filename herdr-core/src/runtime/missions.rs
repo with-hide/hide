@@ -16,7 +16,7 @@ use super::mission_landing::{
     NodeLanding, landing_order, node_landing, reads_branch, stack_settled, stack_waiting,
 };
 use crate::delivery::Actor;
-use crate::mission_criteria::{CheckKind, Criterion, CriterionState};
+use crate::mission_criteria::{CheckKind, Criterion, CriterionKind, CriterionState};
 use crate::mission_events::History;
 use crate::missions::{
     AnswerFailure, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
@@ -221,8 +221,119 @@ pub struct NodeView {
     pub review_fails: u32,
     /// When Hide last read a new head on one of its pull requests.
     pub pushed_at_unix_ms: Option<u64>,
+    /// A push is asked of it (`MissionNode::asks_push`), the node whose
+    /// quiet can warn: `hide mission show` says `push 없음` before its first.
+    pub asks_push: bool,
     /// The warnings it carries, its Conductor's alone: the card's `⚠`.
     pub warnings: Vec<crate::missions::NodeWarning>,
+    /// Who or what it waits on now (`waiting_on`), which `hide mission show`
+    /// prints; none for a node that waits on nothing.
+    pub waiting_on: Option<WaitingOn>,
+}
+
+/// Who or what a mission node waits on now, decided once here so `hide
+/// mission show`'s list and its node read the same answer.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaitingOn {
+    /// Its raise, on whom it reached and why.
+    Attention {
+        to: AttentionTo,
+        reason: crate::missions::AttentionReason,
+    },
+    /// The operator's answer to the decision that stopped it.
+    Decision,
+    /// A node it depends on was dropped.
+    Blocked,
+    /// The nodes it depends on that are not done, in its order.
+    Nodes {
+        keys: Vec<String>,
+    },
+    /// Nothing before it: it waits to be started.
+    Start,
+    /// Its worker: a line failed, or its first open line is the worker's.
+    Worker,
+    Review,
+    Verify,
+    Ci,
+    /// The merge of its pull request.
+    Merge,
+    /// Every line is met and nothing waits on GitHub: the Conductor's move.
+    Conductor,
+}
+
+/// What `view`, a node of `mission`, waits on (`WaitingOn`): its raise
+/// first, then the decision that stopped it, then by its status what it has
+/// not met. A planned node waits on the nodes before it, a working one on
+/// its first line not met (a failed line is its worker's), then its pull
+/// request's merge, and a done one on the merge left before main.
+fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
+    if let Some(attention) = &view.attention {
+        return Some(WaitingOn::Attention {
+            to: attention.to,
+            reason: attention.reason,
+        });
+    }
+    if mission.decision.is_some()
+        && mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.as_deref())
+            == Some(view.key.as_str())
+    {
+        return Some(WaitingOn::Decision);
+    }
+    match view.status {
+        NodeStatus::Planned => {
+            if view.blocked.is_some() {
+                return Some(WaitingOn::Blocked);
+            }
+            let keys: Vec<String> = view
+                .depends_on
+                .iter()
+                .filter(|key| {
+                    mission
+                        .nodes
+                        .iter()
+                        .find(|other| other.key == **key)
+                        .is_some_and(|other| other.status != NodeStatus::Done)
+                })
+                .cloned()
+                .collect();
+            Some(if keys.is_empty() {
+                WaitingOn::Start
+            } else {
+                WaitingOn::Nodes { keys }
+            })
+        }
+        NodeStatus::Working => {
+            if view
+                .criteria
+                .iter()
+                .any(|line| line.state == CriterionState::Fail)
+            {
+                return Some(WaitingOn::Worker);
+            }
+            let open = view
+                .criteria
+                .iter()
+                .find(|line| !matches!(line.state, CriterionState::Pass | CriterionState::Skipped));
+            Some(match open.map(|line| line.kind) {
+                Some(CriterionKind::Review) => WaitingOn::Review,
+                Some(CriterionKind::Verify) => WaitingOn::Verify,
+                Some(CriterionKind::Ci) => WaitingOn::Ci,
+                Some(_) => WaitingOn::Worker,
+                None if view.pr_state.is_some_and(|state| state != PrState::Merged) => {
+                    WaitingOn::Merge
+                }
+                None => WaitingOn::Conductor,
+            })
+        }
+        NodeStatus::Done if matches!(view.landing, Some(NodeLanding::Left { .. })) => {
+            Some(WaitingOn::Merge)
+        }
+        NodeStatus::Done | NodeStatus::Dropped => None,
+    }
 }
 
 /// Letters `hide mission show <node>` lists of the node's worker.
@@ -2711,7 +2822,7 @@ impl Runtime {
                 let criteria_met =
                     count(|state| matches!(state, CriterionState::Pass | CriterionState::Skipped));
                 let criteria_skipped = count(|state| state == CriterionState::Skipped);
-                NodeView {
+                let mut view = NodeView {
                     key: node.key.clone(),
                     title: node.title.clone(),
                     kind: node.kind,
@@ -2787,8 +2898,12 @@ impl Runtime {
                     hide: node.hide.clone(),
                     review_fails: node.review_fails(),
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
+                    asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),
-                }
+                    waiting_on: None,
+                };
+                view.waiting_on = waiting_on(mission, &view);
+                view
             })
             .collect();
         let running = ledger.map_or(0, |ledger| {

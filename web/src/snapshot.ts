@@ -1649,7 +1649,7 @@ export type PlansSnapshot = { items: PlanView[] };
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
 /** Which way every mission's map runs: what a node waits on above it, or to its left. */
 export type MissionMapFlow = "down" | "across";
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; warn_review_fails?: number; warn_quiet_minutes?: number; map_flow?: MissionMapFlow };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };

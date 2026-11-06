@@ -124,7 +124,7 @@ fn push_words(node: &Value, now: u64) -> Option<String> {
     let quiet = warning(node, "no_push");
     let words = match node["pushed_at_unix_ms"].as_u64() {
         Some(at) => format!("push {}", minutes_ago(now, at)),
-        None if quiet.is_some() || pushes(node) => "push 없음".to_owned(),
+        None if quiet.is_some() || node["asks_push"] == true => "push 없음".to_owned(),
         None => return None,
     };
     Some(marked(quiet.is_some(), words))
@@ -138,11 +138,6 @@ fn minutes_ago(now: u64, at: u64) -> String {
         minutes @ 1..=1439 => format!("{minutes}분 전"),
         minutes => format!("{}일 전", minutes / 1440),
     }
-}
-
-/// A change at work delivered by pull request: the node a push is asked of.
-fn pushes(node: &Value) -> bool {
-    node["status"] == "working" && node["kind"] == "change" && node["delivery"] == "pr"
 }
 
 fn pr_words(node: &Value) -> Option<String> {
@@ -169,68 +164,38 @@ fn pr_words(node: &Value) -> Option<String> {
     Some(words)
 }
 
-/// Who or what the node waits on now, by the first line it has not met.
-fn waits_on(mission: &Value, node: &Value) -> Option<String> {
-    if node["attention"].is_object() {
-        let attention = &node["attention"];
-        let who = if attention["to"] == "operator" {
-            "운영자"
-        } else {
-            "지휘자"
-        };
-        return Some(format!("! {who}: {}", reason_word(&attention["reason"])));
-    }
-    if mission["decision"].is_string() && mission["question"]["node"] == node["key"] {
-        return Some("기다림 운영자 결정".to_owned());
-    }
-    match node["status"].as_str() {
-        Some("planned") => {
-            if node["blocked"].is_string() {
-                return Some("막힘 앞 노드 빠짐".to_owned());
-            }
-            let nodes = mission["nodes"].as_array()?;
-            let before: Vec<&str> = node["depends_on"]
+/// What the node waits on, as the core decided it (`waiting_on`).
+fn waits_on(node: &Value) -> Option<String> {
+    let waiting = &node["waiting_on"];
+    let words = match waiting["kind"].as_str()? {
+        "attention" => {
+            let who = if waiting["to"] == "operator" {
+                "운영자"
+            } else {
+                "지휘자"
+            };
+            return Some(format!("! {who}: {}", reason_word(&waiting["reason"])));
+        }
+        "nodes" => {
+            let keys: Vec<&str> = waiting["keys"]
                 .as_array()?
                 .iter()
                 .filter_map(Value::as_str)
-                .filter(|key| {
-                    nodes
-                        .iter()
-                        .find(|other| other["key"] == *key)
-                        .is_some_and(|other| other["status"] != "done")
-                })
                 .collect();
-            Some(if before.is_empty() {
-                "시작 전".to_owned()
-            } else {
-                format!("기다림 {}", before.join(", "))
-            })
+            return Some(format!("기다림 {}", keys.join(", ")));
         }
-        Some("working") => {
-            let lines = node["criteria"].as_array()?;
-            if lines.iter().any(|line| line["state"] == "fail") {
-                return Some("기다림 작업자".to_owned());
-            }
-            let open = lines
-                .iter()
-                .find(|line| line["state"] != "pass" && line["state"] != "skipped");
-            Some(
-                match open.map(|line| line["kind"].as_str()) {
-                    Some(Some("review")) => "기다림 리뷰",
-                    Some(Some("verify")) => "기다림 검증",
-                    Some(Some("ci")) => "기다림 CI",
-                    Some(_) => "기다림 작업자",
-                    None if node["pr_state"].is_string() && node["pr_state"] != "merged" => {
-                        "기다림 머지"
-                    }
-                    None => "기다림 지휘자",
-                }
-                .to_owned(),
-            )
-        }
-        Some("done") if node["landing"]["state"] == "left" => Some("기다림 머지".to_owned()),
-        _ => None,
-    }
+        "decision" => "기다림 운영자 결정",
+        "blocked" => "막힘 앞 노드 빠짐",
+        "start" => "시작 전",
+        "worker" => "기다림 작업자",
+        "review" => "기다림 리뷰",
+        "verify" => "기다림 검증",
+        "ci" => "기다림 CI",
+        "merge" => "기다림 머지",
+        "conductor" => "기다림 지휘자",
+        _ => "-",
+    };
+    Some(words.to_owned())
 }
 
 fn warning_count(node: &Value) -> usize {
@@ -280,7 +245,7 @@ fn draw_mission(mission: &Value, now: u64) -> String {
         fields.extend(review_words(node));
         fields.extend(push_words(node, now));
         fields.extend(pr_words(node));
-        fields.extend(waits_on(mission, node));
+        fields.extend(waits_on(node));
         let mark = if warning_count(node) > 0 { WARN } else { " " };
         let _ = writeln!(out, "{mark} {}", fields.join(" · "));
     }
@@ -386,10 +351,9 @@ fn draw_node(result: &Value, now: u64) -> String {
             other => other.to_owned(),
         });
     }
-    // The decision and the nodes before it are the mission's, which the
-    // node's answer does not carry; its attention has a line of its own.
-    if !node["attention"].is_object() {
-        state.extend(waits_on(&Value::Null, node));
+    // Its attention has a line of its own.
+    if node["waiting_on"]["kind"] != "attention" {
+        state.extend(waits_on(node));
     }
     let _ = writeln!(out, "상태 {}", state.join(" · "));
     if let Some(worker) = worker_words(node) {
@@ -502,6 +466,7 @@ mod tests {
             {"key": "show", "kind": "change", "delivery": "pr", "status": "working",
              "agent_runtime": "running", "pr": 7, "prs": [{"number": 7, "state": "failed"}],
              "pr_state": "failed", "review_fails": 2, "pushed_at_unix_ms": NOW - 95 * MINUTE,
+             "asks_push": true, "waiting_on": {"kind": "worker"},
              "criteria": [
                 {"key": "c1", "kind": "own", "state": "pass"},
                 {"key": "review", "kind": "review", "state": "fail", "fails_in_a_row": 2},
@@ -513,6 +478,7 @@ mod tests {
             {"key": "ci", "kind": "change", "delivery": "pr", "status": "working",
              "pr": 8, "prs": [{"number": 8, "state": "pending"}], "pr_state": "pending",
              "review_fails": 0, "pushed_at_unix_ms": NOW - 12 * MINUTE, "warnings": [],
+             "asks_push": true, "waiting_on": {"kind": "decision"},
              "criteria": [{"key": "c1", "kind": "own", "state": "pass"},
                           {"key": "review", "kind": "review", "state": "open"},
                           {"key": "ci", "kind": "ci", "state": "pass"}]},
@@ -521,6 +487,7 @@ mod tests {
              "pr_state": "merged", "review_fails": 0, "warnings": [],
              "criteria": [{"key": "ci", "kind": "ci", "state": "pass"}]},
             {"key": "later", "kind": "research", "status": "planned", "depends_on": ["show", "docs"],
+             "waiting_on": {"kind": "nodes", "keys": ["show"]},
              "review_fails": 0, "warnings": [], "criteria": []},
             {"key": "old", "kind": "change", "delivery": "pr", "status": "dropped",
              "review_fails": 0, "warnings": [], "criteria": []},
@@ -546,28 +513,50 @@ mod tests {
         );
     }
 
-    /// A change at work with no push Hide has read says so; what a node
-    /// waits on follows its first line not met.
+    /// Each line says what the core decided its node waits on, in words for
+    /// every kind the core decides, and a change a push is asked of with no
+    /// push Hide has read says so.
     #[test]
-    fn a_node_waits_on_its_first_line_not_met() {
+    fn a_node_line_says_what_the_core_decided_it_waits_on() {
+        for (waiting, words) in [
+            (
+                json!({"kind": "attention", "to": "conductor", "reason": "worker_ended"}),
+                "! 지휘자: 작업자가 일을 남기고 끝남",
+            ),
+            (
+                json!({"kind": "attention", "to": "operator", "reason": "pr_closed"}),
+                "! 운영자: PR이 머지 없이 닫힘",
+            ),
+            (json!({"kind": "decision"}), "기다림 운영자 결정"),
+            (json!({"kind": "blocked"}), "막힘 앞 노드 빠짐"),
+            (
+                json!({"kind": "nodes", "keys": ["show", "docs"]}),
+                "기다림 show, docs",
+            ),
+            (json!({"kind": "start"}), "시작 전"),
+            (json!({"kind": "worker"}), "기다림 작업자"),
+            (json!({"kind": "review"}), "기다림 리뷰"),
+            (json!({"kind": "verify"}), "기다림 검증"),
+            (json!({"kind": "ci"}), "기다림 CI"),
+            (json!({"kind": "merge"}), "기다림 머지"),
+            (json!({"kind": "conductor"}), "기다림 지휘자"),
+        ] {
+            let mut value = mission();
+            value["mission"]["nodes"][1]["waiting_on"] = waiting;
+            let text = draw(&value, NOW);
+            assert!(text.contains(&format!(" · CI 통과 · {words}\n")), "{text}");
+        }
         let mut value = mission();
         let node = &mut value["mission"]["nodes"][1];
         node["pushed_at_unix_ms"] = Value::Null;
         node["pr"] = Value::Null;
-        node["pr_state"] = Value::Null;
         let text = draw(&value, NOW);
         assert!(
             text.contains("  ci · 작업 중 · push 없음 · 기다림 운영자 결정\n"),
             "{text}"
         );
-        value["mission"]["decision"] = Value::Null;
-        assert!(draw(&value, NOW).contains("  ci · 작업 중 · push 없음 · 기다림 리뷰\n"));
-        value["mission"]["nodes"][1]["attention"] =
-            json!({"reason": "worker_ended", "to": "conductor", "since_unix_ms": NOW});
-        assert!(
-            draw(&value, NOW).contains("· ! 지휘자: 작업자가 일을 남기고 끝남\n"),
-            "an attention is what the node waits on first"
-        );
+        value["mission"]["nodes"][1]["asks_push"] = json!(false);
+        assert!(draw(&value, NOW).contains("  ci · 작업 중 · 기다림 운영자 결정\n"));
     }
 
     /// A title cannot draw a line of its own.
