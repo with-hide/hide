@@ -59,18 +59,15 @@ pub enum PartCause {
     /// Installed, but Hide could not save that it installed it, so the next
     /// pass installs it again.
     RecordUnsaved,
-    /// Retired: Herdr was not found on this machine. Hide runs no Herdr now.
-    HerdrAbsent,
-    /// Retired: the Herdr on this machine had no integration for the agent.
-    UpdateHerdr,
     /// Retiring an earlier Hide's coordination has not finished; the next
     /// pass carries it on.
     RetirementPending,
     /// Another Hide installation on this account holds the place, and its
     /// own pass keeps it; Hide left it (`value`: what holds it).
     OtherInstall,
-    /// A cause a newer helper named that this build does not know; the
-    /// screen says only the state.
+    /// A cause a newer helper named that this build does not know, or one an
+    /// earlier build named that this build retired (`herdr_absent`,
+    /// `update_herdr`); the screen says only the state.
     #[serde(other)]
     Other,
 }
