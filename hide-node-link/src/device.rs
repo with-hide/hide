@@ -909,6 +909,14 @@ impl Cancel {
         self.0.cancelled.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// The flag a cancel raises, for a bounded run that polls a stop flag
+    /// of its own (`hide_platform::process::run_to_end`): it stops when the
+    /// attempt is cancelled without arming the kill, which stays the
+    /// attempt's process's.
+    pub fn flag(&self) -> &std::sync::atomic::AtomicBool {
+        &self.0.cancelled
+    }
+
     /// Arms what ends the attempt's process at once on a cancel, and runs it
     /// now when the attempt is cancelled already. `kill` may run more than
     /// once and must not block.

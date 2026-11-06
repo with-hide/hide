@@ -23,9 +23,11 @@ use hide_node_link::device::{
 
 pub use super::host::bootstrap::Ran;
 
-/// How long ssh has to sign in and reach the start script, not counting the
-/// time a question or a browser check waits for the operator: a server that
-/// takes longer is not answering.
+/// How long ssh has to answer an attempt's questions (`ssh -V`, `ssh -G`),
+/// sign in and reach the start script, not counting the time a question or
+/// a browser check waits for the operator: an ssh that takes longer is not
+/// answering. One clock for all of it, so a slow first start of the program
+/// is part of connecting and never a failure of its own.
 pub(super) const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long a browser check waits (D-10).
 const BROWSER_WITHIN: Duration = Duration::from_secs(5 * 60);
@@ -245,6 +247,9 @@ pub(super) struct Dial<'a> {
     pub askpass: Option<&'a Path>,
     /// Names the connection in the log.
     pub target: &'a str,
+    /// When the attempt's [`SIGN_IN_TIMEOUT`], started before its first
+    /// question to ssh, runs out.
+    pub until: Instant,
 }
 
 /// Starts `ssh` for the alias and reads the start script's probe through the
@@ -337,7 +342,7 @@ pub(super) fn sign_in(
         .map_err(|error| EstablishError::Helper(format!("ssh's link could not start: {error}")))?;
     let mut pipe = SigningIn::new(link, desk, sign_in, wake, cancel);
     stage("sign_in");
-    let facts = match bootstrap::probe(&mut pipe, Instant::now() + SIGN_IN_TIMEOUT) {
+    let facts = match bootstrap::probe(&mut pipe, dial.until) {
         Ok(facts) => facts,
         Err(ProbeError::Unsupported(reason)) => {
             pipe.link.kill();
@@ -515,9 +520,10 @@ impl SshTarget {
         &self.alias
     }
 
-    /// What `ssh -G` resolves the alias to now.
-    pub fn resolve(&self) -> Result<Resolved, SshFailure> {
-        self.program.resolve(&self.alias)
+    /// What `ssh -G` resolves the alias to now, within the attempt's
+    /// `until` ([`SIGN_IN_TIMEOUT`] from its start) or until `cancel`.
+    pub fn resolve(&self, until: Instant, cancel: &Cancel) -> Result<Resolved, SshFailure> {
+        self.program.resolve(&self.alias, until, cancel)
     }
 }
 
@@ -550,12 +556,16 @@ impl Session {
     pub fn open(
         target: &SshTarget,
         resolved: &Resolved,
+        until: Instant,
         cancel: &Cancel,
         screen: Arc<dyn SignIn>,
         wake: Wake,
     ) -> Result<Self, SessionError> {
         let name = format!("ssh:{}", target.alias);
-        let version = target.program.version().map_err(SessionError::Ssh)?;
+        let version = target
+            .program
+            .version(until, cancel)
+            .map_err(SessionError::Ssh)?;
         // D-06, B14: a dial nobody pressed for hands its questions to
         // nobody, so the first one ends it as a sign-in needed and the
         // screen never shows it.
@@ -571,6 +581,7 @@ impl Session {
                 version,
                 askpass: target.askpass.as_deref(),
                 target: &name,
+                until,
             },
             Arc::clone(&asks),
             wake,
@@ -768,6 +779,7 @@ mod tests {
                     },
                     askpass: None,
                     target: "ssh:studio",
+                    until: Instant::now() + SIGN_IN_TIMEOUT,
                 },
                 Arc::clone(&row) as Arc<dyn SignIn>,
                 Wake::Allowed,
