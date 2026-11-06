@@ -4,6 +4,7 @@
 // same mission is never answerable on one screen and refused on the other,
 // and a refusal carries the same reason in both.
 
+import { useEffect, useRef } from "react";
 import type { MessageKey } from "./i18n/catalogs";
 import type { Mission, MissionAnswerFailure, MissionAnswerState } from "./snapshot";
 
@@ -22,13 +23,21 @@ export type PressedAnswer = { key: number; text: string; failed: MissionAnswerFa
 /** Why the operator cannot answer now, or why the last answer did not arrive (B28, B39). */
 export type AnswerReason = { kind: "offline" } | { kind: "failed"; failure: MissionAnswerFailure } | { kind: "no_conductor" } | { kind: "unsupported" };
 
+/**
+ * Which line says where a sent answer is (B26, B39): typed without the
+ * terminal confirming it (`전달 확인 안 됨` with 다시 보내기), waiting on a
+ * Conductor session Hide cannot read, or on its way (`보냄 · 차례 기다림`,
+ * `Conductor가 읽는 중`). `word` is the line's catalog key.
+ */
+export type SentLine = "unconfirmed" | "unreadable" | "delivered";
+
 export type AnswerView = {
   /** A decision from before questions is answered under key 0, as the core keeps it. */
   key: number;
   options: string[];
   recommend: number | null;
   /** The answer as it stands: the core's, or the one just pressed; null while the question is open. */
-  sent: { text: string; state: MissionAnswerState } | null;
+  sent: { text: string; state: MissionAnswerState; line: SentLine; word: MessageKey } | null;
   /** Sending an unconfirmed answer again shows it sending until the core moves it on. */
   resending: boolean;
   /** Nothing can be pressed: it cannot be taken, or it was already sent. */
@@ -36,6 +45,8 @@ export type AnswerView = {
   /** No Conductor, a device that does not answer, or an agent that takes no banner answer. */
   unreachable: boolean;
   reason: AnswerReason | null;
+  /** The reason is a refusal of the last answer, drawn in the failure colour; the others are quiet. */
+  refused: boolean;
 };
 
 export function answerView(mission: AnswerSource, device: string | null, pressed: PressedAnswer | null): AnswerView {
@@ -43,7 +54,8 @@ export function answerView(mission: AnswerSource, device: string | null, pressed
   const key = question?.key ?? 0;
   const answer = mission.answer?.key === key ? mission.answer : null;
   const resending = pressed?.resend === true && answer?.state === "unconfirmed";
-  const sent: AnswerView["sent"] = answer && !resending ? { text: answer.text, state: answer.state } : pressed ? { text: pressed.text, state: "sending" } : null;
+  const shown = answer && !resending ? { text: answer.text, state: answer.state } : pressed ? { text: pressed.text, state: "sending" as const } : null;
+  const sent: AnswerView["sent"] = shown ? { ...shown, ...sentLine(shown.state, mission.answer_failed) } : null;
   const gone = !mission.conductor.present;
   const offline = mission.stale;
   const unsupported = !mission.conductor.takes_answers;
@@ -57,13 +69,39 @@ export function answerView(mission: AnswerSource, device: string | null, pressed
         : unsupported
           ? { kind: "unsupported" }
           : null;
-  return { key, options: question?.options ?? [], recommend: question?.recommend ?? null, sent, resending, closed: unreachable || sent !== null, unreachable, reason };
+  return { key, options: question?.options ?? [], recommend: question?.recommend ?? null, sent, resending, closed: unreachable || sent !== null, unreachable, reason, refused: reason?.kind === "failed" };
+}
+
+function sentLine(state: MissionAnswerState, failed: MissionAnswerFailure | null): { line: SentLine; word: MessageKey } {
+  if (state === "unconfirmed") return { line: "unconfirmed", word: "mission.banner.unconfirmed" };
+  if (state === "waiting" && failed === "session_unreadable") return { line: "unreadable", word: "mission.banner.failed.session_unreadable" };
+  return { line: "delivered", word: state === "waiting" ? "mission.banner.waitingTurn" : "mission.banner.reading" };
 }
 
 /** Whether the pressed answer still shows: not once the core answers for it, refuses it differently, or asks something else (B26). */
-export function pressedShown(mission: AnswerSource, pressed: PressedAnswer, view: AnswerView): boolean {
+function pressedShown(mission: AnswerSource, pressed: PressedAnswer, view: AnswerView): boolean {
   const answered = mission.answer?.key === view.key && !view.resending;
   return !answered && pressed.key === view.key && pressed.failed === mission.answer_failed;
+}
+
+/**
+ * Keeps a pressed answer drawn as sent until the core's own state stands
+ * for it (B26): cleared at once when `pressedShown` says the core answered,
+ * refused or asked again, else after `PRESSED_MS`. Both screens run this one
+ * cleanup; the desktop keeps the press in its banner, the phone in its store.
+ */
+export function usePressedAnswer(mission: AnswerSource, pressed: PressedAnswer | null, view: AnswerView, clear: () => void): void {
+  const shown = pressed === null || pressedShown(mission, pressed, view);
+  const clearer = useRef(clear);
+  useEffect(() => {
+    clearer.current = clear;
+  });
+  useEffect(() => {
+    if (!pressed) return;
+    if (!shown) return clearer.current();
+    const timer = window.setTimeout(() => clearer.current(), PRESSED_MS);
+    return () => window.clearTimeout(timer);
+  }, [pressed, shown]);
 }
 
 /** The reason's catalog key; `offline` also takes `{ device }`. */

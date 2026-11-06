@@ -8,7 +8,7 @@
 // them.
 
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, Loader2Icon } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { agentProductName } from "../agentAdapters";
 import { Elapsed } from "../components/elapsed";
 import { ProgressCells } from "../components/mission-tone";
@@ -18,12 +18,12 @@ import { Input } from "../components/ui/input";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { ANSWER_LIMIT, PRESSED_MS, answerView, pressedShown, reasonKey, writtenAnswer } from "../missionAnswer";
+import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
-import { attentionReasonText, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
+import { attentionReasonText, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
 import { answerMission, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
-import { missionSteps, progress } from "./missionModel";
+import { missionSteps, progress, workerOf } from "./missionModel";
 import { noticeText, type PhoneMission, type PhoneMissionNode } from "./protocol";
 import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
@@ -134,13 +134,7 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
   const question = mission.question;
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
   // What was pressed shows until the core answers for it, refuses it, or asks something else (B26).
-  const shown = pressed === null || pressedShown(mission, pressed, view);
-  useEffect(() => {
-    if (!pressed) return;
-    if (!shown) return settleMissionAnswer();
-    const timer = window.setTimeout(settleMissionAnswer, PRESSED_MS);
-    return () => window.clearTimeout(timer);
-  }, [pressed, shown]);
+  usePressedAnswer(mission, pressed, view, settleMissionAnswer);
   const resend = () => {
     if (view.sent) answerMission(mission, { resend: true }, view.sent.text);
   };
@@ -156,27 +150,27 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
       </p>
       <p className="break-keep text-title leading-normal text-foreground wrap-anywhere" data-phone-question="true">{mission.decision}</p>
       {question?.why ? <p className="break-keep text-body text-muted-foreground wrap-anywhere">{question.why}</p> : null}
-      {view.sent?.state === "unconfirmed" ? (
+      {view.sent?.line === "unconfirmed" ? (
         <div className="flex min-w-0 flex-col gap-xs" data-phone-answer-sent="unconfirmed">
           <p className="flex min-w-0 items-start gap-xs text-body">
             <CircleAlertIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0 text-mission-hold" />
             <span className="min-w-0 break-keep font-semibold wrap-anywhere">{view.sent.text}</span>
           </p>
-          <p className="text-body text-mission-hold">{t("mission.banner.unconfirmed")}</p>
+          <p className="text-body text-mission-hold">{t(view.sent.word)}</p>
           <Button variant="secondary" className="min-h-(--size-touch-target) self-start" disabled={view.unreachable || !connected || sent !== null} data-phone-resend="true" onClick={resend}>
             {t("mission.banner.resend")}
           </Button>
         </div>
-      ) : view.sent?.state === "waiting" && mission.answer_failed === "session_unreadable" ? (
+      ) : view.sent?.line === "unreadable" ? (
         // The answer waits on a Conductor session Hide cannot read: it is not delivered until a read lands.
         <p className="flex min-w-0 items-start gap-xs text-body" data-phone-answer-sent="waiting">
           <CircleAlertIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0 text-mission-failed" />
-          <span className="min-w-0 break-keep wrap-anywhere"><span className="font-semibold">{view.sent.text}</span> <span className="text-mission-failed">· {t("mission.banner.failed.session_unreadable")}</span></span>
+          <span className="min-w-0 break-keep wrap-anywhere"><span className="font-semibold">{view.sent.text}</span> <span className="text-mission-failed">· {t(view.sent.word)}</span></span>
         </p>
       ) : view.sent ? (
         <p className="flex min-w-0 items-start gap-xs text-body" data-phone-answer-sent={view.sent.state}>
           <CheckIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0 text-mission-done" />
-          <span className="min-w-0 break-keep wrap-anywhere"><span className="font-semibold text-mission-done">{view.sent.text}</span> <span className="text-muted-foreground">· {t(view.sent.state === "waiting" ? "mission.banner.waitingTurn" : "mission.banner.reading")}</span></span>
+          <span className="min-w-0 break-keep wrap-anywhere"><span className="font-semibold text-mission-done">{view.sent.text}</span> <span className="text-muted-foreground">· {t(view.sent.word)}</span></span>
         </p>
       ) : (
         <div className="flex min-w-0 flex-wrap gap-sm">
@@ -201,7 +195,7 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
       )}
       {view.reason ? (
         <p
-          className={cn("break-keep text-body wrap-anywhere", !view.sent && mission.answer_failed && view.reason.kind === "failed" ? "text-mission-failed" : "text-muted-foreground")}
+          className={cn("break-keep text-body wrap-anywhere", view.refused ? "text-mission-failed" : "text-muted-foreground")}
           data-phone-answer-reason={view.reason.kind === "failed" ? view.reason.failure : view.reason.kind}
         >
           {t(reasonKey(view.reason), { device: mission.device_label ?? "" })}
@@ -297,9 +291,17 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
 /** What a step's second line says besides its pull request (B36): why it waits, what it follows, where its work stands, or how it ended. */
 function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | "working" | "done", t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
   if (kind === "hold") {
-    if (node.attention && mission.status !== "cancelled") return attentionReasonText(node.attention.reason, node.attention.pr, t);
-    if (node.escalation) return node.escalation.line ?? t(`mission.turn.cause.${node.escalation.cause}`);
-    return t("mobile.mission.waitsDecision");
+    const reason = holdReason(mission, node, workerOf);
+    switch (reason?.kind) {
+      case "attention":
+        return attentionReasonText(reason.attention.reason, reason.attention.pr, t);
+      case "worker":
+        return reason.escalation.line ?? t(`mission.turn.cause.${reason.escalation.cause}`);
+      case "decision":
+        return t("mobile.mission.waitsDecision");
+      default:
+        return null;
+    }
   }
   if (kind === "done") return node.pr_state ? t(`agentSessions.pr.${node.pr_state}`) : t(kindWord(node.kind));
   return node.base_pr != null ? t("mobile.mission.after", { pr: String(node.base_pr) }) : t(stageWord(node));

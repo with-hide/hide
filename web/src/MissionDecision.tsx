@@ -9,7 +9,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import type { Mission } from "./snapshot";
 import { composingKey } from "./keys";
-import { ANSWER_LIMIT, PRESSED_MS, answerView, pressedShown, reasonKey, writtenAnswer, type PressedAnswer } from "./missionAnswer";
+import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer, type PressedAnswer } from "./missionAnswer";
 
 // The decision a mission waits on, answered where it is asked, first in the
 // page's 내 차례 (PRD mission-plan-visibility D-13, D-20, D-30, B25-B30, B39;
@@ -37,13 +37,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   const { key, options, sent, unreachable, closed } = view;
 
   // What was pressed shows until the core answers for it, refuses it, or asks something else (B26).
-  const shown = pressed === null || pressedShown(mission, pressed, view);
-  useEffect(() => {
-    if (!pressed) return;
-    if (!shown) return setPressed(null);
-    const timer = window.setTimeout(() => setPressed(null), PRESSED_MS);
-    return () => window.clearTimeout(timer);
-  }, [pressed, shown]);
+  usePressedAnswer(mission, pressed, view, () => setPressed(null));
   useEffect(() => {
     if (writing) field.current?.focus();
     else if (returnFocus.current) {
@@ -51,8 +45,6 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
       writeButton.current?.focus();
     }
   }, [writing]);
-
-  const offline = mission.stale;
 
   const choose = (index: number) => {
     actions.answerMission(mission.id, key, { option: index + 1 });
@@ -105,25 +97,25 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
         {/* The Conductor row just above carries 터미널로 ›, or 이어받기 with no Conductor (PRD mission-tool B12, B13). */}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}
-      {sent?.state === "unconfirmed" ? (
+      {sent?.line === "unconfirmed" ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent="unconfirmed">
           <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />
           <span className="min-w-0 truncate font-semibold" title={sent.text}>{sent.text}</span>
-          <span className="shrink-0 text-caption text-mission-hold">· {t("mission.banner.unconfirmed")}</span>
+          <span className="shrink-0 text-caption text-mission-hold">· {t(sent.word)}</span>
           <Button size="sm" variant="ghost" disabled={unreachable} onClick={resend} data-mission-resend="true">{t("mission.banner.resend")}</Button>
         </p>
-      ) : sent?.state === "waiting" && mission.answer_failed === "session_unreadable" ? (
+      ) : sent?.line === "unreadable" ? (
         // The answer waits on a Conductor session Hide cannot read: it is not delivered until a read lands.
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent={sent.state}>
           <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-failed" />
           <span className="min-w-0 truncate font-semibold" title={sent.text}>{sent.text}</span>
-          <span className="min-w-0 truncate text-caption text-mission-failed" data-mission-banner-reason="session_unreadable">· {t("mission.banner.failed.session_unreadable")}</span>
+          <span className="min-w-0 truncate text-caption text-mission-failed" data-mission-banner-reason="session_unreadable">· {t(sent.word)}</span>
         </p>
       ) : sent ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent={sent.state}>
           <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-done" />
           <span className="min-w-0 truncate font-semibold text-mission-done" title={sent.text}>{sent.text}</span>
-          <span className="shrink-0 text-caption text-muted-foreground">· {t(sent.state === "waiting" ? "mission.banner.waitingTurn" : "mission.banner.reading")}</span>
+          <span className="shrink-0 text-caption text-muted-foreground">· {t(sent.word)}</span>
         </p>
       ) : (
         <div className="flex min-w-0 flex-wrap items-center gap-xs">
@@ -167,7 +159,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           )}
         </div>
       )}
-      {reason ? <p className={cn("min-w-0 text-caption", !sent && mission.answer_failed && !offline ? "text-mission-failed" : "text-muted-foreground")} data-mission-banner-reason={offline ? "offline" : (mission.answer_failed ?? view.reason?.kind)}>{reason}</p> : null}
+      {view.reason ? <p className={cn("min-w-0 text-caption", view.refused ? "text-mission-failed" : "text-muted-foreground")} data-mission-banner-reason={view.reason.kind === "failed" ? view.reason.failure : view.reason.kind}>{reason}</p> : null}
     </div>
   );
 }

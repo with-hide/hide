@@ -9,6 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
+import { PRESSED_MS } from "./missionAnswer";
 import { MissionMap } from "./MissionMap";
 import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
@@ -179,6 +180,44 @@ it("writes an answer in the banner: Enter sends it, Escape closes it and gives f
     await press(again, "Enter");
     expect(map.events.filter((event) => event.kind === "mission_answer").map((event) => event.payload)).toEqual([{ mission: "mission-1", key: 3, text: "Stack it on the API PR" }]);
     expect(map.q("[data-mission-banner-sent]")?.textContent).toContain("Stack it on the API PR");
+  } finally { await map.unmount(); }
+});
+
+it("draws a pressed choice as sent for five seconds and then the core's state again, when the core never answers for it (B26)", async () => {
+  const map = await mount({ items: [asked()] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await act(async () => map.q('[data-mission-option="2"]')!.click());
+    const sent = () => map.q("[data-mission-banner-sent]");
+    expect(sent()?.getAttribute("data-mission-banner-sent")).toBe("sending");
+    expect(sent()?.textContent).toContain("Wait for the API PR to merge");
+    await act(async () => vi.advanceTimersByTime(PRESSED_MS - 1));
+    expect(sent()?.getAttribute("data-mission-banner-sent")).toBe("sending");
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(sent()).toBeNull();
+    expect(map.q('[data-mission-option="2"]')).not.toBeNull();
+  } finally {
+    vi.useRealTimers();
+    await map.unmount();
+  }
+});
+
+it("lists the step the decision stopped and a worker the core raised under needs a look in the summary, as the phone's 지금 holds them, and not under in progress (PRD mobile-companion-ui B36)", async () => {
+  const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
+  const nodes = [
+    node("api", { status: "working", pane_id: "p2" }),
+    node("screen", { title: "API screen", status: "working" }),
+    node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("other", { status: "working" }),
+  ];
+  const map = await mount({ items: [asked({ nodes })] }, [], [], {}, [raised]);
+  try {
+    const row = (field: string) => [...map.container.querySelectorAll<HTMLElement>(`[data-mission-summary-row="${field}"] [data-mission-summary-node]`)].map((name) => name.dataset.missionSummaryNode);
+    expect(row("attention")).toEqual(["waits", "api", "screen"]);
+    expect(row("working")).toEqual(["other"]);
+    expect(map.q('[data-mission-summary-row="attention"] dt')?.textContent).toBe("Needs a look 3");
+    const why = [...map.container.querySelectorAll<HTMLElement>("[data-mission-summary-hold]")].map((line) => [line.dataset.missionSummaryHold, line.textContent]);
+    expect(why).toEqual([["attention", "! Conductor · Worker ended with work left"], ["worker", "! You · Login expired"], ["decision", "! You · Decision"]]);
   } finally { await map.unmount(); }
 });
 

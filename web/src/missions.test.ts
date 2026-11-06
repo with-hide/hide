@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { nodeSteps, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
+import { nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -551,9 +551,22 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(lineOutrun({ ...working, line: null, hide: { action: "done", at_unix_ms: 20 } }, [])).toBe(false);
   });
 
+  it("holds the working step the decision stopped and a working step whose worker the core raised in needs a look, after the raised nodes (PRD mobile-companion-ui B36)", () => {
+    const question = { key: 1, why: null, recommend: null, node: "stopped", asked_at_unix_ms: 1 };
+    const nodes = [node("blocked", { status: "working" }), node("stopped", { status: "working" }), node("busy", { status: "working" }), node("flagged", { status: "working", attention: raised("conductor") }), node("done", { status: "done" })];
+    const asked = mission("m", { decision: "Merge now?", question, nodes });
+    const escalationOf = (one: MissionNode) => (one.key === "blocked" ? { cause: "child_blocked" as const, line: "Login expired" } : null);
+    const keys = (groups: ReturnType<typeof summaryGroups<MissionNode>>) => [groups.attention, groups.working, groups.done].map((list) => list.map((one) => one.key));
+    expect(keys(summaryGroups(asked, escalationOf))).toEqual([["flagged", "blocked", "stopped"], ["busy"], ["done"]]);
+    expect(nodes.map((one) => holdReason(asked, one, escalationOf)?.kind ?? null)).toEqual(["worker", "decision", null, "attention", null]);
+    // Once the decision is answered the stopped step works again; a raised worker on a finished step holds nothing.
+    expect(keys(summaryGroups({ ...asked, decision: null }, escalationOf))).toEqual([["flagged", "blocked"], ["stopped", "busy"], ["done"]]);
+    expect(holdReason(asked, nodes[4]!, () => ({ cause: "child_blocked", line: null }))).toBeNull();
+  });
+
   it("groups the summary as needs a look, in progress and done, and lets a done or dropped node work again outside a cancelled mission", () => {
     const m = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { status: "done", attention: raised("operator", "conductor_failed") }), node("d"), node("e", { status: "dropped" })] });
-    const groups = summaryGroups(m);
+    const groups = summaryGroups(m, () => null);
     expect([groups.attention, groups.working, groups.done].map((nodes) => nodes.map((one) => one.key))).toEqual([["c"], ["b"], ["a"]]);
     expect([nodeResumable(m, m.nodes[0]!), nodeResumable(m, m.nodes[4]!), nodeResumable(m, m.nodes[1]!)]).toEqual([true, true, false]);
     expect(nodeResumable(mission("m", { status: "cancelled" }), m.nodes[0]!)).toBe(false);

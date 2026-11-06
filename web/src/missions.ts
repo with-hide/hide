@@ -277,18 +277,44 @@ export function liveNodes<N extends MissionNodeBrief>(mission: { nodes: readonly
 }
 
 /**
- * The summary's groups in the map's order (PRD mission-node-simple B5): the
- * nodes someone has to look at, those in progress, and those done; a node
- * that waits on someone is in the first group only, and a node not started
- * or dropped is in none.
+ * Why a step waits on someone, in the order a step is read: a node raised
+ * to the operator or the Conductor (`! 나`, `! Conductor`), a working step
+ * whose worker the core raised past its parent (one of the seven escalation
+ * causes, the same worker `내 차례` lists), or the working step the open
+ * decision stopped. Null for a step nobody has to look at.
  */
-export function summaryGroups<N extends MissionNodeBrief>(mission: Pick<Mission, "status"> & { nodes: readonly N[] }): { attention: N[]; working: N[]; done: N[] } {
+export type HoldReason = { kind: "attention"; attention: MissionAttention } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
+
+/** What `holdReason` reads of a mission: its state, and the decision with the node it stopped. */
+export type HoldMission = Pick<Mission, "status" | "decision"> & { question?: Pick<NonNullable<Mission["question"]>, "node"> | null };
+
+export function holdReason<N extends MissionNodeBrief>(mission: HoldMission, node: N, escalationOf: (node: N) => WorkerEscalation | null): HoldReason | null {
+  const attention = openAttention(mission, node);
+  if (attention) return { kind: "attention", attention };
+  if (node.status !== "working") return null;
+  const escalation = escalationOf(node);
+  if (escalation) return { kind: "worker", escalation };
+  return mission.decision && mission.question?.node === node.key ? { kind: "decision" } : null;
+}
+
+/**
+ * The summary's groups in the map's order (PRD mission-node-simple B5; PRD
+ * mobile-companion-ui B33, B36): the steps that wait on someone
+ * (`holdReason`), raised nodes first and then the working steps a raised
+ * worker or the decision holds, those in progress, and those done; a step
+ * that waits is in the first group only, so none reads as working on the
+ * desktop's summary or the phone's 지금, and a node not started or dropped
+ * is in none. `escalationOf` answers for a node's worker: the desktop reads
+ * its row, the phone the escalation its core sent with the node.
+ */
+export function summaryGroups<N extends MissionNodeBrief>(mission: HoldMission & { nodes: readonly N[] }, escalationOf: (node: N) => WorkerEscalation | null): { attention: N[]; working: N[]; done: N[] } {
   const nodes = orderedNodes(mission).filter((node) => node.status !== "dropped");
   const raised = (node: N) => openAttention(mission, node) !== null;
+  const held = (node: N) => holdReason(mission, node, escalationOf) !== null;
   return {
-    attention: nodes.filter(raised),
-    working: nodes.filter((node) => !raised(node) && node.status === "working"),
-    done: nodes.filter((node) => !raised(node) && node.status === "done"),
+    attention: [...nodes.filter(raised), ...nodes.filter((node) => !raised(node) && held(node))],
+    working: nodes.filter((node) => !held(node) && node.status === "working"),
+    done: nodes.filter((node) => !held(node) && node.status === "done"),
   };
 }
 
