@@ -147,9 +147,6 @@ async fn the_record_names_the_skipped_channels() {
     assert_eq!(row["notice"], "letter_undelivered");
     assert_eq!(row["letter_id"], "letter-7");
     assert_eq!(row["push"], "mode_off");
-    // The core's own engine has no toast of its own (the desktop host shows
-    // the notice), so the second channel answers why it did not show one.
-    assert_eq!(row["herdr"], "the core's own engine shows no notification");
 }
 
 /// A machine that was a device before its core moved there has the state
@@ -285,7 +282,4 @@ async fn a_reachable_phone_still_gets_the_notice_and_only_the_one_that_failed_is
     let row = channels_failed(&state).await;
     assert_eq!(row["letter_id"], "letter-8");
     assert_eq!(row["push"], "send_failed");
-    // The core's own engine has no toast of its own (the desktop host shows
-    // the notice), so the second channel answers why it did not show one.
-    assert_eq!(row["herdr"], "the core's own engine shows no notification");
 }

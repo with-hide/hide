@@ -20,10 +20,10 @@
 //!
 //! One other tool's entries join that list, and only through the kit's record
 //! (PRD codex-herdr-hook-trust): the entries Herdr's own `herdr integration
-//! install codex` added when an earlier build ran it ([`HookEntry`], learned by
-//! [`learn_herdr_entries`] from what Herdr wrote, never typed here), until the
-//! kit retires them ([`remove_herdr_entries`]). They are matched the same
-//! way, byte for byte, by the same [`select_targets`].
+//! install codex` added when an earlier build ran it ([`HookEntry`], learned
+//! then from what Herdr wrote, never typed here), until the kit retires them
+//! ([`remove_herdr_entries`]). They are matched the same way, byte for byte,
+//! by the same [`select_targets`].
 //!
 //! The app-server is one short child per check, owned by [`Session`]: it is
 //! started through the one spawn helper, bounded by one deadline and by the
@@ -297,52 +297,6 @@ pub struct HookEntry {
     pub command: String,
 }
 
-/// The most entries one integration install may add before the kit refuses to
-/// learn them: Herdr's Codex integration adds one (0.9.1), and a call that
-/// adds a pile is not one whose entries Hide vouches for.
-pub const MAX_LEARNED_ENTRIES: usize = 4;
-
-/// Every command-handler entry of the account's `~/.codex/hooks.json`, or why the
-/// file cannot be read (a missing or empty file is no entries).
-pub fn hook_entries(home: &Path) -> Result<BTreeSet<HookEntry>, String> {
-    let path = AgentRuntime::Codex.config_path(home);
-    let document = crate::install::read_document(&path)
-        .map_err(|failure| failure.message())?
-        .unwrap_or_else(|| crate::install::HookDocument::new(Value::Null));
-    let mut found = BTreeSet::new();
-    let Some(events) = document.get("hooks").and_then(Value::as_object) else {
-        return Ok(found);
-    };
-    for (event, groups) in events {
-        for group in groups.as_array().into_iter().flatten() {
-            let matcher = group
-                .get("matcher")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            for hook in group
-                .get("hooks")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let (Some(COMMAND_HANDLER), Some(command)) = (
-                    hook.get("type").and_then(Value::as_str),
-                    hook.get("command").and_then(Value::as_str),
-                ) else {
-                    continue;
-                };
-                found.insert(HookEntry {
-                    event: event.clone(),
-                    matcher: matcher.clone(),
-                    handler_type: COMMAND_HANDLER.to_owned(),
-                    command: command.to_owned(),
-                });
-            }
-        }
-    }
-    Ok(found)
-}
-
 /// What taking the entries Herdr's integration wrote out of
 /// `~/.codex/hooks.json` did.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -432,65 +386,6 @@ pub fn remove_herdr_entries(
         removed: found.len(),
         kept_or_gone: recorded.len().saturating_sub(found.len()),
     })
-}
-
-/// Why an install teaches the kit nothing about what Herdr wrote. The record
-/// is left as it was in either case.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NotLearned {
-    /// The install added more than [`MAX_LEARNED_ENTRIES`] entries.
-    TooMany(usize),
-    /// Entries that were in the file before the call, and are not ones the kit
-    /// recorded Herdr writing, are gone after it: the file changed in a way an
-    /// integration install does not change it, so something else wrote it.
-    Changed(usize),
-}
-
-impl std::fmt::Display for NotLearned {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TooMany(count) => write!(
-                formatter,
-                "the install added {count} entries, more than the {MAX_LEARNED_ENTRIES} a Herdr integration adds"
-            ),
-            Self::Changed(count) => write!(
-                formatter,
-                "{count} entries that were there before the install changed or are gone"
-            ),
-        }
-    }
-}
-
-/// What Herdr's integration install wrote, out of the entries the file held
-/// before the call and after it, given what the kit had recorded earlier.
-///
-/// The file may only have gained entries, or lost entries the kit already
-/// recorded as Herdr's (Herdr replacing its own older command): any other
-/// removal or edit means a writer other than Herdr's install touched the file
-/// in the window, and nothing is learned. The entries the call added are
-/// Herdr's, and so are the recorded entries still in the file (Herdr leaves an
-/// entry it already wrote alone and only replaces its script), so an accepted
-/// learn drops the entries that are gone. More than [`MAX_LEARNED_ENTRIES`]
-/// added is refused too, and a refusal leaves the record as it was.
-pub fn learn_herdr_entries(
-    before: &BTreeSet<HookEntry>,
-    after: &BTreeSet<HookEntry>,
-    recorded: &[HookEntry],
-) -> Result<Vec<HookEntry>, NotLearned> {
-    let foreign_changes = before
-        .difference(after)
-        .filter(|entry| !recorded.contains(entry))
-        .count();
-    if foreign_changes > 0 {
-        return Err(NotLearned::Changed(foreign_changes));
-    }
-    let added: Vec<&HookEntry> = after.difference(before).collect();
-    if added.len() > MAX_LEARNED_ENTRIES {
-        return Err(NotLearned::TooMany(added.len()));
-    }
-    let kept = recorded.iter().filter(|entry| after.contains(*entry));
-    let learned: BTreeSet<HookEntry> = added.into_iter().chain(kept).cloned().collect();
-    Ok(learned.into_iter().collect())
 }
 
 /// One entry of `hooks/list`, as much of it as the decision reads.
@@ -1638,139 +1533,6 @@ mod tests {
         );
         hook.matcher = None;
         assert!(select_with_herdr(&[recorded], &[hook]).is_empty());
-    }
-
-    fn entry(event: &str, command: &str) -> HookEntry {
-        HookEntry {
-            event: event.to_owned(),
-            matcher: None,
-            handler_type: "command".to_owned(),
-            command: command.to_owned(),
-        }
-    }
-
-    fn set(entries: &[HookEntry]) -> BTreeSet<HookEntry> {
-        entries.iter().cloned().collect()
-    }
-
-    #[test]
-    fn what_an_install_added_is_what_was_learned() {
-        let hide = entry("SessionStart", "hide");
-        let herdr = herdr_entry();
-        assert_eq!(
-            learn_herdr_entries(
-                &set(std::slice::from_ref(&hide)),
-                &set(&[hide, herdr.clone()]),
-                &[]
-            ),
-            Ok(vec![herdr])
-        );
-    }
-
-    #[test]
-    fn an_install_that_changed_nothing_keeps_the_recorded_entries_still_in_the_file() {
-        let herdr = herdr_entry();
-        let both = set(&[entry("Stop", "other"), herdr.clone()]);
-        assert_eq!(
-            learn_herdr_entries(&both, &both, std::slice::from_ref(&herdr)),
-            Ok(vec![herdr.clone()])
-        );
-        // Taken out by hand since: nothing is named that is not there.
-        let without = set(&[entry("Stop", "other")]);
-        assert_eq!(
-            learn_herdr_entries(&without, &without, &[herdr]),
-            Ok(vec![])
-        );
-        // Nothing recorded and nothing added: the entry already there is not
-        // Herdr's write as far as the kit saw.
-        assert_eq!(learn_herdr_entries(&both, &both, &[]), Ok(vec![]));
-    }
-
-    #[test]
-    fn a_new_entry_and_a_recorded_one_still_in_the_file_are_both_learned() {
-        let herdr = herdr_entry();
-        let second = entry("Stop", "second herdr entry");
-        let before = set(&[herdr.clone(), entry("Stop", "other")]);
-        let mut after = before.clone();
-        after.insert(second.clone());
-        let learned = learn_herdr_entries(&before, &after, std::slice::from_ref(&herdr)).unwrap();
-        assert_eq!(learned.len(), 2);
-        assert!(learned.contains(&herdr) && learned.contains(&second));
-    }
-
-    #[test]
-    fn herdr_replacing_its_own_recorded_entry_is_followed() {
-        let old = herdr_entry();
-        let new = entry(
-            "SessionStart",
-            "bash '/acct/.codex/herdr-agent-state.sh' session --v2",
-        );
-        let before = set(&[old.clone(), entry("Stop", "other")]);
-        let after = set(&[new.clone(), entry("Stop", "other")]);
-        assert_eq!(learn_herdr_entries(&before, &after, &[old]), Ok(vec![new]));
-    }
-
-    #[test]
-    fn a_removal_or_edit_of_anyone_elses_entry_in_the_window_teaches_nothing() {
-        let herdr = herdr_entry();
-        let theirs = entry("Stop", "other tool");
-        let before = set(std::slice::from_ref(&theirs));
-        // Removed.
-        let removed = set(std::slice::from_ref(&herdr));
-        assert_eq!(
-            learn_herdr_entries(&before, &removed, &[]),
-            Err(NotLearned::Changed(1))
-        );
-        // Edited in place: the old entry is gone, a new one is there.
-        let edited = set(&[herdr, entry("Stop", "other tool, edited")]);
-        assert_eq!(
-            learn_herdr_entries(&before, &edited, &[]),
-            Err(NotLearned::Changed(1))
-        );
-        // A recorded entry removed alongside is not a reason of its own.
-        assert!(learn_herdr_entries(&set(&[herdr_entry()]), &set(&[]), &[herdr_entry()]).is_ok());
-    }
-
-    #[test]
-    fn an_install_that_added_a_pile_teaches_nothing() {
-        let many: Vec<HookEntry> = (0..=MAX_LEARNED_ENTRIES)
-            .map(|n| entry("SessionStart", &format!("c{n}")))
-            .collect();
-        assert_eq!(
-            learn_herdr_entries(&set(&[]), &set(&many), &[]),
-            Err(NotLearned::TooMany(MAX_LEARNED_ENTRIES + 1))
-        );
-        assert!(learn_herdr_entries(&set(&[]), &set(&many[..MAX_LEARNED_ENTRIES]), &[]).is_ok());
-    }
-
-    #[test]
-    fn the_entries_are_read_from_the_file_by_event_matcher_type_and_command() {
-        let home = tempfile::tempdir().unwrap();
-        assert_eq!(hook_entries(home.path()), Ok(BTreeSet::new()));
-        let dir = home.path().join(".codex");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("hooks.json"),
-            json!({"hooks": {
-                "SessionStart": [
-                    {"hooks": [{"type": "command", "command": "a", "timeout": 10}]},
-                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "b"}, {"type": "prompt"}]}
-                ],
-                "Stop": []
-            }})
-            .to_string(),
-        )
-        .unwrap();
-        let found = hook_entries(home.path()).unwrap();
-        assert_eq!(found.len(), 2);
-        assert!(found.contains(&entry("SessionStart", "a")));
-        assert!(
-            found
-                .iter()
-                .any(|e| e.command == "b" && e.matcher.as_deref() == Some("Bash"))
-        );
-        std::fs::write(dir.join("hooks.json"), "{ not json").unwrap();
-        assert!(hook_entries(home.path()).is_err());
     }
 
     #[test]

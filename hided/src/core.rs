@@ -207,9 +207,6 @@ enum Command {
         node: String,
         reply: Sender<Option<String>>,
     },
-    LinkedNodes {
-        reply: Sender<Vec<String>>,
-    },
     ReleaseSource {
         node: String,
         reply: Sender<ReleaseSourceAnswer>,
@@ -973,17 +970,6 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the device connection reply".to_owned())
     }
 
-    /// The nodes that dialed this core and are connected now: the machines
-    /// the operator works at (PRD core-host-node-remote-core D-18).
-    pub fn linked_nodes(&self) -> Result<Vec<String>, String> {
-        let (reply, rx) = mpsc::channel();
-        self.commands
-            .send(Command::LinkedNodes { reply })
-            .map_err(|_| "core owner thread is gone".to_owned())?;
-        rx.recv()
-            .map_err(|_| "core owner thread dropped the linked nodes".to_owned())
-    }
-
     /// What a move of the core to `device` is made from, and the device's
     /// label records (PRD core-host-node-move B4).
     pub fn release_source(&self, node: &str) -> Result<ReleaseSourceAnswer, String> {
@@ -1633,9 +1619,6 @@ fn owner_loop(
             }
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
-            }
-            Command::LinkedNodes { reply } => {
-                let _ = reply.send(core.linked_nodes());
             }
             Command::MoveSource { device, reply } => {
                 let _ = reply.send(core.move_source(&device));

@@ -128,12 +128,6 @@ mod tests {
             (notices[0].recipient.as_str(), notices[0].about.as_str()),
             ("parent", "target")
         );
-        assert!(
-            notices[0]
-                .english_body()
-                .ends_with(&format!("hide request show {}.", notices[0].id)),
-            "the Herdr notification names the command an agent runs"
-        );
         assert_eq!(ledger.letters.len(), 2);
         assert!(
             ledger.letters.iter().all(|letter| letter

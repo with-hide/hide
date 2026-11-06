@@ -1360,12 +1360,6 @@ pub struct Runtime {
     /// switch), summed per pane and sent at the pane's first frame through
     /// whichever mode it attached in.
     wheel_before_attach: HashMap<String, i32>,
-    /// Observed panes with a `pane.scroll` request in flight, and the lines
-    /// that arrived meanwhile, which go out as one request when it lands.
-    viewport_scrolls: HashMap<String, i32>,
-    /// Observed panes whose last wheel the engine did not move: another client
-    /// holds their scrolling (`TerminalPaneSnapshot::scroll_held_elsewhere`).
-    panes_scroll_held: HashSet<String>,
     /// The tabs that have been on screen, most recent first. An attach lives
     /// for as long as its tab is in this window; every other pane's session is
     /// released. A pane's holder serves one attach at a time, so an attach
@@ -2386,8 +2380,6 @@ impl Runtime {
             attachment_worker: None,
             terminal_sizes: pane_terminal_sizes.into_iter().collect(),
             wheel_before_attach: HashMap::new(),
-            viewport_scrolls: HashMap::new(),
-            panes_scroll_held: HashSet::new(),
             pane_relocations_in_flight: BTreeMap::new(),
             pane_hook_tokens: BTreeMap::new(),
             hook_diagnosis: None,

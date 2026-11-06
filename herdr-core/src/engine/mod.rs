@@ -363,13 +363,6 @@ pub(crate) trait Engine: Send + Sync {
     fn pane_agent_status(&self, wait: Wait, pane: &str) -> Answer<String>;
     /// How far a pane is scrolled, when the engine reports it.
     fn pane_scroll(&self, wait: Wait, pane: &str) -> Answer<Option<crate::find::pane::PaneScroll>>;
-    /// Scrolls a pane to `offset_from_bottom` lines: where it is now.
-    fn scroll_pane(
-        &self,
-        wait: Wait,
-        pane: &str,
-        offset_from_bottom: u64,
-    ) -> Answer<Option<crate::find::pane::PaneScroll>>;
     /// Sets Hide's metadata tokens on a pane; a `None` value clears one.
     fn report_pane_tokens(
         &self,
@@ -411,8 +404,6 @@ pub(crate) trait Engine: Send + Sync {
     /// Puts `text` into a pane as one paste, bracketed when the program in
     /// the pane asked for bracketed paste, with no Enter after it.
     fn paste_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
-    /// Shows the operator a notification.
-    fn notify(&self, wait: Wait, title: &str, body: &str) -> Answer<Notified>;
 
     // A pane's processes.
 
