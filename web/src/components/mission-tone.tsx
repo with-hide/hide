@@ -50,11 +50,15 @@ export const TONE_TEXT: Record<CellTone, string> = {
 /**
  * A state pill's colours, the one table every pill reads: work going on, a
  * turn that waits on the operator (a merge, a decision, a plan's review), a
- * state that asks nothing (planning, finished), and a cancelled one.
+ * check at work, a pass, a rejection, a state that asks nothing (planning,
+ * finished), and a cancelled one.
  */
 export const PILL_TONE = {
   working: "bg-mission-working/15 text-mission-working",
   hold: "bg-mission-hold/15 text-mission-hold",
+  review: "bg-mission-review/15 text-mission-review",
+  done: "bg-mission-done/15 text-mission-done",
+  failed: "bg-mission-failed/15 text-mission-failed",
   quiet: "bg-muted text-muted-foreground",
   cancelled: "bg-muted text-mission-cancelled",
 } as const;

@@ -38,7 +38,7 @@ import {
   shortCommit,
 } from "./missions";
 import { AttentionChoices } from "./components/mission-attention";
-import { ProgressCells } from "./components/mission-tone";
+import { PILL_TONE, ProgressCells } from "./components/mission-tone";
 import { PlanChecklist, PlannedSteps } from "./components/plan-checklist";
 import { planCells, planCount } from "./plans";
 import { formatBytes } from "./i18n/format";
@@ -475,7 +475,7 @@ function Verdict({ tone, word, who, children }: { tone: "fail" | "skipped"; word
   return (
     <div className={cn("col-start-2 flex min-w-0 flex-col gap-xxs rounded-xs border-l-2 bg-secondary px-sm py-xs text-caption", tone === "fail" ? "border-mission-failed" : "border-mission-hold")} data-panel-verdict={tone}>
       <span className="flex min-w-0 items-center gap-xs">
-        <span className={cn("shrink-0 rounded-full px-xs text-micro font-semibold", tone === "fail" ? "bg-mission-failed/15 text-mission-failed" : "bg-mission-hold/15 text-mission-hold")}>{word}</span>
+        <span className={cn("shrink-0 rounded-full px-xs text-micro font-semibold", tone === "fail" ? PILL_TONE.failed : PILL_TONE.hold)}>{word}</span>
         {who ? <span className="flex min-w-0 items-center gap-xxs text-muted-foreground"><AgentMark kind={who} /><span className="truncate">{agentMarkOf(who)?.label ?? who}</span></span> : null}
       </span>
       {children}

@@ -18,7 +18,7 @@ import { usePaneAgents } from "./PaneHeaderBand";
 import { useMapPick } from "./mapPick";
 import { PlanGraph } from "./PlanGraph";
 import { PlanStepPanel } from "./PlanStepPanel";
-import { evidenceWords, planCells, planOfSession, planProposed, stepDelegationWord, stepOf } from "./plans";
+import { evidenceWords, planCells, planOfSession, planProposed, stepDelegationWord, stepLeft, stepOf, stepStatusWord } from "./plans";
 import type { PlanStep, PlanView, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -170,7 +170,10 @@ function PlanSide({ plan, openPane }: { plan: PlanView; openPane: (paneId: strin
   const { t } = useInterfaceTranslation();
   const now = plan.progress.finished ? null : stepOf(plan, plan.progress.current);
   const next = plan.progress.finished ? null : stepOf(plan, plan.progress.next);
-  const left = plan.steps.flatMap((step) => (step.status === "done" && step.evidence ? [{ step, evidence: step.evidence }] : []));
+  const left = plan.steps.flatMap((step) => {
+    const what = stepLeft(step);
+    return what?.kind === "evidence" ? [{ step, evidence: what.evidence }] : [];
+  });
   const handed = plan.steps.filter((step) => step.delegation && step.status !== "dropped");
   return (
     <section aria-label={t("mission.summary")} className="flex min-w-0 flex-col px-md py-sm" data-plan-side="summary">
@@ -218,7 +221,7 @@ function HandedRow({ step, openPane }: { step: PlanStep; openPane: (paneId: stri
           <DelegationWord word={word} />
         ) : (
           <span className={cn("text-micro", step.status === "done" ? "text-mission-done" : "text-mission-working")}>
-            {step.status === "done" ? t("plan.status.done") : t("plan.delegation.state.working")}
+            {stepStatusWord(step, t)}
           </span>
         )}
       </span>

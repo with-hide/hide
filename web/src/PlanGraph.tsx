@@ -38,7 +38,7 @@ export function PlanGraph({ plan, selected, onSelect }: { plan: PlanView; select
   const edgeLook = (edge: GraphEdge): EdgeLook => {
     const from = byKey.get(edge.from);
     const dimmed = away(edge);
-    if (from?.status === "working") return { tone: "text-agent-working", dimmed };
+    if (from?.status === "working") return { tone: "text-mission-working", dimmed };
     if (from?.status === "done" || from?.status === "dropped") return { tone: "text-border", dimmed };
     return { tone: "text-muted-foreground", dimmed };
   };
