@@ -4,7 +4,7 @@ import { ProjectLanePin } from "./ProjectLanePin";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { useElapsed } from "./components/elapsed";
-import { ProgressCells } from "./components/mission-tone";
+import { PILL_TONE, ProgressCells, STATE_PILL_TONE } from "./components/mission-tone";
 import { PrMark } from "./components/pr-mark";
 import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
@@ -14,10 +14,9 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { PILL } from "./MissionMap";
 import { MissionStartGuide } from "./MissionStartGuide";
 import { MissionTakeOver } from "./MissionTakeOver";
-import { groupMissions, CLOSED_SHOWN, missionEntry, missionPillKey, projectMissions, rowLine, shownMission, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
+import { groupMissions, CLOSED_SHOWN, missionEntry, missionPillKey, projectMissions, rowLine, shownMission, STATE_PILL, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
 import { attentionReasonText, missionCells, missionCounts, workerEscalation, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { frontProject } from "./projectStatus";
@@ -224,13 +223,12 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
 function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
   if (turn) {
-    return <span className="flex shrink-0 items-center gap-xxs rounded-full bg-mission-hold/15 px-sm text-caption font-semibold text-mission-hold" data-mission-row-pill={turn.kind}><span aria-hidden="true">!</span>{t(missionPillKey(mission, turn))}</span>;
+    return <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", PILL_TONE.hold)} data-mission-row-pill={turn.kind}><span aria-hidden="true">!</span>{t(missionPillKey(mission, turn))}</span>;
   }
-  const pill = PILL[mission.status];
   return (
-    <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", pill.tone)} data-mission-row-pill={mission.status}>
+    <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", STATE_PILL_TONE[mission.status])} data-mission-row-pill={mission.status}>
       {mission.status === "done" ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
-      {t(pill.key)}
+      {t(STATE_PILL[mission.status])}
     </span>
   );
 }

@@ -1,10 +1,11 @@
-import { ArrowRightIcon, ChevronRightIcon, GitBranchIcon, HistoryIcon, ScrollTextIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, ChevronRightIcon, GitBranchIcon, HistoryIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentMarkOf } from "./agentLogos";
 import { CheckerPopover, useCheckerStatus, VerdictReason, VERDICT_TONE } from "./components/mission-checker";
 import { CriterionMark } from "./components/criterion-mark";
+import { MapPanel, MapPanelHead } from "./components/map-page";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
 import { Badge } from "./components/ui/badge";
@@ -37,7 +38,7 @@ import {
   shortCommit,
 } from "./missions";
 import { AttentionChoices } from "./components/mission-attention";
-import { ProgressCells } from "./components/mission-tone";
+import { PILL_TONE, ProgressCells } from "./components/mission-tone";
 import { PlanChecklist, PlannedSteps } from "./components/plan-checklist";
 import { planCells, planCount } from "./plans";
 import { formatBytes } from "./i18n/format";
@@ -55,7 +56,7 @@ import { useShellStore } from "./store";
 
 export function MissionNodePanel({ mission, node, events, end, onSelect, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onSelect: (key: string) => void; onClose: () => void; actions: Actions }) {
   return (
-    <div className="@container/mission-panel flex min-w-0 flex-col gap-md px-md pb-sm text-body" data-mission-detail={node.key}>
+    <MapPanel data={{ "data-mission-detail": node.key }}>
       <Head mission={mission} node={node} events={events} end={end} onClose={onClose} actions={actions} />
       <Attention mission={mission} node={node} actions={actions} />
       <Now mission={mission} node={node} events={events} />
@@ -67,7 +68,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
       <HideRecord mission={mission} node={node} events={events} />
       <Events node={node} events={events} />
       <Brief key={node.key} mission={mission} node={node} actions={actions} />
-    </div>
+    </MapPanel>
   );
 }
 
@@ -121,23 +122,14 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
       : []),
   ];
   return (
-    <section className="sticky top-0 z-10 -mx-md flex min-w-0 flex-col gap-xxs bg-background px-md pb-xs pt-sm" data-panel-part="head">
-      <div className="flex min-w-0 items-start gap-xs">
-        <MissionNodeMark look={look} label={markWord(node, look, t)} className="mt-xxs" />
-        <h3 className="min-w-0 flex-1 break-words text-subhead font-semibold [word-break:keep-all]" data-panel-title="true">{node.title}</h3>
-        <WorkerWays mission={mission} node={node} actions={actions} />
-        <Hint label={t("mission.panel.close")}>
-          <Button variant="ghost" size="icon-sm" className="-mr-xs shrink-0 text-muted-foreground" aria-label={t("mission.panel.close")} onClick={onClose} data-panel-close="true">
-            <XIcon />
-          </Button>
-        </Hint>
-      </div>
-      {parts.length > 0 ? (
-        <p className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption text-muted-foreground" data-panel-meta="true">
-          {parts}
-        </p>
-      ) : null}
-    </section>
+    <MapPanelHead
+      mark={<MissionNodeMark look={look} label={markWord(node, look, t)} />}
+      title={node.title}
+      ways={<WorkerWays mission={mission} node={node} actions={actions} />}
+      close={t("mission.panel.close")}
+      onClose={onClose}
+      facts={parts.length > 0 ? parts : null}
+    />
   );
 }
 
@@ -483,7 +475,7 @@ function Verdict({ tone, word, who, children }: { tone: "fail" | "skipped"; word
   return (
     <div className={cn("col-start-2 flex min-w-0 flex-col gap-xxs rounded-xs border-l-2 bg-secondary px-sm py-xs text-caption", tone === "fail" ? "border-mission-failed" : "border-mission-hold")} data-panel-verdict={tone}>
       <span className="flex min-w-0 items-center gap-xs">
-        <span className={cn("shrink-0 rounded-full px-xs text-micro font-semibold", tone === "fail" ? "bg-mission-failed/15 text-mission-failed" : "bg-mission-hold/15 text-mission-hold")}>{word}</span>
+        <span className={cn("shrink-0 rounded-full px-xs text-micro font-semibold", tone === "fail" ? PILL_TONE.failed : PILL_TONE.hold)}>{word}</span>
         {who ? <span className="flex min-w-0 items-center gap-xxs text-muted-foreground"><AgentMark kind={who} /><span className="truncate">{agentMarkOf(who)?.label ?? who}</span></span> : null}
       </span>
       {children}
