@@ -2,6 +2,8 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  // Throwaway probe (with-hide/hide-private#466): desk-lane only, no retry.
+  testMatch: /desk-lane\.spec\.ts$/,
   // Builds the fixtures' C programs once, before any test (e2e/shims/build.ts).
   globalSetup: "./e2e/global-setup.ts",
   timeout: 30_000,
@@ -22,7 +24,7 @@ export default defineConfig({
   // classifies and reports, it never replaces a fix (docs/TESTING.md, "Flaky
   // tests"). Locally nothing retries, so a flaky test fails where it is
   // written.
-  retries: process.env.CI ? 1 : 0,
+  retries: 0,
   // The list reporter names every test with its duration, so a CI log says
   // where the minutes went; the dot reporter CI would default to does not. CI
   // also writes the JSON report the flaky-test step reads, and on Windows logs
