@@ -916,6 +916,10 @@ impl Runtime {
     /// last hook moment for a known-empty composer while the agent has not
     /// taken the input yet (`composer_check_due`). Only that input's own
     /// prompt hook, at a later moment, marks the composer empty again.
+    /// Typing into a pane that has had no prompt hook yet needs no note,
+    /// since its every hook moment comes after it: a spawn's brief, a task
+    /// start's first prompt, and agy's `/fork` and the composer clearing
+    /// before it in the fork's new pane.
     pub(crate) fn note_hide_typing(&mut self, pane_id: &str) {
         if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
             observation.hide_typed_at_unix_ms = unix_milliseconds();
