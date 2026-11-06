@@ -529,7 +529,7 @@ pub(super) struct Applied {
 
 /// Lays `facts` on a pane whose folder is `cwd` and whose agent is `agent`:
 /// the folder it reports, the agent its foreground runs, and the state its
-/// screen shows. `seq` is the engine's count of state changes.
+/// screen shows, as of `now`. `seq` is the engine's count of state changes.
 pub(super) fn apply(
     catalog: &Catalog,
     cwd: &mut String,
@@ -537,8 +537,8 @@ pub(super) fn apply(
     live: &mut PaneLive,
     facts: &PaneFacts,
     seq: &mut u64,
+    now: Instant,
 ) -> Applied {
-    let now = Instant::now();
     let mut applied = Applied::default();
     let before = live.facts.clone();
     // Whether the agent's program showed before these facts: only then
@@ -829,6 +829,10 @@ mod tests {
         }
 
         fn facts(&mut self, facts: PaneFacts) -> Applied {
+            self.facts_at(Instant::now(), facts)
+        }
+
+        fn facts_at(&mut self, now: Instant, facts: PaneFacts) -> Applied {
             apply(
                 &catalog(),
                 &mut self.cwd,
@@ -836,6 +840,7 @@ mod tests {
                 &mut self.live,
                 &facts,
                 &mut self.seq,
+                now,
             )
         }
 
@@ -1100,6 +1105,42 @@ mod tests {
             "a start settled on the time alone is recorded"
         );
         assert_eq!(pane.facts(at(None)).settled_unread, None, "once");
+    }
+
+    /// A program that turns the terminal's line editing off and on again
+    /// every second never gives its start a settle's rest, so the start ends
+    /// at its 120 s deadline: taking the keys restarts the settle, never
+    /// the deadline.
+    #[test]
+    fn a_program_toggling_line_editing_every_second_finishes_starting_at_its_deadline() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        let start = pane.agent.as_ref().unwrap().live.started.unwrap();
+        let at = |line_editing| PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            line_editing: Some(line_editing),
+            ..PaneFacts::default()
+        };
+        let second = std::time::Duration::from_secs(1);
+        let deadline = start + START_DEADLINE;
+        let mut now = start;
+        let mut edits_lines = true;
+        while now < deadline {
+            pane.facts_at(now, at(edits_lines));
+            assert!(
+                pane.agent.as_ref().unwrap().launch_pending(now),
+                "starting {:?} after its start",
+                now - start
+            );
+            now += second;
+            edits_lines = !edits_lines;
+        }
+        pane.facts_at(deadline, at(edits_lines));
+        assert!(
+            !pane.agent.as_ref().unwrap().launch_pending(deadline),
+            "the start ends at its deadline"
+        );
     }
 
     /// A program that shows past its start's settle is judged on what its

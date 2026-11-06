@@ -1714,6 +1714,7 @@ impl Topology {
             &mut held.live,
             facts,
             &mut seq,
+            Instant::now(),
         );
         if let Some(agent) = held.agent.as_mut()
             && let Some((kind, session)) = held.pending_session.take()
