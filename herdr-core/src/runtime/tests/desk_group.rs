@@ -7,14 +7,19 @@ use crate::model::{AgentGroupSnapshot, DeskJobState};
 use serde_json::{Value, json};
 
 // Expected outcomes come from PRD Desk 1차 B20, B37 and B38: a session Desk
-// started goes into its checkout's `◆ Desk` group once, without moving the
-// group in front; the operator's move out of the group and close are kept.
+// started goes into its checkout's `◆ Desk` group once, without changing the
+// screen in front; the operator's move out of the group and close are kept.
 const PATH: &str = "/desk-group";
 const TABS: [&str; 3] = ["w-order:t1", "w-order:t2", "w-order:t3"];
 
-/// A runtime running Desk with one checkout of three tabs, in which Desk's
-/// spawn's session is the pane of the second tab.
+/// A runtime running Desk with one checkout of three tabs, the first in
+/// front, in which Desk's spawn's session is the pane of the second tab.
 fn setup() -> Runtime {
+    setup_in(TABS[1])
+}
+
+/// The same runtime with Desk's spawn's session in the pane of `tab`.
+fn setup_in(tab: &str) -> Runtime {
     let (runtime, _) = tab_order_runtime(PATH);
     let mut runtime = with_new_views(runtime, "desk-group");
     runtime.ingest_session(Ok(tab_order_payload(PATH, &TABS, &TABS, TABS[0])));
@@ -22,7 +27,7 @@ fn setup() -> Runtime {
     let mut ledger = Ledger::default();
     let desk = Actor::hide(HIDE_DESK_ROLE, crate::node::TEST_NODE);
     let origin = register(&mut ledger, &desk);
-    let pane = format!("{}:p", TABS[1]);
+    let pane = format!("{tab}:p");
     spawn(
         &mut ledger,
         &desk,
@@ -94,6 +99,42 @@ fn a_session_desk_started_joins_the_desk_group_once_and_the_screen_stays() {
             .count(),
         1
     );
+}
+
+/// The tab in front is Desk's session: it stays on screen, so the group in
+/// front is the `◆ Desk` group it went into, never the one it left empty
+/// (with-hide/hide-private#466).
+#[test]
+fn a_session_desk_started_in_the_tab_in_front_stays_on_screen_in_the_desk_group() {
+    let mut runtime = setup_in(TABS[0]);
+    // The group in front and the tab it shows.
+    let shown = |runtime: &Runtime| {
+        let view = runtime
+            .workspace_views
+            .as_ref()
+            .unwrap()
+            .views
+            .get(crate::node::TEST_NODE, PATH)
+            .unwrap();
+        (
+            view.agent_groups.selected.clone(),
+            view.selected_agent_layout().active().map(str::to_owned),
+        )
+    };
+    assert_eq!(shown(&runtime), (None, Some(TABS[0].to_owned())));
+    runtime.refresh_desk_jobs();
+    // The engine's next answer can land before the next publish follows the
+    // focused tab, and it reads whatever group is in front then.
+    runtime.ingest_session(Ok(tab_order_payload(PATH, &TABS, &TABS, TABS[0])));
+    runtime.sync_workspace_view();
+
+    let (_, groups_now) = groups(&runtime);
+    let desk = groups_now
+        .iter()
+        .find(|group| group.name.as_deref() == Some("◆ Desk"))
+        .expect("the Desk group was made");
+    assert_eq!(desk.tabs, [TABS[0]]);
+    assert_eq!(shown(&runtime), (desk.id.clone(), Some(TABS[0].to_owned())));
 }
 
 #[test]
