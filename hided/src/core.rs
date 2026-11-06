@@ -1369,6 +1369,8 @@ fn owner_loop(
         std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+        // A device of another platform gets this build's own release's kit.
+        crate::cli::RELEASE,
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>)

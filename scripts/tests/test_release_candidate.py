@@ -142,8 +142,9 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(set(jobs["device-bundles"]["needs"]), {"helper-identity", "device-helpers"})
         self.assertEqual(jobs["macos-compile"]["needs"], "helper-identity")
         self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "device-bundles", "macos-compile"})
-        self.assertEqual(set(jobs["windows-package"]["needs"]), {"helper-identity", "device-bundles", "windows-compile"})
-        # The Linux app carries no device kit, so its package waits for nothing.
+        # No app carries a device kit: the Windows package waits for its
+        # compile alone, and the Linux package for nothing.
+        self.assertEqual(set(jobs["windows-package"]["needs"]), {"helper-identity", "windows-compile"})
         self.assertNotIn("needs", jobs["package"])
         for name in ("macos-compile", "macos-package"):
             self.assertEqual(jobs[name]["if"], "${{ inputs.include-macos }}")

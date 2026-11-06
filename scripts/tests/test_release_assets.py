@@ -10,6 +10,25 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK = ROOT / "scripts/check-release-assets.mjs"
+# The manifest's format and every platform's kit, which the device kit contract owns.
+CONTRACT = json.loads((ROOT / "contracts/device-kits.json").read_text())
+FORMAT = CONTRACT["format"]
+
+
+def kit_files(platform):
+    """A kit's file names, each mapped to whether it is a program."""
+    kit = CONTRACT["kits"][platform]
+    files = {name + kit["suffix"]: True for name in CONTRACT["programs"]}
+    files.update({name: False for name in kit["runtime"]})
+    return files
+
+
+def kit_asset(platform, version):
+    return CONTRACT["asset"].replace("{platform}", platform).replace("{version}", version)
+
+
+# Fifteen installers, checksums, update files and blockmaps, every kit and its manifest.
+ASSET_COUNT = 15 + len(CONTRACT["kits"]) + 1
 
 
 class ReleaseAssetsTest(unittest.TestCase):
@@ -46,14 +65,15 @@ class ReleaseAssetsTest(unittest.TestCase):
             "latest-linux.yml": [f"{base}-linux-x64.deb", f"{base}-linux-x64.rpm"],
         }
         platforms = {}
-        for platform in ["linux-x86_64", "linux-aarch64"]:
-            name = f"hide-device-{platform}-{tag[1:]}.tar.gz"
+        for platform in CONTRACT["kits"]:
+            name = kit_asset(platform, tag[1:])
             data = f"device archive fixture {platform}".encode()
             (self.directory / name).write_bytes(data)
             platforms[platform] = {"asset": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-                                   "files": {name: {"size": 64, "sha256": "a" * 64} for name in ["hided", "hide", "hide-agent-hooks", "hide-holder"]}}
+                                   "files": {file: {"size": 64 if program else 1, "sha256": "a" * 64}
+                                             for file, program in kit_files(platform).items()}}
         (self.directory / "device-bundles.json").write_text(json.dumps({
-            "format": 3, "version": tag[1:], "commit": "1" * 40, "order": "42", "platforms": platforms}))
+            "format": FORMAT, "version": tag[1:], "commit": "1" * 40, "order": "42", "platforms": platforms}))
         for info, files in updates.items():
             self.write_update_info(info, tag[1:], files)
 
@@ -95,8 +115,7 @@ class ReleaseAssetsTest(unittest.TestCase):
             "hide-v1.2.3-macos-arm64.zip", "hide-v1.2.3-macos-arm64.zip.sha256",
             "hide-v1.2.3-macos-arm64.zip.blockmap", "latest-mac.yml",
         ]
-        mac_devices = ["device-bundles.json", "hide-device-linux-x86_64-1.2.3.tar.gz",
-                       "hide-device-linux-aarch64-1.2.3.tar.gz"]
+        mac_devices = ["device-bundles.json", *(kit_asset(platform, "1.2.3") for platform in CONTRACT["kits"])]
         self.assertEqual(inventory["installers"], sorted(mac_installers))
         self.assertEqual(set(inventory["release"]) - set(mac_installers + mac_devices), {
             "hide-v1.2.3-windows-x64-setup.exe", "hide-v1.2.3-windows-x64-setup.exe.sha256",
@@ -106,8 +125,8 @@ class ReleaseAssetsTest(unittest.TestCase):
         })
         self.assertEqual(inventory["release"], sorted(file.name for file in self.directory.iterdir()))
         self.assertEqual(self.check().returncode, 0)
-        # All nine Mac release assets are mandatory, even though only six
-        # exist when the installer builder returns to the package builder.
+        # Every Mac release asset and device kit is mandatory, even though only
+        # six exist when the installer builder returns to the package builder.
         for name in mac_installers + mac_devices:
             with self.subTest(missing=name):
                 file = self.directory / name
@@ -123,7 +142,7 @@ class ReleaseAssetsTest(unittest.TestCase):
     def test_device_bundle_manifest_and_archive_must_agree(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("18 files", result.stdout)
+        self.assertIn(f"{ASSET_COUNT} files", result.stdout)
         bundle = self.directory / "hide-device-linux-aarch64-1.2.3.tar.gz"
         original = bundle.read_bytes()
         bundle.write_bytes(original + b"changed")
@@ -142,6 +161,23 @@ class ReleaseAssetsTest(unittest.TestCase):
         manifest_file.write_text(json.dumps(manifest))
         bundle.unlink()
         self.assertNotEqual(self.check().returncode, 0)
+
+    def test_a_release_short_of_a_contract_kit_fails_and_says_why(self):
+        # Until the release producers make every kit (with-hide/hide-private#501
+        # N3), a release carries the Linux kits only; a core refuses that
+        # manifest, so the release fails here instead of shipping it.
+        manifest_file = self.directory / "device-bundles.json"
+        manifest = json.loads(manifest_file.read_text())
+        short = [platform for platform in CONTRACT["kits"] if not platform.startswith("linux-")]
+        for platform in short:
+            (self.directory / kit_asset(platform, "1.2.3")).unlink()
+            manifest["platforms"].pop(platform)
+        manifest_file.write_text(json.dumps(manifest))
+        result = self.check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release-kits", result.stderr)
+        for platform in short:
+            self.assertIn(kit_asset(platform, "1.2.3"), result.stderr)
 
     def test_checksums_cannot_hide_a_missing_target(self):
         name = self.names[2]

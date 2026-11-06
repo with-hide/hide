@@ -61,6 +61,7 @@ LANES = (
     "windows-wsl",
     "web-e2e",
     "remote-mailbox",
+    "remote-mailbox-arm",
     "desktop-e2e",
     "package",
     "merge-rust",
@@ -119,6 +120,19 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # `hide-node-link` reach it through `hided`), or to the tests, can change its
 # result, and nothing else can. Web code and web specs do not reach it.
 MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
+# The same lane on a Linux arm64 runner (with-hide/hide-private#501): an
+# arm64 Linux machine is a device whose kit a core of another platform takes
+# from its release, and here the core's own build connects to one. It is planned
+# for the device link's own crates, its device test and the device kit
+# contract (`DEVICE_KIT_CONTRACT`); a change elsewhere in what the lane builds
+# is the x86_64 lane's to catch, with main's push run and the nightly running
+# both.
+ARM_DEVICE_CRATES = {"hide-node", "hide-node-link"}
+ARM_DEVICE_FILES = ("hided/tests/it/device_own_engine.rs",)
+# The platforms a device kit is made for: `hide-node` includes it in its
+# source (`include_str!`), so a change to it is a change to that crate, and
+# the packaging scripts read it too (READERS, MACOS_LANE_INPUTS).
+DEVICE_KIT_CONTRACT = "contracts/device-kits.json"
 # The WSL device lane (`wsl-device.yml`) connects a real WSL 2 distribution
 # through `wsl.exe`, and the runner's own OpenSSH Server and an sshd in that
 # distribution over Windows' own `ssh.exe`: the crates the links cross (the
@@ -232,6 +246,14 @@ READERS = (
     ("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json", {"policy"}, set()),
     # hide-agent-adapter's contract test.
     ("contracts/usage-coverage.json", {"rust"}, {"hide-agent-adapter"}),
+    # desktop/scripts/device-helpers.mjs reads the device kit contract, and
+    # its tests run in the desktop unit suite; `classify` plans hide-node's
+    # lanes for it.
+    (DEVICE_KIT_CONTRACT, {"checks", "windows-check"}, set()),
+    # hide-node's kit contract test holds the Windows kit's runtime to the
+    # pinned ConPTY files, so a pin that changes them fails in the pull
+    # request, not in a release's kit.
+    ("contracts/conpty.json", {"rust"}, {"hide-node"}),
 )
 
 
@@ -268,7 +290,7 @@ MACOS_LANE_INPUTS = {
         # both for the package's scripts, resources, kit, hooks and updater.
         "paths": (
             "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
-            "contracts/conpty.json", "scripts/fetch-conpty.py",
+            "contracts/conpty.json", "contracts/device-kits.json", "scripts/fetch-conpty.py",
             "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh", "scripts/package-e2e.sh", "scripts/package-e2e-report.py",
             "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
             "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
@@ -402,7 +424,7 @@ POLICY_ONLY = (
     "scripts/check-harness-ignore-anchor.sh",
     "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
-    "scripts/check-agent-screen-rules.py",
+    "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs",
     "scripts/merge-order.py", "scripts/pull_requests.py",
@@ -633,6 +655,8 @@ def classify(path, status, crates, root):
     if parts[:2] == ("vendor", "portable-pty"):
         # The root manifest patches it in for the holder, its one user.
         crate = crates.get("hide-holder")
+    if path.as_posix() == DEVICE_KIT_CONTRACT:
+        crate = crates.get("hide-node")
     if crate is not None:
         packages = reverse_closure(crates, crate["name"])
         # Every crate compiles into the Windows workspace `windows check` builds.
@@ -645,6 +669,8 @@ def classify(path, status, crates, root):
             lanes.add("web-e2e")
         if packages & MAILBOX_CRATES:
             lanes.add("remote-mailbox")
+        if crate["name"] in ARM_DEVICE_CRATES or path.as_posix() in ARM_DEVICE_FILES:
+            lanes.add("remote-mailbox-arm")
         if crate["name"] in WSL_CRATES or path.as_posix() in WSL_CRATE_FILES:
             lanes.add("windows-wsl")
         if crate["name"] in OS_CRATES:
@@ -657,7 +683,8 @@ def classify(path, status, crates, root):
             lanes.add("relay-protocol")
         if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
             lanes.add("holder-restart")
-        if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):
+        # The device kit contract is compiled into hide-node's code.
+        if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path) or path.as_posix() == DEVICE_KIT_CONTRACT:
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
     if parts[0] == "web" and len(parts) > 1:

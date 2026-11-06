@@ -340,13 +340,13 @@ The suite runs the focus tests after every other one (`desktop/playwright.config
 
 ## Device helper release bundles
 
-The Mac desktop host remains Apple Silicon; Linux x64 and Linux ARM64 devices download their kit on first connection.
-The app carries only `Contents/Resources/device-bundles.json`, alongside its five native programs.
-The Windows app carries the same manifest in `resources/device-bundles.json`, because each WSL distribution of the PC is a Linux device that downloads its kit the same way (PRD wsl-device D-04).
-Foreign helper binaries are separate release assets, never app resources.
+Every platform a device kit is made for is named once, in `contracts/device-kits.json`: the manifest's format and name, the archive name, the four programs, and for each platform its Rust target, the job that produces it, its program suffix, the executable header its programs must have and any runtime files beside them.
+The core (`hide-node/src/ssh/kit/`) and the packaging scripts (`desktop/scripts/device-helpers.mjs`) read it, and `scripts/check-device-kits-single-source.py` fails when a platform name appears anywhere else in their code, so a new platform is one entry there and a runner.
+It carries Linux x64, Linux ARM64, macOS ARM64 and Windows x64; an Intel Mac or a Windows ARM PC is refused at the probe, before anything is installed, with the reason the contract gives ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+No app carries a device kit or its manifest: a core of any system fetches `device-bundles.json` and the kits it names from its own release (with-hide/hide-private#501 decision 1).
 The packager verifies foreign bytes without executing them, by their executable headers.
 
-`.github/workflows/device-helpers.yml` is the reusable producer.
+`.github/workflows/device-helpers.yml` is the reusable producer of the Linux kits.
 Its required string inputs are `source-sha` (full public source commit), `version` (the app version, optionally prefixed with `v`) and `build-order` (decimal order, including `0` for a fixture).
 It explicitly checks out the public repository.
 The Linux runners build natively on `ubuntu-24.04` and `ubuntu-24.04-arm` using the existing package recipe after the web build.
@@ -361,48 +361,60 @@ Never redirect a release target directory.
 
 Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
 `package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages; a [release candidate](#unsigned-release-candidates) keeps both artifacts for the private publisher.
-Its `device bundles` job then makes the bundles below once, with `desktop/scripts/device-helpers.mjs bundle <version> <source-sha> <build-order>`, and keeps them as the `hide-device-bundles` artifact (the two archives and `device-bundles.json`).
-The Mac and Windows apps both ship that one manifest: a gzip archive made twice would not be the same bytes, so a manifest made by one job and archives made by another would never match.
-Neither native lane waits for the helpers to compile: `compile (macos)` and `compile (windows)` run `desktop package compile` while the helpers build, and `package (macos)` and `package (windows)` need their compile and the bundles, download the binaries and `hide-device-bundles` into `desktop/out/device-bundles/` and run `desktop package assemble`, so a failed helper skips both apps and fails the run; `package (linux)` is a job of its own that waits for none of them, since the Linux app carries no device kit.
-A package that finds bundles there takes them only when they were made for its exact source, version and order and every archive has the size and digest the manifest names (`readDeviceBundles`); a release Windows app refuses to package without them.
-A local package on macOS or Windows (no `HIDE_VERSION`) carries no device manifest and needs neither helpers nor bundles: its `-main.` version has no published release, so the daemon would refuse to download a kit for it anyway, and the helpers build only on Linux runners, so asking for them made a local Mac install wait about fifteen minutes and left a Windows source build unable to finish.
-A device connected to such a build reports that the build has no device download manifest, unless developer-provided device artifacts are found first.
+Its `device bundles` job then makes the bundles below once, with `desktop/scripts/device-helpers.mjs bundle <version> <source-sha> <build-order>`, and keeps them as the `hide-device-bundles` artifact (the archives and `device-bundles.json`): a gzip archive made twice would not be the same bytes, so a manifest made by one job and archives made by another would never match.
+Neither native lane waits for the helpers to compile: `compile (macos)` and `compile (windows)` run `desktop package compile` while the helpers build.
+`package (macos)` needs its compile and the bundles, downloads the binaries and `hide-device-bundles` into `desktop/out/device-bundles/` and runs `desktop package assemble`, so a failed helper skips the Mac app and fails the run; `package (windows)` and `package (linux)` wait for no helper, since no app carries a device kit.
+A release Mac package takes the bundles only when they were made for its exact source, version and order and every archive has the size and digest the manifest names (`readDeviceBundles`), and refuses to package without them; every package refuses a device manifest or another platform's program among its app's resources.
+A local package (no `HIDE_VERSION`) publishes no kit and needs neither helpers nor bundles: its `-main.` version has no published release, so a core of that build downloads no kit anyway, and the helpers build only on Linux runners, so asking for them made a local Mac install wait about fifteen minutes and left a Windows source build unable to finish.
 `desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer command on its matching runner after dependency installation and `rustup target add <triple>`.
 Packaging refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
 Downloaded artifacts need not retain executable mode bits.
 
 Before building the native app, or before assembling it from compiled binaries, `prepareDeviceBundles` copies the helpers into private worktree staging.
 Linux bytes remain unchanged; only the native Mac app follows the existing Developer ID signing and notarization path.
-It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly four regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `hide-holder`.
-A device is sent all four, the pane holder apart from the helper's version folder (PRD engine-bundle-3-core-owns D-22, `HelperPackages::payload_for`); no archive carries Herdr (PRD engine-bundle-4-herdr-removal D-2).
-No paths, links, extended attributes or PAX records belong in an archive.
+It hashes the final files and builds one gzip-compressed USTAR archive per platform holding exactly the kit's files as regular entries under their `/`-separated paths: the four programs, with the platform's suffix (`.exe` on Windows), and the runtime files the contract lists, such as the Windows holder's ConPTY runtime under `holder-conpty/`; a Linux kit is the four programs at its root.
+A device is sent every file, the pane holder apart from the helper's version folder (PRD engine-bundle-3-core-owns D-22, `HelperPackages::payload_for`); no archive carries Herdr (PRD engine-bundle-4-herdr-removal D-2).
+No links, folder entries, extended attributes or PAX records belong in an archive.
 The archive's name is `hide-device-<platform>-<app-version>.tar.gz`, without a leading `v` in the version.
-The uncompressed four-file total and the compressed archive are each capped at 256 MiB.
+The uncompressed total and the compressed archive are each capped at 256 MiB.
 
-`device-bundles.json` has `format: 3` (format 2 carried Herdr beside the holder and format 1 had no holder; an app reads only its own release's manifest, so no build reads two), `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
-Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the four program names, each with its final `sha256` and `size`.
+`device-bundles.json` has `format: 4`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by every platform of the contract.
+Format 3 named only the two Linux kits, for the manifest each app carried; format 2 carried Herdr beside the holder and format 1 had no holder; a core reads only its own release's manifest, so no build reads two.
+Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the kit's file names, each with its final `sha256` and `size`.
 Hashes are lowercase SHA-256 hex.
-The app ships this small manifest; the Mac package's `desktop/out/release/` receives a copy and both archives alongside the installers and updater files, and the Windows package publishes neither, so each archive is a release asset once.
+`device-helpers.mjs bundle` writes the Linux kits; the macOS and Windows kits come from the producers the contract names (`publisher`, `windows-compile`), which with-hide/hide-private#501 N3 (release-kits) joins into the release's manifest.
+Until it does, the release validator below refuses every release for the kits it lacks and names N3 as the reason: a release with the Linux kits alone would ship a manifest every core refuses, which would break a Mac core's Linux devices without a word.
+The Mac package's `desktop/out/release/` receives the manifest and every archive alongside the installers and updater files, so each archive is a release asset once.
 `desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
 
 The private publisher must take the two artifacts from the release candidate run it selected, as it takes the Linux and Windows packages and [the Mac binaries](#the-candidates-mac-build), require every helper's SHA-256 to equal the receipt's `device_helpers`, download them into the paths above, then run `desktop package assemble` with its Developer ID settings; it builds no helper and compiles no binary itself.
-It must also download that run's `hide-device-bundles` into `desktop/out/device-bundles/`, so its Mac app publishes the archives the candidate's Windows app names; bundles it made itself would carry other digests, and every WSL kit download of that release would be refused.
-It must publish both `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
+It must also download that run's `hide-device-bundles` into `desktop/out/device-bundles/`, so the release publishes the archives and the manifest that run made; bundles it made itself would carry other digests, and every kit download of that release would be refused.
+It must publish the `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
 Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run.
-The public release validator and draft writer require 18 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus both Linux bundles and their manifest.
-They verify each bundle's size and SHA-256 against the manifest; draft preparation also requires its source commit to match the release event before any GitHub request.
+The public release validator and draft writer require 20 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus a kit for every platform of the contract and their manifest.
+They refuse a release short of a kit before anything else, verify that the manifest names every platform of the contract and each kit's files, and verify each kit's size and SHA-256 against the manifest; draft preparation also requires its source commit to match the release event before any GitHub request.
 The private workflow is maintained outside this repository; the public producer and package run do not establish that publishing is connected or a release has shipped.
 
-The connection worker fetches only `https://github.com/with-hide/hide/releases/download/v<app-version>/<asset>` with HTTPS, a 60-second request bound and at most five redirects.
-It checks archive size and hash, then exact entry names, regular-file types, sizes, program hashes and executable headers before atomically publishing a cache slot.
+### Which programs a device gets
+
+Every core picks a device's programs by one rule (`HelperPackages`, `hide-node/src/ssh/kit/select.rs`), on the connection worker and never under the runtime mutex.
+A developer's `<name>-<os>-<arch>` file in the build's folder comes first (`holder-conpty-<os>-<arch>` for the Windows runtime folder); for the core's own platform, its own programs under their system's names come next; for any other platform the contract carries, the kit of this build's release.
+From a folder a device gets exactly the runtime files its kit names, the files a release kit carries, and a folder short of one is refused with its name; the Windows kit's runtime is held to `contracts/conpty.json` by hide-node's contract test, which a change to the pin runs.
+A build that is not a published release (a `-main.` or `0.0.0-` version, one without a commit, or one no package numbered, such as a plain `cargo build --release`, whose build order is 0) downloads nothing, and its refusal names the developer folder: `node desktop/scripts/device-helpers.mjs stage <device-bundles.json> <archive> <folder>` checks a release or CI kit against its manifest and unpacks it there under those names.
+
+The connection worker fetches `https://github.com/with-hide/hide/releases/download/v<app-version>/device-bundles.json`, then the kit's archive, over HTTPS with a 60-second request bound and at most five redirects; the manifest is capped at 64 KiB and a kit at 256 MiB.
+Before any archive it refuses a manifest whose version, commit or build order differs from the ones compiled into the build (`hided::cli::RELEASE`), whose format is not the contract's, or which does not name exactly the contract's platforms and each kit's files.
+It checks archive size and hash, then exact entry names, regular-file types, sizes, file hashes and the programs' executable headers before atomically publishing a cache slot.
+
 The cache path belongs to `hide_kit::layout::device_bundle_cache`: `~/.hide/cache/device-bundles/`.
-A five-second process lock serializes cache access; each of two platform slots holds one verified kit, and one staging folder holds the current download.
-The maximum is 1024 MiB including the two 256 MiB kits, one 256 MiB staging kit and its 256 MiB compressed archive, plus the fixed lock file.
-A reconnect verifies and reuses its cached bytes offline; an app update replaces mismatched slots, and a failed download leaves no usable partial kit.
+It holds the lock file, the release's manifest, `recent` (the slots from most to least recently used), one staging folder for the download in progress and one slot per platform a device of this account needed; any other entry is refused, never removed.
+A five-second process lock serializes cache access, and a kit's bytes are read before the lock is released, so another build cannot evict a kit while it is read.
+Everything in it, the staging kit and its archive included, stays within 1024 MiB: a download that would pass it first removes the least recently used slots.
+A fixed slot per platform would have held four 256 MiB kits beside a 256 MiB staging kit and its archive, 1.5 GiB, so the four platforms share the old two-platform limit instead.
+A reconnect verifies and reuses its cached bytes offline; a slot of another build or with changed bytes is replaced, and a failed download leaves no usable partial kit.
 Every exit explicitly cleans staging before releasing the cache lock; if cleanup fails, the device reason retains both failures and a structured diagnostic names the platform and release, while Drop makes a backup attempt.
 Files in the cache are inert private data; upload gives the verified programs executable permission on the device.
 Missing releases, network failures and verification errors reach the existing device failure and Retry path.
-Local/main builds report that no matching device release exists; an existing developer artifact folder still takes precedence.
 Physical device startup, the private publisher and official signing/notarization remain separate verification claims.
 
 ## Developer ID signing
@@ -527,7 +539,7 @@ A `vX.Y.Z` tag is a stable release, published with `make_latest: "true"`; a `vX.
 Its packages report the version without the `v`, such as `0.4.0-rc.1`, and are named for it, such as `hide-v0.4.0-rc.1-macos-arm64.zip`; the macOS bundle version and the Windows file version are the numeric prefix, `0.4.0`.
 The publisher assembles all three systems' packages before `node scripts/release-draft.mjs <tag> <event-commit-sha> <directory>` prepares the matching draft.
 The file-only entrypoint is `node scripts/check-release-assets.mjs <tag> <directory> [release-pages.json]`.
-The directory must contain exactly that tag's eighteen files (`expectedAssetNames`): the macOS ARM64 dmg and zip, the Windows x64 `setup.exe`, the Linux x64 deb and rpm, one SHA-256 sidecar per installer, `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, the zip's and the setup's `.blockmap`, both Linux device bundles and `device-bundles.json`.
+The directory must contain exactly that tag's twenty files (`expectedAssetNames`): the macOS ARM64 dmg and zip, the Windows x64 `setup.exe`, the Linux x64 deb and rpm, one SHA-256 sidecar per installer, `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, the zip's and the setup's `.blockmap`, the device kit of every platform `contracts/device-kits.json` carries and `device-bundles.json`.
 The gate rejects a missing target, extra or mixed-version files, symbolic links, empty files, an incorrectly named sidecar, and a mismatched digest, and reads each update file strictly: its version must be the tag's, and every file it names must be in the release with the SHA-512 digest and size it states, since the app's updater refuses a download that differs; hashing streams bytes rather than retaining each package in memory.
 Before any release write, the writer checks that the current tag still resolves to the event commit; the workflow passes its contents-write token as `GH_TOKEN`.
 A missing credential, moved tag, or failed initial API read blocks preparation before writes; package workflow artifacts remain available.

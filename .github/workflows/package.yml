@@ -34,14 +34,14 @@
 #
 # Every call also builds the two Linux device helpers (`device-helpers.yml`),
 # which a release candidate hands the private publisher (docs/BUILD.md), and
-# makes the Linux device bundles from them once (`device-bundles`): the Mac
-# app and the Windows app, whose WSL distributions are Linux devices (PRD
-# wsl-device D-04), ship that one manifest, so each names the archives the
-# release has. The Mac and Windows native builds do not wait for the
+# makes the Linux device bundles from them once (`device-bundles`), which a
+# release's Mac package publishes beside its installers. No app carries a
+# device kit or its manifest: a core of any system fetches them from its own
+# release (hide-node/src/ssh/kit/). The native builds do not wait for the
 # helpers: `compile (macos)` and `compile (windows)` build the web shell and
-# the release binaries while the helpers build, and each package job needs
-# its compile and the bundles before it assembles the app, so a failed helper
-# or compile fails the package and no app is made without them.
+# the release binaries while the helpers build; `package (macos)` needs its
+# compile and the bundles, so a failed helper fails the Mac package, and
+# `package (windows)` needs only its compile.
 name: package
 
 on:
@@ -429,8 +429,9 @@ jobs:
   windows-package:
     name: package (windows)
     # Its own job, so the Linux package does not wait for the Windows
-    # binaries and the device bundles this one needs.
-    needs: [helper-identity, device-bundles, windows-compile]
+    # binaries this one needs. It carries no device kit: a core fetches its
+    # kits from its own release (hide-node/src/ssh/kit/).
+    needs: [helper-identity, windows-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     runs-on: windows-latest
@@ -455,7 +456,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - name: Take the identity the binaries and the bundles were made with
+      - name: Take the identity the binaries were made with
         env:
           VERSION: ${{ needs.helper-identity.outputs.version }}
           BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
@@ -467,16 +468,11 @@ jobs:
           name: hide-windows-release-binaries
           path: ${{ github.workspace }}
           digest-mismatch: error
-      - uses: actions/download-artifact@v8
-        with:
-          name: hide-device-bundles
-          path: desktop/out/device-bundles
-          digest-mismatch: error
       - run: bash scripts/verify-web.sh install
       - name: Package the unsigned app, its installers and update files
         # The packager assembles `compile (windows)`'s checked binaries with
-        # the run's device bundles and the holder's pinned ConPTY runtime and
-        # refuses when any of them cannot run; electron-builder then wraps the app in
+        # the holder's pinned ConPTY runtime and refuses when any of them
+        # cannot run; electron-builder then wraps the app in
         # desktop/out/release.
         timeout-minutes: 50
         env:

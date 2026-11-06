@@ -57,3 +57,11 @@ Regenerate it after a change to those commands, and review the diff as the chang
 ```sh
 target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json
 ```
+
+# Device kits
+
+`device-kits.json` names every platform a device kit is made for, and is the only place those platforms are named ([docs/BUILD.md](../docs/BUILD.md#device-helper-release-bundles)).
+It gives the release manifest's format and name, the archive name, the four programs every kit carries, and for each platform its Rust target, the job that produces it, its program suffix, the executable header its programs must have and any runtime files beside them (`true` for an executable one); `refused` gives the reason a device of a platform Hide does not ship for is turned away.
+It is written by hand, and its readers are the core, which compiles it in (`hide-node/src/ssh/kit/contract.rs`), and the packaging scripts (`desktop/scripts/device-helpers.mjs`), each with its own tests over it.
+`scripts/check-device-kits-single-source.py` fails when a platform name appears anywhere else in that code.
+A new platform is one entry here, a runner that builds it, and its row in [docs/INSTALL.md](../docs/INSTALL.md#what-each-system-supports); raising `format` makes every core of an earlier build refuse the new manifest by its number.

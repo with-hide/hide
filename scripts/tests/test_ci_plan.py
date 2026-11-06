@@ -22,13 +22,14 @@ MACOS_LANES = {"os-contract-macos", "vt", "holder-restart", "desktop-e2e", "pack
 # paths only.
 FULL = [
     "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
-    "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
+    "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "remote-mailbox-arm",
+    "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
     "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
-    "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
-    "package",
+    "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox",
+    "remote-mailbox-arm", "desktop-e2e", "package",
 ]
 # A full plan with a package input.
 PACKAGED = FULL + ["package"]
@@ -202,6 +203,42 @@ class Selection(unittest.TestCase):
                 self.assertNotIn("remote-mailbox", plan(path)["lanes"])
         # A change no rule claims plans every lane, this one included.
         self.assertIn("remote-mailbox", plan("scripts/verify-cargo.sh")["lanes"])
+
+    def test_the_arm64_mailbox_lane_follows_the_device_link_and_its_kit_contract(self):
+        for path in (
+            "hide-node/src/ssh/kit/cache.rs", "hide-node/src/ssh/bootstrap.rs", "hide-node-link/src/device.rs",
+            "hided/tests/it/device_own_engine.rs", "contracts/device-kits.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("remote-mailbox-arm", plan(path)["lanes"])
+        # What the x86_64 lane builds besides the device link is its to catch.
+        for path in (
+            "herdr-core/src/lib.rs", "hided/src/lib.rs", "hide-platform/src/process.rs", "hide-host/src/lib.rs",
+            "hided/tests/it/remote_delivery.rs", "web/src/host.ts", "docs/TESTING.md",
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn("remote-mailbox-arm", plan(path)["lanes"])
+        for event in ("push", "schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertIn("remote-mailbox-arm", ci.plan(event, None, None, ROOT)["lanes"])
+        self.assertIn("runner: ubuntu-24.04-arm", pr_jobs()["remote-mailbox-arm"])
+
+    def test_the_device_kit_contract_plans_what_hide_node_plans_and_the_scripts_that_read_it(self):
+        contract = plan("contracts/device-kits.json")
+        self.assertFalse(contract["full"])
+        node = plan("hide-node/src/ssh/kit/contract.rs")
+        self.assertEqual(contract["rust_packages"], node["rust_packages"])
+        # The desktop unit suite runs the packaging scripts' tests, and the
+        # package lane carries the kits.
+        self.assertEqual(set(contract["lanes"]), set(node["lanes"]) | {"checks", "package"})
+
+    def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
+        pin = plan("contracts/conpty.json")
+        self.assertFalse(pin["full"])
+        self.assertIn("rust", pin["lanes"])
+        self.assertIn("hide-node", pin["rust_packages"])
+        # Its own lanes stay: the holder's Windows tests and the package.
+        self.assertLessEqual({"vt", "package", "windows-e2e", "holder-restart"}, set(pin["lanes"]))
 
     def test_the_wsl_lane_follows_the_crates_the_wsl_link_crosses(self):
         for path in (
@@ -1014,7 +1051,10 @@ class Workflows(unittest.TestCase):
         # from the old count; correcting the accounting starts no new job.
         # Every suite runs once, on the core's own engine, since Herdr's lanes
         # went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
-        self.assertLessEqual(most, 50, "a run starts more jobs than the suites and native SDK contracts need")
+        # The remote mailbox lane's Linux arm64 leg adds one, planned only
+        # for the device link's crates, its device test and the device kit
+        # contract (with-hide/hide-private#501).
+        self.assertLessEqual(most, 51, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

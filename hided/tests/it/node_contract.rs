@@ -229,9 +229,10 @@ impl Device {
         let events = Arc::new(Events::default());
         let slot: hide_node::ssh::PaneEventsSlot = Arc::default();
         let _ = slot.set(pane_events.unwrap_or_else(|| events.clone()));
-        let mut connector = hide_node::ssh::Connector::new(Some(
-            retained_packages.unwrap_or_else(|| packages.clone()),
-        ))
+        let mut connector = hide_node::ssh::Connector::new(
+            Some(retained_packages.unwrap_or_else(|| packages.clone())),
+            hided::cli::RELEASE,
+        )
         .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
         .with_pane_events(slot);
         if let Some(sink) = terminals {
@@ -601,10 +602,11 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
     .unwrap();
     assert_eq!(project.identity, expected.identity);
     device.link.close("ordinary build upgrade");
-    let transport = hide_node::ssh::Connector::new(Some(device.current_packages.clone()))
-        .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
-        .transport(&device.local, "contract-node", ALIAS)
-        .unwrap();
+    let transport =
+        hide_node::ssh::Connector::new(Some(device.current_packages.clone()), hided::cli::RELEASE)
+            .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
+            .transport(&device.local, "contract-node", ALIAS)
+            .unwrap();
     let consent = HostConsent {
         contract: HOST_CONSENT_CONTRACT,
         helper_root: "~/helper".to_owned(),

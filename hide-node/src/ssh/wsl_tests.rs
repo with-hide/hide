@@ -6,6 +6,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
+use crate::ssh::host::UNPUBLISHED;
 
 struct Fixture {
     dir: tempfile::TempDir,
@@ -103,7 +104,7 @@ impl Fixture {
             std::fs::write(&path, bytes).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        HelperPackages::new(Some(builds))
+        HelperPackages::new(Some(builds), UNPUBLISHED)
     }
 
     fn home(&self) -> PathBuf {
@@ -161,7 +162,7 @@ fn a_failing_listing_is_no_answer_and_wakes_nothing() {
 fn a_running_distribution_or_an_attempt_that_may_wake_it_is_probed() {
     let fixture = fixture();
     fixture.running("Ubuntu\n");
-    let device = fixture.device(HelperPackages::new(None));
+    let device = fixture.device(HelperPackages::new(None, UNPUBLISHED));
     establish(&device, &consent(None), Wake::NotAllowed);
     let calls = fixture.calls();
     assert_eq!(calls[0], "--list --running --quiet");
@@ -171,7 +172,7 @@ fn a_running_distribution_or_an_attempt_that_may_wake_it_is_probed() {
     );
 
     let fixture = self::fixture();
-    let device = fixture.device(HelperPackages::new(None));
+    let device = fixture.device(HelperPackages::new(None, UNPUBLISHED));
     establish(&device, &consent(None), Wake::Allowed);
     let calls = fixture.calls();
     assert!(

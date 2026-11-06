@@ -64,8 +64,10 @@ fn the_host_list_names_each_alias_its_address_and_the_device_that_holds_it() {
     )
     .unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
-    runtime.devices =
-        Arc::new(hide_node::ssh::Connector::new(None).with_resolve(answers(Arc::clone(&asked))));
+    runtime.devices = Arc::new(
+        hide_node::ssh::Connector::new(None, crate::node::TEST_RELEASE)
+            .with_resolve(answers(Arc::clone(&asked))),
+    );
     // "Studio Mac" is added under `studio`; "Old" under an alias the config
     // no longer names that reaches the same address as `fresh`.
     runtime.snapshot.ui_state.device_registrations = vec![
@@ -146,7 +148,8 @@ fn a_missing_config_or_program_lists_nothing_or_names_the_problem() {
     // The real `ssh -G` path, with a program that cannot start: that fails at
     // once, so no deadline is involved.
     runtime.devices = Arc::new(
-        hide_node::ssh::Connector::new(None).with_ssh_program(PathBuf::from("/nonexistent/ssh")),
+        hide_node::ssh::Connector::new(None, crate::node::TEST_RELEASE)
+            .with_ssh_program(PathBuf::from("/nonexistent/ssh")),
     );
     let home = runtime.home_path.clone().expect("fixture home");
     let shared = Arc::new(Mutex::new(runtime));
@@ -196,7 +199,9 @@ fn first_run_runtime(config: &str, resolve: Resolve) -> Arc<Mutex<Runtime>> {
     let home = runtime.home_path.clone().expect("fixture home");
     std::fs::create_dir_all(home.join(".ssh")).unwrap();
     std::fs::write(home.join(".ssh/config"), config).unwrap();
-    runtime.devices = Arc::new(hide_node::ssh::Connector::new(None).with_resolve(resolve));
+    runtime.devices = Arc::new(
+        hide_node::ssh::Connector::new(None, crate::node::TEST_RELEASE).with_resolve(resolve),
+    );
     let shared = Arc::new(Mutex::new(runtime));
     shared.lock().unwrap().install_worker_context(
         Arc::downgrade(&shared),
