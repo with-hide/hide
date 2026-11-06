@@ -11,10 +11,9 @@
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { agentIn, checkoutAt, closePane, openProject, tabPanes, tabsOf, withControl } from "./daemon-actions";
+import { agentIn, checkoutAt, closePane, openProject, startAgentInCheckout, tabOfPane, tabsOf, withControl } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { setAgentSession } from "./fixture-agents";
 import type { HidedControl } from "./hided-control.mjs";
@@ -41,12 +40,10 @@ function git(cwd: string, args: string[]): void {
  */
 async function startAgentAt(server: EngineServer, daemon: Daemon, control: HidedControl, folder: string, session: string, task: string): Promise<{ tab: string; pane: string }> {
   writeFixtureTranscript(claudeProjects(server), session, { task });
-  const known = await control.until((rest) => checkoutAt(rest, folder)?.tabs ?? [], "the snapshot");
-  control.send("agent_start_in_checkout", { checkout_path: folder, provider: "claude", resume_session_id: session, request_id: `e2e-${crypto.randomUUID()}` });
+  const pane = await startAgentInCheckout(control, folder, { resume_session_id: session }, `an agent in ${folder}`);
   const started = await control.until((rest) => {
-    const tab = checkoutAt(rest, folder)?.tabs.find((id) => !known.includes(id));
-    const pane = tab ? tabPanes(rest, tab)[0] : undefined;
-    return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
+    const tab = tabOfPane(rest, pane);
+    return tab && agentIn(rest, pane) ? { tab, pane } : undefined;
   }, `an agent in a new tab of ${folder}`, 30_000);
   await setAgentSession(server, daemon, started.pane, session);
   return started;
