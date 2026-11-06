@@ -160,6 +160,7 @@ impl Runtime {
             .as_deref()
             .filter(|pane| self.agent_row(pane).is_some());
         if let Some(pane) = live {
+            self.note_hide_typing(pane);
             let started = self.pane_api_route(pane).and_then(|route| {
                 spawn_stray_prompt(
                     route,
