@@ -71,6 +71,10 @@ pub(crate) struct PlanRuntime {
     /// was not taken (`AskSubject::InputUnconfirmed::held`). Bounded by the
     /// unconfirmed inputs; a later typing or a record makes it stale.
     pub(crate) input_held: BTreeMap<String, u8>,
+    /// Typed input whose typings are spent with no record, by input id,
+    /// once `input.undelivered` has logged it. Bounded by the unconfirmed
+    /// inputs.
+    pub(crate) input_undelivered: std::collections::BTreeSet<String>,
     /// Each unconfirmed input's fresh session read, asked once per typing
     /// before the input is judged unconfirmed: the typing and when it was
     /// asked. Bounded by the unconfirmed inputs.
