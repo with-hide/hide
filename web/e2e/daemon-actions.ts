@@ -10,8 +10,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
-import type { SnapshotRest } from "../src/snapshot";
-import { startAnswer } from "../src/startAnswer";
 import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
 import type { Daemon } from "./hided-fixture";
 import { paneProgramLine, type PaneShell } from "./pane-fixture";
@@ -182,25 +180,32 @@ export async function openProject(control: HidedControl, dir: string, label: str
   }, `the project ${folder} with its first tab`, 30_000);
 }
 
+type TaskOperation = { kind: string; phase: string; pane_id: string | null; agent_phase: string | null; failure: string | null; request_id: string | null };
+
 /**
  * Starts the `claude` stand-in in the checkout at `folder` as the start
  * panel's start does, with the start's other `fields` (a resumed session, a
  * target beside another pane), and returns the pane the core started it in.
- * It waits for the core's answer to this start, as the start panel reads it
- * (`startAnswer`), until the agent has started: the core holds one task slot
- * and refuses another start, as `task_operation.busy`, while this one's agent
- * is still starting, and the agent's row is published before that.
+ * It waits for the core's answer to this start, the receipt carrying its
+ * request id that the start panel reads too (`web/src/startAnswer.ts`), until
+ * the agent has started: the core holds one task slot and refuses another
+ * start, as `task_operation.busy`, while this one's agent is still starting,
+ * and the agent's row is published before that.
  * A refused or failed start throws with the core's answer.
  */
 export async function startAgentInCheckout(control: HidedControl, folder: string, fields: Record<string, unknown>, what: string): Promise<string> {
   const requestId = `e2e-${crypto.randomUUID()}`;
   control.send("agent_start_in_checkout", { checkout_path: folder, provider: "claude", request_id: requestId, ...fields });
   const answer = await control.until((rest) => {
-    const answer = startAnswer(rest as SnapshotRest, requestId);
-    return answer.phase === "pending" || (answer.phase === "ready" && answer.agentPhase === "starting") ? undefined : answer;
+    const refused = (rest.status as { last_error?: { kind: string; request_id?: string | null } | null } | undefined)?.last_error;
+    if (refused?.request_id === requestId) return { refused: refused.kind };
+    const operation = rest.task_operation as TaskOperation | null | undefined;
+    if (operation?.request_id !== requestId || operation.kind !== "agent_start") return undefined;
+    return operation.phase === "working" || operation.agent_phase === "starting" ? undefined : { operation };
   }, `the core's answer to the start of ${what}`, 30_000);
-  if (answer.phase !== "ready" || answer.agentPhase !== "started" || !answer.paneId) throw new Error(`the core did not start ${what}: ${JSON.stringify(answer)}`);
-  return answer.paneId;
+  const operation = "operation" in answer ? answer.operation : undefined;
+  if (operation?.phase !== "ready" || operation.agent_phase !== "started" || !operation.pane_id) throw new Error(`the core did not start ${what}: ${JSON.stringify(answer)}`);
+  return operation.pane_id;
 }
 
 /** A new tab in `checkout`, as New tab makes it, and its shell. */
