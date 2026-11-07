@@ -91,18 +91,20 @@ async function mount(missions: Mission[], { pane = "p1", plans = [] as PlanView[
 it("reads each state in words with a cell per node, in the plan chip's place, and a pane that conducts nothing keeps its plan chip (B8, B36, PRD mission-pane-chip B1, B2, B17)", async () => {
   const allDone = NODES.map((row) => ({ ...row, status: "done" as const }));
   const cases: [Partial<Mission>, string, string, string | undefined][] = [
-    [{ status: "planning", nodes: [] }, "planning", "Planning", undefined],
-    [{}, "running", "Mission1/3", "done working waiting"],
+    // The mission's number (`M1` for `mission-1`) stands where the word "Mission" stood, and a state word follows it.
+    [{ status: "planning", nodes: [] }, "planning", "M1 Planning", undefined],
+    [{}, "running", "M1 1/3", "done working waiting"],
     // A decision keeps the progress and adds `!` in its colour (needs-you-cleanup B6).
-    [{ decision: "Which base for the screen PR?" }, "decision", "!Mission1/3", "done working waiting"],
-    [{ status: "merge_wait" }, "merge_wait", "Waiting to merge", "done working waiting"],
-    [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "Mission3/3", "done done done"],
-    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "Cancelled", "done cancelled cancelled"],
+    [{ decision: "Which base for the screen PR?" }, "decision", "! M1 1/3", "done working waiting"],
+    [{ status: "merge_wait" }, "merge_wait", "M1 Waiting to merge", "done working waiting"],
+    [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "M1 3/3", "done done done"],
+    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "M1 Cancelled", "done cancelled cancelled"],
   ];
   for (const [extra, state, text, cells] of cases) {
     const view = await mount([mission(extra)], { plans: [plan()] });
     try {
-      expect([view.chip()?.dataset.missionChipState, view.chip()?.textContent]).toEqual([state, text]);
+      const words = [...view.chip()!.children].map((part) => part.textContent).filter(Boolean).join(" ");
+      expect([view.chip()?.dataset.missionChipState, words]).toEqual([state, text]);
       // One cell per node in the plan, in its state's colour; no cell before the first plan.
       expect(view.chip()?.querySelector<HTMLElement>("[data-progress-cells]")?.dataset.progressCells).toBe(cells);
       // A decision and a done mission keep their colour while the popover is open.
@@ -119,6 +121,12 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
     expect(other.chip()).toBeNull();
     expect(other.container.textContent).toBe("");
   } finally { await other.unmount(); }
+  // An id the core gave no number keeps the word; the chip never makes one up.
+  const unnumbered = await mount([mission({ id: "imported" })]);
+  try {
+    expect(unnumbered.chip()?.querySelector("[data-mission-number]")).toBeNull();
+    expect(unnumbered.chip()?.textContent).toBe("Mission1/3");
+  } finally { await unnumbered.unmount(); }
   const unreadable = await mount([mission()]);
   try {
     await act(async () => useShellStore.setState({ rest: { ...snapshot([mission()]), missions: { items: [mission()], failed: "unreadable" } } as unknown as SnapshotRest }));

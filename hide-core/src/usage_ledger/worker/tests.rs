@@ -587,7 +587,7 @@ fn a_failed_cost_build_keeps_the_last_costs_and_is_tried_again() {
     let past = Instant::now() - COST_REBUILD;
     engine
         .store
-        .execute_for_test("ALTER TABLE events RENAME TO events_gone");
+        .execute_for_test("ALTER TABLE calls RENAME TO calls_gone");
     engine.costs.dirty = true;
     engine.costs.built = Some(past);
     let failed = engine.report(true, &projects).projects;
@@ -601,9 +601,72 @@ fn a_failed_cost_build_keeps_the_last_costs_and_is_tried_again() {
 
     engine
         .store
-        .execute_for_test("ALTER TABLE events_gone RENAME TO events");
+        .execute_for_test("ALTER TABLE calls_gone RENAME TO calls");
     engine.costs.built = Some(past);
     let again = engine.report(true, &projects).projects;
     assert!(!again.failed);
     assert_eq!(again.built.unwrap().len(), 1);
+}
+
+/// with-hide/hide-private#672: an engine opened on a version 3 store moves
+/// its calls before it reads, counts or prunes any, keeping the projects'
+/// costs pending meanwhile, then compacts the file once and builds them
+/// from the moved calls.
+#[test]
+fn a_version_3_store_is_converted_before_anything_reads_its_calls() {
+    use crate::usage_ledger::store::v3_fixture::V3;
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("ledger.sqlite3");
+    let event = hide_session::usage::Event {
+        key: "ab".repeat(32),
+        at_ms: crate::links::now_ms() - 60_000,
+        model: "fixture-model".into(),
+        tokens: hide_session::usage::Tokens {
+            input: 10,
+            output: 20,
+            cache_read: 900,
+            cache_write: 30,
+            cache_write_1h: 0,
+            reasoning: None,
+        },
+        recorded_cost_micro_usd: Some(4_000),
+        session: "converted".into(),
+        cwd: Some("/work/hide".into()),
+        provider: None,
+        incomplete: false,
+    };
+    let file = Candidate {
+        path: "/native/calls.jsonl".into(),
+        size: 1,
+        modified_ms: 1,
+    };
+    let v3 = V3::write(&path, &[("physical-device", Agent::Claude, event)], &file);
+    let node = OwnNode::new(home.path());
+    let mut engine = Engine::open(&path, "physical-device".into(), AiUsageQueue::new()).unwrap();
+    let projects = Arc::new(vec![ProjectRoots {
+        workspace_id: "hide".into(),
+        roots: vec!["/work/hide".into()],
+    }]);
+    assert!(engine.converting);
+    assert_eq!(
+        engine.report(true, &projects).projects,
+        ProjectCosts::default(),
+        "pending while calls are moved"
+    );
+    let visible = Activity {
+        visible: true,
+        open: true,
+    };
+    engine.step(&node, visible);
+    assert_eq!(node.calls.load(Ordering::SeqCst), 0, "nothing read yet");
+    assert!(!engine.converting && engine.compacting);
+    engine.step(&node, visible);
+    assert!(!engine.compacting);
+    let report = engine.report(true, &projects);
+    assert_eq!(*engine.daily, v3.daily);
+    let built = report.projects.built.unwrap();
+    assert_eq!(
+        (built[0].workspace_id.as_str(), built[0].tokens),
+        ("hide", 60)
+    );
 }

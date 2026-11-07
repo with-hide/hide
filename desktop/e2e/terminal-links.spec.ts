@@ -206,7 +206,7 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   // no click. It opens in the viewing column beside the Explorer, which stays
   // in its column, so the docked lane widens by it and the pane rewraps once
   // (PRD lane-two-columns B5, B7).
-  const clicksBefore = sent.get("terminal_click") ?? 0;
+  const clicksBefore = sent.get("terminal_mouse.press") ?? 0;
   let point = await pointOf(page, paneId, `${origin}/a.html`, { offset: 4 });
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
@@ -214,7 +214,7 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
   await narrowed(page, paneId, grid.cols);
-  expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
   expect(dialogs).toEqual([]);
 
   // A path that exists opens its file in View at the line; one that does not is no link.
@@ -274,7 +274,7 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
   await expect(viewTab(page, "wrapped.md")).toBeVisible({ timeout: 20_000 });
-  expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
   await screenshot(page, "terminal-link-wrapped");
   expect(sent.get("reveal_path")).toBe(4);
 
@@ -288,13 +288,15 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   await quietFor(page, 500, "the drag selection holds");
   expect(sent.get("reveal_path")).toBe(4);
   expect(await opened()).toHaveLength(3);
-  expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
 
-  // A click on plain text is still the program's, so the counts above heard the wire.
+  // A click on plain text is still the program's: one `terminal_mouse` press
+  // and release, which its holder reports only to a program that tracks the
+  // mouse. So the counts above heard the wire.
   point = await pointOf(page, paneId, "end-of-links", { offset: 1 });
   await page.mouse.move(point.x, point.y);
   await page.mouse.click(point.x, point.y);
-  await expect.poll(() => sent.get("terminal_click") ?? 0).toBe(clicksBefore + 1);
+  await expect.poll(() => sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore + 1);
   expect(hostLog(run.env).filter((line) => line.event.startsWith("probe_paths.refused"))).toEqual([]);
 });
 
@@ -453,7 +455,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
     "folder ./src",
     "plain MENU-END",
   ], "MENU-END");
-  const clicks = sent.get("terminal_click") ?? 0;
+  const clicks = sent.get("terminal_mouse.press") ?? 0;
   let point = await pointOf(page, paneId, "src/report.HTML:2", { offset: 2 });
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
@@ -507,7 +509,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await expect(page.getByRole("menuitem", { name: "Copy link", exact: true })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "Copy path", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
-  expect(sent.get("terminal_click") ?? 0).toBe(clicks);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicks);
   // Only Open source revealed and only the first click opened a page: a
   // right-click opens nothing, also on Windows, where the menu comes after
   // the button's release (with-hide/hide-private#252).

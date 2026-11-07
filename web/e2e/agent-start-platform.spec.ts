@@ -95,6 +95,9 @@ async function withStartStack(page: Page, kind: string, executable: string, star
       const kit = path.join(home, ".hide", "kit");
       fs.mkdirSync(kit, { recursive: true });
       fs.writeFileSync(path.join(kit, "installed.json"), JSON.stringify({ format: 1, installed: [] }));
+      // Codex has run here before, so its folder is there for Hide's hook:
+      // a spawn refuses an agent whose folder is not (`agent_not_set_up`).
+      fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
     }
     daemon = await startHided(fixture, `start-${kind}`, home, {}, kind === "codex");
     await openPage(page, daemon, kind);

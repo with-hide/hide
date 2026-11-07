@@ -10,6 +10,10 @@ const runs = resolve('agents/runs/phone-release-tests');
 const source = 'a'.repeat(40);
 const policy = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' wss://relay.withhide.dev";
 const page = `<head><meta http-equiv="Content-Security-Policy" content="${policy}"></head>`;
+// The phone's real look frame, so a policy the release would refuse fails here first.
+const realFrame = await readFile('web/public/m/look-frame.html', 'utf8');
+const framePolicy = realFrame.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/)[1];
+const frame = (csp = framePolicy) => realFrame.replace(framePolicy, csp);
 const secrets = { PHONE_VERCEL_TOKEN: 'fixture-token', PHONE_VERCEL_ORG_ID: 'team_fixture', PHONE_VERCEL_PROJECT_ID: 'prj_fixture' };
 const ci = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'with-hide/hide', GITHUB_REF: 'refs/heads/main',
   GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'with-hide/hide/.github/workflows/release-candidate.yml@refs/heads/main' };
@@ -43,8 +47,9 @@ async function fixture(t, protocol = 2) {
     const address = new URL(url);
     const data = address.origin === 'https://previous.vercel.app' ? state.previous : state.live;
     const path = address.pathname.endsWith('/') ? `${address.pathname.slice(1)}index.html` : address.pathname.slice(1);
+    const csp = /look-frame\.html$/.test(path) ? `${framePolicy}; frame-ancestors '${state.badFrame ? 'none' : 'self'}'` : `${policy}; frame-ancestors 'none'`;
     return data.has(path) ? new Response(data.get(path), { headers: {
-      'content-security-policy': state.badHeader ? "script-src *" : `${policy}; frame-ancestors 'none'`,
+      'content-security-policy': state.badHeader ? "script-src *" : csp,
     } }) : new Response('missing', { status: 404 });
   };
   const stage = resolve(root, 'new-parent/stage');
@@ -225,5 +230,30 @@ test('unsafe inventory paths, excessive retained files and reused asset names ar
     for (let i = 0; i < count; i++) manifest.files[`assets/large-${i}.wasm`] = { ...manifest.files['p/1/index.html'], size };
     oversized.state.previous.set('phone-site.json', JSON.stringify(manifest));
     await assert.rejects(oversized.prepare(), reason);
+  }
+});
+
+test('the look frame keeps its own policy, is framed only by the app, and is confirmed by it', async t => {
+  const f = await fixture(t);
+  await writeFile(resolve(f.dist, 'p/2/look-frame.html'), frame());
+  await f.prepare();
+  const { routes } = JSON.parse(await readFile(resolve(f.stage, '.vercel/output/config.json')));
+  const headers = path => routes.filter(route => route.headers && new RegExp(route.src).test(path)).map(route => route.headers['Content-Security-Policy']);
+  assert.deepEqual(headers('/p/2/look-frame.html'), [`${framePolicy}; frame-ancestors 'self'`]);
+  for (const path of ['/', '/p/2/', '/p/2/index.html', '/p/2/assets/new.js', '/p/1/look-frame.htmlx']) {
+    assert.deepEqual(headers(path), [`${policy}; frame-ancestors 'none'`], path);
+  }
+  await f.serve();
+  await confirmPhone(f.stage, f.fetcher);
+  f.state.badFrame = true;
+  await assert.rejects(confirmPhone(f.stage, f.fetcher), /look frame CSP header/);
+});
+
+test('a look frame that could talk back or reach the app stops before deployment', async t => {
+  for (const csp of [framePolicy.replace("connect-src 'none'", 'connect-src https:'), `${framePolicy}; img-src 'self'`, "script-src 'unsafe-inline'"]) {
+    const f = await fixture(t);
+    await writeFile(resolve(f.dist, 'p/2/look-frame.html'), frame(csp));
+    await assert.rejects(f.prepare(), /look frame/);
+    assert.equal(f.state.live.size, 0);
   }
 });

@@ -290,6 +290,9 @@ pub enum TerminalUp {
     Report {
         report: TerminalReport,
     },
+    /// What a pane's program wrote to the clipboard, once, for the screen
+    /// that looks at the pane: never kept for one that connects later.
+    Clipboard(TerminalClipboard),
     /// A diagnostic record the device's terminal service wrote; the core's
     /// side files it with the device it came from, since a device's own log
     /// reaches no one.
@@ -331,6 +334,39 @@ pub struct TerminalOutput {
     /// The bytes draw the whole screen (they start with a reset).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub full: bool,
+}
+
+/// What one pane's program wrote to the clipboard (OSC 52), as it leaves a
+/// node.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct TerminalClipboard {
+    pub pane: String,
+    /// Base64 of the text, at most [`hide_holder_protocol::MAX_CLIPBOARD`]
+    /// bytes.
+    pub data: String,
+}
+
+impl TerminalClipboard {
+    pub fn new(pane: &str, text: &[u8]) -> Self {
+        Self {
+            pane: pane.to_owned(),
+            data: encode_base64(text),
+        }
+    }
+
+    /// The text, or why it is refused: a line from another machine's node
+    /// is held to the bound a holder keeps.
+    pub fn text(&self) -> Result<Vec<u8>, String> {
+        let most = hide_holder_protocol::MAX_CLIPBOARD;
+        if self.data.len() > most.div_ceil(3) * 4 {
+            return Err(format!("a clipboard write past {most} bytes"));
+        }
+        let text = decode_base64(&self.data)?;
+        if text.len() > most {
+            return Err(format!("a clipboard write past {most} bytes"));
+        }
+        Ok(text)
+    }
 }
 
 /// A side-channel input's permission, not acknowledgment that bytes were written.

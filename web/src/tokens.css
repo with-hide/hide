@@ -104,6 +104,7 @@
   --color-diff-removed: var(--diff-removed);
   --color-qr-foreground: var(--qr-foreground);
   --color-qr-background: var(--qr-background);
+  --color-page-canvas: var(--page-canvas);
   --color-terminal-black: var(--terminal-black);
   --color-terminal-red: var(--terminal-red);
   --color-terminal-green: var(--terminal-green);
@@ -488,6 +489,7 @@
   --diff-removed: #d62323;
   --qr-foreground: #000000;
   --qr-background: #ffffff;
+  --page-canvas: #ffffff;
   --terminal-black: #24292f;
   --terminal-red: #c8323a;
   --terminal-green: #2b7a3b;
@@ -591,6 +593,7 @@
   --diff-removed: #ff595c;
   --qr-foreground: #000000;
   --qr-background: #ffffff;
+  --page-canvas: #ffffff;
   --terminal-black: #2b2d30;
   --terminal-red: #f2797d;
   --terminal-green: #7fd88f;

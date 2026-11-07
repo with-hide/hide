@@ -128,11 +128,12 @@ const READ_CHUNK: usize = 64 * 1024;
 
 /// What this holder can send, and what it reads beyond version 1's input
 /// ([`Capability::Keys`]).
-const SENDS: [Capability; 4] = [
+const SENDS: [Capability; 5] = [
     Capability::Screen,
     Capability::Notices,
     Capability::Keys,
     Capability::Submit,
+    Capability::Clipboard,
 ];
 
 /// What this holder sends on a watch.
@@ -386,6 +387,8 @@ fn input_name(message: &ClientMessage) -> &'static str {
 struct Outbox {
     state: Mutex<Pending>,
     wake: Condvar,
+    /// The node accepts [`HolderMessage::Clipboard`].
+    clipboard: bool,
 }
 
 #[derive(Default)]
@@ -465,6 +468,23 @@ impl Outbox {
         pending.messages.push_back(HolderMessage::Notice(notice));
         drop(pending);
         self.wake.notify_one();
+    }
+
+    /// Queues the text the program wrote to the clipboard in place of one
+    /// still waiting, since only the latest write is what the clipboard
+    /// holds; answers whether the node accepts it.
+    fn clipboard(&self, text: Vec<u8>) -> bool {
+        if !self.clipboard {
+            return false;
+        }
+        let mut pending = self.pending();
+        pending
+            .messages
+            .retain(|message| !matches!(message, HolderMessage::Clipboard(_)));
+        pending.messages.push_back(HolderMessage::Clipboard(text));
+        drop(pending);
+        self.wake.notify_one();
+        true
     }
 
     fn changed(&self) {
@@ -705,6 +725,7 @@ impl Holder {
             let marks = Marks {
                 outbox: outbox.clone(),
                 watch: watch_wake.clone(),
+                log: log.clone(),
             };
             let sender = sender.clone();
             let answers = answers.clone();
@@ -978,7 +999,10 @@ impl Holder {
                 format!("connection {generation} took the pane over"),
             ));
         }
-        let outbox = Arc::new(Outbox::default());
+        let outbox = Arc::new(Outbox {
+            clipboard: sends.contains(&Capability::Clipboard),
+            ..Outbox::default()
+        });
         let (written_tx, written) = mpsc::channel();
         let shutdown = stream.shutdown_handle();
         outbox.send(HolderMessage::Welcome(Welcome {
@@ -1582,9 +1606,27 @@ impl Answers {
 struct Marks {
     outbox: Arc<Mutex<Option<Arc<Outbox>>>>,
     watch: Arc<Mutex<Option<Arc<Wake>>>>,
+    log: Log,
 }
 
 impl Marks {
+    /// Hands what the program wrote to the clipboard to the connection that
+    /// holds the pane, once. With none, or one that does not take it, the
+    /// write is dropped: a connection that comes later never gets an older
+    /// write, so a reattach or a redraw does not write it again.
+    fn clipboard(&self, text: Vec<u8>) {
+        let outbox = self
+            .outbox
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let bytes = text.len() as u64;
+        if !outbox.is_some_and(|outbox| outbox.clipboard(text)) {
+            self.log
+                .event("holder.clipboard_dropped", &[("bytes", bytes.into())]);
+        }
+    }
+
     fn changed(&self) {
         let outbox = self
             .outbox
@@ -1686,10 +1728,15 @@ fn read_pty(
             // A Unix PTY answers EIO once no program holds its other end.
             Err(_) => break,
         };
-        pane.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .feed(&buffer[..count], &mut answered);
+        let copied = {
+            let mut pane = pane.lock().unwrap_or_else(PoisonError::into_inner);
+            pane.feed(&buffer[..count], &mut answered);
+            pane.take_clipboard()
+        };
         answers.send(std::mem::take(&mut answered));
+        if let Some(copied) = copied {
+            marks.clipboard(copied);
+        }
         marks.changed();
     }
     let _ = events.send(Event::PtyClosed);
