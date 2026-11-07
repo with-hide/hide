@@ -6,6 +6,7 @@
 //! restart converge on the same rows (B37). Only the link worker writes;
 //! panels and `hide links` open it read-only.
 
+use super::pr_cache::{PrCache, SummaryLine};
 use super::{
     CREATED_AFTER_MS, CREATED_BEFORE_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent,
     LinkedSession, MADE_BEFORE_MS, OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact,
@@ -2082,15 +2083,18 @@ impl LinkStore {
     /// The pull requests of a project that any session could be linked to:
     /// printed or named by one, or on a branch one worked on.
     fn candidate_prs(&self, project: &str) -> Result<Vec<PrRow>, String> {
+        // Each kind of evidence is read once as a set, so the answer costs one
+        // pass over the evidence rather than one per pull request.
         let mut statement = self
             .connection
             .prepare_cached(&format!(
                 "SELECT {PR_COLUMNS_P} FROM prs p WHERE p.project=?1 AND (\
-                 EXISTS(SELECT 1 FROM session_branches b WHERE b.branch=p.branch) OR \
-                 EXISTS(SELECT 1 FROM session_prs s LEFT JOIN repo_names r ON r.name=s.repo_name \
-                 WHERE s.number=p.number AND COALESCE(r.repo, s.repo_name)=p.repo) OR \
-                 EXISTS(SELECT 1 FROM session_named_prs n LEFT JOIN repo_names r ON r.name=n.repo_name \
-                 WHERE n.number=p.number AND (n.repo_name='' OR COALESCE(r.repo, n.repo_name)=p.repo))) \
+                 p.branch IN (SELECT branch FROM session_branches) OR \
+                 (p.repo, p.number) IN (SELECT COALESCE(r.repo, s.repo_name), s.number \
+                 FROM session_prs s LEFT JOIN repo_names r ON r.name=s.repo_name) OR \
+                 p.number IN (SELECT number FROM session_named_prs WHERE repo_name='') OR \
+                 (p.repo, p.number) IN (SELECT COALESCE(r.repo, n.repo_name), n.number \
+                 FROM session_named_prs n LEFT JOIN repo_names r ON r.name=n.repo_name)) \
                  ORDER BY p.number"
             ))
             .map_err(failed)?;
@@ -2199,14 +2203,16 @@ impl LinkStore {
         let Some(pass) = self.pass(project)? else {
             return Ok(ProjectLinkSummary::default());
         };
-        self.summary_in(&pass, checkouts)
+        self.summary_in(&pass, checkouts, &mut PrCache::default())
     }
 
-    /// [`LinkStore::summary`] within a publish pass for one project.
+    /// [`LinkStore::summary`] within a publish pass for one project, reading
+    /// only the pull requests `cache` does not hold.
     pub(super) fn summary_in(
         &self,
         pass: &ProjectPass,
         checkouts: &[WorktreeFact],
+        cache: &mut PrCache,
     ) -> Result<ProjectLinkSummary, String> {
         let mut summary = ProjectLinkSummary::default();
         let row = &pass.project;
@@ -2216,22 +2222,30 @@ impl LinkStore {
         // Per checkout: whether a pull request its sessions worked on merged,
         // and whether one is still open.
         let mut work: BTreeMap<&str, (bool, bool)> = BTreeMap::new();
-        for pr in self.candidate_prs(project)? {
-            let lines = self.pr_lines_in(pass, &pr, None)?;
+        let candidates = self.candidate_prs(project)?;
+        let entries = cache.entries(pass, candidates, |pr| {
+            Ok(self
+                .pr_lines_in(pass, pr, None)?
+                .iter()
+                .map(SummaryLine::from)
+                .collect())
+        })?;
+        for entry in &entries {
+            let (pr, lines) = (&entry.pr, &entry.lines);
             if lines.is_empty() {
                 continue;
             }
             summary.prs.insert(pr.number, lines.len() as u32);
-            for line in &lines {
+            for line in lines {
                 for id in &line.ids {
                     chips.entry(id.clone()).or_default().insert(SessionPrChip {
                         number: pr.number,
-                        created: line.role == SessionRole::Created,
+                        created: line.created,
                     });
                 }
                 // Only work counts: a session that made the pull request or
                 // worked on its branch, not one that printed its address.
-                if line.role != SessionRole::Created && !line.on_branch {
+                if !line.worked {
                     continue;
                 }
                 summary
@@ -2242,7 +2256,7 @@ impl LinkStore {
                 if let Some(checkout) = line
                     .cwd
                     .as_deref()
-                    .filter(|_| line.device_id == row.device)
+                    .filter(|_| line.device == row.device)
                     .and_then(|cwd| deepest_checkout(checkouts, cwd))
                 {
                     summary
@@ -2259,12 +2273,11 @@ impl LinkStore {
                 let checkout = line
                     .cwd
                     .as_deref()
-                    .filter(|_| line.device_id == row.device)
+                    .filter(|_| line.device == row.device)
                     .and_then(|cwd| deepest_checkout(checkouts, cwd))
                     .filter(|checkout| {
                         checkout.created_at_unix_ms.is_some_and(|added| {
-                            line.started_at_unix_ms
-                                .is_some_and(|started| started >= added)
+                            line.started_at.is_some_and(|started| started >= added)
                         })
                     })
                     .filter(|checkout| checkout.branch.as_ref().is_none_or(|b| *b == pr.branch));
@@ -2277,8 +2290,8 @@ impl LinkStore {
             by_pr.insert(
                 pr.number,
                 lines
-                    .into_iter()
-                    .map(|line| (line.device_id, line.agent, line.id))
+                    .iter()
+                    .map(|line| (line.device.clone(), line.agent.clone(), line.id.clone()))
                     .collect(),
             );
         }
@@ -2374,12 +2387,38 @@ impl LinkStore {
                  LEFT JOIN repo_names r ON r.name=x.name",
             )
             .map_err(failed)?;
+        let mut numbers = self
+            .connection
+            .prepare_cached(
+                "SELECT number FROM session_prs WHERE device=?1 AND agent=?2 AND id=?3 \
+                 UNION SELECT number FROM session_named_prs WHERE device=?1 AND agent=?2 AND id=?3 \
+                 UNION SELECT number FROM session_reviews WHERE device=?1 AND agent=?2 AND id=?3",
+            )
+            .map_err(failed)?;
+        let mut branches = self
+            .connection
+            .prepare_cached(
+                "SELECT DISTINCT branch FROM session_branches WHERE device=?1 AND agent=?2 AND id=?3",
+            )
+            .map_err(failed)?;
         for session in sessions {
             let key = SessionKey {
                 device: session.device_id.clone(),
                 agent: session.agent.clone(),
                 id: session.session_id.clone(),
             };
+            let found: Vec<i64> = numbers
+                .query_map(params![key.device, key.agent, key.id], |row| row.get(0))
+                .and_then(Iterator::collect)
+                .map_err(failed)?;
+            reach
+                .numbers
+                .extend(found.into_iter().map(|number| number as u64));
+            let found: Vec<String> = branches
+                .query_map(params![key.device, key.agent, key.id], |row| row.get(0))
+                .and_then(Iterator::collect)
+                .map_err(failed)?;
+            reach.branches.extend(found);
             let mut ids = BTreeSet::from([key.id.clone()]);
             if let Some(row) = self.session(&key)? {
                 if let Some(cwd) = row.cwd {
@@ -2483,6 +2522,17 @@ pub(super) struct SessionReach {
     pub(super) repos: BTreeSet<String>,
     /// The projects holding a pull request of one of those repositories.
     pub(super) owners: BTreeSet<String>,
+    /// The numbers of the pull requests they printed, named or reviewed.
+    pub(super) numbers: BTreeSet<u64>,
+    /// The branches they worked on.
+    pub(super) branches: BTreeSet<String>,
+}
+
+impl SessionReach {
+    /// Whether it reaches nothing.
+    pub(super) fn is_empty(&self) -> bool {
+        self.ids.is_empty() && self.numbers.is_empty() && self.branches.is_empty()
+    }
 }
 
 /// The checkout a session in `cwd` worked in: the deepest one holding it, so
@@ -3158,6 +3208,7 @@ fn deepest_owner<'a>(
 /// What a pass over one project's pull requests reads once: the project row,
 /// its places and fences, and the repository names. The publish and prune
 /// passes ask for these on every pull request, so each is read once per project.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ProjectPass {
     project: ProjectRow,
     /// The folders the project's sessions work in, each on its device.
@@ -3171,6 +3222,11 @@ impl ProjectPass {
     /// The folders the project's sessions work in, each on its device.
     pub(super) fn paths(&self) -> &[DevicePath] {
         &self.paths
+    }
+
+    /// The project's key.
+    pub(super) fn project_key(&self) -> &str {
+        &self.project.key
     }
 
     /// The project's repository, as the record keys it.
@@ -3192,6 +3248,7 @@ impl ProjectPass {
 /// What keeps a learned place (a folder a session printed this project's
 /// pull request from) to this project: a folder holding any project's
 /// registered place, or lying inside another project's, is not this one's.
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Fences {
     every: Vec<DevicePath>,
     others: Vec<DevicePath>,
