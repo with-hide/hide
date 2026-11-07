@@ -267,6 +267,47 @@ fn a_cancelled_clone_leaves_no_folder_and_registers_nothing() {
     );
 }
 
+/// A clone the node answers as moved (its folder was moved or replaced
+/// while Git ran) is a failure the shell words, and its path is never handed
+/// to the registration, so the folder that took its name is not added.
+#[test]
+fn a_clone_answered_as_moved_registers_nothing() {
+    let (_outer, _url, parent) = fixture();
+    let target = parent.join("origin");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("mine.txt"), "mine").unwrap();
+    let shared = shared_runtime(&parent);
+    let mut guard = shared.lock().unwrap();
+    guard.snapshot.repository_clone = Some(crate::model::RepositoryCloneSnapshot {
+        id: 7,
+        device_id: String::new(),
+        host: "localhost".to_owned(),
+        path: target.display().to_string(),
+        phase: "cloning".to_owned(),
+        stage: None,
+        percent: None,
+        failure: None,
+        git_line: None,
+    });
+    assert!(guard.settle_repository_clone(
+        7,
+        Err(hide_node_link::clone::CloneFailure::Moved(target.clone()))
+    ));
+    let clone = guard.snapshot.repository_clone.clone().unwrap();
+    assert_eq!(clone.phase, "failed", "{clone:?}");
+    assert_eq!(clone.failure.as_deref(), Some("moved"));
+    assert!(
+        !guard
+            .snapshot
+            .status
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == "workspace.create.requested"),
+        "{:?}",
+        guard.snapshot.status.diagnostics
+    );
+}
+
 #[test]
 fn a_name_the_url_does_not_give_is_refused_before_anything_runs() {
     let (_outer, url, parent) = fixture();

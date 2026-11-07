@@ -189,6 +189,7 @@ const CLONE_FAILURES = new Map<string, MessageKey>([
   ["unreachable_host", "coreError.clone.failure.unreachable_host"],
   ["stalled", "coreError.clone.failure.stalled"],
   ["target_exists", "coreError.clone.failure.target_exists"],
+  ["moved", "coreError.clone.failure.moved"],
   ["io", "coreError.clone.failure.io"],
 ]);
 

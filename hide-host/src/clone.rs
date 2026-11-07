@@ -59,8 +59,14 @@ const ALLOWED_PROTOCOLS: &str = "https:ssh:file";
 /// parent or a target name swapped for a link writes nothing outside home.
 /// No step uses the target's name once it is held: a failed or cancelled
 /// clone is emptied through the held handle, and only then is the name
-/// removed, as an empty folder, so a folder put there by anyone else is never
-/// deleted. `cancel` is asked every [`POLL`]; answering true ends the run as
+/// removed with a remove that refuses a non-empty folder, so a non-empty
+/// folder put in its place keeps its contents; an empty one can be removed.
+/// A finished clone is answered only while its full path, every folder
+/// above it included, still names the held folder; otherwise it is
+/// [`CloneFailure::Moved`] and both the clone, wherever it went, and what
+/// took its place are left alone. That check is not an atomic handoff: a
+/// rename right after it is the same as one right after the folder is
+/// registered. `cancel` is asked every [`POLL`]; answering true ends the run as
 /// cancelled. `progress` hears each change of stage or percent.
 pub fn clone_repository(
     source: &CloneSource,
@@ -148,8 +154,15 @@ fn clone_with(
         .map_err(|error| CloneFailure::Io(error.message))?;
     at(Step::Held, &opened.folder, name);
     run_git(source, &held, stall_limit, cancel, progress)?;
-    partial.folder = None;
-    Ok(target)
+    // Finished: from here the clone is kept whatever the answer.
+    let folder = partial.folder.take().expect("held until Git ended");
+    // Resolved from the root, so a folder above the target that was moved
+    // or replaced is caught as well as the target itself.
+    let named = identity::file_id(&target);
+    match (identity::file_id_of(&folder), named) {
+        (Ok(cloned), Ok(named)) if cloned == named => Ok(target),
+        _ => Err(CloneFailure::Moved(target)),
+    }
 }
 
 /// A clone's folder until the clone finishes; dropped before, it is taken
@@ -541,7 +554,9 @@ mod tests {
     /// the run passes: right after the folder is made, after it is held and
     /// before Git starts (the made folder moved aside), and after a failed
     /// clone's folder is emptied and before its name is removed. Nothing is
-    /// written outside home, and nothing put there is changed or deleted.
+    /// written outside home, nothing put there is changed or deleted, and a
+    /// clone that finished in the moved folder is answered as moved, never
+    /// as the folder that took its name.
     #[cfg(unix)]
     #[test]
     fn something_put_at_the_target_name_mid_clone_is_never_written_through_or_deleted() {
@@ -553,6 +568,8 @@ mod tests {
         let work = root.join("work");
         std::fs::create_dir(&work).unwrap();
         git(&work, &["init", "-q", "-b", "main"]);
+        std::fs::write(work.join("readme.txt"), "cloned").unwrap();
+        git(&work, &["add", "."]);
         git(
             &work,
             &[
@@ -561,7 +578,6 @@ mod tests {
                 "-c",
                 "user.email=t@example.com",
                 "commit",
-                "--allow-empty",
                 "-q",
                 "-m",
                 "first",
@@ -595,13 +611,14 @@ mod tests {
             Link,
             Folder,
         }
+        // Whether Git finishes in the run's own folder, moved aside.
         let cases = [
             (Step::Made, &good, false),
             (Step::Held, &good, true),
             (Step::Held, &failing, false),
             (Step::Emptied, &failing, false),
         ];
-        for (step, source, succeeds) in cases {
+        for (step, source, cloned) in cases {
             for planted in [Planted::Link, Planted::Folder] {
                 let case = format!("{step:?} {planted:?} {}", source.url());
                 let result = clone_with(
@@ -634,7 +651,17 @@ mod tests {
                         }
                     },
                 );
-                assert_eq!(result.is_ok(), succeeds, "{case}: {result:?}");
+                if cloned {
+                    assert!(
+                        matches!(&result, Err(CloneFailure::Moved(path)) if *path == target),
+                        "{case}: {result:?}"
+                    );
+                } else {
+                    assert!(
+                        result.is_err() && !matches!(result, Err(CloneFailure::Moved(_))),
+                        "{case}: {result:?}"
+                    );
+                }
                 assert_eq!(
                     std::fs::read_dir(&outside).unwrap().count(),
                     0,
@@ -653,9 +680,15 @@ mod tests {
                         assert_eq!(names, ["mine.txt"], "{case} changed the folder put there");
                     }
                 }
-                if succeeds {
-                    // Git cloned into the folder the run held, where it was moved.
-                    assert!(aside.join(".git").is_dir(), "{case}");
+                if cloned {
+                    // Git cloned into the folder the run held, where it was
+                    // moved, and the clone is kept there.
+                    assert!(aside.join(".git/HEAD").is_file(), "{case}");
+                    assert_eq!(
+                        std::fs::read_to_string(aside.join("readme.txt")).unwrap(),
+                        "cloned",
+                        "{case}"
+                    );
                 } else if aside.exists() {
                     // A failed clone's own folder, moved aside, is emptied.
                     assert_eq!(std::fs::read_dir(&aside).unwrap().count(), 0, "{case}");
@@ -669,5 +702,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The target's parent moved away and replaced while Git runs: the clone
+    /// finishes in the held folder, now under the moved parent, and is
+    /// answered as moved; the clone and the folder put in the parent's
+    /// place are both left as they are.
+    #[cfg(unix)]
+    #[test]
+    fn a_parent_moved_and_replaced_mid_clone_is_answered_as_moved() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = identity::canonical(scratch.path()).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            crate::worktrees::git(cwd, args).unwrap_or_else(|error| panic!("{args:?}: {error}"))
+        };
+        let work = root.join("work");
+        std::fs::create_dir(&work).unwrap();
+        git(&work, &["init", "-q", "-b", "main"]);
+        std::fs::write(work.join("readme.txt"), "cloned").unwrap();
+        git(&work, &["add", "."]);
+        git(
+            &work,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "first",
+            ],
+        );
+        let bare = root.join("origin.git");
+        git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                &crate::root::wire(&work),
+                &crate::root::wire(&bare),
+            ],
+        );
+        let source = CloneSource::parse(&format!("file://{}", bare.display())).unwrap();
+        let home = root.join("home");
+        let projects = home.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let moved = home.join("projects.moved");
+
+        let result = clone_with(
+            &source,
+            &projects,
+            &home,
+            STALL_LIMIT,
+            &|| false,
+            &mut |_| {},
+            &|at, _, _| {
+                if at != Step::Held {
+                    return;
+                }
+                std::fs::rename(&projects, &moved).unwrap();
+                std::fs::create_dir_all(projects.join("origin")).unwrap();
+                std::fs::write(projects.join("origin/mine.txt"), "mine").unwrap();
+            },
+        );
+        assert!(
+            matches!(&result, Err(CloneFailure::Moved(path)) if *path == projects.join("origin")),
+            "{result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(moved.join("origin/readme.txt")).unwrap(),
+            "cloned"
+        );
+        assert!(moved.join("origin/.git/HEAD").is_file());
+        let names: Vec<_> = std::fs::read_dir(projects.join("origin"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["mine.txt"]);
     }
 }
