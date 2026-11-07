@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::delivery::doorbell::Hold;
+use crate::delivery::held::{HeldFor, held_for};
 use crate::delivery::ledger::{Ledger, State};
 use crate::model::SidebarAgentSnapshot;
 
@@ -41,10 +42,11 @@ pub(crate) fn retain_raised_holds(
     mut current: BTreeMap<String, Hold>,
 ) -> BTreeMap<String, Hold> {
     for (id, old) in previous {
-        if matches!(
-            old,
-            Hold::Blocked | Hold::AwaitingOperator | Hold::Draft | Hold::Exhausted
-        ) && let Some(next) = current.get_mut(id)
+        // The holds the operator has to lift (`held::held_for`), named in
+        // that one place, so a hold the doorbell adds is kept or dropped
+        // here as it is shown.
+        if held_for(*old).is_some()
+            && let Some(next) = current.get_mut(id)
         {
             *next = *old;
         }
@@ -127,11 +129,14 @@ pub(crate) fn of(
             if letter.state == State::Undelivered {
                 Cause::Undelivered
             } else if letter.state == State::Pending {
-                match holds.get(&letter.id) {
-                    Some(Hold::Blocked | Hold::AwaitingOperator) => Cause::ParentBlocked,
-                    Some(Hold::Draft) => Cause::Draft,
-                    Some(Hold::Exhausted) => Cause::BellExhausted,
-                    _ => continue,
+                match holds.get(&letter.id).copied().and_then(held_for) {
+                    Some(HeldFor::Approval) => Cause::ParentBlocked,
+                    Some(HeldFor::Draft) => Cause::Draft,
+                    Some(HeldFor::Unanswered) => Cause::BellExhausted,
+                    // A parent pane Hide cannot reach is the parent's
+                    // device or session, not the child's to raise; a
+                    // pending letter is never undelivered.
+                    Some(HeldFor::Unreachable | HeldFor::Undelivered) | None => continue,
                 }
             } else {
                 continue;
@@ -628,10 +633,53 @@ mod tests {
         }
     }
 
+    /// The holds the operator lifts are named once (`held::held_for`): a
+    /// parent pane Hide cannot reach is kept like the others, so its held
+    /// letter does not come and go between passes, and raises nothing on the
+    /// child, while a hold that ends on its own is never kept.
+    #[test]
+    fn an_unreachable_parent_is_kept_and_raises_nothing_and_a_passing_hold_is_not_kept() {
+        let child = child();
+        let mut ledger = Ledger::default();
+        mailbox::send(
+            &mut ledger,
+            &actor("child"),
+            &actor("parent"),
+            "request",
+            "question",
+            "request",
+            None,
+            100,
+        )
+        .unwrap();
+        let id = ledger.letters[0].id.clone();
+        for hold in [Hold::Absent, Hold::Session] {
+            let holds = BTreeMap::from([(id.clone(), hold)]);
+            assert_eq!(
+                retain_raised_holds(&holds, BTreeMap::from([(id.clone(), Hold::Working)])),
+                holds,
+                "{hold:?} is the operator's to lift and stays until the letter rings"
+            );
+            assert!(of(&child, Some(&ledger), &holds).is_none());
+        }
+        for hold in [Hold::Working, Hold::Quiet, Hold::NotReady] {
+            let holds = BTreeMap::from([(id.clone(), hold)]);
+            assert_eq!(
+                retain_raised_holds(&holds, BTreeMap::from([(id.clone(), Hold::Draft)])),
+                BTreeMap::from([(id.clone(), Hold::Draft)])
+            );
+        }
+    }
+
     #[test]
     fn session_escalation_clears_on_ack_reply_cancel_or_successful_bell() {
         let child = child();
-        for hold in [Hold::Blocked, Hold::Draft, Hold::Exhausted] {
+        for hold in [
+            Hold::Blocked,
+            Hold::AwaitingOperator,
+            Hold::Draft,
+            Hold::Exhausted,
+        ] {
             let mut ledger = Ledger::default();
             mailbox::send(
                 &mut ledger,

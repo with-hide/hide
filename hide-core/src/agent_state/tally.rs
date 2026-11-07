@@ -89,9 +89,14 @@ impl RowMark {
             return Self::Turn;
         }
         // A demand the operator has read stays theirs until it is answered;
-        // a delegated child's is its parent's (B8, B24).
-        if demand != AgentDemand::None && !matches!(ownership, Ownership::Delegated) {
-            return Self::Turn;
+        // a delegated child's is its parent's (B8, B24), so it waits on the
+        // parent's answer, in progress rather than at rest.
+        if demand != AgentDemand::None {
+            return if matches!(ownership, Ownership::Delegated) {
+                Self::Waiting
+            } else {
+                Self::Turn
+            };
         }
         if activity == AgentActivity::Working {
             return Self::Going;

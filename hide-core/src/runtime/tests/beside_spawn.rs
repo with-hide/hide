@@ -356,6 +356,7 @@ impl Spawner {
         let authority = crate::delivery::worker::Authority {
             caller: self.actor.pane_id.clone(),
             context,
+            also_reads: Vec::new(),
         };
         crate::coordination::run(
             self.client.clone(),

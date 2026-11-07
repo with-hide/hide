@@ -13,8 +13,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use hide_platform::process::{CaptureFailureKind, OwnedChild};
 use serde_json::Value;
 
 use super::store::ServeRecord;
@@ -76,9 +77,27 @@ impl CommandFailure {
     }
 }
 
+/// The most one command may print. A child that writes without end must not
+/// grow hided (engineering rule 15), and `capture_until` takes no more than
+/// 1 MiB; an answer past it is a failure, never a cut one. The one answer that
+/// could follow the size of the tailnet is `status --json`, which lists every
+/// peer at about 1.2 KB each (34 KB on a tailnet of 27 peers, a bound reached
+/// at some 900), so `status` is read without the peers (`--peers=false`): the
+/// same fields hided reads, 3 KB, whatever the tailnet's size.
+const OUTPUT_LIMIT: usize = hide_platform::process::MAX_CAPTURE_BYTES;
+
+/// Runs one `tailscale` command and returns what it printed. The answer is
+/// read when the command has exited and its tree has ended, not when its
+/// pipes close (`OwnedChild::capture_until`): on macOS the standard library
+/// makes a pipe and marks it close-on-exec in two calls, a child another
+/// thread starts between them keeps the write end for as long as it lives,
+/// and waiting for the pipe's end then ran to `COMMAND_TIMEOUT` for a command
+/// that had exited in milliseconds (docs/ARCHITECTURE.md, The platform layer;
+/// with-hide/hide-private#524).
 async fn run(program: &Path, args: &[&str]) -> Result<Vec<u8>, CommandFailure> {
-    let command = format!("tailscale {}", args.join(" "));
-    let child = tokio::process::Command::new(program)
+    let command = command_line(args);
+    let mut process = std::process::Command::new(program);
+    process
         .args(args)
         // The macOS app's executable is both the app and its CLI, and it acts
         // as the CLI only when its environment looks like a terminal (`SHLVL`,
@@ -92,35 +111,53 @@ async fn run(program: &Path, args: &[&str]) -> Result<Vec<u8>, CommandFailure> {
         .env("TAILSCALE_BE_CLI", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| CommandFailure {
-            command: command.clone(),
-            stderr: error.to_string(),
-            exit_code: None,
+        .stderr(Stdio::piped());
+    // The blocking task owns the child: it ends the child's tree on every way
+    // out, and the deadline bounds it even if this future is dropped first.
+    let named = command.clone();
+    tokio::task::spawn_blocking(move || capture(process, &command))
+        .await
+        .unwrap_or_else(|error| Err(failure(&named, error.to_string(), None)))
+}
+
+fn capture(mut process: std::process::Command, command: &str) -> Result<Vec<u8>, CommandFailure> {
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let mut child = OwnedChild::spawn(&mut process)
+        .map_err(|error| failure(command, error.to_string(), None))?;
+    let output = child
+        .capture_until(deadline, OUTPUT_LIMIT)
+        .map_err(|error| match error.kind {
+            CaptureFailureKind::Deadline => failure(
+                command,
+                format!("timed out after {}s", COMMAND_TIMEOUT.as_secs()),
+                None,
+            ),
+            _ => failure(command, error.to_string(), None),
         })?;
-    match tokio::time::timeout(COMMAND_TIMEOUT, child.wait_with_output()).await {
-        Ok(Ok(output)) if output.status.success() => Ok(output.stdout),
-        Ok(Ok(output)) => Err(CommandFailure {
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(failure(
             command,
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            exit_code: output.status.code(),
-        }),
-        Ok(Err(error)) => Err(CommandFailure {
-            command,
-            stderr: error.to_string(),
-            exit_code: None,
-        }),
-        Err(_) => Err(CommandFailure {
-            command,
-            stderr: format!("timed out after {}s", COMMAND_TIMEOUT.as_secs()),
-            exit_code: None,
-        }),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            output.status.code(),
+        ))
     }
 }
 
-/// What `tailscale status --json` says about this Mac.
+fn command_line(args: &[&str]) -> String {
+    format!("tailscale {}", args.join(" "))
+}
+
+fn failure(command: &str, stderr: String, exit_code: Option<i32>) -> CommandFailure {
+    CommandFailure {
+        command: command.to_owned(),
+        stderr,
+        exit_code,
+    }
+}
+
+/// What `tailscale status --json --peers=false` says about this Mac.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Status {
     pub logged_in: bool,
@@ -170,10 +207,14 @@ pub fn parse_status(bytes: &[u8]) -> Result<Status, String> {
     })
 }
 
+/// The status command: without the peers (`--peers=false`), which hided never
+/// reads and which are what make the full answer grow with the tailnet.
+const STATUS: &[&str] = &["status", "--json", "--peers=false"];
+
 pub async fn status(program: &Path) -> Result<Status, CommandFailure> {
-    let bytes = run(program, &["status", "--json"]).await?;
+    let bytes = run(program, STATUS).await?;
     parse_status(&bytes).map_err(|message| CommandFailure {
-        command: "tailscale status --json".to_owned(),
+        command: command_line(STATUS),
         stderr: format!("unreadable answer: {message}"),
         exit_code: Some(0),
     })

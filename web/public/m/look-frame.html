@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8" />
+<!--
+  The frame the phone draws an HTML file in (web/src/mobile/Looks.tsx, HtmlBody). The phone loads it sandboxed without
+  allow-same-origin, so whatever the document runs has an origin of its own and reaches none of the app's storage,
+  credentials or connection. Its policy lets a page do what a generated page needs (inline and CDN scripts, styles, fonts,
+  images, the data: files hided folded in) and nothing that talks back: no fetch, form, frame or plugin. It says it is
+  ready, takes one document from its parent, and writes it over itself; document.open drops this listener with it.
+  The hosted release serves it with the same policy as a header (scripts/phone-release.mjs).
+-->
+<html>
+  <head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: data: blob:; style-src 'unsafe-inline' https: data: blob:; img-src https: data: blob:; font-src https: data:; media-src https: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; form-action 'none'; object-src 'none'; base-uri 'none'" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      addEventListener("message", function (event) {
+        var data = event.data;
+        if (event.source !== parent || !data || data.type !== "hide-look-document" || typeof data.html !== "string") return;
+        document.open();
+        document.write(data.html);
+        document.close();
+      });
+      parent.postMessage("hide-look-ready", "*");
+    </script>
+  </head>
+  <body></body>
+</html>

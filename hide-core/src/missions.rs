@@ -872,6 +872,15 @@ impl MissionNode {
         self.prs.last().copied()
     }
 
+    /// The registrations the Conductor bound as checkers to the node's lines
+    /// (a reviewer or a verifier), once each.
+    pub(crate) fn checker_agents(&self) -> impl Iterator<Item = &str> {
+        self.criteria
+            .iter()
+            .flat_map(|line| line.checkers.iter())
+            .filter_map(|checker| checker.agent_id.as_deref())
+    }
+
     /// Whether the node's worker and checkers may run on another machine
     /// than the mission's: only a change that reaches main through a pull
     /// request, whose work GitHub carries back. A direct change's branch
@@ -1180,6 +1189,20 @@ fn is_zero_u32(value: &u32) -> bool {
 }
 
 impl Mission {
+    /// The (checker registration, Conductor) pairs of `node`: the checkers
+    /// bound to its lines, each with this mission's Conductor. A letter from
+    /// one to the other is what the node's worker may read
+    /// (`MissionBook::checkers_read_by`) and what `hide mission show <node>`
+    /// lists for it, so the list and the reading never differ
+    /// (with-hide/hide-private#656, #668).
+    pub(crate) fn checker_letters<'a>(
+        &'a self,
+        node: &'a MissionNode,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        node.checker_agents()
+            .map(|checker| (checker, &self.conductor.actor))
+    }
+
     /// Each node's key, status and pull requests, which a reopen keeps so
     /// the mission is not closed again until one of them moves.
     pub(crate) fn node_marks(&self) -> String {
@@ -1443,6 +1466,21 @@ impl MissionBook {
 
     pub(crate) fn get_mut(&mut self, id: &str) -> Option<&mut Mission> {
         self.missions.iter_mut().find(|mission| mission.id == id)
+    }
+
+    /// The checkers bound to the lines of the nodes that registration
+    /// `worker` works, each with the Conductor of its mission: the pairs
+    /// whose letters from the checker to that Conductor the worker may read
+    /// (`hide request show`).
+    pub(crate) fn checkers_read_by<'a>(
+        &'a self,
+        worker: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        self.missions
+            .iter()
+            .flat_map(|mission| mission.nodes.iter().map(move |node| (mission, node)))
+            .filter(move |(_, node)| node.agent_id.as_deref() == Some(worker))
+            .flat_map(|(mission, node)| mission.checker_letters(node))
     }
 
     /// The mission `actor` conducts and still runs, if any.

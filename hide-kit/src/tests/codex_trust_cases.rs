@@ -204,6 +204,14 @@ fn a_failure_is_the_codex_parts_reason_only_and_status_keeps_it_until_a_pass_suc
     let read = status(&fixture.target);
     assert_eq!(codex_part(&read).state, ComponentState::Failed);
     assert_eq!(codex_part(&read).reason, Some(reason));
+    // ... with the cause the pass gave, which the core reads to check
+    // the machine with a pass on Check again.
+    for report in [&report, &read] {
+        assert_eq!(
+            codex_part(report).why.as_ref().map(|why| why.cause),
+            Some(PartCause::CodexUntrusted)
+        );
+    }
     assert_eq!(calls(&fixture, "initialize"), asked);
 
     // The next pass tries again and, succeeding, drops the reason.

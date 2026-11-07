@@ -205,6 +205,27 @@ function warned(one: MissionNode, now: number): MissionNode {
 }
 
 /**
+ * The stalled state (hide-private issues 678-680): eleven letters wait for
+ * the Conductor behind a draft in its input, the search fix's worker rests
+ * while its review is open, the screen's worker on the Mac mini rests on its
+ * CI, the API change has no worker left, and the reopen fix's worker works.
+ */
+function stalled(one: MissionNode): MissionNode {
+  switch (one.key) {
+    case "fix-1490":
+      return { ...one, work: { state: "waiting", on: { kind: "review" } } };
+    case "screen":
+      return { ...one, pane_id: "remote:mini:pane:h15:p3", work: { state: "waiting", on: { kind: "ci" } } };
+    case "fix-1487":
+      return { ...one, work: { state: "working" } };
+    case "api":
+      return { ...one, status: "working", finished_at_unix_ms: null, landing: null, work: { state: "no_worker" } };
+    default:
+      return one;
+  }
+}
+
+/**
  * The steps a Conductor wrote with the plan, by node (hide-private missions.md):
  * a node ahead of its worker shows them as dashed cells, a node whose worker has
  * a plan shows that plan, and the reopen fix's worker changed one of its steps.
@@ -276,11 +297,12 @@ const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필�
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
-  const remote = shown === "remote" || shown === "remote-long";
+  // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
+  const remote = shown === "remote" || shown === "remote-long" || shown === "stalled";
   const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
-  nodes.splice(0, nodes.length, ...withSteps(nodes));
+  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : one)));
   if (remote) {
     for (const one of nodes) {
       one.machine = one.key === "screen" || (shown === "remote-long" && one.key === "fix-1487") ? "mini" : one.pane_id ? "local" : null;
@@ -313,6 +335,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     running: state === "decision" ? 1 : state === "running" || state === "wide" ? 4 : 0,
     // A device that disconnected leaves its last values, dimmed (B20).
     stale: state === "stale", github_stale: state === "stale", github_read_at_unix_ms: state === "stale" ? now - 25 * MINUTE : now,
+    conductor_letters: shown === "stalled" ? { count: 11, reason: "draft", since_unix_ms: now - 40 * MINUTE } : null,
   });
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },

@@ -131,6 +131,12 @@ impl PreparedHuman {
 pub(crate) struct Authority {
     pub caller: String,
     pub context: Context,
+    /// Letters the caller may also read with `Show`, beside those it sent or
+    /// received. The core works them out under its lock from what only it
+    /// knows (a mission node's checkers) and hands them over as data; the
+    /// store stays the one place that decides who reads a letter
+    /// (`mailbox::show`) and knows nothing of why.
+    pub also_reads: Vec<mailbox::Exchange>,
 }
 
 impl Prepared {
@@ -698,7 +704,7 @@ pub(crate) fn now() -> u64 {
 }
 
 fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, bool), String> {
-    let (actor, target, command, language) = match &request.effect {
+    let (actor, target, command, language, also_reads) = match &request.effect {
         Effect::SpawnNames { work, names } => {
             crate::coordination::naming::apply(ledger, work, names)?;
             return Ok((json!({"saved":true}), false));
@@ -779,12 +785,12 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             return Ok((Value::Null, false));
         }
         Effect::Command {
+            authority,
             actor,
             target,
             command,
             language,
-            ..
-        } => (actor, target, &**command, *language),
+        } => (actor, target, &**command, *language, &authority.also_reads),
     };
     let value = match command {
         Command::WatchStart { .. } => {
@@ -875,6 +881,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             command,
             now,
             language,
+            also_reads,
         ),
     }?;
     Ok((

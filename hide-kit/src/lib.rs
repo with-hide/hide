@@ -540,6 +540,17 @@ fn report(
     }
 }
 
+/// The Codex hook part is in place and Codex has not trusted it: `reason`
+/// is the kit's sentence, and the cause is the one every reader words.
+fn mark_untrusted(part: &mut ComponentReport, reason: String) {
+    part.state = ComponentState::Failed;
+    part.why = Some(PartWhy {
+        cause: PartCause::CodexUntrusted,
+        value: None,
+    });
+    part.reason = Some(reason);
+}
+
 /// How long a kit waits for another kit changing the same account.
 const LOCK_DEADLINE: Duration = Duration::from_secs(90);
 
@@ -611,20 +622,18 @@ pub fn status(target: &KitTarget) -> KitReport {
         .map(|id| {
             let observed = observe(id, target);
             // `status` asks Codex no trust question, so Codex's trust is
-            // what the last pass found (`codex_trust`).
-            let failure = (id == ComponentId::CodexHook
+            // what the last pass found (`codex_trust`), with the cause that
+            // pass gave it.
+            let untrusted = (id == ComponentId::CodexHook
                 && matches!(observed, Observed::Current)
                 && !switched_off(id))
             .then(|| codex_trust::remembered(target))
             .flatten();
-            report(
-                id,
-                target,
-                observed,
-                recorded(id),
-                switched_off(id),
-                failure,
-            )
+            let mut part = report(id, target, observed, recorded(id), switched_off(id), None);
+            if let Some(reason) = untrusted {
+                mark_untrusted(&mut part, reason);
+            }
+            part
         })
         .collect();
     let agents = agent_kit::status(target, &record, &agent_kit::part_views(&components));
@@ -899,12 +908,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
             .iter_mut()
             .find(|part| part.id == ComponentId::CodexHook)
     {
-        part.state = ComponentState::Failed;
-        part.why = Some(PartWhy {
-            cause: PartCause::CodexUntrusted,
-            value: None,
-        });
-        part.reason = Some(failure);
+        mark_untrusted(part, failure);
     }
     let agents = agent_kit::reports(
         target,
@@ -1197,6 +1201,20 @@ pub(crate) fn write_atomically(
     hide_platform::fs::atomic::write_file(path, contents, access)
         .map(drop)
         .map_err(|error| format!("{} could not be written: {error}", path.display()))
+}
+
+/// A folder the test owns, short whatever `TMPDIR` is: a socket made below it
+/// must fit a Unix socket path (104 bytes on macOS), which a long `TMPDIR`
+/// takes (docs/TESTING.md, Writing a Rust test, rule 7). Windows names a pipe
+/// and has no such limit.
+#[cfg(test)]
+pub(crate) fn short_tempdir() -> tempfile::TempDir {
+    let mut folder = tempfile::Builder::new();
+    folder.prefix("hk");
+    #[cfg(unix)]
+    return folder.tempdir_in("/tmp").unwrap();
+    #[cfg(not(unix))]
+    return folder.tempdir().unwrap();
 }
 
 // The suite drives the kit against a stand-in daemon on a Unix socket and with

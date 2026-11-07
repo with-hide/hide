@@ -313,7 +313,7 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
     row("sleep", { mark: "asleep", status_code: "sleeping", activity: "stopped" }, { line: "파서를 나눴어요" }),
     row("lost", { mark: "unknown", status_code: "unknown", activity: "unknown" }),
     row("parent", { lineage_child_pane_ids: ["k1", "k2"], descendant_mark: { kind: "raised", count: 1 } }),
-    row("k1", { lineage_parent_pane_id: "parent", delegated: true, mark: "quiet", status_code: "question", demand: "question" }),
+    row("k1", { lineage_parent_pane_id: "parent", delegated: true, mark: "waiting", status_code: "question", demand: "question" }),
     row("k2", { lineage_parent_pane_id: "parent", delegated: true, mark: "done", status_code: "done", activity: "stopped" }),
   ];
   const cards = [card("waits", "waiting", "hide-main"), card("left", "done", "hide-main"), card("read", "resting", "hide-main"), card("sleep", "working", "hide-main"), card("lost", "working", "hide-main"), card("parent", "working", "hide-main", ["parent", "k1", "k2"])];

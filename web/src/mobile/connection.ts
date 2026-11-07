@@ -32,6 +32,7 @@ import {
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prOf } from "./prModel";
 import { CLOSED_SHEET, answerSentFor, applyFrame, openPr, patch, usePhone, type StartSheet } from "./store";
+import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
@@ -463,14 +464,19 @@ function failLoadingLook(): void {
   patch({ detail: { ...detail, look: { ...detail.look, content: { state: "failed" } } } });
 }
 
-/** What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15). */
-const SEEN_STATES: readonly string[] = ["text", "image", "shot", "changes", "page", "other", "too_large"];
+/**
+ * What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15).
+ * Every state answers, so a new one cannot be left out by accident.
+ */
+const SEEN: Record<LookContent["state"], boolean> = {
+  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, closed: false, device_unreachable: false, failed: false,
+};
 
 /** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */
 function markLookSeen(): void {
   const detail = usePhone.getState().detail;
   const look = detail?.look;
-  if (!detail || !look || look.shown || !SEEN_STATES.includes(look.content.state)) return;
+  if (!detail || !look || look.shown || !SEEN[look.content.state]) return;
   const sent = send({ type: "look_seen", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id });
   if (sent) patch({ detail: { ...detail, look: { ...look, shown: true } } });
 }

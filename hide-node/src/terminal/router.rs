@@ -662,6 +662,25 @@ impl DeviceSink for Router {
         }
     }
 
+    /// Taken, as output is, only for a pane the core attached on that
+    /// device.
+    fn clipboard(&self, device: &str, pane: &str, text: &[u8]) {
+        let scoped = scoped_pane_id(device, pane);
+        let mut routes = lock(&self.routes);
+        let due = routes.due();
+        let attached = Router::device_of(&scoped).is_some_and(|(owner, _)| owner == device)
+            && routes.attached(device, &scoped);
+        let logged = !attached && routes.refused_line(device, LINE_UNADMITTED);
+        drop(routes);
+        log_due(due);
+        if logged {
+            log_refused_line(device, LINE_UNADMITTED, "clipboard");
+        }
+        if attached {
+            self.hub.clipboard(&scoped, text);
+        }
+    }
+
     fn report(&self, device: &str, mut report: TerminalReport) {
         if let Some(pane) = report.pane_mut() {
             *pane = scoped_pane_id(device, pane);
@@ -741,6 +760,7 @@ mod tests {
     struct Hub {
         output: Mutex<Vec<(String, Vec<u8>)>>,
         forgotten: Mutex<Vec<String>>,
+        copied: Mutex<Vec<(String, Vec<u8>)>>,
     }
 
     impl OutputSink for Hub {
@@ -752,6 +772,12 @@ mod tests {
         }
         fn forget(&self, pane: &str) {
             self.forgotten.lock().unwrap().push(pane.to_owned());
+        }
+        fn clipboard(&self, pane: &str, text: &[u8]) {
+            self.copied
+                .lock()
+                .unwrap()
+                .push((pane.to_owned(), text.to_vec()));
         }
     }
 
@@ -1089,6 +1115,7 @@ mod tests {
         });
         for pane in ["w2:p3", "w9:p9", "w2:p4"] {
             router.output("mini", pane, b"frame", true);
+            DeviceSink::clipboard(&router, "mini", pane, pane.as_bytes());
         }
         let error = |pane: &str| TerminalReport::Error {
             pane: pane.into(),
@@ -1118,6 +1145,11 @@ mod tests {
             hub.output.lock().unwrap().as_slice(),
             [("remote:mini:pane:w2:p3".to_owned(), b"frame".to_vec())]
         );
+        // A copy too is taken only from a pane the core attached.
+        assert_eq!(
+            hub.copied.lock().unwrap().as_slice(),
+            [("remote:mini:pane:w2:p3".to_owned(), b"w2:p3".to_vec())]
+        );
         assert_eq!(
             reports.0.lock().unwrap().as_slice(),
             [
@@ -1134,7 +1166,9 @@ mod tests {
             pane: "remote:mini:pane:w2:p3".into(),
         });
         router.output("mini", "w2:p3", b"late", false);
+        DeviceSink::clipboard(&router, "mini", "w2:p3", b"late");
         assert_eq!(hub.output.lock().unwrap().len(), 1);
+        assert_eq!(hub.copied.lock().unwrap().len(), 1);
         assert_eq!(
             hub.forgotten.lock().unwrap().as_slice(),
             ["remote:mini:pane:w2:p3"]
@@ -1274,6 +1308,7 @@ mod tests {
             fn forget(&self, pane: &str) {
                 self.events.lock().unwrap().push(format!("forget {pane}"));
             }
+            fn clipboard(&self, _pane: &str, _text: &[u8]) {}
         }
         let hub = Arc::new(RacingHub::default());
         let router = Arc::new(Router::new(
