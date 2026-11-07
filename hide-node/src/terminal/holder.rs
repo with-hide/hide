@@ -26,7 +26,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_holder_protocol::record::{EndReason, PaneRecord};
+use hide_holder_protocol::record::{EndReason, PaneRecord, Phase};
 use hide_holder_protocol::{
     Answer, Ask, Capability, ClientMessage, CloseReason, Closed, HolderMessage, Key, MAX_INPUT,
     MAX_KEYS, MAX_PASTE, Modifiers, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION, Scroll,
@@ -49,8 +49,10 @@ use super::Service;
 use super::protocol::SessionEvent;
 use super::session::{Attacher, Cleanup, OpenFailure, SessionEvents, SessionWriter, Transport};
 
+mod turns;
 mod watch;
 
+use turns::{TurnRefused, Turns};
 use watch::Watches;
 pub(super) use watch::too_old;
 
@@ -545,6 +547,58 @@ pub struct Recovered {
     pub complete: bool,
 }
 
+/// What renewing a pane's holder did ([`Holders::renew`]), one value the
+/// core reads whole: whether this build's holder runs the pane, the earlier
+/// one still does untouched, or none of this renewal is known to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Renewal {
+    /// The pane's record names a running holder from this build's version
+    /// folder.
+    Current,
+    /// The pane runs from `to` now, in place of its holder from `from`.
+    Renewed { from: String, to: String },
+    /// The pane's record names a running holder from another build, which
+    /// was left untouched: ending it could have ended something, the pane's
+    /// input could not be settled, or nothing could replace it; why.
+    Kept { code: &'static str, message: String },
+    /// The pane's record is closed or gone: nothing runs it to wake in.
+    Closed(String),
+    /// Another change of the pane's holder kept its turn past the wait.
+    Busy(String),
+    /// The earlier holder ended and the new one did not start: no holder
+    /// runs the pane.
+    Lost(String),
+    /// The earlier holder was asked to end and whether it did is not known,
+    /// or a new holder's start may have left something running: the record
+    /// stays for the next reconcile to settle, and the pane is not used
+    /// until then.
+    Unsettled(String),
+}
+
+/// How long a renewal waits for the pane's turn: one earlier change's
+/// bound and a little more. A renewal keeps the turn for its writes
+/// ([`WRITES_LIMIT`]), the earlier holder's close
+/// ([`hide_kit::panes::CLOSE_LIMIT`]) and the next one's start
+/// ([`hide_kit::panes::START_LIMIT`]): 35 s.
+const RENEW_TURN_WAIT: Duration = Duration::from_secs(45);
+
+/// How long a close waits for the pane's turn: longer than a renewal can
+/// keep it, so a close fails only behind a renewal that is stuck.
+const CLOSE_TURN_WAIT: Duration = Duration::from_secs(60);
+
+/// How long the writes handed to a pane's holder before a renewal may take
+/// to be written ([`Service::writes_settled`]).
+const WRITES_LIMIT: Duration = Duration::from_secs(5);
+
+/// What [`Holders::renew`] found may be ended: the earlier holder's
+/// record, the start that replaces it, and this build's version folder,
+/// held as used until the new holder runs from it.
+struct Ending {
+    record: PaneRecord,
+    request: StartRequest,
+    folder: hide_kit::holders::Reservation,
+}
+
 /// A state folder's holder panes, as a node runs them.
 pub struct Holders {
     panes: Panes,
@@ -555,6 +609,8 @@ pub struct Holders {
     ends: Arc<Ends>,
     /// Each holder pane's facts, on a watch of its own (`watch`).
     watches: Arc<Watches>,
+    /// One renewal or close of a pane's holder at a time (`turns`).
+    turns: Turns,
     reports: Arc<dyn ReportSink>,
     /// What the last [`Holders::recover`] found, for the core's restore to
     /// wait on ([`Holders::recovered`]).
@@ -605,6 +661,7 @@ impl Holders {
             known: Arc::default(),
             ends: Arc::default(),
             watches: Arc::default(),
+            turns: Turns::default(),
             reports,
             recovery: (Mutex::new(None), Condvar::new()),
         })
@@ -779,6 +836,300 @@ impl Holders {
         Ok(())
     }
 
+    /// Brings `intent`'s pane to this build's holder (with-hide/hide-private#646):
+    /// a pane whose agent is asleep, whose holder runs from another build's
+    /// version folder, and whose terminal session runs nothing but its shell,
+    /// is ended and started again under its own id from `request`, the
+    /// replacement naming the earlier start's incarnation, and its screen
+    /// attached again where it was.
+    ///
+    /// It takes the pane's turn first ([`turns`]) and keeps it to its last
+    /// effect, so a close of the pane asked meanwhile ends the holder it
+    /// leaves, and a second renewal judges the pane as this one left it. Only
+    /// a pane whose agent is asleep is renewed: the node then takes no input
+    /// into it but the sleep's own (`Service::type_input`), and the writes
+    /// handed to its holder before that are waited for first. Every refusal
+    /// before the close ends nothing.
+    pub fn renew(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        service: &Service,
+        intent: &HolderIntent,
+        request: impl FnOnce() -> Result<StartRequest, String>,
+    ) -> Renewal {
+        let pane = intent.pane.as_str();
+        let turn = self.turns.take(pane, RENEW_TURN_WAIT);
+        let renewal = match &turn {
+            Ok(_) => self.renew_in_turn(owner, service, intent, request),
+            Err(TurnRefused::Full) => {
+                Renewal::Busy(format!("pane {pane}'s holder has too many changes waiting"))
+            }
+            Err(TurnRefused::Expired) => Renewal::Busy(format!(
+                "pane {pane}'s holder was being changed past {RENEW_TURN_WAIT:?}"
+            )),
+        };
+        match &renewal {
+            // Its screen attaches again to the holder that runs it now.
+            Renewal::Renewed { .. } => service.holder_replaced(pane),
+            Renewal::Lost(_) => service.holder_gone(pane),
+            _ => {}
+        }
+        crate::diagnostic!(match &renewal {
+            Renewal::Current => json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.renewal_current",
+                "pane_id": pane,
+            }),
+            Renewal::Renewed { from, to } => json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.renewed",
+                "pane_id": pane,
+                "from": from,
+                "to": to,
+            }),
+            Renewal::Kept { code, message } => json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.renewal_kept",
+                "pane_id": pane,
+                "code": code,
+                "message": message,
+            }),
+            Renewal::Closed(why)
+            | Renewal::Busy(why)
+            | Renewal::Lost(why)
+            | Renewal::Unsettled(why) => {
+                json!({
+                    "component": "pane_holder",
+                    "kind": "pane_holder.renewal_refused",
+                    "pane_id": pane,
+                    "outcome": match &renewal {
+                        Renewal::Closed(_) => "closed",
+                        Renewal::Busy(_) => "busy",
+                        Renewal::Lost(_) => "lost",
+                        _ => "unsettled",
+                    },
+                    "message": why,
+                })
+            }
+        });
+        drop(turn);
+        renewal
+    }
+
+    /// Whether `pane`'s holder may be ended for a renewal now, judged once
+    /// with the pane's turn held: its record names a running holder and its
+    /// shell, from another build's version folder; the pane is asleep; the
+    /// writes handed to its holder were written; and ending the holder ends
+    /// nothing but the shell ([`hide_platform::process::runs_alone`], the set
+    /// its end ends). [`Renewal::Kept`] leaves a holder the record names
+    /// running untouched; a pane whose record does not name one is
+    /// [`Renewal::Closed`] or [`Renewal::Unsettled`].
+    fn endable(
+        &self,
+        service: &Service,
+        pane: &str,
+        request: impl FnOnce() -> Result<StartRequest, String>,
+    ) -> Result<Ending, Renewal> {
+        let kept = |code: &'static str, message: String| Renewal::Kept { code, message };
+        let holder = holder_pane(pane);
+        let record = match self.panes.record(&holder) {
+            Ok(Some(record)) => record,
+            Ok(None) => return Err(Renewal::Closed(format!("pane {pane} has no record"))),
+            Err(why) => return Err(Renewal::Unsettled(format!("pane {pane}'s record: {why}"))),
+        };
+        if !running(&record) {
+            let why = format!(
+                "pane {pane}'s holder is {:?}, {:?}",
+                record.phase, record.end
+            );
+            return Err(match record.phase {
+                Phase::Ended | Phase::Closing => Renewal::Closed(why),
+                _ => Renewal::Unsettled(why),
+            });
+        }
+        let (Some(holding), Some(shell)) = (record.holder, record.program) else {
+            return Err(kept(
+                "shell_unknown",
+                format!("pane {pane}'s record names no shell"),
+            ));
+        };
+        let to = self
+            .panes
+            .folder_of(&self.source)
+            .map_err(|why| kept("holder_folder_unread", why))?;
+        if record.version_folder == to {
+            return Err(Renewal::Current);
+        }
+        if !service.asleep(pane) {
+            return Err(kept(
+                "pane_awake",
+                format!("pane {pane}'s agent is not asleep, so its input is not held"),
+            ));
+        }
+        let folder = self
+            .panes
+            .prepare_folder(&self.source)
+            .map_err(|why| kept("holder_folder_unprepared", why))?;
+        service
+            .writes_settled(pane, WRITES_LIMIT)
+            .map_err(|why| kept("pane_input_unsettled", why))?;
+        let recorded =
+            |identity: hide_holder_protocol::record::Identity| hide_platform::process::Recorded {
+                pid: identity.pid,
+                started: identity.started,
+            };
+        match hide_platform::process::runs_alone(recorded(holding), recorded(shell)) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(kept(
+                    "pane_busy",
+                    format!("pane {pane}'s shell runs a program, in its terminal or behind it"),
+                ));
+            }
+            Err(error) => {
+                return Err(kept(
+                    "pane_busy",
+                    format!("what pane {pane}'s holder would end could not be read: {error}"),
+                ));
+            }
+        }
+        let request = request().map_err(|why| kept("start_unprepared", why))?;
+        Ok(Ending {
+            record,
+            request: StartRequest {
+                pane: holder,
+                ..request
+            },
+            folder,
+        })
+    }
+
+    /// [`Holders::renew`] with the pane's turn held, up to its answer: acts
+    /// on [`Holders::endable`]. Once the earlier holder was asked to end, its
+    /// record says what the close did: one that still names the same running
+    /// holder was not taken and is [`Renewal::Kept`]; one that ended is
+    /// replaced; anything else is [`Renewal::Unsettled`].
+    fn renew_in_turn(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        service: &Service,
+        intent: &HolderIntent,
+        request: impl FnOnce() -> Result<StartRequest, String>,
+    ) -> Renewal {
+        let pane = intent.pane.as_str();
+        let holder = holder_pane(pane);
+        let Ending {
+            record,
+            request,
+            folder: _folder,
+        } = match self.endable(service, pane, request) {
+            Ok(ending) => ending,
+            Err(renewal) => return renewal,
+        };
+        let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder);
+        // An earlier build's holder's close is one Hide asked for, so its
+        // screen draws no failure; it is open again once the renewal answers.
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: true,
+        });
+        let renewal = self.replace(owner, intent, &record, request, socket);
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: false,
+        });
+        renewal
+    }
+
+    /// Ends `record`'s holder and starts `request` in its place.
+    fn replace(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        intent: &HolderIntent,
+        record: &PaneRecord,
+        request: StartRequest,
+        socket: PathBuf,
+    ) -> Renewal {
+        let pane = intent.pane.as_str();
+        let holder = holder_pane(pane);
+        // The earlier holder's watch ends here, so its end changes nothing
+        // of the pane, whose rules the next watch takes up.
+        self.watches.retire(pane);
+        let ended = match self.panes.close(owner, &holder) {
+            Ok(ended) => ended,
+            Err(error) => {
+                let now = self.panes.record(&holder);
+                if let Ok(Some(now)) = &now
+                    && now.incarnation == record.incarnation
+                    && running(now)
+                {
+                    self.watches.watch(pane, socket);
+                    return Renewal::Kept {
+                        code: "holder_not_ended",
+                        message: format!("pane {pane}'s holder was not asked to end: {error}"),
+                    };
+                }
+                self.known.remove(pane);
+                self.watches.forget(pane);
+                return Renewal::Unsettled(format!(
+                    "pane {pane}'s earlier holder was asked to end and its close did not finish: {error}"
+                ));
+            }
+        };
+        // Until the new holder runs, an open of the pane waits for it.
+        self.known.remove(pane);
+        self.known.starting(pane);
+        let started = owner.issue(&holder, &intent.digest).map(|guard| {
+            let started = self
+                .reserve(&guard, intent, Some(ended.incarnation))
+                .and_then(|reserved| {
+                    self.panes.start_reserved(
+                        &guard,
+                        &holder,
+                        reserved.incarnation,
+                        &intent.digest,
+                        &self.source,
+                        || Ok(request),
+                    )
+                });
+            if !matches!(started, Err(StartRefusal::Uncertain(_))) {
+                let _ = owner.retire(owner.incarnation(), guard.number());
+            }
+            started
+        });
+        let renewed = match started {
+            Ok(Ok(Started::Started(record) | Started::Existing(record)))
+                if record.end.is_none() =>
+            {
+                record
+            }
+            failed => {
+                self.known.not_started(pane);
+                self.watches.forget(pane);
+                return match failed {
+                    Ok(Err(StartRefusal::Uncertain(why))) => Renewal::Unsettled(why),
+                    Ok(Ok(Started::Started(record) | Started::Existing(record))) => {
+                        Renewal::Lost(format!("the new holder ended: {:?}", record.end))
+                    }
+                    Ok(Err(refusal)) => Renewal::Lost(refusal.to_string()),
+                    Err(why) => Renewal::Lost(why),
+                };
+            }
+        };
+        self.known.insert(pane, socket.clone());
+        self.watches.watch(pane, socket);
+        Renewal::Renewed {
+            from: ended.version_folder,
+            to: renewed.version_folder,
+        }
+    }
+
+    /// Whether a renewal or a close of `pane`'s holder has the pane's turn
+    /// or waits for it.
+    pub fn changing(&self, pane: &str) -> bool {
+        self.turns.taken(pane)
+    }
+
     fn forget_screen(&self, service: &Service, pane: &str) {
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
@@ -827,19 +1178,29 @@ impl Holders {
     /// Ends the pane: its program and everything it started, then its
     /// holder, within `hide_kit::panes::CLOSE_LIMIT`, and answers its record.
     /// The service's session of it ends as a close it asked for; the node
-    /// forgets the pane once it ended.
+    /// forgets the pane once it ended. It waits for the pane's turn, behind a
+    /// renewal under way, and so ends the holder that renewal leaves.
     pub fn terminate(
         &self,
         owner: &hide_kit::panes::Owner,
         service: &Service,
         pane: &str,
     ) -> Result<PaneRecord, CloseError> {
+        // Behind a renewal of the pane, whose holder this ends once it is
+        // done; a close is never dropped for one, only refused behind one
+        // that is stuck.
+        let _turn = self.turns.take(pane, CLOSE_TURN_WAIT).map_err(|refused| {
+            CloseError::Failed(format!(
+                "pane {pane}'s holder is being changed ({refused:?}); it was not asked to end"
+            ))
+        })?;
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
             closing: true,
         });
         let closed = self.panes.close(owner, &holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
+            service.holder_gone(pane);
             self.forget_screen(service, pane);
         } else {
             service.control(TerminalControl::Closing {
@@ -1239,6 +1600,15 @@ fn finished(reason: Option<EndReason>) -> bool {
         reason,
         Some(EndReason::ProgramExited | EndReason::Terminated | EndReason::TreeEndUnconfirmed)
     )
+}
+
+/// Whether `record` names a holder that runs its pane now: the state a
+/// renewal ends a holder from, and the one a close that never took the pane
+/// leaves.
+fn running(record: &PaneRecord) -> bool {
+    record.phase == Phase::Running
+        && record.end.is_none()
+        && record.holder.is_some_and(|holder| holder.runs())
 }
 
 /// Takes one reconcile round's judgments into `judged` and answers how many

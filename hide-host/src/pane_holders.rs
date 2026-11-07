@@ -166,6 +166,7 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
             .and_then(value),
         PaneCall::Cancel { intent, request } => holders.cancel(&intent, request).and_then(value),
         PaneCall::Retire { request } => holders.retire(request).and_then(value),
+        PaneCall::Renew { start } => holders.renew(&start).and_then(value),
         PaneCall::ShellLaunch => value(holders.shell_launch()),
         PaneCall::Terminate { pane } => holders.terminate(&pane).and_then(value),
         PaneCall::Read { pane, lines } => holders.read(&pane, lines).and_then(text),
@@ -182,6 +183,9 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
             .and_then(value),
         PaneCall::Proof { pane } => holders.proof(&pane).and_then(value),
         PaneCall::Input { pane, input } => holders.input(&pane, input).and_then(value),
+        PaneCall::SleeperInput { pane, input } => {
+            holders.sleeper_input(&pane, input).and_then(value)
+        }
         PaneCall::Letter {
             pane,
             text,

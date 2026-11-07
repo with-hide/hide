@@ -15,15 +15,16 @@ use hide_host::kit::PaneInstall;
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
-use super::holder::Holders;
-use super::input::Typed;
+use super::holder::{Holders, Renewal};
+use super::input::{Typed, Typist};
 use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
-    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink,
-    PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded,
+    PaneFactsSink, PaneHolders, PaneInput, RENEWAL_BUSY, RENEWAL_LOST, RENEWAL_PANE_CLOSED,
+    RENEWAL_UNSETTLED, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -389,6 +390,44 @@ impl PaneHolders for LocalPanes {
             .map_err(start_refusal)
     }
 
+    fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+        if start.program.is_some() {
+            return Err(HolderError::Refused {
+                code: "invalid_program".to_owned(),
+                message: "only a shell pane's holder is renewed".to_owned(),
+            });
+        }
+        let intent = start.intent()?;
+        match self
+            .holders
+            .renew(self.owner()?, &self.service, &intent, || {
+                self.expand(start).map_err(|error| format!("{error:?}"))
+            }) {
+            Renewal::Current => Ok(HolderRenewal::Current),
+            Renewal::Renewed { from, to } => Ok(HolderRenewal::Renewed { from, to }),
+            Renewal::Kept { code, message } => Ok(HolderRenewal::Kept {
+                code: code.to_owned(),
+                message,
+            }),
+            Renewal::Closed(message) => Err(HolderError::Refused {
+                code: RENEWAL_PANE_CLOSED.to_owned(),
+                message,
+            }),
+            Renewal::Busy(message) => Err(HolderError::Refused {
+                code: RENEWAL_BUSY.to_owned(),
+                message,
+            }),
+            Renewal::Lost(message) => Err(HolderError::Refused {
+                code: RENEWAL_LOST.to_owned(),
+                message,
+            }),
+            Renewal::Unsettled(message) => Err(HolderError::Refused {
+                code: RENEWAL_UNSETTLED.to_owned(),
+                message,
+            }),
+        }
+    }
+
     fn shell_launch(&self) -> Option<ShellLaunch> {
         self.shell
             .launch()
@@ -498,7 +537,11 @@ impl PaneHolders for LocalPanes {
     }
 
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
-        self.service.type_input(pane, typed(input))
+        self.service.type_input(pane, typed(input), Typist::Engine)
+    }
+
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.service.type_input(pane, typed(input), Typist::Sleeper)
     }
 
     fn letter(

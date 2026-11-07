@@ -9,6 +9,9 @@ use hide_node_link::{LinkError, NodeLink};
 
 pub(super) struct Connection {
     pub(super) local: Arc<hide_node::Local>,
+    /// Read only by the renewal test whose shell traps POSIX signals.
+    #[cfg(unix)]
+    pub(super) holders: Arc<Holders>,
     pub(super) linked: LinkPanes,
     pub(super) service: Arc<Service>,
     pub(super) reports: Arc<Reports>,
@@ -16,13 +19,28 @@ pub(super) struct Connection {
 }
 
 impl Connection {
-    fn open(home: &Path, state: &Path) -> Self {
+    pub(super) fn open(home: &Path, state: &Path) -> Self {
         Self::with_attacher(home, state, |attacher| attacher)
     }
 
     pub(super) fn with_attacher(
         home: &Path,
         state: &Path,
+        wrap: impl FnOnce(Box<dyn Attacher>) -> Box<dyn Attacher>,
+    ) -> Self {
+        Self::built(home, state, source(), wrap)
+    }
+
+    /// A connection whose node starts its holders from `holder`, as the
+    /// daemon of the build that carries it does.
+    pub(super) fn of_build(home: &Path, state: &Path, holder: hide_kit::holders::Source) -> Self {
+        Self::built(home, state, holder, |attacher| attacher)
+    }
+
+    fn built(
+        home: &Path,
+        state: &Path,
+        holder: hide_kit::holders::Source,
         wrap: impl FnOnce(Box<dyn Attacher>) -> Box<dyn Attacher>,
     ) -> Self {
         let screens = Arc::new(Screens::default());
@@ -33,7 +51,7 @@ impl Connection {
                     home,
                     state_dir: state,
                 },
-                source(),
+                holder,
                 reports.clone(),
             )
             .unwrap(),
@@ -49,7 +67,7 @@ impl Connection {
         );
         let local = Arc::new(
             hide_node::Local::new(Some(home.to_owned())).with_panes(Arc::new(LocalPanes::new(
-                holders,
+                Arc::clone(&holders),
                 Arc::clone(&service),
                 PaneShell::Fixed(shell()),
             ))),
@@ -57,6 +75,8 @@ impl Connection {
         let linked = LinkPanes::new(local.clone(), Arc::new(|_| {}));
         Self {
             local,
+            #[cfg(unix)]
+            holders,
             linked,
             service,
             screens,

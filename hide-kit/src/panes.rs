@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::record::{self, End, EndReason, Identity, PaneRecord, Phase, Unreadable};
 use hide_holder_protocol::{
-    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, Size, Theme,
-    read_holder, write_client,
+    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION,
+    Size, Theme, read_holder, write_client,
 };
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
@@ -52,7 +52,7 @@ pub use ownership::Owner;
 mod requests;
 mod reservation;
 #[cfg(test)]
-use hide_holder_protocol::{PROTOCOL_VERSION, record::RECORD_FORMAT};
+use hide_holder_protocol::record::RECORD_FORMAT;
 pub use requests::Request;
 
 /// The most holders a state folder keeps: every record that is not ended
@@ -451,6 +451,23 @@ impl Panes {
     /// The pane's record as it is now.
     pub fn record(&self, pane: &str) -> Result<Option<PaneRecord>, Unreadable> {
         record::read(&layout::pane_record(&self.state_dir, pane))
+    }
+
+    /// The version folder `source`'s holder runs from, by name: what a
+    /// record's `version_folder` is compared with to tell a pane that runs
+    /// another build's holder (with-hide/hide-private#646). The name is the
+    /// folder's content hash, so a different name is a different build,
+    /// never an older or newer one.
+    pub fn folder_of(&self, source: &holders::Source) -> Result<String, String> {
+        self.names
+            .name(PROTOCOL_VERSION, source)
+            .map_err(|error| format!("the holder's files could not be read: {error}"))
+    }
+
+    /// Makes or finds `source`'s version folder and holds it as used until
+    /// the answer is dropped, as a start does ([`holders::prepare`]).
+    pub fn prepare_folder(&self, source: &holders::Source) -> Result<holders::Reservation, String> {
+        holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
     }
 
     fn emit(&self, event: &str, fields: serde_json::Value) {
