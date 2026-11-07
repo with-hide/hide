@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub use hide_node_link::herdr_save::{Fetched, Found, READ_CAP, Server};
+pub use hide_node_link::herdr_save::{Fetched, Found, NEWEST_FORMAT, READ_CAP, Server};
 
 /// How long Hide's Herdr has to end on each way of asking it (D-6).
 pub const STOP_WITHIN: Duration = Duration::from_secs(10);

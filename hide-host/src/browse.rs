@@ -205,16 +205,22 @@ impl HomeFolder {
 
     /// The folder as `~` spells it, names between `/`.
     fn label(&self) -> String {
-        match self.real.strip_prefix(&self.home_real) {
-            Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-            Ok(rest) => format!(
-                "~/{}",
-                hide_platform::path::RelPath::from_native(rest)
-                    .map(hide_platform::path::RelPath::into_string)
-                    .unwrap_or_else(|_| rest.to_string_lossy().replace('\\', "/"))
-            ),
-            Err(_) => crate::root::wire(&self.real),
-        }
+        home_label(&self.real, &self.home_real)
+    }
+}
+
+/// `real` as `~` spells it against `home_real`, names between `/`; a path
+/// outside home in its wire spelling.
+pub(crate) fn home_label(real: &Path, home_real: &Path) -> String {
+    match real.strip_prefix(home_real) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Ok(rest) => format!(
+            "~/{}",
+            hide_platform::path::RelPath::from_native(rest)
+                .map(hide_platform::path::RelPath::into_string)
+                .unwrap_or_else(|_| rest.to_string_lossy().replace('\\', "/"))
+        ),
+        Err(_) => crate::root::wire(real),
     }
 }
 

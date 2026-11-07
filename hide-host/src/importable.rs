@@ -16,7 +16,6 @@
 //! log, and never takes another source with it (B27).
 
 use std::collections::{BTreeSet, HashMap};
-use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -28,10 +27,6 @@ pub use hide_node_link::importable::{
     DroppedSource, EXCLUDE_CAP, IMPORTABLE_CAP, ImportApp, ImportSource, ImportableProject,
     ImportableProjects, JUDGED_FOLDER_CAP, PASEO_READ_CAP, RECENT_WINDOW_MS,
 };
-
-/// The newest Herdr session format this reader knows (Herdr v0.9.5's
-/// `SNAPSHOT_VERSION`, as `hide-core`'s Herdr session reader reads it).
-const HERDR_NEWEST_FORMAT: u32 = 3;
 
 /// A folder one source named, and when that source last saw it in use.
 struct Named {
@@ -197,10 +192,11 @@ fn herdr(variables: hide_platform::host::Variables) -> Result<Vec<Named>, String
     }
     let save: Save = serde_json::from_str(&text)
         .map_err(|error| format!("it is not a Herdr session: {error}"))?;
-    if save.version > HERDR_NEWEST_FORMAT {
+    if save.version > crate::herdr_save::NEWEST_FORMAT {
         return Err(format!(
-            "it is format {}, newer than the format {HERDR_NEWEST_FORMAT} this build reads",
-            save.version
+            "it is format {}, newer than the format {} this build reads",
+            save.version,
+            crate::herdr_save::NEWEST_FORMAT
         ));
     }
     let active_at_unix_ms = modified_ns / 1_000_000;
@@ -291,7 +287,7 @@ fn merge(
         .into_iter()
         .map(|(root, sources, active_at_unix_ms)| ImportableProject {
             path: crate::root::wire(&root),
-            label: label(&root, &home_real),
+            label: crate::browse::home_label(&root, &home_real),
             name: root
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -300,23 +296,4 @@ fn merge(
             active_at_unix_ms,
         })
         .collect()
-}
-
-/// `root` as `~` spells it, names between `/`.
-fn label(root: &Path, home: &Path) -> String {
-    match root.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Ok(rest) => format!(
-            "~/{}",
-            hide_platform::path::RelPath::from_native(rest)
-                .map(hide_platform::path::RelPath::into_string)
-                .unwrap_or_else(|_| rest.to_string_lossy().replace('\\', "/"))
-        ),
-        Err(_) => crate::root::wire(root),
-    }
-}
-
-/// The variables of this process, for [`find`] on the node that answers.
-pub fn process_variables(name: &str) -> Option<OsString> {
-    std::env::var_os(name)
 }

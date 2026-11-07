@@ -1160,7 +1160,7 @@ pub fn handle_with_progress(
                 .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
             let variables = |name: &str| match name {
                 "HOME" => Some(home.as_os_str().to_owned()),
-                _ => crate::importable::process_variables(name),
+                _ => std::env::var_os(name),
             };
             to_value(crate::importable::find(&home, &variables, now, &exclude))
         }
