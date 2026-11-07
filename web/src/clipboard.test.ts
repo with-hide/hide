@@ -2,7 +2,9 @@
 import { afterAll, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { takeProgramCopy } from "./clipboard";
-import { attachTerminal, terminalShown } from "./terminals";
+import { useShellStore } from "./store";
+import type { SnapshotRest } from "./snapshot";
+import { attachTerminal, liveTerminalIds, terminalShown } from "./terminals";
 
 // jsdom has no canvas: answer xterm's capability probe at the browser
 // boundary and keep real terminals.
@@ -51,12 +53,16 @@ it("only a pane on this window's screen writes its copy", async () => {
   vi.stubGlobal("matchMedia", () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }));
   document.documentElement.style.setProperty("--text-terminal-base", "14px");
   document.body.innerHTML = '<div data-pane-view="shown"></div><div data-pane-view="hidden"></div>';
+  // The core streams both: the hidden pane stays attached while parked.
+  useShellStore.setState({ rest: { terminal: { panes: [{ pane_id: "shown", transport_state: "attached" }, { pane_id: "hidden", transport_state: "attached" }] } } as unknown as SnapshotRest });
   const actions = createActions(() => true);
   const host = (pane: string) => document.querySelector<HTMLElement>(`[data-pane-view="${pane}"]`)!;
   const detachShown = attachTerminal("shown", host("shown"), () => true, actions, 1);
   // Shown once, then its tab was left: parked, still attached for output.
   attachTerminal("hidden", host("hidden"), () => true, actions, 1)();
   try {
+    expect(liveTerminalIds()).toContain("hidden");
+    expect([terminalShown("shown"), terminalShown("hidden"), terminalShown("never")]).toEqual([true, false, false]);
     const seen = recorder();
     const window = { inFront: true, shows: terminalShown };
     expect(await takeProgramCopy({ pane_id: "hidden", text_base64: btoa("hidden") }, window, seen.write, seen.diagnostic)).toBe(false);
@@ -66,6 +72,7 @@ it("only a pane on this window's screen writes its copy", async () => {
     expect(seen.logged).toHaveLength(2);
   } finally {
     detachShown();
+    useShellStore.setState({ rest: null });
     vi.unstubAllGlobals();
   }
 });
