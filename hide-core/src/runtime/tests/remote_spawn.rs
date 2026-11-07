@@ -127,8 +127,10 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
 /// deadline passed; a read of the name then answers it is gone. The pane
 /// shows its shell's first-prompt mark once `unmarked` reads of it have
 /// passed, `refused` makes the engine refuse the next start before typing
-/// anything, and `list_fails` is how many agent lists after the start the
-/// engine fails to answer.
+/// anything, `list_fails` is how many agent lists after the start the
+/// engine fails to answer, and while `full` the device's node holds the
+/// most pane holders it keeps, so no pane starts there.
+#[allow(clippy::too_many_arguments)] // each the test's own control of the engine
 fn device_engine(
     started: Arc<AtomicBool>,
     session: Arc<Mutex<Option<String>>>,
@@ -137,9 +139,14 @@ fn device_engine(
     unmarked: Arc<AtomicUsize>,
     refused: Arc<AtomicBool>,
     list_fails: Arc<AtomicUsize>,
+    full: Arc<AtomicBool>,
 ) -> Fake {
     FakeEngine::start(move |method, _| match method {
         "worktree_path" => reply(None::<String>),
+        "create_worktree" if full.load(Ordering::SeqCst) => self::refused(
+            hide_node_link::holders::HOLDER_CAP_REFUSAL,
+            "128 holders are recorded in this state folder, the most it keeps (128)",
+        ),
         "create_worktree" => reply(crate::engine::CreatedWorktree {
             tab_label: "hide".into(),
             workspace_id: "w2".into(),
@@ -230,6 +237,8 @@ struct Spawner {
     refused: Arc<AtomicBool>,
     /// How many agent lists after the start the engine fails to answer.
     list_fails: Arc<AtomicUsize>,
+    /// Whether the device's node holds the most pane holders it keeps.
+    full: Arc<AtomicBool>,
     fake: Fake,
     path: PathBuf,
     _worker: Worker,
@@ -263,6 +272,7 @@ fn spawner() -> Spawner {
     let unmarked = Arc::new(AtomicUsize::new(0));
     let refused = Arc::new(AtomicBool::new(false));
     let list_fails = Arc::new(AtomicUsize::new(0));
+    let full = Arc::new(AtomicBool::new(false));
     let fake = device_engine(
         started,
         session.clone(),
@@ -271,6 +281,7 @@ fn spawner() -> Spawner {
         unmarked.clone(),
         refused.clone(),
         list_fails.clone(),
+        full.clone(),
     );
     let node = Arc::new(Node {
         repository: AtomicBool::new(true),
@@ -386,6 +397,7 @@ fn spawner() -> Spawner {
         unmarked,
         refused,
         list_fails,
+        full,
         fake,
         path,
         _worker: worker,
@@ -1074,6 +1086,32 @@ fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_start
     assert_eq!(spawner.count("launch_tab"), 2, "a new tab");
     assert_eq!(spawner.count("start_agent"), 1);
     assert_eq!(spawner.count("close_pane"), 1);
+}
+
+/// #676: a device whose node holds the most pane holders it keeps refuses
+/// the spawn as `holder_cap`, naming the device and the node's count, and
+/// the same intent starts the agent once a pane there was given back.
+#[test]
+fn a_spawn_on_a_machine_at_its_holder_cap_names_the_machine_and_starts_once_one_is_free() {
+    let spawner = spawner();
+    spawner.full.store(true, Ordering::SeqCst);
+    let refused = spawner
+        .spawn(Some("here"), Some(DEVICE), "full")
+        .expect_err("no pane starts on a full machine");
+    assert_eq!(
+        split_refusal(&refused),
+        (
+            "holder_cap",
+            Some("mini: 128 holders are recorded in this state folder, the most it keeps (128)")
+        )
+    );
+    assert_eq!(spawner.count("start_agent"), 0);
+
+    spawner.full.store(false, Ordering::SeqCst);
+    let child = spawner
+        .spawn(Some("here"), Some(DEVICE), "full")
+        .expect("the same intent starts once a pane is free");
+    assert_eq!(child["pane"], "w2:p1");
 }
 
 fn count(methods: &[&str], name: &str) -> usize {

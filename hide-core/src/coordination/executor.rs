@@ -40,6 +40,19 @@ fn worktree_create_refusal(error: EngineError) -> String {
 // beside another spawn's.
 pub(crate) static SPAWN: Mutex<()> = Mutex::new(());
 
+/// The refusal for a spawn whose machine already runs the most pane holders
+/// it keeps: the machine and the node's own count and cap, so the caller
+/// knows where to end finished agents.
+fn holder_cap(machine: &str, why: &str) -> String {
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "spawn.holder_cap", "machine": machine, "detail": why,
+    }));
+    super::refusal(
+        hide_node_link::holders::HOLDER_CAP_REFUSAL,
+        &format!("{machine}: {why}"),
+    )
+}
+
 /// How long a spawn has to answer its caller: [`super::SPAWN_ANSWER_WAIT`],
 /// or [`super::DEVICE_SPAWN_ANSWER_WAIT`] on a device.
 fn answer_wait(on_device: bool) -> Duration {
@@ -1238,7 +1251,12 @@ fn spawn(
                                 .unwrap_or_default(),
                             launch.as_ref().map(|launch| launch.command.as_slice()),
                         )
-                        .map_err(|error| format!("{error:?}"))?;
+                        .map_err(|failure| match failure.code() {
+                            Some(hide_node_link::holders::HOLDER_CAP_REFUSAL) => {
+                                holder_cap(&child_device, failure.message())
+                            }
+                            _ => failure.message().to_owned(),
+                        })?;
                         shell = ShellStart::of_tab(tab.launched, launch.as_ref());
                         seed_tab = tab.initial_label.map(|label| super::naming::SeedTab {
                             id: tab.tab_id,
@@ -1270,6 +1288,11 @@ fn spawn(
                     )
                     .map_err(|error| match error {
                         EngineError::Request(message) | EngineError::Answer(message) => message,
+                        EngineError::Refused { code, message }
+                            if code == hide_node_link::holders::HOLDER_CAP_REFUSAL =>
+                        {
+                            holder_cap(&child_device, &message)
+                        }
                         error => worktree_create_refusal(error),
                     })?;
                 let launch = crate::agent_start::shell_launch(node.as_deref(), &reserved.id);

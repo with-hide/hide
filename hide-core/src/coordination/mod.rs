@@ -36,6 +36,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "send_unconfirmed"
             | "operator_typing"
             | crate::agent_start::SHELL_STARTING
+            | hide_node_link::holders::HOLDER_CAP_REFUSAL
             | "card_not_processed"
             | "mission_cap_reached"
             | "mission_conducted"

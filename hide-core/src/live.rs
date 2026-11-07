@@ -248,6 +248,12 @@ pub enum RemoteControlOutcome {
 pub(crate) enum ControlFailure {
     Definite(String),
     Ambiguous(String),
+    /// The engine refused under its stable `code`; `message` says which
+    /// operation and why.
+    Refused {
+        code: String,
+        message: String,
+    },
 }
 
 impl ControlFailure {
@@ -257,7 +263,17 @@ impl ControlFailure {
 
     pub(crate) fn message(&self) -> &str {
         match self {
-            Self::Definite(message) | Self::Ambiguous(message) => message,
+            Self::Definite(message) | Self::Ambiguous(message) | Self::Refused { message, .. } => {
+                message
+            }
+        }
+    }
+
+    /// The engine's refusal code, when the engine refused.
+    pub(crate) fn code(&self) -> Option<&str> {
+        match self {
+            Self::Refused { code, .. } => Some(code),
+            Self::Definite(_) | Self::Ambiguous(_) => None,
         }
     }
 }
@@ -513,9 +529,10 @@ pub(crate) fn failed(operation: &str) -> impl FnOnce(EngineError) -> String + '_
 /// never came or could not be read may have happened.
 pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> ControlFailure + '_ {
     move |error| match error {
-        EngineError::Refused { code, message } => {
-            ControlFailure::Definite(format!("{operation} was refused: {code}: {message}"))
-        }
+        EngineError::Refused { code, message } => ControlFailure::Refused {
+            message: format!("{operation} was refused: {code}: {message}"),
+            code,
+        },
         EngineError::Request(message) => ControlFailure::Definite(message),
         EngineError::Answer(message) => ControlFailure::Ambiguous(message),
         other => ControlFailure::Ambiguous(format!("{operation} result is unknown: {other}")),

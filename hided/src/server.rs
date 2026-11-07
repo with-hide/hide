@@ -1319,6 +1319,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "holder_cap" => {
+            "That machine already runs the most panes Hide keeps open there (the detail names the machine and the count); end finished agents on it with hide agent end <id>, which closes their panes, then run the same command again with the same intent"
+        }
         "pane_close_failed" => {
             "The registration ended, but the engine did not close its pane; run the same command again to close it"
         }

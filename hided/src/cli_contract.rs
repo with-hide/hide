@@ -405,6 +405,7 @@ pub const COMMANDS: &[Spec] = &[
             "intent_conflict",
             "invalid_launch_choice",
             "shell_starting",
+            "holder_cap",
             "pane_busy",
             "agent_not_started",
             "worktree_unconfirmed",
