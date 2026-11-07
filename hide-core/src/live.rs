@@ -574,10 +574,9 @@ pub(crate) fn start_agent(
         &|| Ok(()),
     )
     .map_err(|error| match error {
-        crate::agent_start::StartError::ShellStarting(screen) => crate::coordination::refusal(
-            crate::agent_start::SHELL_STARTING,
-            screen.as_deref().unwrap_or_default(),
-        ),
+        crate::agent_start::StartError::ShellStarting { waited, screen } => {
+            crate::coordination::shell_starting_refusal(waited, screen.as_deref())
+        }
         // The engine refused the pane as busy until the start's deadline: nothing
         // was typed, and the same intent asks again in the same pane.
         crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
@@ -646,8 +645,8 @@ pub(crate) fn start_agent_checked(
 pub(crate) fn start_error_message(error: crate::agent_start::StartError) -> String {
     match error {
         crate::agent_start::StartError::NotStarted { detail, .. } => detail,
-        crate::agent_start::StartError::ShellStarting(screen) => {
-            crate::agent_start::shell_starting_message(screen.as_deref())
+        crate::agent_start::StartError::ShellStarting { waited, screen } => {
+            crate::agent_start::shell_starting_message(waited, screen.as_deref())
         }
         crate::agent_start::StartError::Engine(error) => format!("agent.start failed: {error}"),
     }

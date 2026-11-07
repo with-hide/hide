@@ -53,6 +53,12 @@ fn holder_cap(machine: &str, why: &str) -> String {
     )
 }
 
+/// What is left of a spawn's answer time for its agent to take input, at
+/// most [`super::BRIEF_READY_WAIT`].
+fn brief_wait(answer_by: Instant) -> Duration {
+    super::BRIEF_READY_WAIT.min(answer_by.saturating_duration_since(Instant::now()))
+}
+
 /// How long a spawn has to answer its caller: [`super::SPAWN_ANSWER_WAIT`],
 /// or [`super::DEVICE_SPAWN_ANSWER_WAIT`] on a device.
 fn answer_wait(on_device: bool) -> Duration {
@@ -316,6 +322,7 @@ fn wait_native_identity(
     pane: &str,
     name: Option<&str>,
     kind: &str,
+    answer_by: Instant,
 ) -> Result<ProjectedAgent, String> {
     // The public socket start acknowledges the typed command before the
     // process and its native session are detected. Wait for that observation,
@@ -323,7 +330,7 @@ fn wait_native_identity(
     // The agent runs by now, so a read the engine did not answer says nothing of
     // it: the wait reads again, and at its deadline the spawn leaves the
     // registration to an identity wait rather than an agent nothing tracks.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = (Instant::now() + Duration::from_secs(5)).min(answer_by);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -354,12 +361,19 @@ fn wait_native_identity(
     }
 }
 /// Waits until the engine reports the agent `name` in `pane` ready for input
-/// (`BRIEF_READY_WAIT`), the moment the spawn's brief may be typed. An agent
-/// that never takes input in that time is `brief_not_submitted`: nothing was
-/// typed, and the same command waits again.
-fn brief_ready(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> Result<(), String> {
+/// (`BRIEF_READY_WAIT`, ending by the spawn's `answer_by`), the moment the
+/// spawn's brief may be typed. An agent that never takes input in that time
+/// is `brief_not_submitted`: nothing was typed, and the same command waits
+/// again.
+fn brief_ready(
+    engine: &dyn Engine,
+    spawn: &str,
+    pane: &str,
+    name: &str,
+    answer_by: Instant,
+) -> Result<(), String> {
     use crate::delivery::ladder::NotReady;
-    crate::delivery::ladder::ready(engine, pane, name, super::BRIEF_READY_WAIT).map_err(|not| {
+    crate::delivery::ladder::ready(engine, pane, name, brief_wait(answer_by)).map_err(|not| {
         match not {
             NotReady::Request(message) => message,
             NotReady::Unread(detail) => brief_refused(spawn, pane, "brief.agent_unread", detail),
@@ -893,8 +907,10 @@ fn spawn(
     {
         *machine = None;
     }
-    // The caller waits this long for the answer; the new shell's wait ends
-    // inside it, so a stopped shell is answered rather than timed out.
+    // The caller waits this long for the answer; the new shell's wait and
+    // every wait after the start (the agent taking input, its session) end
+    // inside it, so a stopped shell or a slow agent is answered rather than
+    // timed out.
     let answer_by = Instant::now()
         + answer_wait(matches!(
             &command,
@@ -1480,7 +1496,7 @@ fn spawn(
                     engine.as_ref(),
                     pane,
                     name,
-                    super::BRIEF_READY_WAIT,
+                    brief_wait(answer_by),
                 ) {
                     Ok(()) => {
                         reserved = serde_json::from_value(mutate(
@@ -1511,14 +1527,16 @@ fn spawn(
                 // Its session start drops an Enter typed during it
                 // (`AgentId::brief_after_session`). Unseen within the wait,
                 // the brief goes in anyway and its record still judges it.
-                if let Err(reason) = wait_native_identity(engine.as_ref(), pane, Some(name), kind) {
+                if let Err(reason) =
+                    wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
+                {
                     crate::diagnostic!(json!({
                         "component": "spawn", "kind": "brief.session_unseen",
                         "spawn": reserved.id, "pane_id": pane, "reason": reason,
                     }));
                 }
             }
-            brief_ready(engine.as_ref(), &reserved.id, pane, name)?;
+            brief_ready(engine.as_ref(), &reserved.id, pane, name, answer_by)?;
             let pane_key = if on_node {
                 pane.to_owned()
             } else {
@@ -1606,7 +1624,8 @@ fn spawn(
                 .map_err(|_| "delivery_unavailable")?
                 .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
         }
-        let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind) {
+        let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
+        {
             Err(reason) if reason == "native_identity_unavailable" => {
                 // The agent rests without a session (Codex and OpenCode 2
                 // report theirs at their first turn): the core binds it when
@@ -2359,6 +2378,11 @@ mod tests {
     use crate::engine::fake::{FakeEngine, processes, reply, session};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// A spawn's answer time that ends no wait in these tests.
+    fn far() -> Instant {
+        Instant::now() + super::super::SPAWN_ANSWER_WAIT
+    }
+
     /// A `worktree.create` whose answer never came may still finish in
     /// the engine, so it is one stable code the same intent resolves; a refusal
     /// and a connection that never opened keep their own words.
@@ -2425,7 +2449,7 @@ mod tests {
                     "kind":"id","value":"parent-session"}}]})))
         });
         let native =
-            wait_native_identity(fake.engine().as_ref(), "w9J:p9R", None, "claude").unwrap();
+            wait_native_identity(fake.engine().as_ref(), "w9J:p9R", None, "claude", far()).unwrap();
         assert_eq!(native.name, None);
         let host = || HostIdentity {
             machine: crate::node::TEST_NODE,
@@ -2466,9 +2490,14 @@ mod tests {
                     "agent_session":{"source":"herdr:pi","agent":"pi",
                         "kind":"path","value":reported}}]})))
             });
-            let native =
-                wait_native_identity(fake.engine().as_ref(), "w9J:p9R", Some("child"), "pi")
-                    .unwrap();
+            let native = wait_native_identity(
+                fake.engine().as_ref(),
+                "w9J:p9R",
+                Some("child"),
+                "pi",
+                far(),
+            )
+            .unwrap();
             let made = record(
                 &native,
                 HostIdentity {
@@ -2507,9 +2536,14 @@ mod tests {
                         "agent":session_agent,"kind":"id","value":"fixture-child-session"}
                 }]})))
             });
-            let child =
-                wait_native_identity(fake.engine().as_ref(), "w2:p1", Some("child"), requested)
-                    .unwrap();
+            let child = wait_native_identity(
+                fake.engine().as_ref(),
+                "w2:p1",
+                Some("child"),
+                requested,
+                far(),
+            )
+            .unwrap();
             assert_eq!(child.agent.as_deref(), Some(reported));
             assert_eq!(
                 child.lineage_session,
@@ -2534,8 +2568,14 @@ mod tests {
             }
             reply(session(json!({"agents":[agent]})))
         });
-        let child =
-            wait_native_identity(fake.engine().as_ref(), "w2:p1", Some("child"), "claude").unwrap();
+        let child = wait_native_identity(
+            fake.engine().as_ref(),
+            "w2:p1",
+            Some("child"),
+            "claude",
+            far(),
+        )
+        .unwrap();
         assert_eq!(
             child.lineage_session,
             crate::engine::tokens::session_digest("fixture-child-session")

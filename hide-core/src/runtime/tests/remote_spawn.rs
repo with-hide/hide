@@ -1049,17 +1049,10 @@ fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
 /// a shell starts.
 #[test]
 fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_starts_again() {
-    struct Wait;
-    impl Drop for Wait {
-        fn drop(&mut self) {
-            crate::coordination::executor::TEST_ANSWER_WAIT.set(None);
-        }
-    }
     let spawner = spawner();
     spawner.node.integrated.store(true, Ordering::SeqCst);
     spawner.unmarked.store(usize::MAX, Ordering::SeqCst);
-    let _wait = Wait;
-    crate::coordination::executor::TEST_ANSWER_WAIT.set(Some(Duration::from_millis(300)));
+    let _wait = AnswerWait::set(Duration::from_millis(300));
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "stuck");
     let asked = std::time::Instant::now();
     let refused = ask().expect_err("the shell never marked its first prompt");
@@ -1067,10 +1060,12 @@ fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_start
         asked.elapsed() < crate::agent_start::SHELL_WAIT,
         "the shell's wait ended inside the spawn's answer time"
     );
+    let (code, detail) = split_refusal(&refused);
+    assert_eq!(code, "shell_starting");
     assert_eq!(
-        split_refusal(&refused),
-        ("shell_starting", Some("Last login: today")),
-        "the reason, with what the shell shows last"
+        crate::coordination::shell_starting_detail(detail.expect("a detail")),
+        (Some(1), Some("Last login: today")),
+        "the reason, with how long the shell was waited for and what it shows last"
     );
     assert_eq!(spawner.count("start_agent"), 0, "nothing was typed");
     assert_eq!(spawner.count("close_pane"), 1, "the tab it opened closed");
@@ -1086,6 +1081,66 @@ fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_start
     assert_eq!(spawner.count("launch_tab"), 2, "a new tab");
     assert_eq!(spawner.count("start_agent"), 1);
     assert_eq!(spawner.count("close_pane"), 1);
+}
+
+/// A spawn's answer time, shortened for one test.
+struct AnswerWait;
+
+impl AnswerWait {
+    fn set(wait: Duration) -> Self {
+        crate::coordination::executor::TEST_ANSWER_WAIT.set(Some(wait));
+        Self
+    }
+}
+
+impl Drop for AnswerWait {
+    fn drop(&mut self) {
+        crate::coordination::executor::TEST_ANSWER_WAIT.set(None);
+    }
+}
+
+/// A spawn whose agent started and never takes input answers inside its
+/// answer time: the waits after the start (its session, the agent taking
+/// its brief) draw on what the shell left of that time, never on 30 s of
+/// their own, and the brief is not typed.
+#[test]
+fn a_spawn_whose_agent_never_takes_input_answers_within_its_answer_time() {
+    let spawner = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    let asked = std::time::Instant::now();
+    let answer = crate::coordination::run(
+        spawner.client.clone(),
+        authority(&spawner.actor),
+        spawner.actor.clone(),
+        Command::Spawn {
+            mission: None,
+            plan_node: None,
+            plan: None,
+            parent: Some("here".into()),
+            machine: Some(DEVICE.into()),
+            name: "worker".into(),
+            intent: "slow".into(),
+            kind: "codex".into(),
+            repo: "/srv/repo".into(),
+            branch: "topic".into(),
+            path: None,
+            args: Vec::new(),
+            launch: Default::default(),
+            task: None,
+            brief: Some("fix it".into()),
+            beside: false,
+        },
+    );
+    assert!(
+        asked.elapsed() < crate::coordination::BRIEF_READY_WAIT,
+        "answered in {:?}: {answer:?}",
+        asked.elapsed()
+    );
+    assert_eq!(
+        split_refusal(&answer.expect_err("the agent never took input")).0,
+        "brief_not_submitted"
+    );
+    assert_eq!(count(&spawner.fake.methods(), "prompt_agent"), 0);
 }
 
 /// #676: a device whose node holds the most pane holders it keeps refuses

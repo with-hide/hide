@@ -925,8 +925,8 @@ impl OwnEngine<'static> {
         )
         .map_err(|error| match error {
             StartError::NotStarted { detail, .. } => detail,
-            StartError::ShellStarting(line) => {
-                crate::agent_start::shell_starting_message(line.as_deref())
+            StartError::ShellStarting { waited, screen } => {
+                crate::agent_start::shell_starting_message(waited, screen.as_deref())
             }
             StartError::Engine(error) => error.to_string(),
         })?;

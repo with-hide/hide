@@ -229,10 +229,13 @@ pub(crate) enum StartError {
     /// surface words (`agent_start.shell_*`, or a session check's own code);
     /// `detail` the sentence the log, a wake's record and the CLI keep.
     NotStarted { reason: String, detail: String },
-    /// Nothing was typed into the pane: its shell held the terminal but had
-    /// not marked its first prompt within the wait, stopped in its startup
-    /// files (a question waiting for a key). Carries the screen's last line.
-    ShellStarting(Option<String>),
+    /// Nothing was typed into the pane: its shell had not finished starting
+    /// within the wait (`waited`), stopped in its startup files (a question
+    /// waiting for a key). Carries the screen's last line, if any.
+    ShellStarting {
+        waited: Duration,
+        screen: Option<String>,
+    },
     /// The engine's own answer to `agent.start`: a refusal, no answer at all, or
     /// an answer in a shape the start does not promise (`Answer`).
     Engine(EngineError),
@@ -351,19 +354,23 @@ fn shell_unreadable(message: String) -> StartError {
 /// starting by; the screen's last line goes beside it, never into a sentence.
 pub(crate) const SHELL_STARTING_REASON: &str = "agent_start.shell_starting";
 
-/// What an operator reads for a start whose shell had not finished starting,
-/// with the screen's last line when there was one.
-pub(crate) fn shell_starting_message(screen: Option<&str>) -> String {
+/// What an operator reads for a start whose shell had not finished starting
+/// after `waited`, with the screen's last line when there was one.
+pub(crate) fn shell_starting_message(waited: Duration, screen: Option<&str>) -> String {
+    let seconds = whole_seconds(waited);
     match screen {
         Some(line) => format!(
-            "The pane's shell had not finished starting after {} s, so the agent was not started. Its screen ends with \"{line}\": answer what it asks in that pane, then retry.",
-            SHELL_WAIT.as_secs()
+            "The pane's shell had not finished starting after {seconds} s, so the agent was not started. Its screen ends with \"{line}\": answer what it asks in that pane, then retry."
         ),
         None => format!(
-            "The pane's shell had not finished starting after {} s, so the agent was not started. Check what its startup files wait for in that pane, then retry.",
-            SHELL_WAIT.as_secs()
+            "The pane's shell had not finished starting after {seconds} s, so the agent was not started. Check what its startup files wait for in that pane, then retry."
         ),
     }
+}
+
+/// `wait` in whole seconds, as an operator reads it.
+pub(crate) fn whole_seconds(wait: Duration) -> u64 {
+    (wait.as_millis() as u64).div_ceil(1000)
 }
 
 /// Action proof after shell readiness, repeated before every actual start
@@ -637,7 +644,10 @@ impl Shell<'_> {
                 // Whichever of the three it waited on (its first prompt, the
                 // terminal, a line editor that would cut the line), the shell
                 // had not finished starting; the diagnostic above keeps which.
-                return Err(StartError::ShellStarting(self.last_screen_line()));
+                return Err(StartError::ShellStarting {
+                    waited: started.elapsed(),
+                    screen: self.last_screen_line(),
+                });
             }
             thread::sleep(POLL_INTERVAL);
         }
@@ -1142,11 +1152,13 @@ mod tests {
             }),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::ShellStarting(screen)) = start(&fake, Duration::from_millis(300))
+        let Err(StartError::ShellStarting { waited, screen }) =
+            start(&fake, Duration::from_millis(300))
         else {
             panic!("a shell that never holds the terminal is not a start");
         };
         assert_eq!(screen.as_deref(), Some("Last login: today"));
+        assert!(waited >= Duration::from_millis(300), "{waited:?}");
         assert!(!fake.methods().contains(&"start_agent"));
     }
 
@@ -1420,7 +1432,7 @@ mod tests {
         let (refused, records) = crate::diagnostics::capture(|| {
             start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_millis(300))
         });
-        let Err(StartError::ShellStarting(_)) = refused else {
+        let Err(StartError::ShellStarting { .. }) = refused else {
             panic!("a line the terminal would cut is not typed");
         };
         assert!(
@@ -1512,7 +1524,7 @@ mod tests {
                 }),
                 other => panic!("unexpected {other}"),
             });
-            let Err(StartError::ShellStarting(line)) =
+            let Err(StartError::ShellStarting { screen: line, .. }) =
                 start_integrated(&fake, Duration::from_millis(300))
             else {
                 panic!("an unmarked shell is not a start");
@@ -1540,8 +1552,9 @@ mod tests {
             }),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::ShellStarting(Some(line))) =
-            start_integrated(&fake, Duration::from_millis(300))
+        let Err(StartError::ShellStarting {
+            screen: Some(line), ..
+        }) = start_integrated(&fake, Duration::from_millis(300))
         else {
             panic!("an unmarked shell is not a start");
         };
@@ -1562,8 +1575,9 @@ mod tests {
             }),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::ShellStarting(Some(line))) =
-            start_integrated(&fake, Duration::from_millis(300))
+        let Err(StartError::ShellStarting {
+            screen: Some(line), ..
+        }) = start_integrated(&fake, Duration::from_millis(300))
         else {
             panic!("an unmarked shell is not a start");
         };
@@ -1603,7 +1617,7 @@ mod tests {
             &|| Ok(()),
         );
         assert!(
-            matches!(answer, Err(StartError::ShellStarting(_))),
+            matches!(answer, Err(StartError::ShellStarting { .. })),
             "{answer:?}"
         );
         assert!(!fake.methods().contains(&"start_agent"));

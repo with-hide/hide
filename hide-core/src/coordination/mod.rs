@@ -18,11 +18,31 @@ use serde_json::{Value, json};
 const DETAIL: char = '\u{1f}';
 
 /// A refusal code with the detail its next action names (the device ids a
-/// caller could have used, or the last line of a shell that had not finished
-/// starting); the daemon splits them again with
+/// caller could have used, or how long a shell that had not finished
+/// starting was waited for, with its last line); the daemon splits them again with
 /// [`split_refusal`] and answers the code alone.
 pub(crate) fn refusal(code: &str, detail: &str) -> String {
     format!("{code}{DETAIL}{detail}")
+}
+
+/// A spawn's `shell_starting` refusal: how long its new shell was waited
+/// for, in whole seconds, and the screen's last line when there was one.
+pub(crate) fn shell_starting_refusal(waited: std::time::Duration, screen: Option<&str>) -> String {
+    let seconds = crate::agent_start::whole_seconds(waited);
+    refusal(
+        crate::agent_start::SHELL_STARTING,
+        &format!("{seconds}{DETAIL}{}", screen.unwrap_or_default()),
+    )
+}
+
+/// The seconds a `shell_starting` refusal's shell was waited for and the
+/// screen's last line, read from its detail.
+pub fn shell_starting_detail(detail: &str) -> (Option<u64>, Option<&str>) {
+    let (seconds, screen) = detail.split_once(DETAIL).unwrap_or(("", detail));
+    (
+        seconds.parse().ok(),
+        Some(screen).filter(|line| !line.is_empty()),
+    )
 }
 
 /// The code of a refusal and the detail it carries, if any.
