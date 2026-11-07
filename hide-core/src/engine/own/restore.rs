@@ -24,7 +24,19 @@
 //! agent in the same folder) or one an adopted pane still runs stays a shell.
 //! A pane that cannot be resumed opens with one line saying why, and a resume
 //! whose agent ends with a failure says so in the pane, which is a shell
-//! again. An adopted pane whose saved agent is not running, its shell the
+//! again. The saved agent stays the pane's saved agent until its resume is
+//! typed (`Restored::Resume`), so a daemon that ends first, with the resumes
+//! of a dozen panes still waiting their turn, leaves each to the next restore;
+//! a resume that could not be typed is tried once more after the others
+//! ([`RESUME_ATTEMPTS`]). An agent that is not resumed for good, in a pane
+//! that was restarted or adopted at its prompt, is named by the session
+//! (`ProjectionState::not_resumed`), and the core ends its registration, so
+//! its row reads ended rather than running with nothing behind it. That is
+//! the agent whose resume could not be typed and the one whose typed resume
+//! ended without the agent running: its start's deadline passed with no
+//! program shown, or its program left the foreground before the start settled
+//! ([`PaneAgent::resume_missed`]), the same deadline every start has. An
+//! adopted pane whose saved agent is not running, its shell the
 //! terminal's foreground, is resumed the same way: the daemon that typed
 //! its resume ended before the line reached the shell, or the agent ended
 //! while no daemon ran.
@@ -42,12 +54,14 @@ use super::agents::{self, PaneAgent};
 use super::shell_line;
 use super::starts::STARTS_AT_ONCE;
 use super::store::{self, Read};
-use super::topology::{Pane, Topology};
+use super::topology::{Pane, Restored, Topology};
 use super::{EngineError, Env, OwnEngine, holder_error};
 use crate::agent_start::{ShellStart, StartError};
 use crate::model::PaneLaunch;
 use crate::node_access::{NodeLink, call_as};
 use crate::runtime::agent_choice::{choice_arguments, launch_describes};
+use crate::session_sync::NotResumed;
+use crate::start_prompt::ByName;
 
 /// How long the restore waits for the node to finish judging its records.
 /// A node judges each record in a few rounds of a bounded budget, so this
@@ -62,6 +76,16 @@ pub(super) const BOUND: Duration = Duration::from_secs(180);
 /// How long the restore waits for the node to say whether a saved pane's
 /// folder is still there.
 const FOLDER_WAIT: Duration = Duration::from_secs(10);
+
+/// How many times a resume that could not be typed is tried: once in its turn
+/// and once more after every other resume has had its turn. A machine that
+/// restarted dozens of panes at once holds shells past their start wait
+/// (2026-11-06, 42 resumes at load 324), and by the second pass the load
+/// the others made has settled. Two tries are the cap, since each can wait a
+/// start's full shell wait; a resume that fails both is left as an agent that
+/// was not resumed, whether its shell would not take it or the load had not
+/// settled yet.
+const RESUME_ATTEMPTS: usize = 2;
 
 /// The name of the tab running holders the saved session does not place
 /// are gathered in.
@@ -116,6 +140,16 @@ struct Restart {
     cwd: String,
     agent: Option<PaneAgent>,
     previous: Option<u64>,
+}
+
+/// What starting every pane of a restore left: the panes that could not
+/// start, with why, the agents to resume, in `restarts` order, and the panes
+/// whose agent opened a shell that is not resumed, with the line that says
+/// why.
+struct Restarted {
+    failures: Vec<(String, String)>,
+    resumes: Vec<Resume>,
+    left: Vec<(String, String)>,
 }
 
 /// What a restarted pane's agent gets: its resume, typed once its shell is
@@ -371,14 +405,17 @@ impl OwnEngine<'static> {
             // panes draw before the rest have their turn.
             topology.front_first(&mut restarted);
             // A restarted pane's agent ended with its holder: the pane is a
-            // shell until its resume is typed.
+            // shell until its resume is typed, and the agent is its saved
+            // agent until then.
             let restarts: Vec<Restart> = restarted
                 .into_iter()
                 .filter_map(|id| {
                     let pane = topology.pane_mut(&id).ok()?;
+                    let agent = pane.agent.take();
+                    pane.restored = agent.clone().map(Restored::Resume);
                     Some(Restart {
                         cwd: pane.cwd.clone(),
-                        agent: pane.agent.take(),
+                        agent,
                         previous: recovery
                             .recoverable
                             .iter()
@@ -412,9 +449,11 @@ impl OwnEngine<'static> {
                 .into_iter()
                 .filter_map(|id| {
                     let pane = topology.pane_mut(&id).ok()?;
+                    let agent = pane.agent.take();
+                    pane.restored = agent.clone().map(Restored::Resume);
                     Some(Restart {
                         cwd: pane.cwd.clone(),
-                        agent: pane.agent.take(),
+                        agent,
                         previous: recovery
                             .recoverable
                             .iter()
@@ -453,20 +492,45 @@ impl OwnEngine<'static> {
             &waiting,
         );
         self.mark_cut(&mut plans);
-        let (failures, mut resumes) = self.start_restarts(&restarts, &plans, home.as_deref());
+        let Restarted {
+            failures,
+            mut resumes,
+            mut left,
+        } = self.start_restarts(&restarts, &plans, home.as_deref());
         resumes.extend(given_back);
         for restart in &idle {
             match plans.get(&restart.pane) {
                 Some(Plan::Resume(resume)) => resumes.push(resume.clone()),
-                Some(Plan::Shell(why)) => crate::diagnostic!(serde_json::json!({
-                    "component": "own_engine",
-                    "kind": "engine.restore_not_resumed",
-                    "pane_id": restart.pane,
-                    "message": why,
-                })),
+                Some(Plan::Shell(why)) => {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "own_engine",
+                        "kind": "engine.restore_not_resumed",
+                        "pane_id": restart.pane,
+                        "message": why,
+                    }));
+                    if restart.agent.is_some() {
+                        left.push((restart.pane.clone(), why.clone()));
+                    }
+                }
                 None => {}
             }
         }
+        // A pane whose shell could not start never ran its agent again.
+        let said: BTreeSet<String> = left.iter().map(|(pane, _)| pane.clone()).collect();
+        left.extend(
+            failures
+                .iter()
+                .filter(|(pane, _)| {
+                    !said.contains(pane)
+                        && both.iter().any(|r| r.pane == *pane && r.agent.is_some())
+                })
+                .map(|(pane, why)| {
+                    (
+                        pane.clone(),
+                        format!("its new shell could not start ({why})"),
+                    )
+                }),
+        );
         let closed: Vec<String> = {
             let mut topology = self.topology();
             let failed: BTreeSet<&str> = failures.iter().map(|(pane, _)| pane.as_str()).collect();
@@ -478,6 +542,37 @@ impl OwnEngine<'static> {
                 })
                 .map(|restart| restart.pane.clone())
                 .collect();
+            // The agents no resume will be typed for: the session names each
+            // until an agent shows in its pane, and the core ends its
+            // registration. Said before a failed pane takes its agent back,
+            // which a pane that runs one cannot be said of.
+            for (pane, why) in &left {
+                let Some(agent) = both
+                    .iter()
+                    .find(|restart| restart.pane == *pane)
+                    .and_then(|restart| restart.agent.as_ref())
+                else {
+                    continue;
+                };
+                if topology.not_resumed(
+                    pane,
+                    NotResumed {
+                        pane_id: pane.clone(),
+                        agent: agent.kind.clone(),
+                        session: agent.session.clone(),
+                        why: why.clone(),
+                    },
+                ) {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "own_engine",
+                        "kind": "agent.not_resumed",
+                        "pane_id": pane,
+                        "agent": agent.kind,
+                        "by_session": agent.session.is_some(),
+                        "message": why,
+                    }));
+                }
+            }
             for (pane, why) in &failures {
                 if let Ok(found) = topology.pane_mut(pane) {
                     found.failed = Some(why.clone());
@@ -515,6 +610,7 @@ impl OwnEngine<'static> {
             "idle": idle.len(),
             "gathered": orphans.len(),
             "resumes": resumes.len(),
+            "not_resumed": left.len(),
         }));
         self.changed();
         resumes
@@ -620,17 +716,16 @@ impl OwnEngine<'static> {
 
     /// Starts every pane of `restarts`, [`STARTS_AT_ONCE`] at a time, each
     /// in its folder or in `home` when the folder is gone, opening with the
-    /// line its plan says when its agent is not resumed: the panes that
-    /// could not start, with why, and the agents to resume, in `restarts`
-    /// order.
+    /// line its plan says when its agent is not resumed.
     fn start_restarts(
         &self,
         restarts: &[Restart],
         plans: &BTreeMap<String, Plan>,
         home: Option<&str>,
-    ) -> (Vec<(String, String)>, Vec<Resume>) {
+    ) -> Restarted {
         let next = Mutex::new(restarts.iter());
         let failures = Mutex::new(Vec::new());
+        let left = Mutex::new(Vec::new());
         let started = Mutex::new(BTreeSet::new());
         std::thread::scope(|scope| {
             for _ in 0..STARTS_AT_ONCE.min(restarts.len()) {
@@ -657,6 +752,13 @@ impl OwnEngine<'static> {
                             (None, _) => None,
                         };
                         let resumable = notice.is_none() && matches!(plan, Some(Plan::Resume(_)));
+                        if let (false, true, Some(notice)) =
+                            (resumable, restart.agent.is_some(), &notice)
+                        {
+                            left.lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .push((restart.pane.clone(), notice.clone()));
+                        }
                         match self.start_pane_replacing(
                             &restart.pane,
                             None,
@@ -700,12 +802,18 @@ impl OwnEngine<'static> {
                 _ => None,
             })
             .collect();
-        (
-            failures
+        // In `restarts` order, whichever thread said it first.
+        let mut left = left
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        left.sort_by_key(|(pane, _)| restarts.iter().position(|restart| restart.pane == *pane));
+        Restarted {
+            failures: failures
                 .into_inner()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             resumes,
-        )
+            left,
+        }
     }
 
     /// Marks each resume whose agent's hook last said its turn was running or
@@ -730,95 +838,136 @@ impl OwnEngine<'static> {
     }
 
     /// Types each of `resumes` into its pane, one pane after another, each
-    /// once its shell is ready; one that cannot be typed leaves its pane a
-    /// shell and logs why. A cut resume is owed its letter from before its
-    /// line is typed, so the agent's first hook report never comes first.
-    /// One that was resting is not typed ([`Self::rests`]).
+    /// once its shell is ready; one that cannot be typed is tried again once
+    /// the others have had their turn ([`RESUME_ATTEMPTS`]), and one that
+    /// still cannot leaves its pane a shell, logs why and is named by the
+    /// session as an agent that was not resumed. A cut resume is owed its
+    /// letter from before its line is typed, so the agent's first hook report
+    /// never comes first. One that was resting is not typed ([`Self::rests`]).
+    /// An engine its owner lets go ends the pass: each resume it had yet to
+    /// type is still its pane's saved agent, which the next restore resumes.
     pub(super) fn resume_agents(engine: &std::sync::Weak<super::Shared>, resumes: &[Resume]) {
         let mut shell = None;
-        for resume in resumes {
-            let Some(shared) = engine.upgrade() else {
-                return;
-            };
-            let engine = OwnEngine {
-                shared,
-                gates: Vec::new(),
-                saver: None,
-            };
-            if engine.check().is_err() {
-                return;
-            }
-            if engine.rests(resume) {
-                continue;
-            }
-            // A restarted pane runs the shell a pane with no program runs: it
-            // marks its first prompt when that is the integration's, and the
-            // resume waits for the mark as a start into a tab the core just
-            // opened with it does.
-            let shell = shell
-                .get_or_insert_with(|| {
-                    ShellStart::of_tab(true, engine.shared.holders.shell_launch().as_ref())
-                })
-                .clone();
-            let cut = || {
-                engine
-                    .shared
-                    .cut
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-            };
-            let opened;
-            let resume = match &resume.new_tab {
-                None => resume,
-                Some(tab) => match engine.open_tab(
-                    &tab.workspace,
-                    None,
-                    &resume.shown,
-                    None,
-                    false,
-                    &tab.cwd,
-                    Env::new(),
-                    None,
-                ) {
-                    Ok((_, pane)) => {
-                        opened = Resume {
-                            pane,
-                            new_tab: None,
-                            ..resume.clone()
-                        };
-                        &opened
-                    }
-                    Err(error) => {
-                        engine.wait_again(resume, &error.to_string());
-                        continue;
-                    }
-                },
-            };
-            if resume.cut {
-                cut().insert(resume.pane.clone(), resume.kind.clone());
-            }
-            match engine.resume_agent(resume, shell) {
-                Ok(by_file) => crate::diagnostic!(serde_json::json!({
-                    "component": "own_engine",
-                    "kind": "agent.resumed",
-                    "pane_id": resume.pane,
-                    "agent": resume.kind,
-                    "by_session": resume.session.is_some(),
-                    "by_file": by_file,
-                    "cut": resume.cut,
-                })),
-                Err(why) => {
-                    // An agent that never resumed is owed nothing.
-                    cut().remove(&resume.pane);
-                    crate::diagnostic!(serde_json::json!({
+        let mut turn: Vec<Resume> = resumes.to_vec();
+        for attempt in 1..=RESUME_ATTEMPTS {
+            let mut again = Vec::new();
+            for resume in &turn {
+                let Some(shared) = engine.upgrade() else {
+                    return;
+                };
+                let engine = OwnEngine {
+                    shared,
+                    gates: Vec::new(),
+                    saver: None,
+                };
+                if engine.check().is_err() {
+                    return;
+                }
+                if engine.rests(resume) {
+                    continue;
+                }
+                // A restarted pane runs the shell a pane with no program runs:
+                // it marks its first prompt when that is the integration's, and
+                // the resume waits for the mark as a start into a tab the core
+                // just opened with it does.
+                let shell = shell
+                    .get_or_insert_with(|| {
+                        ShellStart::of_tab(true, engine.shared.holders.shell_launch().as_ref())
+                    })
+                    .clone();
+                let cut = || {
+                    engine
+                        .shared
+                        .cut
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                };
+                let opened;
+                let resume = match &resume.new_tab {
+                    None => resume,
+                    Some(tab) => match engine.open_tab(
+                        &tab.workspace,
+                        None,
+                        &resume.shown,
+                        None,
+                        false,
+                        &tab.cwd,
+                        Env::new(),
+                        None,
+                    ) {
+                        Ok((_, pane)) => {
+                            opened = Resume {
+                                pane,
+                                new_tab: None,
+                                ..resume.clone()
+                            };
+                            &opened
+                        }
+                        Err(error) => {
+                            engine.wait_again(resume, &error.to_string());
+                            continue;
+                        }
+                    },
+                };
+                if resume.cut {
+                    cut().insert(resume.pane.clone(), resume.kind.clone());
+                }
+                match engine.resume_agent(resume, shell) {
+                    Ok(by_name) => crate::diagnostic!(serde_json::json!({
                         "component": "own_engine",
-                        "kind": "agent.resume_not_typed",
+                        "kind": "agent.resumed",
                         "pane_id": resume.pane,
                         "agent": resume.kind,
-                        "message": why,
-                    }));
+                        "by_session": resume.session.is_some(),
+                        "by_file": by_name.is_none(),
+                        "by_name_cause": by_name.map(ByName::as_str),
+                        "cut": resume.cut,
+                        "attempt": attempt,
+                    })),
+                    Err(why) => {
+                        // An agent that never resumed is owed nothing.
+                        cut().remove(&resume.pane);
+                        let last = attempt == RESUME_ATTEMPTS;
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "own_engine",
+                            "kind": "agent.resume_not_typed",
+                            "pane_id": resume.pane,
+                            "agent": resume.kind,
+                            "message": why,
+                            "attempt": attempt,
+                            "final": last,
+                        }));
+                        if last {
+                            engine.leave_not_resumed(resume, &why);
+                        } else {
+                            // Into the tab the first try opened, if it did.
+                            again.push(resume.clone());
+                        }
+                    }
                 }
             }
+            if again.is_empty() {
+                return;
+            }
+            turn = again;
+        }
+    }
+
+    /// Names the agent of `resume`, which could not be typed into its pane,
+    /// as one that was not resumed: the pane's shell stays as it is and the
+    /// core ends the agent's registration. Only when the pane runs nothing
+    /// of the agent: a resume whose typing is unconfirmed has left its start
+    /// pending there, and that start is what settles it.
+    fn leave_not_resumed(&self, resume: &Resume, why: &str) {
+        let left = NotResumed {
+            pane_id: resume.pane.clone(),
+            agent: resume.kind.clone(),
+            session: resume.session.clone(),
+            why: format!("its resume could not be typed ({why})"),
+        };
+        if self.topology().not_resumed(&resume.pane, left.clone()) {
+            self.say_not_resumed(&left);
+            self.changed();
         }
     }
 
@@ -903,14 +1052,18 @@ impl OwnEngine<'static> {
     /// for it, as `shell` says it has finished starting, then records the
     /// agent as started and types its resume, its program named by the file
     /// the pane's node starts it from, as a wake's is
-    /// (`start_prompt::start_program`); whether it was is what it answers.
-    fn resume_agent(&self, resume: &Resume, shell: ShellStart) -> Result<bool, String> {
+    /// (`start_prompt::start_program_file`, asked about the definition's
+    /// first executable, the resume's first word); why it went by its name
+    /// instead is what it answers, `None` when the file named it.
+    fn resume_agent(&self, resume: &Resume, shell: ShellStart) -> Result<Option<ByName>, String> {
         let node = self.node().ok().map(|node| &**node as &dyn NodeLink);
-        let file = node
-            .zip(resume.argv.first())
-            .and_then(|(node, program)| crate::start_prompt::start_program(node, program));
-        let argv = agents::named_by_file(resume.argv.clone(), file.as_ref());
-        let by_file = argv.first() != resume.argv.first();
+        let file = match node.zip(resume.argv.first()) {
+            Some((node, program)) => crate::start_prompt::start_program_file(node, program),
+            None => Err(ByName::NodeUnanswered),
+        };
+        let argv = agents::named_by_file(resume.argv.clone(), file.as_ref().ok());
+        let by_name = (argv.first() == resume.argv.first())
+            .then(|| file.as_ref().err().copied().unwrap_or(ByName::AsNamed));
         // The longest of the shells' lines, as a start is bounded.
         let longest =
             shell_line::longest(|shell| shell_line::resume_command(&argv, &resume.shown, shell))
@@ -939,12 +1092,12 @@ impl OwnEngine<'static> {
             .ok_or_else(|| "the resume names no program".to_owned())?;
         self.type_agent_start(
             &resume.pane,
-            PaneAgent::started(&resume.kind, resume.name.as_deref(), resume.session.clone()),
+            PaneAgent::resumed(&resume.kind, resume.name.as_deref(), resume.session.clone()),
             &line,
             false,
         )
         .map_err(|error| error.to_string())?;
-        Ok(by_file)
+        Ok(by_name)
     }
 
     /// Where a saved pane whose folder was `cwd` starts again: there, or in

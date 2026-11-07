@@ -171,6 +171,9 @@ struct Shared {
     calls: Mutex<Vec<(&'static str, Value)>>,
     arrived: std::sync::Condvar,
     wake: Mutex<Option<Wake>>,
+    /// The definitions the core handed this engine, as a real engine keeps
+    /// them; the built-in ones until it does.
+    definitions: Mutex<Option<Arc<hide_agent_adapter::definition::Catalog>>>,
 }
 
 /// The stand-in engine; [`FakeEngine::engine`] hands the core its
@@ -195,6 +198,7 @@ impl FakeEngine<'static> {
                 calls: Mutex::default(),
                 arrived: std::sync::Condvar::new(),
                 wake: Mutex::default(),
+                definitions: Mutex::default(),
             }),
             gates: Vec::new(),
         })
@@ -318,6 +322,21 @@ impl<'g> Engine for FakeEngine<'g> {
 
     fn changes(&self, wake: Wake) {
         *lock(&self.shared.wake) = Some(wake);
+    }
+
+    fn set_agent_definitions(&self, catalog: Arc<hide_agent_adapter::definition::Catalog>) {
+        *lock(&self.shared.definitions) = Some(catalog);
+    }
+
+    fn start_program_name(&self, kind: &str) -> Option<String> {
+        let held = lock(&self.shared.definitions).clone();
+        let definitions = held
+            .as_ref()
+            .map_or(hide_agent_adapter::definition::builtins(), |catalog| {
+                catalog.definitions.as_slice()
+            });
+        hide_agent_adapter::definition::find(definitions, kind)
+            .and_then(|definition| definition.executables.first().cloned())
     }
 
     fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
