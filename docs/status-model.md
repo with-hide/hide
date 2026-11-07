@@ -107,6 +107,10 @@ The engine keeps no seen state of its own, so the read axis is the only record o
 So Hide keeps its own record instead.
 A pane is read when it has held Hide's keyboard focus since its last state change, and on the engine the record was read on, a state change is the engine's `state_change_seq` moving **or** the derived demand and activity pair changing.
 The pair matters because the engine's sequence does not move when only the core's own label changes: an analysis that reads a question at the end of a turn arrives after the agent stopped, so the demand appears with the sequence where it was.
+An agent a phone has open is looked at the same way: from the moment a phone opens its detail until every phone that has it open closes it or goes away, it is read as the desktop's focus pane is, with the same record and the same ancestor and descendant rules, on the phone and the desktop at once, this machine's agent and a device's alike.
+hided tells the core the whole list of agents its phones have open each time it changes (`phone_viewing`, `Runtime::phone_viewed_pane_ids`, at most 16), so a turn that ends while a phone looks is read, and one that ends after it closed is news again.
+A phone's look moves nothing else: not the desktop's focus or tab, not an attach, and it does not wake a sleeping agent.
+Regression owners: `hide-core/src/runtime/tests/phone_viewing.rs` and `an_agent_a_phone_opens_is_looked_at_until_every_phone_lets_it_go` in `hided/src/mobile/phone.rs`.
 The record is `pane_read_records` in the persisted UI state, keyed by pane id, so it survives a restart.
 A record is dropped only when the authoritative pane layout stops reporting that pane, scoped to the namespace that pass owns, so a temporarily incomplete agent list and a local sync can never drop a restored or remote pane's record.
 The same pass drops the descendant signals other records keep for that pane and the pane's saved completion.
