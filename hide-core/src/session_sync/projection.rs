@@ -86,8 +86,10 @@ pub(crate) struct ProjectedAgent {
     pub(crate) tokens: BTreeMap<String, Value>,
 }
 
-/// An agent a restore did not bring back: its pane is a shell now and no
-/// resume will be typed into it. The core ends the agent's registration
+/// An agent a restore did not bring back: its pane is a shell now, because
+/// no resume could be typed or the one typed ended without the agent running
+/// (its start's deadline passed with no program shown, or its program ended
+/// before the start settled). The core ends the agent's registration
 /// (`Runtime::end_unresumed`), so the row reads ended, never running with
 /// nothing behind it.
 #[derive(Clone, Debug, PartialEq)]

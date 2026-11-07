@@ -121,9 +121,11 @@ pub(super) enum Restored {
     /// so a daemon that ends before the core's record is on disk, or the
     /// next reboot, finds it again.
     Resting(PaneAgent),
-    /// An agent no resume will be typed for: the pane is a shell, and the
-    /// core ends the agent's registration (`ProjectionState::not_resumed`).
-    /// The agent is no longer the pane's, so it is saved as nothing.
+    /// An agent whose resume did not bring it back: none could be typed, or
+    /// the one typed ended without the agent running. The pane is a shell,
+    /// and the core ends the agent's registration
+    /// (`ProjectionState::not_resumed`). The agent is no longer the pane's,
+    /// so it is saved as nothing.
     NotResumed(NotResumed),
 }
 
@@ -1787,6 +1789,10 @@ impl Topology {
         // An agent the pane's foreground shows is the pane's agent now.
         if held.agent.is_some() {
             held.restored = None;
+        } else if let Some(missed) = &applied.resume_missed {
+            // A resume whose program ended before its start settled leaves
+            // the pane a shell as one never typed does.
+            held.restored = Some(Restored::NotResumed(missed.not_resumed(pane)));
         }
         if let Some(agent) = held.agent.as_mut()
             && let Some((kind, session)) = held.pending_session.take()
@@ -1847,6 +1853,34 @@ impl Topology {
     /// Answers whether the pane is there to say it.
     pub(super) fn not_resumed(&mut self, pane: &str, left: NotResumed) -> bool {
         self.restore_leaves(pane, Restored::NotResumed(left))
+    }
+
+    /// Names as not resumed the agent of each pane whose restore typed its
+    /// resume and whose start's deadline passed with no program shown
+    /// ([`agents::PaneAgent::resume_missed`]): the provisional agent is
+    /// taken out, as the facts that ended a shown one do
+    /// ([`Self::apply_facts`]), and the pane's save keeps nothing of it.
+    /// The agents it named, one per pane; the deadline is what the engine's
+    /// reads wake at (`settles_at`), so it is found by the first read past it.
+    pub(super) fn miss_expired_resumes(&mut self, now: Instant) -> Vec<NotResumed> {
+        let expired: Vec<String> = self
+            .panes()
+            .filter(|(_, pane)| {
+                pane.agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.resume_missed(now, false))
+            })
+            .map(|(id, _)| id.to_owned())
+            .collect();
+        expired
+            .into_iter()
+            .filter_map(|id| {
+                let held = self.pane_mut(&id).ok()?;
+                let left = held.agent.take()?.not_resumed(&id);
+                held.restored = Some(Restored::NotResumed(left.clone()));
+                Some(left)
+            })
+            .collect()
     }
 
     /// What a restore leaves in `pane` while no agent runs there: nothing

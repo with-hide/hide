@@ -31,7 +31,12 @@
 //! ([`RESUME_ATTEMPTS`]). An agent that is not resumed for good, in a pane
 //! that was restarted or adopted at its prompt, is named by the session
 //! (`ProjectionState::not_resumed`), and the core ends its registration, so
-//! its row reads ended rather than running with nothing behind it. An adopted pane whose saved agent is not running, its shell the
+//! its row reads ended rather than running with nothing behind it. That is
+//! the agent whose resume could not be typed and the one whose typed resume
+//! ended without the agent running: its start's deadline passed with no
+//! program shown, or its program left the foreground before the start settled
+//! ([`PaneAgent::resume_missed`]), the same deadline every start has. An
+//! adopted pane whose saved agent is not running, its shell the
 //! terminal's foreground, is resumed the same way: the daemon that typed
 //! its resume ended before the line reached the shell, or the agent ended
 //! while no daemon ran.
@@ -960,15 +965,8 @@ impl OwnEngine<'static> {
             session: resume.session.clone(),
             why: format!("its resume could not be typed ({why})"),
         };
-        if self.topology().not_resumed(&resume.pane, left) {
-            crate::diagnostic!(serde_json::json!({
-                "component": "own_engine",
-                "kind": "agent.not_resumed",
-                "pane_id": resume.pane,
-                "agent": resume.kind,
-                "by_session": resume.session.is_some(),
-                "message": why,
-            }));
+        if self.topology().not_resumed(&resume.pane, left.clone()) {
+            self.say_not_resumed(&left);
             self.changed();
         }
     }
@@ -1094,7 +1092,7 @@ impl OwnEngine<'static> {
             .ok_or_else(|| "the resume names no program".to_owned())?;
         self.type_agent_start(
             &resume.pane,
-            PaneAgent::started(&resume.kind, resume.name.as_deref(), resume.session.clone()),
+            PaneAgent::resumed(&resume.kind, resume.name.as_deref(), resume.session.clone()),
             &line,
         )
         .map_err(|error| error.to_string())?;
