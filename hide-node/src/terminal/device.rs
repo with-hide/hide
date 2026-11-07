@@ -50,6 +50,7 @@ use hide_node_link::terminal::{
 };
 use serde_json::json;
 
+use super::copies::{MAX_WAITING_COPIES, WaitingCopies};
 use super::protocol::{decode_base64, encode_base64};
 use super::{OutputSink, Service};
 
@@ -111,10 +112,9 @@ struct UplinkState {
     panes: HashMap<String, PaneUplink>,
     /// Panes with output waiting, in turn.
     order: VecDeque<String>,
-    /// The last clipboard write not sent yet, its pane and its line, which
-    /// goes ahead of every pane's output: only the latest of any pane, since
-    /// each write replaces the one clipboard.
-    clipboard: Option<(String, Vec<u8>)>,
+    /// Clipboard writes not sent yet, the latest line of each pane, which go
+    /// ahead of every pane's output.
+    clipboard: WaitingCopies<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -272,7 +272,16 @@ impl Uplink {
         if state.stopped || state.withheld {
             return;
         }
-        state.clipboard = Some((pane.to_owned(), line));
+        if let Some(dropped) = state.clipboard.push(pane, line)
+            && state.diagnostics.len() < MAX_UNSENT_DIAGNOSTICS
+        {
+            state.diagnostics.push_back(json!({
+                "component": "node_terminal",
+                "kind": "terminal.clipboard_dropped",
+                "pane_id": dropped,
+                "cap": MAX_WAITING_COPIES,
+            }));
+        }
         drop(state);
         self.ready.notify_one();
     }
@@ -281,13 +290,7 @@ impl Uplink {
         let mut state = lock(&self.state);
         state.panes.remove(pane);
         state.order.retain(|queued| queued != pane);
-        if state
-            .clipboard
-            .as_ref()
-            .is_some_and(|(copied, _)| copied == pane)
-        {
-            state.clipboard = None;
-        }
+        state.clipboard.forget(pane);
     }
 
     /// The next line to send, and the panes to draw again now that the link
@@ -327,7 +330,7 @@ impl Uplink {
                 drop(state);
                 return Some((line_of(ahead), redraws));
             }
-            if let Some((_, line)) = state.clipboard.take() {
+            if let Some((_, line)) = state.clipboard.pop() {
                 return Some((Some(line), redraws));
             }
             while let Some(pane) = state.order.pop_front() {
@@ -370,7 +373,7 @@ impl Uplink {
                 entry.dropping = true;
                 entry.redraw = false;
             }
-            state.clipboard = None;
+            state.clipboard.clear();
             state.order.clear();
         } else {
             for entry in state.panes.values_mut() {
@@ -390,7 +393,7 @@ impl Uplink {
         state.diagnostics.clear();
         state.panes.clear();
         state.order.clear();
-        state.clipboard = None;
+        state.clipboard.clear();
         drop(state);
         self.ready.notify_all();
     }

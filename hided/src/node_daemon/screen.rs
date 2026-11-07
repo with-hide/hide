@@ -357,11 +357,10 @@ async fn attached(
                     return ScreenEnd::Left;
                 }
                 // Only a window writes a program's copy to its clipboard.
-                if let Some(copied) = client.take_clipboard()
-                    && renderer
-                    && socket.send(Message::Text(copied.as_ref().into())).await.is_err()
-                {
-                    return ScreenEnd::Left;
+                for copied in client.take_clipboard().iter().filter(|_| renderer) {
+                    if socket.send(Message::Text(copied.as_ref().into())).await.is_err() {
+                        return ScreenEnd::Left;
+                    }
                 }
             }
             () = unsent.ready() => {

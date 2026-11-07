@@ -27,6 +27,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use hide_node::ssh::RemoteHost;
 use hide_node::terminal::OutputSink;
+use hide_node::terminal::copies::MAX_WAITING_COPIES;
 use hide_node_link::address::is_pane_of;
 use hide_node_link::terminal::{
     TerminalClipboard, TerminalDown, TerminalLine, TerminalNode, TerminalOutput, TerminalUp,
@@ -381,10 +382,11 @@ impl RelayTap {
     }
 
     /// Queues what a pane's program wrote to the clipboard for the node's
-    /// screens, in place of one still waiting: only the latest, since each
-    /// write replaces the one clipboard. Only for a pane the node was sent,
-    /// which its screens can be looking at; the node's own panes reach its
-    /// screens from its own terminals.
+    /// screens, in place of the pane's write still waiting, so a hidden
+    /// pane's copy never pushes out the shown one's; past
+    /// [`MAX_WAITING_COPIES`] panes the oldest goes, logged. Only for a pane
+    /// the node was sent, which its screens can be looking at; the node's own
+    /// panes reach its screens from its own terminals.
     fn clipboard(&self, pane: &str, text: &[u8]) {
         if is_pane_of(pane, &self.node) {
             return;
@@ -396,19 +398,44 @@ impl RelayTap {
         }
         let mut freed = 0;
         state.items.retain(|item| {
-            if matches!(item, TapItem::Clipboard(_)) {
+            if matches!(item, TapItem::Clipboard(copied) if copied.pane == pane) {
                 freed += item.size();
                 false
             } else {
                 true
             }
         });
+        let waiting = state
+            .items
+            .iter()
+            .filter(|item| matches!(item, TapItem::Clipboard(_)))
+            .count();
+        let mut dropped = None;
+        if waiting >= MAX_WAITING_COPIES
+            && let Some(oldest) = state
+                .items
+                .iter()
+                .position(|item| matches!(item, TapItem::Clipboard(_)))
+            && let Some(TapItem::Clipboard(copied)) = state.items.remove(oldest)
+        {
+            freed += copied.data.len();
+            dropped = Some(copied.pane);
+        }
         state.bytes -= freed;
         let item = TapItem::Clipboard(clipboard);
         state.bytes += item.size();
         state.items.push_back(item);
         drop(state);
         self.wake.notify_one();
+        if let Some(pane) = dropped {
+            hide_core::diagnostic!(json!({
+                "component": "node_relay",
+                "kind": "relay.clipboard_dropped",
+                "node": self.node,
+                "pane_id": pane,
+                "cap": MAX_WAITING_COPIES,
+            }));
+        }
     }
 
     fn forget(&self, pane: &str) {
@@ -1004,7 +1031,7 @@ mod tests {
     }
 
     /// with-hide/hide-private#659: a core's pane's copy reaches the linked
-    /// node's screens once, the latest only, and only for a pane the node
+    /// node's screens once, the latest of each pane, and only for a pane the node
     /// draws; the node's own panes reach its screens from its own
     /// terminals, and a backlog dropped for an overflow keeps the copy,
     /// which no redraw would bring back.
@@ -1015,17 +1042,27 @@ mod tests {
         tap.clipboard("remote:mac:pane:w1:p9", b"own");
         assert!(lines(&tap).is_empty());
         tap.output("w1:p1", b"whole", true);
+        tap.output("w1:p2", b"whole", true);
         tap.clipboard("w1:p1", b"older");
+        tap.clipboard("w1:p2", b"hidden");
         tap.clipboard("w1:p1", b"latest");
         let sent = lines(&tap);
         let copies: Vec<_> = sent
             .iter()
             .filter_map(|line| match line {
-                TerminalUp::Clipboard(copied) => Some(copied.text().unwrap()),
+                TerminalUp::Clipboard(copied) => {
+                    Some((copied.pane.clone(), copied.text().unwrap()))
+                }
                 _ => None,
             })
             .collect();
-        assert_eq!(copies, [b"latest".to_vec()]);
+        assert_eq!(
+            copies,
+            [
+                ("w1:p2".to_owned(), b"hidden".to_vec()),
+                ("w1:p1".to_owned(), b"latest".to_vec())
+            ]
+        );
         assert!(lines(&tap).is_empty());
 
         tap.clipboard("w1:p1", b"kept");

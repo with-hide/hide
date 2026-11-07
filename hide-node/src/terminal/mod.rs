@@ -22,6 +22,7 @@
 //! return at once and never call back.
 
 mod command;
+pub mod copies;
 pub mod device;
 mod echo_timing;
 pub mod engine_panes;

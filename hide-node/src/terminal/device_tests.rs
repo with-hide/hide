@@ -1210,21 +1210,33 @@ fn pending_device_permissions_expire_without_new_input_and_end_with_the_link() {
     }
 }
 
-/// with-hide/hide-private#659: a device's copy goes up ahead of every pane's
-/// waiting output, only the latest of any pane, and is never kept for later:
-/// a link that stops drawing the node's panes, or a pane forgotten, drops it.
+/// with-hide/hide-private#659: a device's copies go up ahead of every pane's
+/// waiting output, the latest of each pane in the order written, so a
+/// hidden pane's copy never pushes out the shown one's; none is kept for
+/// later: a link that stops drawing the node's panes, or a pane forgotten,
+/// drops it.
 #[test]
 fn a_devices_copy_goes_up_once_ahead_of_output_and_only_the_latest() {
     let uplink = Uplink::default();
     uplink.push_output("w1:p1", b"waiting", false);
     uplink.push_clipboard("w1:p1", b"older");
-    uplink.push_clipboard("w1:p2", b"latest");
-    let (line, _) = uplink.next().unwrap();
-    let TerminalUp::Clipboard(copied) = up(&line.unwrap()) else {
-        panic!("the copy goes first");
-    };
-    assert_eq!(copied.pane, "w1:p2");
-    assert_eq!(copied.text().unwrap(), b"latest");
+    uplink.push_clipboard("w1:p2", b"hidden");
+    uplink.push_clipboard("w1:p1", b"latest");
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let (line, _) = uplink.next().unwrap();
+        let TerminalUp::Clipboard(copied) = up(&line.unwrap()) else {
+            panic!("the copies go first");
+        };
+        copies.push((copied.pane.clone(), copied.text().unwrap()));
+    }
+    assert_eq!(
+        copies,
+        [
+            ("w1:p2".to_owned(), b"hidden".to_vec()),
+            ("w1:p1".to_owned(), b"latest".to_vec())
+        ]
+    );
     let (line, _) = uplink.next().unwrap();
     assert!(matches!(up(&line.unwrap()), TerminalUp::Output(_)));
 
