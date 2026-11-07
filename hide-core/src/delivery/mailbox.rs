@@ -2005,7 +2005,7 @@ mod tests {
         assert_eq!(ledger.letters[0].state, State::Pending);
         assert_eq!(
             confirm_owed(&mut ledger, &parent, &owed("parent-native"), 4),
-            [report.clone()]
+            std::slice::from_ref(&report)
         );
         assert_eq!(
             (ledger.letters[0].state, ledger.letters[0].hook_confirmed),
