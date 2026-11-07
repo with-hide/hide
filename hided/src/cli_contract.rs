@@ -389,6 +389,7 @@ pub const COMMANDS: &[Spec] = &[
             "agent_hook_untrusted",
             "agent_hook_missing",
             "agent_hook_unconfirmed",
+            "agent_hook_unchecked",
             "intent_conflict",
             "invalid_launch_choice",
             "shell_starting",

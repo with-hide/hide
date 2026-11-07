@@ -2486,7 +2486,7 @@ export type MemoryQuestion =
  * Why a failed promotion's agent never started (`memory_start_failure_code`):
  * `detail` is the line its new pane's shell stopped at, for `shell_starting`.
  */
-export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "card_not_processed" | "other"; detail: string | null };
+export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "agent_hook_not_ready" | "card_not_processed" | "other"; detail: string | null };
 
 export type MemoryDocument = {
   authority: "outdated" | "card_newer" | "ask";
@@ -2790,7 +2790,7 @@ export type DeskSteps = { sessions: number; files: number; letters: number; star
 /** `desk_job_reason`. */
 export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
 /** `desk_job_failure`: why a start failed, grouped by what the operator can do (`desk.jobFailure.*`). */
-export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
+export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "agent_hook_not_ready" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
 /** `desk_output_kind`. */
 export type DeskOutputKind = "image" | "page" | "doc" | "pr";
 /**

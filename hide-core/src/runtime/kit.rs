@@ -66,33 +66,23 @@ fn diagnostic_identity(value: &str) -> serde_json::Value {
     })
 }
 
-/// The machine's last report says Codex has not trusted Hide's hook.
+/// The machine's last report says Codex has not trusted Hide's hook, which
+/// only a pass asks again.
 fn trust_unrecorded(kit: &KitSnapshot) -> bool {
-    kit.components.iter().any(|part| {
-        part.id == ComponentId::CodexHook
-            && part.state == hide_kit::ComponentState::Failed
-            && part
-                .why
-                .as_ref()
-                .is_some_and(|why| why.cause == hide_kit::PartCause::CodexUntrusted)
+    use super::start_hook::{HookRefusal, StartHook, piece_start};
+    kit.agents.iter().any(|agent| {
+        agent.hook.as_ref().map(piece_start) == Some(StartHook::Pass(HookRefusal::Untrusted))
     })
 }
 
 /// A piece of the agent that waited for the agent to make its own folder
 /// in `old` can be put in now.
 fn folder_made(old: &KitAgentSnapshot, now: &KitAgentSnapshot) -> bool {
-    let waits = |piece: &crate::model::KitPieceSnapshot| {
-        piece.state == hide_kit::ComponentState::Absent
-            && piece.why.as_ref().is_some_and(|why| {
-                matches!(
-                    why.cause,
-                    hide_kit::PartCause::AgentAbsent | hide_kit::PartCause::NotCreatedYet
-                )
-            })
-    };
+    use super::start_hook::{HookRefusal, StartHook, piece_start};
     let made = |old: Option<&crate::model::KitPieceSnapshot>,
                 now: Option<&crate::model::KitPieceSnapshot>| {
-        old.is_some_and(waits) && now.is_some_and(|piece| piece.state.needs_attention())
+        old.map(piece_start) == Some(StartHook::Pass(HookRefusal::NotSetUp))
+            && now.is_some_and(|piece| piece.state.needs_attention())
     };
     made(Some(&old.skill), Some(&now.skill)) || made(old.hook.as_ref(), now.hook.as_ref())
 }
@@ -260,7 +250,11 @@ impl Runtime {
             .get(node.as_str())
             .is_none_or(|state| state.unavailable.is_none())
         {
-            if self.kit_states.get(node.as_str()).is_some_and(trust_unrecorded) {
+            if self
+                .kit_states
+                .get(node.as_str())
+                .is_some_and(trust_unrecorded)
+            {
                 self.queue_kit_scope(node.as_str(), Scope::automatic());
             } else {
                 self.local_kit_check_requested = true;
@@ -277,7 +271,11 @@ impl Runtime {
             if !self.device_kit_pending.contains_key(&device_id)
                 && !self.device_kit_running.contains(&device_id)
             {
-                let job = if self.kit_states.get(&device_id).is_some_and(trust_unrecorded) {
+                let job = if self
+                    .kit_states
+                    .get(&device_id)
+                    .is_some_and(trust_unrecorded)
+                {
                     KitJob::Apply(Scope::automatic())
                 } else {
                     KitJob::Status

@@ -1413,6 +1413,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "agent_hook_unconfirmed" => {
             "Hide's check of the agent's hook on that machine did not finish in time; run the same command again with the same intent"
         }
+        "agent_hook_unchecked" => {
+            "Hide could not check the agent's hook on that machine; ask the operator to open Settings > Devices for that machine (This Mac for this machine), which says what stopped the check and offers Try again or Check again, then run the same command again with the same intent"
+        }
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
         }
@@ -5090,6 +5093,7 @@ mod tests {
             "agent_hook_untrusted",
             "agent_hook_missing",
             "agent_hook_unconfirmed",
+            "agent_hook_unchecked",
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",

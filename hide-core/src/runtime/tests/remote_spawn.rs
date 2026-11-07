@@ -36,6 +36,8 @@ struct Node {
     /// What the device's kit answers a pass, and the passes it ran.
     kit: Mutex<Option<hide_kit::KitReport>>,
     kit_passes: Mutex<Vec<hide_node_link::protocol::KitAction>>,
+    /// Whether the device's next kit call fails before it answers.
+    kit_fails: AtomicBool,
 }
 
 impl NodeLink for Node {
@@ -66,6 +68,9 @@ impl NodeLink for Node {
             }
             Call::Kit { action, .. } => {
                 self.kit_passes.lock().unwrap().push(action);
+                if self.kit_fails.swap(false, Ordering::SeqCst) {
+                    return Err(LinkError::Unknown("the kit call broke off".to_owned()));
+                }
                 serde_json::to_value(self.kit.lock().unwrap().clone().expect("a kit report"))
                     .unwrap()
             }
@@ -284,6 +289,7 @@ fn spawner() -> Spawner {
         calls: AtomicUsize::new(0),
         kit: Mutex::new(None),
         kit_passes: Mutex::new(Vec::new()),
+        kit_fails: AtomicBool::new(false),
     });
     {
         let mut guard = runtime.lock().unwrap();
@@ -1193,7 +1199,11 @@ fn a_spawn_whose_hook_a_pass_cannot_put_in_is_refused_before_anything_is_made() 
         assert_eq!(split_refusal(&error), (code, None), "{state:?} {cause:?}");
         assert_eq!(spawner.kit_passes().len(), passes, "{state:?} {cause:?}");
         assert!(spawner.ledger().spawns.is_empty());
-        assert!(spawner.fake.methods().is_empty(), "{:?}", spawner.fake.methods());
+        assert!(
+            spawner.fake.methods().is_empty(),
+            "{:?}",
+            spawner.fake.methods()
+        );
     }
 }
 
@@ -1245,6 +1255,142 @@ fn a_claude_spawn_onto_a_device_without_its_folder_waits_for_a_pass() {
     let _ = claude(&made_since);
     assert_eq!(made_since.kit_passes().len(), 1);
     assert_eq!(made_since.count("start_agent"), 1);
+}
+
+fn refused_kit() -> hide_kit::KitReport {
+    hide_kit::KitReport {
+        refused: Some(Box::new(hide_kit::KitRefusal {
+            cause: hide_kit::RefusalCause::Busy,
+            path: None,
+            variable: None,
+            stop: None,
+            detail: "another Hide was changing the kit".to_owned(),
+        })),
+        ..Default::default()
+    }
+}
+
+/// The pass a spawn asks for can fail as well as answer: a device whose
+/// pass stopped before changing anything, or whose kit call broke off, is
+/// refused as unchecked with nothing made, never started without its hook
+/// or refused for what an older report said.
+#[test]
+fn a_device_pass_that_fails_refuses_the_spawn_as_unchecked() {
+    use hide_kit::{ComponentState, PartCause};
+    let absent = || {
+        agent_kit(
+            "claude-code",
+            ComponentState::Absent,
+            Some(PartCause::AgentAbsent),
+            true,
+        )
+    };
+    for fails in [false, true] {
+        let spawner = spawner();
+        spawner.kit(absent(), refused_kit());
+        spawner.node.kit_fails.store(fails, Ordering::SeqCst);
+        let error = spawner
+            .spawn_kind(
+                "claude",
+                Some("here"),
+                Some(DEVICE),
+                "one",
+                Default::default(),
+                Vec::new(),
+            )
+            .expect_err("refused");
+        assert_eq!(
+            split_refusal(&error),
+            ("agent_hook_unchecked", None),
+            "call fails: {fails}"
+        );
+        assert_eq!(spawner.kit_passes().len(), 1);
+        assert!(spawner.ledger().spawns.is_empty());
+        let made = spawner.fake.methods();
+        assert!(made.is_empty(), "{made:?}");
+    }
+}
+
+/// Stands in for this machine's kit worker: takes the pass a start asks
+/// for and answers it with `answer`. True when there was a pass to take.
+#[allow(clippy::disallowed_methods)] // polls for the pass it takes, bounded by a deadline
+fn local_kit_worker(
+    runtime: &Arc<Mutex<Runtime>>,
+    answer: impl FnOnce(&mut Runtime) + Send + 'static,
+) -> std::thread::JoinHandle<bool> {
+    let runtime = Arc::clone(runtime);
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let mut locked = runtime.lock().unwrap();
+            if locked.take_local_kit_job(Instant::now()).is_some() {
+                answer(&mut locked);
+                return true;
+            }
+            drop(locked);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    })
+}
+
+/// This machine's path, through its own kit worker: a hook left out has one
+/// pass taken and answered there before the spawn makes anything, and the
+/// spawn goes on once that pass put it in.
+#[test]
+fn a_local_spawn_runs_one_pass_on_this_machine_and_goes_on_once_the_hook_is_in() {
+    use hide_kit::ComponentState;
+    let spawner = spawner();
+    spawner.runtime.lock().unwrap().ingest_kit_report(
+        crate::node::TEST_NODE,
+        &agent_kit("codex", ComponentState::NotInstalled, None, true),
+    );
+    spawner.runtime.lock().unwrap().local_kit_pending = None;
+    let worker = local_kit_worker(&spawner.runtime, |runtime| {
+        runtime.ingest_kit_report(
+            crate::node::TEST_NODE,
+            &agent_kit("codex", ComponentState::Installed, None, true),
+        );
+    });
+    let answer = spawner.spawn(Some("here"), None, "one");
+    assert!(worker.join().unwrap(), "the spawn asked for a pass");
+    // This fixture gives this machine no engine of its own, so the spawn,
+    // past its hook, stops at the first step that asks for one.
+    assert_eq!(answer.expect_err("no local engine"), "herdr_unavailable");
+}
+
+/// The same on this machine when the pass fails: a read that failed, then a
+/// pass that fails again or stops, refuses the start as unchecked.
+#[test]
+fn a_local_pass_that_fails_refuses_the_spawn_as_unchecked() {
+    use crate::model::KitUnavailable;
+    for refuses in [false, true] {
+        let spawner = spawner();
+        spawner
+            .runtime
+            .lock()
+            .unwrap()
+            .set_local_kit_unavailable(KitUnavailable::Unreadable, "the read broke off");
+        let worker = local_kit_worker(&spawner.runtime, move |runtime| {
+            if refuses {
+                runtime.ingest_kit_report(crate::node::TEST_NODE, &refused_kit());
+            } else {
+                runtime.set_local_kit_unavailable(KitUnavailable::Unreadable, "the pass broke off");
+            }
+        });
+        let error = spawner
+            .spawn(Some("here"), None, "one")
+            .expect_err("refused");
+        assert!(worker.join().unwrap(), "the spawn asked for a pass");
+        assert_eq!(
+            split_refusal(&error),
+            ("agent_hook_unchecked", None),
+            "refuses: {refuses}"
+        );
+        assert!(spawner.ledger().spawns.is_empty());
+        let made = spawner.fake.methods();
+        assert!(made.is_empty(), "{made:?}");
+    }
 }
 
 fn count(methods: &[&str], name: &str) -> usize {

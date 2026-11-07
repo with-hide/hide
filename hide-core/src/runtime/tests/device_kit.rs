@@ -1053,17 +1053,30 @@ fn check_again_shows_a_read_under_way_and_a_failed_one_as_a_code_beside_the_last
 /// Failed; a trusted hook is only read again.
 #[test]
 fn check_again_after_codex_trusts_the_hook_clears_its_failure() {
-    let untrusted = {
-        let mut report = report(&[(ComponentId::CodexHook, ComponentState::Failed)]);
-        let part = &mut report.components[0];
-        part.why = Some(hide_kit::PartWhy {
-            cause: hide_kit::PartCause::CodexUntrusted,
-            value: None,
+    // The Codex hook part and Codex's row, as a pass reports them.
+    let codex_report = |state, cause: Option<hide_kit::PartCause>| {
+        let why = cause.map(|cause| hide_kit::PartWhy { cause, value: None });
+        let mut report = report(&[(ComponentId::CodexHook, state)]);
+        report.components[0].why = why.clone();
+        let mut codex = agent_report(
+            "codex",
+            hide_kit::Availability::Available,
+            true,
+            ComponentState::Installed,
+        );
+        codex.hook = Some(hide_kit::PieceReport {
+            state,
+            reason: None,
+            why,
+            location: None,
         });
-        part.reason = Some("Codex has not trusted the hook".to_owned());
+        report.agents = vec![codex];
         report
     };
-    let helper = KitDevice::answering(Ok(untrusted));
+    let helper = KitDevice::answering(Ok(codex_report(
+        ComponentState::Failed,
+        Some(hide_kit::PartCause::CodexUntrusted),
+    )));
     let shared = with_consent(Some(Arc::clone(&helper)));
     dispatch(&shared, "kit_check", serde_json::json!({}));
     settle(&shared);
@@ -1076,10 +1089,7 @@ fn check_again_after_codex_trusts_the_hook_clears_its_failure() {
     assert_eq!(codex(&kit(&shared)), Some(ComponentState::Failed));
 
     // The operator chose Trust all in Codex there.
-    *helper.answer.lock().unwrap() = Ok(report(&[(
-        ComponentId::CodexHook,
-        ComponentState::Installed,
-    )]));
+    *helper.answer.lock().unwrap() = Ok(codex_report(ComponentState::Installed, None));
     let before = helper.calls().len();
     dispatch(&shared, "kit_check", serde_json::json!({}));
     settle(&shared);

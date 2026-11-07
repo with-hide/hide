@@ -852,14 +852,6 @@ fn check_target(
     }
 }
 
-/// How long a spawn waits for the pass it asked of its child's machine's
-/// kit. A pass asks Codex to trust Hide's hooks, which is bounded at 19 s
-/// (`hide_agent_hooks::codex_trust`), and reads each agent once; a kit that
-/// is still busy past this, waiting on another kit's account lock or on a
-/// slow device, has the spawn refused so the same command asks again,
-/// rather than held for the 90 s that lock allows.
-const HOOK_PASS_WAIT: Duration = Duration::from_secs(30);
-
 /// Judges whether `kind` on `machine` has Hide's hook in place, from that
 /// machine's kit report, before anything is made for the spawn
 /// (`runtime::start_hook`). Where a pass may put it in place, one runs on
@@ -884,14 +876,13 @@ fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Resul
             StartHook::Pass(_) => locked.ask_start_pass(machine)?,
         }
     };
-    let deadline = Instant::now() + HOOK_PASS_WAIT;
+    let deadline = Instant::now() + super::HOOK_PASS_WAIT;
     loop {
         {
             let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
             if locked.start_pass_answered(machine, asked) {
                 return locked
-                    .start_hook(machine, kind)
-                    .after_pass()
+                    .start_hook_after_pass(machine, kind)
                     .map_err(|refusal| refused(refusal, "pass"));
             }
             if !locked.kit_reachable(machine) {
@@ -901,7 +892,7 @@ fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Resul
         if Instant::now() >= deadline {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "hook.pass_unanswered", "device": machine,
-                "agent_kind": kind, "intent": intent, "waited_ms": HOOK_PASS_WAIT.as_millis(),
+                "agent_kind": kind, "intent": intent, "waited_ms": super::HOOK_PASS_WAIT.as_millis(),
             }));
             return Err(refused(HookRefusal::Unconfirmed, "wait"));
         }
@@ -988,11 +979,10 @@ fn spawn(
         return Err("invalid_spawn".into());
     }
     let mut ledger = state(client)?;
-    // A spawn beside its caller opens in the caller's own tab, so it is
-    // judged before anything is registered, reserved or created; a retry of
-    // an intent whose pane exists already is judged by what it did, and a
-    // completed one stays offline (engineering #11).
-    let beside_of = if *beside {
+    // An earlier attempt of this intent by the same parent: every check
+    // below judges a retry by what that attempt already did (engineering
+    // #11).
+    let earlier = {
         let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
             super::live_self(&ledger, actor)
                 .next()
@@ -1000,14 +990,22 @@ fn spawn(
         } else {
             parent.clone()
         };
-        let placed = known_parent.is_some_and(|id| {
-            ledger.spawns.iter().any(|record| {
-                record.parent == id
-                    && record.intent == *intent
-                    && record.beside
-                    && (record.pane.is_some() || record.completed)
-            })
-        });
+        known_parent.and_then(|id| {
+            ledger
+                .spawns
+                .iter()
+                .find(|record| record.parent == id && record.intent == *intent)
+                .cloned()
+        })
+    };
+    // A spawn beside its caller opens in the caller's own tab, so it is
+    // judged before anything is registered, reserved or created; a retry of
+    // an intent whose pane exists already is judged by what it did, and a
+    // completed one stays offline.
+    let beside_of = if *beside {
+        let placed = earlier
+            .as_ref()
+            .is_some_and(|record| record.beside && (record.pane.is_some() || record.completed));
         Some(beside_target(
             client,
             authority,
@@ -1031,24 +1029,14 @@ fn spawn(
         {
             return Err("parent_authority_required".into());
         }
-        let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
-            super::live_self(&ledger, actor)
-                .next()
-                .map(|p| p.id.clone())
-        } else {
-            parent.clone()
-        };
-        let earlier = known_parent.and_then(|id| {
-            ledger
-                .spawns
-                .iter()
-                .find(|record| record.parent == id && record.intent == *intent)
-        });
-        if earlier.is_some_and(|record| record.machine != *machine) {
+        if earlier
+            .as_ref()
+            .is_some_and(|record| record.machine != *machine)
+        {
             return Err("intent_conflict".into());
         }
-        let started = earlier.is_some_and(|record| record.pane.is_some());
-        if !earlier.is_some_and(|record| record.completed) {
+        let started = earlier.as_ref().is_some_and(|record| record.pane.is_some());
+        if !earlier.as_ref().is_some_and(|record| record.completed) {
             check_target(
                 client,
                 actor,
@@ -1065,25 +1053,12 @@ fn spawn(
     // The child's hook is judged before anything is made for it, on every
     // attempt that has not typed its start yet: one that has is past what a
     // hook changes (with-hide/hide-private#661, #662).
+    if !earlier
+        .as_ref()
+        .is_some_and(|record| record.completed || record.typed > 0)
     {
-        let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
-            super::live_self(&ledger, actor)
-                .next()
-                .map(|p| p.id.clone())
-        } else {
-            parent.clone()
-        };
-        let typed = known_parent.is_some_and(|id| {
-            ledger.spawns.iter().any(|record| {
-                record.parent == id
-                    && record.intent == *intent
-                    && (record.completed || record.typed > 0)
-            })
-        });
-        if !typed {
-            let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
-            check_hook(client, child_machine, kind, intent)?;
-        }
+        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+        check_hook(client, child_machine, kind, intent)?;
     }
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that

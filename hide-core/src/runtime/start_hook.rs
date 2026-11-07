@@ -13,19 +13,24 @@
 //! and judges again from its answer; what no pass changes is refused with a
 //! code whose next action says what the operator does.
 //!
-//! A machine where the kit does not run (a daemon outside the app, a device
-//! without consent, an unsupported platform) or whose kit cannot be judged
-//! (its pass stopped, its helper predates agents) is not judged here, as
-//! before; nor is a hook Hide does not put there by design (a system with no
-//! such hook, another tool's file of the same name).
+//! A machine where the kit does not run by design or by the operator's
+//! choice (a daemon outside the app, a device without consent or with an
+//! older one, an unsupported platform) is not judged here, as before; nor is
+//! a helper that predates agents, or a hook Hide does not put there by design
+//! (a system with no such hook, another tool's file of the same name). A kit
+//! that should run and could not answer (its read failed, its pass stopped)
+//! is asked for a pass like a missing hook, and refused when that pass
+//! fails too.
 
 use std::collections::BTreeMap;
 
 use hide_kit::{ComponentState, PartCause, Scope};
 
+use crate::model::KitUnavailable;
+
 use super::Runtime;
 use super::hosts::HostPhase;
-use crate::model::KitSnapshot;
+use crate::model::{KitPieceSnapshot, KitSnapshot};
 
 /// Why a spawn did not start its agent, as the one code each refusal
 /// answers; `hided` words each code's next action.
@@ -43,9 +48,27 @@ pub(crate) enum HookRefusal {
     Missing,
     /// The pass the spawn asked for did not answer within its wait.
     Unconfirmed,
+    /// The machine's kit could not be read, or its pass stopped before
+    /// changing anything, so whether the hook is there is not known.
+    Unchecked,
 }
 
 impl HookRefusal {
+    const ALL: [Self; 6] = [
+        Self::Off,
+        Self::NotSetUp,
+        Self::Untrusted,
+        Self::Missing,
+        Self::Unconfirmed,
+        Self::Unchecked,
+    ];
+
+    /// Whether `code` is one of these refusals, as a surface that groups
+    /// start failures (Desk, Memory) reads it.
+    pub(crate) fn is_code(code: &str) -> bool {
+        Self::ALL.iter().any(|refusal| refusal.code() == code)
+    }
+
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::Off => "agent_hook_off",
@@ -53,6 +76,7 @@ impl HookRefusal {
             Self::Untrusted => "agent_hook_untrusted",
             Self::Missing => "agent_hook_missing",
             Self::Unconfirmed => "agent_hook_unconfirmed",
+            Self::Unchecked => "agent_hook_unchecked",
         }
     }
 }
@@ -82,14 +106,28 @@ impl StartHook {
 }
 
 /// What `kit`, one machine's last kit report, says about starting `kind`
-/// there; `None` is a machine the kit never ran on in this process. The one
-/// place a kit report's piece chooses a start's refusal.
+/// there; `None` is a machine the kit never ran on in this process. The
+/// agent's hook is judged by [`piece_start`].
 pub(crate) fn judge(kit: Option<&KitSnapshot>, kind: &str) -> StartHook {
     let Some(kit) = kit else {
         return StartHook::Ready;
     };
-    if kit.unavailable.is_some() || kit.refused.is_some() {
-        return StartHook::Ready;
+    match kit.unavailable {
+        Some(
+            KitUnavailable::Standalone
+            | KitUnavailable::NoConsent
+            | KitUnavailable::ConsentOutdated
+            | KitUnavailable::UnsupportedPlatform,
+        ) => return StartHook::Ready,
+        // No worker runs this machine's passes until Hide starts again.
+        Some(KitUnavailable::InstallerUnavailable) => {
+            return StartHook::Refused(HookRefusal::Unchecked);
+        }
+        Some(KitUnavailable::Unreadable) => return StartHook::Pass(HookRefusal::Unchecked),
+        None => {}
+    }
+    if kit.refused.is_some() {
+        return StartHook::Pass(HookRefusal::Unchecked);
     }
     let Some(id) = hide_agent_adapter::adapter(kind).map(|row| row.id) else {
         return StartHook::Ready;
@@ -107,11 +145,17 @@ pub(crate) fn judge(kit: Option<&KitSnapshot>, kind: &str) -> StartHook {
     if !agent.enabled {
         return StartHook::Refused(HookRefusal::Off);
     }
-    let Some(hook) = agent.hook.as_ref() else {
-        return StartHook::Ready;
-    };
-    let cause = hook.why.as_ref().map(|why| why.cause);
-    match hook.state {
+    agent.hook.as_ref().map_or(StartHook::Ready, piece_start)
+}
+
+/// What one piece of an agent on a machine, its hook or its skill, needs
+/// before the agent starts there: in place, a pass of the kit, or something
+/// only the operator does. The one place that says which pieces a pass can
+/// put in: the spawn's judgment, the read that finds an agent's folder made
+/// and Check again on a Codex that had not trusted Hide's hook all ask it.
+pub(crate) fn piece_start(piece: &KitPieceSnapshot) -> StartHook {
+    let cause = piece.why.as_ref().map(|why| why.cause);
+    match piece.state {
         ComponentState::Installed => StartHook::Ready,
         ComponentState::Off => StartHook::Refused(HookRefusal::Off),
         // The operator took it out: only Reinstall brings it back (D-26).
@@ -122,13 +166,15 @@ pub(crate) fn judge(kit: Option<&KitSnapshot>, kind: &str) -> StartHook {
         ComponentState::Outdated | ComponentState::NotInstalled => {
             StartHook::Pass(HookRefusal::Missing)
         }
+        // Only a pass asks Codex to trust it again, and the operator may
+        // have approved it in Codex since.
         ComponentState::Failed if cause == Some(PartCause::CodexUntrusted) => {
             StartHook::Pass(HookRefusal::Untrusted)
         }
         ComponentState::Failed => StartHook::Pass(HookRefusal::Missing),
         // The agent's folder may be there by now (`AgentAbsent` is the hook
         // part's word for the same wait). Any other absence is one Hide puts
-        // no hook into by design, or a program the start's own probe looks
+        // no piece into by design, or a program the start's own probe looks
         // for (`agent_not_installed`).
         ComponentState::Absent => match cause {
             Some(PartCause::AgentAbsent | PartCause::NotCreatedYet) => {
@@ -161,6 +207,28 @@ impl Runtime {
             return StartHook::Ready;
         }
         judge(self.kit_states.get(machine), kind)
+    }
+
+    /// The answer for a start of `kind` on `machine` once the pass it asked
+    /// for has answered. A pass whose call failed leaves the machine's last
+    /// report in place with the failure beside it, so a hook still not in
+    /// place is then refused as unchecked rather than for what that older
+    /// report said.
+    pub(crate) fn start_hook_after_pass(
+        &self,
+        machine: &str,
+        kind: &str,
+    ) -> Result<(), HookRefusal> {
+        let hook = self.start_hook(machine, kind);
+        let failed = self
+            .kit_states
+            .get(machine)
+            .is_some_and(|kit| kit.check_failed.is_some());
+        match hook {
+            StartHook::Ready => Ok(()),
+            _ if failed => Err(HookRefusal::Unchecked),
+            hook => hook.after_pass(),
+        }
     }
 
     /// Queues one automatic pass on `machine`'s kit for a start and answers
@@ -278,8 +346,46 @@ mod tests {
         assert_eq!(judged(ComponentState::Installed, None), StartHook::Ready);
         assert_eq!(judge(None, "codex"), StartHook::Ready);
         let mut unavailable = kit(ComponentState::NotInstalled, None, true);
-        unavailable.unavailable = Some(crate::model::KitUnavailable::NoConsent);
-        assert_eq!(judge(Some(&unavailable), "codex"), StartHook::Ready);
+        // The kit does not run there by design or by the operator's choice.
+        for cause in [
+            KitUnavailable::Standalone,
+            KitUnavailable::NoConsent,
+            KitUnavailable::ConsentOutdated,
+            KitUnavailable::UnsupportedPlatform,
+        ] {
+            unavailable.unavailable = Some(cause);
+            assert_eq!(
+                judge(Some(&unavailable), "codex"),
+                StartHook::Ready,
+                "{cause:?}"
+            );
+        }
+    }
+
+    /// A kit that should run and gave no answer is asked for a pass, and
+    /// what it does not answer is refused as unchecked, never started.
+    #[test]
+    fn a_kit_that_could_not_answer_waits_for_a_pass_and_is_never_read_as_ready() {
+        let unchecked = StartHook::Pass(HookRefusal::Unchecked);
+        let unreadable = KitSnapshot::unavailable(KitUnavailable::Unreadable);
+        assert_eq!(judge(Some(&unreadable), "claude"), unchecked);
+        // A kit whose worker never started answers no pass.
+        let no_worker = KitSnapshot::unavailable(KitUnavailable::InstallerUnavailable);
+        assert_eq!(
+            judge(Some(&no_worker), "claude"),
+            StartHook::Refused(HookRefusal::Unchecked)
+        );
+        let refused = KitSnapshot {
+            refused: Some(crate::model::KitRefusalSnapshot {
+                cause: hide_kit::RefusalCause::Busy,
+                path: None,
+                variable: None,
+                stop: None,
+            }),
+            ..KitSnapshot::default()
+        };
+        assert_eq!(judge(Some(&refused), "claude"), unchecked);
+        assert_eq!(unchecked.after_pass(), Err(HookRefusal::Unchecked));
     }
 
     #[test]
