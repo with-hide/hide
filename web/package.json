@@ -9,7 +9,7 @@
     "bundle": "pnpm prepare:relay && vite build",
     "preview": "vite preview",
     "typecheck": "pnpm prepare:relay && tsc --noEmit",
-    "lint": "eslint src e2e && node scripts/check-e2e-test-size.mjs e2e",
+    "lint": "eslint src e2e && node scripts/check-e2e-test-size.mjs e2e && node scripts/check-e2e-sent-kinds.mjs e2e",
     "gen:types": "node scripts/gen-types.mjs",
     "test": "pnpm prepare:relay && vitest run",
     "e2e": "pnpm build && bash ../scripts/verify-web.sh web e2e",

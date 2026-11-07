@@ -340,6 +340,8 @@ A piece that another open change is still building is marked as pending with the
    `web/scripts/check-e2e-test-size.mjs` (run by `lint` in `web` and `desktop`) fails a test over 120 lines or 40 `expect` calls, counted on the `test(...)` call itself.
    The tests that were already over are recorded in `e2e/test-size-baseline.json` as a ceiling that only shrinks: a recorded test that grows fails, and so does an entry whose test is gone or fits the limit, until the entry is removed.
    Moving assertions into a helper lowers the count, not the line span, so the line limit stays; a split that removes an entry is the intended way out.
+   An event count (`countSent` in `web/e2e/wire.ts`) answers 0 for a kind the page never sends, so a read of a renamed or removed kind passes every "nothing was sent" assertion and fails only a positive one, in whichever lane runs that spec.
+   `web/scripts/check-e2e-sent-kinds.mjs` (run by `lint` in `web` and `desktop`) fails a literal `sent.get("<kind>")` whose kind neither the core's `validate_event` nor `hided/src` names, so a renamed event fails its readers on every pull request rather than in the macOS-only desktop lane (with-hide/hide-private#686, where `terminal_click` became `terminal_mouse`).
 6. **Leave the renderer off; turn WebGL on only in a spec that tests it.**
    Headless Chromium composites in software, so each frame of xterm's WebGL canvas is read back synchronously on the page's main thread, 250 to 500 ms at a time.
    `web/playwright.config.ts` launches every web e2e Chromium with `--disable-webgl`, so the shell uses xterm's DOM renderer, its existing fallback, and a spec needs no setting of its own; [Wait for state, not time](#wait-for-state-not-time) has the measurement.
