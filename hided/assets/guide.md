@@ -34,6 +34,7 @@ hide inbox
 - Letters come as one bundle: each sender's questions and blocks in full, its newest three other letters in full, and older ones folded into one line you open with `hide request show <id>`. Taking the bundle takes the folded letters too; an agent with no prompt hook takes it with the one `hide inbox --ack <bundle>` that `hide inbox` prints.
 - An agent Hide put to sleep still takes letters: a `request` or `block` wakes it, resuming its conversation, and is handed over once it is awake; a `report` or `progress` waits for its next wake, and the hour a letter waits does not run while it sleeps. Each `request` or `block` wakes it once: one that already rang or already woke it does not wake it again, and its hour runs while it sleeps.
   When it cannot be woken, the letter ends undelivered and Hide's own letter tells you whom and why; send again to try once more.
+- When Hide cannot bring a letter of yours to its recipient, after its wake failed or its three bells were spent, the letter ends undelivered at once and Hide's own letter tells you whom, in which pane, why and what to do now; `hide inbox` lists your letters that came back under `returned`, apart from the letters you received.
 
 ## Agents
 

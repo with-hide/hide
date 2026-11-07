@@ -210,6 +210,23 @@ pub fn pane_records(home: &Path) -> PathBuf {
     records_of(home, std::env::var(INSTALL_VARIABLE).ok().as_deref())
 }
 
+/// The file of `pane_id`'s record in `folder`. A pane id is in Herdr's shape
+/// (`w7B:pM`, `h7B:pM`), so it is folded into a file name rather than used
+/// as one.
+pub fn pane_file(folder: &Path, pane_id: &str) -> PathBuf {
+    let safe: String = pane_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    folder.join(format!("{safe}.json"))
+}
+
 fn records_of(home: &Path, pane: Option<&str>) -> PathBuf {
     let records = home.join(".hide").join("agent-hooks");
     match pane {

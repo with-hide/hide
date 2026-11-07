@@ -314,6 +314,17 @@ impl RecordedTerminals {
             .collect()
     }
 
+    /// The panes released since the last take.
+    pub(super) fn releases(&self) -> Vec<String> {
+        self.take()
+            .into_iter()
+            .filter_map(|control| match control {
+                TerminalControl::Release { pane, .. } => Some(pane),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// `install:<device>` and `remove:<device>`, in order.
     pub(super) fn devices(&self) -> Vec<String> {
         self.devices.lock().unwrap().clone()

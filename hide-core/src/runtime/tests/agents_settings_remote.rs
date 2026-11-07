@@ -165,17 +165,39 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         issue_links: Default::default(),
     };
 
+    // The device is not in front: its holders attached its panes at their
+    // start, and the core releases them rather than forgets them, so its node
+    // keeps them for the engine's typing (with-hide/hide-private#677).
     assert!(runtime.ingest_remote_session("mini", Ok(session.clone())));
-    assert!(terminals.attaches().is_empty());
-    assert!(
+    let transport_state = |runtime: &Runtime, pane_id: &str| {
         runtime
             .snapshot
             .terminal
             .panes
             .iter()
-            .filter(|pane| pane.pane_id.starts_with("remote:mini:pane:"))
-            .all(|pane| pane.transport_state == "idle")
+            .find(|pane| pane.pane_id == pane_id)
+            .map(|pane| pane.transport_state.clone())
+    };
+    let controls = terminals.take();
+    assert!(
+        controls.iter().all(|control| !matches!(
+            control,
+            TerminalControl::Attach { .. } | TerminalControl::Forget { .. }
+        )),
+        "{controls:?}"
     );
+    let mut released = controls
+        .into_iter()
+        .filter_map(|control| match control {
+            TerminalControl::Release { pane, .. } => Some(pane),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    released.sort();
+    assert_eq!(released, [pane_id, inactive_pane_id]);
+    for pane in [pane_id, inactive_pane_id] {
+        assert_eq!(transport_state(&runtime, pane).as_deref(), Some("released"));
+    }
 
     // Focusing the device asks its node to attach the active tab's pane,
     // and only that one; the attach carries the size its view reported.
@@ -226,11 +248,14 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
             .find(|pane| pane.pane_id == inactive_pane_id)
             .expect("inactive pane remains projected")
             .transport_state,
-        "idle"
+        "released"
     );
     assert!(!runtime.ingest_remote_session("mini", Ok(session.clone())));
     assert!(
-        terminals.attaches().is_empty(),
+        terminals.take().iter().all(|control| !matches!(
+            control,
+            TerminalControl::Attach { .. } | TerminalControl::Release { .. }
+        )),
         "an unchanged session asks again"
     );
     assert!(runtime.resolve_session(
@@ -247,8 +272,42 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
             .is_some()
     );
     assert!(
-        !runtime.ingest_remote_session("mini", Ok(session)),
+        !runtime.ingest_remote_session("mini", Ok(session.clone())),
         "an identical remote fetch retains resolution without publishing another snapshot"
+    );
+
+    // This machine comes in front: the device pane that was on screen is
+    // released and its node keeps it, as a pane of this machine whose tab
+    // left the attach window is; it is never forgotten while listed.
+    let focus_local = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "focus_device",
+        "payload": {"device_id": crate::node::TEST_NODE}
+    }))
+    .expect("focus local event");
+    assert!(runtime.dispatch_json(&focus_local));
+    let controls = terminals.take();
+    assert!(
+        controls.contains(&TerminalControl::Release {
+            pane: pane_id.into(),
+            message: format!("Pane {pane_id} was detached while its tab is not shown"),
+        }),
+        "{controls:?}"
+    );
+    assert!(
+        !controls
+            .iter()
+            .any(|control| matches!(control, TerminalControl::Forget { .. })),
+        "{controls:?}"
+    );
+    assert_eq!(
+        transport_state(&runtime, pane_id).as_deref(),
+        Some("released")
+    );
+    assert!(!runtime.ingest_remote_session("mini", Ok(session.clone())));
+    assert!(
+        terminals.releases().is_empty(),
+        "a released pane is released once"
     );
 
     // The device's panes leave its session: their node forgets them and so

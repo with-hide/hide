@@ -560,6 +560,7 @@ impl Runtime {
             intent: "wake-failed",
             component: "agent_sleep",
             unsent: "agent_sleep.wake_note_unsent",
+            now: false,
         };
         self.letter_wakes.noting = self.send_hide_notes(kind, notes, |runtime| {
             runtime.letter_wakes.noting = false;

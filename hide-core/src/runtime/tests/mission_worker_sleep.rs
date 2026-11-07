@@ -352,7 +352,7 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
     assert!(!failed.contains_key(&report));
     // The store's pass applies it.
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    assert!(ledger.fail_woken(&failed, unix_milliseconds()));
+    assert!(ledger.fail_undeliverable(&failed, unix_milliseconds()));
     let undelivered = ledger
         .letters
         .iter()

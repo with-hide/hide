@@ -97,6 +97,7 @@ impl Runtime {
             intent: "transition-cut",
             component: "own_engine",
             unsent: "transition_letter.unsent",
+            now: false,
         };
         self.transition_letters.sending = self.send_hide_notes(kind, notes, |runtime| {
             runtime.transition_letters.sending = false;
