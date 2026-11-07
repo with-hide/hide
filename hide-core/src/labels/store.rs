@@ -135,6 +135,11 @@ pub(crate) struct PaneRecord {
     /// is the pane's elapsed time and recency whichever session it runs.
     #[serde(default)]
     pub(crate) state_change_seq: u64,
+    /// `state_change_seq` was counted by an engine before the worker's own
+    /// (`forget_engine_state`): its first observation takes the new count
+    /// without reading the difference as a state that moved.
+    #[serde(skip)]
+    pub(crate) seq_of_earlier_engine: bool,
     #[serde(default)]
     pub(crate) changed_unix_ms: u64,
     #[serde(default)]
@@ -238,6 +243,21 @@ impl PaneRecord {
             self.end = Some(LabelEnd::Question);
             self.line = reply;
         }
+    }
+
+    /// A worker starts on an engine that counts each pane's states from its
+    /// own start (`docs/status-model.md`, Across an engine restart): what was
+    /// known for a state of an earlier engine, the read that answered it and
+    /// the stop and notice it owed or settled, is known for none of this
+    /// one's. The session's turns and where its read stopped stay, so the
+    /// next read continues from there, and so do the label and what it
+    /// already said.
+    pub(crate) fn forget_engine_state(&mut self) {
+        self.turns_seq = None;
+        self.turn_end_owed = None;
+        self.notice_owed = None;
+        self.notice_finalized = None;
+        self.seq_of_earlier_engine = true;
     }
 
     /// A new session in the pane: nothing the old one said or decided stays.

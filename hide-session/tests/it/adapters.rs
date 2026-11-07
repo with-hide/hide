@@ -4121,6 +4121,211 @@ fn a_claude_interruption_or_an_unanswered_prompt_ends_the_turn() {
     assert_eq!(ended(), Some(hide_session::turns::TurnEnded::Interrupted));
 }
 
+/// Claude Code 2.1.319 writes how a turn ended in one `system` record of
+/// subtype `turn_duration`, right after the Stop hooks' `stop_hook_summary`,
+/// and once, after the last summary, when the agent went on after its first
+/// Stop hooks ran (a queued prompt it took as an attachment). That record,
+/// not a reply, says the turn completed; one written after an interruption
+/// of a tool call leaves the interruption; the next prompt starts a turn of
+/// its own; and reading the same file again reads the same end.
+#[test]
+fn a_claude_turn_completes_where_claude_code_writes_its_turn_duration() {
+    use hide_session::turns::TurnEnded;
+    let home = home(Agent::Claude);
+    let path = home
+        .path()
+        .join(".claude/projects/-work-app/a1b2c3d4-0000-4000-8000-000000000001.jsonl");
+    let record = |at: &str, kind: &str| {
+        serde_json::json!({
+            "type": kind,
+            "version": "2.1.319",
+            "userType": "external",
+            "entrypoint": "cli",
+            "isSidechain": false,
+            "timestamp": at,
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "cwd": "/work/app",
+        })
+    };
+    let prompt = |at: &str, text: &str| {
+        let mut prompt = record(at, "user");
+        prompt["promptId"] = serde_json::json!(format!("prompt-{at}"));
+        prompt["message"] = serde_json::json!({"role": "user", "content": text});
+        prompt
+    };
+    let message = |at: &str, kind: &str, content: serde_json::Value| {
+        let mut message = record(at, kind);
+        message["message"] = serde_json::json!({"role": kind, "content": content});
+        message
+    };
+    let reply = |at: &str| {
+        message(
+            at,
+            "assistant",
+            serde_json::json!([{"type": "text", "text": "Done."}]),
+        )
+    };
+    let system = |at: &str, subtype: &str| {
+        let mut system = record(at, "system");
+        system["subtype"] = serde_json::json!(subtype);
+        system["isMeta"] = serde_json::json!(false);
+        if subtype == "turn_duration" {
+            system["durationMs"] = serde_json::json!(1200);
+            system["messageCount"] = serde_json::json!(4);
+        } else {
+            system["hookCount"] = serde_json::json!(1);
+            system["preventedContinuation"] = serde_json::json!(false);
+        }
+        system
+    };
+    let append = |records: &[serde_json::Value]| {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for record in records {
+            writeln!(file, "{record}").unwrap();
+        }
+    };
+    let ended = || {
+        read_whole(home.path(), Agent::Claude)
+            .turns
+            .as_ref()
+            .unwrap()
+            .ended()
+    };
+
+    append(&[
+        prompt("2026-11-08T10:00:00.000Z", "search the logs"),
+        reply("2026-11-08T10:00:01.000Z"),
+    ]);
+    assert_eq!(ended(), None, "a reply does not end the turn");
+    append(&[system("2026-11-08T10:00:01.100Z", "stop_hook_summary")]);
+    assert_eq!(ended(), None, "nor do the Stop hooks");
+    // Only the form Claude Code was seen writing is read.
+    let mut sidechain = system("2026-11-08T10:00:01.150Z", "turn_duration");
+    sidechain["isSidechain"] = serde_json::json!(true);
+    append(&[sidechain]);
+    assert_eq!(ended(), None, "a sidechain's record is not this turn's end");
+    append(&[system("2026-11-08T10:00:01.200Z", "turn_duration")]);
+    assert_eq!(ended(), Some(TurnEnded::Completed));
+    assert_eq!(
+        ended(),
+        Some(TurnEnded::Completed),
+        "the same file read again"
+    );
+
+    // The agent goes on after its first Stop hooks ran: one end, after the
+    // last summary.
+    append(&[
+        prompt("2026-11-08T10:01:00.000Z", "fix it"),
+        reply("2026-11-08T10:01:01.000Z"),
+        system("2026-11-08T10:01:01.100Z", "stop_hook_summary"),
+        serde_json::json!({"type": "attachment", "timestamp": "2026-11-08T10:01:01.200Z",
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "attachment": {"type": "queued_command", "prompt": "and the test"}}),
+        reply("2026-11-08T10:01:02.000Z"),
+        system("2026-11-08T10:01:02.100Z", "stop_hook_summary"),
+    ]);
+    assert_eq!(ended(), None, "the turn went on");
+    append(&[system("2026-11-08T10:01:02.200Z", "turn_duration")]);
+    assert_eq!(ended(), Some(TurnEnded::Completed));
+
+    // An interrupted tool call, with the turn's end written after it.
+    append(&[
+        prompt("2026-11-08T10:02:00.000Z", "run the tests"),
+        message(
+            "2026-11-08T10:02:01.000Z",
+            "assistant",
+            serde_json::json!([{"type": "tool_use", "id": "toolu_1", "name": "Bash",
+                "input": {"command": "cargo test"}}]),
+        ),
+        message(
+            "2026-11-08T10:02:02.000Z",
+            "user",
+            serde_json::json!([{"type": "tool_result", "tool_use_id": "toolu_1",
+                "is_error": true, "content": "The user doesn't want to proceed."}]),
+        ),
+        message(
+            "2026-11-08T10:02:02.100Z",
+            "user",
+            serde_json::json!([{"type": "text", "text": "[Request interrupted by user for tool use]"}]),
+        ),
+        system("2026-11-08T10:02:02.200Z", "turn_duration"),
+    ]);
+    assert_eq!(ended(), Some(TurnEnded::Interrupted));
+
+    // The next prompt is a turn of its own, not the last one's end.
+    append(&[prompt("2026-11-08T10:03:00.000Z", "go on")]);
+    assert_eq!(ended(), Some(TurnEnded::Unanswered));
+    append(&[reply("2026-11-08T10:03:01.000Z")]);
+    assert_eq!(ended(), None);
+}
+
+/// The turn's end clears no wait the tracker holds: a native question with
+/// no answer still waits and the calls answered stay answered. Claude Code
+/// was not seen writing an end while a question waits; this is the
+/// tracker's contract for any order of records.
+#[test]
+fn a_claude_turn_end_leaves_an_open_question_and_the_answered_calls() {
+    let home = home(Agent::Claude);
+    let path = home
+        .path()
+        .join(".claude/projects/-work-app/a1b2c3d4-0000-4000-8000-000000000001.jsonl");
+    let at = |second: u32| format!("2026-11-08T11:00:{second:02}.000Z");
+    let records = [
+        serde_json::json!({"type": "user", "timestamp": at(0), "promptId": "prompt-1",
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "message": {"role": "user", "content": "ask me"}}),
+        serde_json::json!({"type": "assistant", "timestamp": at(1),
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": at(2),
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "src"}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": at(3),
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_2", "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which one?"}]}}]}}),
+    ];
+    let append = |records: &[serde_json::Value]| {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for record in records {
+            writeln!(file, "{record}").unwrap();
+        }
+    };
+    append(&records);
+    let before = read_whole(home.path(), Agent::Claude).turns.unwrap();
+    assert_eq!(
+        before.waiting(),
+        Some(hide_session::turns::Waiting::Question)
+    );
+    append(&[
+        serde_json::json!({"type": "system", "subtype": "turn_duration",
+        "timestamp": at(4), "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+        "durationMs": 4000, "messageCount": 4, "isMeta": false, "isSidechain": false}),
+    ]);
+    let after = read_whole(home.path(), Agent::Claude).turns.unwrap();
+    assert_eq!(
+        after.ended(),
+        Some(hide_session::turns::TurnEnded::Completed)
+    );
+    assert_eq!(
+        after.waiting(),
+        Some(hide_session::turns::Waiting::Question)
+    );
+    assert_eq!(after.answered_calls(), before.answered_calls());
+    assert!(!after.answered_calls().is_empty());
+}
+
 pub(crate) const OPENCODE_ROOT: &str = "ses_0a1b2c3d4e5f60718293a4b5c6";
 
 fn opencode_writer(home: &Path) -> rusqlite::Connection {

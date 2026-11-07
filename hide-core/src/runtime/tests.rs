@@ -42,6 +42,8 @@ mod device_catalog;
 mod device_kit;
 #[path = "tests/device_names.rs"]
 mod device_names;
+#[path = "tests/device_reconnect.rs"]
+mod device_reconnect;
 #[path = "tests/device_sleep.rs"]
 mod device_sleep;
 #[path = "tests/device_worktrees.rs"]

@@ -313,3 +313,168 @@ fn a_late_analysis_cannot_release_the_next_turns_notice() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].state, push::NoticeState::NeedsYou);
 }
+
+/// Appends Claude Code 2.1.319's records to the session the fixture wrote.
+fn append_claude(path: &std::path::Path, records: &[serde_json::Value]) {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    for (index, record) in records.iter().enumerate() {
+        let mut record = record.clone();
+        record["sessionId"] = json!("native-notice");
+        record["isSidechain"] = json!(false);
+        record["timestamp"] = json!(format!("2026-10-01T00:01:{index:02}Z"));
+        writeln!(file, "{record}").unwrap();
+    }
+}
+
+fn claude_system(subtype: &str) -> serde_json::Value {
+    json!({"type": "system", "subtype": subtype, "isMeta": false})
+}
+
+fn claude_call(call: &str, command: &str) -> serde_json::Value {
+    json!({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": call, "name": "Bash", "input": {"command": command}}]}})
+}
+
+fn claude_result(call: &str) -> serde_json::Value {
+    json!({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call, "content": "ok"}]}})
+}
+
+/// The row the overlay lays for `agent`: whether it owes or settled a
+/// notice for the state, and the session read's facts.
+fn laid(
+    worker: &LabelWorker,
+    agent: &ObservedAgent,
+) -> (bool, bool, Option<crate::request_view::RowFacts>) {
+    let (kind, value) = agent.reference.clone().unwrap();
+    let mut payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [{
+        "pane_id": agent.pane_id, "agent": agent.agent, "agent_status": agent.status,
+        "state_change_seq": agent.state_change_seq,
+        "agent_session": {"kind": kind, "value": value},
+    }]}))
+    .unwrap();
+    worker.overlay().apply(&mut payload);
+    let row = payload.agents.remove(0);
+    (
+        row.notification_pending,
+        row.notification_finalized,
+        row.facts,
+    )
+}
+
+/// A device's next link, or a daemon that starts, runs a new engine that
+/// counts its states from the start again, and its worker starts from the
+/// records the last one kept. At the very state number the last engine
+/// reached, nothing read for that engine is laid: not the turn's end, not
+/// the calls answered, not a notice owed or settled, until this engine's
+/// read lands. That read continues from where the last one stopped, so it
+/// reads only what the session wrote meanwhile, here a turn cut short in a
+/// tool call; the turn already announced is not announced again, and the
+/// same state observed again reads nothing more.
+#[test]
+fn a_worker_on_a_new_engine_lays_nothing_read_under_the_last_one() {
+    use hide_session::turns::TurnEnded;
+    let harness = Harness::new();
+    let store = harness.store();
+    let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+    let path = harness.session("notice", "native-notice", &[("user", "검증해줘")]);
+    harness.backend.begin("알림 검증 작업");
+    let working = agent(&path, "working", 1);
+    observe(&mut worker, &working);
+    settle(&mut worker, &woken);
+    let mut notices = push::Transitions::default();
+    notices.observe(&projection(&worker, &working));
+
+    // The turn answers a call and replies; the engine reads it at rest
+    // before Claude Code writes the turn's end, and again after.
+    append_claude(
+        &path,
+        &[
+            claude_call("toolu_1", "ls"),
+            claude_result("toolu_1"),
+            json!({"type": "assistant", "message": {"role": "assistant",
+                "content": [{"type": "text", "text": "어떤 방법으로 진행할까요?"}]}}),
+            claude_system("stop_hook_summary"),
+        ],
+    );
+    harness
+        .backend
+        .answer("알림 검증 작업", "question", "진행 방법을 골라주세요");
+    let stopped = ObservedAgent {
+        status: Some("done".into()),
+        state_change_seq: 5,
+        ..working.clone()
+    };
+    observe(&mut worker, &stopped);
+    settle_with_ticks(&mut worker, &woken);
+    assert_eq!(laid(&worker, &stopped).2.unwrap().turn_ended, None);
+    append_claude(&path, &[claude_system("turn_duration")]);
+    let done = ObservedAgent {
+        state_change_seq: 6,
+        ..stopped
+    };
+    observe(&mut worker, &done);
+    settle_with_ticks(&mut worker, &woken);
+    let first = laid(&worker, &done).2.unwrap();
+    assert_eq!(first.turn_ended, Some(TurnEnded::Completed));
+    assert!(!first.answered_calls.is_empty());
+    assert_eq!(notices.observe(&projection(&worker, &done)).0.len(), 1);
+    drop(worker);
+
+    // While the link was down the agent ran another turn, interrupted in a
+    // tool call, and Claude Code wrote the turn's end after that.
+    append_claude(
+        &path,
+        &[
+            json!({"type": "user", "origin": {"kind": "human"},
+                "message": {"role": "user", "content": "다시 해줘"}}),
+            claude_call("toolu_2", "cargo test"),
+            claude_result("toolu_2"),
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "text", "text": "[Request interrupted by user for tool use]"}]}}),
+            claude_system("turn_duration"),
+        ],
+    );
+    let (mut worker, woken, source) = harness.worker(Arc::clone(&store));
+    observe(&mut worker, &done);
+    let (pending, finalized, facts) = laid(&worker, &done);
+    assert!(
+        !pending && !finalized,
+        "no notice of the last engine's state"
+    );
+    let facts = facts.unwrap_or_default();
+    assert_eq!(facts.turn_ended, None, "the last engine's read is not laid");
+    assert!(facts.answered_calls.is_empty());
+    assert!(notices.observe(&projection(&worker, &done)).0.is_empty());
+
+    settle_with_ticks(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    let (pending, _, facts) = laid(&worker, &done);
+    let facts = facts.unwrap();
+    assert_eq!(facts.turn_ended, Some(TurnEnded::Interrupted));
+    assert!(
+        facts
+            .answered_calls
+            .iter()
+            .any(|call| !first.answered_calls.contains(call)),
+        "the call answered while the link was down"
+    );
+    assert!(!pending, "a state first seen here owes no notice");
+    assert!(
+        notices.observe(&projection(&worker, &done)).0.is_empty(),
+        "the turn announced on the last link is not announced again"
+    );
+
+    observe(&mut worker, &done);
+    settle_with_ticks(&mut worker, &woken);
+    assert_eq!(
+        source.reads.load(Ordering::SeqCst),
+        1,
+        "nothing more to read"
+    );
+    assert_eq!(
+        laid(&worker, &done).2.unwrap().turn_ended,
+        Some(TurnEnded::Interrupted)
+    );
+}

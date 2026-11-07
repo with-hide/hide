@@ -1428,6 +1428,186 @@ fn resumes_through_the_nodes_file(shell: &str) {
         .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
 }
 
+/// Ends the holder and the program of each of `panes` as the machine going
+/// down does, by the pids and start times its record names, and waits for
+/// each to be gone.
+fn end_holders_of(state_dir: &std::path::Path, panes: &[&str]) {
+    for pane in panes {
+        let record = hide_kit::layout::pane_record(state_dir, &hide_kit::panes::holder_pane(pane));
+        let ran: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
+        for process in ["holder", "program"] {
+            let pid = u32::try_from(ran[process]["pid"].as_u64().unwrap()).unwrap();
+            let started = ran[process]["started"].as_u64().unwrap();
+            hide_platform::process::kill_tree(pid).unwrap();
+            until("the pane's processes end", || {
+                hide_platform::process::start_time(pid).map_or(true, |now| now != started)
+            });
+        }
+    }
+}
+
+/// Issue 653: the machine goes down with a Claude Code and a Codex running in
+/// two panes, every holder and the daemon ending, and the next daemon opens a
+/// new shell in each pane and resumes each agent in its own conversation. The
+/// stand-in programs record the words they were started with, so the check is
+/// what the agents were given, not what was typed. Each pane's shell runs with
+/// the stand-ins first on its `PATH`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+#[allow(clippy::disallowed_methods)] // polls the save, bounded by a deadline
+fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_conversations() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
+    use hide_agent_hooks::report::HookTurn;
+
+    use crate::agent_start::{ShellStart, start_at_shell_reusing_name};
+    use crate::codex_launch::CodexDaemon;
+
+    const CLAUDE: &str = "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90";
+    const CODEX: &str = "0192f3a4-7b6c-7d8e-9f01-23456789abcd";
+    let (root, [home, state_dir, folder]) = holder_root();
+    let _processes = RecordedProcesses(state_dir.clone());
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    let engine_dir = hide_kit::layout::engine_dir(&state_dir);
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let args_of = |program: &str| root.path().join(format!("{program}-args"));
+    for program in ["claude", "codex"] {
+        let path = bin.join(program);
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec sleep 600\n",
+                args_of(program).display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let runs = |program: &str| std::fs::read_to_string(args_of(program)).unwrap_or_default();
+    let shell = vec![
+        "/usr/bin/env".into(),
+        format!("PATH={}:/usr/bin:/bin", bin.display()).into(),
+        "/bin/sh".into(),
+    ];
+    let open = || {
+        let (node, service) = built_node(&home, &state_dir, shell.clone());
+        let place = super::own::Place {
+            engine_dir: engine_dir.clone(),
+            home: hide_platform::path::to_wire(&home).unwrap(),
+            hooks_home: Some(home.clone()),
+            node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
+            windows: false,
+            definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+            launches: Arc::default(),
+        };
+        let panes = super::own::link_panes(node);
+        let engine =
+            super::own::OwnEngine::open(Arc::clone(&panes), place).expect("the engine opens");
+        (engine, panes, service)
+    };
+
+    let (first, first_panes, first_service) = open();
+    let (_, _, claude) = first
+        .create_workspace(WAIT, &folder, "reboot", false, BTreeMap::new())
+        .unwrap();
+    let codex = first
+        .split_beside(WAIT, &claude, None, BTreeMap::new())
+        .unwrap();
+    let node = hide_node::Local::new(Some(home.clone()));
+    for (pane, kind, name, session) in [
+        (&claude, "claude", "worker-claude", CLAUDE),
+        (&codex, "codex", "worker-codex", CODEX),
+    ] {
+        prompted(&first, pane);
+        let start = first
+            .prepare_start(super::AgentLaunch {
+                pane_id: pane.clone(),
+                name: name.into(),
+                kind: kind.into(),
+                args: Vec::new(),
+                codex_daemon: CodexDaemon::Unsupported,
+                wakes: false,
+                program: None,
+            })
+            .expect("the start is prepared");
+        start_at_shell_reusing_name(
+            &first,
+            Some(&node),
+            &format!("contract:{name}"),
+            ShellStart::Plain,
+            &start,
+            SHOWN_WITHIN,
+            &|| Ok(()),
+        )
+        .unwrap_or_else(|error| panic!("{kind} starts: {error:?}"));
+        until(&format!("{kind} runs"), || runs(kind) == "\n");
+        // Its hook names the conversation and says its turn was running.
+        first
+            .hook_session(pane, kind, session)
+            .expect("the hook's session is taken");
+        apply(
+            &home,
+            pane,
+            Change::None,
+            Reporter {
+                agent: Some(kind),
+                session: Some(session),
+            },
+            Said::Turn(HookTurn::Working),
+            None,
+        )
+        .unwrap();
+    }
+    let save = hide_kit::layout::engine_session_in(&engine_dir);
+    until("the save names both conversations", || {
+        std::fs::read(&save).is_ok_and(|bytes| {
+            let text = String::from_utf8_lossy(&bytes);
+            text.contains(CLAUDE) && text.contains(CODEX)
+        })
+    });
+
+    // The machine goes down: the daemon, every holder and both agents end.
+    first.stop();
+    drop((first, first_panes, first_service));
+    end_holders_of(&state_dir, &[&claude, &codex]);
+
+    let (next, next_panes, _next_service) = open();
+    until_within(
+        "each agent is started again",
+        crate::agent_start::AGENT_START_DEADLINE,
+        || runs("claude").lines().count() == 2 && runs("codex").lines().count() == 2,
+    );
+    assert_eq!(runs("claude"), format!("\n--resume {CLAUDE}\n"));
+    assert_eq!(runs("codex"), format!("\nresume {CODEX}\n"));
+    until("each resumed agent holds its own conversation", || {
+        next.agents(WAIT).is_ok_and(|agents| {
+            [(&claude, CLAUDE), (&codex, CODEX)]
+                .iter()
+                .all(|(pane, session)| {
+                    agents.iter().any(|agent| {
+                        agent.pane_id == **pane
+                            && agent.agent_session.as_ref().map(|s| s.value.as_str())
+                                == Some(*session)
+                    })
+                })
+        })
+    });
+    assert!(
+        next.session(WAIT).unwrap().not_resumed.is_empty(),
+        "both were resumed"
+    );
+    for pane in [&claude, &codex] {
+        next_panes
+            .terminate(pane)
+            .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
+    }
+}
+
 /// PRD engine-bundle-3-core-owns B18's hook cells: on the core's own engine
 /// a Claude whose hook said its conversation is put to sleep in its pane by
 /// its own quit key and woken there resuming that conversation by id, the
