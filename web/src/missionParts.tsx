@@ -9,7 +9,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, launchSession, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, launchSession, missionNumber, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { machineName, windowDeviceId } from "./screenMachine";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
@@ -180,4 +180,10 @@ export function RunText({ run, className, wordsClassName, children }: { run: Run
       {children}
     </span>
   );
+}
+
+/** A mission's short number (`M39`) in muted monospace before its title; nothing for an id that carries none. */
+export function MissionNumber({ mission, className }: { mission: Pick<Mission, "id">; className?: string }) {
+  const number = missionNumber(mission.id);
+  return number ? <span className={cn("shrink-0 font-mono tabular-nums text-muted-foreground", className)} data-mission-number={number}>{number}</span> : null;
 }

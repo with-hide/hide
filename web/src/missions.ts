@@ -653,6 +653,17 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
   return items;
 }
 
+/**
+ * A mission's short number, `M39` for `mission-39`, the one name the Mission
+ * tool's rows, the map's head and a Conductor pane's chip call it by: read
+ * from the core's id only, never made up, and null for an id of another shape.
+ * The `M` keeps it apart from a pull request's `#`.
+ */
+export function missionNumber(id: string): string | null {
+  const found = /^mission-(\d+)$/.exec(id);
+  return found ? `M${found[1]}` : null;
+}
+
 /** `Conductor에게 편지 N통 대기 · <what to do>`: the Conductor's held letters as 내 차례 and the Mission tool's row say them. */
 export function heldLettersText(letters: MissionHeldLetters, t: TFunction<"translation">): string {
   return `${t("mission.letters.waiting", { count: letters.count })} · ${t(`mission.letters.reason.${letters.reason}`)}`;

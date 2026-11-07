@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -657,5 +657,13 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
     expect(nodeWork(mission("m"), node("n", { status: "done", work: waiting }))).toBeNull();
     expect(nodeWork(mission("m", { status: "cancelled" }), node("n", { status: "working", work: waiting }))).toBeNull();
     expect(nodeWork(mission("m"), node("n", { status: "working" }))).toBeNull();
+  });
+});
+
+describe("missionNumber", () => {
+  it("names a mission by the number in the core's id, and gives none for an id without one", () => {
+    expect(missionNumber("mission-39")).toBe("M39");
+    expect(missionNumber("mission-7")).toBe("M7");
+    for (const id of ["imported", "mission-", "mission-3a", "Mission-3", "mission-3-b"]) expect(missionNumber(id)).toBeNull();
   });
 });

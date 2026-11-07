@@ -78,6 +78,8 @@ it("reads top down as the head, 내 차례 only when the operator has something 
   const running = await mount({ items: [mission({ nodes })] });
   try {
     expect(running.q("[data-mission-pill]")?.textContent).toBe("Running");
+    // The head starts with the mission's number, the same `M1` its list row and its Conductor's chip use.
+    expect(running.q("[data-mission-summary]")?.firstElementChild?.getAttribute("data-mission-number")).toBe("M1");
     expect(running.q('[data-mission-stat="time"]')?.textContent).toBe("3m so far");
     expect(running.q('[data-mission-stat="done"]')?.textContent).toBe("1 / 5 done");
     // Its cells are drawn as the cards: done green, a node someone has to look at in the decision colour (PRD mission-node-simple B5).

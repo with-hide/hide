@@ -25,7 +25,7 @@ import { useMapPick } from "./mapPick";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
+import { markWord, MissionDevice, MissionNumber, RunText, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
 import { STATE_PILL } from "./missionList";
 import { planCount } from "./plans";
 import {
@@ -199,6 +199,7 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const time = took ? t("mission.elapsed.total", { elapsed: took }) : running ? t("mission.elapsed.running", { elapsed: running }) : null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs px-md py-sm text-body" data-mission-summary="true">
+      <MissionNumber mission={mission} className="text-caption" />
       <WorkPill tone={STATE_PILL_TONE[mission.status]} done={mission.status === "done"} data-mission-pill={mission.status}>
         {t(STATE_PILL[mission.status])}
       </WorkPill>
