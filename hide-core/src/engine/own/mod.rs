@@ -1476,10 +1476,13 @@ impl<'g> Engine for OwnEngine<'g> {
                 code: "unknown_agent".to_owned(),
                 message: format!("no agent definition names {kind}"),
             })?;
-        if self
+        let applied = self
             .topology()
-            .hook_session(pane, &definition.id, session)?
-        {
+            .hook_session(pane, &definition.id, session, &catalog)?;
+        if applied.rules_for.is_some() {
+            self.give_rules(pane);
+        }
+        if applied.changed {
             self.changed();
         }
         // The first session the resumed agent names is the conversation it
@@ -4637,6 +4640,294 @@ mod tests {
             engine.close_pane(WAIT, &pane).unwrap();
             assert!(engine.hook_session(&pane, "claude", "too-late").is_err());
         }
+    }
+
+    /// with-hide/hide-private#696: an agent typed into a shell under a
+    /// program the holder cannot name (a native Claude Code, whose process
+    /// the system names by its version, a wrapper, a terminal it could not
+    /// read) is known by its own hook's report, whichever comes first, as a
+    /// start knows the agent it types; it ends when the shell holds the
+    /// terminal again.
+    #[test]
+    fn a_typed_agent_its_holder_cannot_name_is_known_by_its_own_hooks_report() {
+        use hide_node_link::holders::ScreenState;
+        let unread = PaneFacts {
+            foreground_unread: true,
+            ..PaneFacts::default()
+        };
+        for (kind, shown, program) in [
+            ("claude-code", "claude", "2.1.318"),
+            ("codex", "codex", "wrapper"),
+            ("opencode", "opencode", "wrapper"),
+        ] {
+            for (report_first, facts) in [
+                (true, running(program, ScreenState::Idle)),
+                (false, running(program, ScreenState::Idle)),
+                (true, unread.clone()),
+                (false, unread.clone()),
+            ] {
+                let case = format!("{kind} under {facts:?}, report first: {report_first}");
+                let holders = Arc::new(Holders::default());
+                let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+                let (_, _, pane) = engine
+                    .create_workspace(WAIT, "/w", "w", true, Env::new())
+                    .unwrap();
+                // The shell at its prompt.
+                holders.say(&pane, &PaneFacts::default());
+                if report_first {
+                    engine.hook_session(&pane, kind, "s-1").unwrap();
+                    assert!(engine.agents(WAIT).unwrap().is_empty(), "{case}");
+                }
+                holders.say(&pane, &facts);
+                if !report_first {
+                    engine.hook_session(&pane, kind, "s-1").unwrap();
+                }
+                let agents = engine.agents(WAIT).unwrap();
+                assert_eq!(agents.len(), 1, "{case}");
+                assert_eq!(agents[0].pane_id, pane, "{case}");
+                assert_eq!(agents[0].agent.as_deref(), Some(shown), "{case}");
+                assert_eq!(
+                    agents[0]
+                        .agent_session
+                        .as_ref()
+                        .map(|session| session.value.as_str()),
+                    Some("s-1"),
+                    "{case}"
+                );
+                if program == "2.1.318" && !facts.foreground_unread {
+                    // The shell's decision first, then the agent's.
+                    assert_eq!(
+                        holders.rules_given(2).last().unwrap().1.as_deref(),
+                        Some("claude-code"),
+                        "its screen is read with its own rules: {case}"
+                    );
+                }
+                holders.say(&pane, &PaneFacts::default());
+                assert!(engine.agents(WAIT).unwrap().is_empty(), "{case}");
+            }
+        }
+
+        // A program a definition names as another agent is never claimed.
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.say(&pane, &running("gemini", ScreenState::Idle));
+        engine.hook_session(&pane, "claude-code", "s-1").unwrap();
+        let agents = engine.agents(WAIT).unwrap();
+        assert_eq!(agents[0].agent.as_deref(), Some("gemini"));
+        assert!(agents[0].agent_session.is_none());
+    }
+
+    /// #696: the session the core publishes carries that agent, so the hook
+    /// facts the core keeps for its pane are laid on it and saved as seen,
+    /// where before only its reports were kept and its pane read as having
+    /// no agent.
+    #[test]
+    fn a_typed_agent_known_by_its_hook_reaches_the_cores_session_and_hook_facts() {
+        use crate::agent_hooks::facts::HookFacts;
+        use hide_node_link::holders::ScreenState;
+        use hide_node_link::panes::{HookStatusReport, HookTurn};
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.say(&pane, &running("2.1.318", ScreenState::Working));
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("hook-facts.json");
+        {
+            let mut facts = HookFacts::restore(path.clone(), Vec::new);
+            // What `Core::hook_status` does with the report: record it, then
+            // hand its session to the pane's engine.
+            let report = HookStatusReport {
+                runtime: "claude-code".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some("s-1".to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+                waiting: None,
+            };
+            facts.record(&pane, &report).unwrap();
+            engine.hook_session(&pane, "claude-code", "s-1").unwrap();
+            let mut published = engine.session(WAIT).unwrap().project();
+            let tokens = facts.lay(&mut published, str::to_owned, |_| true);
+            assert!(tokens.contains_key(&pane), "{tokens:?}");
+            let agent = published
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id.as_deref() == Some(pane.as_str()))
+                .expect("the session lists the pane's agent");
+            assert_eq!(agent.hook, Some(HookTurn::Working));
+        }
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["panes"][&pane]["seen_agent"], true, "{saved}");
+    }
+
+    /// #696: a typed agent known by its own hook goes on in its pane with its
+    /// session when the daemon starts again, as a spawned agent does: with
+    /// its pane's holder still running, the agent runs on and nothing is
+    /// typed; with every holder ended (a reboot), its conversation is resumed
+    /// in the same pane by its session. One that ended before, its shell
+    /// back in front, left no record, and nothing is resumed in its pane.
+    /// A device's engine, which runs in the core over the device's node and
+    /// reads no hook files there, does the same.
+    #[test]
+    fn a_typed_agent_known_by_its_hook_goes_on_in_its_pane_after_a_restart() {
+        for device in [false, true] {
+            typed_agent_goes_on_after_a_restart(device);
+        }
+    }
+
+    fn typed_agent_goes_on_after_a_restart(device: bool) {
+        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
+        use hide_agent_hooks::report::HookTurn;
+        use hide_node_link::holders::ScreenState;
+        let root = tempfile::tempdir().unwrap();
+        let place = match device {
+            false => place(root.path()),
+            // As `open_device` makes it.
+            true => Place {
+                hooks_home: None,
+                ..place(root.path())
+            },
+        };
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        // The ended agent's pane comes first: a resume it had would be typed
+        // before the others'.
+        let (_, _, ended) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let split = |at: &str| {
+            first
+                .split_pane_at(
+                    WAIT,
+                    at,
+                    ClosedSplitDirection::Right,
+                    &wire(&folder),
+                    0.5,
+                    Env::new(),
+                )
+                .unwrap()
+        };
+        let claude = split(&ended);
+        let codex = split(&claude);
+        let opencode = split(&codex);
+        let typed = [
+            (claude.clone(), "claude-code", "2.1.318", "s-1"),
+            (codex.clone(), "codex", "wrapper", "s-2"),
+            (opencode.clone(), "opencode", "wrapper", "s-3"),
+            (ended.clone(), "claude-code", "2.1.318", "s-4"),
+        ];
+        for (pane, kind, program, session) in &typed {
+            first_holders.say(pane, &running(program, ScreenState::Working));
+            first.hook_session(pane, kind, session).unwrap();
+            // Its turn was running when the daemon went down.
+            apply(
+                &home(&place),
+                pane,
+                Change::None,
+                Reporter {
+                    agent: Some(kind),
+                    session: Some(session),
+                },
+                Said::Turn(HookTurn::Working),
+                None,
+            )
+            .unwrap();
+        }
+        // The last one's agent ended: its shell holds the terminal again.
+        first_holders.say(&ended, &PaneFacts::default());
+        drop(first);
+        let panes: Vec<String> = typed.iter().map(|(pane, ..)| pane.clone()).collect();
+        let typed = &typed[..3];
+
+        // Only the daemon ended: each holder still runs its agent.
+        {
+            let holders = Arc::new(Holders::default());
+            *holders.processes.lock().unwrap() = Some(HolderProcesses {
+                shell: 52,
+                foreground: Some(hide_node_link::holders::HolderForeground {
+                    group: 60,
+                    members: vec![(60, "wrapper".to_owned())],
+                    folders: Some(Vec::new()),
+                }),
+            });
+            let engine =
+                OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone())
+                    .unwrap();
+            holders.hand(HolderRecovery {
+                owner: 1,
+                present: panes.clone(),
+                ..HolderRecovery::default()
+            });
+            engine.restored().unwrap();
+            for (pane, _, program, _) in typed {
+                holders.say(pane, &running(program, ScreenState::Working));
+            }
+            holders.say(&ended, &PaneFacts::default());
+            let agents = engine.agents(WAIT).unwrap();
+            assert_eq!(agents.len(), 3, "device {device}: {agents:?}");
+            for (pane, _, _, session) in typed {
+                let agent = agents
+                    .iter()
+                    .find(|agent| agent.pane_id == *pane)
+                    .unwrap_or_else(|| {
+                        panic!("{pane} lists its agent (device {device}): {agents:?}")
+                    });
+                assert_eq!(
+                    agent
+                        .agent_session
+                        .as_ref()
+                        .map(|session| session.value.as_str()),
+                    Some(*session)
+                );
+                assert_eq!(holders.typed(pane), "", "nothing is typed over it");
+            }
+        }
+
+        // Every holder ended: each conversation resumes in its own pane.
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            ended: panes,
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+        for (pane, resumed) in [
+            (&claude, "claude --resume s-1 || printf"),
+            (&codex, "codex resume s-2 || printf"),
+            (&opencode, "opencode -s s-3 || printf"),
+        ] {
+            assert!(
+                holders.wait_typed(pane).starts_with(resumed),
+                "device {device}: {:?}",
+                holders.typed(pane)
+            );
+        }
+        // Resumes are typed one pane after another, in the panes' order.
+        assert_eq!(
+            holders.typed(&ended),
+            "",
+            "an ended agent is not resumed (device {device})"
+        );
+        assert!(next.session(WAIT).unwrap().resting.is_empty());
     }
 
     /// B19: the folder, title and first prompt the holder reads follow the
