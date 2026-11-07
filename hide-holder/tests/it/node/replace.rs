@@ -32,7 +32,7 @@ const GRID: GridSize = GridSize {
 /// Has the shell print its terminal's grid (on Windows its columns), which
 /// reads [`GRID_PRINTED`] at [`GRID`]; the line typed never does.
 const PRINT_GRID: &str = if cfg!(windows) {
-    "for /f \"tokens=2\" %a in ('mode con ^| find \"Columns\"') do @echo grid-%a\r"
+    "for /f \"tokens=2\" %a in ('mode con ^| findstr Columns') do @echo grid-%a\r"
 } else {
     "S=$(stty size); echo \"grid-${S% *}x${S#* }\"\r"
 };

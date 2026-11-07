@@ -56,7 +56,7 @@ fn a_shell_on_another_builds_holder_is_started_again_in_its_place_under_its_id()
     assert_eq!(starts_of(&holders, &pane), 2, "the new holder started once");
     assert_eq!(
         listed(&engine),
-        [pane.clone()],
+        std::slice::from_ref(&pane),
         "the pane kept its id alone"
     );
     assert_eq!(restore_error(&engine, &pane), None);
@@ -102,7 +102,11 @@ fn a_replacement_whose_new_holder_does_not_start_marks_the_pane_and_keeps_it() {
 
     let refused = engine.replace_outdated_holder(WAIT, &pane).unwrap_err();
     assert_eq!(refused.code(), Some("holder_start_failed"));
-    assert_eq!(listed(&engine), [pane.clone()], "the pane was closed");
+    assert_eq!(
+        listed(&engine),
+        std::slice::from_ref(&pane),
+        "the pane was closed"
+    );
     assert!(
         restore_error(&engine, &pane).is_some_and(|why| why.contains("holder program is missing")),
         "{:?}",
