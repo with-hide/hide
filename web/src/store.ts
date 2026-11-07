@@ -53,6 +53,12 @@ export type CloneTarget = { device_id: string; parent: string; name: string; pat
 export type HomeEntry = { name: string; is_directory: boolean; repository?: boolean; branch?: string; repositories?: number };
 /** One folder under a machine's home (`hide_node_link::browse::HomeListing`). */
 export type HomeListing = { path: string; label: string; home: string; entries: HomeEntry[]; truncated: boolean };
+/** Where a machine's node found a project worth adding: an agent's session format (`claude`, `codex`, ...), `paseo` or `herdr`. */
+export type ImportSource = string;
+/** One project worth adding on a machine (`hide_node_link::importable::ImportableProject`). */
+export type ImportableProject = { path: string; label: string; name: string; sources: ImportSource[]; active_at_unix_ms: number };
+/** A machine's answer to `importable_projects`: at most twenty projects, or why the machine could not be asked. */
+export type ImportableAnswer = { device_id: string; projects: ImportableProject[] | null; reason: string | null; seq: number };
 /** A machine's answer to `home_folder_list`: the listing, or the reason it could not list `request`. */
 export type HomeFolderAnswer = { device_id: string; request: string; listing: HomeListing | null; reason: string | null; seq: number };
 /**
@@ -236,6 +242,8 @@ type Store = {
   homeFolders: Record<string, HomeFolderAnswer>;
   /** How many folder list answers arrived; an asker keeps only answers newer than its ask. */
   homeFolderSeq: number;
+  /** Add a project's importable projects, the newest answer per machine; `seq` counts every answer, as `homeFolderSeq` does. */
+  importable: Record<string, ImportableAnswer>;
   /** hided's last answer about where Create new project would make its folder. */
   projectTarget: ProjectTarget | null;
   /** The last device folder that could not be listed, until a listing for it arrives. */
@@ -393,6 +401,7 @@ export const useShellStore = create<Store>((set, get) => ({
   cloneTarget: null,
   homeFolders: {},
   homeFolderSeq: 0,
+  importable: {},
   projectTarget: null,
   directoryUnavailable: null,
   fileIndex: null,
@@ -573,6 +582,23 @@ export const useShellStore = create<Store>((set, get) => ({
           reason: answer.reason ?? (answer.listing ? null : "unreadable"),
           seq: state.homeFolderSeq + 1,
         }),
+      }));
+      return [];
+    }
+    if (frame.type === "importable_projects") {
+      const answer = payload as Partial<ImportableAnswer>;
+      const device = answer.device_id ?? "";
+      set((state) => ({
+        homeFolderSeq: state.homeFolderSeq + 1,
+        importable: {
+          ...state.importable,
+          [device]: {
+            device_id: device,
+            projects: answer.projects ?? null,
+            reason: answer.reason ?? (answer.projects ? null : "unreadable"),
+            seq: state.homeFolderSeq + 1,
+          },
+        },
       }));
       return [];
     }

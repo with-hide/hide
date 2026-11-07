@@ -60,4 +60,16 @@ impl Runtime {
         self.persist_ui_state();
         true
     }
+
+    /// The paths of the projects registered on `device_id`, in the wire
+    /// spelling the node that holds them answered.
+    pub(crate) fn registered_paths(&self, device_id: &str) -> Vec<String> {
+        self.snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .filter(|registration| registration.device_id == device_id)
+            .map(|registration| registration.path.clone())
+            .collect()
+    }
 }

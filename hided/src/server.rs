@@ -2271,7 +2271,8 @@ enum ClientAction {
     /// A `file_list` for a checkout on an SSH device, answered by its helper.
     DeviceListing(Value),
     /// Add a project's question for a machine's node: a folder under its
-    /// home (`home_folder_list`), or where a clone or a new project would
+    /// home (`home_folder_list`), the projects worth adding there
+    /// (`importable_projects`), or where a clone or a new project would
     /// land on a device (`clone_target`, `project_target`).
     NodeAsk(Value),
     /// Comment mode on a browser View, answered when its page is ready.
@@ -2335,7 +2336,9 @@ fn handle_client_text(
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
     }
     match event.get("kind").and_then(Value::as_str) {
-        Some("home_folder_list") => return Ok(ClientAction::NodeAsk(event)),
+        Some("home_folder_list" | "importable_projects") => {
+            return Ok(ClientAction::NodeAsk(event));
+        }
         Some("project_target" | "clone_target")
             if event_device(&state.boundary, &event).is_some() =>
         {
@@ -2844,12 +2847,22 @@ fn spawn_node_ask(
 /// How long a node may take to list a folder or judge a new folder's place.
 const NODE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// How long a node may take to find the projects worth adding: it walks up
+/// to `SESSION_DISCOVERY_LIMIT` session entries and judges up to
+/// `JUDGED_FOLDER_CAP` folders.
+const IMPORTABLE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Add a project's question for a machine's node, answered as the frame the
 /// dialog reads (PRD device-add-project D-03, D-07, D-08):
 ///
 /// - `home_folder_list` {device_id, path}: one folder under that machine's
 ///   home (`Call::HomeList`), this machine's included, answered as a
 ///   `home_folder_list` frame carrying `listing` or `reason`;
+/// - `importable_projects` {device_id}: the projects worth adding on that
+///   machine (`Call::ImportableProjects`), its registrations left out,
+///   answered as an `importable_projects` frame carrying `projects` or
+///   `reason`, each source the node could not read logged as
+///   `add_project.import_source_dropped`;
 /// - a device's `clone_target` and `project_target`: where the clone or new
 ///   project would land under that device's home (`Call::NewFolderTarget`),
 ///   answered in the same frames this machine's `$HOME` line answers with.
@@ -2897,6 +2910,38 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
             };
             json!({"type": "home_folder_list", "payload": {
                 "device_id": device, "request": request, "listing": listing, "reason": refused,
+            }})
+        }
+        "importable_projects" => {
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                // The core's registrations there are left out before the
+                // node keeps its newest twenty.
+                let exclude = core.registered_paths(&device).map_err(LinkError::NotConnected)?;
+                hide_core::node_access::call_as::<hide_node_link::importable::ImportableProjects>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::ImportableProjects { exclude },
+                    IMPORTABLE_ASK_TIMEOUT,
+                )
+            });
+            let (projects, refused) = match answer {
+                Ok(found) => {
+                    // A source the node could not read is the log's, never
+                    // the screen's (PRD device-add-project D-12, B27).
+                    for dropped in &found.dropped {
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "component": "hided", "kind": "add_project.import_source_dropped",
+                                "device": device, "source": dropped.source, "reason": dropped.reason,
+                            })
+                        );
+                    }
+                    (Some(found.projects), None)
+                }
+                Err(error) => (None, Some(reason(error))),
+            };
+            json!({"type": "importable_projects", "payload": {
+                "device_id": device, "projects": projects, "reason": refused,
             }})
         }
         _ => {

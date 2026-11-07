@@ -3405,6 +3405,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "home_folder_list", payload: { device_id: deviceId, path } });
     },
 
+    /** The projects worth adding on `deviceId`, answered as an `importable_projects` frame (PRD device-add-project D-09). */
+    listImportableProjects(deviceId: string) {
+      dispatch({ schema_version: 2, kind: "importable_projects", payload: { device_id: deviceId } });
+    },
+
     /** The core remembers the folder the list last showed on each machine (PRD device-add-project D-04). */
     setAddProjectFolder(deviceId: string, path: string) {
       dispatch({ schema_version: 2, kind: "add_project_folder_set", payload: { device_id: deviceId, path } });

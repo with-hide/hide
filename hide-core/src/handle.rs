@@ -1058,6 +1058,16 @@ impl Core {
         result
     }
 
+    /// The paths of the projects registered on `device_id`, which a node's
+    /// answer of the projects worth adding leaves out (PRD
+    /// device-add-project D-11).
+    pub fn registered_paths(&self, device_id: &str) -> Vec<String> {
+        if !check_owner_thread(self, "registered_paths") {
+            return Vec::new();
+        }
+        lock_recover(&self.runtime).registered_paths(device_id)
+    }
+
     /// Why a link from `node` would be refused now, if it would.
     pub fn inbound_refusal(&self, node: &str) -> Option<String> {
         if !check_owner_thread(self, "inbound_refusal") {
