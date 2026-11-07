@@ -215,8 +215,10 @@ struct StoredUiState {
     /// build for the size, as a first launch always does.
     #[serde(default)]
     pane_terminal_sizes: BTreeMap<String, (u16, u16)>,
-    /// Absent in a store written before agent sleep existed, which loads as
-    /// Never; a value that is not one of the choices loads as Never too.
+    /// The hours, or 0 for an Off the operator chose
+    /// (`agent_sleep::stored_after_hours`). Absent or null in a store written
+    /// before the 24-hour default, when null was both the default and Off,
+    /// and loads as the default, as a value that is not a choice does.
     #[serde(default)]
     agent_sleep_after_hours: Option<u32>,
     /// Absent in a store written before issue sources could be chosen, which
@@ -689,9 +691,9 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             pane_completions: stored.pane_completions,
             pane_launches: stored.pane_launches,
             request_verbs: stored.request_verbs,
-            agent_sleep_after_hours: stored
-                .agent_sleep_after_hours
-                .filter(|hours| crate::agent_sleep::valid_after_hours(Some(*hours))),
+            agent_sleep_after_hours: crate::agent_sleep::loaded_after_hours(
+                stored.agent_sleep_after_hours,
+            ),
             project_issue_sources: stored
                 .project_issue_sources
                 .into_iter()
@@ -874,7 +876,9 @@ pub fn save(
         pane_launches: state.pane_launches.clone(),
         request_verbs: state.request_verbs.clone(),
         pane_terminal_sizes: pane_terminal_sizes.clone(),
-        agent_sleep_after_hours: state.agent_sleep_after_hours,
+        agent_sleep_after_hours: Some(crate::agent_sleep::stored_after_hours(
+            state.agent_sleep_after_hours,
+        )),
         project_issue_sources: state.project_issue_sources.clone(),
         issue_settings: StoredIssueSettings {
             settings: state.issue_settings.clone(),
