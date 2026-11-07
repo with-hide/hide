@@ -7643,6 +7643,12 @@ fn a_device_workers_node_names_the_pane_its_agent_row_has() {
         Some(crate::runtime::missions::NodeWork::Working),
         "a device worker's work is read from its row there"
     );
+    // A device that dropped keeps its last rows; they no longer say what its
+    // worker does, so the card says nothing rather than the last word.
+    runtime.snapshot.status.remote[0].state = "not_connected".into();
+    let view = node_view(&runtime, "fix");
+    assert_eq!(view.work, None, "a worker on a device that does not answer");
+    assert_eq!(view.pane_id.as_deref(), Some("remote:mini:pane:w2:p0"));
 }
 
 /// with-hide/hide-private#680: a node in progress says whether its worker
@@ -7707,6 +7713,36 @@ fn a_node_in_progress_says_whether_its_worker_works_waits_or_is_gone() {
         .ended = true;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::NoWorker));
+}
+
+/// The missions are drawn again when a row they read moves, and only then:
+/// an agent outside every mission changing its turn leaves the digest the
+/// views are kept by as it was, while the worker's row, or its device
+/// dropping, changes it (review of with-hide/hide#2211).
+#[test]
+fn only_a_missions_own_rows_redraw_its_views() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let digest = |runtime: &Runtime| {
+        let ledger = runtime.delivery_state().unwrap();
+        runtime.rows_and_holds_digest(Some(&ledger))
+    };
+    runtime.snapshot.navigator.agents = vec![
+        shown_row("recipient", "recipient", "working"),
+        shown_row("elsewhere", "elsewhere", "working"),
+    ];
+    let before = digest(&runtime);
+    runtime.snapshot.navigator.agents[1] = shown_row("elsewhere", "elsewhere", "idle");
+    assert_eq!(digest(&runtime), before, "a row no mission holds");
+    runtime.snapshot.navigator.agents[0] = shown_row("recipient", "recipient", "idle");
+    assert_ne!(digest(&runtime), before, "the worker's own row");
 }
 
 /// `runtime`'s letter from the `recipient` pane to the Conductor, written
@@ -7822,7 +7858,11 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .iter_mut()
         .find(|letter| letter.id == again)
         .unwrap()
-        .state = crate::delivery::ledger::State::Acknowledged;
+        .state = crate::delivery::ledger::State::Delivered;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(held(&runtime), None, "the sender got it through");
+    assert_eq!(
+        held(&runtime),
+        None,
+        "the later letter's bell was answered: the Conductor is reached again, before any ack"
+    );
 }

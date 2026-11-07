@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, type EscalationCause } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -645,6 +645,21 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
     }
     expect(nodeWorkWords({ state: "waiting", on: { kind: "attention", to: "operator", reason: "worker_ended" } }, t)).toBe("Waiting · You");
     expect(heldLettersText({ count: 2, reason: "draft", since_unix_ms: 1 }, t)).toBe("Letters waiting for the Conductor: 2 · unsent text in the Conductor's input: send or clear it");
+  });
+
+  it("folds a worker raised for its held letter into the Conductor's letters line, and keeps a worker raised for anything else", () => {
+    const letters = { count: 2, reason: "draft" as const, since_unix_ms: 1 };
+    const nodes = [node("api", { status: "working", pane_id: "p2" })];
+    const raisedFor = (cause: EscalationCause) => () => ({ cause, line: null });
+    // One cause, one line: the letters line already says what to do.
+    for (const cause of ["draft", "parent_blocked", "bell_exhausted", "undelivered"] as const) {
+      expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters"]);
+      // Without the letters line the worker's own item still says it.
+      expect(turnItems(mission("m", { nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["worker_blocked"]);
+    }
+    for (const cause of ["child_blocked", "observer_unconfirmed", "input_unconfirmed"] as const) {
+      expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters", "worker_blocked"]);
+    }
   });
 
   it("puts a running mission's held Conductor letters in 내 차례 and says a node's work only while it is in progress", () => {

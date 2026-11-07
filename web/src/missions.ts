@@ -630,6 +630,9 @@ export function workerEscalation(row: Pick<AgentRow, "escalation" | "request"> |
   return { cause: row.escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null };
 }
 
+/** The escalations a held letter to the parent raises: with the Conductor's held letters shown, they fold into that one line. */
+const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked", "bell_exhausted", "undelivered"]);
+
 /** `escalationOf` answers for a node's worker: the desktop reads its row, the phone the escalation its core sent with the node. */
 export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, escalationOf: (node: N) => WorkerEscalation | null): TurnItem<N>[] {
   if (!missionOpen(mission)) return [];
@@ -644,7 +647,8 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
   }
   for (const node of orderedNodes(mission)) {
     const escalation = node.status === "working" ? escalationOf(node) : null;
-    if (escalation) items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
+    // A worker raised because its letter to the Conductor is held is the letters line's cause said again; that line already says what to do.
+    if (escalation && !(mission.conductor_letters && LETTER_CAUSES.has(escalation.cause))) items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
   }
   if (mission.status === "merge_wait") {
     const nodes = landingOrder(mission);

@@ -2852,27 +2852,52 @@ impl Runtime {
         }
     }
 
-    /// What `ViewsMadeFrom::rows_and_holds` compares: one pass over the agent
-    /// rows and the doorbell's holds while a mission runs, nothing otherwise.
-    fn rows_and_holds_digest(&self) -> u64 {
+    /// What `ViewsMadeFrom::rows_and_holds` compares while a mission runs,
+    /// zero with none running: each open mission's workers' and checkers'
+    /// activity as a node's `work` reads it (`worker_activity`), and the
+    /// doorbell's holds by the operator's part in them, which a Conductor's
+    /// held letters read. Rows no mission holds are not read, so an
+    /// unrelated agent's turn rebuilds no mission; one pass over the
+    /// missions' registrations and the holds, both bounded by the ledger.
+    pub(super) fn rows_and_holds_digest(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+    ) -> u64 {
         use std::hash::{Hash, Hasher};
-        if !self
+        let mut open = self
             .missions
             .book
             .missions
             .iter()
-            .any(|mission| mission.status.open())
-        {
+            .filter(|mission| mission.status.open())
+            .peekable();
+        if open.peek().is_none() {
             return 0;
         }
+        let records = worker_records(ledger, open);
+        let mut workers: Vec<(&str, Option<&str>)> = records
+            .iter()
+            .map(|(id, record)| (*id, self.worker_activity(record)))
+            .collect();
+        workers.sort_unstable();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for row in self.agent_rows() {
-            (&row.pane_id, &row.activity).hash(&mut hasher);
-        }
+        workers.hash(&mut hasher);
         for (letter, hold) in &self.delivery_holds {
             (letter, crate::delivery::held::held_for(*hold)).hash(&mut hasher);
         }
         hasher.finish()
+    }
+
+    /// A mission registration's agent row activity, as its node's `work`
+    /// reads it: none while its machine does not answer, since a device
+    /// that dropped keeps its last rows and they no longer say what the
+    /// agent does (a row Hide cannot see says nothing).
+    fn worker_activity(&self, record: &crate::coordination::AgentRecord) -> Option<&str> {
+        if !self.device_answers(&record.machine) {
+            return None;
+        }
+        self.agent_row(&record.pane_on(self.node.as_str()))
+            .map(|row| row.activity.as_str())
     }
 
     /// The mission's device does not answer, so its map shows the last
@@ -3017,11 +3042,7 @@ impl Runtime {
                     work: None,
                 };
                 view.waiting_on = waiting_on(mission, &view);
-                let activity = view
-                    .pane_id
-                    .as_deref()
-                    .and_then(|pane| self.agent_row(pane))
-                    .map(|row| row.activity.as_str());
+                let activity = record.and_then(|record| self.worker_activity(record));
                 view.work = node_work(mission, &view, activity);
                 view
             })
@@ -3185,7 +3206,7 @@ impl Runtime {
             worker_records(ledger.as_deref(), self.missions.book.missions.iter()).into_values()
         }));
         let laid = self.laid_panes();
-        let rows_and_holds = self.rows_and_holds_digest();
+        let rows_and_holds = self.rows_and_holds_digest(ledger.as_deref());
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),

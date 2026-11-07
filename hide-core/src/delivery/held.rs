@@ -126,10 +126,11 @@ pub(crate) fn letters_held(
 }
 
 /// Whether a letter from `undelivered`'s sender to its recipient, written
-/// after it, was taken in.
+/// after it, reached the recipient: its bell was answered (`Delivered`) or
+/// the letter taken in, so the recipient can be reached again.
 fn got_through_since(ledger: &Ledger, undelivered: &super::ledger::Letter) -> bool {
     ledger.letters.iter().any(|later| {
-        later.state == State::Acknowledged
+        matches!(later.state, State::Delivered | State::Acknowledged)
             && later.created_at_unix_ms >= undelivered.created_at_unix_ms
             && later.id != undelivered.id
             && later.sender.same_identity(&undelivered.sender)
