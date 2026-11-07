@@ -1094,6 +1094,7 @@ impl OwnEngine<'static> {
             &resume.pane,
             PaneAgent::resumed(&resume.kind, resume.name.as_deref(), resume.session.clone()),
             &line,
+            false,
         )
         .map_err(|error| error.to_string())?;
         Ok(by_name)
