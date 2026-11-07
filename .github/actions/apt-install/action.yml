@@ -54,7 +54,11 @@ runs:
       shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
-        APT_BUDGET_SECONDS: ${{ fromJSON(inputs.minutes) * 60 }}
+        MINUTES: ${{ inputs.minutes }}
         APT_CACHE_DIR: ${{ steps.name.outputs.dir }}
+      # An expression has no arithmetic, so the minutes become seconds here.
       # $PACKAGES is split on purpose: one word per package.
-      run: bash "$GITHUB_WORKSPACE/scripts/ci-apt-install.sh" $PACKAGES
+      run: |
+        [[ $MINUTES =~ ^[0-9]+$ ]] || { echo "minutes must be a whole number, not '$MINUTES'" >&2; exit 2; }
+        export APT_BUDGET_SECONDS=$(( MINUTES * 60 ))
+        bash "$GITHUB_WORKSPACE/scripts/ci-apt-install.sh" $PACKAGES
