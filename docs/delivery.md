@@ -456,7 +456,8 @@ The agent journey's `composer` cell checks every declaration nightly on each sys
 ### Delivering a held letter now
 
 A draft is the one hold that does not end on its own: an idle pane whose composer may hold the operator's half-written prompt keeps its letters until its next real prompt, for up to the 60-minute deadline, unless its composer is read empty first ([Reading the composer](#reading-the-composer)).
-So the core shows it, and nothing else about a hold reaches the screen.
+So the core shows it, and no other hold reaches a pane.
+A running mission's Conductor is the one recipient whose other holds reach the screen too, because every worker and checker of the mission waits on it: the holds the operator can lift (a pane or device Hide cannot reach, an approval the Conductor waits for, a draft, three bells unanswered) for a letter two minutes old or more, and a letter that ended undelivered until its sender gets a later one through, are counted on the mission's map and in its 내 차례 with what to do (`delivery::held`, read from the holds the doorbell publishes, never a verdict of its own; with-hide/hide-private#678).
 A pane's letters are shown waiting when the doorbell's last reason for a pending letter there is `draft`, the pane still holds that draft, and the pane has rested for two minutes: no input hide routed and no change of the engine's status since (`doorbell::letters_waiting`, `WAITING_MARK_REST_MS`).
 Every other hold (working, the quiet period, a launch, a menu) ends on its own and shows nothing.
 The count is every letter held there, which the bell turn brings together, and a pane whose held letters have all spent their three bells shows nothing, since pressing could ring none.

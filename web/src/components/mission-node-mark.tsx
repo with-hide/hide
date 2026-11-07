@@ -9,13 +9,15 @@ import { Hint } from "./ui/tooltip";
 // check. An outside node still watching is a dotted ring, its `↗` drawn
 // beside its number on the card in every state. The hover and the
 // accessible name say the same state word. A node whose worker Hide put to
-// sleep keeps the in-progress ring; its label names the sleep (B1).
+// sleep keeps the in-progress ring; its label names the sleep (B1). The ring
+// turns only while the node is worked: a node in progress whose worker rests
+// or is gone (`still`, hide-private issue 680) keeps the ring and stops it.
 
-export function MissionNodeMark({ look, label, className }: { look: NodeLook; label: string; className?: string }) {
+export function MissionNodeMark({ look, label, still = false, className }: { look: NodeLook; label: string; still?: boolean; className?: string }) {
   return (
     <Hint label={label}>
-      <span role="img" aria-label={label} data-node-mark={look} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
-        <svg viewBox="0 0 12 12" className={cn("size-full", look === "working" && "motion-safe:animate-spin")} aria-hidden="true">
+      <span role="img" aria-label={label} data-node-mark={look} data-node-mark-still={still || undefined} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
+        <svg viewBox="0 0 12 12" className={cn("size-full", look === "working" && !still && "motion-safe:animate-spin")} aria-hidden="true">
           <Shape look={look} />
         </svg>
       </span>

@@ -761,6 +761,15 @@ pub(crate) enum Mutation {
 }
 
 impl AgentRecord {
+    /// The registration's pane as the core and the screen name it: the
+    /// engine's own id on the core's node `node`, `remote:<device>:pane:<id>`
+    /// on a device. Every place that shows the operator where a registration
+    /// is, or finds its agent row, takes it from here, never from `pane`,
+    /// which is the device's own id (with-hide/hide-private#679).
+    pub(crate) fn pane_on(&self, node: &str) -> String {
+        crate::address::pane_id_on(node, &self.machine, &self.pane)
+    }
+
     /// The name this agent has on the wire and in the ledger: the name it
     /// registered under, else its registration id, which is stable and which
     /// `hide request send` and `--parent` already resolve. Never a pane id and
