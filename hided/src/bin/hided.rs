@@ -7,8 +7,17 @@ const EXIT_WITHIN: std::time::Duration = std::time::Duration::from_secs(1);
 fn main() {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     // Read before anything runs: an argument no role names is refused here,
-    // before an owner watch, a state folder or a log is touched.
+    // and `--version` and `--help` are answered here, before an owner watch,
+    // a state folder or a log is touched.
     let role = match hided::role::parse(&args) {
+        Ok(Role::Version) => {
+            println!("{}", hided::role::version_line());
+            return;
+        }
+        Ok(Role::Help) => {
+            println!("{}", hided::role::USAGE);
+            return;
+        }
         // A pane's entry point becomes its shell in this same process. In
         // particular it must not acquire a daemon's owner watch or load
         // state.
@@ -55,19 +64,10 @@ fn main() {
 
 fn run(role: Role<'_>) -> Result<(), String> {
     match role {
-        // Answered before the environment is read: neither opens a state
-        // folder, on any machine.
-        Role::Version => {
-            println!("{}", hided::role::version_line());
-            return Ok(());
-        }
-        Role::Help => {
-            println!("{}", hided::role::USAGE);
-            return Ok(());
-        }
-        // `main` hands it its shell before the owner watch.
-        Role::ShellExec(_) => {
-            return Err("shell-exec runs before the daemon's roles".into());
+        // `main` answers these, and hands shell-exec its shell, before the
+        // owner watch.
+        Role::Version | Role::Help | Role::ShellExec(_) => {
+            return Err("this role runs before the daemon's roles".into());
         }
         // The node role on a device reads no daemon environment and opens no
         // state folder: it answers its link until the channel closes.
