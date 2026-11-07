@@ -13,6 +13,7 @@
 //! change; what it asks is one of the `mobile_*` events.
 
 pub mod conversation;
+pub mod html_look;
 pub mod looks;
 pub mod page_shot;
 pub mod pane;

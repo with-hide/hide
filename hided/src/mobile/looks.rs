@@ -13,7 +13,9 @@
 //! the same way for both. A diff is a list of changed file names and line
 //! counts, never a line of code; a page's screen is the picture the desktop
 //! app shows of it now (`page_shot.rs`), sent as an image beside its address,
-//! the machine that took it and when.
+//! the machine that took it and when; an HTML file of a checkout is sent as
+//! one document with the files it names folded in (`html_look.rs`), which the
+//! phone draws itself.
 //!
 //! Content leaves as JSON text, so bytes travel as base64 chunks small
 //! enough for one relay message (`CHUNK`), at most `WINDOW` of them ahead of
@@ -30,6 +32,7 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use super::Mobile;
+use super::html_look::{self, Place};
 use super::page_shot;
 use super::projection::AgentKey;
 use crate::server;
@@ -58,6 +61,9 @@ pub enum Shown {
     Changes,
     /// A page the desktop host draws.
     Page,
+    /// An HTML file of a checkout, which the phone draws itself from the
+    /// page and the files beside it (`html_look`), however it was opened.
+    Html,
     /// A document drawn from its text.
     Document,
     Image,
@@ -67,6 +73,9 @@ pub enum Shown {
 
 impl Shown {
     pub fn of(view: &LookView) -> Self {
+        if html_path(view).is_some() {
+            return Self::Html;
+        }
         match view.kind {
             DisplayKind::Diff => Self::Changes,
             DisplayKind::Browser => Self::Page,
@@ -87,11 +96,26 @@ impl Shown {
         match self {
             Self::Changes => "changes",
             Self::Page => "page",
+            Self::Html => "html",
             Self::Document => "doc",
             Self::Image => "image",
             Self::NameOnly => "other",
         }
     }
+}
+
+/// The wire path of the HTML file a View shows, when it shows one inside its
+/// checkout: a file View of an HTML file, or a page View whose address is
+/// such a file. The desktop's rule for which file is HTML decides.
+fn html_path(view: &LookView) -> Option<String> {
+    let path = match view.kind {
+        DisplayKind::File => view.path.clone(),
+        DisplayKind::Browser => crate::file_url::file_path(view.url.as_deref()?)?.0,
+        DisplayKind::Diff | DisplayKind::External => return None,
+    };
+    let name = std::path::Path::new(hide_platform::path::wire_name(&path));
+    let html = hide_host::document::language_for(name).as_deref() == Some("html");
+    (html && Place::of(&view.checkout_path, &path).is_some()).then_some(path)
 }
 
 fn cut(text: &str, chars: usize) -> String {
@@ -104,14 +128,16 @@ pub fn list_frame(key: &AgentKey, looks: &LookViews) -> Value {
         .views
         .iter()
         .map(|view| {
+            let shown = Shown::of(view);
             let mut row = json!({
                 "id": view.display_id,
-                "kind": Shown::of(view).word(),
+                "kind": shown.word(),
                 "name": cut(&view.label, NAME_CHARS),
                 "unseen": view.unseen,
                 "at": view.at_unix_ms,
             });
-            if let Some(url) = &view.url {
+            // A local page's address is its path, which a phone never gets.
+            if let Some(url) = view.url.as_ref().filter(|_| shown != Shown::Html) {
                 row["url"] = json!(cut(url, URL_CHARS));
             }
             row
@@ -271,13 +297,26 @@ async fn send(
             }
         },
         Shown::NameOnly => result(request_id, &view.display_id, "other"),
+        Shown::Html => match html_page(mobile, request_id, view).await {
+            Ok(read) => return chunks(request_id, view, shown, read, frames, window).await,
+            Err(state) => result(request_id, &view.display_id, state),
+        },
         Shown::Document | Shown::Image => {
             let cap = if shown == Shown::Image {
                 IMAGE_CAP
             } else {
                 TEXT_CAP
             };
-            match read(mobile, request_id, view, cap, shown == Shown::Image).await {
+            match read(
+                mobile,
+                request_id,
+                view,
+                &view.path,
+                cap,
+                shown == Shown::Image,
+            )
+            .await
+            {
                 Ok(read) => return chunks(request_id, view, shown, read, frames, window).await,
                 Err(state) => result(request_id, &view.display_id, state),
             }
@@ -378,12 +417,13 @@ struct PageFacts {
     device_id: String,
 }
 
-/// Reads the View's file up to `cap` bytes through the desktop's readers.
-/// The error is the `look_result` state to answer.
+/// Reads `path` of the View's checkout up to `cap` bytes through the
+/// desktop's readers. The error is the `look_result` state to answer.
 async fn read(
     mobile: &Arc<Mobile>,
     request_id: &str,
     view: &LookView,
+    path: &str,
     cap: u64,
     refuse_past_cap: bool,
 ) -> Result<Read, &'static str> {
@@ -400,7 +440,7 @@ async fn read(
         "schema_version": 2, "kind": "file_bytes",
         "payload": {
             "request_id": request_id, "device_id": view.device_id,
-            "root": view.checkout_path, "path": view.path,
+            "root": view.checkout_path, "path": path,
             "offset": 0, "length": cap,
         },
     });
@@ -471,6 +511,75 @@ async fn read(
     })
 }
 
+/// An HTML file with the files of its checkout that it names folded in
+/// (`html_look`): the page is read whole up to the image cap, then each named
+/// file, then what its stylesheets name, while they fit under that cap and
+/// `MAX_FILES`. A file that is missing, outside the checkout or past either
+/// limit stays as its address and draws as missing; how many is logged.
+async fn html_page(
+    mobile: &Arc<Mobile>,
+    request_id: &str,
+    view: &LookView,
+) -> Result<Read, &'static str> {
+    let path = html_path(view).ok_or("failed")?;
+    let place = Place::of(&view.checkout_path, &path).ok_or("failed")?;
+    let page = read(mobile, request_id, view, &path, IMAGE_CAP, true).await?;
+    let text = String::from_utf8(page.bytes).map_err(|_| "other")?;
+    let page_dir = place.page.parent().unwrap_or_default();
+    let mut budget = IMAGE_CAP.saturating_sub(text.len() as u64);
+    let mut read_files: Vec<(hide_platform::path::RelPath, Vec<u8>)> = Vec::new();
+    let mut left = 0_usize;
+    let mut level = html_look::wanted(&text, &page_dir, false);
+    for depth in 1..=html_look::MAX_DEPTH {
+        let mut next = Vec::new();
+        for file in level {
+            if read_files.iter().any(|(read, _)| *read == file) {
+                continue;
+            }
+            // Base64 is four bytes for every three.
+            let room = budget / 4 * 3;
+            if read_files.len() >= html_look::MAX_FILES || room == 0 {
+                left += 1;
+                continue;
+            }
+            let Ok(bytes) = read(mobile, request_id, view, &place.wire(&file), room, true)
+                .await
+                .map(|read| read.bytes)
+            else {
+                left += 1;
+                continue;
+            };
+            budget = budget.saturating_sub((bytes.len() as u64).div_ceil(3) * 4);
+            if html_look::is_stylesheet(&file)
+                && depth < html_look::MAX_DEPTH
+                && let Ok(css) = std::str::from_utf8(&bytes)
+            {
+                let dir = file.parent().unwrap_or_default();
+                next.extend(html_look::wanted(css, &dir, true));
+            }
+            read_files.push((file, bytes));
+        }
+        level = next;
+    }
+    if left > 0 {
+        hide_core::diagnostic!(json!({
+            "component": "mobile_phone", "kind": "look.html_files_left",
+            "view_id": view.display_id, "count": left,
+        }));
+    }
+    let folded = html_look::data_addresses(&read_files);
+    let document = html_look::fold(&text, &page_dir, false, &folded);
+    // A file named many times is folded in at each place it is named.
+    if document.len() as u64 > IMAGE_CAP {
+        return Err("too_large");
+    }
+    Ok(Read {
+        total: document.len() as u64,
+        bytes: document.into_bytes(),
+        page: None,
+    })
+}
+
 /// The `look_result` state for a device whose link could not be had: it is
 /// `device_unreachable`, and why goes to the log (B26). A link that is up says
 /// nothing.
@@ -512,6 +621,7 @@ async fn chunks(
     let mode = match shown {
         Shown::Image => "image",
         Shown::Page => "page",
+        Shown::Html => "html",
         // The desktop's own rule for what a Markdown file is, so the two draw alike.
         _ if hide_host::document::language_for(std::path::Path::new(&view.path)).as_deref()
             == Some("markdown") =>
@@ -623,6 +733,47 @@ mod tests {
             Shown::NameOnly
         );
         assert_eq!(shown(".env", DisplayKind::File, None), Shown::Document);
+        // An HTML file of the checkout is drawn by the phone, opened as a
+        // file or as a page; a web address and a file elsewhere are not.
+        assert_eq!(
+            shown("mock.html", DisplayKind::File, Some("document")),
+            Shown::Html
+        );
+        assert_eq!(shown("mock.HTM", DisplayKind::File, None), Shown::Html);
+        let page = |url: &str| {
+            let mut view = view("", DisplayKind::Browser);
+            view.path = String::new();
+            view.url = Some(url.into());
+            Shown::of(&view)
+        };
+        assert_eq!(page("file:///repo/design/mock.html"), Shown::Html);
+        assert_eq!(page("file:///repo/design/my%20mock.html#top"), Shown::Html);
+        assert_eq!(page("file:///repo/design/logo.svg"), Shown::Page);
+        assert_eq!(page("file:///elsewhere/mock.html"), Shown::Page);
+        assert_eq!(page("https://example.com/mock.html"), Shown::Page);
+    }
+
+    #[test]
+    fn a_local_page_is_listed_without_its_address() {
+        let key = AgentKey {
+            device_id: "test-node".into(),
+            pane_id: "w1:p1".into(),
+        };
+        let mut local = view("mock.html", DisplayKind::Browser);
+        local.url = Some("file:///repo/mock.html".into());
+        let mut web = view("site", DisplayKind::Browser);
+        web.url = Some("https://example.com/".into());
+        let frame = list_frame(
+            &key,
+            &LookViews {
+                views: vec![local, web],
+                omitted: 0,
+            },
+        );
+        assert_eq!(frame["views"][0]["kind"], "html");
+        assert!(frame["views"][0].get("url").is_none());
+        assert_eq!(frame["views"][1]["kind"], "page");
+        assert_eq!(frame["views"][1]["url"], "https://example.com/");
     }
 
     #[test]
