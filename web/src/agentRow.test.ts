@@ -89,6 +89,9 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     // In progress names nothing more while the agent works, and its wait while it waits (D-25, B36).
     expect(markWords(t, { mark: "going", status_code: "working" })).toBe("진행 중");
     expect(markWords(t, { mark: "waiting", status_code: "waiting" })).toBe("진행 중 · 대기");
+    // A delegated child's own request waits on its parent's answer and names it (B24).
+    expect(markWords(t, { mark: "waiting", status_code: "error" })).toBe("진행 중 · 막힘");
+    expect(markWords(t, { mark: "waiting", status_code: "question" })).toBe("진행 중 · 질문");
   });
 });
 

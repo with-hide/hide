@@ -733,10 +733,10 @@ fn a_pane_with_children_lists_them_and_names_the_one_that_speaks_for_them() {
         "Resolve hook failure"
     );
     // The question is the parent's to answer, so the child draws none of
-    // the operator's marks (status-marks B24).
+    // the operator's marks, only the ring of a wait (status-marks B24).
     assert_eq!(
         children.representative.as_ref().unwrap().mark,
-        crate::agent_state::tally::RowMark::Quiet
+        crate::agent_state::tally::RowMark::Waiting
     );
 
     // In-process subagents are summarised separately and never folded into
@@ -1120,7 +1120,10 @@ fn a_delegated_childs_demand_and_completion_stay_off_the_operators_groups() {
     // The axes themselves are untouched, so the parent's badge can still read
     // the question off the row it points at.
     assert_eq!(row("child").demand, "question");
-    assert_eq!(row("child").mark, crate::agent_state::tally::RowMark::Quiet);
+    assert_eq!(
+        row("child").mark,
+        crate::agent_state::tally::RowMark::Waiting
+    );
     // The operator's own root keeps its group and its brightness.
     assert_eq!(row("parent").group, "working");
     assert!(!row("parent").delegated);
