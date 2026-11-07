@@ -1628,6 +1628,10 @@ pub struct Runtime {
     /// nothing else follows from it: no focus, tab, wake or attach. Memory
     /// only; a launch starts with no phone looking.
     phone_viewed_pane_ids: BTreeSet<String>,
+    /// The look each machine's rows were last read with
+    /// (`agents::OperatorLook`); `follow_operator_look` reads every row
+    /// again only when the operator's look has moved from it. Memory only.
+    read_look: agents::OperatorLook,
     /// The read axis's view of the current connection to the local engine
     /// server and to each device's: the mark that names the server and the
     /// panes settled on it so far (`agent_state::ReadConnection`). Memory
@@ -2505,6 +2509,7 @@ impl Runtime {
             agent_worked_at_unix_ms: 0,
             operator_focused_pane_id: None,
             phone_viewed_pane_ids: BTreeSet::new(),
+            read_look: Default::default(),
             local_read_connection: crate::agent_state::ReadConnection::new(read_mark(0)),
             remote_read_connections: BTreeMap::new(),
             read_marks_made: 1,
@@ -2953,13 +2958,17 @@ impl Runtime {
             if chooses_workspace && self.snapshot.status.last_error.is_none() {
                 self.mark_front_chosen();
             }
-            self.sync_workspace_view();
+            changed |= self.sync_workspace_view();
         }
         // Every event that can move the visible tab funnels through here, so
         // the attach window is maintained once rather than at each of the four
         // places a tab becomes visible.
         let released = self.track_visible_tab_attachments();
-        changed || released
+        // Whatever the event moved the operator's look with, its rows are
+        // read in its own frame; terminal input and output and a document's
+        // keystrokes move no look and skip the comparison.
+        let read = !high_frequency && self.follow_operator_look();
+        changed || released || read
     }
 }
 

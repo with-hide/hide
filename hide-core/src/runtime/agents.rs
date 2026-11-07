@@ -4,6 +4,18 @@ use super::*;
 /// with two sockets each, so a longer list is not one hided sends.
 const MAX_PHONE_VIEWED_PANES: usize = 16;
 
+/// The panes the operator looks at, per machine, as the read axis reads them
+/// (`Runtime::looked_at`): this machine's focus pane as the operator chose
+/// it, each device's own focus while that device is in front and its window
+/// shows the pane's tab (`remote_read_focus`), and every agent a phone has
+/// open. One value, so a move of any of its parts is one comparison
+/// (`Runtime::follow_operator_look`).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct OperatorLook {
+    local: Vec<String>,
+    devices: BTreeMap<String, Vec<String>>,
+}
+
 /// Which of this machine's panes the lineage pass saw, and how each one's
 /// connection stood, so a Reopen's published state ends with the need for it.
 #[derive(Default)]
@@ -1317,8 +1329,8 @@ impl Runtime {
         scope: ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) -> bool {
-        let looked_at = self.looked_at(self.operator_focused_pane_id.clone());
-        let looked_at = looked_at.iter().map(String::as_str).collect::<Vec<_>>();
+        let look = self.local_look();
+        let looked_at = look.iter().map(String::as_str).collect::<Vec<_>>();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut changes = Vec::new();
         if let Some(live_pane_ids) = live_pane_ids {
@@ -1339,6 +1351,7 @@ impl Runtime {
             &mut self.local_read_connection,
             &looked_at,
         ));
+        self.read_look.local = look;
         self.snapshot.ui_state.pane_read_records = records;
         let synced = self.sync_pane_status_from_agents(agents);
         let pruned = prune_pane_text_scales(
@@ -1389,6 +1402,60 @@ impl Runtime {
             .collect()
     }
 
+    /// This machine's look: the focus pane the operator chose and a phone's.
+    fn local_look(&self) -> Vec<String> {
+        self.looked_at(self.operator_focused_pane_id.clone())
+    }
+
+    /// A device's look: its own focus, as `remote_read_focus` filters it,
+    /// and a phone's.
+    fn device_look(&self, target_id: &str, session: &RemoteSessionSnapshot) -> Vec<String> {
+        self.looked_at(self.remote_read_focus(target_id, session))
+    }
+
+    /// The operator's look now on every machine whose rows are published.
+    /// A device's look depends on its published session, so it is read
+    /// while the sessions are in place.
+    fn operator_look(&self) -> OperatorLook {
+        OperatorLook {
+            local: self.local_look(),
+            devices: self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .filter_map(|remote| {
+                    let session = remote.session.as_ref()?;
+                    Some((
+                        remote.target_id.clone(),
+                        self.device_look(&remote.target_id, session),
+                    ))
+                })
+                .collect(),
+        }
+    }
+
+    /// Reads every row again when the operator's look has moved from the
+    /// look the rows were last read with, and does nothing otherwise.
+    ///
+    /// This is the one place a moved look is read: whatever moved it (a
+    /// pane or tab chosen on this machine, a device brought forward or
+    /// left, the tab a device's window shows, a device's own keyboard, a
+    /// phone), each entry that changes the runtime calls this once its
+    /// change is complete, under the same lock: an event's dispatch
+    /// (`dispatch_json`), a device's session (`ingest_remote_session`), this
+    /// machine's engine session (`ingest_session_with_focus_check`), and the
+    /// pass that settles the front Workspace and the tab a device's window
+    /// shows (`sync_workspace_view`). A device's own keyboard that already
+    /// rests on a pane sends nothing new, so the read cannot wait for the
+    /// device's next session (with-hide/hide-private#685).
+    pub(super) fn follow_operator_look(&mut self) -> bool {
+        if self.operator_look() == self.read_look {
+            return false;
+        }
+        self.refresh_read_state_everywhere()
+    }
+
     /// The focus a device's own server reports, counted as the operator's
     /// look only while that device is in front and the pane is in a tab its
     /// window shows. Hide never focuses a remote pane itself.
@@ -1420,10 +1487,13 @@ impl Runtime {
 
     /// Re-runs the read axis over every row already published, this
     /// machine's and each device's, for a look that arrived without a new
-    /// agent list: a request view result opened, or a phone opening or
-    /// closing an agent. A device's rows are read with the same looks its
-    /// next sync reads them with (`apply_remote_read_state`).
+    /// agent list: the operator's look moved (`follow_operator_look`) or a
+    /// request view result was opened. A device's rows are read with the
+    /// same looks its next sync reads them with (`apply_remote_read_state`).
     pub(super) fn refresh_read_state_everywhere(&mut self) -> bool {
+        // Read before the rows are taken out below: which of a device's tabs
+        // its window shows is asked of its published session.
+        let look = self.operator_look();
         let mut changed = self.refresh_pane_read_state();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut remotes = std::mem::take(&mut self.snapshot.status.remote);
@@ -1432,7 +1502,11 @@ impl Runtime {
             let Some(session) = remote.session.as_mut() else {
                 continue;
             };
-            let looked_at = self.looked_at(self.remote_read_focus(&remote.target_id, session));
+            let looked_at = look
+                .devices
+                .get(&remote.target_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             let before = session.agents.clone();
             changes.extend(crate::agent_state::apply_read_state(
                 &mut session.agents,
@@ -1445,6 +1519,7 @@ impl Runtime {
         }
         self.snapshot.status.remote = remotes;
         self.snapshot.ui_state.pane_read_records = records;
+        self.read_look = look;
         if !changes.is_empty() {
             self.record_read_record_changes(&changes);
         }
@@ -1478,7 +1553,9 @@ impl Runtime {
             "pane_ids": viewed,
         }));
         self.phone_viewed_pane_ids = viewed;
-        self.refresh_read_state_everywhere()
+        // The phone's look moved; the dispatch that carried it reads every
+        // row as of the new look (`follow_operator_look`).
+        false
     }
 
     /// Applies the read axis to one remote target's agent rows.
@@ -1496,7 +1573,7 @@ impl Runtime {
         target_id: &str,
         session: &mut RemoteSessionSnapshot,
     ) -> bool {
-        let looked_at = self.looked_at(self.remote_read_focus(target_id, session));
+        let look = self.device_look(target_id, session);
         let live_pane_ids = session
             .workspaces
             .iter()
@@ -1556,8 +1633,9 @@ impl Runtime {
             Default::default(),
             &mut records,
             connection,
-            &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
+            &look.iter().map(String::as_str).collect::<Vec<_>>(),
         ));
+        self.read_look.devices.insert(target_id.to_owned(), look);
         self.snapshot.ui_state.pane_read_records = records;
         if lineage_pruned {
             self.persist_ui_state();

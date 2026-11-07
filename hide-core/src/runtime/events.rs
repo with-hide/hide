@@ -2877,11 +2877,11 @@ impl Runtime {
                 self.select_terminal_pane(next_pane_id.clone());
                 self.sync_active_tab_projection();
                 // The operator chose this tab, so its pane now holds Hide's
-                // keyboard and the read record follows it. Leaving the record
-                // on the pane of the tab just left kept marking that pane read
-                // while nobody was looking at it.
+                // keyboard and the read record follows it once the event is
+                // done (`follow_operator_look`). Leaving the record on the
+                // pane of the tab just left kept marking that pane read while
+                // nobody was looking at it.
                 self.operator_focused_pane_id = next_pane_id;
-                self.refresh_pane_read_state();
                 self.yield_surface_to_terminal();
                 self.persist_current_ui_state();
                 if payload.focus_device && !self.device_in_front(self.node.as_str()) {
@@ -3559,7 +3559,6 @@ impl Runtime {
                 self.sync_changes_root_path();
                 self.select_terminal_pane(pane_id);
                 self.operator_focused_pane_id = None;
-                self.refresh_pane_read_state();
                 self.persist_current_ui_state();
                 true
             }

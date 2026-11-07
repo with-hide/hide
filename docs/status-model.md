@@ -111,6 +111,13 @@ An agent a phone has open is looked at the same way: from the moment a phone ope
 hided tells the core the whole list of agents its phones have open each time it changes (`phone_viewing`, `Runtime::phone_viewed_pane_ids`, at most 16), so a turn that ends while a phone looks is read, and one that ends after it closed is news again.
 A phone's look moves nothing else: not the desktop's focus or tab, not an attach, and it does not wake a sleeping agent.
 Regression owners: `hide-core/src/runtime/tests/phone_viewing.rs` and `an_agent_a_phone_opens_is_looked_at_until_every_phone_lets_it_go` in `hided/src/mobile/phone.rs`.
+
+What the operator looks at is one value (`OperatorLook` in `hide-core/src/runtime/agents.rs`): on this machine the focus pane the operator chose, on each device its own focus while that device is in front and its window shows the pane's tab, and every agent a phone has open.
+Each machine's rows keep the look they were last read with, and a look that moved reads every row again in one place (`Runtime::follow_operator_look`), whatever moved it: a pane, tab or checkout chosen here, a device brought forward or left, the tab a device's window shows, a device's own keyboard, a phone.
+Every entry that changes the runtime calls it once its change is done, under the same lock: an event's dispatch, a device's session, this machine's engine session, and the pass that settles the front Workspace and the tab a device's window shows (`sync_workspace_view`), so a read never waits for a window to pull a snapshot.
+An event or a session that leaves the look where it was reads nothing again and announces nothing more, and terminal input and output and a document's keystrokes skip the comparison.
+A device's own keyboard that already rests on a pane sends nothing new, so a device brought forward, or a device window that came to show that pane's tab, once left its finished row in 읽을 것 until the device's next session (with-hide/hide-private#685).
+Regression owner: `hide-core/src/runtime/tests/read_on_look.rs`.
 The record is `pane_read_records` in the persisted UI state, keyed by pane id, so it survives a restart.
 A record is dropped only when the authoritative pane layout stops reporting that pane, scoped to the namespace that pass owns, so a temporarily incomplete agent list and a local sync can never drop a restored or remote pane's record.
 The same pass drops the descendant signals other records keep for that pane and the pane's saved completion.

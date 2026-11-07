@@ -538,7 +538,6 @@ impl Runtime {
         self.sync_changes_root_path();
         self.select_terminal_pane(pane_id);
         self.operator_focused_pane_id = None;
-        self.refresh_pane_read_state();
         self.persist_current_ui_state();
         Ok(())
     }

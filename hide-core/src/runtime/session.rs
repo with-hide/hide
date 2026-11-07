@@ -2172,6 +2172,10 @@ impl Runtime {
         }
         changed |= self.refresh_browser_inventory_scope();
         changed |= self.refresh_agent_scopes();
+        // The session above was read with the tabs the device's window
+        // showed before it arrived; the session and the window it settled
+        // may have moved the look since.
+        changed |= self.follow_operator_look();
         // A device pre-check's pane may now name its agent's session.
         self.feed_link_reviews();
         changed
@@ -2494,7 +2498,11 @@ impl Runtime {
         self.ingesting_session = false;
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
-        self.pump_geometry_queues() || changed
+        let pumped = self.pump_geometry_queues();
+        // A worker's answer that lands with this session (a start, a moved
+        // pane) may have moved the look on any machine.
+        let read = self.follow_operator_look();
+        pumped || changed || read
     }
 
     fn apply_session_update(
@@ -3511,8 +3519,9 @@ impl Runtime {
         if origin == PaneFocusOrigin::Restore {
             return;
         }
+        // The read follows once the change that chose the pane is done
+        // (`follow_operator_look`).
         self.operator_focused_pane_id = Some(pane_id);
-        self.refresh_pane_read_state();
     }
 
     /// Reserves only the latest intent. The running worker calls this after
@@ -6237,7 +6246,6 @@ impl Runtime {
         // and then a pane focus, and raising the remembered pane here for
         // that one frame cleared a question nobody had read.
         self.operator_focused_pane_id = None;
-        self.refresh_pane_read_state();
         self.yield_surface_to_terminal();
         // With separate View areas the alignment above already chose the
         // Workspace's remembered View tab; only the shared canvas needs a

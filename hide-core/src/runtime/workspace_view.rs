@@ -943,13 +943,15 @@ impl Runtime {
     /// that device's front adds one pass over its session's checkouts. The
     /// Agent tab bookmark pass adds a comparison of the shown tabs and area
     /// fronts against what it saw last, in a few small vectors and with no
-    /// write.
-    pub(super) fn sync_workspace_view(&mut self) {
+    /// write. The operator's look this pass may move is compared with the
+    /// look the rows were read with (`follow_operator_look`), and the rows
+    /// are read again only when it moved; true when that changed a row.
+    pub(super) fn sync_workspace_view(&mut self) -> bool {
         // The recent list follows the front checkout wherever the layout
         // store exists or not, and writes only when the front moved.
         self.track_recent_checkouts();
         let Some(store) = self.workspace_views.as_ref() else {
-            return;
+            return false;
         };
         // The device's front moved to a checkout other than the one it had
         // and the one asked for: someone chose that one, so the request's
@@ -1044,6 +1046,10 @@ impl Runtime {
         // The open record's gallery follows the View lists (D-40).
         self.settle_record_views();
         self.sync_agent_selection();
+        // This pass can bring a device forward and move the tab a device's
+        // window shows to the one its own keyboard is on; what that shows is
+        // read here, by the pass that moved it, wherever the pass runs.
+        let read = self.follow_operator_look();
         if let Some(store) = &self.workspace_views {
             for workspace in &mut self.snapshot.navigator.workspaces {
                 for checkout in &mut workspace.checkouts {
@@ -1144,6 +1150,7 @@ impl Runtime {
             self.snapshot.browser_views_revision = Some(store.generation);
         }
         self.publish_workspace_view(front.as_ref());
+        read
     }
 
     /// Records authority transitions before an asynchronous catalog/session
