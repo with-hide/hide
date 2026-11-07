@@ -1004,8 +1004,48 @@ fn newest_by_modified(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBu
         .map(|(_, path)| path)
 }
 
+/// The folder Claude Code keeps a cwd's sessions in, under
+/// `~/.claude/projects`, by its own rule (Claude Code 2.1.319): every UTF-16
+/// unit of the cwd that is not an ASCII letter or digit becomes `-`, so
+/// `/Users/a/.hide/x_y` is `-Users-a--hide-x-y` and `C:\Users\a` is
+/// `C--Users-a`; a name past 200 units keeps its first 200 and adds `-` and
+/// the cwd's string hash in base 36. Replacing `/` alone missed every cwd
+/// with a dot, an underscore or a space, as each worktree under `~/.hide`.
 fn project_directory(cwd: &str) -> String {
-    cwd.replace('/', "-")
+    const LIMIT: usize = 200;
+    let name: String = cwd
+        .encode_utf16()
+        .map(|unit| match u8::try_from(unit) {
+            Ok(byte) if byte.is_ascii_alphanumeric() => char::from(byte),
+            _ => '-',
+        })
+        .collect();
+    if name.len() <= LIMIT {
+        return name;
+    }
+    // JavaScript's `(hash << 5) - hash + unit | 0` over the cwd's units.
+    let hash = cwd.encode_utf16().fold(0_i32, |hash, unit| {
+        hash.wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(i32::from(unit))
+    });
+    format!(
+        "{}-{}",
+        &name[..LIMIT],
+        base36(i64::from(hash).unsigned_abs())
+    )
+}
+
+fn base36(mut value: u64) -> String {
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit((value % 36) as u32, 36).unwrap_or('0'));
+        value /= 36;
+        if value == 0 {
+            break;
+        }
+    }
+    digits.iter().rev().collect()
 }
 
 /// Return the newest Codex JSONL files in the newest YYYY/MM/DD directory.
@@ -2493,6 +2533,56 @@ mod tests {
             EventKind::Human
         );
         assert!(!parse_codex_events(&codex).events[0].is_provider_injected());
+    }
+
+    /// Claude Code's own folder names, worked out with its rule in
+    /// JavaScript: `-` for each unit that is not an ASCII letter or digit,
+    /// and a long name cut at 200 with its hash.
+    #[test]
+    fn a_cwd_names_the_folder_claude_code_names_for_it() {
+        let long = format!(
+            "/Users/grab/.hide-dev/vlp/home/work/{}end",
+            "deeply_nested.folder/".repeat(9)
+        );
+        for (cwd, folder) in [
+            (
+                "/Users/grab/.hide-dev/vlp/home/work",
+                "-Users-grab--hide-dev-vlp-home-work",
+            ),
+            (
+                "/Users/a/.hide/worktrees/herdr_ide/fix device",
+                "-Users-a--hide-worktrees-herdr-ide-fix-device",
+            ),
+            ("C:\\Users\\a\\proj.x", "C--Users-a-proj-x"),
+            ("/tmp/caf\u{e9}/\u{1f600}", "-tmp-caf----"),
+            (
+                long.as_str(),
+                "-Users-grab--hide-dev-vlp-home-work-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-fol-cyjqcy",
+            ),
+        ] {
+            assert_eq!(project_directory(cwd), folder, "{cwd}");
+        }
+    }
+
+    /// A pane in a worktree under `~/.hide` finds its Claude session, by its
+    /// reported id or as the cwd's newest, in the folder Claude Code made.
+    #[test]
+    fn a_session_in_a_dotted_cwd_is_found_in_claude_code_s_folder() {
+        let home = tempdir().unwrap();
+        let cwd = "/Users/example/.hide/worktrees/herdr_ide/fix-bell";
+        let claude_dir = home
+            .path()
+            .join(".claude/projects/-Users-example--hide-worktrees-herdr-ide-fix-bell");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let session = claude_dir.join("claude-id.jsonl");
+        fs::write(&session, b"").unwrap();
+        let mut locator = SessionLocator::new(home.path());
+        assert_eq!(
+            locator
+                .locate("pane-new", Agent::Claude, None, Some(cwd))
+                .unwrap(),
+            session
+        );
     }
 
     #[test]
