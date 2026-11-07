@@ -334,6 +334,40 @@ fn roots(db: &Connection) -> rusqlite::Result<Vec<Columns>> {
         .collect()
 }
 
+/// The folders the operator's own agy conversations worked in since
+/// `since_unix_ms`, each with when its transcript last changed, from the
+/// newest [`SEARCH_ROWS`] root rows of agy's index, for the folders agents
+/// worked in (`SessionCatalog::worked_folders`). No index means no folders;
+/// an index Hide cannot read answers why.
+pub(crate) fn worked_folders(
+    home: &Path,
+    since_unix_ms: u64,
+) -> std::result::Result<Vec<(PathBuf, u64)>, String> {
+    if std::fs::symlink_metadata(home.join(FOLDER).join(DATABASE))
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(Vec::new());
+    }
+    let rows = with_index(home, roots)
+        .map_err(String::from)?
+        .map_err(|error| String::from(crate::sqlite::refusal(&REASONS, &error)))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(to_row)
+        .filter(|row| valid_id(&row.id))
+        .filter_map(|row| {
+            let changed = std::fs::metadata(transcript(home, &row.id))
+                .and_then(|metadata| metadata.modified())
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_millis();
+            let changed = u64::try_from(changed).ok()?;
+            (changed >= since_unix_ms).then_some((row.cwd, changed))
+        })
+        .collect())
+}
+
 /// The rows of `rows` whose checkout is `cwd` (canonical).
 fn in_checkout(rows: Vec<Columns>, cwd: &Path) -> impl Iterator<Item = Row> + '_ {
     rows.into_iter().filter_map(to_row).filter(move |row| {

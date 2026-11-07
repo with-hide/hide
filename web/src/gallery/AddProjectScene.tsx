@@ -2,16 +2,18 @@
 // start view on a connected Linux device, with an offline Windows PC beside
 // it in the machine select (`state=start`), and the dialog's own folder list
 // of that device's home with a repository, a project already added, a folder
-// holding repositories and a file (`state=list`). The scene answers each
-// folder list ask itself, as hided would from the device's node; it proves
-// the rendered rows, not the node's listing.
+// holding repositories and a file (`state=list`). The start view carries the
+// device's projects to import, one found by two agents, one by Paseo and
+// Herdr, one with a long path (B20-B23, B32). The scene answers each folder
+// list and import ask itself, as hided would from the device's node; it
+// proves the rendered rows, not the node's reading.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { AddProjectDialog } from "../AddProjectDialog";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import type { Device, DeviceHost } from "../snapshot";
-import { homeFolderKey, useShellStore, type HomeListing } from "../store";
+import { homeFolderKey, useShellStore, type HomeListing, type ImportableProject } from "../store";
 import { useUiStore } from "../ui";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 
@@ -46,6 +48,18 @@ const LISTINGS: Record<string, HomeListing> = {
   },
 };
 
+const IMPORTABLE: ImportableProject[] = [
+  { path: `${HOME}/api-server`, label: "~/api-server", name: "api-server", sources: ["claude", "codex"], active_at_unix_ms: 3 },
+  { path: `${HOME}/infra`, label: "~/infra", name: "infra", sources: ["paseo", "herdr"], active_at_unix_ms: 2 },
+  {
+    path: `${HOME}/projects/clients/northwind-traders/customer-portal-redesign`,
+    label: "~/projects/clients/northwind-traders/customer-portal-redesign",
+    name: "customer-portal-redesign",
+    sources: ["opencode", "antigravity", "herdr"],
+    active_at_unix_ms: 1,
+  },
+];
+
 export function AddProjectScene({ params }: { params: URLSearchParams }) {
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const lang = params.get("lang") ?? "ko";
@@ -55,6 +69,11 @@ export function AddProjectScene({ params }: { params: URLSearchParams }) {
   const actions = useMemo(
     () =>
       createActions((event) => {
+        if (event.kind === "importable_projects") {
+          const { device_id } = event.payload as { device_id: string };
+          window.setTimeout(() => useShellStore.getState().applyFrame({ type: "importable_projects", payload: { device_id, projects: IMPORTABLE, reason: null } } as never));
+          return true;
+        }
         if (event.kind !== "home_folder_list") return true;
         const { device_id, path } = event.payload as { device_id: string; path: string };
         // Answered after the ask returns, as a frame from hided arrives.

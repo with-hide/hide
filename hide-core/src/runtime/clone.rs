@@ -259,6 +259,7 @@ impl Runtime {
             new_folder: false,
             // The clone's parent was judged inside that machine's home.
             confirmed_outside_home: None,
+            request_id: None,
         }));
         true
     }

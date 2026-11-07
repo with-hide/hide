@@ -2304,7 +2304,8 @@ enum ClientAction {
     /// A `file_list` for a checkout on an SSH device, answered by its helper.
     DeviceListing(Value),
     /// Add a project's question for a machine's node: a folder under its
-    /// home (`home_folder_list`), or where a clone or a new project would
+    /// home (`home_folder_list`), the projects worth adding there
+    /// (`importable_projects`), or where a clone or a new project would
     /// land on a device (`clone_target`, `project_target`).
     NodeAsk(Value),
     /// Comment mode on a browser View, answered when its page is ready.
@@ -2368,7 +2369,9 @@ fn handle_client_text(
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
     }
     match event.get("kind").and_then(Value::as_str) {
-        Some("home_folder_list") => return Ok(ClientAction::NodeAsk(event)),
+        Some("home_folder_list" | "importable_projects") => {
+            return Ok(ClientAction::NodeAsk(event));
+        }
         Some("project_target" | "clone_target")
             if event_device(&state.boundary, &event).is_some() =>
         {
@@ -2877,12 +2880,23 @@ fn spawn_node_ask(
 /// How long a node may take to list a folder or judge a new folder's place.
 const NODE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// How long a node may take to find the projects worth adding: it walks up
+/// to `SESSION_DISCOVERY_LIMIT` session entries and judges up to
+/// `JUDGED_FOLDER_CAP` folders, and answers by `IMPORTABLE_SEARCH_BUDGET`,
+/// which this leaves room above for the link.
+const IMPORTABLE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Add a project's question for a machine's node, answered as the frame the
 /// dialog reads (PRD device-add-project D-03, D-07, D-08):
 ///
 /// - `home_folder_list` {device_id, path}: one folder under that machine's
 ///   home (`Call::HomeList`), this machine's included, answered as a
 ///   `home_folder_list` frame carrying `listing` or `reason`;
+/// - `importable_projects` {device_id}: the projects worth adding on that
+///   machine (`Call::ImportableProjects`), its registrations left out,
+///   answered as an `importable_projects` frame carrying `projects` or
+///   `reason`, each source the node could not read logged as
+///   `add_project.import_source_dropped`;
 /// - a device's `clone_target` and `project_target`: where the clone or new
 ///   project would land under that device's home (`Call::NewFolderTarget`),
 ///   answered in the same frames this machine's `$HOME` line answers with.
@@ -2930,6 +2944,40 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
             };
             json!({"type": "home_folder_list", "payload": {
                 "device_id": device, "request": request, "listing": listing, "reason": refused,
+            }})
+        }
+        "importable_projects" => {
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                // The core's registrations there are left out before the
+                // node keeps its newest twenty.
+                let exclude = core
+                    .registered_paths(&device)
+                    .map_err(LinkError::NotConnected)?;
+                hide_core::node_access::call_as::<hide_node_link::importable::ImportableProjects>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::ImportableProjects { exclude },
+                    IMPORTABLE_ASK_TIMEOUT,
+                )
+            });
+            let (projects, refused) = match answer {
+                Ok(found) => {
+                    // A source the node could not read is the log's, never
+                    // the screen's (PRD device-add-project D-12, B27).
+                    for dropped in &found.dropped {
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "component": "hided", "kind": "add_project.import_source_dropped",
+                                "device": device, "source": dropped.source, "reason": dropped.reason,
+                            })
+                        );
+                    }
+                    (Some(found.projects), None)
+                }
+                Err(error) => (None, Some(reason(error))),
+            };
+            json!({"type": "importable_projects", "payload": {
+                "device_id": device, "projects": projects, "reason": refused,
             }})
         }
         _ => {
@@ -4162,7 +4210,17 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "create_workspace" if event.pointer("/payload/new_folder") == Some(&Value::Bool(true)) => {
             new_project(boundary, event, &kind)
         }
-        "create_workspace" => register(boundary, event, &kind),
+        "create_workspace" => register(boundary, event, &kind).map(|mut frame| {
+            // An add sent by request id reads its refusal by that id, as it
+            // reads the core's (`create_workspace.request_id`).
+            if let (Some(id), Some(payload)) = (
+                event.pointer("/payload/request_id").and_then(Value::as_str),
+                frame.get_mut("payload").and_then(Value::as_object_mut),
+            ) {
+                payload.insert("request_id".to_owned(), Value::from(id));
+            }
+            frame
+        }),
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
@@ -5935,6 +5993,25 @@ mod tests {
             std::fs::read_to_string(projects.join("taken/notes.md")).unwrap(),
             "mine\n"
         );
+    }
+
+    /// PRD device-add-project B25: a refused add that named a request id
+    /// carries it back, so the importable list reads the refusal as that
+    /// row's own; one that named none carries none.
+    #[test]
+    fn a_refused_add_carries_the_request_id_it_was_sent_with() {
+        let home = tempfile::tempdir().unwrap();
+        let boundary = Boundary::new(home.path()).unwrap();
+        let gone = home.path().join("gone").display().to_string();
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false, "request_id": "import:7"}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["type"], "path_refused", "{answer}");
+        assert_eq!(answer["payload"]["request_id"], "import:7");
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["payload"].get("request_id"), None);
     }
 
     /// PRD wsl-device B15, B18: a folder outside home reaches the core only

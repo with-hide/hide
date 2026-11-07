@@ -197,6 +197,7 @@ export interface ServerFrame {
     | "open_external_result"
     | "clone_target"
     | "home_folder_list"
+    | "importable_projects"
     | "core_move"
     | "core_link"
     | "agent_notice"

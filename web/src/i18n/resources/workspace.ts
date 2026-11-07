@@ -197,6 +197,12 @@ export const workspaceEnglish = {
   "addProject.create.location": "Will be created in {{parent}}",
   "addProject.create.leftover": "An empty folder by this name is already there; the project is made in it.",
   "addProject.create.submit": "Create project",
+  "addProject.import.title": "Projects to import",
+  "addProject.import.detail": "Folders you worked in with agents on {{host}}, and Paseo and Herdr projects. Those apps stay as they are.",
+  "addProject.import.addAll": "Add all ({{count}})",
+  "addProject.import.addNamed": "Add {{name}}",
+  "addProject.import.adding": "Adding…",
+  "addProject.import.sources": "Found in {{sources}}",
 } as const;
 
 const ko = {
@@ -396,6 +402,12 @@ const ko = {
   "addProject.create.location": "{{parent}} 안에 만들어요",
   "addProject.create.leftover": "같은 이름의 빈 폴더가 이미 있어요. 그 폴더를 프로젝트로 써요.",
   "addProject.create.submit": "프로젝트 만들기",
+  "addProject.import.title": "가져올 수 있는 프로젝트",
+  "addProject.import.detail": "{{host}}에서 에이전트로 작업한 폴더와 Paseo, Herdr 프로젝트예요. 원래 앱은 그대로 둬요.",
+  "addProject.import.addAll": "모두 추가 ({{count}})",
+  "addProject.import.addNamed": "{{name}} 추가",
+  "addProject.import.adding": "추가하는 중…",
+  "addProject.import.sources": "{{sources}}에서 찾음",
 } satisfies Catalog<typeof workspaceEnglish>;
 
 const zhCN = {
@@ -595,6 +607,12 @@ const zhCN = {
   "addProject.create.location": "将在 {{parent}} 中创建",
   "addProject.create.leftover": "已存在同名的空文件夹，项目将创建在其中。",
   "addProject.create.submit": "创建项目",
+  "addProject.import.title": "可导入的项目",
+  "addProject.import.detail": "{{host}} 上与智能体一起工作过的文件夹，以及 Paseo 和 Herdr 的项目。这些应用保持原样。",
+  "addProject.import.addAll": "全部添加（{{count}}）",
+  "addProject.import.addNamed": "添加 {{name}}",
+  "addProject.import.adding": "正在添加…",
+  "addProject.import.sources": "来自 {{sources}}",
 } satisfies Catalog<typeof workspaceEnglish>;
 
 const ja = {
@@ -794,6 +812,12 @@ const ja = {
   "addProject.create.location": "{{parent}} 内に作成します",
   "addProject.create.leftover": "同じ名前の空のフォルダがすでにあります。プロジェクトはその中に作成されます。",
   "addProject.create.submit": "プロジェクトを作成",
+  "addProject.import.title": "取り込めるプロジェクト",
+  "addProject.import.detail": "{{host}} でエージェントと作業したフォルダと、Paseo と Herdr のプロジェクトです。元のアプリはそのままです。",
+  "addProject.import.addAll": "すべて追加（{{count}}）",
+  "addProject.import.addNamed": "{{name}} を追加",
+  "addProject.import.adding": "追加しています…",
+  "addProject.import.sources": "{{sources}} で見つかりました",
 } satisfies Catalog<typeof workspaceEnglish>;
 
 export const workspaceCatalogs = { en: workspaceEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof workspaceEnglish>;
