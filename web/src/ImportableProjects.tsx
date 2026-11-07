@@ -133,7 +133,7 @@ export function ImportableProjects({
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 flex-wrap items-center gap-xs">
                   <span className="min-w-0 truncate text-subhead font-medium text-foreground">{project.name}</span>
-                  <span className="flex flex-wrap gap-xxs" aria-label={t("addProject.import.sources", { sources: project.sources.map(sourceName).join(", ") })}>
+                  <span role="group" className="flex flex-wrap gap-xxs" aria-label={t("addProject.import.sources", { sources: project.sources.map(sourceName).join(", ") })}>
                     {project.sources.map((source) => (
                       <Badge key={source} variant={sourceIsApp(source) ? "outline" : "secondary"} aria-hidden="true" data-add-project-import-source={source}>
                         {sourceName(source)}
