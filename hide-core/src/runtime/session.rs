@@ -819,8 +819,8 @@ impl Runtime {
                 &device.id,
             );
         }
-        if self.snapshot.navigator.focused_device_id.is_none() {
-            self.snapshot.navigator.focused_device_id = Some(self.node.as_str().to_owned());
+        if self.look.front().is_none() {
+            self.set_front_device(Some(self.node.as_str().to_owned()));
         }
         self.resync_navigator_focus();
         self.rebuild_tab_strips();
@@ -1296,6 +1296,9 @@ impl Runtime {
                 );
             }
         }
+        // A rebuilt entry starts without its agent; name it before the strip
+        // is published, as this machine's strips are.
+        sync_strip_agent_identity(&mut session.workspaces, &session.agents);
     }
 
     pub(super) fn report_dropped_tab_moves(&mut self, dropped_moves: Vec<String>) {
@@ -1740,12 +1743,12 @@ impl Runtime {
         }
         if clear_group_pane {
             self.select_terminal_pane(None);
-            self.operator_focused_pane_id = None;
+            self.set_operator_focus(None);
         } else if let Some(pane_id) = follow_pane {
             self.select_terminal_pane(Some(pane_id));
             // The engine moved the keyboard, not the operator. The read record
             // follows only a focus the operator made in Hide.
-            self.operator_focused_pane_id = None;
+            self.set_operator_focus(None);
         }
         for (checkout_id, hide_tab, engine_tab) in followed {
             self.supersede_start_navigation();
@@ -1964,7 +1967,21 @@ impl Runtime {
     /// Applies the authoritative session projection for one configured remote
     /// the engine target. The last valid session remains visible through a stale or
     /// disconnected interval, while status always names the current failure.
+    ///
+    /// A session is news, not a selection: its rows are read with the look
+    /// as it stands when it arrives (inside a selection, the look the last
+    /// completed one left), its own keyboard included, and whatever look it
+    /// moved is read as it completes (`look.rs`).
     pub fn ingest_remote_session(
+        &mut self,
+        target_id: &str,
+        fetched: Result<RemoteSessionSnapshot, SessionFetchError>,
+    ) -> bool {
+        let changed = self.apply_remote_session(target_id, fetched);
+        changed | self.complete_look()
+    }
+
+    fn apply_remote_session(
         &mut self,
         target_id: &str,
         fetched: Result<RemoteSessionSnapshot, SessionFetchError>,
@@ -2494,7 +2511,10 @@ impl Runtime {
         self.ingesting_session = false;
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
-        self.pump_geometry_queues() || changed
+        let pumped = self.pump_geometry_queues();
+        // Read with the look as the session found it; a look it moved, by
+        // an answer that lands with it (a start, a moved pane), is read here.
+        pumped | changed | self.complete_look()
     }
 
     fn apply_session_update(
@@ -2973,7 +2993,7 @@ impl Runtime {
                         || self.snapshot.ui_state.selected_pane_id.is_some()
                     {
                         self.select_terminal_pane(None);
-                        self.operator_focused_pane_id = None;
+                        self.set_operator_focus(None);
                         selection_changed = true;
                     }
                 } else if selected_pane_retired {
@@ -3341,6 +3361,16 @@ impl Runtime {
         origin: PaneFocusOrigin,
         request_id: Option<String>,
     ) {
+        self.change_look(|runtime| runtime.focus_pane_steps(pane_id, origin, request_id));
+    }
+
+    /// The steps of `focus_pane`, which runs them as one selection (`look.rs`).
+    fn focus_pane_steps(
+        &mut self,
+        pane_id: String,
+        origin: PaneFocusOrigin,
+        request_id: Option<String>,
+    ) {
         if self
             .snapshot
             .navigator
@@ -3511,8 +3541,9 @@ impl Runtime {
         if origin == PaneFocusOrigin::Restore {
             return;
         }
-        self.operator_focused_pane_id = Some(pane_id);
-        self.refresh_pane_read_state();
+        // The read follows as the selection that chose the pane completes
+        // (`look.rs`).
+        self.set_operator_focus(Some(pane_id));
     }
 
     /// Reserves only the latest intent. The running worker calls this after
@@ -3973,7 +4004,7 @@ impl Runtime {
         previous: &Option<String>,
         arriving: &str,
     ) {
-        let Some(operator) = self.operator_focused_pane_id.as_deref() else {
+        let Some(operator) = self.look.focus() else {
             return;
         };
         if arriving == operator || previous.as_deref() != Some(operator) {
@@ -3983,7 +4014,7 @@ impl Runtime {
             "pane.read_focus.released",
             format!("The engine moved focus from {operator} to {arriving}"),
         );
-        self.operator_focused_pane_id = None;
+        self.set_operator_focus(None);
     }
     pub(super) fn begin_task_operation(
         &mut self,
@@ -4037,6 +4068,20 @@ impl Runtime {
         Ok(id)
     }
     pub fn ingest_task_operation_result(
+        &mut self,
+        id: u64,
+        result: Result<
+            crate::worktree_control::WorktreeTaskOutcome,
+            crate::worktree_control::TaskFailure,
+        >,
+    ) -> bool {
+        let (changed, read) =
+            self.change_look(|runtime| runtime.ingest_task_operation_result_steps(id, result));
+        changed || read
+    }
+
+    /// The steps of `ingest_task_operation_result`, which runs them as one selection (`look.rs`).
+    fn ingest_task_operation_result_steps(
         &mut self,
         id: u64,
         result: Result<
@@ -5872,8 +5917,7 @@ impl Runtime {
         }
     }
     pub(super) fn persist_current_ui_state(&mut self) {
-        self.snapshot.ui_state.focused_device_id =
-            self.snapshot.navigator.focused_device_id.clone();
+        self.snapshot.ui_state.focused_device_id = self.look.front().map(str::to_owned);
         self.snapshot.ui_state.focused_checkout_id =
             self.snapshot.navigator.focused_checkout_id.clone();
         self.persist_ui_state();
@@ -6126,6 +6170,13 @@ impl Runtime {
         self.persist_current_ui_state();
     }
     pub(super) fn focus_checkout(&mut self, workspace_id: &str, checkout_id: &str) -> bool {
+        let (changed, read) =
+            self.change_look(|runtime| runtime.focus_checkout_steps(workspace_id, checkout_id));
+        changed || read
+    }
+
+    /// The steps of `focus_checkout`, which runs them as one selection (`look.rs`).
+    fn focus_checkout_steps(&mut self, workspace_id: &str, checkout_id: &str) -> bool {
         // The checkout comes forward on the tab it was showing, with the
         // keyboard on the pane the operator last had there. Its first pane
         // is only for a checkout Hide has never shown.
@@ -6236,8 +6287,7 @@ impl Runtime {
         // the checkout came forward on. A sidebar row click dispatches this
         // and then a pane focus, and raising the remembered pane here for
         // that one frame cleared a question nobody had read.
-        self.operator_focused_pane_id = None;
-        self.refresh_pane_read_state();
+        self.set_operator_focus(None);
         self.yield_surface_to_terminal();
         // With separate View areas the alignment above already chose the
         // Workspace's remembered View tab; only the shared canvas needs a
@@ -6274,6 +6324,22 @@ impl Runtime {
         true
     }
     pub fn ingest_workspace_creation(
+        &mut self,
+        request_path: &str,
+        result: Result<
+            crate::checkout_owner::open::WorkspaceCreationOutcome,
+            crate::checkout_owner::open::WorkspaceCreationFailure,
+        >,
+        elapsed_ms: u128,
+    ) -> bool {
+        let (changed, read) = self.change_look(|runtime| {
+            runtime.ingest_workspace_creation_steps(request_path, result, elapsed_ms)
+        });
+        changed || read
+    }
+
+    /// The steps of `ingest_workspace_creation`, which runs them as one selection (`look.rs`).
+    fn ingest_workspace_creation_steps(
         &mut self,
         request_path: &str,
         result: Result<
@@ -6336,7 +6402,7 @@ impl Runtime {
                 "Workspace registrations changed during creation; session sync will refresh the catalog",
             );
         }
-        self.snapshot.navigator.focused_device_id = Some(self.node.as_str().to_owned());
+        self.set_front_device(Some(self.node.as_str().to_owned()));
         self.reconcile_remote_terminal_selection();
         let target_checkout = outcome
             .workspaces

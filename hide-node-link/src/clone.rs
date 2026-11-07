@@ -163,6 +163,10 @@ pub enum CloneFailure {
     UnreachableHost,
     /// Something is already at the target's name.
     TargetExists(PathBuf),
+    /// Git finished, but by then the target's path no longer named the folder
+    /// it cloned into: it, or a folder above it, was moved or replaced. The
+    /// clone stays where it went and nothing is registered.
+    Moved(PathBuf),
     /// Git failed otherwise; its last `fatal:` line, credentials removed.
     Git(String),
     /// The run itself could not start or finish its own work.
@@ -179,6 +183,7 @@ impl CloneFailure {
             Self::NotFound => "not_found",
             Self::UnreachableHost => "unreachable_host",
             Self::TargetExists(_) => "target_exists",
+            Self::Moved(_) => "moved",
             Self::Git(_) => "git",
             Self::Io(_) => "io",
         }
@@ -196,6 +201,10 @@ impl CloneFailure {
             Self::NotFound => "The repository was not found, or it needs sign-in.".to_owned(),
             Self::UnreachableHost => "The host could not be reached.".to_owned(),
             Self::TargetExists(path) => format!("{} already exists.", path.display()),
+            Self::Moved(path) => format!(
+                "{} was moved or replaced while it was cloned; the clone was left where it went and nothing was added.",
+                path.display()
+            ),
             Self::Git(line) => line.clone(),
             Self::Io(reason) => reason.clone(),
         }

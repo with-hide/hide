@@ -7,6 +7,8 @@ use crate::engine::fake::{self, FakeEngine, Reply, refused, reply, unanswered};
 /// The stand-in engine a runtime test answers for.
 type Fake = Arc<FakeEngine<'static>>;
 
+#[path = "tests/add_project.rs"]
+mod add_project;
 mod agent_areas;
 #[path = "tests/agent_connection.rs"]
 mod agent_connection;
@@ -40,6 +42,8 @@ mod detail;
 mod device_catalog;
 #[path = "tests/device_kit.rs"]
 mod device_kit;
+#[path = "tests/device_reconnect.rs"]
+mod device_reconnect;
 #[path = "tests/device_sleep.rs"]
 mod device_sleep;
 #[path = "tests/device_worktrees.rs"]
@@ -119,6 +123,8 @@ mod projects;
 mod ps;
 #[path = "tests/pull_requests.rs"]
 mod pull_requests;
+#[path = "tests/read_on_look.rs"]
+mod read_on_look;
 #[path = "tests/recent_checkouts.rs"]
 mod recent_checkouts;
 #[path = "tests/recent_panes.rs"]

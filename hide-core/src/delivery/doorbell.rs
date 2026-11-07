@@ -1635,6 +1635,7 @@ mod tests {
             status: "idle".into(),
             telemetry_stale: false,
             state_change_seq: Some(7),
+            engine: None,
             status_changed_at_unix_ms: NOW - 60_000,
             last_input_at_unix_ms: NOW - 60_000,
             last_submit_at_unix_ms: NOW - 60_000,

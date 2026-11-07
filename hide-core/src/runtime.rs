@@ -10,6 +10,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_definitions;
 pub(crate) use agent_definitions::settle_and_hand_off;
+mod add_project;
 mod agent_groups;
 mod agent_hook_status;
 mod agent_permission;
@@ -53,6 +54,7 @@ mod issues;
 mod kit;
 mod ledger_walk;
 pub(crate) mod links;
+mod look;
 mod machine_profiles;
 pub(crate) mod memory;
 pub(crate) mod memory_analysis;
@@ -1614,26 +1616,13 @@ pub struct Runtime {
     worker_context: Option<RuntimeWorkerContext>,
     /// When an agent last worked or waited on the operator; 0 until one has.
     agent_worked_at_unix_ms: u64,
-    /// The pane the operator chose to look at, and the only pane whose read
-    /// record may be raised.
-    ///
-    /// The engine's focus is not the operator's attention. A tab carries the pane
-    /// it last had focused, so bringing a tab forward makes the engine report a
-    /// focus nobody asked for; a spawned pane takes focus on its own; and a
-    /// relaunch inherits whatever focus the arriving session snapshot names.
-    /// Counting any of those as a look cleared rows the operator never saw
-    /// (one click on a Done row cleared two rows, and a restart cleared the
-    /// last unread one). Only a focus Hide itself dispatched on the
-    /// operator's behalf arms this, and it is memory only: a launch starts
-    /// with the operator having looked at nothing.
-    operator_focused_pane_id: Option<String>,
-    /// The agents a phone has open now, by the core's pane id (a device's
-    /// pane carries its device): hided names every one whenever a phone opens
-    /// or closes an agent's detail or disconnects (`phone_viewing`). Each is
-    /// read as the desktop's focus pane is, for as long as it stays open, and
-    /// nothing else follows from it: no focus, tab, wake or attach. Memory
-    /// only; a launch starts with no phone looking.
-    phone_viewed_pane_ids: BTreeSet<String>,
+    /// What the operator looks at: this machine's chosen pane, the device in
+    /// front and the phones' agents, written only through `runtime/look.rs`.
+    look: look::LookInputs,
+    /// The look each machine's rows were last read with
+    /// (`agents::OperatorLook`); `follow_operator_look` reads every row
+    /// again only when the operator's look has moved from it. Memory only.
+    read_look: agents::OperatorLook,
     /// The read axis's view of the current connection to the local engine
     /// server and to each device's: the mark that names the server and the
     /// panes settled on it so far (`agent_state::ReadConnection`). Memory
@@ -2313,6 +2302,7 @@ impl Runtime {
             }
             store
         });
+        let front_device = snapshot.navigator.focused_device_id.clone();
         let mut runtime = Self {
             snapshot,
             hide_started: delivery_ledger
@@ -2511,8 +2501,8 @@ impl Runtime {
             guardrails: guardrails::GuardrailsWork::default(),
             system_language: None,
             agent_worked_at_unix_ms: 0,
-            operator_focused_pane_id: None,
-            phone_viewed_pane_ids: BTreeSet::new(),
+            look: look::LookInputs::restored(front_device),
+            read_look: Default::default(),
             local_read_connection: crate::agent_state::ReadConnection::new(read_mark(0)),
             remote_read_connections: BTreeMap::new(),
             read_marks_made: 1,
@@ -2918,15 +2908,28 @@ impl Runtime {
             return true;
         }
 
+        // A keystroke in a document is as frequent as terminal input and
+        // moves no area either: its first edit keeps its own displays open,
+        // and the next snapshot read's sync publishes that. Neither moves the
+        // operator's look, so neither is a selection to read.
+        let high_frequency = event.is_terminal_io() || matches!(event, Event::FileDraft(_));
+        if high_frequency {
+            return self.dispatch_event(event, true);
+        }
+        // Everything one event changes is one selection: the look it leaves
+        // is read once, in the event's own frame (`look.rs`).
+        let (changed, read) = self.change_look(|runtime| runtime.dispatch_event(event, false));
+        changed || read
+    }
+
+    /// Applies one decoded event and everything that follows from it in the
+    /// same frame.
+    fn dispatch_event(&mut self, event: Event, high_frequency: bool) -> bool {
         let cleared_error = self.snapshot.status.last_error.take().is_some();
         let intent = self
             .separate_view_areas()
             .then(|| AreaIntent::of(&event))
             .flatten();
-        // A keystroke in a document is as frequent as terminal input and
-        // moves no area either: its first edit keeps its own displays open,
-        // and the next snapshot read's sync publishes that.
-        let high_frequency = event.is_terminal_io() || matches!(event, Event::FileDraft(_));
         let chooses_workspace = matches!(
             event,
             Event::FocusCheckout(_) | Event::FocusPane(_) | Event::FocusTab(_)
@@ -2962,7 +2965,7 @@ impl Runtime {
             if chooses_workspace && self.snapshot.status.last_error.is_none() {
                 self.mark_front_chosen();
             }
-            self.sync_workspace_view();
+            changed |= self.sync_workspace_view();
         }
         // Every event that can move the visible tab funnels through here, so
         // the attach window is maintained once rather than at each of the four

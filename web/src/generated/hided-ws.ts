@@ -196,6 +196,7 @@ export interface ServerFrame {
     | "attachment_refused"
     | "open_external_result"
     | "clone_target"
+    | "home_folder_list"
     | "core_move"
     | "core_link"
     | "agent_notice"

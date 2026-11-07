@@ -375,6 +375,7 @@ mod tests {
             status: status.into(),
             telemetry_stale: false,
             state_change_seq: Some(4),
+            engine: None,
             status_changed_at_unix_ms: changed,
             last_input_at_unix_ms: input,
             last_submit_at_unix_ms: 0,

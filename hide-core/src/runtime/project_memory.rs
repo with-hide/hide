@@ -280,6 +280,16 @@ impl Runtime {
         &mut self,
         payload: events::ProjectMemoryNavigatePayload,
     ) -> bool {
+        let (changed, read) =
+            self.change_look(|runtime| runtime.navigate_project_memory_steps(payload));
+        changed || read
+    }
+
+    /// The steps of `navigate_project_memory`, which runs them as one selection (`look.rs`).
+    fn navigate_project_memory_steps(
+        &mut self,
+        payload: events::ProjectMemoryNavigatePayload,
+    ) -> bool {
         let usable = self.catalog_workspaces().any(|workspace| {
             workspace.id == payload.workspace_id
                 && workspace.device_id == payload.device_id

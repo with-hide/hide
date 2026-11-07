@@ -30,12 +30,7 @@ impl Runtime {
         let Some((workspace_id, checkout_id)) = self.front_checkout() else {
             return;
         };
-        let device_id = self
-            .snapshot
-            .navigator
-            .focused_device_id
-            .as_deref()
-            .unwrap_or(self.node.as_str());
+        let device_id = self.look.front().unwrap_or(self.node.as_str());
         let Some((workspace, checkout)) = self.catalog_checkout(workspace_id, checkout_id) else {
             return;
         };

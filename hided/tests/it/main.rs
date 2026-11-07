@@ -3,6 +3,7 @@
 //! crate and all its dependencies again; docs/BUILD.md, "One integration
 //! test binary per crate", owns the rule.
 
+mod arguments;
 mod browser_control;
 mod closed_stdout;
 mod connect_build;

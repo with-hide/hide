@@ -330,7 +330,7 @@ impl Runtime {
             + self.panes_closing.len()
     }
     pub(super) fn reconcile_remote_terminal_selection(&mut self) -> bool {
-        let focused_device_id = self.snapshot.navigator.focused_device_id.clone();
+        let focused_device_id = self.look.front().map(str::to_owned);
         let sessions = self
             .snapshot
             .status

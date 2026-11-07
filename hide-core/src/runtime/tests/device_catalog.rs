@@ -493,7 +493,7 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
     device.hold();
     {
         let mut runtime = shared.lock().unwrap();
-        runtime.snapshot.navigator.focused_device_id = Some(TARGET.to_owned());
+        runtime.set_front_device(Some(TARGET.to_owned()));
         runtime.ingest_remote_session(TARGET, Ok(raw));
         runtime.sync_workspace_view();
         let held = &runtime.snapshot.ui_state.recent_checkouts;
@@ -1387,22 +1387,6 @@ fn a_removed_device_project_outside_its_home_is_asked_about_again() {
         runtime.snapshot.ui_state.workspace_registrations[0].path,
         t.other
     );
-}
-
-/// Create new project is this Mac's: a device's helper registers folders
-/// but makes none, so a new folder named on a device is refused, not sent.
-#[test]
-fn a_new_project_folder_on_a_device_is_refused_before_the_helper() {
-    let t = tree();
-    let mut runtime = runtime();
-    dispatch(
-        &mut runtime,
-        "create_workspace",
-        serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": true, "new_folder": true}),
-    );
-    let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.kind, "workspace.create_local_only");
-    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
 }
 
 /// B23, B12: a new tab in a device project the engine has no workspace in opens
