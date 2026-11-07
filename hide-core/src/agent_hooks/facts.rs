@@ -58,23 +58,45 @@ struct SessionFact {
     counts: Option<HookCounts>,
     #[serde(skip)]
     turn: Option<HookTurn>,
-    /// The engine's state sequence for the agent when `turn` was first laid on it:
+    /// The engine state the agent was in when `turn` was first laid on it:
     /// a turn end the session read finds under a later state ended this
     /// turn, which no hook event of the session may follow (Claude Code's
     /// interruption, which sends neither `Stop` nor always `idle_prompt`).
     #[serde(skip)]
-    turn_seq: Option<u64>,
+    turn_seq: Option<Laid>,
     /// The calls whose permission the operator has not answered yet, as the
     /// hook last said them: the session waits on the operator while any is
     /// open, whatever `turn` says (a background subagent's dialog outlives
     /// the main turn's `Stop`).
     #[serde(skip)]
     waiting: Vec<String>,
-    /// The engine's state sequence when `waiting` was last laid on the agent: a
+    /// The engine state when `waiting` was last laid on the agent: a
     /// session read under a later state that finds a call's result ends
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
-    waiting_seq: Option<u64>,
+    waiting_seq: Option<Laid>,
+}
+
+/// The engine state a running turn or an open approval was first laid
+/// under. A state sequence compares only with one read on the same engine
+/// (status-model.md, Across an engine restart): a device's engine goes with
+/// its link, and the one the next link opens counts from the start again,
+/// so what was laid or reported before that engine began is older than any
+/// state it reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Laid {
+    At(u64),
+    BeforeThisEngine,
+}
+
+impl Laid {
+    /// Whether the engine state `now` came after this one.
+    fn before(self, now: u64) -> bool {
+        match self {
+            Self::At(since) => now > since,
+            Self::BeforeThisEngine => true,
+        }
+    }
 }
 
 /// The most open approvals one session reports; the hook keeps the same
@@ -260,6 +282,16 @@ impl HookFacts {
         if fact.turn != turn_before {
             fact.turn_seq = None;
         }
+        // A report made since the engine that laid the fact ended speaks for
+        // the engine reading the pane now: the turn or approvals it restates
+        // are laid again under that engine's state, so a session read of an
+        // earlier turn can never end them.
+        if report.turn.is_some() && fact.turn_seq == Some(Laid::BeforeThisEngine) {
+            fact.turn_seq = None;
+        }
+        if report.waiting.is_some() && fact.waiting_seq == Some(Laid::BeforeThisEngine) {
+            fact.waiting_seq = None;
+        }
         facts.sessions.push(fact);
         if facts.sessions.len() > SESSIONS_PER_PANE {
             facts.sessions.remove(0);
@@ -349,6 +381,24 @@ impl HookFacts {
         tokens
     }
 
+    /// The engine that read the panes `owns` speaks for ended with its
+    /// device's link: every turn and approval it holds was laid or reported
+    /// before the next engine, whose state sequences count from the start
+    /// again, so any state that engine reads comes after them. Memory only,
+    /// as the turns are.
+    pub(crate) fn engine_ended(&mut self, owns: impl Fn(&str) -> bool) {
+        for (_, facts) in self.panes.iter_mut().filter(|(pane, _)| owns(pane)) {
+            for fact in &mut facts.sessions {
+                if fact.turn.is_some() {
+                    fact.turn_seq = Some(Laid::BeforeThisEngine);
+                }
+                if !fact.waiting.is_empty() {
+                    fact.waiting_seq = Some(Laid::BeforeThisEngine);
+                }
+            }
+        }
+    }
+
     fn save(&self) {
         if let Some(file) = &self.file {
             file.save(self.panes.clone());
@@ -373,7 +423,7 @@ fn engine_session(agent: &SessionAgentPayload) -> Option<&str> {
 fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
     close_answered_waits(fact, agent);
     if fact.turn.is_some() && fact.turn_seq.is_none() {
-        fact.turn_seq = agent.state_change_seq;
+        fact.turn_seq = agent.state_change_seq.map(Laid::At);
     }
     let (Some(HookTurn::Working | HookTurn::Waiting), Some(since), Some(now)) =
         (fact.turn, fact.turn_seq, agent.state_change_seq)
@@ -382,7 +432,7 @@ fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
     };
     let at_rest = matches!(agent.agent_status.as_deref(), Some("idle" | "done"));
     let ended = agent.facts.as_ref().and_then(|facts| facts.turn_ended);
-    if now > since && at_rest {
+    if since.before(now) && at_rest {
         fact.turn = match ended {
             Some(hide_session::turns::TurnEnded::Completed) => Some(HookTurn::Done),
             // An interrupt closes every dialog of the turn, a subagent's too.
@@ -408,7 +458,7 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
         return;
     }
     if fact.waiting_seq.is_none() {
-        fact.waiting_seq = agent.state_change_seq;
+        fact.waiting_seq = agent.state_change_seq.map(Laid::At);
     }
     let (Some(since), Some(now)) = (fact.waiting_seq, agent.state_change_seq) else {
         return;
@@ -416,7 +466,7 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
     let Some(answered) = agent.facts.as_ref().map(|facts| &facts.answered_calls) else {
         return;
     };
-    if now > since && !answered.is_empty() {
+    if since.before(now) && !answered.is_empty() {
         fact.waiting.retain(|open| !answered.contains(open));
     }
 }
@@ -540,6 +590,158 @@ mod tests {
         let mut laid = payload(session);
         lay(facts, &mut laid);
         laid.agents[0].hook
+    }
+
+    /// The pane's agent as the engine reads it, `status` at state `seq`, with
+    /// what the session read made under that state says of its last turn
+    /// and of its tool calls.
+    fn read(
+        status: &str,
+        seq: u64,
+        ended: Option<hide_session::turns::TurnEnded>,
+        answered: &[&str],
+    ) -> SessionSnapshotPayload {
+        let mut read = payload("s-1");
+        read.agents[0].agent_status = Some(status.to_owned());
+        read.agents[0].state_change_seq = Some(seq);
+        read.agents[0].facts = Some(crate::request_view::RowFacts {
+            turn_ended: ended,
+            answered_calls: answered.iter().map(|call| (*call).to_owned()).collect(),
+            ..Default::default()
+        });
+        read
+    }
+
+    /// The turn laid on the agent and the approvals still open after `read`.
+    fn after(
+        facts: &mut HookFacts,
+        mut read: SessionSnapshotPayload,
+    ) -> (Option<HookTurn>, Vec<String>) {
+        lay(facts, &mut read);
+        let open = facts.panes["w1:p1"]
+            .sessions
+            .last()
+            .unwrap()
+            .waiting
+            .clone();
+        (read.agents[0].hook, open)
+    }
+
+    fn asking(call: &str) -> HookStatusReport {
+        let mut asking = report(Some("s-1"), Some(HookTurn::Waiting));
+        asking.waiting = Some(vec![call.to_owned()]);
+        asking
+    }
+
+    /// A device's engine goes with its link and the next link's engine counts
+    /// its states from the start again: a turn the hook last said was
+    /// running when the link went down ends once that next engine reads the
+    /// agent at rest and the session read under that state says the turn
+    /// ended. A lower sequence alone, read as if it were the same engine's,
+    /// never ended it, and the restore's unknown step does not either.
+    #[test]
+    fn a_turn_from_an_engine_that_ended_ends_on_the_next_engines_read_of_it_at_rest() {
+        use hide_session::turns::TurnEnded::Completed;
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)))
+            .unwrap();
+        let working = Some(HookTurn::Working);
+        assert_eq!(after(&mut facts, read("working", 57, None, &[])).0, working);
+        assert_eq!(
+            after(&mut facts, read("done", 2, Some(Completed), &[])).0,
+            working,
+            "a state of the same engine before the turn's ends nothing"
+        );
+
+        facts.engine_ended(|_| true);
+        assert_eq!(after(&mut facts, read("unknown", 0, None, &[])).0, working);
+        assert_eq!(
+            after(&mut facts, read("unknown", 0, Some(Completed), &[])).0,
+            working,
+            "a restored pane not yet read again is not at rest"
+        );
+        assert_eq!(
+            after(&mut facts, read("idle", 2, None, &[])).0,
+            working,
+            "at rest, with no session read saying the turn ended"
+        );
+        let done = Some(HookTurn::Done);
+        assert_eq!(
+            after(&mut facts, read("done", 2, Some(Completed), &[])).0,
+            done
+        );
+        assert_eq!(
+            after(&mut facts, read("done", 2, Some(Completed), &[])).0,
+            done
+        );
+    }
+
+    /// What a hook reports once the engine that laid its turn ended speaks
+    /// for the next engine: a turn or approvals it says again, unchanged,
+    /// are laid again under that engine's state, so a session read of the
+    /// turn before them, under that same state, ends neither.
+    #[test]
+    fn a_turn_reported_again_after_its_engine_ended_is_laid_under_the_next_one() {
+        use hide_session::turns::TurnEnded::Completed;
+        let mut facts = HookFacts::default();
+        facts.record("w1:p1", &asking("call-1")).unwrap();
+        after(&mut facts, read("blocked", 57, None, &[]));
+        facts.engine_ended(|_| true);
+        facts.record("w1:p1", &asking("call-1")).unwrap();
+        assert_eq!(
+            after(&mut facts, read("idle", 2, Some(Completed), &["call-1"])),
+            (Some(HookTurn::Waiting), vec!["call-1".to_owned()])
+        );
+        assert_eq!(
+            after(&mut facts, read("idle", 3, Some(Completed), &["call-1"])),
+            (Some(HookTurn::Done), Vec::new()),
+            "a read under a later state of the next engine ends them"
+        );
+    }
+
+    /// An approval open when its engine ended closes on the next engine's
+    /// session read that finds its call's result, working or not (D-10); a
+    /// read that finds no result, or the restore's unknown step, leaves it.
+    #[test]
+    fn an_approval_from_an_engine_that_ended_closes_on_the_next_engines_read_of_its_answer() {
+        let mut facts = HookFacts::default();
+        facts.record("w1:p1", &asking("call-1")).unwrap();
+        after(&mut facts, read("blocked", 57, None, &[]));
+        facts.engine_ended(|_| true);
+        let open = vec!["call-1".to_owned()];
+        assert_eq!(after(&mut facts, read("unknown", 0, None, &[])).1, open);
+        assert_eq!(after(&mut facts, read("working", 1, None, &[])).1, open);
+        assert_eq!(
+            after(&mut facts, read("working", 1, None, &["call-1"])),
+            (Some(HookTurn::Waiting), Vec::new())
+        );
+    }
+
+    /// The end of one device's engine leaves every pane it does not speak
+    /// for as it was.
+    #[test]
+    fn an_engine_that_ended_leaves_the_turns_of_other_panes_as_they_were() {
+        let mut facts = HookFacts::default();
+        for pane in ["w1:p1", "remote:mini:pane:t1"] {
+            facts
+                .record(pane, &report(Some("s-1"), Some(HookTurn::Working)))
+                .unwrap();
+        }
+        let mut both = read("working", 57, None, &[]);
+        let mut device = both.agents[0].clone();
+        device.pane_id = Some("remote:mini:pane:t1".to_owned());
+        both.agents.push(device);
+        both.panes
+            .push(serde_json::from_value(json!({"pane_id": "remote:mini:pane:t1"})).unwrap());
+        facts.lay(&mut both, str::to_owned, |_| true);
+        facts.engine_ended(|pane| crate::address::is_pane_of(pane, "mini"));
+        let anchor = |facts: &HookFacts, pane: &str| facts.panes[pane].sessions[0].turn_seq;
+        assert_eq!(anchor(&facts, "w1:p1"), Some(Laid::At(57)));
+        assert_eq!(
+            anchor(&facts, "remote:mini:pane:t1"),
+            Some(Laid::BeforeThisEngine)
+        );
     }
 
     /// An agent started again in its pane: the engine can keep naming the session

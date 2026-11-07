@@ -238,6 +238,14 @@ struct Engine {
     ai_limited: bool,
     ai_dirty: bool,
     failure: Option<&'static str>,
+    /// Version 3 calls still wait to be moved (`Store::convert`): until they
+    /// are, no call is read, counted or pruned.
+    converting: bool,
+    /// The calls this process moved, logged when the last batch moved.
+    converted: u64,
+    convert_retry: Option<Instant>,
+    /// Compacting is looked at once per open and once after a conversion.
+    compacting: bool,
     pruned: Instant,
     pruning: bool,
     prune_retry: Option<Instant>,
@@ -286,6 +294,8 @@ impl Engine {
         ai: Arc<AiUsageQueue>,
     ) -> Result<Self, &'static str> {
         let store = Store::open(path)?;
+        let converting = store.converting()?;
+        let compacting = !converting && store.compaction_due()?;
         let agents = Agent::supported()
             .filter(|agent| *agent != Agent::Cursor)
             .map(|agent| {
@@ -337,6 +347,10 @@ impl Engine {
             ai_limited,
             ai_dirty: ai_unread,
             failure: None,
+            converting,
+            converted: 0,
+            convert_retry: None,
+            compacting,
             pruned: Instant::now(),
             pruning: true,
             prune_retry: None,
@@ -402,6 +416,25 @@ impl Engine {
     /// One node read and one atomic store step per turn, followed by a rest.
     /// Round-robin selection prevents a large agent history starving another.
     fn step(&mut self, own: &dyn NodeLink, activity: Activity) {
+        if self.converting {
+            self.convert_step();
+            return;
+        }
+        if self.compacting {
+            self.compacting = false;
+            // The operator cannot act on a store left larger than it could
+            // be: its failure goes to the log, and the next open looks again.
+            match self
+                .store
+                .compaction_due()
+                .and_then(|due| due.then(|| self.store.compact()).transpose())
+            {
+                Ok(Some(())) => diagnostic("usage_store_compacted", None, 0),
+                Ok(None) => {}
+                Err(code) => diagnostic(code, None, 0),
+            }
+            return;
+        }
         let now = crate::links::now_ms();
         let zone = jiff::tz::TimeZone::system();
         if (self.pruning || self.pruned.elapsed() >= Duration::from_secs(30 * 60))
@@ -580,6 +613,37 @@ impl Engine {
         }
     }
 
+    /// One batch of a version 3 store's calls moved. A failed batch moved
+    /// nothing and is tried again after `RETRY`.
+    fn convert_step(&mut self) {
+        if self.convert_retry.is_some_and(|at| at.elapsed() < RETRY) {
+            return;
+        }
+        match self
+            .store
+            .convert()
+            .and_then(|moved| Ok((moved, self.store.converting()?)))
+        {
+            Ok((moved, left)) => {
+                self.convert_retry = None;
+                self.converted += moved as u64;
+                if !left {
+                    self.converting = false;
+                    // The moved calls left their old pages free.
+                    self.compacting = true;
+                    self.costs.dirty = true;
+                    // A failure a batch reported clears with the next read.
+                    self.dirty = true;
+                    diagnostic("usage_store_converted", None, self.converted);
+                }
+            }
+            Err(code) => {
+                self.convert_retry = Some(Instant::now());
+                self.failed(code);
+            }
+        }
+    }
+
     fn finish(&mut self, index: usize, now: u64, zone: &jiff::tz::TimeZone) {
         let work = &mut self.agents[index];
         if work.progress.reading && !work.failed {
@@ -665,6 +729,11 @@ impl Engine {
     /// build keeps the last costs, stays due and is tried again after the
     /// same wait, logged once per cause; the frame says it failed (B33).
     fn project_costs(&mut self, projects: &Arc<Vec<ProjectRoots>>) -> ProjectCosts {
+        // Calls still being moved would read as missing; the costs stay
+        // pending until the conversion ends.
+        if self.converting {
+            return self.costs.published();
+        }
         let now = crate::links::now_ms();
         let zone = jiff::tz::TimeZone::system();
         let Ok(today) = super::local_day(now, &zone) else {

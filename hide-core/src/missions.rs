@@ -1189,6 +1189,20 @@ fn is_zero_u32(value: &u32) -> bool {
 }
 
 impl Mission {
+    /// The (checker registration, Conductor) pairs of `node`: the checkers
+    /// bound to its lines, each with this mission's Conductor. A letter from
+    /// one to the other is what the node's worker may read
+    /// (`MissionBook::checkers_read_by`) and what `hide mission show <node>`
+    /// lists for it, so the list and the reading never differ
+    /// (with-hide/hide-private#656, #668).
+    pub(crate) fn checker_letters<'a>(
+        &'a self,
+        node: &'a MissionNode,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        node.checker_agents()
+            .map(|checker| (checker, &self.conductor.actor))
+    }
+
     /// Each node's key, status and pull requests, which a reopen keeps so
     /// the mission is not closed again until one of them moves.
     pub(crate) fn node_marks(&self) -> String {
@@ -1466,10 +1480,7 @@ impl MissionBook {
             .iter()
             .flat_map(|mission| mission.nodes.iter().map(move |node| (mission, node)))
             .filter(move |(_, node)| node.agent_id.as_deref() == Some(worker))
-            .flat_map(|(mission, node)| {
-                node.checker_agents()
-                    .map(|checker| (checker, &mission.conductor.actor))
-            })
+            .flat_map(|(mission, node)| mission.checker_letters(node))
     }
 
     /// The mission `actor` conducts and still runs, if any.

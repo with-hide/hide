@@ -409,7 +409,7 @@ impl Runtime {
                     let record = ledger.agents.iter().find(|record| record.id == id)?;
                     Some(MemoryPromotionAgentSnapshot {
                         name: record.wire_name().to_owned(),
-                        pane_id: (!record.ended).then(|| record.pane.clone()),
+                        pane_id: (!record.ended).then(|| record.pane_on(self.node.as_str())),
                         agent_id: Some(record.id.clone()),
                     })
                 })

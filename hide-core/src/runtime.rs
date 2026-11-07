@@ -99,6 +99,7 @@ mod session_state;
 mod session_thread;
 mod snapshot_delta;
 mod ssh_hosts;
+pub(crate) mod start_hook;
 mod strays;
 mod suggestion_apply;
 mod suggestion_evidence;
@@ -1412,6 +1413,10 @@ pub struct Runtime {
     /// The kit call each device's helper runs next, merged across requests,
     /// keyed by device id.
     device_kit_pending: BTreeMap<String, KitJob>,
+    /// The passes spawns asked of each machine's kit before starting an
+    /// agent there, by device id (`runtime/start_hook.rs`); one entry per
+    /// machine, dropped with the device's kit work.
+    start_passes: start_hook::StartPassLedger,
     /// The devices whose last kit report said they wait for the first-run
     /// agent choice, and whether this run already sent it: a device is sent
     /// the choice once, so a device that keeps waiting (its record would not
@@ -2397,6 +2402,7 @@ impl Runtime {
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
+            start_passes: BTreeMap::new(),
             device_first_run_choice: BTreeMap::new(),
             device_kit_running: BTreeSet::new(),
             codex_daemon_off_running: BTreeMap::new(),

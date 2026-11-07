@@ -775,10 +775,24 @@ impl Runtime {
         delegated: bool,
     ) {
         let group = if delegated {
-            let Some(group) = self.delegated_group_owner(key, tab_id) else {
-                return;
-            };
-            group
+            // A delegated tab whose agent registration ended has no row to
+            // name its root, yet its window is still there and the operator
+            // chose it: it opens in the group already in front, not nowhere.
+            match self.delegated_group_owner(key, tab_id) {
+                Some(group) => group,
+                None => {
+                    self.push_diagnostic(
+                        "agent_layout.owner_unresolved",
+                        format!(
+                            "Remote tab {tab_id} has no resolvable owner group; it opens in the group in front"
+                        ),
+                    );
+                    self.workspace_views
+                        .as_ref()
+                        .and_then(|store| store.views.get(&key.0, &key.1))
+                        .and_then(|view| view.agent_groups.selected.clone())
+                }
+            }
         } else {
             self.workspace_views
                 .as_ref()

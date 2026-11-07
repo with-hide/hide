@@ -84,7 +84,7 @@ it("a screen closed as fallen behind fails its read and reattaches at the first 
   const states: ConnectionState[] = [];
   const stop = useShellStore.subscribe((state) => states.push(state.connection));
   const full: boolean[] = [];
-  const shell = connectShell({ onChunks: (_chunks, isFull) => full.push(isFull) });
+  const shell = connectShell({ onChunks: (_chunks, isFull) => full.push(isFull), onCopy: () => {} });
   configureFileBytes(shell.dispatch);
 
   const first = made(0);
@@ -127,7 +127,7 @@ it("a screen closed as fallen behind fails its read and reattaches at the first 
 // the core of the daemon frame before the snapshot it applied, never one
 // announced on a socket that died before its snapshot came.
 it("a reconnect names the core its revision came from", async () => {
-  const shell = connectShell({ onChunks: () => {} });
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
   const first = made(0);
   first.open();
   first.frame({ type: "daemon", payload: { core_instance: "aaaaaaaaaaaaaaaa" } });
@@ -170,7 +170,7 @@ it("a reconnect names the core its revision came from", async () => {
 it("a move holds the window as moving, sends only the move, and the role after it draws the window at the node's address", async () => {
   const states: ConnectionState[] = [];
   const stop = useShellStore.subscribe((state) => states.push(state.connection));
-  const shell = connectShell({ onChunks: () => {} });
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
   const first = made(0);
   first.open();
   first.frame({ type: "snapshot", payload: { revision: 3, rest: {} } });
@@ -219,7 +219,7 @@ it("a move holds the window as moving, sends only the move, and the role after i
 // neither releases a window the move holds, so no key reaches a role that is
 // stopping or a move that has not finished (W1).
 it("a frame a role sends while the move is under way keeps the window held", async () => {
-  const shell = connectShell({ onChunks: () => {} });
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
   const first = made(0);
   first.open();
   first.frame({ type: "snapshot", payload: { revision: 3, rest: {} } });
@@ -244,7 +244,7 @@ it("a frame a role sends while the move is under way keeps the window held", asy
 });
 
 it("a new held page reports access when its first snapshot releases the hold", () => {
-  const shell = connectShell({ onChunks: () => {} });
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
   const first = made(0);
   first.open();
   first.frame({ type: "core_link", payload: { phase: "waiting", machine: null, alias: "mini" } });
@@ -271,7 +271,7 @@ it("a move back removes the node from the address, and an unfinished move leaves
 // holds no window, so a fresh window goes from connecting to live; a node
 // that holds its screens (`core_link`) does hold a window not drawn yet.
 it("an idle move frame before the first snapshot holds nothing, and a node holding its screens does", async () => {
-  const shell = connectShell({ onChunks: () => {} });
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
   const first = made(0);
   first.open();
   const idle = { state: "idle", direction: null, device: null, node: null, sent: 0, total: 0, failed: [], step: null, cause: null, intent: null };
@@ -298,7 +298,7 @@ it("an idle move frame before the first snapshot holds nothing, and a node holdi
 // shows reconnecting, and a drawn window a frame held goes back to live when
 // the move turns out not to go ahead.
 it("a window no move holds reconnects as reconnecting, and a move that stops short releases it", async () => {
-  const shell = connectShell({ onChunks: () => {} });
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
   const first = made(0);
   first.open();
   first.frame({ type: "snapshot", payload: { revision: 3, rest: {} } });
@@ -308,5 +308,21 @@ it("a window no move holds reconnects as reconnecting, and a move that stops sho
   expect(useShellStore.getState().connection).toBe("live");
   first.closeWith(1006, "");
   expect(useShellStore.getState().connection).toBe("reconnecting");
+  shell.close();
+});
+
+// with-hide/hide-private#659: a program's copy reaches the window as its own
+// frame, handed over once, and never as a pane's output that a redraw or a
+// reconnect would replay.
+it("a clipboard frame is handed to the copy handler and never to the terminals", () => {
+  const copies: unknown[] = [];
+  const chunks: unknown[] = [];
+  const shell = connectShell({ onChunks: (taken) => chunks.push(...taken), onCopy: (copy) => copies.push(copy) });
+  const socket = made(0);
+  socket.open();
+  socket.frame({ type: "snapshot", payload: { revision: 1, rest: {} } });
+  socket.frame({ type: "clipboard", payload: { pane_id: "remote:mini:pane:w1:p1", text_base64: "Y29waWVk" } });
+  expect(copies).toEqual([{ pane_id: "remote:mini:pane:w1:p1", text_base64: "Y29waWVk" }]);
+  expect(chunks).toEqual([]);
   shell.close();
 });

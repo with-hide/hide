@@ -3338,6 +3338,12 @@
                 "machine_unavailable",
                 "repository_unavailable",
                 "agent_not_installed",
+                "agent_hook_off",
+                "agent_not_set_up",
+                "agent_hook_untrusted",
+                "agent_hook_missing",
+                "agent_hook_unconfirmed",
+                "agent_hook_unchecked",
                 "intent_conflict",
                 "invalid_launch_choice",
                 "shell_starting",
@@ -5274,7 +5280,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:68f6a1d841fa83702eccaff1061353868b85b19192c1c309ede9459e09d76c0c",
+    "digest": "sha256:4abe04d860d5ab4909b7339482e755dc67feee6b1b1087b71e5006301afc825b",
     "envelopes": {
         "agent": {
             "answer": "value",

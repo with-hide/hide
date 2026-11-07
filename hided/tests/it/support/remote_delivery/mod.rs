@@ -1064,6 +1064,31 @@ impl Fixture {
         self.screen.event(kind, payload)
     }
 
+    /// Sets `agent` up on the device as an operator's would be before a
+    /// spawn there: it has run, so its folder (`folder`, below the device
+    /// account's home) is there, and it is switched on, so the device's kit
+    /// puts Hide's hook in. A spawn refuses an agent whose hook is not in
+    /// place (docs/delivery.md).
+    pub fn agent_ready_on_device(&self, agent: &str, folder: &str) -> Result<()> {
+        fs::create_dir_all(self.remote.environment.home.join(folder))?;
+        self.event(
+            "kit_agent_set",
+            json!({"device_id": DEVICE, "agent": agent, "enabled": true}),
+        )?;
+        wait_for("the agent's hook on the device", || {
+            let snapshot = self.snapshot()?;
+            Ok(snapshot
+                .pointer("/navigator/devices")
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.iter().find(|row| row["id"] == DEVICE))
+                .and_then(|row| row.pointer("/kit/agents"))
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.iter().find(|row| row["id"] == agent))
+                .is_some_and(|row| row.pointer("/hook/state") == Some(&json!("installed")))
+                .then_some(()))
+        })
+    }
+
     pub fn reconnect_device(&self) -> Result<()> {
         self.event("retry_connect", json!({"target_id":DEVICE}))
     }

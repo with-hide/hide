@@ -35,6 +35,42 @@ pub struct Watch {
     pub status_changed_at_unix_ms: u64,
     #[serde(default)]
     pub generation: u64,
+    /// The engine connection `last_status` and `last_state_change_seq` were
+    /// read on ([`StateRead::engine`]). Memory only: a core that starts again
+    /// connects to every engine anew, so a loaded watch has none, and its first
+    /// reading compares by status alone.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub last_engine: Option<String>,
+}
+
+/// One engine's reading of an agent's state: the connection it was read on
+/// (`agent_state::ReadConnection::mark`), its status and its state sequence.
+/// The one rule for whether an agent's state moved between two readings,
+/// the watch's activity and the delivery observation's clock alike.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StateRead<'a> {
+    pub engine: Option<&'a str>,
+    pub status: &'a str,
+    pub seq: Option<u64>,
+}
+
+impl StateRead<'_> {
+    /// Whether the reading says where the agent is. A restored pane reports
+    /// sequence 0, then `unknown` until its holder has read the screen again
+    /// (status-model.md, Across an engine restart); neither is a state.
+    pub(crate) fn settled(&self) -> bool {
+        self.seq != Some(0) && self.status != "unknown"
+    }
+
+    /// Whether this reading is another state than `last`: another status, or
+    /// another sequence on the same engine. A sequence compares only with one
+    /// read on the same engine, since the next engine counts from the start
+    /// again; a watch loaded from the file names no engine, so its first
+    /// reading compares by status.
+    pub(crate) fn moved_from(&self, last: &StateRead<'_>) -> bool {
+        self.status != last.status || (self.engine == last.engine && self.seq != last.seq)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -48,6 +84,15 @@ pub struct View {
 }
 
 impl Watch {
+    /// The last settled reading the watch took of its target.
+    pub(crate) fn last_read(&self) -> StateRead<'_> {
+        StateRead {
+            engine: self.last_engine.as_deref(),
+            status: &self.last_status,
+            seq: self.last_state_change_seq,
+        }
+    }
+
     pub fn view(&self) -> View {
         View {
             id: self.id.clone(),
@@ -109,6 +154,7 @@ pub fn start(
         last_state_change_seq: None,
         status_changed_at_unix_ms: activity,
         generation: 0,
+        last_engine: None,
     };
     ledger.watches.push(watch.clone());
     Ok(watch)
@@ -178,6 +224,8 @@ pub struct Reading {
     pub status: String,
     pub status_available: bool,
     pub state_change_seq: Option<u64>,
+    /// The engine connection the status was read on ([`StateRead::engine`]).
+    pub engine: Option<String>,
     pub status_changed_at_unix_ms: u64,
     pub session_modified_at_unix_ms: Option<u64>,
     pub failure: Option<String>,
@@ -190,6 +238,16 @@ pub struct Reading {
     /// The target's own row says the engine holds it at a blocked prompt, such as
     /// a permission menu.
     pub blocked: bool,
+}
+
+impl Reading {
+    pub(crate) fn read(&self) -> StateRead<'_> {
+        StateRead {
+            engine: self.engine.as_deref(),
+            status: &self.status,
+            seq: self.state_change_seq,
+        }
+    }
 }
 
 /// A target whose activity read failed this many ticks in a row is reported.
@@ -239,13 +297,17 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
         };
         let before = ledger.watches[index].clone();
         let watch = &mut ledger.watches[index];
-        if reading.status_available
-            && (watch.last_status != reading.status
-                || watch.last_state_change_seq != reading.state_change_seq)
-        {
+        let read = reading.read();
+        // The target's last settled reading is kept whole, engine, status and
+        // sequence: a reconnect's restore steps leave it as it was, and only
+        // a state that moved from it is activity.
+        if reading.status_available && read.settled() {
+            if read.moved_from(&watch.last_read()) {
+                watch.status_changed_at_unix_ms = reading.status_changed_at_unix_ms.min(now);
+            }
             watch.last_status = reading.status.clone();
             watch.last_state_change_seq = reading.state_change_seq;
-            watch.status_changed_at_unix_ms = reading.status_changed_at_unix_ms.min(now);
+            watch.last_engine = reading.engine.clone();
         }
         let activity = if reading.status_available {
             reading
@@ -520,6 +582,7 @@ mod tests {
             status: "idle".into(),
             status_available: true,
             state_change_seq: Some(activity),
+            engine: None,
             status_changed_at_unix_ms: activity,
             session_modified_at_unix_ms: None,
             failure: None,
@@ -659,6 +722,157 @@ mod tests {
             .filter(|letter| letter.watch_warning.is_some())
             .filter_map(|letter| letter.body.lines().next())
             .collect()
+    }
+
+    /// The target as the engine connection `engine` reads it, `status` at
+    /// state `seq`, with the observation's clock of that state at `changed`.
+    fn read_on(id: &str, engine: &str, status: &str, seq: u64, changed: u64) -> Reading {
+        Reading {
+            status: status.into(),
+            state_change_seq: Some(seq),
+            engine: Some(engine.into()),
+            ..reading(id, changed)
+        }
+    }
+
+    /// A device's link coming back at `at`: its new engine restores the
+    /// target's pane in steps, sequence 0, then unknown until its holder has
+    /// read the screen, then `status` at a sequence of its own, each one new
+    /// to the observation, so its clock reads the reconnect.
+    fn reconnect(ledger: &mut Ledger, id: &str, link: &str, status: &str, at: u64) {
+        for reading in [
+            read_on(id, link, status, 0, at),
+            read_on(id, link, "unknown", 1, at),
+            read_on(id, link, status, 2, at),
+        ] {
+            tick(ledger, &[reading], at).unwrap();
+        }
+    }
+
+    /// A target that rested through any number of its device's reconnects is
+    /// one quiet episode: its parent gets the first warning at its hour from
+    /// the target's last move, the second at its own, and the human notice
+    /// stays owed; none of them starts again on a reconnect.
+    #[test]
+    fn a_resting_target_whose_device_reconnects_warns_its_parent_once_per_quiet() {
+        let mut ledger = Ledger::default();
+        let id = start(&mut ledger, &actor("parent"), &actor("child"), 10)
+            .unwrap()
+            .id;
+        tick(&mut ledger, &[read_on(&id, "link-1", "done", 57, 10)], 10).unwrap();
+        reconnect(&mut ledger, &id, "link-2", "done", 5 * 60_000);
+        reconnect(&mut ledger, &id, "link-3", "done", 12 * 60_000);
+        let first = 10 + INACTIVITY_MS;
+        tick(
+            &mut ledger,
+            &[read_on(&id, "link-3", "done", 2, 12 * 60_000)],
+            first - 1,
+        )
+        .unwrap();
+        assert!(
+            summaries(&ledger).is_empty(),
+            "no reconnect moved the quiet"
+        );
+        tick(
+            &mut ledger,
+            &[read_on(&id, "link-3", "done", 2, 12 * 60_000)],
+            first,
+        )
+        .unwrap();
+        assert_eq!(summaries(&ledger).len(), 1);
+
+        reconnect(&mut ledger, &id, "link-4", "done", first + 60_000);
+        let watch = &ledger.watches[0];
+        assert_eq!(
+            (
+                watch.warning_count,
+                watch.first_warning_at_unix_ms,
+                watch.last_activity_at_unix_ms
+            ),
+            (1, Some(first), 10),
+            "the episode and its first warning stand"
+        );
+        let second = first + SECOND_WARNING_MS;
+        tick(
+            &mut ledger,
+            &[read_on(&id, "link-4", "done", 2, first + 60_000)],
+            second,
+        )
+        .unwrap();
+        let warnings: Vec<_> = ledger
+            .letters
+            .iter()
+            .filter_map(|letter| letter.watch_warning.as_ref())
+            .map(|warning| (warning.ordinal, warning.activity_at_unix_ms))
+            .collect();
+        assert_eq!(warnings, [(1, 10), (2, 10)], "two warnings of one episode");
+        assert_eq!(
+            super::super::human::claim(&mut ledger, second).len(),
+            1,
+            "the unanswered first warning still owes the operator its notice"
+        );
+    }
+
+    /// A target that finished while its device was away is seen finished on
+    /// the next link: that change is activity once, and the quiet after it
+    /// is warned once, at its hour, however often the link comes back.
+    #[test]
+    fn a_target_seen_finished_after_its_device_reconnects_warns_its_parent_once() {
+        let mut ledger = Ledger::default();
+        let id = start(&mut ledger, &actor("parent"), &actor("child"), 10)
+            .unwrap()
+            .id;
+        tick(
+            &mut ledger,
+            &[read_on(&id, "link-1", "working", 57, 10)],
+            10,
+        )
+        .unwrap();
+        // Back within the hour: a longer outage is warned while it lasts, by
+        // the last state read, a letter of its own.
+        let back = 15 * 60_000;
+        reconnect(&mut ledger, &id, "link-2", "done", back);
+        assert_eq!(ledger.watches[0].last_activity_at_unix_ms, back);
+        reconnect(&mut ledger, &id, "link-3", "done", back + 10 * 60_000);
+        let hour = back + INACTIVITY_MS;
+        let last = read_on(&id, "link-3", "done", 2, back + 10 * 60_000);
+        tick(&mut ledger, std::slice::from_ref(&last), hour - 1).unwrap();
+        assert!(summaries(&ledger).is_empty());
+        tick(&mut ledger, std::slice::from_ref(&last), hour).unwrap();
+        reconnect(&mut ledger, &id, "link-4", "done", hour + 60_000);
+        tick(&mut ledger, std::slice::from_ref(&last), hour + 2 * 60_000).unwrap();
+        assert_eq!(summaries(&ledger).len(), 1);
+        assert_eq!(ledger.watches[0].last_activity_at_unix_ms, back);
+    }
+
+    /// A sequence compares only with one read on the same engine: the same
+    /// status at another sequence is activity on the engine that moved it
+    /// (a whole turn between two ticks), and nothing on the next link's
+    /// engine, which counts from the start again. A watch loaded from its
+    /// file names no engine, and its first reading compares by status.
+    #[test]
+    fn a_sequence_moves_a_watch_only_on_the_engine_that_counted_it() {
+        let mut ledger = Ledger::default();
+        let id = start(&mut ledger, &actor("parent"), &actor("child"), 10)
+            .unwrap()
+            .id;
+        tick(&mut ledger, &[read_on(&id, "link-1", "done", 57, 10)], 10).unwrap();
+        tick(&mut ledger, &[read_on(&id, "link-1", "done", 60, 50)], 60).unwrap();
+        assert_eq!(ledger.watches[0].last_activity_at_unix_ms, 50);
+        tick(&mut ledger, &[read_on(&id, "link-2", "done", 3, 70)], 80).unwrap();
+        assert_eq!(ledger.watches[0].last_activity_at_unix_ms, 50);
+
+        let mut loaded: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        assert_eq!(loaded.watches[0].last_engine, None);
+        tick(&mut loaded, &[read_on(&id, "core-2", "done", 4, 90)], 100).unwrap();
+        assert_eq!(loaded.watches[0].last_activity_at_unix_ms, 50);
+        tick(
+            &mut loaded,
+            &[read_on(&id, "core-2", "working", 5, 110)],
+            120,
+        )
+        .unwrap();
+        assert_eq!(loaded.watches[0].last_activity_at_unix_ms, 110);
     }
 
     /// docs/delivery.md, Watch activity and completion: a child that
@@ -943,6 +1157,7 @@ mod tests {
             status: "unknown".into(),
             status_available: true,
             state_change_seq: None,
+            engine: None,
             status_changed_at_unix_ms: 1,
             session_modified_at_unix_ms: None,
             failure: None,

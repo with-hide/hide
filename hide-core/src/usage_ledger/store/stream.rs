@@ -31,10 +31,14 @@ pub(super) enum Merged {
 }
 
 /// `None` when `next` is not a later view of `old` but another call under
-/// the same key.
+/// the same key. `old` is `node`'s Claude call stored as counted on `day`:
+/// changing the machine's timezone must not move an already accounted call
+/// into another rollup.
 pub(super) fn merge(
     tx: &rusqlite::Transaction<'_>,
     device: &str,
+    node: i64,
+    day: &str,
     old: &Event,
     next: &Event,
     frozen_at: u64,
@@ -66,15 +70,6 @@ pub(super) fn merge(
     if merged == *old {
         return Ok(Some(Merged::Same));
     }
-    // Read the persisted original day: changing the machine's timezone must
-    // not move an already accounted call into another rollup.
-    let day: String = tx
-        .query_row(
-            "SELECT day FROM events WHERE device=?1 AND agent='claude' AND key=?2",
-            params![device, old.key],
-            |row| row.get(0),
-        )
-        .map_err(failed)?;
     let raw: String = tx
         .query_row(
             "SELECT totals FROM daily WHERE device=?1 AND agent='claude' AND day=?2 AND model=?3",
@@ -108,9 +103,20 @@ pub(super) fn merge(
         params![device, day, old.model, encode(&totals)?],
     )
     .map_err(failed)?;
+    let tokens = &merged.tokens;
     tx.execute(
-        "UPDATE events SET event=?3,fingerprint=?4 WHERE device=?1 AND agent='claude' AND key=?2",
-        params![device, old.key, encode(&merged)?, fingerprint(&merged)?],
+        "UPDATE calls SET input=?3,output=?4,cache_read=?5,cache_write=?6,cache_write_1h=?7,\
+         reasoning=?8 WHERE node=?1 AND agent='claude' AND key=?2",
+        params![
+            node,
+            key_bytes(&old.key)?,
+            tokens.input,
+            tokens.output,
+            tokens.cache_read,
+            tokens.cache_write,
+            tokens.cache_write_1h,
+            tokens.reasoning
+        ],
     )
     .map_err(failed)?;
     Ok(Some(Merged::Rewrote))

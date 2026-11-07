@@ -1229,6 +1229,18 @@ impl Runtime {
         }
     }
 
+    /// The mark of the connection `device`'s engine is read on now: this
+    /// machine's, or a device's once it has connected.
+    pub(super) fn read_mark(&self, device: &str) -> Option<String> {
+        if device == self.node.as_str() {
+            Some(self.local_read_connection.mark.clone())
+        } else {
+            self.remote_read_connections
+                .get(device)
+                .map(|connection| connection.mark.clone())
+        }
+    }
+
     /// The connection the read axis judges one target's panes on.
     pub(super) fn read_connection(
         &mut self,

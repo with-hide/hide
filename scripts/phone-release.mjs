@@ -86,6 +86,20 @@ async function localFiles(root, prefix = '') {
   }
   return result;
 }
+// The frame a phone draws an HTML file in (web/public/m/look-frame.html) keeps a policy of its own: it runs a page's
+// scripts in a sandbox of their own origin, and may load what a generated page needs but never talk back. It is framed
+// only by the app, so every other file keeps `frame-ancestors 'none'`.
+const FRAME = /^p\/[1-9][0-9]*\/look-frame\.html$/;
+const FRAME_ROUTE = '^/p/[1-9][0-9]*/look-frame\\.html$';
+function framePolicy(html) {
+  const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
+  const directives = new Map(policy?.split(';').map(d => { const [key, ...values] = d.trim().split(/\s+/); return [key, values.join(' ')]; }));
+  for (const key of ['default-src', 'connect-src', 'form-action', 'frame-src', 'object-src']) {
+    if (directives.get(key) !== "'none'") throw new Error(`Phone look frame must keep ${key} 'none'.`);
+  }
+  if (/'self'/.test(policy)) throw new Error("Phone look frame must not reach the app's own origin.");
+  return policy;
+}
 function contentPolicy(html) {
   const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
   const directives = new Map(policy?.split(';').map(d => { const [key, ...values] = d.trim().split(/\s+/); return [key, values.join(' ')]; }));
@@ -155,8 +169,15 @@ export async function preparePhone({ source, dist, stage, secrets, fetcher = fet
   await put(output, 'phone-site.json', JSON.stringify(manifest));
   await mkdir(resolve(stage, '.vercel'), { recursive: true });
   await writeFile(resolve(stage, '.vercel/project.json'), JSON.stringify({ projectId: project.id, orgId: project.accountId }));
+  const frames = [];
+  for (const path of Object.keys(files).filter(p => FRAME.test(p))) {
+    const frame = framePolicy(await readFile(resolve(output, path), 'utf8'));
+    frames.push({ src: `^/${path.replaceAll('.', '\\.')}$`, headers: { 'Content-Security-Policy': `${frame}; frame-ancestors 'self'`,
+      'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' }, continue: true });
+  }
   await writeFile(resolve(stage, '.vercel/output/config.json'), JSON.stringify({ version: 3, routes: [
-    { src: '/(.*)', headers: { 'Content-Security-Policy': `${policy}; frame-ancestors 'none'`, 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' }, continue: true },
+    { src: `^/(?!${FRAME_ROUTE.slice(2, -1)}$).*$`, headers: { 'Content-Security-Policy': `${policy}; frame-ancestors 'none'`, 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' }, continue: true },
+    ...frames,
     { src: '/', dest: '/index.html' },
     { src: '/p/([1-9][0-9]*)/', dest: '/p/$1/index.html' },
     { handle: 'filesystem' },
@@ -174,7 +195,9 @@ export async function confirmPhone(stage, fetcher = fetch) {
   for (const [path, entry] of Object.entries(expected.files)) {
     const { bytes, headers } = await get(`${ORIGIN}/${path}`, fetcher);
     if (sha256(bytes) !== entry.sha256 || bytes.length !== entry.size) throw new Error(`Production phone file differs: ${path}`);
-    if (path.endsWith('.html')) {
+    if (FRAME.test(path)) {
+      if (headers.get('content-security-policy') !== `${framePolicy(bytes.toString())}; frame-ancestors 'self'`) throw new Error('Production look frame CSP header is missing or changed');
+    } else if (path.endsWith('.html')) {
       const policy = contentPolicy(bytes.toString());
       if (headers.get('content-security-policy') !== `${policy}; frame-ancestors 'none'`) throw new Error('Production phone CSP header is missing or changed');
     }
