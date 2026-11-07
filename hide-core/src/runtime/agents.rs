@@ -1415,7 +1415,11 @@ impl Runtime {
 
     /// The operator's look now on every machine whose rows are published.
     /// A device's look depends on its published session, so it is read
-    /// while the sessions are in place.
+    /// while the sessions are in place. A device that is not connected keeps
+    /// its last session's rows but shows none of its panes, so nothing on it
+    /// is looked at until it answers again; the session a device has just
+    /// answered with is read with its look as it arrives
+    /// (`apply_remote_read_state`).
     fn operator_look(&self) -> OperatorLook {
         OperatorLook {
             local: self.local_look(),
@@ -1426,10 +1430,12 @@ impl Runtime {
                 .iter()
                 .filter_map(|remote| {
                     let session = remote.session.as_ref()?;
-                    Some((
-                        remote.target_id.clone(),
-                        self.device_look(&remote.target_id, session),
-                    ))
+                    let look = if remote.state == "connected" {
+                        self.device_look(&remote.target_id, session)
+                    } else {
+                        Vec::new()
+                    };
+                    Some((remote.target_id.clone(), look))
                 })
                 .collect(),
         }

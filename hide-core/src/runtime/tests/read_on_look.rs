@@ -216,6 +216,10 @@ fn a_finished_pane_is_read_once_the_device_s_window_shows_its_tab() {
                 "t2",
             )),
         );
+        assert!(
+            unread(&runtime, "t2"),
+            "{origin:?}: until a window pulls, the window still shows t1, so no one has looked at t2"
+        );
         publish(&mut runtime);
         assert_eq!(
             runtime.node_shown_agent_tabs(DEVICE),
@@ -266,6 +270,44 @@ fn a_device_behind_is_not_read_and_bringing_this_mac_forward_reads_none_of_its_p
         assert!(
             unread(&runtime, "t1"),
             "{origin:?}: this Mac in front again reads nothing on the device"
+        );
+    }
+}
+
+/// Rule: a device that stopped answering keeps its last rows but shows none
+/// of its panes. Bringing it forward reads nothing on it, on the event or on
+/// a snapshot read; once it answers again, in front with its keyboard on the
+/// finished pane, that pane is read.
+#[test]
+fn a_device_that_stopped_answering_is_read_only_once_it_answers_again() {
+    for origin in origins() {
+        let t = tree();
+        let (mut runtime, _views) = device(origin.clone(), false);
+        let finished = device_session(&t.main, &[("t1", "done", 1)], "t1");
+        runtime.ingest_remote_session(DEVICE, Ok(finished.clone()));
+        runtime.ingest_remote_session(
+            DEVICE,
+            Err(SessionFetchError::Unreachable("fixture disconnect".into())),
+        );
+        assert_ne!(runtime.snapshot.status.remote[0].state, "connected");
+        assert!(unread(&runtime, "t1"), "{origin:?}: its last rows stay");
+
+        dispatch(&mut runtime, "focus_device", json!({"device_id": DEVICE}));
+        assert!(runtime.device_in_front(DEVICE), "{origin:?}");
+        assert!(
+            unread(&runtime, "t1"),
+            "{origin:?}: a device that is not connected shows no pane to look at"
+        );
+        publish(&mut runtime);
+        assert!(
+            unread(&runtime, "t1"),
+            "{origin:?}: nor does a snapshot read"
+        );
+
+        runtime.ingest_remote_session(DEVICE, Ok(finished.clone()));
+        assert!(
+            !unread(&runtime, "t1"),
+            "{origin:?}: it answers in front with its keyboard on the pane, so the pane is read"
         );
     }
 }
