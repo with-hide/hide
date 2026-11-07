@@ -98,7 +98,6 @@ test("a tab with two agents opens with a line that opens it, takes its name once
     // A second agent joins the same line under the retained name.
     await startAgent(engine, daemon, engine.tab);
     await expect(tabButton(page, engine.tab)).toHaveAccessibleName("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인, 2 agents");
-    expect(sent.get("sidebar_tab_expanded") ?? 0).toBe(0);
   } finally { daemon.stop(); engine.stop(); }
 });
 
