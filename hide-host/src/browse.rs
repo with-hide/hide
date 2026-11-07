@@ -136,11 +136,13 @@ fn under_home(home_real: &Path, from: &Path, named: &Path) -> Option<PathBuf> {
     Some(inside)
 }
 
-/// A small Git file under home, read through the handle on home.
+/// A small Git file under home, read through the handle on home: a regular
+/// file only, opened without waiting, so a FIFO at `HEAD` or `commondir`
+/// answers at once and holds no worker (`list::open_regular_file`).
 fn read_git_file(home: &Dir, path: &Path) -> Option<String> {
     use std::io::Read;
     let mut text = String::new();
-    home.open(path)
+    crate::list::open_regular_file(home, path)
         .ok()?
         .take(GIT_FILE_CAP)
         .read_to_string(&mut text)
@@ -483,6 +485,57 @@ mod tests {
         assert!(row("inner").repository);
         assert_eq!(row("inner").branch.as_deref(), Some("inner"));
         assert_eq!(row("inside-repo").branch.as_deref(), Some("main"));
+    }
+
+    /// A FIFO at a repository's `HEAD`, or at a linked worktree's
+    /// `commondir`, answers at once with no badge instead of waiting for a
+    /// writer, so it holds no worker and the next listing is answered too.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_for_a_git_file_answers_at_once_and_the_next_listing_still_works() {
+        let (_outer, home) = home();
+        let fifo = |path: &Path| {
+            let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: a valid NUL-terminated path and a mode.
+            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        };
+        fs::create_dir_all(home.join("stuck/.git")).unwrap();
+        fifo(&home.join("stuck/.git/HEAD"));
+        fs::create_dir_all(home.join("repo/.git/worktrees/linked")).unwrap();
+        fifo(&home.join("repo/.git/worktrees/linked/commondir"));
+        fs::write(
+            home.join("repo/.git/worktrees/linked/HEAD"),
+            "ref: refs/heads/side\n",
+        )
+        .unwrap();
+        fs::create_dir(home.join("linked")).unwrap();
+        fs::write(
+            home.join("linked/.git"),
+            "gitdir: ../repo/.git/worktrees/linked\n",
+        )
+        .unwrap();
+        repository(&home.join("plain"), "main");
+
+        for round in 0..2 {
+            let (sender, answered) = std::sync::mpsc::channel();
+            let listed = home.clone();
+            std::thread::spawn(move || sender.send(home_list("~", &listed)));
+            let listing = answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap_or_else(|_| panic!("listing {round} waited on a FIFO"))
+                .unwrap();
+            let row = |name: &str| {
+                listing
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .unwrap()
+                    .clone()
+            };
+            assert!(!row("stuck").repository);
+            assert!(!row("linked").repository);
+            assert_eq!(row("plain").branch.as_deref(), Some("main"));
+        }
     }
 
     #[test]

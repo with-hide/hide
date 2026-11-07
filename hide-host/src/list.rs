@@ -194,6 +194,30 @@ fn folder_stamp(metadata: &cap_std::fs::Metadata) -> Option<String> {
     }
 }
 
+/// Opens `relative` under `dir` to read it as a regular file. The open
+/// itself never waits: a FIFO with no writer, or a device, opens at once on
+/// Unix (`O_NONBLOCK`, and no terminal becomes this process's), and the
+/// opened handle is refused unless it is a regular file, so a name swapped
+/// for another kind between a look and the open reads nothing either.
+/// Windows has no such files at a path.
+pub fn open_regular_file(dir: &Dir, relative: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    let file = dir.open_with(relative, &options)?.into_std();
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", relative.display()),
+        ));
+    }
+    Ok(file)
+}
+
 pub fn require_directory(dir: &Dir, relative: &Path) -> HostResult<()> {
     if relative.as_os_str().is_empty() {
         return Ok(());
