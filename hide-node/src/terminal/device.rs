@@ -45,8 +45,8 @@ use std::time::{Duration, Instant};
 
 use hide_node_link::terminal::{
     GridSize, KeyTarget, MAX_TERMINAL_LINE_BYTES, MAX_UNSENT_KEY_BYTES, MAX_UNSENT_OUTPUT_BYTES,
-    PaneTerminalState, ReportSink, TerminalControl, TerminalDown, TerminalLine, TerminalNode,
-    TerminalOutput, TerminalReport, TerminalUp,
+    PaneTerminalState, ReportSink, TerminalClipboard, TerminalControl, TerminalDown, TerminalLine,
+    TerminalNode, TerminalOutput, TerminalReport, TerminalUp,
 };
 use serde_json::json;
 
@@ -111,6 +111,10 @@ struct UplinkState {
     panes: HashMap<String, PaneUplink>,
     /// Panes with output waiting, in turn.
     order: VecDeque<String>,
+    /// The last clipboard write not sent yet, its pane and its line, which
+    /// goes ahead of every pane's output: only the latest of any pane, since
+    /// each write replaces the one clipboard.
+    clipboard: Option<(String, Vec<u8>)>,
 }
 
 #[derive(Default)]
@@ -253,10 +257,37 @@ impl Uplink {
         self.ready.notify_one();
     }
 
+    /// Queues what a pane's program wrote to the clipboard, in place of a
+    /// write of that pane still waiting. While the core draws none of the
+    /// node's panes it is dropped, as output is: the screen that draws them
+    /// had it.
+    fn push_clipboard(&self, pane: &str, text: &[u8]) {
+        if lock(&self.state).withheld {
+            return;
+        }
+        let Some(line) = line_of(TerminalUp::Clipboard(TerminalClipboard::new(pane, text))) else {
+            return;
+        };
+        let mut state = lock(&self.state);
+        if state.stopped || state.withheld {
+            return;
+        }
+        state.clipboard = Some((pane.to_owned(), line));
+        drop(state);
+        self.ready.notify_one();
+    }
+
     fn forget(&self, pane: &str) {
         let mut state = lock(&self.state);
         state.panes.remove(pane);
         state.order.retain(|queued| queued != pane);
+        if state
+            .clipboard
+            .as_ref()
+            .is_some_and(|(copied, _)| copied == pane)
+        {
+            state.clipboard = None;
+        }
     }
 
     /// The next line to send, and the panes to draw again now that the link
@@ -295,6 +326,9 @@ impl Uplink {
             if let Some(ahead) = ahead {
                 drop(state);
                 return Some((line_of(ahead), redraws));
+            }
+            if let Some((_, line)) = state.clipboard.take() {
+                return Some((Some(line), redraws));
             }
             while let Some(pane) = state.order.pop_front() {
                 let Some(entry) = state.panes.get_mut(&pane) else {
@@ -336,6 +370,7 @@ impl Uplink {
                 entry.dropping = true;
                 entry.redraw = false;
             }
+            state.clipboard = None;
             state.order.clear();
         } else {
             for entry in state.panes.values_mut() {
@@ -355,6 +390,7 @@ impl Uplink {
         state.diagnostics.clear();
         state.panes.clear();
         state.order.clear();
+        state.clipboard = None;
         drop(state);
         self.ready.notify_all();
     }
@@ -369,6 +405,10 @@ impl OutputSink for UplinkOutputs {
 
     fn forget(&self, pane: &str) {
         self.0.forget(pane);
+    }
+
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.0.push_clipboard(pane, text);
     }
 }
 
@@ -412,6 +452,14 @@ impl OutputSink for NodeOutputs {
     fn forget(&self, pane: &str) {
         self.screen.forget(pane);
         self.uplink.forget(pane);
+    }
+
+    /// To the node's own screens and, while the core draws the node's
+    /// panes too, up the link: each screen writes it only if its window is
+    /// the one in front.
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.screen.clipboard(pane, text);
+        self.uplink.push_clipboard(pane, text);
     }
 }
 
@@ -662,6 +710,7 @@ impl TerminalNode for NodeTerminals {
 /// for output and the core for reports, each told which device it is.
 pub trait DeviceSink: Send + Sync {
     fn output(&self, device: &str, pane: &str, bytes: &[u8], full: bool);
+    fn clipboard(&self, device: &str, pane: &str, text: &[u8]);
     fn report(&self, device: &str, report: TerminalReport);
 }
 
@@ -1295,6 +1344,16 @@ impl ProxyShared {
                     "kind": "terminal.output_unreadable",
                     "device": self.device,
                     "pane_id": device_text(&output.pane, DEVICE_RECORD_NAME),
+                    "message": device_text(&message, DEVICE_RECORD_TEXT),
+                })),
+            },
+            TerminalUp::Clipboard(clipboard) => match clipboard.text() {
+                Ok(text) => self.sink.clipboard(&self.device, &clipboard.pane, &text),
+                Err(message) => self.record(json!({
+                    "component": "device_terminal",
+                    "kind": "terminal.clipboard_unreadable",
+                    "device": self.device,
+                    "pane_id": device_text(&clipboard.pane, DEVICE_RECORD_NAME),
                     "message": device_text(&message, DEVICE_RECORD_TEXT),
                 })),
             },

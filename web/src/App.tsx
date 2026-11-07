@@ -37,6 +37,7 @@ import { focusedRemoteDevice, frontCheckout } from "./snapshot";
 import { OPEN_ANSWER_TIMEOUT_MS, openingProgress, startupScreen, waitingForSavedWorkspace } from "./navigation";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { useShellStore } from "./store";
+import { takeProgramCopy } from "./clipboard";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
 import { applyEditorTheme } from "./editor/theme";
@@ -68,6 +69,7 @@ export function App() {
         if (full) resetAllTerminals();
         feedChunks(chunks);
       },
+      onCopy: (copy) => void takeProgramCopy(copy, document.hasFocus(), actions.copyText, (message) => useShellStore.getState().noteDiagnostic(message)),
     });
     dispatchRef.current = session.dispatch;
     configureFileBytes(session.dispatch);

@@ -29,8 +29,8 @@ use hide_node::ssh::RemoteHost;
 use hide_node::terminal::OutputSink;
 use hide_node_link::address::is_pane_of;
 use hide_node_link::terminal::{
-    TerminalDown, TerminalLine, TerminalNode, TerminalOutput, TerminalUp, decode_base64,
-    encode_base64,
+    TerminalClipboard, TerminalDown, TerminalLine, TerminalNode, TerminalOutput, TerminalUp,
+    decode_base64, encode_base64,
 };
 use serde_json::json;
 
@@ -145,12 +145,21 @@ impl OutputSink for ScreenOutputs {
             tap.forget(pane);
         }
     }
+
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.hub.clipboard(pane, text);
+        for tap in self.taps().iter().flat_map(|taps| taps.iter()) {
+            tap.clipboard(pane, text);
+        }
+    }
 }
 
 enum TapItem {
     Output(TerminalOutput),
     /// The pane is gone; the node forgets what it kept of it.
     Forget(String),
+    /// What a pane's program wrote to the clipboard, for the node's screens.
+    Clipboard(TerminalClipboard),
 }
 
 impl TapItem {
@@ -159,6 +168,7 @@ impl TapItem {
         match self {
             Self::Output(output) => output.data.len(),
             Self::Forget(pane) => pane.len(),
+            Self::Clipboard(clipboard) => clipboard.data.len(),
         }
     }
 }
@@ -306,7 +316,7 @@ impl RelayTap {
         while state.bytes + size > TAP_CAP_BYTES {
             let Some(oldest) = state.items.iter().find_map(|item| match item {
                 TapItem::Output(output) => Some(output.pane.clone()),
-                TapItem::Forget(_) => None,
+                TapItem::Forget(_) | TapItem::Clipboard(_) => None,
             }) else {
                 break;
             };
@@ -346,8 +356,9 @@ impl RelayTap {
                 TapItem::Output(output) => {
                     panes.insert(output.pane);
                 }
-                // A pane's end is kept: the node must still forget it.
-                forget @ TapItem::Forget(_) => forgotten.push_back(forget),
+                // A pane's end is kept: the node must still forget it; and
+                // a clipboard write, which no redraw would bring back.
+                kept @ (TapItem::Forget(_) | TapItem::Clipboard(_)) => forgotten.push_back(kept),
             }
         }
         state.bytes = forgotten.iter().map(TapItem::size).sum();
@@ -369,6 +380,37 @@ impl RelayTap {
         }
     }
 
+    /// Queues what a pane's program wrote to the clipboard for the node's
+    /// screens, in place of one still waiting: only the latest, since each
+    /// write replaces the one clipboard. Only for a pane the node was sent,
+    /// which its screens can be looking at; the node's own panes reach its
+    /// screens from its own terminals.
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        if is_pane_of(pane, &self.node) {
+            return;
+        }
+        let clipboard = TerminalClipboard::new(pane, text);
+        let mut state = lock(&self.state);
+        if state.closed || !state.started_whole.contains(pane) {
+            return;
+        }
+        let mut freed = 0;
+        state.items.retain(|item| {
+            if matches!(item, TapItem::Clipboard(_)) {
+                freed += item.size();
+                false
+            } else {
+                true
+            }
+        });
+        state.bytes -= freed;
+        let item = TapItem::Clipboard(clipboard);
+        state.bytes += item.size();
+        state.items.push_back(item);
+        drop(state);
+        self.wake.notify_one();
+    }
+
     fn forget(&self, pane: &str) {
         if is_pane_of(pane, &self.node) {
             return;
@@ -377,11 +419,14 @@ impl RelayTap {
         if state.closed {
             return;
         }
-        // Its output goes; a Forget already queued for it stays, so a
-        // second forget before the relay sends still forgets it once.
+        // Its output and clipboard write go; a Forget already queued for it
+        // stays, so a second forget before the relay sends still forgets it
+        // once.
         let mut freed = 0;
         state.items.retain(|item| {
-            if matches!(item, TapItem::Output(output) if output.pane == pane) {
+            if matches!(item, TapItem::Output(output) if output.pane == pane)
+                || matches!(item, TapItem::Clipboard(copied) if copied.pane == pane)
+            {
                 freed += item.size();
                 false
             } else {
@@ -429,6 +474,7 @@ impl RelayTap {
             let terminal = match item {
                 TapItem::Output(output) => TerminalUp::Output(output),
                 TapItem::Forget(pane) => TerminalUp::Forget { pane },
+                TapItem::Clipboard(clipboard) => TerminalUp::Clipboard(clipboard),
             };
             if let Ok(encoded) = serde_json::to_string(&TerminalLine { terminal }) {
                 text.push_str(&encoded);
@@ -943,6 +989,50 @@ mod tests {
             [true, false]
         );
         assert!(sent.iter().all(|output| output.pane == "w1:p1"));
+    }
+
+    fn lines(tap: &Arc<RelayTap>) -> Vec<TerminalUp> {
+        let (text, _) = tap.take();
+        text.unwrap_or_default()
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<TerminalLine<TerminalUp>>(line)
+                    .unwrap()
+                    .terminal
+            })
+            .collect()
+    }
+
+    /// with-hide/hide-private#659: a core's pane's copy reaches the linked
+    /// node's screens once, the latest only, and only for a pane the node
+    /// draws; the node's own panes reach its screens from its own
+    /// terminals, and a backlog dropped for an overflow keeps the copy,
+    /// which no redraw would bring back.
+    #[test]
+    fn a_tap_relays_a_copy_once_for_a_pane_the_node_draws() {
+        let tap = RelayTap::new("mac");
+        tap.clipboard("w1:p1", b"before drawn");
+        tap.clipboard("remote:mac:pane:w1:p9", b"own");
+        assert!(lines(&tap).is_empty());
+        tap.output("w1:p1", b"whole", true);
+        tap.clipboard("w1:p1", b"older");
+        tap.clipboard("w1:p1", b"latest");
+        let sent = lines(&tap);
+        let copies: Vec<_> = sent
+            .iter()
+            .filter_map(|line| match line {
+                TerminalUp::Clipboard(copied) => Some(copied.text().unwrap()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copies, [b"latest".to_vec()]);
+        assert!(lines(&tap).is_empty());
+
+        tap.clipboard("w1:p1", b"kept");
+        tap.output("w1:p1", &vec![b'x'; TAP_CAP_BYTES], false);
+        assert!(lines(&tap).iter().any(
+            |line| matches!(line, TerminalUp::Clipboard(copied) if copied.text().unwrap() == b"kept")
+        ));
     }
 
     /// A pane the core forgets is forgotten by the node it was sent to, so

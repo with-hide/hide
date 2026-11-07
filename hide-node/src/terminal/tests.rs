@@ -294,6 +294,7 @@ impl SessionWriter for Submitting {
 pub(super) struct Outputs {
     written: Mutex<Vec<(String, Vec<u8>, bool)>>,
     forgotten: Mutex<Vec<String>>,
+    copied: Mutex<Vec<(String, Vec<u8>)>>,
     /// The pane whose next output the sink panics on, told first.
     panic_on: Mutex<Option<(String, Sender<()>)>>,
     /// The pane whose next output the sink holds until the test lets it go
@@ -336,6 +337,13 @@ impl OutputSink for Outputs {
 
     fn forget(&self, pane: &str) {
         self.forgotten.lock().unwrap().push(pane.to_owned());
+    }
+
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.copied
+            .lock()
+            .unwrap()
+            .push((pane.to_owned(), text.to_vec()));
     }
 }
 
@@ -861,6 +869,40 @@ fn an_attach_to_a_pane_already_attached_is_answered_with_its_state() {
     // The core asks for the attach the pane's start already made.
     harness.attach("w1:p1", Some(SIZE));
     harness.state("w1:p1", "controlling");
+}
+
+/// with-hide/hide-private#659: what a pane's program wrote to the clipboard
+/// reaches the screen once, in the order its session said it, and never as
+/// the pane's output, so a screen drawn again (a released pane attached
+/// again) is not handed it a second time.
+#[test]
+fn a_programs_copy_reaches_the_screen_once_and_never_as_output() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness.service.view("w1:p1", SIZE, true);
+    opened.frame(SIZE, true, b"whole");
+    opened
+        .output
+        .send(SessionEvent::Clipboard {
+            text: b"copied".to_vec(),
+        })
+        .unwrap();
+    opened.frame(SIZE, false, b"next");
+    let written = harness.wait_written(2);
+    assert!(written.iter().all(|(_, bytes, _)| bytes != b"copied"));
+    let copied = || harness.outputs.copied.lock().unwrap().clone();
+    assert_eq!(copied(), [("w1:p1".to_owned(), b"copied".to_vec())]);
+
+    harness.service.control(TerminalControl::Release {
+        pane: "w1:p1".into(),
+        message: "detached".into(),
+    });
+    harness.state("w1:p1", "released");
+    harness.attach("w1:p1", Some(SIZE));
+    let again = harness.opened();
+    again.frame(SIZE, true, b"again");
+    harness.wait_written(3);
+    assert_eq!(copied().len(), 1);
 }
 
 #[test]
@@ -1776,6 +1818,7 @@ fn a_frame_on_its_way_to_the_screens_holds_up_no_control() {
             }
         }
         fn forget(&self, _: &str) {}
+        fn clipboard(&self, _: &str, _: &[u8]) {}
     }
     let (entered_tx, entered) = channel();
     let (go_tx, go) = channel();
