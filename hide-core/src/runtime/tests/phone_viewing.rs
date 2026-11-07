@@ -70,7 +70,11 @@ fn an_agent_stays_read_while_a_phone_has_it_open_and_not_after() {
     );
 
     runtime.dispatch_json(&viewing(&[]));
-    assert_eq!(row(&runtime), (false, "seen".to_owned()), "closing keeps the read");
+    assert_eq!(
+        row(&runtime),
+        (false, "seen".to_owned()),
+        "closing keeps the read"
+    );
     report(&mut runtime, "working", 3);
     report(&mut runtime, "done", 4);
     assert_eq!(
@@ -200,5 +204,8 @@ fn a_phone_reads_a_device_s_agent_while_it_has_it_open() {
     runtime.dispatch_json(&viewing(&[]));
     runtime.ingest_remote_session("mini", Ok(session("working", 43)));
     runtime.ingest_remote_session("mini", Ok(session("done", 44)));
-    assert!(unread(&runtime), "a turn finished after the phone closed is news");
+    assert!(
+        unread(&runtime),
+        "a turn finished after the phone closed is news"
+    );
 }
