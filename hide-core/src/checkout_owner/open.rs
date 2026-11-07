@@ -77,6 +77,7 @@ impl WorkspaceCreationFailure {
                 hide_node_link::ErrorCode::AlreadyExists => {
                     "workspace.create_refused.already_exists"
                 }
+                hide_node_link::ErrorCode::OutsideRoot => "workspace.create_refused.outside_root",
                 _ => "workspace.create_failed",
             },
             _ => "workspace.create_failed",
@@ -293,6 +294,48 @@ fn registered_owner(
 
 /// How long the node may take to make a project's folder and repository.
 const PROJECT_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a device's node may take to judge a new project's folder.
+const PROJECT_TARGET_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Create new project on a device (PRD device-add-project D-07): its node
+/// judges `path`, a parent and one folder name, against that device's own
+/// home (`Call::NewFolderTarget`), as hided's `$HOME` line judges one on the
+/// core's machine, then makes the folder and its repository at the path it
+/// judged (`Call::ProjectCreate`). Answers the real path made, which the
+/// caller registers as any folder on that device. Runs off the lock.
+pub(crate) fn make_device_project(
+    node: &dyn crate::node_access::NodeLink,
+    path: &str,
+) -> Result<ProjectCreated, WorkspaceCreationFailure> {
+    let (parent, name) = path.rsplit_once('/').ok_or_else(|| {
+        WorkspaceCreationFailure::failed(format!("{path} names no parent folder"))
+    })?;
+    let target = call_as::<hide_node_link::browse::NewFolderTarget>(
+        node,
+        Call::NewFolderTarget {
+            parent: if parent.is_empty() { "/" } else { parent }.to_owned(),
+            name: name.to_owned(),
+            kind: hide_node_link::browse::NewFolderKind::Project,
+        },
+        PROJECT_TARGET_TIMEOUT,
+    )
+    .map_err(WorkspaceCreationFailure::from_project_create)?;
+    let judged = target
+        .path
+        .ok_or_else(|| WorkspaceCreationFailure::failed(format!("{path} names no folder")))?;
+    call_as::<ProjectCreated>(
+        node,
+        Call::ProjectCreate {
+            path: judged.clone(),
+            new_folder: true,
+            initialize_git: true,
+        },
+        PROJECT_CREATE_TIMEOUT,
+    )
+    .map_err(WorkspaceCreationFailure::from_project_create)
+    .and_then(|created| the_folder_checked(created, &judged))
+}
 
 /// A tab Hide created in a checkout's owner the engine workspace.
 #[derive(Clone, Debug, Eq, PartialEq)]

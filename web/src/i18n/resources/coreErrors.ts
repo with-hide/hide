@@ -12,7 +12,6 @@ export const coreErrorsEnglish = {
   "coreError.project.addRefused": "This folder cannot be added as a project on this device.",
   "coreError.project.outsideRoot": "This folder can't be a project: it is the home folder or holds it, leads out of the home folder through a link, or is on a network.",
   "coreError.project.pinNeedsConfirmation": "A folder outside the home folder can be pinned after you add it with Add project.",
-  "coreError.project.localOnly": "A new project can be created only on the device the core runs on.",
   "coreError.project.addUnconfirmed": "Hide could not confirm the project was added. Check the list, and add it again if it is missing.",
   "coreError.project.addInFlight": "This project is still being added. Remove it once its first terminal opens.",
   "coreError.project.removeInFlight": "This project is still being removed. Add it again once its terminals have closed.",
@@ -22,6 +21,7 @@ export const coreErrorsEnglish = {
   "coreError.deviceNotConnected": "This device is not connected. Try again once it is.",
 
   "coreError.clone.busy": "Another clone is still running. Try again once it finishes or is cancelled.",
+  "coreError.clone.unavailable": "This device isn't connected. Clone again once it connects.",
   "coreError.clone.invalid": "This address cannot be cloned. Check the URL.",
   "coreError.clone.failure.authentication": "Authentication failed: this repository needs credentials Git could not find. Set up an SSH key or a credential helper, then try again.",
   "coreError.clone.failure.unknown_host_key": "This host's SSH key is not known yet. Connect to it once from a terminal to trust it, then try again.",
@@ -157,7 +157,6 @@ const ko = {
   "coreError.project.addRefused": "이 기기에서는 이 폴더를 프로젝트로 추가할 수 없어요.",
   "coreError.project.outsideRoot": "이 폴더는 프로젝트로 추가할 수 없어요. 홈 폴더이거나 홈 폴더를 품은 폴더, 링크로 홈 밖에 나가는 폴더, 또는 네트워크 폴더예요.",
   "coreError.project.pinNeedsConfirmation": "홈 밖 폴더는 프로젝트 추가에서 확인한 뒤에 고정할 수 있어요.",
-  "coreError.project.localOnly": "새 프로젝트는 core가 실행되는 기기에서만 만들 수 있어요.",
   "coreError.project.addUnconfirmed": "프로젝트가 추가됐는지 확인하지 못했어요. 목록을 확인하고, 없으면 다시 추가하세요.",
   "coreError.project.addInFlight": "이 프로젝트를 아직 추가하는 중이에요. 첫 터미널이 열린 뒤 제거하세요.",
   "coreError.project.removeInFlight": "이 프로젝트를 제거하는 중이에요. 터미널이 닫힌 뒤 다시 추가하세요.",
@@ -167,6 +166,7 @@ const ko = {
   "coreError.deviceNotConnected": "이 기기에 연결돼 있지 않아요. 연결된 뒤 다시 시도하세요.",
 
   "coreError.clone.busy": "다른 클론이 아직 진행 중이에요. 끝나거나 취소된 뒤 다시 시도하세요.",
+  "coreError.clone.unavailable": "이 기기가 연결되어 있지 않아요. 연결되면 다시 클론하세요.",
   "coreError.clone.invalid": "이 주소는 클론할 수 없어요. URL을 확인하세요.",
   "coreError.clone.failure.authentication": "인증에 실패했어요. 이 저장소에는 Git이 찾지 못한 자격 증명이 필요해요. SSH 키나 자격 증명 도우미를 설정한 뒤 다시 시도하세요.",
   "coreError.clone.failure.unknown_host_key": "이 호스트의 SSH 키를 아직 몰라요. 터미널에서 한 번 접속해 신뢰한 뒤 다시 시도하세요.",
@@ -302,7 +302,6 @@ const ja = {
   "coreError.project.addRefused": "このデバイスでは、このフォルダをプロジェクトとして追加できません。",
   "coreError.project.outsideRoot": "このフォルダはプロジェクトにできません。ホームフォルダそのものかそれを含むフォルダ、リンクでホームフォルダの外へ出るフォルダ、またはネットワーク上のフォルダです。",
   "coreError.project.pinNeedsConfirmation": "ホームフォルダの外にあるフォルダは、「プロジェクトを追加」で確認してから固定できます。",
-  "coreError.project.localOnly": "新しいプロジェクトはcoreが動いているデバイスでのみ作成できます。",
   "coreError.project.addUnconfirmed": "プロジェクトが追加されたか確認できませんでした。一覧を確認し、なければもう一度追加してください。",
   "coreError.project.addInFlight": "このプロジェクトはまだ追加中です。最初のペインが開いてから削除してください。",
   "coreError.project.removeInFlight": "このプロジェクトはまだ削除中です。ペインが閉じてからもう一度追加してください。",
@@ -312,6 +311,7 @@ const ja = {
   "coreError.deviceNotConnected": "このデバイスに接続されていません。接続されてからもう一度お試しください。",
 
   "coreError.clone.busy": "別のクローンがまだ実行中です。終了するかキャンセルされてからもう一度お試しください。",
+  "coreError.clone.unavailable": "このデバイスは接続されていません。接続されたらもう一度クローンしてください。",
   "coreError.clone.invalid": "このアドレスはクローンできません。URLを確認してください。",
   "coreError.clone.failure.authentication": "認証に失敗しました。このリポジトリにはGitが見つけられなかった認証情報が必要です。SSHキーまたは認証情報ヘルパーを設定してから、もう一度お試しください。",
   "coreError.clone.failure.unknown_host_key": "このホストのSSHキーはまだ登録されていません。ターミナルで一度接続して信頼してから、もう一度お試しください。",
@@ -447,7 +447,6 @@ const zhCN = {
   "coreError.project.addRefused": "无法在此设备上将此文件夹添加为项目。",
   "coreError.project.outsideRoot": "此文件夹不能作为项目：它是主文件夹或包含主文件夹、通过链接通向主文件夹之外，或位于网络上。",
   "coreError.project.pinNeedsConfirmation": "主文件夹之外的文件夹需要先在“添加项目”中确认，然后才能固定。",
-  "coreError.project.localOnly": "只能在运行 core 的设备上创建新项目。",
   "coreError.project.addUnconfirmed": "无法确认项目是否已添加。请查看列表，如果没有请重新添加。",
   "coreError.project.addInFlight": "此项目仍在添加中。请在第一个窗格打开后再移除。",
   "coreError.project.removeInFlight": "此项目仍在移除中。请在其窗格关闭后重新添加。",
@@ -457,6 +456,7 @@ const zhCN = {
   "coreError.deviceNotConnected": "此设备未连接。连接后请重试。",
 
   "coreError.clone.busy": "另一个克隆仍在进行。请在其完成或取消后重试。",
+  "coreError.clone.unavailable": "此设备未连接。连接后请重新克隆。",
   "coreError.clone.invalid": "无法克隆此地址。请检查 URL.",
   "coreError.clone.failure.authentication": "身份验证失败：此仓库需要 Git 找不到的凭据。请设置 SSH 密钥或凭据助手后重试。",
   "coreError.clone.failure.unknown_host_key": "尚不认识此主机的 SSH 密钥。请先在终端连接一次以信任它，然后重试。",

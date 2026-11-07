@@ -530,7 +530,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
   if (adding) {
     return (
       <>
-        <AddProjectViews actions={actions} title={(translate) => translate("firstRun.project.title")} onHost={setHost} draft={{ device: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_device, path: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_path, form: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form }} onDraft={actions.saveFirstRunDraft} />
+        <AddProjectViews actions={actions} title={(translate) => translate("firstRun.project.title")} onHost={setHost} draft={{ device: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_device, form: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form }} onDraft={actions.saveFirstRunDraft} />
         <DialogFooter>
           <Button variant="ghost" onClick={() => showAdding(false)} data-first-run-back="true">{t("firstRun.back")}</Button>
           {skip}

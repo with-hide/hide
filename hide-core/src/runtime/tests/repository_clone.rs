@@ -34,10 +34,12 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?}");
 }
 
-/// A bare repository at `outer/origin.git` and an empty `outer/projects`.
+/// A bare repository at `outer/origin.git` and an empty `outer/projects`,
+/// spelled by their real paths; `outer` is the node's home.
 fn fixture() -> (tempfile::TempDir, String, PathBuf) {
     let outer = tempfile::tempdir().unwrap();
-    let work = outer.path().join("work");
+    let root = hide_platform::fs::identity::canonical(outer.path()).unwrap();
+    let work = root.join("work");
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q", "-b", "main"]);
     for index in 0..100 {
@@ -49,9 +51,9 @@ fn fixture() -> (tempfile::TempDir, String, PathBuf) {
     }
     git(&work, &["add", "."]);
     git(&work, &["commit", "-q", "-m", "fixture"]);
-    let bare = outer.path().join("origin.git");
+    let bare = root.join("origin.git");
     git(
-        outer.path(),
+        &root,
         &[
             "clone",
             "-q",
@@ -60,16 +62,21 @@ fn fixture() -> (tempfile::TempDir, String, PathBuf) {
             bare.to_str().unwrap(),
         ],
     );
-    let parent = outer.path().join("projects");
+    let parent = root.join("projects");
     std::fs::create_dir_all(&parent).unwrap();
     let url = format!("file://{}", bare.display());
     (outer, url, parent)
 }
 
 /// A runtime whose live context points back at itself, as the daemon's does,
-/// with an engine socket that does not exist.
-fn shared_runtime() -> SharedRuntime {
-    let shared = SharedRuntime::new(runtime());
+/// with an engine socket that does not exist and its own node answering for
+/// `parent`'s folder as home: a clone lands only under home.
+fn shared_runtime(parent: &Path) -> SharedRuntime {
+    let mut runtime = runtime();
+    runtime.own_node = Arc::new(hide_node::Local::new(
+        parent.parent().map(Path::to_path_buf),
+    ));
+    let shared = SharedRuntime::new(runtime);
     let socket_path = std::env::temp_dir()
         .join(format!(
             "hide-core-clone-{}-{}.sock",
@@ -132,7 +139,7 @@ fn children(parent: &Path) -> Vec<String> {
 #[test]
 fn a_finished_clone_is_registered_through_create_workspace() {
     let (_outer, url, parent) = fixture();
-    let shared = shared_runtime();
+    let shared = shared_runtime(&parent);
     assert!(
         shared
             .lock()
@@ -164,7 +171,7 @@ fn a_finished_clone_is_registered_through_create_workspace() {
 #[test]
 fn the_same_clone_sent_twice_runs_once_and_another_waits() {
     let (outer, url, parent) = fixture();
-    let shared = shared_runtime();
+    let shared = shared_runtime(&parent);
     {
         let mut guard = shared.lock().unwrap();
         assert!(guard.dispatch_json(&clone_event(&url, &parent, "origin")));
@@ -208,7 +215,7 @@ fn the_same_clone_sent_twice_runs_once_and_another_waits() {
 fn a_failed_clone_names_its_failure_by_code_and_sends_no_sentence() {
     let (_outer, url, parent) = fixture();
     std::fs::create_dir_all(parent.join("origin")).unwrap();
-    let shared = shared_runtime();
+    let shared = shared_runtime(&parent);
     assert!(
         shared
             .lock()
@@ -226,7 +233,7 @@ fn a_failed_clone_names_its_failure_by_code_and_sends_no_sentence() {
 #[test]
 fn a_cancelled_clone_leaves_no_folder_and_registers_nothing() {
     let (_outer, url, parent) = fixture();
-    let shared = shared_runtime();
+    let shared = shared_runtime(&parent);
     {
         let mut guard = shared.lock().unwrap();
         assert!(guard.dispatch_json(&clone_event(&url, &parent, "origin")));
@@ -263,7 +270,7 @@ fn a_cancelled_clone_leaves_no_folder_and_registers_nothing() {
 #[test]
 fn a_name_the_url_does_not_give_is_refused_before_anything_runs() {
     let (_outer, url, parent) = fixture();
-    let shared = shared_runtime();
+    let shared = shared_runtime(&parent);
     let mut guard = shared.lock().unwrap();
     assert!(guard.dispatch_json(&clone_event(&url, &parent, "elsewhere")));
     assert_eq!(
@@ -278,4 +285,62 @@ fn a_name_the_url_does_not_give_is_refused_before_anything_runs() {
     );
     assert_eq!(guard.snapshot.repository_clone, None);
     assert!(children(&parent).is_empty());
+}
+
+fn device_clone_event(url: &str, device: &str, parent: &str, name: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "clone_repository",
+        "payload": {"url": url, "device_id": device, "parent": parent, "name": name}
+    }))
+    .unwrap()
+}
+
+/// PRD device-add-project B16, B17: a clone on a device lands under that
+/// device's own home, judged by its node, and is registered on that device;
+/// a name already taken there ends the clone before Git runs.
+#[test]
+fn a_clone_on_a_device_lands_under_its_home_and_is_registered_there() {
+    let (_outer, url, parent) = fixture();
+    let (_home_dir, home) = super::add_project::device_home();
+    let shared = shared_runtime(&parent);
+    super::add_project::with_device(&mut shared.lock().unwrap(), &home);
+    assert!(shared.lock().unwrap().dispatch_json(&device_clone_event(
+        &url,
+        "window",
+        "~/projects",
+        "origin"
+    )));
+    let clone = settled(&shared);
+    assert_eq!(
+        (clone.phase.as_str(), clone.device_id.as_str()),
+        ("finished", "window")
+    );
+    assert!(home.join("projects/origin/f0.txt").is_file());
+    let registered: Vec<(String, String)> = shared
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .iter()
+        .map(|row| (row.device_id.clone(), row.path.clone()))
+        .collect();
+    assert_eq!(
+        registered,
+        [(
+            "window".to_owned(),
+            hide_platform::path::to_wire_lossy(&home.join("projects/origin"))
+        )]
+    );
+
+    assert!(shared.lock().unwrap().dispatch_json(&device_clone_event(
+        &url,
+        "window",
+        "~/projects",
+        "origin"
+    )));
+    let clone = settled(&shared);
+    assert_eq!(clone.phase, "failed");
+    assert_eq!(clone.failure.as_deref(), Some("target_exists"));
 }
