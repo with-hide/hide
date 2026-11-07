@@ -1,0 +1,60 @@
+# Apt packages for a Linux job, kept as .deb files so a usual run never asks
+# the Ubuntu mirror, and, when it must, asks it inside one time limit
+# (with-hide/hide-private#629: a slow mirror took 5 minutes for 5 MB of zsh and
+# held the job past its timeout).
+#
+# The files are cached under the runner image's version and the package list,
+# so a hit fetches nothing and installs in seconds; a miss downloads inside
+# `minutes` and the job's end saves the files. `scripts/ci-apt-install.sh`
+# owns the retry and the one time limit: the action passes `minutes` to it as
+# the whole time it may spend on the mirror, and that is the cap that decides
+# when a slow mirror gives up. A caller still gives the step a `timeout-minutes`
+# (agent-journey's step-cap test requires one), set a few minutes above
+# `minutes`: it is the runner's backstop for a hang the script cannot see
+# (the cache, dpkg), never the size of the wait. The caller's job limit has to
+# hold the job's usual time plus that backstop (pr.yml's rust job says its sum).
+#
+# Linux only: the caller guards the step with `if: runner.os == 'Linux'`, and
+# checks the repository out first.
+name: apt packages
+description: Install apt packages from cached .deb files, fetching what the cache lacks within one time limit.
+
+inputs:
+  packages:
+    description: The packages to install, separated by spaces.
+    required: true
+  minutes:
+    description: The most this step may spend on the mirror, fetching and refreshing together.
+    required: false
+    default: '5'
+
+runs:
+  using: composite
+  steps:
+    - name: Name the cache for these packages on this image
+      id: name
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      # ImageVersion is a runner variable, not a workflow `env` value. The
+      # image fixes the package lists the cached versions were chosen from.
+      run: |
+        echo "key=apt-debs-v1-$ImageVersion-${PACKAGES// /+}" >> "$GITHUB_OUTPUT"
+        echo "dir=$RUNNER_TEMP/apt-debs" >> "$GITHUB_OUTPUT"
+    - name: Look for the packages in the cache
+      uses: actions/cache@v6
+      env:
+        # The default is 10 minutes for one segment; a cache that stalls is no
+        # better than a mirror that does.
+        SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+      with:
+        path: ${{ steps.name.outputs.dir }}
+        key: ${{ steps.name.outputs.key }}
+    - name: Install the packages
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        APT_BUDGET_SECONDS: ${{ fromJSON(inputs.minutes) * 60 }}
+        APT_CACHE_DIR: ${{ steps.name.outputs.dir }}
+      # $PACKAGES is split on purpose: one word per package.
+      run: bash "$GITHUB_WORKSPACE/scripts/ci-apt-install.sh" $PACKAGES

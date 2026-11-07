@@ -192,7 +192,10 @@ jobs:
           node-version: 22
       - name: Install zsh
         # The invariant scripts are zsh; the image has bash.
-        run: sudo apt-get install -y --no-install-recommends zsh
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh
       # A merge group runs the structural checks below and not the script
       # suite, which takes about two minutes and checks the scripts each pull
       # request already ran it on; main's push run runs it on the merge.
@@ -225,7 +228,11 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'rust')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The job's usual time (14 to 18 minutes, 17m47s on #2197) plus the
+    # shell install's 7-minute backstop, 25, with a minute of margin. The
+    # install ends inside its own 4 minutes on a slow mirror and takes seconds
+    # on a cache hit, so the mirror cannot take the job past this limit.
+    timeout-minutes: 26
     permissions:
       contents: read
     env:
@@ -243,6 +250,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The shells the real-shell tests below run in, installed first so a slow
+      # Ubuntu mirror fails here, by name and inside 4 minutes, before any
+      # test time is spent. The .deb files are cached, so a usual run does not
+      # ask the mirror (.github/actions/apt-install).
+      - name: Install the real shells
+        if: ${{ env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node') }}
+        timeout-minutes: 7
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh fish tcsh csh
+          minutes: 4
       - name: Install the holder tests' xterm
         timeout-minutes: 3
         run: bash scripts/verify-web.sh install holder
@@ -297,13 +315,6 @@ jobs:
             (( ${#packages[@]} )) || { echo 'the plan chose the rust lane but no crate' >&2; exit 1; }
             bash scripts/verify-cargo.sh nextest --profile ci "${packages[@]}"
           fi
-      - name: Install the real shells
-        # Its own step with its own limit: a slow Ubuntu mirror is retried and
-        # cut off here (scripts/ci-apt-install.sh), never spent from the real
-        # shell tests' 15 minutes or the job's 20.
-        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
-        timeout-minutes: 6
-        run: bash scripts/ci-apt-install.sh zsh fish tcsh csh
       - name: Shell integration and agent start in real shells
         # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
         # fish read the user's files in their order, zsh gives ZDOTDIR back,

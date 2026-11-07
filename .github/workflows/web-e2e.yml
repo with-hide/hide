@@ -276,9 +276,7 @@ jobs:
           if [ "$SHARDS" -gt 1 ]; then
             sudo dpkg -i zsh-debs/*.deb
           else
-            printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-              | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-            sudo apt-get install -y --no-install-recommends zsh
+            APT_BUDGET_SECONDS=180 bash scripts/ci-apt-install.sh zsh
           fi
       - name: Install Playwright Chromium
         timeout-minutes: 5

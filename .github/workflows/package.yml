@@ -304,7 +304,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install zsh for the panes, rpmbuild for the rpm and a display for the update test
-        run: sudo apt-get install -y --no-install-recommends zsh rpm xvfb
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh rpm xvfb
       - name: Name the version
         env:
           REQUESTED: ${{ inputs.version }}
