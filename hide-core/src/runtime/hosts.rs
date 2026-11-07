@@ -1397,6 +1397,7 @@ impl Runtime {
                 self.device_kit_pending.remove(device_id);
                 self.device_first_run_choice.remove(device_id);
                 self.kit_states.remove(device_id);
+                self.device_hook_diagnoses.remove(device_id);
             }
             // Work queued for the device runs on the next link; the row stops
             // saying it is working until a worker can run it.

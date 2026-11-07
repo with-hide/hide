@@ -1901,6 +1901,36 @@ mod tests {
         assert!(session_activity(home.path(), &request).unwrap()["bytes"].as_u64() > Some(0));
     }
 
+    /// A helper answers the hook diagnosis the same way on every system:
+    /// one row per hook runtime, read from the account it runs as, with the
+    /// version of the program that account's search finds. The core reads it
+    /// from each device for the versions its panes run
+    /// (`hide_core::kit::DeviceDiagnosisReader`), and nothing in the answer
+    /// is the core's own machine's.
+    #[test]
+    fn a_hook_diagnosis_answers_for_the_account_the_helper_runs_as() {
+        let home = tempfile::tempdir().unwrap();
+        let env = Env::standalone(Some(home.path().to_path_buf()));
+        let answer = handle_in(Call::HookDiagnosis, &env).unwrap();
+        let diagnosis: hide_agent_hooks::Diagnosis = serde_json::from_value(answer).unwrap();
+        assert_eq!(
+            diagnosis
+                .runtimes
+                .iter()
+                .map(|row| row.runtime)
+                .collect::<Vec<_>>(),
+            hide_agent_hooks::AgentRuntime::ALL
+        );
+        for row in &diagnosis.runtimes {
+            assert!(
+                Path::new(&row.path).starts_with(home.path()),
+                "{} is read from the account's own home, not {}",
+                row.label,
+                row.path
+            );
+        }
+    }
+
     #[test]
     fn activity_helper_answers_metadata_only_and_refuses_unsupported_references() {
         let home = tempfile::tempdir().unwrap();
