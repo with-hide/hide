@@ -89,6 +89,12 @@ pub struct MissionView {
     /// The operator asked the Conductor to end the mission and it has not
     /// closed it yet (`미션 종료`).
     pub end_asked: bool,
+    /// The letters to the Conductor the doorbell holds for something only
+    /// the operator can lift (`delivery::held::letters_held`), while the mission
+    /// runs: its map's Conductor row and its 내 차례 say how many and what
+    /// to do, and the line goes when they are delivered
+    /// (with-hide/hide-private#678).
+    pub conductor_letters: Option<crate::delivery::held::HeldLetters>,
     pub delay: Option<String>,
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
@@ -229,6 +235,46 @@ pub struct NodeView {
     /// Who or what it waits on now (`waiting_on`), which `hide mission show`
     /// prints; none for a node that waits on nothing.
     pub waiting_on: Option<WaitingOn>,
+    /// Whether a node in progress is being worked now (`node_work`); none
+    /// for a node not in progress, an outside one, or one whose worker's
+    /// row Hide cannot see.
+    pub work: Option<NodeWork>,
+}
+
+/// Whether a node in progress is worked now (with-hide/hide-private#680):
+/// its worker works, its worker rests and the node waits on someone
+/// (`waiting_on`, said beside it), or no worker stands for it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum NodeWork {
+    Working,
+    Waiting { on: WaitingOn },
+    NoWorker,
+}
+
+/// What `view`, a node of a running mission, is doing now: from its
+/// worker's registration (none or ended is no worker, asleep rests) and,
+/// for a running one, its agent row's activity (`working` works, `stopped`
+/// rests); a row Hide cannot see, or whose activity it does not know, says
+/// nothing rather than a guess.
+fn node_work(mission: &Mission, view: &NodeView, row_activity: Option<&str>) -> Option<NodeWork> {
+    use crate::delivery::answer::Runtime as Life;
+    if !mission.status.open()
+        || view.status != NodeStatus::Working
+        || view.kind == NodeKind::External
+    {
+        return None;
+    }
+    let waiting = || view.waiting_on.clone().map(|on| NodeWork::Waiting { on });
+    match view.agent_runtime {
+        None | Some(Life::Ended) => Some(NodeWork::NoWorker),
+        Some(Life::Asleep) => waiting(),
+        Some(Life::Running) => match row_activity? {
+            "working" => Some(NodeWork::Working),
+            "stopped" => waiting(),
+            _ => None,
+        },
+    }
 }
 
 /// What `view`, a node of `mission`, waits on (`WaitingOn`): its raise
@@ -305,20 +351,57 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
     }
 }
 
-/// Letters `hide mission show <node>` lists of the node's worker.
+/// Letters `hide mission show <node>` lists of the node's worker, and
+/// apart from them, of its checkers to its Conductor: each list keeps its
+/// own five, so a busy worker never pushes its reviews off (#668).
 const NODE_LETTER_LIMIT: usize = 5;
 /// Characters of a letter's first line it keeps.
 const NODE_LETTER_LINE: usize = 160;
 
-/// One letter of a node's worker, as `hide mission show <node>` lists it:
-/// who wrote to whom, its kind, and its first line.
+/// One letter of a node's worker or checker, as `hide mission show <node>`
+/// lists it: its id, which `hide request show` reads, who wrote to whom,
+/// its kind, and its first line.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NodeLetter {
+    pub id: String,
     pub at_unix_ms: u64,
     pub from: String,
     pub to: String,
     pub kind: String,
     pub line: String,
+}
+
+/// The newest `NODE_LETTER_LIMIT` letters of `ledger` that `pick` takes,
+/// newest first, each with its first line cut to `NODE_LETTER_LINE`.
+fn newest_letters(
+    ledger: &crate::delivery::ledger::Ledger,
+    pick: impl Fn(&crate::delivery::ledger::Letter) -> bool,
+) -> Vec<NodeLetter> {
+    let mut letters: Vec<&crate::delivery::ledger::Letter> = ledger
+        .letters
+        .iter()
+        .filter(|letter| pick(letter))
+        .collect();
+    letters.sort_by_key(|letter| std::cmp::Reverse(letter.created_at_unix_ms));
+    letters
+        .into_iter()
+        .take(NODE_LETTER_LIMIT)
+        .map(|letter| NodeLetter {
+            id: letter.id.clone(),
+            at_unix_ms: letter.created_at_unix_ms,
+            from: letter.sender.name.clone(),
+            to: letter.recipient.name.clone(),
+            kind: letter.kind.clone(),
+            line: letter
+                .body
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(NODE_LETTER_LINE)
+                .collect(),
+        })
+        .collect()
 }
 
 /// One of a node's pull requests as its card draws it.
@@ -466,6 +549,10 @@ struct ViewsMadeFrom {
     /// The rows carrying a core question, which decide whether a node's
     /// attention is on a row (`on_row`).
     laid: Vec<String>,
+    /// While a mission runs: a digest of every agent row's activity, which
+    /// a node's `work` reads, and of the doorbell's holds, which its
+    /// Conductor's held letters read; zero with none running.
+    rows_and_holds: u64,
     made: bool,
 }
 
@@ -1759,6 +1846,7 @@ impl Runtime {
                         "mission_id": id,
                         "node": shown,
                         "letters": self.node_letters(&id, &key),
+                        "checker_letters": self.node_checker_letters(&id, &key),
                     }),
                     false,
                 ))
@@ -2699,35 +2787,40 @@ impl Runtime {
         else {
             return Some(Vec::new());
         };
-        let mut letters: Vec<&crate::delivery::ledger::Letter> = ledger
-            .letters
-            .iter()
-            .filter(|letter| {
-                letter.sender.same_identity(&worker.actor)
-                    || letter.recipient.same_identity(&worker.actor)
+        Some(newest_letters(&ledger, |letter| {
+            letter.sender.same_identity(&worker.actor)
+                || letter.recipient.same_identity(&worker.actor)
+        }))
+    }
+
+    /// The newest letters node `key`'s checkers wrote to its Conductor,
+    /// newest first, at most `NODE_LETTER_LIMIT`: the letters its worker may
+    /// read (`Mission::checker_letters`), listed with their ids so the
+    /// worker finds them without being told (with-hide/hide-private#668).
+    /// None for a node with no checker bound, and null while the ledger
+    /// cannot be read.
+    fn node_checker_letters(&self, id: &str, key: &str) -> Option<Vec<NodeLetter>> {
+        let ledger = self.delivery_state().ok()?;
+        let Some((mission, node)) = self
+            .missions
+            .book
+            .get(id)
+            .and_then(|mission| Some((mission, mission.node(key)?)))
+        else {
+            return Some(Vec::new());
+        };
+        let pairs: Vec<(&crate::delivery::Actor, &crate::delivery::Actor)> = mission
+            .checker_letters(node)
+            .filter_map(|(checker, conductor)| {
+                let record = ledger.agents.iter().find(|record| record.id == checker)?;
+                Some((&record.actor, conductor))
             })
             .collect();
-        letters.sort_by_key(|letter| std::cmp::Reverse(letter.created_at_unix_ms));
-        Some(
-            letters
-                .into_iter()
-                .take(NODE_LETTER_LIMIT)
-                .map(|letter| NodeLetter {
-                    at_unix_ms: letter.created_at_unix_ms,
-                    from: letter.sender.name.clone(),
-                    to: letter.recipient.name.clone(),
-                    kind: letter.kind.clone(),
-                    line: letter
-                        .body
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .chars()
-                        .take(NODE_LETTER_LINE)
-                        .collect(),
-                })
-                .collect(),
-        )
+        Some(newest_letters(&ledger, |letter| {
+            pairs.iter().any(|(checker, conductor)| {
+                letter.sender.same_identity(checker) && letter.recipient.same_identity(conductor)
+            })
+        }))
     }
 
     /// The view of one mission as the map draws it.
@@ -2737,6 +2830,49 @@ impl Runtime {
         let agents = worker_records(ledger.as_deref(), std::iter::once(mission));
         let sleeping = self.sleeping_registrations(agents.values().copied());
         Some(self.view_mission(mission, &agents, &sleeping, ledger.as_deref()))
+    }
+
+    /// The letters to an open mission's Conductor that only the operator can
+    /// let through (`delivery::held::letters_held`), and when the next one held
+    /// for that comes of age.
+    fn conductor_letters(
+        &self,
+        mission: &Mission,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        now: u64,
+    ) -> (Option<crate::delivery::held::HeldLetters>, Option<u64>) {
+        match ledger {
+            Some(ledger) if mission.status.open() => crate::delivery::held::letters_held(
+                ledger,
+                &self.delivery_holds,
+                &mission.conductor.actor,
+                now,
+            ),
+            _ => (None, None),
+        }
+    }
+
+    /// What `ViewsMadeFrom::rows_and_holds` compares: one pass over the agent
+    /// rows and the doorbell's holds while a mission runs, nothing otherwise.
+    fn rows_and_holds_digest(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        if !self
+            .missions
+            .book
+            .missions
+            .iter()
+            .any(|mission| mission.status.open())
+        {
+            return 0;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for row in self.agent_rows() {
+            (&row.pane_id, &row.activity).hash(&mut hasher);
+        }
+        for (letter, hold) in &self.delivery_holds {
+            (letter, crate::delivery::held::held_for(*hold)).hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     /// The mission's device does not answer, so its map shows the last
@@ -2789,7 +2925,7 @@ impl Runtime {
                 };
                 for checker in criteria.iter_mut().flat_map(|line| &mut line.checkers) {
                     let record = checker.agent_id.as_deref().and_then(|id| agents.get(id));
-                    checker.pane_id = record.map(|record| record.pane.clone());
+                    checker.pane_id = record.map(|record| record.pane_on(self.node.as_str()));
                     checker.machine = record.map(|record| record.machine.clone());
                 }
                 let count = |pick: fn(CriterionState) -> bool| {
@@ -2813,7 +2949,7 @@ impl Runtime {
                     launched: node.launched.clone().filter(|launch| {
                         node.agent_id.as_deref() == Some(launch.agent_id.as_str())
                     }),
-                    pane_id: record.map(|record| record.pane.clone()),
+                    pane_id: record.map(|record| record.pane_on(self.node.as_str())),
                     machine: record.map(|record| record.machine.clone()),
                     pr: node.current_pr(),
                     prs,
@@ -2878,8 +3014,15 @@ impl Runtime {
                     asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),
                     waiting_on: None,
+                    work: None,
                 };
                 view.waiting_on = waiting_on(mission, &view);
+                let activity = view
+                    .pane_id
+                    .as_deref()
+                    .and_then(|pane| self.agent_row(pane))
+                    .map(|row| row.activity.as_str());
+                view.work = node_work(mission, &view, activity);
                 view
             })
             .collect();
@@ -2964,6 +3107,9 @@ impl Runtime {
                     .then_some(AnswerFailure::SessionUnreadable)
                 }),
             end_asked: mission.end_asked_at_unix_ms.is_some(),
+            conductor_letters: self
+                .conductor_letters(mission, ledger, crate::delivery::worker::now())
+                .0,
             delay: mission.delay.clone(),
             report: mission.report.clone(),
             created_at_unix_ms: mission.created_at_unix_ms,
@@ -3039,6 +3185,7 @@ impl Runtime {
             worker_records(ledger.as_deref(), self.missions.book.missions.iter()).into_values()
         }));
         let laid = self.laid_panes();
+        let rows_and_holds = self.rows_and_holds_digest();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -3056,6 +3203,7 @@ impl Runtime {
             && same_ledger
             && before.present == present
             && before.unreadable == unreadable
+            && before.rows_and_holds == rows_and_holds
             && now < before.until
             && self.snapshot.missions.failed == failed
         {
@@ -3094,9 +3242,18 @@ impl Runtime {
                 }
             })
             .collect();
+        let held_due = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter_map(|mission| self.conductor_letters(mission, ledger.as_deref(), now).1)
+            .min()
+            .unwrap_or(u64::MAX);
         let until = ledger.as_deref().map_or(u64::MAX, |ledger| {
             crate::coordination::mission_reservations_end(ledger, now)
         });
+        let until = until.min(held_due);
         let next = MissionsSnapshot { items, failed };
         if self.snapshot.missions != next {
             self.snapshot.missions = next;
@@ -3114,6 +3271,7 @@ impl Runtime {
             until,
             sleeping,
             laid,
+            rows_and_holds,
             made: true,
         };
     }
@@ -3199,9 +3357,8 @@ fn proven_launch(
     node: &str,
     record: &crate::coordination::AgentRecord,
 ) -> Option<crate::missions::NodeLaunch> {
-    let pane = crate::address::pane_id_on(node, &record.machine, &record.pane);
     let launch = launches
-        .get(&pane)
+        .get(&record.pane_on(node))
         .filter(|launch| launch.session.as_deref() == Some(record.session.as_str()))?;
     Some(crate::missions::NodeLaunch {
         agent_id: record.id.clone(),

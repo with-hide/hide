@@ -9482,6 +9482,49 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_failure", &failures);
             checked.insert("mission_answer_failure");
+            use crate::delivery::held::HeldFor;
+            let held = [
+                HeldFor::Unreachable,
+                HeldFor::Undelivered,
+                HeldFor::Approval,
+                HeldFor::Draft,
+                HeldFor::Unanswered,
+            ];
+            for variant in held {
+                match variant {
+                    HeldFor::Unreachable
+                    | HeldFor::Undelivered
+                    | HeldFor::Approval
+                    | HeldFor::Draft
+                    | HeldFor::Unanswered => {}
+                }
+            }
+            assert_wire(&contract, "mission_letters_held_for", &held);
+            checked.insert("mission_letters_held_for");
+            use crate::runtime::missions::NodeWork;
+            let work = [
+                NodeWork::Working,
+                NodeWork::Waiting {
+                    on: crate::missions::WaitingOn::Review,
+                },
+                NodeWork::NoWorker,
+            ];
+            for variant in &work {
+                match variant {
+                    NodeWork::Working | NodeWork::Waiting { .. } | NodeWork::NoWorker => {}
+                }
+            }
+            let states: Vec<String> = work
+                .iter()
+                .map(|variant| {
+                    serde_json::to_value(variant).unwrap()["state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect();
+            assert_wire(&contract, "mission_node_work", &states);
+            checked.insert("mission_node_work");
         }
 
         {

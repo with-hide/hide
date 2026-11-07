@@ -420,19 +420,31 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
             draw_line(&mut out, line, now);
         }
     }
-    match result["letters"].as_array() {
+    draw_letters(&mut out, "최근 편지", &result["letters"], now);
+    // Absent from a core before the checkers' letters were listed.
+    if result.get("checker_letters").is_some() {
+        draw_letters(&mut out, "검토자 편지", &result["checker_letters"], now);
+    }
+    Ok(out)
+}
+
+/// A list of a node's letters under `head`, each with the id
+/// `hide request show` reads it by.
+fn draw_letters(out: &mut String, head: &str, letters: &Value, now: u64) {
+    match letters.as_array() {
         None => {
-            let _ = writeln!(out, "최근 편지 · 읽지 못함");
+            let _ = writeln!(out, "{head} · 읽지 못함");
         }
         Some(letters) if letters.is_empty() => {
-            let _ = writeln!(out, "최근 편지 없음");
+            let _ = writeln!(out, "{head} 없음");
         }
         Some(letters) => {
-            let _ = writeln!(out, "최근 편지");
+            let _ = writeln!(out, "{head}");
             for letter in letters {
                 let _ = writeln!(
                     out,
-                    "  {} · {} → {} · {} · {}",
+                    "  {} · {} · {} → {} · {} · {}",
+                    text(letter, "id"),
                     age(now, &letter["at_unix_ms"]),
                     text(letter, "from"),
                     text(letter, "to"),
@@ -442,7 +454,6 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
             }
         }
     }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -573,7 +584,9 @@ mod tests {
 
     /// with-hide/hide-private#552 c1: one node in full: its state, worker,
     /// pull requests, push, warnings, every line with its evidence and each
-    /// checker's answer, and its worker's newest letters.
+    /// checker's answer, its worker's newest letters, and the letters its
+    /// checkers wrote to the Conductor, each with the id `hide request show`
+    /// reads it by (with-hide/hide-private#668).
     #[test]
     fn a_node_reads_in_full_with_its_lines_reviews_and_letters() {
         let mut node = mission()["mission"]["nodes"][0].clone();
@@ -593,7 +606,9 @@ mod tests {
              "summary": "input lost", "evidence": "repro in test", "at_unix_ms": NOW - 20 * MINUTE},
             {"worker": {"agent": "claude"}, "state": "open"}]);
         let answer = json!({"mission_id": "mission-33", "node": node, "letters": [
-            {"at_unix_ms": NOW - 3 * MINUTE, "from": "w", "to": "lead", "kind": "progress", "line": "pushed the fix"}]});
+            {"id": "letter-9", "at_unix_ms": NOW - 3 * MINUTE, "from": "w", "to": "lead", "kind": "progress", "line": "pushed the fix"}],
+            "checker_letters": [
+            {"id": "letter-7", "at_unix_ms": NOW - 20 * MINUTE, "from": "r", "to": "lead", "kind": "report", "line": "FAIL: input lost"}]});
         assert_eq!(
             draw(&answer, NOW).unwrap(),
             "mission-33 · show · Summarize show\n\
@@ -611,7 +626,9 @@ mod tests {
              \x20   claude 열림 · 아직 안 붙음\n\
              \x20 ci 실패\n\
              최근 편지\n\
-             \x20 3분 전 · w → lead · progress · pushed the fix\n"
+             \x20 letter-9 · 3분 전 · w → lead · progress · pushed the fix\n\
+             검토자 편지\n\
+             \x20 letter-7 · 20분 전 · r → lead · report · FAIL: input lost\n"
         );
         let unread = json!({"mission_id": "mission-33", "node": {"key": "x", "status": "planned"}, "letters": null});
         assert!(

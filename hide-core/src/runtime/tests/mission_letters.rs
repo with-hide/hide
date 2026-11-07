@@ -288,3 +288,63 @@ fn the_grant_ends_with_the_nodes_binding() {
     );
     assert!(mission.show("neighbor", &verdict).is_ok());
 }
+
+/// with-hide/hide-private#668: `hide mission show <node>` lists, apart
+/// from its worker's own letters, the letters its checkers wrote to the
+/// Conductor with their ids, so the worker finds and reads them with
+/// `hide request show` without being told; a checker's letter to anyone
+/// else is not listed, and another node lists none of them.
+#[test]
+fn a_node_lists_its_checkers_letters_to_the_conductor_by_id() {
+    let mission = Fixture::start();
+    let verdict = mission.write("reviewer", "conductor", "report");
+    let aside = mission.write("reviewer", "neighbor", "request");
+    let progress = mission.write("worker", "conductor", "progress");
+    let show = |pane: &str, node: &str| {
+        let actor = Actor {
+            pane_id: pane.into(),
+            name: pane.into(),
+            kind: "codex".into(),
+            device_id: crate::node::TEST_NODE.into(),
+            session: None,
+        };
+        let command: crate::missions::MissionCommand =
+            serde_json::from_value(json!({"op": "show", "mission": "mission-1", "node": node}))
+                .unwrap();
+        mission
+            .runtime
+            .lock()
+            .unwrap()
+            .mission_command(
+                crate::node::TEST_NODE,
+                pane,
+                &authority(&actor).context,
+                command,
+            )
+            .unwrap()
+            .0
+    };
+    let ids = |letters: &Value| -> Vec<String> {
+        letters
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|letter| letter["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let shown = show("worker", "fix");
+    assert_eq!(ids(&shown["checker_letters"]), vec![verdict.clone()]);
+    assert_eq!(shown["checker_letters"][0]["kind"], "report");
+    assert_eq!(shown["checker_letters"][0]["line"], "reviewer says so");
+    assert_eq!(ids(&shown["letters"]), vec![progress]);
+    assert!(!ids(&shown["checker_letters"]).contains(&aside));
+    assert_eq!(
+        mission.show("worker", &verdict).unwrap()["id"],
+        verdict.as_str(),
+        "the listed letter is one the worker reads"
+    );
+    assert_eq!(
+        ids(&show("neighbor", "docs")["checker_letters"]),
+        Vec::<String>::new()
+    );
+}
