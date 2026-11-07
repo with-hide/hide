@@ -100,6 +100,7 @@ mod session_command;
 mod session_state;
 mod session_thread;
 mod snapshot_delta;
+mod spent_bells;
 mod ssh_hosts;
 pub(crate) mod start_hook;
 mod strays;
@@ -1846,6 +1847,7 @@ pub struct Runtime {
     /// The wakes letters to sleeping agents ask for, and the letters a
     /// failed one leaves undelivered (PRD mission-worker-sleep).
     letter_wakes: agent_sleep::letters::LetterWakes,
+    spent_bells: spent_bells::SpentBells,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
     /// The letters owed to agents whose turn a move or a machine restart cut
@@ -2589,6 +2591,7 @@ impl Runtime {
             agent_sleep_backoff: HashMap::new(),
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
+            spent_bells: Default::default(),
             unreadable_letters: Default::default(),
             transition_letters: Default::default(),
             pane_reopens: HashMap::new(),

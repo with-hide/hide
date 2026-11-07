@@ -1213,6 +1213,8 @@ mod tests {
             bell_route: Default::default(),
             input_noticed: 0,
             input_noticed_at_unix_ms: 0,
+            bell_failure: None,
+            bell_ended: Some(0),
         }
     }
 

@@ -576,7 +576,10 @@ fn a_device_pane_a_selection_passes_through_is_not_read() {
 }
 
 /// The operator picks `shown` in the device's Agent area, as the area's
-/// tab choice does, without the device being asked anything.
+/// tab choice does, without the device being asked anything: the device's
+/// panes on screen follow the choice at once, as each tab choice reconciles
+/// them, so a pane the choice leaves is released then, not at the next
+/// session.
 fn show_device_tab(runtime: &mut Runtime, path: &str, shown: &str) {
     let layout = runtime
         .workspace_views
@@ -587,6 +590,7 @@ fn show_device_tab(runtime: &mut Runtime, path: &str, shown: &str) {
         .selected_agent_layout_mut();
     let stamp = layout.tree.next_stamp(unix_milliseconds());
     layout.select(&tab(shown), false, stamp).unwrap();
+    runtime.reconcile_remote_terminal_selection();
 }
 
 /// The device's published session.

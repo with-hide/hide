@@ -128,7 +128,13 @@ impl Known {
 
     /// Whether `pane` is a holder pane: one that runs, or one being started.
     fn contains(&self, pane: &str) -> bool {
-        self.owns_every_pane.load(Ordering::Acquire) || self.lock().contains_key(pane)
+        self.owns_every_pane.load(Ordering::Acquire) || self.holds(pane)
+    }
+
+    /// Whether a holder of `pane` is registered here: one that runs, or one
+    /// being started, whether or not the holders own every pane.
+    fn holds(&self, pane: &str) -> bool {
+        self.lock().contains_key(pane)
     }
 
     /// A start of `pane`'s holder begins; a pane that already runs keeps
@@ -210,6 +216,10 @@ impl Attacher for PaneAttacher {
 
     fn keeps_own_size(&self, pane_id: &str) -> bool {
         self.known.contains(pane_id)
+    }
+
+    fn holds(&self, pane_id: &str) -> bool {
+        self.known.holds(pane_id)
     }
 }
 
