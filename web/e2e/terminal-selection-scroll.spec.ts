@@ -5,6 +5,7 @@
 // tracks the mouse gets the drag instead, unless shift is held.
 
 import fs from "node:fs";
+import os from "node:os";
 import { expect, test, type Page } from "@playwright/test";
 import { mod } from "./chords";
 import { sendKeys, withControl } from "./daemon-actions";
@@ -114,7 +115,8 @@ test("a selection stays on the text it covers when the wheel scrolls the pane", 
   }
 });
 
-test("a drag past the top edge scrolls the history and its copy holds every row it passed", async ({ page, context }) => {
+// @platform: The holder's history and its view of it (OSC 7721) on the platform's PTY, and the system's copy chord.
+test("a drag past the top edge scrolls the history and its copy holds every row it passed", { tag: "@platform" }, async ({ page, context }) => {
   const lastSent = new Map<string, Record<string, unknown>>();
   const sent = countSent(page, lastSent);
   await page.setViewportSize({ width: 1680, height: 900 });
@@ -155,14 +157,16 @@ test("a drag past the top edge scrolls the history and its copy holds every row 
     expect(named).toEqual(Array.from({ length: last - 1 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`));
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.keyboard.press(mod("KeyC"));
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
+    // The Windows text clipboard represents line endings as CRLF.
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied.split("\n").join(os.EOL));
   } finally {
     daemon?.stop();
     engine.stop();
   }
 });
 
-test("a program that tracks the mouse gets the drag, and a drag with shift selects instead", async ({ page }) => {
+// @platform: Mouse modes a program sets through the platform's PTY, and the press, motion and release its holder reports to it.
+test("a program that tracks the mouse gets the drag, and a drag with shift selects instead", { tag: "@platform" }, async ({ page }) => {
   const lastSent = new Map<string, Record<string, unknown>>();
   const sent = countSent(page, lastSent);
   await page.setViewportSize({ width: 1680, height: 900 });
