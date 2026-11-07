@@ -451,7 +451,8 @@ DESKTOP_E2E_LANES = {"checks", "windows-desktop", "windows-check"}
 # An unregistered convention keeps its folder's existing plan.
 UNIT_TEST_PATHS = (
     "desktop/src/*.test.ts", "desktop/scripts/*.test.mjs",
-    "desktop/e2e/fixture-cleanup.unit.ts", "desktop/e2e/windows-processes.unit.ts",
+    "desktop/e2e/fixture-cleanup.unit.ts", "desktop/e2e/native-teardown.unit.ts",
+    "desktop/e2e/windows-processes.unit.ts",
 )
 
 

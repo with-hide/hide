@@ -368,7 +368,8 @@ async function startFirstAgent(control: HidedControl, folder: string) {
  * can follow the row that shows the session (with-hide/hide-private#130: `agent spawn` was
  * refused `agent_pane_required` from a pane whose row already read its session). `agent
  * show here` resolves the caller the same way a spawn does and only reads, so the wait
- * polls it and sends no spawn.
+ * polls it and sends no spawn. It also refuses a pane with no ledger record
+ * (`participant_unavailable`), and that answer already proves the observation.
  */
 async function parentOnItsSession(control: HidedControl, pane: string, runAs: (pane: string) => HideRunner): Promise<void> {
   await control.until((rest) => agentIn(rest, pane)?.session_id === FIXTURE_AGENTS[0].session || undefined, `${pane} on its session`, 30_000);
@@ -378,8 +379,11 @@ async function parentOnItsSession(control: HidedControl, pane: string, runAs: (p
     await expect.poll(async () => {
       const answer = await show(["agent", "show", "here"]);
       last = answer.out;
-      return answer.status;
-    }, { message: `the core to name ${pane} as a caller`, timeout: 30_000 }).toBe(0);
+      // A pane the core can name but has no ledger record for is refused
+      // `participant_unavailable`, which is past the observation a spawn needs;
+      // only `agent_pane_required` says the observation is not laid yet.
+      return answer.status === 0 || answer.out.includes('"participant_unavailable"');
+    }, { message: `the core to name ${pane} as a caller`, timeout: 30_000 }).toBe(true);
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nthe last answer of \`agent show here\`: ${last}`, { cause: error });
   }
