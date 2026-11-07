@@ -1395,6 +1395,24 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "mission_candidate_refused" => {
             "The worker is none of the operator's candidates in Settings > Mission; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"
         }
+        // A spawn whose agent would start without Hide's hook on its
+        // machine (`runtime::start_hook`): nothing was made or typed, and the
+        // same command continues once the operator has done this.
+        "agent_hook_off" => {
+            "The agent is switched off for that machine; ask the operator to switch it on in Settings > Agents for that machine, then run the same command again with the same intent"
+        }
+        "agent_not_set_up" => {
+            "The agent has not made its own folder on that machine yet, so Hide cannot put its hook in; ask the operator to start the agent there once and sign in, then run the same command again with the same intent"
+        }
+        "agent_hook_untrusted" => {
+            "Codex on that machine has not trusted Hide's hooks; ask the operator to start codex there once and choose Trust all and continue on its Hooks need review screen, then run the same command again with the same intent"
+        }
+        "agent_hook_missing" => {
+            "Hide's hook for the agent is not in place on that machine; ask the operator to press Reinstall for that machine in Settings > Devices (This Mac for this machine), then run the same command again with the same intent"
+        }
+        "agent_hook_unconfirmed" => {
+            "Hide's check of the agent's hook on that machine did not finish in time; run the same command again with the same intent"
+        }
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
         }
@@ -5067,6 +5085,11 @@ mod tests {
             "target_ambiguous",
             "target_unavailable",
             "codex_capability_unknown",
+            "agent_hook_off",
+            "agent_not_set_up",
+            "agent_hook_untrusted",
+            "agent_hook_missing",
+            "agent_hook_unconfirmed",
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",

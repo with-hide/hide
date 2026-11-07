@@ -852,6 +852,63 @@ fn check_target(
     }
 }
 
+/// How long a spawn waits for the pass it asked of its child's machine's
+/// kit. A pass asks Codex to trust Hide's hooks, which is bounded at 19 s
+/// (`hide_agent_hooks::codex_trust`), and reads each agent once; a kit that
+/// is still busy past this, waiting on another kit's account lock or on a
+/// slow device, has the spawn refused so the same command asks again,
+/// rather than held for the 90 s that lock allows.
+const HOOK_PASS_WAIT: Duration = Duration::from_secs(30);
+
+/// Judges whether `kind` on `machine` has Hide's hook in place, from that
+/// machine's kit report, before anything is made for the spawn
+/// (`runtime::start_hook`). Where a pass may put it in place, one runs on
+/// the machine's own kit worker, off the runtime lock, and the spawn judges
+/// again from its answer.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Result<(), String> {
+    use crate::runtime::start_hook::{HookRefusal, StartHook};
+    let refused = |refusal: HookRefusal, stage: &str| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "hook.refused", "device": machine,
+            "agent_kind": kind, "intent": intent, "reason": refusal.code(), "stage": stage,
+        }));
+        refusal.code().to_owned()
+    };
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let asked = {
+        let mut locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+        match locked.start_hook(machine, kind) {
+            StartHook::Ready => return Ok(()),
+            StartHook::Refused(refusal) => return Err(refused(refusal, "report")),
+            StartHook::Pass(_) => locked.ask_start_pass(machine)?,
+        }
+    };
+    let deadline = Instant::now() + HOOK_PASS_WAIT;
+    loop {
+        {
+            let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+            if locked.start_pass_answered(machine, asked) {
+                return locked
+                    .start_hook(machine, kind)
+                    .after_pass()
+                    .map_err(|refusal| refused(refusal, "pass"));
+            }
+            if !locked.kit_reachable(machine) {
+                return Err("machine_unavailable".into());
+            }
+        }
+        if Instant::now() >= deadline {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "hook.pass_unanswered", "device": machine,
+                "agent_kind": kind, "intent": intent, "waited_ms": HOOK_PASS_WAIT.as_millis(),
+            }));
+            return Err(refused(HookRefusal::Unconfirmed, "wait"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn spawn(
     client: &Client,
     authority: &Authority,
@@ -1003,6 +1060,29 @@ fn spawn(
                 (!started).then_some(repo.as_str()),
                 !started,
             )?;
+        }
+    }
+    // The child's hook is judged before anything is made for it, on every
+    // attempt that has not typed its start yet: one that has is past what a
+    // hook changes (with-hide/hide-private#661, #662).
+    {
+        let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
+            super::live_self(&ledger, actor)
+                .next()
+                .map(|p| p.id.clone())
+        } else {
+            parent.clone()
+        };
+        let typed = known_parent.is_some_and(|id| {
+            ledger.spawns.iter().any(|record| {
+                record.parent == id
+                    && record.intent == *intent
+                    && (record.completed || record.typed > 0)
+            })
+        });
+        if !typed {
+            let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+            check_hook(client, child_machine, kind, intent)?;
         }
     }
     // The device checks above only read, so a slow device never holds the

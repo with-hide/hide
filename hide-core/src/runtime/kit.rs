@@ -15,7 +15,7 @@ use hide_kit::{ComponentId, KitReport, Scope};
 
 use super::Runtime;
 use super::hosts::HostPhase;
-use crate::model::{CodexDaemonOffSnapshot, KitSnapshot, KitUnavailable};
+use crate::model::{CodexDaemonOffSnapshot, KitAgentSnapshot, KitSnapshot, KitUnavailable};
 use crate::node_access::NodeLink;
 
 /// How often this Mac's kit is read again while Settings is on screen, so a
@@ -64,6 +64,37 @@ fn diagnostic_identity(value: &str) -> serde_json::Value {
         "bytes": value.len(),
         "truncated": end != value.len(),
     })
+}
+
+/// The machine's last report says Codex has not trusted Hide's hook.
+fn trust_unrecorded(kit: &KitSnapshot) -> bool {
+    kit.components.iter().any(|part| {
+        part.id == ComponentId::CodexHook
+            && part.state == hide_kit::ComponentState::Failed
+            && part
+                .why
+                .as_ref()
+                .is_some_and(|why| why.cause == hide_kit::PartCause::CodexUntrusted)
+    })
+}
+
+/// A piece of the agent that waited for the agent to make its own folder
+/// in `old` can be put in now.
+fn folder_made(old: &KitAgentSnapshot, now: &KitAgentSnapshot) -> bool {
+    let waits = |piece: &crate::model::KitPieceSnapshot| {
+        piece.state == hide_kit::ComponentState::Absent
+            && piece.why.as_ref().is_some_and(|why| {
+                matches!(
+                    why.cause,
+                    hide_kit::PartCause::AgentAbsent | hide_kit::PartCause::NotCreatedYet
+                )
+            })
+    };
+    let made = |old: Option<&crate::model::KitPieceSnapshot>,
+                now: Option<&crate::model::KitPieceSnapshot>| {
+        old.is_some_and(waits) && now.is_some_and(|piece| piece.state.needs_attention())
+    };
+    made(Some(&old.skill), Some(&now.skill)) || made(old.hook.as_ref(), now.hook.as_ref())
 }
 
 /// What a device's kit worker does on one call.
@@ -175,6 +206,7 @@ impl Runtime {
     /// log, and the row words `cause`.
     pub(crate) fn set_local_kit_unavailable(&mut self, cause: KitUnavailable, detail: &str) {
         let node = self.node.clone();
+        self.start_pass_finished(node.as_str());
         if self.set_kit_state(node.as_str(), KitSnapshot::unavailable(cause)) {
             crate::diagnostic!(serde_json::json!({
                 "component": "kit",
@@ -198,6 +230,8 @@ impl Runtime {
     /// a re-read while Settings is on screen; off screen nothing is read.
     pub(crate) fn take_local_kit_job(&mut self, now: Instant) -> Option<KitJob> {
         if let Some(scope) = self.local_kit_pending.take() {
+            let node = self.node.clone();
+            self.start_pass_taken(node.as_str());
             return Some(KitJob::Apply(scope));
         }
         if std::mem::take(&mut self.local_kit_check_requested)
@@ -214,15 +248,23 @@ impl Runtime {
     /// to read, and one with work queued answers with that work. True when a
     /// machine's `checking` flipped, so the caller announces it: a slow read
     /// over a device must show as under way before it answers (B10).
+    /// A machine whose last pass could not have Codex trust Hide's hook is
+    /// checked with a pass, since only a pass asks Codex again and the
+    /// operator may have approved the hooks in Codex since (`hide_kit`'s
+    /// `codex_trust`); every other machine is read.
     pub(super) fn request_kit_check(&mut self) -> bool {
         let mut changed = false;
+        let node = self.node.clone();
         if self
             .kit_states
-            .get(self.node.as_str())
+            .get(node.as_str())
             .is_none_or(|state| state.unavailable.is_none())
         {
-            self.local_kit_check_requested = true;
-            let node = self.node.clone();
+            if self.kit_states.get(node.as_str()).is_some_and(trust_unrecorded) {
+                self.queue_kit_scope(node.as_str(), Scope::automatic());
+            } else {
+                self.local_kit_check_requested = true;
+            }
             changed |= self.set_kit_checking(node.as_str());
         }
         let ready = self
@@ -235,7 +277,12 @@ impl Runtime {
             if !self.device_kit_pending.contains_key(&device_id)
                 && !self.device_kit_running.contains(&device_id)
             {
-                self.queue_device_kit(&device_id, KitJob::Status);
+                let job = if self.kit_states.get(&device_id).is_some_and(trust_unrecorded) {
+                    KitJob::Apply(Scope::automatic())
+                } else {
+                    KitJob::Status
+                };
+                self.queue_device_kit(&device_id, job);
                 changed |= self.set_kit_checking(&device_id);
             }
         }
@@ -386,6 +433,7 @@ impl Runtime {
     /// Stores what a check or an install found on one machine. A report that
     /// lands while an install is queued for that machine keeps it busy.
     pub(crate) fn ingest_kit_report(&mut self, device_id: &str, report: &KitReport) -> bool {
+        self.start_pass_finished(device_id);
         self.diagnose_unknown_kit_agents(device_id, report);
         // What an older layout left (the standalone hcoord plugin, folders
         // `~/.hide` replaced) is no part either (PRD hide-home-layout D-13).
@@ -483,40 +531,53 @@ impl Runtime {
         changed
     }
 
-    /// An agent that is on, whose copy was too old in the machine's last
-    /// report and is new enough in this one, gets the pieces it still lacks
-    /// on the pass this queues, without a press: a read only judges, and
-    /// the next install would otherwise wait for a launch or a Reinstall
-    /// (docs/agent-hooks.md, Updating an agent that is too old). A pass that
-    /// installed them leaves nothing to repair, so it queues nothing more.
+    /// An agent that is on, whose pieces waited on something the operator
+    /// does outside Hide and no longer do, with a piece still to put in,
+    /// gets it on the pass this queues, without a press: a read only judges,
+    /// and the next install would otherwise wait for a launch or a
+    /// Reinstall. The waits are a copy older than the agent's minimum, until
+    /// it is updated (docs/agent-hooks.md, Updating an agent that is too
+    /// old), and a folder the agent makes at its first start or sign-in,
+    /// which its hook and skill go into (docs/agent-hooks.md, What the kit
+    /// puts down). A pass that installed them leaves nothing to repair, so it
+    /// queues nothing more.
     fn install_updated_agents(&mut self, device_id: &str, snapshot: &KitSnapshot) {
         let Some(before) = self.kit_states.get(device_id) else {
             return;
         };
-        let updated = snapshot
-            .agents
-            .iter()
-            .filter(|agent| {
-                agent.enabled
-                    && agent.update.is_none()
-                    && agent.needs_attention()
-                    && before
-                        .agents
-                        .iter()
-                        .any(|old| old.id == agent.id && old.update.is_some())
-            })
-            .map(|agent| agent.id.clone())
-            .collect::<Vec<_>>();
-        if updated.is_empty() {
-            return;
+        let lifted = |ended: fn(&KitAgentSnapshot, &KitAgentSnapshot) -> bool| {
+            snapshot
+                .agents
+                .iter()
+                .filter(|agent| {
+                    agent.enabled
+                        && agent.needs_attention()
+                        && before
+                            .agents
+                            .iter()
+                            .any(|old| old.id == agent.id && ended(old, agent))
+                })
+                .map(|agent| agent.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let updated = lifted(|old, now| old.update.is_some() && now.update.is_none());
+        let folders = lifted(folder_made);
+        for (kind, agents) in [
+            ("kit.agent_updated", &updated),
+            ("kit.agent_folder_created", &folders),
+        ] {
+            if !agents.is_empty() {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": kind,
+                    "device_id": device_id,
+                    "agents": agents,
+                }));
+            }
         }
-        crate::diagnostic!(serde_json::json!({
-            "component": "kit",
-            "kind": "kit.agent_updated",
-            "device_id": device_id,
-            "agents": updated,
-        }));
-        self.queue_kit_scope(device_id, Scope::automatic());
+        if !updated.is_empty() || !folders.is_empty() {
+            self.queue_kit_scope(device_id, Scope::automatic());
+        }
     }
 
     /// What a machine's kit report says about the first-run agent choice.
@@ -1016,7 +1077,7 @@ impl Runtime {
         self.queue_kit_scope(device_id, Scope::reinstall(parts))
     }
 
-    fn queue_kit_scope(&mut self, device_id: &str, scope: Scope) -> bool {
+    pub(super) fn queue_kit_scope(&mut self, device_id: &str, scope: Scope) -> bool {
         if device_id != self.node.as_str() {
             self.queue_device_kit(device_id, KitJob::Apply(scope));
             return true;
@@ -1113,6 +1174,7 @@ impl Runtime {
     ) -> Result<(), &'static str> {
         let device_id = registration.id.as_str();
         self.device_kit_pending.remove(device_id);
+        self.forget_start_passes(device_id);
         self.kit_states.remove(device_id);
         let left = |reason: &'static str| {
             crate::diagnostic!(serde_json::json!({
@@ -1214,6 +1276,9 @@ impl Runtime {
             .host_consent
             .and_then(|consent| consent.cli_dir)
             .unwrap_or_else(|| self.host_cli_dir.clone());
+        if matches!(job, KitJob::Apply(_)) {
+            self.start_pass_taken(device_id);
+        }
         let daemon_off_run =
             matches!(&job, KitJob::Apply(scope) if scope.codex_daemon_off).then(|| {
                 self.codex_daemon_off_runs += 1;
@@ -1249,6 +1314,11 @@ impl Runtime {
             && self.codex_daemon_off_running.get(device_id) == daemon_off_run.as_ref();
         if current {
             self.codex_daemon_off_running.remove(device_id);
+        }
+        // A start waiting on the pass this call ran reads the answer, or
+        // the device gone, from here on.
+        if let DeviceKitAnswer::Report(_) = &answer {
+            self.start_pass_finished(device_id);
         }
         let answer = match answer {
             DeviceKitAnswer::Report(Ok(mut report)) if daemon_off_run.is_some() && !current => {
@@ -1382,6 +1452,7 @@ impl Runtime {
     pub(super) fn forget_device_kit_work(&mut self, device_id: &str) {
         self.forget_device_connect(device_id);
         self.device_kit_pending.remove(device_id);
+        self.forget_start_passes(device_id);
         self.codex_daemon_off_running.remove(device_id);
         self.end_codex_daemon_off_unanswered(device_id);
         self.reopen_first_run_choice(device_id);

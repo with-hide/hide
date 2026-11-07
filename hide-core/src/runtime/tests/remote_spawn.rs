@@ -33,6 +33,9 @@ struct Node {
     trust_fails: AtomicBool,
     /// How many checks the spawn has asked this node.
     calls: AtomicUsize,
+    /// What the device's kit answers a pass, and the passes it ran.
+    kit: Mutex<Option<hide_kit::KitReport>>,
+    kit_passes: Mutex<Vec<hide_node_link::protocol::KitAction>>,
 }
 
 impl NodeLink for Node {
@@ -60,6 +63,11 @@ impl NodeLink for Node {
             // start plain, and a start is confirmed after typing.
             Call::ShellIntegration => {
                 json!({"command": ["/bin/sh"], "readiness": "plain", "env": {}})
+            }
+            Call::Kit { action, .. } => {
+                self.kit_passes.lock().unwrap().push(action);
+                serde_json::to_value(self.kit.lock().unwrap().clone().expect("a kit report"))
+                    .unwrap()
             }
             Call::AgentTrust { .. } if self.trust_fails.swap(false, Ordering::SeqCst) => {
                 return Err(LinkError::Refused(hide_node_link::HostError::new(
@@ -274,6 +282,8 @@ fn spawner() -> Spawner {
         trusted: Mutex::new(Vec::new()),
         trust_fails: AtomicBool::new(false),
         calls: AtomicUsize::new(0),
+        kit: Mutex::new(None),
+        kit_passes: Mutex::new(Vec::new()),
     });
     {
         let mut guard = runtime.lock().unwrap();
@@ -1023,6 +1033,145 @@ fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
         .unwrap();
     assert!(marked < typed, "{methods:?}");
     assert_eq!(count(&methods, "create_worktree"), 1, "{methods:?}");
+}
+
+/// The device's kit report with Codex's hook in `state` for `cause`, and
+/// Codex on or off.
+fn codex_kit(
+    state: hide_kit::ComponentState,
+    cause: Option<hide_kit::PartCause>,
+    enabled: bool,
+) -> hide_kit::KitReport {
+    let piece = |state, cause: Option<hide_kit::PartCause>| hide_kit::PieceReport {
+        state,
+        reason: None,
+        why: cause.map(|cause| hide_kit::PartWhy { cause, value: None }),
+        location: None,
+    };
+    hide_kit::KitReport {
+        codex_daemon: Some(true),
+        agents: vec![hide_kit::AgentReport {
+            id: "codex".to_owned(),
+            label: "Codex".to_owned(),
+            availability: hide_kit::Availability::Available,
+            enabled,
+            chosen: true,
+            skill: piece(hide_kit::ComponentState::Installed, None),
+            hook: Some(piece(state, cause)),
+            update: None,
+            doc_url: String::new(),
+        }],
+        ..Default::default()
+    }
+}
+
+impl Spawner {
+    /// The device's kit last reported `report`, a pass there answers
+    /// `pass`, and its kit worker can run: the device's helper is allowed.
+    fn kit(&self, report: hide_kit::KitReport, pass: hide_kit::KitReport) {
+        *self.node.kit.lock().unwrap() = Some(pass);
+        let mut runtime = self.runtime.lock().unwrap();
+        let consent = runtime.new_host_consent();
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == DEVICE)
+            .unwrap()
+            .host_consent = Some(consent);
+        runtime.install_worker_context(Arc::downgrade(&self.runtime), ChangeNotifier::noop());
+        runtime.ingest_kit_report(DEVICE, &report);
+    }
+
+    fn kit_passes(&self) -> Vec<hide_node_link::protocol::KitAction> {
+        self.node.kit_passes.lock().unwrap().clone()
+    }
+}
+
+/// with-hide/hide-private#661, #662: a device whose last kit pass left the
+/// agent's hook out (Codex had not trusted it, or the agent had not made its
+/// folder yet) has one pass run there before the spawn makes anything, and
+/// the spawn goes on once that pass puts the hook in.
+#[test]
+fn a_spawn_runs_one_kit_pass_where_the_hook_was_left_out_and_starts_once_it_is_in() {
+    use hide_kit::{ComponentState, PartCause};
+    for (cause, state) in [
+        (PartCause::CodexUntrusted, ComponentState::Failed),
+        (PartCause::AgentAbsent, ComponentState::Absent),
+    ] {
+        let spawner = spawner();
+        spawner.kit(
+            codex_kit(state, Some(cause), true),
+            codex_kit(ComponentState::Installed, None, true),
+        );
+        let child = spawner
+            .spawn(Some("here"), Some(DEVICE), "one")
+            .unwrap_or_else(|error| panic!("{cause:?}: {error}"));
+        assert_eq!(child["machine"], DEVICE);
+        assert_eq!(
+            spawner.kit_passes(),
+            [hide_node_link::protocol::KitAction::Apply],
+            "{cause:?}"
+        );
+        assert_eq!(spawner.count("start_agent"), 1);
+        // The pass's answer is the device's row now.
+        let kit = spawner.runtime.lock().unwrap().kit_state(DEVICE);
+        assert_eq!(
+            kit.agents[0].hook.as_ref().unwrap().state,
+            ComponentState::Installed
+        );
+    }
+}
+
+/// The same, where the pass cannot put the hook in: the spawn is refused with
+/// what the operator does, and nothing is made or typed on the device.
+#[test]
+fn a_spawn_whose_hook_a_pass_cannot_put_in_is_refused_before_anything_is_made() {
+    use hide_kit::{ComponentState, PartCause};
+    for (state, cause, enabled, code, passes) in [
+        (
+            ComponentState::Failed,
+            Some(PartCause::CodexUntrusted),
+            true,
+            "agent_hook_untrusted",
+            1,
+        ),
+        (
+            ComponentState::Absent,
+            Some(PartCause::AgentAbsent),
+            true,
+            "agent_not_set_up",
+            1,
+        ),
+        (
+            ComponentState::NotInstalled,
+            None,
+            true,
+            "agent_hook_missing",
+            1,
+        ),
+        // What no pass changes is answered from the report alone.
+        (ComponentState::Off, None, false, "agent_hook_off", 0),
+        (
+            ComponentState::Removed,
+            Some(PartCause::TakenOut),
+            true,
+            "agent_hook_missing",
+            0,
+        ),
+    ] {
+        let spawner = spawner();
+        let report = codex_kit(state, cause, enabled);
+        spawner.kit(report.clone(), report);
+        let error = spawner
+            .spawn(Some("here"), Some(DEVICE), "one")
+            .expect_err("refused");
+        assert_eq!(split_refusal(&error), (code, None), "{state:?} {cause:?}");
+        assert_eq!(spawner.kit_passes().len(), passes, "{state:?} {cause:?}");
+        assert!(spawner.ledger().spawns.is_empty());
+        assert!(spawner.fake.methods().is_empty(), "{:?}", spawner.fake.methods());
+    }
 }
 
 fn count(methods: &[&str], name: &str) -> usize {
