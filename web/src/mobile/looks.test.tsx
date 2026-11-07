@@ -325,3 +325,49 @@ it("says a page's screen cannot be taken with its address alone, keeps refresh p
     await unmount();
   }
 });
+
+it("draws an HTML file in a sandboxed frame of its own, handing it the document only once that frame says it is ready", async () => {
+  const html: LookRow = { id: "v5", kind: "html", name: "mockup.html", unseen: true, at: Date.now() - 10_000 };
+  const { container, serve, last, press, unmount } = await openLooks([...ROWS, html]);
+  try {
+    expect(container.querySelector('[data-phone-look="v5"]')!.textContent).toContain("HTML page");
+    await press('[data-phone-look="v5"]');
+    const request = last("look_open").request_id as string;
+    const page = '<!doctype html><h1>안녕</h1><img src="data:image/png;base64,AAAA">';
+    const bytes = new TextEncoder().encode(page);
+    await serve({ type: "look_head", request_id: request, view_id: "v5", mode: "html", size: bytes.length, total: bytes.length, truncated: false, chunks: 1 });
+    await serve({ type: "look_chunk", request_id: request, seq: 0, data: Buffer.from(bytes).toString("base64") });
+    await serve({ type: "look_end", request_id: request, view_id: "v5" });
+
+    // A frame has a window only in a document.
+    document.body.append(container);
+    const frame = container.querySelector<HTMLIFrameElement>('[data-phone-look-state="html"] iframe[data-phone-look-html]')!;
+    // Scripts run, but in an origin of their own: no allow-same-origin, no top navigation, no popups.
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("src")).toBe("look-frame.html");
+    expect(frame.title).toBe("mockup.html");
+    const handed = vi.spyOn(frame.contentWindow!, "postMessage");
+    // Another window saying it is ready gets nothing, and neither does the frame saying anything else.
+    await act(async () => window.dispatchEvent(new MessageEvent("message", { data: "hide-look-ready", source: window })));
+    await act(async () => window.dispatchEvent(new MessageEvent("message", { data: "hello", source: frame.contentWindow })));
+    expect(handed).not.toHaveBeenCalled();
+    await act(async () => window.dispatchEvent(new MessageEvent("message", { data: "hide-look-ready", source: frame.contentWindow })));
+    expect(handed).toHaveBeenCalledExactlyOnceWith({ type: "hide-look-document", html: page }, "*");
+    expect(last("look_seen")).toMatchObject({ view_id: "v5" });
+  } finally {
+    container.remove();
+    await unmount();
+  }
+});
+
+it("says an HTML file too large to fold in is a page to see on the Mac", async () => {
+  const html: LookRow = { id: "v5", kind: "html", name: "mockup.html", unseen: true, at: Date.now() - 10_000 };
+  const { container, serve, last, press, unmount } = await openLooks([...ROWS, html]);
+  try {
+    await press('[data-phone-look="v5"]');
+    await serve({ type: "look_result", request_id: last("look_open").request_id as string, view_id: "v5", state: "too_large" });
+    expect(container.querySelector('[data-phone-look-state="too_large"]')!.textContent).toContain("The page is large. See it on your Mac.");
+  } finally {
+    await unmount();
+  }
+});

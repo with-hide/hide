@@ -171,7 +171,8 @@ export type DetailView = "conversation" | "terminal";
 export type DetailTab = DetailView | "looks";
 
 /** What a View is on the phone: hided names it by what the phone can show of it (hided/src/mobile/looks.rs `Shown`). */
-export type LookKind = "changes" | "page" | "doc" | "image" | "other";
+/** `html` is an HTML file of a checkout, which the phone draws itself in a sandboxed frame. */
+export type LookKind = "changes" | "page" | "html" | "doc" | "image" | "other";
 
 /** One row of the 볼 것 list: a View the agent opened that is open now. It carries no path; the phone asks for its content by `id` alone (D-16). */
 export type LookRow = {
@@ -199,12 +200,13 @@ export type LookResultState = "page" | "other" | "too_large" | "closed" | "faile
 /**
  * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,
  * an image of the desktop app's page now) also names the address, when it was taken (ms) and the device that took it.
+ * An HTML file's (`mode: "html"`) is one document with the files of its checkout it names already folded in.
  */
 export type LookHead = {
   type: "look_head";
   request_id: string;
   view_id: string;
-  mode: "text" | "markdown" | "image" | "page";
+  mode: "text" | "markdown" | "image" | "page" | "html";
   size: number;
   total: number;
   truncated: boolean;

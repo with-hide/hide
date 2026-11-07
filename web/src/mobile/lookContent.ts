@@ -18,6 +18,8 @@ export type LookContent =
   | { state: "changes"; files: LookFile[]; count: number; added: number; removed: number }
   /** A page the desktop app showed, as it looked when its device took it (B20). */
   | { state: "shot"; url: string; size: number; address: string; takenAt: number; takenBy: string }
+  /** An HTML file of a checkout as one document, the files it names folded in, drawn in the sandboxed frame. */
+  | { state: "html"; document: string; size: number }
   /** A page whose screen cannot be taken now: its address alone, and refresh still works (B21). */
   | { state: "page"; url: string }
   /** Nothing the phone can show: a PDF, a video, another binary (B19). */
@@ -66,7 +68,7 @@ function decodedLength(data: string): number {
 
 /** Starts a read from its head; null when the head claims more than its cap or contradicts itself. */
 export function beginAssembly(head: LookHead): Assembly | null {
-  const cap = head.mode === "image" || head.mode === "page" ? LOOK_IMAGE_CAP : LOOK_TEXT_CAP;
+  const cap = head.mode === "text" || head.mode === "markdown" ? LOOK_TEXT_CAP : LOOK_IMAGE_CAP;
   const sane = Number.isSafeInteger(head.size) && head.size >= 0 && head.size <= cap && Number.isSafeInteger(head.chunks) && head.chunks >= 0 && head.chunks <= MAX_CHUNKS;
   if (!sane || (head.size === 0) !== (head.chunks === 0)) return null;
   // A screenshot says when and by whom it was taken, or it is not one.
@@ -129,6 +131,7 @@ export function finishAssembly(assembly: Assembly): LookContent | null {
     return assembly.page ? { state: "shot", url, size: assembly.size, ...assembly.page } : { state: "image", url, size: assembly.size };
   }
   const text = new TextDecoder("utf-8").decode(bytesOf(assembly.parts));
+  if (assembly.mode === "html") return { state: "html", document: text, size: assembly.size };
   // The cap may cut a character in two; the half is not shown.
   return { state: "text", markdown: assembly.mode === "markdown", text: assembly.truncated ? text.replace(/�+$/, "") : text, truncated: assembly.truncated };
 }
