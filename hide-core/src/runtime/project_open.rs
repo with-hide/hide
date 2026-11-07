@@ -9,9 +9,10 @@
 //!
 //! A `create_workspace` that names a request id (Add a project's importable
 //! list, which adds one row after another) keeps a receipt here too, beside
-//! these and under the same bound, which brings nothing forward and is
+//! these and under the same bounds, which brings nothing forward and is
 //! published as `status.project_adds`, so each row reads its own outcome
-//! after any later event.
+//! after any later event; an add that is not admitted is kept as a receipt
+//! refused at once.
 
 use std::collections::VecDeque;
 
@@ -19,8 +20,10 @@ use super::events::{CreateWorkspacePayload, Event, RemoteControlPayload, RemoteC
 use super::*;
 use crate::project_open::{ProjectOpenReceipt, Unheld};
 
-/// Receipts kept at once; past it a settled one makes room, and with every
-/// one still waiting a new request is refused `project_open_busy`.
+/// Requests waiting at once: with this many waiting a new one is refused
+/// (`project_open_busy`, or an add's refused receipt). Settled receipts are
+/// bounded apart, by the same number with the oldest dropped first, so a
+/// refusal always has room to be kept.
 const MAX_OPENS: usize = 32;
 
 #[derive(Default)]
@@ -107,7 +110,7 @@ impl Runtime {
         {
             return Ok(false);
         }
-        if !self.make_open_room() {
+        if !self.admits_open() {
             return Err("project_open_busy".to_owned());
         }
         let receipt = match self.open_target(device, path) {
@@ -129,7 +132,7 @@ impl Runtime {
         };
         let pending = receipt == ProjectOpenReceipt::Pending;
         let registered = matches!(receipt, ProjectOpenReceipt::Opened { .. });
-        self.project_opens.entries.push_back(ProjectOpen {
+        self.keep_open(ProjectOpen {
             request_id: request_id.to_owned(),
             device: device.to_owned(),
             path: path.to_owned(),
@@ -165,30 +168,48 @@ impl Runtime {
             .map(|open| open.receipt.clone())
     }
 
-    /// Room for one more receipt: past [`MAX_OPENS`] the oldest settled one
-    /// goes; `false` when every one is still waiting.
-    fn make_open_room(&mut self) -> bool {
-        if self.project_opens.entries.len() < MAX_OPENS {
-            return true;
-        }
-        let Some(settled) = self
+    /// Whether another request may wait: fewer than [`MAX_OPENS`] do.
+    fn admits_open(&self) -> bool {
+        let waiting = self
             .project_opens
             .entries
             .iter()
-            .position(|open| open.receipt != ProjectOpenReceipt::Pending)
-        else {
-            return false;
-        };
-        self.project_opens.entries.remove(settled);
-        self.publish_project_adds();
-        true
+            .filter(|open| open.receipt == ProjectOpenReceipt::Pending)
+            .count();
+        waiting < MAX_OPENS
     }
 
-    /// Keeps a receipt for the add `request_id` of `path` on `device`,
-    /// settled with its registration; `false` when the add is refused
-    /// instead: a malformed or reused id, or [`MAX_OPENS`] requests all
-    /// still waiting, whose refusal is the `last_error` naming that id,
-    /// since no receipt could be kept.
+    /// Keeps `open`'s receipt, dropping the oldest settled receipts past
+    /// [`MAX_OPENS`] of them; a waiting one is never dropped.
+    fn keep_open(&mut self, open: ProjectOpen) {
+        self.project_opens.entries.push_back(open);
+        self.trim_settled_opens();
+    }
+
+    fn trim_settled_opens(&mut self) {
+        let entries = &mut self.project_opens.entries;
+        let mut settled = entries
+            .iter()
+            .filter(|open| open.receipt != ProjectOpenReceipt::Pending)
+            .count();
+        while settled > MAX_OPENS {
+            let Some(oldest) = entries
+                .iter()
+                .position(|open| open.receipt != ProjectOpenReceipt::Pending)
+            else {
+                break;
+            };
+            entries.remove(oldest);
+            settled -= 1;
+        }
+        self.publish_project_adds();
+    }
+
+    /// Keeps a receipt for the add `request_id` of `path` on `device`:
+    /// waiting, settled later with its registration, and `true`; or, when
+    /// the add is not admitted (a reused id, or [`MAX_OPENS`] requests all
+    /// waiting), already refused with why, and `false`. A malformed id can
+    /// name no receipt, so its refusal is the `last_error` alone.
     pub(super) fn await_add(&mut self, request_id: &str, device: &str, path: &str) -> bool {
         if request_id.is_empty()
             || request_id.len() > REQUEST_ID_LIMIT
@@ -201,41 +222,49 @@ impl Runtime {
             );
             return false;
         }
-        if self
+        let refused = if self
             .project_opens
             .entries
             .iter()
             .any(|open| open.request_id == request_id)
         {
-            self.set_request_error(
+            Some((
                 "workspace.create_refused",
-                "The add named a request id another request already used",
-                false,
-                Some(request_id),
-            );
-            return false;
-        }
-        if !self.make_open_room() {
-            self.set_request_error(
+                "The add named a request id another request already used".to_owned(),
+            ))
+        } else if !self.admits_open() {
+            Some((
                 "workspace.create_busy",
                 format!(
                     "{MAX_OPENS} projects are already being added; add this one once they finish"
                 ),
-                true,
-                Some(request_id),
-            );
-            return false;
-        }
-        self.project_opens.entries.push_back(ProjectOpen {
+            ))
+        } else {
+            None
+        };
+        let (receipt, refusal) = match &refused {
+            Some((kind, message)) => {
+                // Logged as every refusal is; the receipt is what the sender reads.
+                let retryable = *kind == "workspace.create_busy";
+                self.set_request_error(*kind, message.clone(), retryable, Some(request_id));
+                (
+                    ProjectOpenReceipt::Refused {
+                        reason: kind.replace('.', "_"),
+                    },
+                    Some(((*kind).to_owned(), message.clone())),
+                )
+            }
+            None => (ProjectOpenReceipt::Pending, None),
+        };
+        self.keep_open(ProjectOpen {
             request_id: request_id.to_owned(),
             device: device.to_owned(),
             path: path.to_owned(),
-            receipt: ProjectOpenReceipt::Pending,
+            receipt,
             forward: false,
-            refusal: None,
+            refusal,
         });
-        self.publish_project_adds();
-        true
+        refused.is_none()
     }
 
     /// The adds' receipts as the snapshot carries them.
@@ -362,7 +391,7 @@ impl Runtime {
                 open.refusal = refusal.clone();
             }
         }
-        self.publish_project_adds();
+        self.trim_settled_opens();
     }
 
     /// The deepest registered checkout on `device` that holds `path`.

@@ -228,6 +228,65 @@ fn two_adds_of_one_folder_each_receive_its_refusal() {
     }
 }
 
+/// B25: with 32 requests waiting, an add is not admitted and its receipt
+/// says so at once, past a later event; a reused id gets a refused receipt
+/// of its own.
+#[test]
+fn an_add_not_admitted_is_answered_by_a_refused_receipt() {
+    let (_outer, home) = device_home();
+    let mut runtime = runtime();
+    with_device(&mut runtime, &home);
+    for index in 0..32 {
+        assert!(runtime.await_add(&format!("waiting-{index}"), DEVICE, &format!("/w/{index}")));
+    }
+    let app = hide_platform::path::to_wire_lossy(&home.join("projects/app"));
+    std::fs::create_dir_all(home.join("projects/app")).unwrap();
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": DEVICE, "path": app, "label": "app", "initialize_git": false, "request_id": "import:busy"}),
+    );
+    assert!(
+        device_paths(&runtime).is_empty(),
+        "a refused add starts nothing"
+    );
+    dispatch(
+        &mut runtime,
+        "add_project_folder_set",
+        serde_json::json!({"device_id": DEVICE, "path": "C:/Users/me"}),
+    );
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert!(matches!(
+        add_receipt(&runtime, "import:busy"),
+        Some(crate::model::ProjectAddOutcome::Refused { kind, .. }) if kind == "workspace.create_busy"
+    ));
+
+    // A waiting request settles and the next add is admitted again; the
+    // settled receipts stay bounded.
+    runtime.settle_project_open(
+        DEVICE,
+        "/w/0",
+        Ok(()),
+        super::super::project_open::Forward::No,
+    );
+    assert!(runtime.await_add("import:again", DEVICE, "/w/again"));
+    for index in 0..40 {
+        runtime.await_add("waiting-1", DEVICE, &format!("/r/{index}"));
+    }
+    assert!(runtime.snapshot.status.project_adds.len() <= 64);
+    assert!(matches!(
+        runtime
+            .snapshot
+            .status
+            .project_adds
+            .iter()
+            .rev()
+            .find(|receipt| receipt.request_id == "waiting-1")
+            .map(|receipt| receipt.outcome.clone()),
+        Some(crate::model::ProjectAddOutcome::Refused { kind, .. }) if kind == "workspace.create_refused"
+    ));
+}
+
 /// D-04, B4: the folder list's last folder is kept per machine, this one's
 /// apart from each device's, a device's leaves with the device, and a
 /// machine the core does not know is refused.

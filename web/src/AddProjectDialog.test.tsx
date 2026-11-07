@@ -427,6 +427,14 @@ const receipt = (request_id: string, path: string, outcome: { state: "added" } |
     }) as never),
   );
 
+/** An unrelated event: the core clears its last error, never a receipt. */
+const coreRefusalCleared = () =>
+  act(async () =>
+    useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => ({
+      rest: { ...current.rest, status: { ...current.rest!.status, last_error: null } },
+    }) as never),
+  );
+
 /** The core's answer to the add of `path`: registered on its machine, and that add's receipt. */
 const added = async (events: Sent[], id: number, path: string) => {
   await register(id, path, "ubuntu");
@@ -516,5 +524,20 @@ it("reads a row's answer only from its own receipt, not from a project another w
   await added(events, 11, "/home/me/site");
   expect(importRows()).toEqual(["/home/me/app"]);
   expect(find('[data-add-project-import-failed="/home/me/app"]')).not.toBeNull();
+  await unmount();
+});
+
+it("shows an add the core could not take while others wait as refused, and moves on to the next row (PRD device-add-project B25)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await answerImport("ubuntu", found);
+
+  await act(async () => find("[data-add-project-import-all]")!.click());
+  await receipt(requestOf(events, "/home/me/app"), "/home/me/app", { state: "refused", kind: "workspace.create_busy", message: "32 projects are already being added" });
+  await coreRefusalCleared();
+  expect(find('[data-add-project-import-failed="/home/me/app"]')).not.toBeNull();
+  // No longer Adding: its own button can be pressed again.
+  expect((find('[data-add-project-import-add="/home/me/app"]') as HTMLButtonElement).disabled).toBe(false);
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site"]);
   await unmount();
 });
