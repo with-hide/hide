@@ -4,7 +4,9 @@ import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { agentIn, areaShowing, closePane, startAgentInCheckout, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
+import { dumpOnFailure } from "./failure-dump";
 import { setAgentSession } from "./fixture-agents";
+import type { HidedControl } from "./hided-control.mjs";
 import { startHided } from "./hided-fixture";
 import { chooseTheme, countSent, enterWorkspace, rest, screenshot, sendEvent } from "./wire";
 
@@ -24,6 +26,14 @@ async function renameTab(page: Page, tab: string, name: string) {
 /** The checkout's folder, in the spelling the core gives its panes. */
 const folderOf = (engine: AgentFixture) => toPage(fs.realpathSync(path.join(engine.root, "fixture")));
 
+/** The core's task slot, its last refusal and its newest diagnostics, as a start leaves them. */
+function coreStart(control: HidedControl) {
+  return control.until((snapshot) => {
+    const status = snapshot.status as { last_error?: unknown; diagnostics?: { kind: string; message: string }[] } | undefined;
+    return { task: snapshot.task_operation ?? null, refused: status?.last_error ?? null, diagnostics: (status?.diagnostics ?? []).slice(-12).map((entry) => `${entry.kind}: ${entry.message}`) };
+  }, "the core's start state", 3_000);
+}
+
 /**
  * Starts a Claude agent as the start panel does: in a tab of its own, or,
  * given `beside`, in a new pane beside the agents of that tab. Returns where
@@ -34,7 +44,9 @@ async function startAgent(engine: AgentFixture, daemon: Awaited<ReturnType<typeo
   const started = await withControl(daemon, async (control) => {
     const area = beside ? await control.until((rest) => areaShowing(rest, beside), `the area showing ${beside}`) : undefined;
     const what = beside ? `a new agent beside ${beside}` : "a new agent in a tab of its own";
-    const pane = await startAgentInCheckout(control, folder, beside ? { target: { ...area, tab_id: beside, add_pane: true } } : {}, what);
+    // The test's own timeout is 30 s, so the start gives up before it and a
+    // failed one says what the core held (with-hide/hide-private#518).
+    const pane = await dumpOnFailure(`start of ${what}`, () => coreStart(control), () => startAgentInCheckout(control, folder, beside ? { target: { ...area, tab_id: beside, add_pane: true } } : {}, what, 15_000));
     return control.until((rest) => {
       const tab = tabOfPane(rest, pane);
       return tab && agentIn(rest, pane) ? { tab, pane } : undefined;

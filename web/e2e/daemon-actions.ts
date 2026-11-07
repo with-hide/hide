@@ -190,9 +190,10 @@ type TaskOperation = { kind: string; phase: string; pane_id: string | null; agen
  * the agent has started: the core holds one task slot and refuses another
  * start, as `task_operation.busy`, while this one's agent is still starting,
  * and the agent's row is published before that.
- * A refused or failed start throws with the core's answer.
+ * A refused or failed start throws with the core's answer; `waitMs` bounds the
+ * wait for it, for a spec whose own timeout is shorter than the default.
  */
-export async function startAgentInCheckout(control: HidedControl, folder: string, fields: Record<string, unknown>, what: string): Promise<string> {
+export async function startAgentInCheckout(control: HidedControl, folder: string, fields: Record<string, unknown>, what: string, waitMs = 30_000): Promise<string> {
   const requestId = `e2e-${crypto.randomUUID()}`;
   control.send("agent_start_in_checkout", { checkout_path: folder, provider: "claude", request_id: requestId, ...fields });
   const answer = await control.until((rest) => {
@@ -201,7 +202,7 @@ export async function startAgentInCheckout(control: HidedControl, folder: string
     const operation = rest.task_operation as TaskOperation | null | undefined;
     if (operation?.request_id !== requestId || operation.kind !== "agent_start") return undefined;
     return operation.phase === "working" || operation.agent_phase === "starting" ? undefined : { operation };
-  }, `the core's answer to the start of ${what}`, 30_000);
+  }, `the core's answer to the start of ${what}`, waitMs);
   const operation = "operation" in answer ? answer.operation : undefined;
   if (operation?.phase !== "ready" || operation.agent_phase !== "started" || !operation.pane_id) throw new Error(`the core did not start ${what}: ${JSON.stringify(answer)}`);
   return operation.pane_id;
