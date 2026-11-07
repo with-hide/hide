@@ -265,10 +265,8 @@ fn child(runtime: &Runtime) -> &SidebarAgentSnapshot {
 
 /// The operator looks at the parent and moves on.
 fn read_parent(runtime: &mut Runtime) {
-    runtime.operator_focused_pane_id = Some("w1:p1".to_owned());
-    runtime.refresh_pane_read_state();
-    runtime.operator_focused_pane_id = None;
-    runtime.refresh_pane_read_state();
+    runtime.set_operator_focus(Some("w1:p1".to_owned()));
+    runtime.set_operator_focus(None);
 }
 
 /// The child's hook said its turn was running when the link went down, and
