@@ -57,40 +57,6 @@ impl Default for OverviewGraphSnapshot {
 }
 
 impl OverviewGraphSnapshot {
-    /// Delivery intake/watch transitions do not change the graph's immutable letter facts.
-    /// Compare borrowed inputs and the retained count before sorting or cloning the bounded page.
-    pub(crate) fn matches_ledger(
-        &self,
-        previous: &crate::delivery::ledger::Ledger,
-        next: &crate::delivery::ledger::Ledger,
-        now: u64,
-    ) -> bool {
-        self.available
-            && previous.letters.len() == next.letters.len()
-            && next
-                .letters
-                .iter()
-                .filter(|letter| letter.retained(now))
-                .count()
-                == self.retained_count
-            && previous
-                .letters
-                .iter()
-                .zip(&next.letters)
-                .all(|(before, after)| {
-                    let same_party = |a: &crate::delivery::Actor, b: &crate::delivery::Actor| {
-                        a.device_id == b.device_id
-                            && a.pane_id == b.pane_id
-                            && a.session == b.session
-                    };
-                    before.id == after.id
-                        && before.kind == after.kind
-                        && before.created_at_unix_ms == after.created_at_unix_ms
-                        && same_party(&before.sender, &after.sender)
-                        && same_party(&before.recipient, &after.recipient)
-                })
-    }
-
     /// Called on an accepted delivery revision, never on a terminal key or snapshot read.
     /// The ledger itself is capped at 5,000; only the newest retained 2,000 are copied.
     pub(crate) fn from_ledger(ledger: &crate::delivery::ledger::Ledger, now: u64) -> Self {
@@ -197,21 +163,5 @@ mod tests {
         assert_eq!(graph.letters.len(), 1);
         assert_eq!(graph.letters[0].id, "letter-2");
         assert!(ledger.letters[1].open());
-    }
-
-    #[test]
-    fn intake_transitions_reuse_metadata_but_expiration_and_session_changes_invalidate_it() {
-        let before = Ledger {
-            letters: vec![letter(1, 1)],
-            ..Ledger::default()
-        };
-        let graph = OverviewGraphSnapshot::from_ledger(&before, 2);
-        let mut after = before.clone();
-        after.letters[0].hook_confirmed = Some(true);
-        after.letters[0].bell_sent = true;
-        assert!(graph.matches_ledger(&before, &after, 3));
-        assert!(!graph.matches_ledger(&before, &after, crate::delivery::RETENTION_MS + 1));
-        after.letters[0].recipient.session = Some("replacement-session".into());
-        assert!(!graph.matches_ledger(&before, &after, 3));
     }
 }

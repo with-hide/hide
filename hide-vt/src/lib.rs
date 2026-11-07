@@ -535,7 +535,9 @@ impl CellWide {
 
 type WritePtyCallback = dyn FnMut(&[u8]) + Send;
 
-const MAX_CLIPBOARD_BYTES: usize = 192 * 1024;
+/// The most bytes one clipboard write (OSC 52) is taken with; a longer one
+/// is refused.
+pub const MAX_CLIPBOARD_BYTES: usize = 192 * 1024;
 
 #[derive(Default)]
 struct TerminalCallbackState {

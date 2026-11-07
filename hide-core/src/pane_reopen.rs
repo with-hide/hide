@@ -300,6 +300,8 @@ mod tests {
                     reply(())
                 }
                 "start_agent" => started(),
+                // The pane runs this build's holder.
+                "replace_outdated_holder" => reply(false),
                 other => panic!("unexpected {other}"),
             });
             let reaper = thread::spawn(move || {
@@ -376,6 +378,8 @@ mod tests {
             "delivery_agent" => reply(crate::engine::fake::delivery_agent(&json!({
                 "pane_id": "w1:p9", "name": "held", "agent": "claude"
             }))),
+            // The pane runs this build's holder.
+            "replace_outdated_holder" => reply(false),
             other => panic!("unexpected {other}"),
         });
         let reaper = thread::spawn(move || {
@@ -440,6 +444,8 @@ mod tests {
                 refused("agent_name_taken", "agent name reviewer is already used")
             }
             "start_agent" => started(),
+            // The pane runs this build's holder.
+            "replace_outdated_holder" => reply(false),
             other => panic!("unexpected {other}"),
         });
         let reaper = thread::spawn(move || {

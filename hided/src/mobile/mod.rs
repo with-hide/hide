@@ -13,6 +13,7 @@
 //! change; what it asks is one of the `mobile_*` events.
 
 pub mod conversation;
+pub mod html_look;
 pub mod looks;
 pub mod page_shot;
 pub mod pane;
@@ -114,6 +115,33 @@ struct Inner {
     /// An exposed Mobile's last pass could not read Tailscale; one such miss
     /// keeps the exposure, the next one in a row drops it.
     missed_check: bool,
+    /// Whether a pass is owed for a change no pass has read yet.
+    reconcile_owed: PassOwed,
+}
+
+/// A change of hide's own settings, or the start, that no pass has read yet.
+/// A pass takes it when it reads the settings, so two changes that arrive
+/// before a pass starts cost one pass, and a pass never repeats what an
+/// earlier one already read.
+#[derive(Clone, Copy, Debug)]
+struct PassOwed(bool);
+
+impl PassOwed {
+    fn owe(&mut self) {
+        self.0 = true;
+    }
+
+    /// Whether a pass that reads the settings now should run, and the debt it
+    /// settles by running. A forced pass (the observation clock, Settings
+    /// opening) runs whatever is owed, because it asks Tailscale again rather
+    /// than act on a change of ours.
+    fn take(&mut self, forced: bool) -> bool {
+        let run = forced || self.0;
+        if run {
+            self.0 = false;
+        }
+        run
+    }
 }
 
 impl Inner {
@@ -198,7 +226,9 @@ pub struct Mobile {
     config: Config,
     inner: Mutex<Inner>,
     /// One reconcile at a time, so a double toggle or two startup passes
-    /// converge on one serve entry.
+    /// converge on one serve entry (`Inner::reconcile_owed` keeps the second
+    /// from running at all when the first has read the settings it was asked
+    /// about).
     reconcile_lock: tokio::sync::Mutex<()>,
     origin: RwLock<Option<String>>,
     frame: watch::Sender<Arc<Value>>,
@@ -295,6 +325,7 @@ impl Mobile {
                 pending_clear: HashMap::new(),
                 inputs: HashMap::new(),
                 missed_check: false,
+                reconcile_owed: PassOwed(true),
             }),
             config,
             reconcile_lock: tokio::sync::Mutex::new(()),
@@ -338,7 +369,7 @@ impl Mobile {
             }
             tokio::spawn(Arc::clone(&startup).observe_loop());
             tokio::spawn(Arc::clone(&startup).follow());
-            startup.reconcile().await;
+            startup.reconcile_if_owed().await;
         });
         tokio::spawn(Arc::clone(&mobile).sweep_loop());
         mobile
@@ -638,6 +669,22 @@ impl Mobile {
     /// on, the Mac's three checks pass and port 443 holds hide's own entry
     /// for this port; off, hide's recorded entry is gone. Runs one at a time.
     pub async fn reconcile(&self) {
+        self.pass(true).await;
+    }
+
+    /// A change of this daemon's own settings asks for a pass: it runs one
+    /// unless a pass that read those settings already ran.
+    fn owe_pass(self: &Arc<Self>) {
+        self.lock().reconcile_owed.owe();
+        let mobile = Arc::clone(self);
+        tokio::spawn(async move { mobile.reconcile_if_owed().await });
+    }
+
+    async fn reconcile_if_owed(&self) {
+        self.pass(false).await;
+    }
+
+    async fn pass(&self, forced: bool) {
         let _running = self.reconcile_lock.lock().await;
         // Once the daemon is stopping, shutdown owns the serve entry; a
         // pending core touches none.
@@ -645,7 +692,10 @@ impl Mobile {
             return;
         }
         let (enabled, method, record) = {
-            let inner = self.lock();
+            let mut inner = self.lock();
+            if !inner.reconcile_owed.take(forced) {
+                return;
+            }
             (
                 inner.settings.enabled,
                 inner.settings.method(),
@@ -1291,8 +1341,7 @@ impl Mobile {
                     "component": "mobile_transport", "kind": "mobile.switched", "enabled": enabled,
                 }));
                 self.publish();
-                let mobile = Arc::clone(self);
-                tokio::spawn(async move { mobile.reconcile().await });
+                self.owe_pass();
             }
             "mobile_method" => {
                 let method = match payload.get("method").and_then(Value::as_str) {
@@ -1333,8 +1382,7 @@ impl Mobile {
                 self.close_phones("method_changed");
                 self.relay_changed();
                 self.publish();
-                let mobile = Arc::clone(self);
-                tokio::spawn(async move { mobile.reconcile().await });
+                self.owe_pass();
             }
             "mobile_retry" => {
                 if self.lock().relay_state != relay::State::Connected {
@@ -2219,6 +2267,21 @@ mod tests {
     use super::*;
     use crate::desktop_notices::DesktopNotices;
     use hide_core::agent_state::phone::project;
+
+    /// Two changes that arrive before a pass starts are one pass, a pass that
+    /// already read them leaves nothing for the next, and a forced pass runs
+    /// whatever is owed. A start owes the first pass.
+    #[test]
+    fn changes_before_a_pass_cost_one_pass_and_a_forced_pass_always_runs() {
+        let mut owed = PassOwed(true);
+        owed.owe();
+        assert!(owed.take(false), "the first pass runs");
+        assert!(!owed.take(false), "the second read nothing new");
+        assert!(owed.take(true), "a forced pass asks Tailscale again");
+        assert!(!owed.take(false), "a forced pass settles the debt it read");
+        owed.owe();
+        assert!(owed.take(false), "a change after a pass owes another");
+    }
 
     fn projected(group: &str, demand: &str) -> Projection {
         project(

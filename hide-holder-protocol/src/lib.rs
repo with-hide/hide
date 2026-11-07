@@ -23,7 +23,9 @@
 //! In version 1 a node sends input, a size, a theme, a redraw, a release and
 //! a terminate, and the holder sends the screen as [`Fragment`]s, what it
 //! refused while the pane runs on as [`Notice`]s to a node that accepts
-//! [`Capability::Notices`], and why it closed. Releasing lets go of the connection and leaves the pane running;
+//! [`Capability::Notices`], what the program put on the clipboard as
+//! [`HolderMessage::Clipboard`] to a node that accepts
+//! [`Capability::Clipboard`], and why it closed. Releasing lets go of the connection and leaves the pane running;
 //! terminating ends the pane's program and everything it started, then the
 //! holder.
 //!
@@ -141,6 +143,10 @@ pub const MAX_DETAIL: usize = 4 * 1024;
 /// The most pids a [`Closed`] names.
 pub const MAX_LEFT: usize = 256;
 
+/// The most bytes one [`HolderMessage::Clipboard`] carries: the most the
+/// terminal parser takes from one OSC 52 write.
+pub const MAX_CLIPBOARD: usize = 192 * 1024;
+
 /// The most bytes of a [`Facts`]'s folder.
 pub const MAX_CWD: usize = 4 * 1024;
 /// The most characters of a [`Facts`]'s title, Herdr's bound on a title it
@@ -194,6 +200,7 @@ mod kind {
     pub const ANSWER: u8 = 0x91;
     pub const NOTICE: u8 = 0x92;
     pub const FACTS: u8 = 0x93;
+    pub const CLIPBOARD: u8 = 0x94;
 }
 
 /// Something one side can do that the other must accept before it is used.
@@ -225,6 +232,10 @@ pub enum Capability {
     /// The holder reads [`ClientMessage::Submit`]; a node sends it only to a
     /// holder whose welcome names this.
     Submit,
+    /// The holder sends what the program wrote to the clipboard (OSC 52) as
+    /// [`HolderMessage::Clipboard`]. A node that does not accept it, as one
+    /// built before it does not, is sent none, and the write is dropped.
+    Clipboard,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -241,6 +252,7 @@ impl Capability {
             Self::LineEditing => "line_editing",
             Self::ForegroundUnread => "foreground_unread",
             Self::Submit => "submit",
+            Self::Clipboard => "clipboard",
             Self::Other(name) => name,
         }
     }
@@ -255,6 +267,7 @@ impl Capability {
             "line_editing" => Self::LineEditing,
             "foreground_unread" => Self::ForegroundUnread,
             "submit" => Self::Submit,
+            "clipboard" => Self::Clipboard,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -1133,6 +1146,11 @@ pub enum HolderMessage {
     Fragment(Fragment),
     Answer(Answer),
     Notice(Notice),
+    /// The text the program last wrote to the clipboard, at most
+    /// [`MAX_CLIPBOARD`] bytes, sent once to the connection that holds the
+    /// pane and never again: it is no part of the screen, so a redraw or a
+    /// takeover does not repeat it.
+    Clipboard(Vec<u8>),
     Watching(Watching),
     Facts(Facts),
     Closed(Closed),
@@ -1772,6 +1790,12 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
             put_text(&mut payload, &detail);
             write_frame(writer, kind::NOTICE, &payload)
         }
+        HolderMessage::Clipboard(text) => {
+            if text.len() > MAX_CLIPBOARD {
+                return Err(too_long("clipboard", text.len(), MAX_CLIPBOARD));
+            }
+            write_frame(writer, kind::CLIPBOARD, text)
+        }
         HolderMessage::Watching(watching) => {
             let mut payload = watching.version.to_le_bytes().to_vec();
             payload.extend_from_slice(&watching.rules_engine.to_le_bytes());
@@ -1924,6 +1948,9 @@ fn read_holder_agreed(
                 detail,
             })
         }
+        kind::CLIPBOARD => {
+            HolderMessage::Clipboard(payload.rest_bounded("clipboard", MAX_CLIPBOARD)?)
+        }
         kind::WATCHING => {
             let version = payload.u16()?;
             let rules_engine = payload.u32()?;
@@ -2074,6 +2101,7 @@ pub fn open(
         HolderMessage::Fragment(_)
         | HolderMessage::Answer(_)
         | HolderMessage::Notice(_)
+        | HolderMessage::Clipboard(_)
         | HolderMessage::Watching(_)
         | HolderMessage::Facts(_) => Err(OpenError::Protocol(FrameError::Malformed(
             "a screen, an answer, a notice or facts before the welcome".to_owned(),
@@ -2103,6 +2131,7 @@ pub fn ask(
         HolderMessage::Welcome(_)
         | HolderMessage::Fragment(_)
         | HolderMessage::Notice(_)
+        | HolderMessage::Clipboard(_)
         | HolderMessage::Watching(_)
         | HolderMessage::Facts(_) => Err(OpenError::Protocol(FrameError::Malformed(
             "an ask answered with a screen, a notice or facts".to_owned(),
@@ -2137,6 +2166,7 @@ pub fn watch(
         | HolderMessage::Fragment(_)
         | HolderMessage::Answer(_)
         | HolderMessage::Notice(_)
+        | HolderMessage::Clipboard(_)
         | HolderMessage::Facts(_) => Err(OpenError::Protocol(FrameError::Malformed(
             "a watch answered with something other than watching".to_owned(),
         ))),
@@ -2625,6 +2655,8 @@ mod tests {
             HolderMessage::Notice(Notice::new(NoticeReason::AnswersResumed, 12, 96, "")),
             // A newer holder's reason reads as itself, not as a broken frame.
             HolderMessage::Notice(Notice::new(NoticeReason::Other(77), 0, 0, "later")),
+            HolderMessage::Clipboard(b"copied \x00 text".to_vec()),
+            HolderMessage::Clipboard(vec![b'x'; MAX_CLIPBOARD]),
             HolderMessage::Watching(Watching {
                 version: 1,
                 rules_engine: 3,
@@ -2830,6 +2862,14 @@ mod tests {
             truncated: false,
         });
         assert!(write_holder(&mut Vec::new(), &text).is_err());
+        let copied = HolderMessage::Clipboard(vec![b'x'; MAX_CLIPBOARD + 1]);
+        assert!(write_holder(&mut Vec::new(), &copied).is_err());
+        let mut forged = Vec::new();
+        write_frame(&mut forged, kind::CLIPBOARD, &vec![b'x'; MAX_CLIPBOARD + 1]).unwrap();
+        assert!(matches!(
+            read_holder(&mut &forged[..]),
+            Err(FrameError::Malformed(_))
+        ));
     }
 
     #[test]

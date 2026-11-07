@@ -409,6 +409,7 @@ fn built_node(
     impl OutputSink for Nowhere {
         fn output(&self, _: &str, _: &[u8], _: bool) {}
         fn forget(&self, _: &str) {}
+        fn clipboard(&self, _: &str, _: &[u8]) {}
     }
     impl ReportSink for Nowhere {
         fn report(&self, _: hide_node_link::terminal::TerminalReport) {}

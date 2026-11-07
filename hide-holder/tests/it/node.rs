@@ -73,6 +73,8 @@ type Frame = (Vec<u8>, bool);
 #[derive(Default)]
 struct Screens {
     frames: Mutex<BTreeMap<String, Vec<Frame>>>,
+    /// What the panes' programs wrote to the clipboard, by pane, in order.
+    copied: Mutex<Vec<(String, Vec<u8>)>>,
     changed: Condvar,
 }
 
@@ -86,6 +88,14 @@ impl OutputSink for Screens {
     }
 
     fn forget(&self, _pane: &str) {}
+
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.copied
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((pane.to_owned(), text.to_vec()));
+        self.changed.notify_all();
+    }
 }
 
 impl Screens {
@@ -1603,6 +1613,7 @@ fn a_node_logs_the_answers_its_holder_refused_with_the_pane_and_keeps_the_sessio
             .expect("the burst's end was never drawn")
         {
             SessionEvent::Frame { bytes, .. } => text.extend_from_slice(&bytes),
+            SessionEvent::Clipboard { .. } => {}
             SessionEvent::Ended { category, message } => {
                 panic!("the session ended ({category}): {message}")
             }

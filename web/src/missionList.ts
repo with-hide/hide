@@ -6,8 +6,8 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { attentionReasonText, liveNodes, missionCounts, missionOpen, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
-import type { DetailSlot, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
+import { attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
+import type { DetailSlot, Mission, MissionAttention, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
 export const MISSION_GROUPS = ["turn", "running", "merge_wait", "closed"] as const;
@@ -75,6 +75,7 @@ export function missionPillKey(mission: Pick<Mission, "status">, turn: Pick<Turn
 const TURN_PILL: Record<TurnItem["kind"], MessageKey> = {
   decision: "missionTool.pill.decision",
   takeover: "missionTool.pill.takeover",
+  letters: "missionTool.pill.letters",
   attention: "mission.attention",
   worker_blocked: "missionTool.pill.blocked",
   landing: "missionTool.pill.merge",
@@ -98,6 +99,7 @@ export const STATE_PILL: Record<MissionStatus, MessageKey> = {
 export type RowLine<N extends MissionNodeBrief = MissionNodeBrief> =
   | { kind: "decision"; text: string }
   | { kind: "takeover"; left: number }
+  | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
   | { kind: "attention"; node: N; attention: MissionAttention }
   | { kind: "landing"; nodes: N[]; join: boolean }
@@ -113,6 +115,8 @@ export function rowLine<M extends MissionBrief>(mission: M, turn: TurnItem<M["no
         const { done, total } = missionCounts(mission);
         return { kind: "takeover", left: total - done };
       }
+      case "letters":
+        return { kind: "letters", letters: turn.letters };
       case "worker_blocked":
         return { kind: "worker_blocked", node: turn.node, cause: turn.cause, line: turn.line };
       case "attention":
@@ -139,6 +143,8 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
     case "takeover":
       return line.left > 0 ? t("missionTool.takeoverLeft", { count: line.left }) : t("missionTool.takeoverReport");
+    case "letters":
+      return heldLettersText(line.letters, t);
     case "worker_blocked":
       return `${line.node.title} · ${line.line ?? t(`mission.turn.cause.${line.cause}`)}`;
     case "attention":

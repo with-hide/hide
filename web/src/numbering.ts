@@ -82,7 +82,7 @@ function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[
   for (const row of projects) if (row.kind === "raised") for (const item of [...row.agents, ...(row.expanded ? row.more : [])]) append(item.agent);
   const collapsed = rest?.ui_state?.session_collapsed_checkout_ids ?? [];
   const checkout = (workspace: import("./snapshot").Workspace, value: Checkout) => {
-    const grouped = sidebarTabGroups(value, workspace.device_id, checkoutAgentRows(workspace, agents, "sidebar").get(value.id) ?? [], agents);
+    const grouped = sidebarTabGroups(value, workspace.device_id, checkoutAgentRows(workspace, everyPaneAgent(state.agents, rest?.status?.remote), "sidebar").get(value.id) ?? [], agents);
     const ordered = value.agent_groups && !collapsed.includes(value.id) ? sidebarNamedGroups(value, grouped).filter(({ group }) => !groupClosed.has(groupFoldKey(workspace.device_id, value.id, group.id))).flatMap(({ segments }) => segments) : grouped;
     for (const row of ordered.flatMap((group) => group.rows)) {
       // Digits number the roots; an opened root's children and grandchildren take none.

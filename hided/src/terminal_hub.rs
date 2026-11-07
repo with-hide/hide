@@ -34,6 +34,14 @@
 //! A chunk past [`MAX_CHUNK_BYTES`] is not drawn at all: its pane waits for
 //! a full frame that fits, asked for when the long chunk was not full
 //! itself, so a pane whose every frame is that long cannot loop.
+//!
+//! What a pane's program writes to the clipboard (OSC 52) is no chunk: it
+//! is handed to the clients connected now as a `clipboard` frame of its own,
+//! once, and kept in no ring, so a client that connects, resumes or is
+//! drawn again later never writes an older copy. A client keeps the latest
+//! write of each pane it has not been sent (`WaitingCopies`): the window
+//! takes only a pane it shows, so a hidden pane's copy must not push out the
+//! shown one's.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -41,6 +49,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use hide_node::terminal::OutputSink;
+use hide_node::terminal::copies::{MAX_WAITING_COPIES, WaitingCopies};
 use hide_node_link::terminal::{MAX_UNSENT_OUTPUT_BYTES, RETAINED_BYTES, RETAINED_CHUNKS};
 use serde_json::json;
 
@@ -168,6 +177,8 @@ struct Client {
     /// The client's cursor is to be told even with no chunk to carry it: it
     /// started from a whole snapshot and has none it can resume from.
     announce: bool,
+    /// The `clipboard` frames not sent to this client, the latest of each pane.
+    clipboard: WaitingCopies<Arc<str>>,
     wake: Arc<tokio::sync::Notify>,
 }
 
@@ -237,6 +248,7 @@ impl TerminalHub {
             redraw: HashMap::new(),
             examined: state.sequence,
             announce: resume == Resume::Fresh,
+            clipboard: WaitingCopies::default(),
             wake: Arc::clone(&wake),
         };
         match resume {
@@ -517,6 +529,41 @@ impl OutputSink for TerminalHub {
         drop(state);
         drop((ring, freed));
     }
+
+    /// Hands the write to every client connected now, in place of the
+    /// pane's write it has not been sent; a client that connects later
+    /// never gets it.
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        let frame: Arc<str> = clipboard_frame(pane, text).into();
+        let mut state = lock(&self.state);
+        let mut dropped = Vec::new();
+        for client in state.clients.values_mut() {
+            dropped.extend(client.clipboard.push(pane, Arc::clone(&frame)));
+            client.wake.notify_one();
+        }
+        drop(state);
+        for pane in dropped {
+            hide_core::diagnostic!(json!({
+                "component": "terminal_hub",
+                "kind": "terminal.clipboard_dropped",
+                "pane_id": pane,
+                "cap": MAX_WAITING_COPIES,
+            }));
+        }
+    }
+}
+
+/// The `clipboard` frame a client writes to its clipboard once: the pane and
+/// the text in base64, written out directly as a chunk is.
+fn clipboard_frame(pane: &str, text: &[u8]) -> String {
+    let pane = serde_json::to_string(pane).expect("a string serializes");
+    let mut frame = String::with_capacity(pane.len() + text.len().div_ceil(3) * 4 + 64);
+    frame.push_str(r#"{"type":"clipboard","payload":{"pane_id":"#);
+    frame.push_str(&pane);
+    frame.push_str(r#","text_base64":""#);
+    base64::engine::general_purpose::STANDARD.encode_string(text, &mut frame);
+    frame.push_str(r#""}}"#);
+    frame
 }
 
 impl HubClient {
@@ -567,6 +614,16 @@ impl HubClient {
             client.announce = true;
             client.wake.notify_one();
         }
+    }
+
+    /// The `clipboard` frames this client was not sent yet, oldest first,
+    /// once.
+    pub fn take_clipboard(&self) -> Vec<Arc<str>> {
+        let mut state = lock(&self.hub.state);
+        let Some(client) = state.clients.get_mut(&self.id) else {
+            return Vec::new();
+        };
+        std::iter::from_fn(|| client.clipboard.pop().map(|(_, frame)| frame)).collect()
     }
 
     /// The next frame to send and the panes whose node should draw them
@@ -682,6 +739,69 @@ mod tests {
             chunks,
             value["payload"]["terminal_sequence"].as_u64().unwrap(),
         )
+    }
+
+    fn copy_of(frame: &str) -> (String, Vec<u8>) {
+        let value: serde_json::Value = serde_json::from_str(frame).unwrap();
+        assert_eq!(value["type"], "clipboard");
+        (
+            value["payload"]["pane_id"].as_str().unwrap().to_owned(),
+            base64::engine::general_purpose::STANDARD
+                .decode(value["payload"]["text_base64"].as_str().unwrap())
+                .unwrap(),
+        )
+    }
+
+    /// with-hide/hide-private#659: a program's copy reaches each client
+    /// connected when it was written once, the latest of each pane in the
+    /// order written (a hidden pane's never pushes out the shown one's), and
+    /// none that connects, resumes or is drawn again from a snapshot later,
+    /// so an old copy is never written again.
+    #[test]
+    fn a_copy_reaches_the_clients_connected_now_once() {
+        let hub = TerminalHub::new();
+        let first = hub.connect(Resume::Fresh);
+        hub.output("w1:p1", b"screen", true);
+        hub.clipboard("w1:p1", b"older");
+        hub.clipboard("w1:p2", b"hidden");
+        hub.clipboard("w1:p1", b"latest");
+        let (frame, _) = first.take();
+        let (chunks, cursor) = frame_chunks(&frame.unwrap());
+        assert_eq!(chunks, [("w1:p1".to_owned(), b"screen".to_vec())]);
+        let copied = first.take_clipboard();
+        assert_eq!(
+            copied
+                .iter()
+                .map(|frame| copy_of(frame))
+                .collect::<Vec<_>>(),
+            [
+                ("w1:p2".to_owned(), b"hidden".to_vec()),
+                ("w1:p1".to_owned(), b"latest".to_vec())
+            ]
+        );
+        assert!(first.take_clipboard().is_empty());
+
+        // Drawn again from a whole snapshot, or connected again from its
+        // cursor or from nothing: no copy is handed again.
+        first.restart();
+        assert!(first.take_clipboard().is_empty());
+        drop(first);
+        let resumed = hub.connect(Resume::After {
+            epoch: hub.epoch.to_string(),
+            cursor,
+        });
+        let fresh = hub.connect(Resume::Fresh);
+        let redrawn = hub.connect(Resume::Redraw);
+        for client in [&resumed, &fresh, &redrawn] {
+            let _ = client.take();
+            assert!(client.take_clipboard().is_empty());
+        }
+        hub.clipboard("w1:p1", b"next");
+        for client in [&resumed, &fresh, &redrawn] {
+            let copied = client.take_clipboard();
+            assert_eq!(copied.len(), 1);
+            assert_eq!(copy_of(&copied[0]), ("w1:p1".to_owned(), b"next".to_vec()));
+        }
     }
 
     #[test]
