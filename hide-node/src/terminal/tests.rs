@@ -2425,6 +2425,58 @@ fn the_writes_handed_before_are_written_once_they_are_settled() {
     );
 }
 
+/// with-hide/hide-private#646: a write that failed against a pane's holder
+/// leaves what reached it unknown, so the pane's writes stay unsettled
+/// through another pane's attach and its own attach again, until its holder
+/// changes.
+#[test]
+fn a_failed_write_keeps_the_panes_writes_unsettled_until_its_holder_changes() {
+    let harness = harness(RetryPolicy::Manual);
+    let first = harness.controlling("w1:p1");
+    // The holder's end stops taking what the writer sends.
+    drop(first.input);
+    harness.key("w1:p1", b"lost");
+    harness.state("w1:p1", "unavailable");
+    let _other = harness.controlling("w1:p2");
+    assert!(harness.service.writes_settled("w1:p1", WAIT).is_err());
+    // The operator's Reconnect.
+    harness.service.control(TerminalControl::Attach {
+        pane: "w1:p1".into(),
+        size: Some(SIZE),
+        manual: true,
+    });
+    let again = harness.opened();
+    harness.state("w1:p1", "controlling");
+    harness.key("w1:p1", b"next");
+    assert_eq!(input_bytes(&again, b"next".len()), b"next");
+    assert!(
+        harness.service.writes_settled("w1:p1", WAIT).is_err(),
+        "the attach again wrote to the same holder"
+    );
+    assert_eq!(harness.service.writes_settled("w1:p2", WAIT), Ok(()));
+    harness.service.holder_replaced("w1:p1");
+    assert_eq!(harness.service.writes_settled("w1:p1", WAIT), Ok(()));
+}
+
+/// A new holder's input starts afresh: a write that failed against the
+/// holder the pane had before does not count against the one that replaced
+/// it, and the pane's screen is attached again to the new one.
+#[test]
+fn an_earlier_holders_failed_write_does_not_count_against_the_next() {
+    let harness = harness(RetryPolicy::Manual);
+    let first = harness.controlling("w1:p1");
+    drop(first.input);
+    harness.key("w1:p1", b"lost");
+    harness.state("w1:p1", "unavailable");
+    assert!(harness.service.writes_settled("w1:p1", WAIT).is_err());
+    harness.service.holder_replaced("w1:p1");
+    let next = harness.opened();
+    harness.state("w1:p1", "controlling");
+    harness.key("w1:p1", b"next");
+    assert_eq!(input_bytes(&next, b"next".len()), b"next");
+    assert_eq!(harness.service.writes_settled("w1:p1", WAIT), Ok(()));
+}
+
 /// The core's own engine typing a command is not the operator typing: no
 /// key of it is reported, so the first report is the operator's own key.
 #[test]

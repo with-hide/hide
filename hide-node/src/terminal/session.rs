@@ -403,6 +403,11 @@ impl WriterLife {
         self.end() != WriterEnd::Running
     }
 
+    /// Whether its writer ended on a failed write.
+    pub(super) fn failed(&self) -> bool {
+        self.end() == WriterEnd::Failed
+    }
+
     /// Whether `self` and `other` are the same session's writer.
     pub(super) fn same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)

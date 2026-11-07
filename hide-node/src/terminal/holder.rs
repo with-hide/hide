@@ -858,8 +858,11 @@ impl Holders {
                 "pane {pane}'s holder was being changed past {RENEW_TURN_WAIT:?}"
             )),
         };
-        if matches!(renewal, Renewal::Renewed { .. }) {
-            self.attach_again(service, pane);
+        match &renewal {
+            // Its screen attaches again to the holder that runs it now.
+            Renewal::Renewed { .. } => service.holder_replaced(pane),
+            Renewal::Lost(_) => service.holder_gone(pane),
+            _ => {}
         }
         crate::diagnostic!(match &renewal {
             Renewal::Current => json!({
@@ -1117,18 +1120,6 @@ impl Holders {
         self.turns.taken(pane)
     }
 
-    /// Attaches the pane's screen again after a renewal's close: a manual
-    /// attach, since the close left the screen closing, which an ordinary
-    /// attach does not open again; the size the core named for the pane is
-    /// kept and sent to the holder.
-    fn attach_again(&self, service: &Service, pane: &str) {
-        service.control(TerminalControl::Attach {
-            pane: pane.to_owned(),
-            size: None,
-            manual: true,
-        });
-    }
-
     fn forget_screen(&self, service: &Service, pane: &str) {
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
@@ -1199,6 +1190,7 @@ impl Holders {
         });
         let closed = self.panes.close(owner, &holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
+            service.holder_gone(pane);
             self.forget_screen(service, pane);
         } else {
             service.control(TerminalControl::Closing {

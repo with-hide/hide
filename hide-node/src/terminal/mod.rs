@@ -256,6 +256,53 @@ struct Attachment {
     delivering: bool,
 }
 
+/// A pane's input to the holder that runs it now (with-hide/hide-private#646):
+/// the writers of its sessions that still write, and whether any write to
+/// this holder failed, which stays until the holder changes, since what
+/// reached the holder is then not known. A writer that ended having
+/// written everything leaves no trace, so it holds no more than the
+/// writers that run and one flag.
+#[derive(Default)]
+struct HolderInput {
+    running: Vec<session::WriterLife>,
+    failed: bool,
+}
+
+/// The most writers of one pane's sessions counted at once. A released or
+/// replaced session's writer ends within its release's bound
+/// (`Session::drop`), so more than this many still writing means attaches
+/// came faster than writers end; the pane's input is then counted as not
+/// known rather than counted further.
+const MAX_HOLDER_WRITERS: usize = 8;
+
+impl HolderInput {
+    /// Takes the ended writers out, keeping a failure.
+    fn fold(&mut self) {
+        self.running.retain(|life| {
+            self.failed |= life.failed();
+            !life.ended()
+        });
+    }
+
+    /// Counts `life`, a new session's writer, within [`MAX_HOLDER_WRITERS`].
+    fn count(&mut self, pane: &str, life: session::WriterLife) {
+        self.fold();
+        if self.running.len() >= MAX_HOLDER_WRITERS {
+            self.running.remove(0);
+            if !self.failed {
+                crate::diagnostic!(json!({
+                    "component": "terminal_session",
+                    "kind": "terminal.holder_writers_over_cap",
+                    "pane_id": pane,
+                    "cap": MAX_HOLDER_WRITERS,
+                }));
+            }
+            self.failed = true;
+        }
+        self.running.push(life);
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     panes: HashMap<String, Pane>,
@@ -276,12 +323,11 @@ struct Inner {
     deliveries: Vec<Delivery>,
     spawns: Vec<(SpawnRequest, ChildHold)>,
     retired: Vec<Session>,
-    /// Each pane's session writers that have not ended, the current one's
-    /// included: a released or replaced session's writer still writes what
-    /// was handed to it ([`Service::writes_settled`]). Ended ones are
-    /// dropped at each session's start, so it holds no more than the
-    /// writers that run and one ended one per pane.
-    writers: BTreeMap<String, Vec<session::WriterLife>>,
+    /// What each pane's input to the holder that runs it now has come to
+    /// ([`HolderInput`]), kept apart from the pane's sessions, so a release,
+    /// an attach of this pane or another, or a forget leaves it, and set
+    /// back only when the pane's holder changes ([`Service::holder_replaced`]).
+    holder_input: BTreeMap<String, HolderInput>,
     /// Something may now be due earlier than the clock's current wait.
     wake_clock: bool,
     refusals: Refusals,
@@ -381,31 +427,41 @@ impl Service {
     }
 
     /// Waits until everything handed to `pane`'s session writers before this
-    /// call has been written to its holder, up to `within`: the current
-    /// session's, and those of the sessions released or replaced before it,
-    /// whose writers write what they were handed until they end. A write
-    /// that failed, or one still waiting when `within` passes, is an error:
-    /// what reached the holder is then not known. Input held for the pane,
-    /// for its attach or behind a letter, is not waited for: a pane that is
-    /// asleep drops or refuses it when it is written.
+    /// call has been written to the holder that runs it now, up to `within`:
+    /// the current session's, and those of the sessions released or replaced
+    /// before it, whose writers write what they were handed until they end.
+    /// A write to this holder that ever failed, or one still waiting when
+    /// `within` passes, is an error: what reached the holder is then not
+    /// known. Input held for the pane, for its attach or behind a letter, is
+    /// not waited for: a pane that is asleep drops or refuses it when it is
+    /// written.
     pub(crate) fn writes_settled(&self, pane: &str, within: Duration) -> Result<(), String> {
         let deadline = Instant::now() + within;
+        let failed =
+            || format!("a write to pane {pane}'s holder failed, so what reached it is not known");
         let (done, settled) = std::sync::mpsc::channel();
         let (earlier, handed) = self.shared.run(|inner, _| {
-            let session = inner
+            let current = inner
                 .panes
                 .get(pane)
                 .and_then(|entry| entry.session.as_ref());
-            let current = session.map(Session::life);
-            let earlier: Vec<_> = inner
-                .writers
-                .get(pane)
-                .into_iter()
-                .flatten()
-                .filter(|life| !current.as_ref().is_some_and(|current| current.same(life)))
+            let input = inner.holder_input.entry(pane.to_owned()).or_default();
+            input.fold();
+            if input.failed {
+                return Err(failed());
+            }
+            let current_life = current.map(Session::life);
+            let earlier: Vec<_> = input
+                .running
+                .iter()
+                .filter(|life| {
+                    !current_life
+                        .as_ref()
+                        .is_some_and(|current| current.same(life))
+                })
                 .cloned()
                 .collect();
-            let Some(session) = session else {
+            let Some(session) = current else {
                 return Ok((earlier, false));
             };
             session
@@ -416,11 +472,16 @@ impl Service {
                 .map_err(|refused| refused.message(pane))
         })?;
         for life in earlier {
-            life.settled_by(deadline).map_err(|why| {
-                format!(
+            if let Err(why) = life.settled_by(deadline) {
+                self.shared.run(|inner, _| {
+                    if let Some(input) = inner.holder_input.get_mut(pane) {
+                        input.fold();
+                    }
+                });
+                return Err(format!(
                     "an earlier session's writes to pane {pane}'s holder {why}, within {within:?}"
-                )
-            })?;
+                ));
+            }
         }
         if !handed {
             return Ok(());
@@ -428,13 +489,43 @@ impl Service {
         let left = deadline.saturating_duration_since(Instant::now());
         match settled.recv_timeout(left) {
             Ok(true) => Ok(()),
-            Ok(false) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
-                "a write to pane {pane}'s holder failed or never reached it"
-            )),
+            Ok(false) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(failed()),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
                 "the writes to pane {pane}'s holder were not done within {within:?}"
             )),
         }
+    }
+
+    /// A new holder runs `pane` in place of the one that ran it: the pane's
+    /// input state starts afresh for it, and in the same step the pane is
+    /// attached again under a new generation, as an operator's Reconnect
+    /// is (a manual attach, since the renewal's close left the screen
+    /// closing, which an ordinary attach does not open again; the size the
+    /// core named for the pane is kept and sent to the holder). So a session
+    /// of the earlier holder, current or still opening, is
+    /// retired or never installed, its writer's late end lands in the state
+    /// it was counted in, which is gone, and no writer of the new holder is
+    /// counted before the state it belongs to exists.
+    pub(crate) fn holder_replaced(&self, pane: &str) {
+        self.shared.run(|inner, shared| {
+            inner.holder_input.remove(pane);
+            inner.control(
+                shared,
+                TerminalControl::Attach {
+                    pane: pane.to_owned(),
+                    size: None,
+                    manual: true,
+                },
+            );
+        });
+    }
+
+    /// The holder that ran `pane` is ended and none runs it: what was
+    /// written to it is no longer anyone's.
+    pub(crate) fn holder_gone(&self, pane: &str) {
+        self.shared.run(|inner, _| {
+            inner.holder_input.remove(pane);
+        });
     }
 
     fn route_input(&self, target: KeyTarget, chunk: HeldChunk) {
@@ -2455,14 +2546,13 @@ impl Inner {
             );
             return;
         }
-        self.writers.retain(|_, lives| {
-            lives.retain(|life| !life.ended());
-            !lives.is_empty()
-        });
-        self.writers
+        for input in self.holder_input.values_mut() {
+            input.fold();
+        }
+        self.holder_input
             .entry(pane.to_owned())
             .or_default()
-            .push(session.life());
+            .count(pane, session.life());
         let entry = self.panes.get_mut(pane).expect("checked above");
         entry.session = Some(session);
         let message = entry.lifecycle.message.clone();
