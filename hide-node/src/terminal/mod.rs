@@ -511,9 +511,10 @@ impl Service {
     /// it was counted in, which is gone, and no writer of the new holder is
     /// counted before the state it belongs to exists. A pane no screen holds
     /// is not attached: one attached only for the engine's input is released
-    /// now, its session and any opening one retired as a release retires
-    /// them, and a released one stays so, until the next input attaches it
-    /// to the new holder (`Inner::attach_for_input`).
+    /// now, its session and any opening one retired even while a caller's
+    /// input or a letter has yet to let go of it, and a released one stays
+    /// so, until the next input attaches it to the new holder
+    /// (`Inner::attach_for_input`).
     pub(crate) fn holder_replaced(&self, pane: &str) {
         self.shared.run(|inner, shared| {
             inner.holder_input.remove(pane);
@@ -523,7 +524,10 @@ impl Service {
                 entry.session.is_none() && matches!(entry.lifecycle.state, "released" | "idle")
             });
             if let Some(message) = for_input {
-                inner.release(pane, message);
+                // Retired even while a caller's input or a letter has yet to
+                // let go of the pane: nothing of the earlier holder outlives
+                // its replacement.
+                inner.retire_released(pane, message);
                 return;
             }
             if released {
@@ -2976,6 +2980,16 @@ impl Inner {
             }
             return;
         }
+        self.retire_released(pane, message);
+    }
+
+    /// Releases `pane` now, whatever input is still in flight: its session
+    /// and any opening one are retired (a late one reads the pane released
+    /// and is not installed), and it reads released until it attaches again.
+    fn retire_released(&mut self, pane: &str, message: String) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
         entry.release_after_input = None;
         entry.pending_spawn = None;
         // A released pane draws no frame until it attaches again.

@@ -2506,12 +2506,13 @@ fn an_earlier_holders_failed_write_does_not_count_against_the_next() {
     assert_eq!(harness.service.writes_settled("w1:p1", WAIT), Ok(()));
 }
 
-/// A pane no screen holds is not attached by its holder's renewal: a
+/// A pane no screen holds is not attached by its holder's renewal: the
 /// session opened only for the engine's input is retired with the earlier
-/// holder, nothing opens for the new one, and the next input attaches the
-/// pane for itself alone, reading released throughout.
-#[test]
-fn a_renewal_leaves_a_pane_no_screen_holds_released() {
+/// holder at once, even while a caller's input or a letter has yet to let
+/// go of the pane, nothing opens for the new holder, and the next input
+/// attaches the pane to it for that input alone, reading released
+/// throughout.
+fn a_renewal_retires_the_input_session_of_a_pane_no_screen_holds(letter: bool) {
     let harness = harness(RetryPolicy::Automatic);
     let _first = harness.controlling("w1:p1");
     harness.service.control(TerminalControl::Release {
@@ -2519,21 +2520,33 @@ fn a_renewal_leaves_a_pane_no_screen_holds_released() {
         message: "detached".into(),
     });
     harness.state("w1:p1", "released");
+    // An earlier caller whose input was written but who has not let go of
+    // the pane yet, or a letter being typed: the pane stays attached after
+    // the input below.
+    let lingering = harness.service.shared.run(|inner, _| {
+        let entry = inner.panes.get_mut("w1:p1").unwrap();
+        if letter {
+            entry.letter.get_or_insert_with(LetterHold::default).letters += 1;
+            None
+        } else {
+            let (receipt, _command) = command::Receipt::take(&inner.permits).unwrap();
+            entry.commands.push((receipt.clone(), Typist::Sleeper));
+            Some(receipt)
+        }
+    });
     harness
         .service
         .type_input("w1:p1", Typed::Bytes(b"sleep\r".to_vec()), Typist::Sleeper)
         .unwrap();
+    let earlier = harness.opened();
+    assert_eq!(input_bytes(&earlier, b"sleep\r".len()), b"sleep\r");
     let let_go = |opened: &Opened| loop {
         if let Err(error) = opened.input.recv_timeout(WAIT) {
             assert_eq!(error, std::sync::mpsc::RecvTimeoutError::Disconnected);
             break;
         }
     };
-    let earlier = harness.opened();
-    assert_eq!(input_bytes(&earlier, b"sleep\r".len()), b"sleep\r");
     harness.service.holder_replaced("w1:p1");
-    // The earlier holder's session is let go, by the renewal or by the end
-    // of its input, whichever came first.
     let_go(&earlier);
     harness
         .service
@@ -2541,6 +2554,15 @@ fn a_renewal_leaves_a_pane_no_screen_holds_released() {
         .unwrap();
     let next = harness.opened();
     assert_eq!(input_bytes(&next, b"resume\r".len()), b"resume\r");
+    // The earlier caller or letter lets go: the pane is released again.
+    harness.service.shared.run(|inner, _| {
+        let entry = inner.panes.get_mut("w1:p1").unwrap();
+        entry.letter = None;
+        entry
+            .commands
+            .retain(|(receipt, _)| Some(receipt) != lingering.as_ref());
+        inner.finish_input_release("w1:p1");
+    });
     let_go(&next);
     let told: Vec<_> = harness
         .reports
@@ -2552,6 +2574,16 @@ fn a_renewal_leaves_a_pane_no_screen_holds_released() {
         .collect();
     assert!(told.iter().all(|state| state == "released"), "{told:?}");
     assert!(harness.opened.try_recv().is_err(), "only the inputs opened");
+}
+
+#[test]
+fn a_renewal_retires_the_input_session_a_callers_input_still_holds() {
+    a_renewal_retires_the_input_session_of_a_pane_no_screen_holds(false);
+}
+
+#[test]
+fn a_renewal_retires_the_input_session_a_letter_still_holds() {
+    a_renewal_retires_the_input_session_of_a_pane_no_screen_holds(true);
 }
 
 /// The core's own engine typing a command is not the operator typing: no
