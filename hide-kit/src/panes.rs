@@ -1952,7 +1952,7 @@ mod tests {
 
     #[test]
     fn a_holder_that_wrote_itself_running_after_the_bound_is_taken_as_started() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::tests::short_tempdir();
         let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         let stand_in = StandIn::start();
         let holder = stand_in.identity();
@@ -1976,7 +1976,7 @@ mod tests {
     #[test]
     fn cancellation_from_another_boot_never_ends_a_current_process() {
         for close_directly in [false, true] {
-            let home = tempfile::tempdir().unwrap();
+            let home = crate::tests::short_tempdir();
             let mut panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
             panes.boot = Some("current-boot".to_owned());
             let owner = panes.acquire(Duration::ZERO).unwrap();
@@ -2017,7 +2017,7 @@ mod tests {
     /// and a process of this boot that reuses its pid is left alone.
     #[test]
     fn a_record_of_an_earlier_boot_is_settled_here_whatever_owner_it_names() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::tests::short_tempdir();
         let mut panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         panes.boot = Some("current-boot".to_owned());
         let owner = panes.acquire(Duration::ZERO).unwrap();
@@ -2048,7 +2048,7 @@ mod tests {
     /// a restart run a second shell beside them.
     #[test]
     fn an_ended_record_whose_pane_left_processes_running_is_neither_dropped_nor_forgotten() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::tests::short_tempdir();
         let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         let owner = panes.acquire(Duration::ZERO).unwrap();
         let stand_in = StandIn::start();
@@ -2097,7 +2097,7 @@ mod tests {
     #[test]
     fn cancellation_never_records_completion_before_the_live_holder_leaves() {
         for cleanup_refused in [false, true] {
-            let home = tempfile::tempdir().unwrap();
+            let home = crate::tests::short_tempdir();
             let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
             let owner = panes.acquire(Duration::ZERO).unwrap();
             let stand_in = StandIn::start();
@@ -2152,7 +2152,7 @@ mod tests {
 
     #[test]
     fn a_start_given_up_on_is_recorded_and_its_holder_ended() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::tests::short_tempdir();
         let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         let mut stand_in = StandIn::start();
         let holder = stand_in.identity();

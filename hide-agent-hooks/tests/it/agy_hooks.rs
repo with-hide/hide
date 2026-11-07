@@ -66,7 +66,12 @@ impl Machine {
     }
 
     fn with_hide(hide: &str) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // Short whatever `TMPDIR` is: the payload below carries paths from
+        // here and must fit PIPE_BUF, and the stand-in daemon's socket is below it.
+        let dir = tempfile::Builder::new()
+            .prefix("ah")
+            .tempdir_in("/tmp")
+            .unwrap();
         let root = dir.path().canonicalize().unwrap();
         let home = root.join("home");
         let bin = root.join("bin");
