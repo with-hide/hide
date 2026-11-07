@@ -347,6 +347,48 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             eprintln!("the conversion could not be logged: {error}");
         }
     }
+    // A device an earlier build registered under its SSH alias takes its
+    // machine's own id once, before the core reads the folder; a write that
+    // fails stops the start like the conversion above, and a device a check
+    // refuses stays under its old id, held unconnected, with why here.
+    let log = |record: serde_json::Value| {
+        if let Err(error) =
+            hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
+        {
+            eprintln!("the device naming could not be logged: {error}");
+        }
+    };
+    let named =
+        hide_core::node_migration::name_devices(&env.state_dir, &node).map_err(|refusal| {
+            log(serde_json::json!({
+                "component": "hided",
+                "kind": "node_migration.devices_refused",
+                "pid": std::process::id(),
+                "node": node.as_str(),
+                "file": refusal.file.display().to_string(),
+                "reason": &refusal.reason,
+            }));
+            refusal.to_string()
+        })?;
+    if !named.renamed.is_empty() || !named.named.is_empty() {
+        log(serde_json::json!({
+            "component": "hided",
+            "kind": "node_migration.devices_named",
+            "node": node.as_str(),
+            "renamed": named.renamed,
+            "named": named.named,
+            "files": named.files,
+            "links_unopened": named.links_unopened,
+        }));
+    }
+    if !named.held.is_empty() {
+        log(serde_json::json!({
+            "component": "hided",
+            "kind": "node_migration.devices_held",
+            "node": node.as_str(),
+            "held": named.held,
+        }));
+    }
     // A Herdr session asked to move is moved, and what is not moved yet is
     // recorded, before the engine opens (PRD engine-bundle-4-herdr-removal
     // D-3, D-25).
