@@ -2594,6 +2594,7 @@ impl Runtime {
                             crate::delivery::worker::Authority {
                                 caller: authority.caller.clone(),
                                 context: authority.context.clone(),
+                                also_reads: Vec::new(),
                             },
                             actor.clone(),
                             Some(wake.target.clone()),

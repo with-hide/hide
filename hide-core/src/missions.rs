@@ -1454,16 +1454,22 @@ impl MissionBook {
         self.missions.iter_mut().find(|mission| mission.id == id)
     }
 
-    /// Whether `checker` is bound to a line of a node that `worker` works:
-    /// the same node of the same mission, the one pair of agents in which
-    /// the worker may read the checker's letters (`hide request show`).
-    pub(crate) fn worker_reads_checker(&self, worker: &str, checker: &str) -> bool {
-        self.missions.iter().any(|mission| {
-            mission.nodes.iter().any(|node| {
-                node.agent_id.as_deref() == Some(worker)
-                    && node.checker_agents().any(|bound| bound == checker)
+    /// The checkers bound to the lines of the nodes that registration
+    /// `worker` works, each with the Conductor of its mission: the pairs
+    /// whose letters from the checker to that Conductor the worker may read
+    /// (`hide request show`).
+    pub(crate) fn checkers_read_by<'a>(
+        &'a self,
+        worker: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        self.missions
+            .iter()
+            .flat_map(|mission| mission.nodes.iter().map(move |node| (mission, node)))
+            .filter(move |(_, node)| node.agent_id.as_deref() == Some(worker))
+            .flat_map(|(mission, node)| {
+                node.checker_agents()
+                    .map(|checker| (checker, &mission.conductor.actor))
             })
-        })
     }
 
     /// The mission `actor` conducts and still runs, if any.

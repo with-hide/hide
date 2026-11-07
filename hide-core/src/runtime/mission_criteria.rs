@@ -655,11 +655,7 @@ impl Runtime {
     /// Whether registration `id` checks one of `node`'s lines, so it cannot
     /// become the node's worker (B4).
     pub(super) fn checks_node(node: &MissionNode, id: &str) -> bool {
-        node.criteria.iter().any(|line| {
-            line.checkers
-                .iter()
-                .any(|checker| checker.agent_id.as_deref() == Some(id))
-        })
+        node.checker_agents().any(|checker| checker == id)
     }
 }
 

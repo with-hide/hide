@@ -1,7 +1,7 @@
 //! Who may read a letter through `hide request show`: its sender and its
 //! recipient, and, beyond them, the worker of a mission node reading a letter
-//! one of that node's checkers wrote (docs/delivery.md, Who may read a
-//! letter). The reads run through the store, as a pane's command does.
+//! one of that node's checkers wrote to the Conductor (docs/delivery.md, Who
+//! may read a letter). The reads run through the store, as a pane's command does.
 
 use super::*;
 use crate::delivery::worker::Worker;
@@ -213,6 +213,15 @@ fn a_node_worker_reads_its_nodes_checker_letter_and_no_other_agent_does() {
             "{pane}"
         );
     }
+
+    // Only what the checker wrote to the Conductor: a letter it wrote to
+    // another agent stays between the two.
+    let aside = mission.write("reviewer", "neighbor", "request");
+    assert!(mission.show("neighbor", &aside).is_ok());
+    assert_eq!(
+        mission.show("worker", &aside).unwrap_err(),
+        "letter_unavailable"
+    );
 
     // The grant runs one way: the checker does not read the worker's letters.
     let progress = mission.write("worker", "conductor", "progress");

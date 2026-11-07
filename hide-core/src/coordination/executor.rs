@@ -237,6 +237,7 @@ fn mutate(
             authority: Authority {
                 caller: authority.caller.clone(),
                 context: authority.context.clone(),
+                also_reads: Vec::new(),
             },
             actor: actor.clone(),
             mutation: Box::new(mutation),
@@ -1085,6 +1086,7 @@ fn spawn(
                 authority: Authority {
                     caller: authority.caller.clone(),
                     context: authority.context.clone(),
+                    also_reads: Vec::new(),
                 },
                 actor: actor.clone(),
                 spawn: reserved.id.clone(),
