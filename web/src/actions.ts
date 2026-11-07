@@ -3380,11 +3380,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * Registers a folder on `deviceId`; a device's own helper judges it against that device's home.
      * `confirmed` carries the operator's answer to the question a folder outside home asks: it names
-     * that same path, and the boundary takes it for no other (PRD wsl-device B15).
+     * that same path, and the boundary takes it for no other (PRD wsl-device B15). `requestId` names
+     * the add so its refusal is read as its own (`last_error.request_id`, `path_refused.request_id`).
      */
-    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest()), confirmed = false) {
+    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest()), confirmed = false, requestId?: string) {
       const confirmation = confirmed ? { confirmed_outside_home: path } : {};
-      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation } });
+      const request = requestId ? { request_id: requestId } : {};
+      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation, ...request } });
     },
 
     /**

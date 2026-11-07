@@ -157,6 +157,11 @@ pub(super) struct CreateWorkspacePayload {
     /// device's helper judges its own with it (`Call::Registrable`).
     #[serde(default)]
     pub(super) confirmed_outside_home: Option<String>,
+    /// The id the sender reads this add's refusal by
+    /// (`LastErrorSnapshot::request_id`): Add a project's importable list
+    /// adds row after row and tells each row's answer from the others'.
+    #[serde(default)]
+    pub(super) request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2469,6 +2474,15 @@ impl Runtime {
             ),
             Event::CancelRepositoryClone(payload) => self.cancel_repository_clone(payload.id),
             Event::CreateWorkspace(payload) => {
+                if let Some(request_id) = payload.request_id.as_deref() {
+                    let device = payload
+                        .device_id
+                        .clone()
+                        .unwrap_or_else(|| self.node.as_str().to_owned());
+                    if !self.await_add(request_id, &device, &payload.path) {
+                        return true;
+                    }
+                }
                 if let Some(device) = payload
                     .device_id
                     .clone()

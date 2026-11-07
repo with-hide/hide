@@ -133,6 +133,42 @@ fn a_new_project_on_a_device_is_refused_for_a_taken_name_or_a_parent_outside_its
     assert!(device_paths(&runtime).is_empty());
 }
 
+/// B25: an add sent with a request id is refused by that id and no other,
+/// so Add a project's importable list reads each row's answer as its own;
+/// an add without one is refused as before, naming no request.
+#[test]
+fn a_refused_add_names_the_request_that_sent_it() {
+    let (_outer, home) = device_home();
+    std::fs::create_dir_all(home.join("projects/app")).unwrap();
+    let mut runtime = runtime();
+    with_device(&mut runtime, &home);
+    let gone = hide_platform::path::to_wire_lossy(&home.join("projects/gone"));
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": DEVICE, "path": gone, "label": "gone", "initialize_git": false, "request_id": "import:1"}),
+    );
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.request_id.as_deref(), Some("import:1"));
+
+    let app = hide_platform::path::to_wire_lossy(&home.join("projects/app"));
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": DEVICE, "path": app, "label": "app", "initialize_git": false, "request_id": "import:2"}),
+    );
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(device_paths(&runtime), [app]);
+
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": DEVICE, "path": gone, "label": "gone", "initialize_git": false}),
+    );
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.request_id, None);
+}
+
 /// D-04, B4: the folder list's last folder is kept per machine, this one's
 /// apart from each device's, a device's leaves with the device, and a
 /// machine the core does not know is refused.

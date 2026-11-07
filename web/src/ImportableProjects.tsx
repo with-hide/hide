@@ -3,11 +3,13 @@
 // Paseo and Herdr working in, each with a chip per source, added one at a
 // time or all at once while the dialog stays open.
 //
-// Every add is the `create_workspace` a picked folder sends. The core
-// answers a registration through the snapshot and a refusal through its one
-// `last_error` (or hided's `path_refused`), so the adds go one at a time:
-// each answer then belongs to the one row sent, a row that lands leaves the
-// list, and a row refused stays with its reason to be pressed again (B25).
+// Every add is the `create_workspace` a picked folder sends, named by a
+// request id of its own. A row lands when its root is registered on its
+// machine, and is refused only by the refusal that names its request id
+// (the core's `last_error` or hided's `path_refused`), so an add made at
+// the same time from another window or the CLI answers no row here. The
+// adds go one at a time, so a row refused stays with its reason to be
+// pressed again (B25).
 
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
@@ -16,16 +18,16 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Status } from "./components/settings-rows";
 import { coreErrorText } from "./coreError";
-import { useErrorSince } from "./errorSince";
 import { useInterfaceTranslation } from "./i18n/client";
+import { alreadyRegistered } from "./addProject";
 import { importRows, sourceIsApp, sourceName } from "./importProjects";
 import type { WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 
-/** One add on its way: the row's folder, when it was sent, and the ids of the machine's projects then. */
-type Sent = { path: string; at: number; known: ReadonlySet<string> };
+/** One add on its way: the row's folder and the request id it was sent with. */
+type Sent = { path: string; request: string };
 
-const ADD_ERRORS = ["workspace.create", "workspace.remove_in_flight", "workspace.control_unavailable"];
+let nextRequest = 0;
 
 export function ImportableProjects({
   actions,
@@ -68,14 +70,15 @@ export function ImportableProjects({
   }, [device, offline]);
 
   const rows = importRows(answer, after, device, registrations).filter((row) => !added.has(row.path));
-  const coreError = useErrorSince(sent?.at ?? null, ADD_ERRORS);
-  const landed = sent !== null && registrations.some((row) => row.device_id === device && !sent.known.has(row.id));
-  const refused = sent && pathRefusal?.kind === "create_workspace" && pathRefusal.path === sent.path ? pathRefusal.reason : null;
+  const lastError = useShellStore((s) => s.rest?.status?.last_error ?? null);
+  const coreError = sent && lastError?.request_id === sent.request ? lastError : null;
+  const landed = sent !== null && alreadyRegistered(sent.path, device, registrations);
+  const refused = sent && pathRefusal?.request_id === sent.request ? pathRefusal.reason : null;
 
   // The add on its way is answered: landed (its row leaves through the registrations), or refused with why.
   useEffect(() => {
     if (!sent) return;
-    if (landed || coreError?.kind === "workspace.create_registered") {
+    if (landed) {
       setAdded((previous) => new Set(previous).add(sent.path));
       setSent(null);
       return;
@@ -84,7 +87,7 @@ export function ImportableProjects({
     if (reason === null) return;
     setFailed((previous) => ({ ...previous, [sent.path]: reason }));
     setSent(null);
-  }, [landed, refused, coreError?.occurred_at]);
+  }, [landed, refused, coreError]);
 
   // The next row waiting is sent once the one before it is answered.
   useEffect(() => {
@@ -93,9 +96,10 @@ export function ImportableProjects({
     setQueue(rest);
     const project = rows.find((row) => row.path === path);
     if (!project) return;
-    useShellStore.getState().clearPathRefusal();
-    setSent({ path: project.path, at: Date.now(), known: new Set(registrations.filter((row) => row.device_id === device).map((row) => row.id)) });
-    actions.createWorkspace(project.path, project.name, device);
+    nextRequest += 1;
+    const request = `import:${Date.now().toString(36)}:${nextRequest}`;
+    setSent({ path: project.path, request });
+    actions.createWorkspace(project.path, project.name, device, false, request);
   }, [sent, queue]);
 
   if (rows.length === 0) return null;

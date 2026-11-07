@@ -6,6 +6,11 @@
 //! answer rather than the shared `last_error`, which the next event of any
 //! kind clears. A registration settles every receipt waiting on its device
 //! and path, the dialog's own included.
+//!
+//! A `create_workspace` that names a request id (Add a project's importable
+//! list, which adds one row after another) is kept here too, by its device
+//! and path, so its refusal is the `last_error` that names that id and no
+//! other add's (`LastErrorSnapshot::request_id`).
 
 use std::collections::VecDeque;
 
@@ -20,7 +25,19 @@ const MAX_OPENS: usize = 32;
 #[derive(Default)]
 pub(super) struct ProjectOpens {
     entries: VecDeque<ProjectOpen>,
+    /// The adds waiting on a registration's outcome by their request id, at
+    /// most [`MAX_OPENS`].
+    adds: VecDeque<RequestedAdd>,
 }
+
+struct RequestedAdd {
+    request_id: String,
+    device: String,
+    path: String,
+}
+
+/// The longest request id an add may carry.
+const REQUEST_ID_LIMIT: usize = 128;
 
 struct ProjectOpen {
     request_id: String,
@@ -140,6 +157,7 @@ impl Runtime {
                 initialize_git: false,
                 new_folder: false,
                 confirmed_outside_home: None,
+                request_id: None,
             }));
         }
         Ok(true)
@@ -154,9 +172,68 @@ impl Runtime {
             .map(|open| open.receipt.clone())
     }
 
+    /// Keeps the add `request_id` of `path` on `device` until its
+    /// registration settles; `false` when it is refused, with the refusal
+    /// named by that id: a malformed id, or [`MAX_OPENS`] adds already
+    /// waiting.
+    pub(super) fn await_add(&mut self, request_id: &str, device: &str, path: &str) -> bool {
+        if request_id.is_empty()
+            || request_id.len() > REQUEST_ID_LIMIT
+            || request_id.chars().any(char::is_control)
+        {
+            self.set_error(
+                "workspace.create_refused",
+                "The add named a request id that is empty, too long or holds a control character",
+                false,
+            );
+            return false;
+        }
+        if self.project_opens.adds.len() >= MAX_OPENS {
+            self.set_request_error(
+                "workspace.create_busy",
+                format!(
+                    "{MAX_OPENS} projects are already being added; add this one once they finish"
+                ),
+                true,
+                Some(request_id),
+            );
+            return false;
+        }
+        self.project_opens.adds.push_back(RequestedAdd {
+            request_id: request_id.to_owned(),
+            device: device.to_owned(),
+            path: path.to_owned(),
+        });
+        true
+    }
+
+    /// Answers the adds waiting on `device` and `path`: a refusal becomes
+    /// the `last_error` that names the add's request id, the error the
+    /// refusal just set when it is that kind.
+    fn answer_adds(&mut self, device: &str, path: &str, outcome: Result<(), &str>) {
+        let (answered, waiting) = std::mem::take(&mut self.project_opens.adds)
+            .into_iter()
+            .partition::<VecDeque<_>, _>(|add| add.device == device && add.path == path);
+        self.project_opens.adds = waiting;
+        let (Err(kind), Some(add)) = (outcome, answered.back()) else {
+            return;
+        };
+        match self.snapshot.status.last_error.as_mut() {
+            Some(error) if error.kind == kind => error.request_id = Some(add.request_id.clone()),
+            _ => self.set_request_error(
+                kind,
+                format!("{path} could not be added"),
+                false,
+                Some(&add.request_id),
+            ),
+        }
+    }
+
     /// Settles every request waiting on `device` and `path` with the
     /// registration's outcome, an error kind or the project registered, and
-    /// brings in front what `forward` says.
+    /// brings in front what `forward` says. Every outcome of a
+    /// `create_workspace` passes here, so the adds waiting by request id
+    /// are answered here too.
     pub(super) fn settle_project_open(
         &mut self,
         device: &str,
@@ -164,6 +241,7 @@ impl Runtime {
         outcome: Result<(), &str>,
         forward: Forward,
     ) {
+        self.answer_adds(device, path, outcome);
         let waiting = self
             .project_opens
             .entries

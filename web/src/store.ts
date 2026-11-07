@@ -46,7 +46,8 @@ export type DirectoryList = {
 /** `reason` is the helper's refusal code on `code: "refused"`, worded by `fileFailure.ts`; its sentence stays in hided's log. */
 export type DirectoryUnavailable = { device_id: string; root_path: string; code: string; reason: string | null };
 /** `confirm` is the project root a `needs_confirmation` asks about instead of the folder sent. */
-export type PathRefusal = { kind: string; path: string; reason: string; confirm?: string };
+/** A path hided refused; `request_id` is the add's own when it sent one (Add a project's importable list). */
+export type PathRefusal = { kind: string; path: string; reason: string; confirm?: string; request_id?: string };
 /** The answer to where a clone would land on `device_id`: `path` when it may, `reason` when it may not. */
 export type CloneTarget = { device_id: string; parent: string; name: string; path: string | null; reason: string | null };
 /** One child of a folder in Add a project's folder list (`hide_node_link::browse::HomeEntry`). */
@@ -560,7 +561,13 @@ export const useShellStore = create<Store>((set, get) => ({
     }
     if (frame.type === "path_refused") {
       set({
-        pathRefusal: { kind: payload.kind ?? "", path: payload.path ?? "", reason: payload.reason ?? "", ...(payload.confirm ? { confirm: payload.confirm } : {}) },
+        pathRefusal: {
+          kind: payload.kind ?? "",
+          path: payload.path ?? "",
+          reason: payload.reason ?? "",
+          ...(payload.confirm ? { confirm: payload.confirm } : {}),
+          ...(payload.request_id ? { request_id: payload.request_id } : {}),
+        },
       });
       return [];
     }

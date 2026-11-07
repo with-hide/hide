@@ -405,6 +405,25 @@ const register = (id: number, path: string, device: string) =>
     }) as never),
   );
 
+/** The request id the newest add of `path` was sent with. */
+const requestOf = (events: Sent[], path: string) =>
+  creates(events)
+    .filter((payload) => payload.path === path)
+    .map((payload) => payload.request_id as string)
+    .at(-1)!;
+
+/** hided's refusal of the add of `path`, naming that add's request id. */
+const refuseAdd = (events: Sent[], path: string, reason: string) =>
+  act(async () => useShellStore.setState({ pathRefusal: { kind: "create_workspace", path, reason, request_id: requestOf(events, path) } } as never));
+
+/** The core's refusal, as its `last_error`, naming `request_id` (or none). */
+const coreRefusal = (kind: string, message: string, request_id: string | null) =>
+  act(async () =>
+    useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => ({
+      rest: { ...current.rest, status: { ...current.rest!.status, last_error: { kind, message, retryable: false, occurred_at: Date.now(), request_id } } },
+    }) as never),
+  );
+
 const found = [
   { path: "/home/me/app", name: "app", sources: ["claude", "codex"] },
   { path: "/home/me/site", name: "site", sources: ["paseo", "herdr"] },
@@ -442,7 +461,7 @@ it("adds a row, then every row one at a time, keeping a refused row with its rea
   await answerImport("ubuntu", [...found, { path: "/home/me/blog", name: "blog", sources: ["herdr"] }]);
 
   await act(async () => find('[data-add-project-import-add="/home/me/app"]')!.click());
-  expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/app", label: "app", initialize_git: false }]);
+  expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/app", label: "app", initialize_git: false, request_id: expect.any(String) }]);
   await register(8, "/home/me/app", "ubuntu");
   expect(importRows()).toEqual(["/home/me/site", "/home/me/blog"]);
   expect(useUiStore.getState().overlay).toBe("add_project");
@@ -450,7 +469,7 @@ it("adds a row, then every row one at a time, keeping a refused row with its rea
   await act(async () => find("[data-add-project-import-all]")!.click());
   // One add at a time: the next waits for the answer to the one before it.
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site"]);
-  await refuse("/home/me/site", "not_found");
+  await refuseAdd(events, "/home/me/site", "not_found");
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site", "/home/me/blog"]);
   await register(9, "/home/me/blog", "ubuntu");
   expect(importRows()).toEqual(["/home/me/site"]);
@@ -462,5 +481,32 @@ it("adds a row, then every row one at a time, keeping a refused row with its rea
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site", "/home/me/blog", "/home/me/site"]);
   expect(find('[data-add-project-import-failed="/home/me/site"]')).toBeNull();
   expect(useUiStore.getState().overlay).toBe("add_project");
+  await unmount();
+});
+
+it("reads a row's answer only from its own add, not from a project another window added or another add's refusal (PRD device-add-project B25)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await answerImport("ubuntu", found);
+
+  await act(async () => find("[data-add-project-import-all]")!.click());
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app"]);
+  // Another window registers another project on the machine, and another add is refused: neither answers app.
+  await register(10, "/home/me/elsewhere", "ubuntu");
+  await coreRefusal("workspace.create_refused", "elsewhere could not be added", "another-window");
+  await coreRefusal("workspace.create_refused", "a refusal naming no request", null);
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app"]);
+  expect(importRows()).toEqual(["/home/me/app", "/home/me/site"]);
+  expect(find("[data-add-project-import-failed]")).toBeNull();
+
+  // app's own refusal stays on app, and site is sent next with nothing wrong on it.
+  await coreRefusal("workspace.create_failed", "app could not be added", requestOf(events, "/home/me/app"));
+  expect(find('[data-add-project-import-failed="/home/me/app"]')).not.toBeNull();
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site"]);
+  expect(requestOf(events, "/home/me/site")).not.toBe(requestOf(events, "/home/me/app"));
+  expect(find('[data-add-project-import-failed="/home/me/site"]')).toBeNull();
+  await register(11, "/home/me/site", "ubuntu");
+  expect(importRows()).toEqual(["/home/me/app"]);
+  expect(find('[data-add-project-import-failed="/home/me/app"]')).not.toBeNull();
   await unmount();
 });

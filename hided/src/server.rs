@@ -4177,7 +4177,17 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "create_workspace" if event.pointer("/payload/new_folder") == Some(&Value::Bool(true)) => {
             new_project(boundary, event, &kind)
         }
-        "create_workspace" => register(boundary, event, &kind),
+        "create_workspace" => register(boundary, event, &kind).map(|mut frame| {
+            // An add sent by request id reads its refusal by that id, as it
+            // reads the core's (`create_workspace.request_id`).
+            if let (Some(id), Some(payload)) = (
+                event.pointer("/payload/request_id").and_then(Value::as_str),
+                frame.get_mut("payload").and_then(Value::as_object_mut),
+            ) {
+                payload.insert("request_id".to_owned(), Value::from(id));
+            }
+            frame
+        }),
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
@@ -5944,6 +5954,25 @@ mod tests {
             std::fs::read_to_string(projects.join("taken/notes.md")).unwrap(),
             "mine\n"
         );
+    }
+
+    /// PRD device-add-project B25: a refused add that named a request id
+    /// carries it back, so the importable list reads the refusal as that
+    /// row's own; one that named none carries none.
+    #[test]
+    fn a_refused_add_carries_the_request_id_it_was_sent_with() {
+        let home = tempfile::tempdir().unwrap();
+        let boundary = Boundary::new(home.path()).unwrap();
+        let gone = home.path().join("gone").display().to_string();
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false, "request_id": "import:7"}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["type"], "path_refused", "{answer}");
+        assert_eq!(answer["payload"]["request_id"], "import:7");
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["payload"].get("request_id"), None);
     }
 
     /// PRD wsl-device B15, B18: a folder outside home reaches the core only
