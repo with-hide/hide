@@ -28,7 +28,7 @@ const DEVICES: Device[] = [
   device("tower", { label: "tower", ssh_alias: "tower", state: "unavailable", host: { ...host("windows x86_64"), state: "unavailable" } }),
 ];
 
-const HOME = "/home/dev";
+const HOME = "/srv/dev";
 const LISTINGS: Record<string, HomeListing> = {
   "~": {
     path: HOME,
