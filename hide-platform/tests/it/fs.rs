@@ -2535,7 +2535,11 @@ fn a_dotted_name_and_the_systems_hidden_mark_hide_an_entry() {
     }
     #[cfg(windows)]
     {
-        let status = Command::new("attrib").arg("+h").arg(&marked).status().unwrap();
+        let status = Command::new("attrib")
+            .arg("+h")
+            .arg(&marked)
+            .status()
+            .unwrap();
         assert!(status.success());
         assert!(hide_platform::fs::hidden(&marked));
     }

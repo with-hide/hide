@@ -94,8 +94,14 @@ fn a_new_project_on_a_device_is_made_under_its_home_and_registered_there() {
     );
     assert_eq!(runtime.snapshot.status.last_error, None);
     let made = home.join("projects/app");
-    assert!(made.join(".git").is_dir(), "the repository is started there");
-    assert_eq!(device_paths(&runtime), [hide_platform::path::to_wire_lossy(&made)]);
+    assert!(
+        made.join(".git").is_dir(),
+        "the repository is started there"
+    );
+    assert_eq!(
+        device_paths(&runtime),
+        [hide_platform::path::to_wire_lossy(&made)]
+    );
 }
 
 /// B19: a taken name and a parent outside the device's home are refused by
@@ -136,17 +142,46 @@ fn the_last_folder_is_remembered_per_machine_and_forgotten_with_its_device() {
     let mut runtime = runtime();
     with_device(&mut runtime, &home);
     let own = runtime.node.as_str().to_owned();
-    dispatch(&mut runtime, "add_project_folder_set", serde_json::json!({"device_id": own, "path": "/Users/me/work"}));
-    dispatch(&mut runtime, "add_project_folder_set", serde_json::json!({"device_id": DEVICE, "path": "C:/Users/me/projects"}));
-    dispatch(&mut runtime, "add_project_folder_set", serde_json::json!({"device_id": "unknown", "path": "/srv"}));
-    dispatch(&mut runtime, "add_project_folder_set", serde_json::json!({"device_id": DEVICE, "path": ""}));
+    dispatch(
+        &mut runtime,
+        "add_project_folder_set",
+        serde_json::json!({"device_id": own, "path": "/Users/me/work"}),
+    );
+    dispatch(
+        &mut runtime,
+        "add_project_folder_set",
+        serde_json::json!({"device_id": DEVICE, "path": "C:/Users/me/projects"}),
+    );
+    dispatch(
+        &mut runtime,
+        "add_project_folder_set",
+        serde_json::json!({"device_id": "unknown", "path": "/srv"}),
+    );
+    dispatch(
+        &mut runtime,
+        "add_project_folder_set",
+        serde_json::json!({"device_id": DEVICE, "path": ""}),
+    );
     let ui = &runtime.snapshot.ui_state;
     assert_eq!(ui.add_project_folder.as_deref(), Some("/Users/me/work"));
     assert_eq!(
         ui.device_add_project_folders,
         BTreeMap::from([(DEVICE.to_owned(), "C:/Users/me/projects".to_owned())])
     );
-    dispatch(&mut runtime, "remove_device", serde_json::json!({"device_id": DEVICE}));
-    assert!(runtime.snapshot.ui_state.device_add_project_folders.is_empty());
-    assert_eq!(runtime.snapshot.ui_state.add_project_folder.as_deref(), Some("/Users/me/work"));
+    dispatch(
+        &mut runtime,
+        "remove_device",
+        serde_json::json!({"device_id": DEVICE}),
+    );
+    assert!(
+        runtime
+            .snapshot
+            .ui_state
+            .device_add_project_folders
+            .is_empty()
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.add_project_folder.as_deref(),
+        Some("/Users/me/work")
+    );
 }

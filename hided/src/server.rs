@@ -2336,7 +2336,9 @@ fn handle_client_text(
     }
     match event.get("kind").and_then(Value::as_str) {
         Some("home_folder_list") => return Ok(ClientAction::NodeAsk(event)),
-        Some("project_target" | "clone_target") if event_device(&state.boundary, &event).is_some() => {
+        Some("project_target" | "clone_target")
+            if event_device(&state.boundary, &event).is_some() =>
+        {
             return Ok(ClientAction::NodeAsk(event));
         }
         Some("project_target") => {
@@ -2873,7 +2875,9 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
             let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
                 hide_core::node_access::call_as::<hide_node_link::browse::HomeListing>(
                     link.as_ref(),
-                    hide_node_link::protocol::Call::HomeList { path: request.clone() },
+                    hide_node_link::protocol::Call::HomeList {
+                        path: request.clone(),
+                    },
                     NODE_ASK_TIMEOUT,
                 )
             });

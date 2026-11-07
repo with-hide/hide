@@ -324,12 +324,12 @@ use crate::error::HostError;
 /// launcher read as the program it runs, so a first input rides the start
 /// there too; a helper on 76 would answer `program` or `batch` for it, so
 /// it upgrades.
-/// 78: `home_list` lists one folder under the node's home for Add a
+/// 79: `home_list` lists one folder under the node's home for Add a
 /// project's folder list and `new_folder_target` says where a clone or a new
 /// project would land under that home, so both run on any device (PRD
-/// device-add-project D-01, D-07); a helper on 77 would refuse both, so it
-/// upgrades.
-pub const PROTOCOL_VERSION: u32 = 78;
+/// device-add-project D-01, D-07); a helper before 79 would refuse both, so
+/// it upgrades. (78 is another change's step.)
+pub const PROTOCOL_VERSION: u32 = 79;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

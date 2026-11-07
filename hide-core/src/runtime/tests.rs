@@ -7,6 +7,8 @@ use crate::engine::fake::{self, FakeEngine, Reply, refused, reply, unanswered};
 /// The stand-in engine a runtime test answers for.
 type Fake = Arc<FakeEngine<'static>>;
 
+#[path = "tests/add_project.rs"]
+mod add_project;
 mod agent_areas;
 #[path = "tests/agent_connection.rs"]
 mod agent_connection;
@@ -16,8 +18,6 @@ mod agent_definitions;
 mod agent_features;
 #[path = "tests/agent_scopes.rs"]
 mod agent_scopes;
-#[path = "tests/add_project.rs"]
-mod add_project;
 #[path = "tests/agent_sleep.rs"]
 mod agent_sleep;
 #[path = "tests/agent_update.rs"]

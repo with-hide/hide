@@ -308,9 +308,9 @@ pub(crate) fn make_device_project(
     node: &dyn crate::node_access::NodeLink,
     path: &str,
 ) -> Result<ProjectCreated, WorkspaceCreationFailure> {
-    let (parent, name) = path
-        .rsplit_once('/')
-        .ok_or_else(|| WorkspaceCreationFailure::failed(format!("{path} names no parent folder")))?;
+    let (parent, name) = path.rsplit_once('/').ok_or_else(|| {
+        WorkspaceCreationFailure::failed(format!("{path} names no parent folder"))
+    })?;
     let target = call_as::<hide_node_link::browse::NewFolderTarget>(
         node,
         Call::NewFolderTarget {

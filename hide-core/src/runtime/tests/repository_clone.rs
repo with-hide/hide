@@ -298,14 +298,17 @@ fn a_clone_on_a_device_lands_under_its_home_and_is_registered_there() {
     let (_home_dir, home) = super::add_project::device_home();
     let shared = shared_runtime();
     super::add_project::with_device(&mut shared.lock().unwrap(), &home);
-    assert!(
-        shared
-            .lock()
-            .unwrap()
-            .dispatch_json(&device_clone_event(&url, "window", "~/projects", "origin"))
-    );
+    assert!(shared.lock().unwrap().dispatch_json(&device_clone_event(
+        &url,
+        "window",
+        "~/projects",
+        "origin"
+    )));
     let clone = settled(&shared);
-    assert_eq!((clone.phase.as_str(), clone.device_id.as_str()), ("finished", "window"));
+    assert_eq!(
+        (clone.phase.as_str(), clone.device_id.as_str()),
+        ("finished", "window")
+    );
     assert!(home.join("projects/origin/f0.txt").is_file());
     let registered: Vec<(String, String)> = shared
         .lock()
@@ -324,12 +327,12 @@ fn a_clone_on_a_device_lands_under_its_home_and_is_registered_there() {
         )]
     );
 
-    assert!(
-        shared
-            .lock()
-            .unwrap()
-            .dispatch_json(&device_clone_event(&url, "window", "~/projects", "origin"))
-    );
+    assert!(shared.lock().unwrap().dispatch_json(&device_clone_event(
+        &url,
+        "window",
+        "~/projects",
+        "origin"
+    )));
     let clone = settled(&shared);
     assert_eq!(clone.phase, "failed");
     assert_eq!(clone.failure.as_deref(), Some("target_exists"));

@@ -1183,7 +1183,8 @@ impl Runtime {
         let spawned = thread::Builder::new()
             .name("hide-core-device-project".to_owned())
             .spawn(move || {
-                let made = crate::checkout_owner::open::make_device_project(channel.as_ref(), &path);
+                let made =
+                    crate::checkout_owner::open::make_device_project(channel.as_ref(), &path);
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };

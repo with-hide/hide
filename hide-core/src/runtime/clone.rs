@@ -241,7 +241,11 @@ impl Runtime {
             return true;
         };
         let path = path.display().to_string();
-        let label = path.rsplit(['/', '\\']).next().unwrap_or_default().to_owned();
+        let label = path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_owned();
         let device = clone.device_id.clone();
         // The same event Browse folder sends, so a cloned folder is
         // registered, refused or deduplicated exactly as a picked one, on the
@@ -365,7 +369,9 @@ fn judge_device_parent(
         CLONE_TARGET_TIMEOUT,
     ) {
         Ok(target) => Ok(target.parent),
-        Err(LinkError::Refused(refused)) if refused.code == hide_node_link::ErrorCode::AlreadyExists => {
+        Err(LinkError::Refused(refused))
+            if refused.code == hide_node_link::ErrorCode::AlreadyExists =>
+        {
             Err(CloneFailure::TargetExists(PathBuf::from(format!(
                 "{}/{name}",
                 parent.trim_end_matches('/')

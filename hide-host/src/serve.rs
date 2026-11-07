@@ -1145,7 +1145,9 @@ pub fn handle_with_progress(
         }
         Call::NewFolderTarget { parent, name, kind } => {
             let home = env.home("HOME is not set, so no folder can be judged against it")?;
-            to_value(crate::browse::new_folder_target(&parent, &name, kind, &home)?)
+            to_value(crate::browse::new_folder_target(
+                &parent, &name, kind, &home,
+            )?)
         }
         Call::ProjectCreate {
             path,

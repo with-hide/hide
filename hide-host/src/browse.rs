@@ -26,9 +26,10 @@ pub use hide_node_link::browse::{
 /// with how many repositories it holds.
 pub fn home_list(written: &str, home: &Path) -> HostResult<HomeListing> {
     let opened = HomeFolder::open(written, home)?;
-    let listing = crate::list::list_where(&opened.home, &opened.relative, &opened.home_real, |name| {
-        hide_platform::fs::hidden(&opened.real.join(name))
-    })?;
+    let listing =
+        crate::list::list_where(&opened.home, &opened.relative, &opened.home_real, |name| {
+            hide_platform::fs::hidden(&opened.real.join(name))
+        })?;
     let mut budget = REPOSITORY_COUNT_ANSWER_CAP;
     let entries = listing
         .entries
@@ -50,7 +51,9 @@ pub fn home_list(written: &str, home: &Path) -> HostResult<HomeListing> {
                         row.repository = true;
                         row.branch = repository.branch();
                     }
-                    None => row.repositories = repositories_in(&opened.folder, &row.name, &mut budget),
+                    None => {
+                        row.repositories = repositories_in(&opened.folder, &row.name, &mut budget)
+                    }
                 }
             }
             row
@@ -98,7 +101,12 @@ pub fn new_folder_target(
         NewFolderKind::Clone => match opened.folder.symlink_metadata(name) {
             Ok(_) => return Err(taken()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(HostError::io(&error, format!("{} cannot be read", path.display()))),
+            Err(error) => {
+                return Err(HostError::io(
+                    &error,
+                    format!("{} cannot be read", path.display()),
+                ));
+            }
         },
         NewFolderKind::Project => match crate::project::folder(&path) {
             crate::project::ProjectFolder::Free => {}
@@ -167,7 +175,8 @@ impl HomeFolder {
             // path is followed as the real path it resolves to, opened through
             // the same handle, and any other answer is outside home.
             Err(error) if error.code == ErrorCode::OutsideRoot => {
-                let real = identity::canonical(&home_real.join(&relative)).map_err(|_| outside())?;
+                let real =
+                    identity::canonical(&home_real.join(&relative)).map_err(|_| outside())?;
                 let inside = real
                     .strip_prefix(&home_real)
                     .map_err(|_| outside())?
@@ -261,11 +270,19 @@ mod tests {
 
     fn repository(path: &Path, branch: &str) {
         fs::create_dir_all(path.join(".git/refs/heads")).unwrap();
-        fs::write(path.join(".git/HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
+        fs::write(
+            path.join(".git/HEAD"),
+            format!("ref: refs/heads/{branch}\n"),
+        )
+        .unwrap();
     }
 
     fn names(listing: &HomeListing) -> Vec<&str> {
-        listing.entries.iter().map(|entry| entry.name.as_str()).collect()
+        listing
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect()
     }
 
     #[test]
@@ -294,7 +311,14 @@ mod tests {
         fs::create_dir_all(home.join("old/scratch")).unwrap();
         fs::create_dir_all(home.join("empty")).unwrap();
         let listing = home_list(&crate::root::wire(&home), &home).unwrap();
-        let row = |name: &str| listing.entries.iter().find(|entry| entry.name == name).unwrap().clone();
+        let row = |name: &str| {
+            listing
+                .entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap()
+                .clone()
+        };
         assert!(row("app").repository);
         assert_eq!(row("app").branch.as_deref(), Some("feat/remote"));
         assert_eq!(row("app").repositories, None);
@@ -327,7 +351,12 @@ mod tests {
         let listing = home_list("~", &home).unwrap();
         assert_eq!(listing.entries.len(), HOME_LIST_CAP);
         assert!(listing.truncated);
-        assert!(listing.entries.iter().all(|entry| entry.name.starts_with("file-")));
+        assert!(
+            listing
+                .entries
+                .iter()
+                .all(|entry| entry.name.starts_with("file-"))
+        );
     }
 
     #[test]
@@ -351,7 +380,10 @@ mod tests {
             assert_eq!(code("~/away"), ErrorCode::OutsideRoot);
             assert_eq!(code("~/away/secret"), ErrorCode::OutsideRoot);
             let listing = home_list("~", &home).unwrap();
-            assert!(!names(&listing).contains(&"away"), "a link out of home is no row");
+            assert!(
+                !names(&listing).contains(&"away"),
+                "a link out of home is no row"
+            );
             assert!(names(&listing).contains(&"inward"));
             assert_eq!(home_list("~/inward", &home).unwrap().label, "~/work");
         }
@@ -366,18 +398,54 @@ mod tests {
         let target = new_folder_target("~/projects", "app", NewFolderKind::Clone, &home).unwrap();
         assert_eq!(target.parent, crate::root::wire(&home.join("projects")));
         assert_eq!(target.parent_label, "~/projects");
-        assert_eq!(target.path, Some(crate::root::wire(&home.join("projects/app"))));
-        let code = |parent: &str, name: &str, kind| new_folder_target(parent, name, kind, &home).unwrap_err().code;
-        assert_eq!(code("~/projects", "taken", NewFolderKind::Clone), ErrorCode::AlreadyExists);
-        assert_eq!(code("~/projects", "leftover", NewFolderKind::Clone), ErrorCode::AlreadyExists);
-        assert_eq!(code("~/projects", "taken", NewFolderKind::Project), ErrorCode::AlreadyExists);
-        assert_eq!(code("~/projects", "a/b", NewFolderKind::Project), ErrorCode::InvalidPath);
-        assert_eq!(code("~/projects", "..", NewFolderKind::Clone), ErrorCode::InvalidPath);
-        assert_eq!(code("~/projects", "", NewFolderKind::Clone), ErrorCode::InvalidPath);
-        assert_eq!(code(&crate::root::wire(outer.path()), "app", NewFolderKind::Project), ErrorCode::OutsideRoot);
-        let leftover = new_folder_target("~/projects", "leftover", NewFolderKind::Project, &home).unwrap();
+        assert_eq!(
+            target.path,
+            Some(crate::root::wire(&home.join("projects/app")))
+        );
+        let code = |parent: &str, name: &str, kind| {
+            new_folder_target(parent, name, kind, &home)
+                .unwrap_err()
+                .code
+        };
+        assert_eq!(
+            code("~/projects", "taken", NewFolderKind::Clone),
+            ErrorCode::AlreadyExists
+        );
+        assert_eq!(
+            code("~/projects", "leftover", NewFolderKind::Clone),
+            ErrorCode::AlreadyExists
+        );
+        assert_eq!(
+            code("~/projects", "taken", NewFolderKind::Project),
+            ErrorCode::AlreadyExists
+        );
+        assert_eq!(
+            code("~/projects", "a/b", NewFolderKind::Project),
+            ErrorCode::InvalidPath
+        );
+        assert_eq!(
+            code("~/projects", "..", NewFolderKind::Clone),
+            ErrorCode::InvalidPath
+        );
+        assert_eq!(
+            code("~/projects", "", NewFolderKind::Clone),
+            ErrorCode::InvalidPath
+        );
+        assert_eq!(
+            code(
+                &crate::root::wire(outer.path()),
+                "app",
+                NewFolderKind::Project
+            ),
+            ErrorCode::OutsideRoot
+        );
+        let leftover =
+            new_folder_target("~/projects", "leftover", NewFolderKind::Project, &home).unwrap();
         assert!(leftover.leftover);
         let parent_only = new_folder_target("~", "", NewFolderKind::Project, &home).unwrap();
-        assert_eq!((parent_only.parent_label.as_str(), parent_only.path), ("~", None));
+        assert_eq!(
+            (parent_only.parent_label.as_str(), parent_only.path),
+            ("~", None)
+        );
     }
 }

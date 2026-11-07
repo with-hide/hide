@@ -1945,7 +1945,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "session_tree_toggle" => decode!(PaneTargetPayload, SessionTreeToggle),
         "sidebar_lens_set" => decode!(super::detail::SidebarLensPayload, SidebarLensSet),
         "add_project_folder_set" => {
-            decode!(super::add_project::AddProjectFolderPayload, AddProjectFolderSet)
+            decode!(
+                super::add_project::AddProjectFolderPayload,
+                AddProjectFolderSet
+            )
         }
         "task_view_set" => decode!(super::detail::TaskViewPayload, TaskViewSet),
         "sidebar_project_set" => decode!(super::detail::SidebarProjectPayload, SidebarProjectSet),
