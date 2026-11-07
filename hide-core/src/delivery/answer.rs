@@ -60,6 +60,10 @@ pub enum PaneEnd {
     Gone,
     /// Another conversation runs in the pane now, so it was left open.
     OtherAgent,
+    /// Left open: the registration is from before Hide recorded its pane's
+    /// terminal, and no agent shows in the pane, so nothing proves the pane
+    /// is still the registration's.
+    Left,
 }
 
 /// The conversation of an ended registration.
@@ -70,8 +74,9 @@ pub enum ConversationEnd {
     Archived,
     /// Not kept: the archive already holds as many sessions as it keeps.
     ArchiveFull,
-    /// Nothing was archived: the pane stayed, was gone, or showed no
-    /// conversation Hide knows.
+    /// Nothing was archived: the pane stayed, was gone, showed no
+    /// conversation Hide knows, or Hide could not form the record (its
+    /// reason is in the diagnostic log).
     None,
 }
 

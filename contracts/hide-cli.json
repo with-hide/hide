@@ -350,7 +350,7 @@
                             "type": "string"
                         },
                         {
-                            "description": "Nothing was archived: the pane stayed, was gone, or showed no conversation Hide knows.",
+                            "description": "Nothing was archived: the pane stayed, was gone, showed no conversation Hide knows, or Hide could not form the record (its reason is in the diagnostic log).",
                             "enum": [
                                 "none"
                             ],
@@ -410,6 +410,13 @@
                             "description": "Another conversation runs in the pane now, so it was left open.",
                             "enum": [
                                 "other_agent"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Left open: the registration is from before Hide recorded its pane's terminal, and no agent shows in the pane, so nothing proves the pane is still the registration's.",
+                            "enum": [
+                                "left"
                             ],
                             "type": "string"
                         }
@@ -5589,7 +5596,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c1af17eaf2affa948135f8a8a33326a55bf7027285bd9e375665c520466803c7",
+    "digest": "sha256:9e53f7dd774157ada3d73c897b9552495c13903de3bb8ec00bf4ab29d9cede7d",
     "envelopes": {
         "agent": {
             "answer": "value",

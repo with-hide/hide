@@ -6,6 +6,8 @@
 //! connected device `mini`, whose engine is a fake that closes the panes it
 //! is asked to; this machine has no engine at all, so a close that went
 //! anywhere but the worker's machine would fail instead of passing unseen.
+//! [`ending_here`] puts caller and worker on this machine instead, whose
+//! engine is then the fake and the device has none.
 
 use super::device_catalog::{engine_workspace, session};
 use super::*;
@@ -23,6 +25,10 @@ const DEVICE_PANE: &str = "t1";
 const PANE: &str = "remote:mini:pane:t1";
 const TERMINAL: &str = "terminal-t1";
 const SESSION: &str = "native-worker";
+/// The caller's and the worker's panes when both run on this machine, in
+/// the tree fixture's listed checkout.
+const HERE_CALLER: &str = "w1:p1";
+const HERE_PANE: &str = "w1:p2";
 
 /// The device's panes, each with the terminal it runs, and whether the
 /// engine refuses the next close.
@@ -32,7 +38,7 @@ struct Panes {
     close_refused: bool,
 }
 
-fn device_engine(panes: Arc<Mutex<Panes>>) -> Fake {
+fn pane_engine(panes: Arc<Mutex<Panes>>) -> Fake {
     FakeEngine::start(move |method, params| {
         let mut panes = panes.lock().unwrap();
         match method {
@@ -54,6 +60,11 @@ fn device_engine(panes: Arc<Mutex<Panes>>) -> Fake {
 }
 
 struct Ending {
+    /// The worker's pane as this core names it, and as its engine does.
+    pane: &'static str,
+    engine_pane: &'static str,
+    /// Where the caller's pane is, as the delivery store checks it.
+    context: crate::workspace_control::Context,
     _turn: std::sync::MutexGuard<'static, ()>,
     _root: tempfile::TempDir,
     runtime: Arc<Mutex<Runtime>>,
@@ -89,7 +100,7 @@ fn ending() -> Ending {
         open: vec![(DEVICE_PANE.to_owned(), TERMINAL.to_owned())],
         close_refused: false,
     }));
-    let fake = device_engine(panes.clone());
+    let fake = pane_engine(panes.clone());
     {
         let mut guard = runtime.lock().unwrap();
         guard
@@ -131,21 +142,128 @@ fn ending() -> Ending {
         device_id: DEVICE.into(),
         session: crate::engine::tokens::session_digest(SESSION),
     };
+    registered(
+        (PANE, DEVICE_PANE),
+        turn,
+        root,
+        runtime,
+        actor,
+        ("sender", worker, DEVICE_PANE),
+        (panes, fake),
+        path,
+    )
+}
+
+/// The same caller and worker, both on this machine: the caller in
+/// `HERE_CALLER`, the worker in `HERE_PANE` of the listed checkout, and
+/// this machine's engine the fake. Its rows carry no reference-proven
+/// session facts, as an agent the label reader has not confirmed yet.
+fn ending_here() -> Ending {
+    let turn = crate::coordination::SPAWN_TURN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, mut actor, _, path) = fixture(root.path());
+    actor.pane_id = HERE_CALLER.into();
+    actor.session = crate::engine::tokens::session_digest("native-parent");
+    let panes = Arc::new(Mutex::new(Panes {
+        open: vec![(HERE_PANE.to_owned(), TERMINAL.to_owned())],
+        close_refused: false,
+    }));
+    let fake = pane_engine(panes.clone());
+    {
+        let mut guard = runtime.lock().unwrap();
+        guard.restore_hint_pending = false;
+        guard.live = Some(fake.live());
+        show_here(&mut guard, Some(SESSION));
+        assert!(
+            guard
+                .snapshot
+                .navigator
+                .agents
+                .iter()
+                .any(|row| row.pane_id == HERE_PANE && row.row_facts.is_none()),
+            "the worker's row, its session file not confirmed"
+        );
+    }
+    let worker = Actor {
+        pane_id: HERE_PANE.into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest(SESSION),
+    };
+    registered(
+        (HERE_PANE, HERE_PANE),
+        turn,
+        root,
+        runtime,
+        actor,
+        (HERE_CALLER, worker, HERE_PANE),
+        (panes, fake),
+        path,
+    )
+}
+
+/// This machine's session as the core holds it: the caller in
+/// `HERE_CALLER` and, with a conversation, the worker running it in
+/// `HERE_PANE`.
+fn show_here(runtime: &mut Runtime, conversation: Option<&str>) {
+    use super::tree_close::{tree_catalog, tree_payload};
+    let present: &[&str] = match conversation {
+        Some(_) => &[HERE_CALLER, HERE_PANE],
+        None => &[HERE_CALLER],
+    };
+    let mut payload = tree_payload(present, &[]);
+    for agent in &mut payload.agents {
+        if agent.pane_id.as_deref() == Some(HERE_CALLER) {
+            agent.agent = Some("codex".into());
+            agent.agent_session = Some(crate::sidebar::SessionAgentSessionPayload {
+                kind: "id".into(),
+                value: "native-parent".into(),
+            });
+            agent.lineage_session = crate::engine::tokens::session_digest("native-parent");
+        } else {
+            agent.agent = Some("codex".into());
+            agent.agent_session =
+                conversation.map(|conversation| crate::sidebar::SessionAgentSessionPayload {
+                    kind: "id".into(),
+                    value: conversation.into(),
+                });
+        }
+    }
+    runtime.ingest_session_with_catalog(Ok(payload.clone()), Some(tree_catalog()));
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+}
+
+/// Registers `actor` as `agent-1` and `worker` as `agent-2` in
+/// `worker_pane` with `TERMINAL`, and starts the delivery store.
+#[allow(clippy::too_many_arguments)] // the fixture's parts, each kept
+fn registered(
+    (pane, engine_pane): (&'static str, &'static str),
+    turn: std::sync::MutexGuard<'static, ()>,
+    root: tempfile::TempDir,
+    runtime: Arc<Mutex<Runtime>>,
+    actor: Actor,
+    (caller_pane, worker, worker_pane): (&str, Actor, &str),
+    (panes, fake): (Arc<Mutex<Panes>>, Fake),
+    path: PathBuf,
+) -> Ending {
     let mut state = ledger::Ledger::default();
     for (record, machine, session, pane, terminal, parent) in [
         (
             &actor,
             crate::node::TEST_NODE,
             "native-parent",
-            "sender",
+            caller_pane,
             None,
             None,
         ),
         (
             &worker,
-            DEVICE,
+            worker.device_id.as_str(),
             SESSION,
-            DEVICE_PANE,
+            worker_pane,
             Some(TERMINAL),
             Some("agent-1"),
         ),
@@ -188,7 +306,23 @@ fn ending() -> Ending {
         path.clone(),
     )
     .unwrap();
+    let mut context = authority(&actor).context;
+    if caller_pane == HERE_CALLER {
+        context = runtime
+            .lock()
+            .unwrap()
+            .workspace_control_query(
+                crate::node::TEST_NODE,
+                HERE_CALLER,
+                crate::workspace_control::Query::Info,
+            )
+            .unwrap()
+            .context;
+    }
     Ending {
+        pane,
+        engine_pane,
+        context,
         _turn: turn,
         _root: root,
         runtime,
@@ -228,7 +362,10 @@ impl Ending {
     fn end(&self, keep_pane: bool) -> Result<Value, String> {
         crate::coordination::run(
             self.client.clone(),
-            authority(&self.actor),
+            crate::delivery::worker::Authority {
+                context: self.context.clone(),
+                ..authority(&self.actor)
+            },
             self.actor.clone(),
             Command::End {
                 id: "agent-2".into(),
@@ -465,4 +602,73 @@ fn an_agent_ended_before_its_session_file_was_confirmed_keeps_its_conversation()
     };
     assert_eq!(ended.member.native_session_id, "s-w1-p2");
     assert_eq!(ended.member.source_reference, None);
+}
+
+/// #676 on this machine: the worker's pane closes and its conversation waits
+/// under 보관됨 for 이어가기, though the label reader never confirmed its
+/// session file (its row carries no reference-proven facts): the session it
+/// registered with proves it.
+#[test]
+fn ending_an_agent_of_this_machine_closes_its_pane_and_keeps_its_conversation() {
+    let ending = ending_here();
+    let answer = ending.end(false).unwrap();
+    assert_eq!(answer["pane"], "closed");
+    assert_eq!(answer["conversation"], "archived");
+    assert!(ending.worker_ended());
+    assert!(ending.open().is_empty(), "the worker's pane closed");
+    let [record] = ending.archive().try_into().expect("one archived session");
+    let member = record.root();
+    assert_eq!(
+        (
+            member.machine.as_str(),
+            member.pane_id.as_str(),
+            member.native_session_id.as_str(),
+            member.source_reference.as_ref(),
+        ),
+        (crate::node::TEST_NODE, ending.pane, SESSION, None)
+    );
+    let mut runtime = ending.runtime.lock().unwrap();
+    let member = |runtime: &Runtime| {
+        let archive = &runtime.snapshot.ui_state.session_archive;
+        let record = archive.records.values().next().expect("still archived");
+        record.root().clone()
+    };
+    runtime.advance_session_archive();
+    assert!(!member(&runtime).closed, "still listed until the next read");
+    show_here(&mut runtime, None);
+    runtime.advance_session_archive();
+    assert!(member(&runtime).closed, "its pane left the listing");
+    let rows = &runtime.snapshot.navigator.archived_sessions;
+    assert!(rows.len() == 1 && rows[0].listed, "under 보관됨: {rows:?}");
+    let (_, records) = crate::diagnostics::capture(|| show_here(&mut runtime, Some(SESSION)));
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "session_archive.resumed"),
+        "{records:?}"
+    );
+    runtime.advance_session_archive();
+    assert!(runtime.snapshot.ui_state.session_archive.records.is_empty());
+}
+
+/// A close the engine refused with the pane still running leaves no record
+/// under 보관됨: the conversation was archived before the close and is taken
+/// back, since it runs on in that pane.
+#[test]
+fn a_refused_close_of_this_machine_takes_its_archived_conversation_back() {
+    let ending = ending_here();
+    ending.panes.lock().unwrap().close_refused = true;
+    let (refusal, records) = crate::diagnostics::capture(|| ending.end(false));
+    assert_eq!(refusal, Err("pane_close_failed".to_owned()));
+    assert_eq!(ending.open(), [ending.engine_pane]);
+    assert!(ending.archive().is_empty());
+    let kinds = records
+        .iter()
+        .filter_map(|record| record["kind"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        kinds.contains(&"session_archive.agent_ended")
+            && kinds.contains(&"session_archive.agent_end_withdrawn"),
+        "{kinds:?}"
+    );
 }

@@ -286,7 +286,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     // The answer is the registration as it ended with what became of its
-    // pane (`closed`, `kept`, `gone`, `other_agent`) and of its
+    // pane (`closed`, `kept`, `gone`, `other_agent`, `left`) and of its
     // conversation (`archived`, `archive_full`, `none`); `--keep-pane` ends
     // only the registration, as every end did before.
     Spec {

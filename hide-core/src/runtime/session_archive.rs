@@ -14,8 +14,8 @@
 
 use super::*;
 use crate::session_archive::{
-    ArchiveId, ArchivePhase, ArchiveRecord, ArchivedMember, ArchivedPull,
-    RESUME_CONFIRM_TIMEOUT_MS, Resume, SessionArchive,
+    ARCHIVE_FULL, AdmitRefusal, ArchiveId, ArchivePhase, ArchiveRecord, ArchivedMember,
+    ArchivedPull, RESUME_CONFIRM_TIMEOUT_MS, Resume, SessionArchive,
 };
 use crate::sidebar::SessionAgentSessionPayload;
 use serde::Deserialize;
@@ -352,7 +352,10 @@ impl Runtime {
             .ui_state
             .session_archive
             .admit(id.clone(), record)
-            .map_err(|reason| ("archive.full", reason.to_owned()))?;
+            .map_err(|refusal| match refusal {
+                AdmitRefusal::Full => ("archive.full", ARCHIVE_FULL.to_owned()),
+                AdmitRefusal::Fault(reason) => ("archive.save_failed", reason.to_owned()),
+            })?;
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.saving",
             "archive_id": id.as_str(), "pane_id": pane_id, "members": tree.len(),
@@ -435,32 +438,35 @@ impl Runtime {
         })))
     }
 
-    /// Keeps the conversation of an agent `hide agent end` closed, as an
+    /// Keeps the conversation of an agent `hide agent end` closes, as an
     /// archived session of its own under `보관됨`, where 이어가기 resumes it
-    /// as a new root: the registration ended with the pane, so the record
-    /// holds none. A conversation already archived converges on its record;
-    /// a full archive keeps nothing and says so.
-    pub(crate) fn archive_ended(&mut self, ended: EndedConversation) -> Result<(), &'static str> {
+    /// as a new root: the registration has ended, so the record holds none.
+    /// It is kept before the pane closes, so a close that ends the pane but
+    /// not the command (a core that stops, a release that fails after the
+    /// pane left) still leaves it there; its member closes once the pane
+    /// left its machine's listing, so that listing is never taken for a
+    /// resume of the conversation. The record this call admitted, or none
+    /// when the conversation is archived already.
+    pub(crate) fn archive_ended(
+        &mut self,
+        ended: EndedConversation,
+    ) -> Result<Option<ArchiveId>, AdmitRefusal> {
         let EndedConversation {
             project_root,
             project_label,
             mut member,
             starred_at_unix_ms,
         } = ended;
-        // The engine closed the pane, and its machine's listing can still
-        // show it until its next read: the member closes once the pane left,
-        // as an archive's own close does, so that listing is never taken
-        // for a resume of the conversation.
         member.closed = self.pane_left(&member.machine, &member.pane_id);
         let archive = &mut self.snapshot.ui_state.session_archive;
         if archive
             .find(&member.machine, &member.kind, &member.native_session_id)
             .is_some()
         {
-            return Ok(());
+            return Ok(None);
         }
         let pane_id = member.pane_id.clone();
-        let id = ArchiveId::new()?;
+        let id = ArchiveId::new().map_err(AdmitRefusal::Fault)?;
         archive.admit(
             id.clone(),
             ArchiveRecord {
@@ -479,13 +485,37 @@ impl Runtime {
             "component": "session_archive", "kind": "session_archive.agent_ended",
             "archive_id": id.as_str(), "pane_id": pane_id,
         }));
+        self.archive_ended_changed();
+        Ok(Some(id))
+    }
+
+    /// Takes back the record [`Self::archive_ended`] admitted for a pane
+    /// whose close did not happen: the conversation still runs there, so
+    /// it is not under 보관됨. A record whose pane has left is kept.
+    pub(crate) fn withdraw_ended(&mut self, id: &ArchiveId) {
+        let archive = &mut self.snapshot.ui_state.session_archive;
+        if !archive
+            .records
+            .get(id)
+            .is_some_and(|record| record.members.iter().all(|member| !member.closed))
+        {
+            return;
+        }
+        archive.records.remove(id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "session_archive", "kind": "session_archive.agent_end_withdrawn",
+            "archive_id": id.as_str(),
+        }));
+        self.archive_ended_changed();
+    }
+
+    fn archive_ended_changed(&mut self) {
         self.persist_ui_state();
         if self.refresh_archived_rows()
             && let Some(context) = self.worker_context.as_ref()
         {
             context.notifier.notify();
         }
-        Ok(())
     }
 
     /// Whether `pane_id` is gone from a connected `machine`'s listing; a

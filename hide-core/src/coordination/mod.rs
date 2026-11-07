@@ -304,18 +304,26 @@ pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::fr
 /// and the spawn's new shell gets what is left of it, at most
 /// `agent_start::SHELL_WAIT`, to finish starting: a shell stopped in its
 /// startup files is answered as `shell_starting` while the caller still
-/// waits, rather than as a timeout whose spawn holds the spawn lock.
+/// waits, rather than as a timeout whose spawn holds the spawn lock. The
+/// waits after the start (the agent's session, the agent taking its brief,
+/// at most [`BRIEF_READY_WAIT`]) take what is left after that, so a slow
+/// shell and a slow agent together are still answered in time.
 pub const SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
 /// [`SPAWN_ANSWER_WAIT`] for a spawn on a connected device, whose checks,
 /// worktree, tab and start are each a round trip over SSH.
 pub const DEVICE_SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
-/// Each engine call that reads or closes a pane a spawn or an end made.
-pub const PANE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-/// What `hide agent end` takes beyond an ordinary command: after its record
-/// ended, it reads its pane's terminal and closes the pane, each within
-/// [`PANE_WAIT`]. The CLI waits this and an ordinary command's wait.
-pub const END_ANSWER_WAIT: std::time::Duration =
-    std::time::Duration::from_secs(2 * PANE_WAIT.as_secs());
+/// The wait the engine is asked for on each call that reads or closes a
+/// pane a spawn or an end made. The core's own engine answers a read from
+/// its topology and bounds a close by the pane's end on its node
+/// ([`END_ANSWER_WAIT`]), so this bounds no call of its own.
+pub(crate) const PANE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// What `hide agent end` takes beyond an ordinary command: the end of its
+/// pane on the pane's node, this machine's or a device's, which ends the
+/// holder's tree and, when that tree ignores it, its pids
+/// (`hide_node_link::link_panes::END_WAIT`). Its other steps read the
+/// ledger and the topology. The CLI waits this and an ordinary command's
+/// wait.
+pub const END_ANSWER_WAIT: std::time::Duration = hide_node_link::link_panes::END_WAIT;
 
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past
