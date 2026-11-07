@@ -1,4 +1,4 @@
-use super::v3_fixture::{V3, kept_rows};
+use super::v3_fixture::{V3, count_as_version_3, kept_rows};
 use super::*;
 
 /// The store's step budgets are the worker's; these tests read what a step
@@ -963,27 +963,34 @@ fn convert_all(path: &Path, open: impl Fn(&Path) -> Result<Store, &'static str>)
     while store.converting().unwrap() {
         store.convert().unwrap();
     }
-    assert!(store.compaction_due().unwrap());
     store.compact().unwrap();
     assert!(!store.compaction_due().unwrap());
     store
 }
 
 /// What the converted `store` must answer as `v3` did: the same days'
-/// totals, the same calls for the projects' costs, and every stored call
-/// found as already counted.
+/// totals, the same calls for the projects' costs as the worker reads them
+/// at `now`, and every stored call found as already counted.
 fn answers_as(store: &mut Store, v3: &V3, now: u64) {
+    use super::super::project_cost::{EVENT_LIMIT, since};
     assert_eq!(store.daily().unwrap(), v3.daily);
     for (device, calls) in &v3.calls {
+        let window: Vec<_> = calls
+            .iter()
+            .filter(|(_, _, event)| event.at_ms >= since(now))
+            .collect();
         let mut read = Vec::new();
         let limited = store
-            .recent_calls(device, 0, calls.len(), |agent, day, event| {
+            .recent_calls(device, since(now), EVENT_LIMIT, |agent, day, event| {
                 read.push((agent.to_owned(), day.to_owned(), event));
                 Ok(())
             })
             .unwrap();
-        assert!(!limited);
-        assert!(read == *calls, "{device}: the calls read differ");
+        assert_eq!(limited, window.len() > EVENT_LIMIT);
+        assert!(
+            read.iter().eq(window.into_iter().take(EVENT_LIMIT)),
+            "{device}: the calls read differ"
+        );
     }
     for (device, agent) in v3.agents() {
         let events: Vec<Event> = v3
@@ -1108,55 +1115,166 @@ fn an_interrupted_conversion_goes_on_where_it_stopped() {
     answers_as(&mut store, &v3, now);
 }
 
-/// A build before version 4 opens only versions up to 3, so from the first
-/// open of this build it refuses the store and writes nothing to it (as
-/// this build refuses a newer one, `corrupt_or_newer_stores_are_refused...`):
-/// the totals, checkpoints and backfills stay exactly as they were. Back on
-/// this build, the calls the native files gained meanwhile are read from
-/// the same checkpoints and counted once, beside the ones already counted.
+/// A build from before the calls format opens a converted store as its own:
+/// the version is still 3 and every table it uses is there as it made it,
+/// so it goes on counting, its calls into `events` and Hide AI's into
+/// `ai_daily`, which this format did not change. Back on this build, its
+/// calls are moved like a version 3 store's, and one it counted a second
+/// time, a later view of a Claude message already moved, is taken back from
+/// its day and merged: the days read as if this build had counted every
+/// call itself.
 #[test]
-fn an_older_build_refuses_a_converted_store_and_the_calls_meanwhile_count_after() {
+fn an_older_build_counts_into_a_converted_store_and_the_return_counts_each_call_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    let now = instant("2026-11-07");
-    let old = [call(1, "2026-11-01"), call(2, "2026-11-02")];
-    let v3 = V3::write(
+    let first = [call(1, "2026-11-01"), call(2, "2026-11-02")];
+    V3::write(
         &path,
-        &old.clone().map(|event| ("node-a", Agent::Claude, event)),
+        &first.clone().map(|event| ("node-a", Agent::Claude, event)),
         &source(),
     );
-    let store = open(&path).unwrap();
+    drop(convert_all(&path, open));
+    // What a version 3 build opens and writes is there as it made it.
+    assert_eq!(user_version(&path), 3);
+    let schema = |path: &Path| -> Vec<String> {
+        let db = Connection::open(path).unwrap();
+        let mut query = db
+            .prepare(
+                "SELECT sql FROM sqlite_master WHERE name IN \
+                 ('events','events_at','devices','backfills','daily','daily_day','cursors',\
+                 'price_cache','ai_daily','ai_daily_day','ai_state') ORDER BY name",
+            )
+            .unwrap();
+        query
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let made_by_version_3 = dir.path().join("v3.sqlite3");
+    V3::write(&made_by_version_3, &[], &source());
+    {
+        // What a version 3 build's own open adds.
+        let db = Connection::open(&made_by_version_3).unwrap();
+        db.execute_batch(AI_SCHEMA).unwrap();
+    }
+    assert_eq!(schema(&path), schema(&made_by_version_3));
+
+    let mut later_view = call(2, "2026-11-02");
+    later_view.tokens.output += 50;
+    let new = call(3, "2026-11-05");
+    let last = call(4, "2026-11-06");
+    {
+        let db = Connection::open(&path).unwrap();
+        for event in [&new, &later_view, &last] {
+            count_as_version_3(&db, "node-a", Agent::Claude, event);
+        }
+    }
+    // The return's step is cut after it took the second count back: the
+    // step changes nothing, and the next one takes it back once.
+    let mut store = open(&path).unwrap();
     assert!(store.converting().unwrap());
-    // Not a call moved yet, and already past what an older build opens.
-    assert!(user_version(&path) > 3);
-    assert_eq!(v3.kept, kept_rows(&store.connection));
+    let before = store.daily().unwrap();
+    store.execute_for_test("UPDATE events SET event='{' WHERE at=(SELECT max(at) FROM events)");
+    assert_eq!(store.convert(), Err("usage_store_decode"));
+    assert_eq!(store.daily().unwrap(), before);
+    let saved = encode(&last).unwrap().replace('\'', "''");
+    store.execute_for_test(&format!("UPDATE events SET event='{saved}' WHERE event='{{'"));
     drop(store);
-    let mut store = convert_all(&path, open);
-    let (checkpoint_source, _) = store
-        .checkpoint("node-a", Agent::Claude, &source().path)
-        .unwrap()
-        .unwrap();
-    assert_eq!(checkpoint_source, source());
-    let mut grown = old.to_vec();
-    grown.extend([call(3, "2026-11-05"), call(4, "2026-11-06")]);
-    let outcome = store
-        .ingest(
-            "node-a",
-            Agent::Claude,
-            &source(),
-            &step(grown),
-            now,
-            &jiff::tz::TimeZone::UTC,
-        )
-        .unwrap();
-    assert_eq!((outcome.repeated, outcome.added), (2, 2));
-    let calls: u64 = store
-        .daily()
-        .unwrap()
-        .iter()
-        .map(|day| day.totals.calls)
-        .sum();
-    assert_eq!(calls, 4);
+    let store = convert_all(&path, open);
+
+    let mut alone = open(&dir.path().join("alone.sqlite3")).unwrap();
+    for batch in [first.to_vec(), vec![later_view, new, last]] {
+        alone
+            .ingest(
+                "node-a",
+                Agent::Claude,
+                &source(),
+                &step(batch),
+                instant("2026-11-07"),
+                &jiff::tz::TimeZone::UTC,
+            )
+            .unwrap();
+    }
+    assert_eq!(store.daily().unwrap(), alone.daily().unwrap());
+    let rows = |table: &str| -> u64 {
+        store
+            .connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!((rows("calls"), rows("events")), (4, 0), "each call is kept once");
+}
+
+/// The calls a store holds when it is converted for an older build, and
+/// what that build counts into it: a new call and a later view of a call
+/// already moved, with one Hide AI call.
+fn cross_build_calls() -> ([Event; 2], [Event; 2], AiPart) {
+    let mut later_view = call(2, "2026-11-02");
+    later_view.tokens.output += 50;
+    (
+        [call(1, "2026-11-01"), call(2, "2026-11-02")],
+        [later_view, call(3, "2026-11-05")],
+        ai_part("2026-11-06", "m-1", "labels", 10),
+    )
+}
+
+fn cross_build_store() -> std::path::PathBuf {
+    let Some(dir) = std::env::var_os("HIDE_TEST_CROSS_BUILD") else {
+        panic!("HIDE_TEST_CROSS_BUILD names no folder");
+    };
+    hide_kit::layout::usage_store(Path::new(&dir))
+}
+
+/// The first of three runs by hand that go from this build to an older one
+/// and back with each build's own code: this one converts a store in the
+/// folder `HIDE_TEST_CROSS_BUILD` names; an older build's checkout then
+/// opens it with its own `Store`, ingests `cross_build_calls`'s second
+/// calls and records its Hide AI call; `cross_build_return` checks what
+/// this build reads afterwards (`cargo nextest run -p hide-core
+/// --run-ignored only cross_build`).
+#[test]
+#[ignore = "run by hand beside an older build"]
+fn cross_build_convert() {
+    let path = cross_build_store();
+    let (first, _, _) = cross_build_calls();
+    V3::write(
+        &path,
+        &first.map(|event| ("node-a", Agent::Claude, event)),
+        &source(),
+    );
+    drop(convert_all(&path, open));
+}
+
+/// The third run of [`cross_build_convert`]'s: back on this build, the
+/// store reads as if this build had counted every call and Hide AI call
+/// itself.
+#[test]
+#[ignore = "run by hand beside an older build"]
+fn cross_build_return() {
+    let path = cross_build_store();
+    let (first, older, hide_ai) = cross_build_calls();
+    let mut store = open(&path).unwrap();
+    assert!(store.converting().unwrap(), "the older build counted nothing");
+    drop(store);
+    store = convert_all(&path, open);
+    let dir = tempfile::tempdir().unwrap();
+    let mut alone = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    for batch in [first.to_vec(), older.to_vec()] {
+        alone
+            .ingest(
+                "node-a",
+                Agent::Claude,
+                &source(),
+                &step(batch),
+                instant("2026-11-07"),
+                &jiff::tz::TimeZone::UTC,
+            )
+            .unwrap();
+    }
+    alone.ai_record(&[hide_ai], &[]).unwrap();
+    assert_eq!(store.daily().unwrap(), alone.daily().unwrap());
+    assert_eq!(store.ai_rows().unwrap(), alone.ai_rows().unwrap());
 }
 
 /// A place leaves with its last call: once a session's calls are past the
@@ -1221,7 +1339,8 @@ fn operator_copy_converts_to_under_half_and_answers_as_before() {
     };
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    std::fs::copy(&copy, &path).unwrap();
+    // Written anew rather than copied: a copy keeps a read-only copy's mode.
+    std::fs::write(&path, std::fs::read(&copy).unwrap()).unwrap();
     let v3 = V3::read(&path);
     let before = bytes_on_disk(&path);
     let newest = v3

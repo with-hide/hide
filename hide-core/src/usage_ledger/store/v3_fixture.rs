@@ -46,55 +46,15 @@ pub(crate) struct V3 {
 }
 
 impl V3 {
-    /// Writes `calls` as a build before version 4 stored them: the whole
+    /// Writes `calls` as a build before the calls format stored them: the whole
     /// event as JSON beside its key, its day's totals, the node's count, a
     /// completed backfill and a checkpoint at the start of `file`.
     pub(crate) fn write(path: &Path, calls: &[(&str, Agent, Event)], file: &Candidate) -> Self {
         let db = Connection::open(path).unwrap();
         db.execute_batch(&format!("BEGIN;{V3_SCHEMA}")).unwrap();
         for (device, agent, event) in calls {
+            count_as_version_3(&db, device, *agent, event);
             let agent = agent.as_str();
-            let day = local_day(event.at_ms, &jiff::tz::TimeZone::UTC).unwrap();
-            let json = encode(event).unwrap();
-            let fingerprint = sha2::Digest::finalize(sha2::Digest::chain_update(
-                <sha2::Sha256 as sha2::Digest>::new(),
-                json.as_bytes(),
-            ))
-            .to_vec();
-            db.execute(
-                "INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                params![
-                    device,
-                    agent,
-                    event.key,
-                    day,
-                    fingerprint,
-                    event.at_ms,
-                    json
-                ],
-            )
-            .unwrap();
-            let totals: Option<String> = db
-                .query_row(
-                    "SELECT totals FROM daily WHERE device=?1 AND agent=?2 AND day=?3 AND model=?4",
-                    params![device, agent, day, event.model],
-                    |r| r.get(0),
-                )
-                .optional()
-                .unwrap();
-            let mut totals: Totals = totals.map(|t| decode(&t).unwrap()).unwrap_or_default();
-            totals.add(event).unwrap();
-            db.execute(
-                "INSERT INTO daily VALUES(?1,?2,?3,?4,?5) ON CONFLICT(device,agent,day,model) \
-                 DO UPDATE SET totals=excluded.totals",
-                params![device, agent, day, event.model, encode(&totals).unwrap()],
-            )
-            .unwrap();
-            db.execute(
-                "INSERT INTO devices VALUES(?1,1) ON CONFLICT(device) DO UPDATE SET calls=calls+1",
-                [device],
-            )
-            .unwrap();
             db.execute(
                 "INSERT OR IGNORE INTO backfills(device,agent,completed) VALUES(?1,?2,1)",
                 params![device, agent],
@@ -185,6 +145,47 @@ impl V3 {
         }
         agents
     }
+}
+
+/// Counts `event` as a version 3 build counts a call it finds no row of in
+/// `events`: the whole event as JSON beside its key, added to its day's
+/// totals and to the device's count. What a build before
+/// with-hide/hide-private#672 writes into a store this build converted.
+pub(crate) fn count_as_version_3(db: &Connection, device: &str, agent: Agent, event: &Event) {
+    let agent = agent.as_str();
+    let day = local_day(event.at_ms, &jiff::tz::TimeZone::UTC).unwrap();
+    let json = encode(event).unwrap();
+    let fingerprint = sha2::Digest::finalize(sha2::Digest::chain_update(
+        <sha2::Sha256 as sha2::Digest>::new(),
+        json.as_bytes(),
+    ))
+    .to_vec();
+    db.execute(
+        "INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![device, agent, event.key, day, fingerprint, event.at_ms, json],
+    )
+    .unwrap();
+    let totals: Option<String> = db
+        .query_row(
+            "SELECT totals FROM daily WHERE device=?1 AND agent=?2 AND day=?3 AND model=?4",
+            params![device, agent, day, event.model],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    let mut totals: Totals = totals.map(|t| decode(&t).unwrap()).unwrap_or_default();
+    totals.add(event).unwrap();
+    db.execute(
+        "INSERT INTO daily VALUES(?1,?2,?3,?4,?5) ON CONFLICT(device,agent,day,model) \
+         DO UPDATE SET totals=excluded.totals",
+        params![device, agent, day, event.model, encode(&totals).unwrap()],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO devices VALUES(?1,1) ON CONFLICT(device) DO UPDATE SET calls=calls+1",
+        [device],
+    )
+    .unwrap();
 }
 
 /// Every row of the tables a conversion must leave as they were.
