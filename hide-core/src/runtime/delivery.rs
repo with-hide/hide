@@ -748,6 +748,43 @@ impl Runtime {
         );
     }
 
+    /// Puts the registrations of the agents a restore did not resume on the
+    /// ones the delivery store has still to end (`left`, from the engine's
+    /// session read, which names each until an agent shows in its pane). The
+    /// pane is there, a shell, so no read lists it gone: the engine says so.
+    /// A pane a sleep record holds keeps its registration, which a wake
+    /// continues. Said again by every read that names the agent, which costs
+    /// a pass over `left` and nothing once the registration has ended.
+    pub(crate) fn end_unresumed(
+        &mut self,
+        device: &str,
+        host_scope: Option<&str>,
+        payload: &SessionSnapshotPayload,
+        left: &[crate::session_sync::NotResumed],
+    ) {
+        if left.is_empty() || !self.delivery_pane_owner_registered(device) {
+            return;
+        }
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return;
+        };
+        let shown: HashSet<&str> = payload
+            .agents
+            .iter()
+            .filter_map(|agent| agent.pane_id.as_deref())
+            .collect();
+        let asleep = &self.snapshot.ui_state.agent_sleep.records;
+        let left: Vec<_> = left
+            .iter()
+            .filter(|left| !asleep.contains_key(&left.pane_id))
+            .cloned()
+            .collect();
+        let ended = crate::coordination::not_resumed_registrations(
+            ledger, device, host_scope, &left, &shown,
+        );
+        self.registrations_gone.extend(ended);
+    }
+
     /// The registration the live execution in `pane` holds, which a sleep
     /// that closes the pane saves so its wake continues it.
     pub(super) fn delivery_registration_of(
@@ -4513,6 +4550,139 @@ pub(crate) mod tests {
         assert!(guard.delivery_registrations_gone().is_empty());
         assert!(crate::coordination::resolve_actor(&persisted, "child").is_none());
         drop(guard);
+    }
+
+    /// The lead's pane with an agent, and the child's pane a shell: its
+    /// engine restored it after a restart and did not resume the agent.
+    fn lead_with_the_child_a_shell() -> SessionSnapshotPayload {
+        serde_json::from_value(json!({
+            "agents": [
+                {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
+                 "lineage_session":crate::engine::tokens::session_digest("lead-native")},
+            ],
+            "panes": [{"pane_id": "lead"}, {"pane_id": "child"}],
+        }))
+        .unwrap()
+    }
+
+    fn not_resumed(pane: &str, session: &str) -> crate::session_sync::NotResumed {
+        crate::session_sync::NotResumed {
+            pane_id: pane.into(),
+            agent: "codex".into(),
+            session: Some(session.into()),
+            why: "its resume could not be typed (fixture)".into(),
+        }
+    }
+
+    /// Issue 653: after a reboot a pane can be a shell with the agent's
+    /// registration still live, and nothing ever ended it, so `hide agent show`
+    /// read it running. The engine names the agent it did not resume, and the
+    /// store ends its registration and the watches on it as a closed pane's
+    /// would; the agent whose pane runs one stays registered.
+    #[test]
+    fn an_agent_a_restore_did_not_resume_ends_its_registration_though_its_pane_stays() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        registered_pair(&mut runtime.lock().unwrap());
+        {
+            let mut guard = runtime.lock().unwrap();
+            let shown = lead_with_the_child_a_shell();
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &shown, Some("scope"), None);
+            assert!(
+                guard.delivery_registrations_gone().is_empty(),
+                "both panes are there, so no read lists one gone"
+            );
+            guard.end_unresumed(
+                crate::node::TEST_NODE,
+                Some("scope"),
+                &shown,
+                &[
+                    not_resumed("child", "child-native"),
+                    // The lead's pane runs an agent now, whatever the restore left.
+                    not_resumed("lead", "lead-native"),
+                ],
+            );
+            assert_eq!(
+                guard
+                    .delivery_registrations_gone()
+                    .into_iter()
+                    .map(|(id, reason)| (id, reason.reason()))
+                    .collect::<Vec<_>>(),
+                [("agent-2".to_owned(), "agent_not_resumed")]
+            );
+        }
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        drop(worker);
+        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let ended = |ledger: &Ledger| {
+            ledger
+                .agents
+                .iter()
+                .map(|record| (record.id.clone(), record.ended))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ended(&persisted),
+            [("agent-1".to_owned(), false), ("agent-2".to_owned(), true)]
+        );
+        assert!(persisted.watches.is_empty());
+        // Said again by the next read, which still names it: nothing is left to end.
+        let mut guard = runtime.lock().unwrap();
+        guard.end_unresumed(
+            crate::node::TEST_NODE,
+            Some("scope"),
+            &lead_with_the_child_a_shell(),
+            &[not_resumed("child", "child-native")],
+        );
+        assert!(guard.delivery_registrations_gone().is_empty());
+    }
+
+    /// A registration that belongs to another conversation than the one the
+    /// restore did not resume is not that agent's, and one on another engine
+    /// or device is not this read's to end.
+    #[test]
+    fn a_registration_of_another_conversation_or_engine_is_not_ended_by_a_restore() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, _) = fixture(root.path());
+        let mut guard = runtime.lock().unwrap();
+        registered_pair(&mut guard);
+        let shown = lead_with_the_child_a_shell();
+        let left = |session: &str| [not_resumed("child", session)];
+        // The pane's registration was made for another conversation.
+        guard.end_unresumed(
+            crate::node::TEST_NODE,
+            Some("scope"),
+            &shown,
+            &left("another"),
+        );
+        assert!(guard.delivery_registrations_gone().is_empty());
+        // Another engine of this machine, and another machine, judge their own.
+        guard.end_unresumed(
+            crate::node::TEST_NODE,
+            Some("another-herdr"),
+            &shown,
+            &left("child-native"),
+        );
+        guard.end_unresumed("device", None, &shown, &left("child-native"));
+        assert!(guard.delivery_registrations_gone().is_empty());
+        // A conversation the save did not name matches the pane's registration.
+        let unnamed = [crate::session_sync::NotResumed {
+            session: None,
+            ..not_resumed("child", "")
+        }];
+        guard.end_unresumed(crate::node::TEST_NODE, Some("scope"), &shown, &unnamed);
+        assert_eq!(guard.delivery_registrations_gone().len(), 1);
     }
 
     /// The same close ends the answer wait of a request the closed pane's agent

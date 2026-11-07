@@ -68,14 +68,7 @@ impl Definitions {
 /// The definition a caller's kind names: its id or one of its other
 /// spellings, as Herdr's names (`claude`) reach the engine too.
 pub(super) fn definition<'c>(catalog: &'c Catalog, kind: &str) -> Option<&'c Definition> {
-    let kind = kind.trim();
-    catalog.definitions.iter().find(|definition| {
-        definition.id.eq_ignore_ascii_case(kind)
-            || definition
-                .aliases
-                .iter()
-                .any(|alias| alias.eq_ignore_ascii_case(kind))
-    })
+    hide_agent_adapter::definition::find(&catalog.definitions, kind)
 }
 
 /// Native and runtime script names take precedence over the optional

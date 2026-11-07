@@ -320,6 +320,11 @@ impl<'g> Engine for FakeEngine<'g> {
         *lock(&self.shared.wake) = Some(wake);
     }
 
+    fn start_program_name(&self, kind: &str) -> Option<String> {
+        hide_agent_adapter::definition::find(hide_agent_adapter::definition::builtins(), kind)
+            .and_then(|definition| definition.executables.first().cloned())
+    }
+
     fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
         self.ask(
             "hook_session",
