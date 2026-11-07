@@ -107,6 +107,8 @@ mod overview_graph;
 mod own_devices;
 mod pane_geometry;
 pub(super) mod pane_move;
+#[path = "tests/phone_viewing.rs"]
+mod phone_viewing;
 mod plans;
 #[path = "tests/project_open.rs"]
 mod project_open;

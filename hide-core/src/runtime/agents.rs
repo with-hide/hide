@@ -1,5 +1,9 @@
 use super::*;
 
+/// The agents phones may have open at once: hided serves at most four phones
+/// with two sockets each, so a longer list is not one hided sends.
+const MAX_PHONE_VIEWED_PANES: usize = 16;
+
 /// Which of this machine's panes the lineage pass saw, and how each one's
 /// connection stood, so a Reopen's published state ends with the need for it.
 #[derive(Default)]
@@ -1313,7 +1317,8 @@ impl Runtime {
         scope: ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) -> bool {
-        let focused = self.operator_focused_pane_id.clone();
+        let looked_at = self.looked_at(self.operator_focused_pane_id.clone());
+        let looked_at = looked_at.iter().map(String::as_str).collect::<Vec<_>>();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut changes = Vec::new();
         if let Some(live_pane_ids) = live_pane_ids {
@@ -1332,7 +1337,7 @@ impl Runtime {
             beyond,
             &mut records,
             &mut self.local_read_connection,
-            focused.as_deref(),
+            &looked_at,
         ));
         self.snapshot.ui_state.pane_read_records = records;
         let synced = self.sync_pane_status_from_agents(agents);
@@ -1373,22 +1378,26 @@ impl Runtime {
         changed | self.refresh_inactive_groups() | self.sync_request_rows()
     }
 
-    /// Applies the read axis to one remote target's agent rows.
-    ///
-    /// A pane is a pane: a remote row earns its read record the same way a
-    /// local one does, from the focus its own server reports, because Hide
-    /// never focuses a remote pane itself. Eviction is scoped to this target's
-    /// pane id prefix, so a local sync cannot drop what this pass wrote and
-    /// this pass cannot drop another target's records.
-    ///
-    /// The remote pane tree arrives freshly projected on every sync, with no
-    /// read axis applied, so it is synced whether or not the ledger moved.
-    pub(super) fn apply_remote_read_state(
-        &mut self,
+    /// The panes the operator is looking at on one server: `focus`, that
+    /// server's focus pane as the operator chose it, and every agent a phone
+    /// has open (`phone_viewed_pane_ids`). These are the panes the read axis
+    /// reads as of now (`agent_state::apply_read_state`).
+    fn looked_at(&self, focus: Option<String>) -> Vec<String> {
+        focus
+            .into_iter()
+            .chain(self.phone_viewed_pane_ids.iter().cloned())
+            .collect()
+    }
+
+    /// The focus a device's own server reports, counted as the operator's
+    /// look only while that device is in front and the pane is in a tab its
+    /// window shows. Hide never focuses a remote pane itself.
+    fn remote_read_focus(
+        &self,
         target_id: &str,
-        session: &mut RemoteSessionSnapshot,
-    ) -> bool {
-        let focused = session.focused_pane_id.clone().filter(|pane| {
+        session: &RemoteSessionSnapshot,
+    ) -> Option<String> {
+        session.focused_pane_id.clone().filter(|pane| {
             if self.workspace_views.is_none() {
                 return true;
             }
@@ -1406,7 +1415,88 @@ impl Runtime {
                             && tab.panes.iter().any(|entry| &entry.id == pane)
                     })
             })
-        });
+        })
+    }
+
+    /// Re-runs the read axis over every row already published, this
+    /// machine's and each device's, for a look that arrived without a new
+    /// agent list: a request view result opened, or a phone opening or
+    /// closing an agent. A device's rows are read with the same looks its
+    /// next sync reads them with (`apply_remote_read_state`).
+    pub(super) fn refresh_read_state_everywhere(&mut self) -> bool {
+        let mut changed = self.refresh_pane_read_state();
+        let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
+        let mut remotes = std::mem::take(&mut self.snapshot.status.remote);
+        let mut changes = Vec::new();
+        for remote in &mut remotes {
+            let Some(session) = remote.session.as_mut() else {
+                continue;
+            };
+            let looked_at = self.looked_at(self.remote_read_focus(&remote.target_id, session));
+            let before = session.agents.clone();
+            changes.extend(crate::agent_state::apply_read_state(
+                &mut session.agents,
+                Default::default(),
+                &mut records,
+                self.read_connection(Some(&remote.target_id)),
+                &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
+            ));
+            changed |= before != session.agents;
+        }
+        self.snapshot.status.remote = remotes;
+        self.snapshot.ui_state.pane_read_records = records;
+        if !changes.is_empty() {
+            self.record_read_record_changes(&changes);
+        }
+        changed | self.sync_request_rows()
+    }
+
+    /// A phone opened or closed an agent's detail, or went away: `pane_ids`
+    /// is every agent the phones have open now. Each is read as the
+    /// desktop's focus pane is while it stays open, so a turn it finishes
+    /// meanwhile is read too; one no longer open keeps the record it was
+    /// last read with. Nothing else moves: the desktop's focus, its tabs, a
+    /// sleeping agent (a look from the phone does not wake it) and every
+    /// attach stay as they are.
+    pub(super) fn set_phone_viewing(&mut self, pane_ids: Vec<String>) -> bool {
+        if pane_ids.len() > MAX_PHONE_VIEWED_PANES {
+            self.push_diagnostic(
+                "pane.phone_viewing.refused",
+                format!(
+                    "A phone look named {} agents; at most {MAX_PHONE_VIEWED_PANES} are open at once",
+                    pane_ids.len()
+                ),
+            );
+            return false;
+        }
+        let viewed = pane_ids.into_iter().collect::<BTreeSet<_>>();
+        if viewed == self.phone_viewed_pane_ids {
+            return false;
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "runtime", "kind": "pane.phone_viewing",
+            "pane_ids": viewed,
+        }));
+        self.phone_viewed_pane_ids = viewed;
+        self.refresh_read_state_everywhere()
+    }
+
+    /// Applies the read axis to one remote target's agent rows.
+    ///
+    /// A pane is a pane: a remote row earns its read record the same way a
+    /// local one does, from the focus its own server reports, because Hide
+    /// never focuses a remote pane itself. Eviction is scoped to this target's
+    /// pane id prefix, so a local sync cannot drop what this pass wrote and
+    /// this pass cannot drop another target's records.
+    ///
+    /// The remote pane tree arrives freshly projected on every sync, with no
+    /// read axis applied, so it is synced whether or not the ledger moved.
+    pub(super) fn apply_remote_read_state(
+        &mut self,
+        target_id: &str,
+        session: &mut RemoteSessionSnapshot,
+    ) -> bool {
+        let looked_at = self.looked_at(self.remote_read_focus(target_id, session));
         let live_pane_ids = session
             .workspaces
             .iter()
@@ -1466,7 +1556,7 @@ impl Runtime {
             Default::default(),
             &mut records,
             connection,
-            focused.as_deref(),
+            &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
         ));
         self.snapshot.ui_state.pane_read_records = records;
         if lineage_pruned {

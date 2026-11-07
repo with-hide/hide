@@ -282,7 +282,7 @@ fn lineage_cross_checkout_tree_and_orphan_keep_the_canonical_rows_and_axes() {
         Default::default(),
         &mut records,
         &mut crate::agent_state::ReadConnection::new("server".to_owned()),
-        Some("child"),
+        &["child"],
     );
     let original = rows
         .iter()
@@ -438,7 +438,7 @@ fn lineage_expansion_persists_without_attention_opening_it_and_prunes_on_disappe
         Default::default(),
         &mut runtime.snapshot.ui_state.pane_read_records,
         &mut crate::agent_state::ReadConnection::new("server".to_owned()),
-        None,
+        &[],
     );
     assert!(
         attention

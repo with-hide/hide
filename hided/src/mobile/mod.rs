@@ -214,6 +214,10 @@ pub struct Mobile {
     starts: start::Desk,
     meta: watch::Sender<PhoneMeta>,
     live: Mutex<HashMap<u64, LivePhone>>,
+    /// The agents the core was last told the phones have open
+    /// (`announce_viewing`); held while the core is told, so two changes
+    /// reach it in the order they happened.
+    viewing_announced: Mutex<BTreeSet<String>>,
     vapid: Option<push::Vapid>,
     wake: Notify,
     stopping: watch::Sender<bool>,
@@ -308,6 +312,7 @@ impl Mobile {
             })
             .0,
             live: Mutex::new(HashMap::new()),
+            viewing_announced: Mutex::new(BTreeSet::new()),
             vapid,
             wake: Notify::new(),
             stopping: watch::channel(false).0,
@@ -1592,6 +1597,12 @@ impl Mobile {
     pub fn unregister(&self, connection: u64) {
         self.set_start_sheet(connection, false);
         let removed = self.live().remove(&connection);
+        if removed
+            .as_ref()
+            .is_some_and(|phone| phone.viewing.is_some())
+        {
+            self.announce_viewing();
+        }
         if let Some(phone) = removed {
             self.lock().phones.touch(&phone.phone_id, now_ms());
             hide_core::diagnostic!(json!({
@@ -1700,10 +1711,51 @@ impl Mobile {
             .await
     }
 
+    /// The agent this connection has open, or none. An agent a phone has
+    /// open is read on both surfaces, as the desktop's focus on its pane
+    /// reads it, for as long as it stays open (`announce_viewing`).
     pub fn set_viewing(&self, connection: u64, viewing: Option<AgentKey>) {
         if let Some(phone) = self.live().get_mut(&connection) {
             phone.viewing = viewing;
         }
+        self.announce_viewing();
+    }
+
+    /// Tells the core every agent the phones have open now, when that
+    /// changed (`phone_viewing`). The list is read and sent under
+    /// `viewing_announced`, so whichever change is told last tells the
+    /// latest list; a list the core did not take is told again with the
+    /// next change.
+    fn announce_viewing(&self) {
+        let mut announced = self
+            .viewing_announced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let viewing = self
+            .live()
+            .values()
+            .filter_map(|phone| phone.viewing.as_ref())
+            .map(|key| key.pane_id.clone())
+            .collect::<BTreeSet<_>>();
+        if *announced == viewing {
+            return;
+        }
+        let event = json!({
+            "schema_version": hide_core::SCHEMA_VERSION, "kind": "phone_viewing",
+            "payload": {"pane_ids": viewing},
+        });
+        match self.config.core.dispatch(event.to_string().into_bytes()) {
+            Ok(()) => *announced = viewing,
+            Err(error) => hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "phone.viewing_unrecorded",
+                "message": error,
+            })),
+        }
+    }
+
+    #[cfg(test)]
+    fn viewing_announced(&self) -> BTreeSet<String> {
+        self.viewing_announced.lock().unwrap().clone()
     }
 
     /// Whether any phone has this root agent's detail open (no push then).
