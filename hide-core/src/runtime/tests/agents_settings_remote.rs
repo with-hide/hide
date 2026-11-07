@@ -300,9 +300,15 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
             .any(|control| matches!(control, TerminalControl::Forget { .. })),
         "{controls:?}"
     );
-    assert_eq!(transport_state(&runtime, pane_id).as_deref(), Some("released"));
+    assert_eq!(
+        transport_state(&runtime, pane_id).as_deref(),
+        Some("released")
+    );
     assert!(!runtime.ingest_remote_session("mini", Ok(session.clone())));
-    assert!(terminals.releases().is_empty(), "a released pane is released once");
+    assert!(
+        terminals.releases().is_empty(),
+        "a released pane is released once"
+    );
 
     // The device's panes leave its session: their node forgets them and so
     // does the projection, while this machine's pane stays.
