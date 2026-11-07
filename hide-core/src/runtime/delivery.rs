@@ -1574,6 +1574,7 @@ impl Runtime {
             }
             _ => None,
         };
+        let node_read = self.node_checker_letter(&actor, &command);
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
@@ -1590,10 +1591,46 @@ impl Runtime {
             Some(engine) => prepared.forced_through(engine),
             None => prepared,
         };
-        Ok(match queued {
+        Ok(match queued.or(node_read) {
             Some(answer) => prepared.answered(answer),
             None => prepared,
         })
+    }
+
+    /// The letter a mission node's worker asks to read when its sender is a
+    /// checker bound to that same node, the one read beyond a letter's own
+    /// sender and recipient (docs/delivery.md, Who may read a letter).
+    /// `None` leaves the command to the store, which answers
+    /// `letter_unavailable` to every other reader. A read changes nothing,
+    /// so the answer comes from the published ledger under the lock: a
+    /// letter the store has not published yet reads as unavailable until it
+    /// is.
+    fn node_checker_letter(&self, reader: &Actor, command: &Command) -> Option<serde_json::Value> {
+        let Command::Show { id } = command else {
+            return None;
+        };
+        let ledger = self.delivery_ledger.as_ref().ok()?;
+        let letter = ledger.letters.iter().find(|letter| letter.id == *id)?;
+        // Its own sender and recipient read it through the store as before.
+        if letter.sender.same_identity(reader) || letter.recipient.same_identity(reader) {
+            return None;
+        }
+        let registration = |actor: &Actor, live: bool| {
+            ledger
+                .agents
+                .iter()
+                .rev()
+                .find(|record| record.actor.same_identity(actor) && !(live && record.ended))
+                .map(|record| record.id.as_str())
+        };
+        // A checker that has since ended still wrote the letter, but only a
+        // worker that runs asks to read it.
+        let worker = registration(reader, true)?;
+        let checker = registration(&letter.sender, false)?;
+        self.missions
+            .book
+            .worker_reads_checker(worker, checker)
+            .then(|| serde_json::json!(letter))
     }
 
     pub(crate) fn install_delivery_client(&mut self, client: Client) {

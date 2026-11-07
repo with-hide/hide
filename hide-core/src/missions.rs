@@ -872,6 +872,15 @@ impl MissionNode {
         self.prs.last().copied()
     }
 
+    /// The registrations the Conductor bound as checkers to the node's lines
+    /// (a reviewer or a verifier), once each.
+    pub(crate) fn checker_agents(&self) -> impl Iterator<Item = &str> {
+        self.criteria
+            .iter()
+            .flat_map(|line| line.checkers.iter())
+            .filter_map(|checker| checker.agent_id.as_deref())
+    }
+
     /// Whether the node's worker and checkers may run on another machine
     /// than the mission's: only a change that reaches main through a pull
     /// request, whose work GitHub carries back. A direct change's branch
@@ -1443,6 +1452,18 @@ impl MissionBook {
 
     pub(crate) fn get_mut(&mut self, id: &str) -> Option<&mut Mission> {
         self.missions.iter_mut().find(|mission| mission.id == id)
+    }
+
+    /// Whether `checker` is bound to a line of a node that `worker` works:
+    /// the same node of the same mission, the one pair of agents in which
+    /// the worker may read the checker's letters (`hide request show`).
+    pub(crate) fn worker_reads_checker(&self, worker: &str, checker: &str) -> bool {
+        self.missions.iter().any(|mission| {
+            mission.nodes.iter().any(|node| {
+                node.agent_id.as_deref() == Some(worker)
+                    && node.checker_agents().any(|bound| bound == checker)
+            })
+        })
     }
 
     /// The mission `actor` conducts and still runs, if any.
