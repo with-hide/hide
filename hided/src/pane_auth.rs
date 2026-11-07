@@ -264,6 +264,8 @@ fn remove_local_reference(entry: &Capability) {
 pub use hide_agent_hooks::hook_request::{Reference, Route};
 
 pub struct Registry {
+    /// The state folder, whose hook outbox the sweep hands on.
+    state_dir: PathBuf,
     directory: PathBuf,
     entries: Mutex<HashMap<String, Capability>>,
     closed: AtomicBool,
@@ -288,6 +290,7 @@ impl Registry {
             }
         }
         Ok(Self {
+            state_dir: state_dir.to_path_buf(),
             directory,
             entries: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
@@ -741,7 +744,7 @@ impl Drop for Registry {
 /// The installation this daemon is (`hide_host::kit::running_install`), the
 /// one its own panes name; `None` for a build run from anywhere else, whose
 /// panes name none.
-fn own_install() -> Option<&'static str> {
+pub(crate) fn own_install() -> Option<&'static str> {
     static OWN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     OWN.get_or_init(|| hide_host::kit::running_install().map(|install| install.id))
         .as_deref()
@@ -1086,7 +1089,10 @@ pub async fn serve(
             _ = sweep.tick() => {
                 let registry = Arc::clone(&registry);
                 let core = Arc::clone(&core);
-                tokio::task::spawn_blocking(move || registry.sweep(&core));
+                tokio::task::spawn_blocking(move || {
+                    registry.sweep(&core);
+                    crate::hook_request::replay_own(&registry.state_dir, &core);
+                });
                 continue;
             }
             () = shutdown.ended() => break,

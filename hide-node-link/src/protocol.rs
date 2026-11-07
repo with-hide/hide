@@ -328,7 +328,11 @@ use crate::error::HostError;
 /// (`TerminalControl::Mouse`), which the holder encodes for the program's
 /// mouse mode, in place of the core's own bytes (`Write`); a helper on 77
 /// would refuse it, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 78;
+/// 79: a node sends the status reports its hooks queued while the core was
+/// away (`NodeEvent::QueuedReports`), which the core answers with
+/// `ProofAnswer::Replayed`; a core on 78 would read the event as no event
+/// at all, so the helper upgrades.
+pub const PROTOCOL_VERSION: u32 = 79;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

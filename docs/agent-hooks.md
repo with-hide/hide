@@ -355,6 +355,23 @@ The same worker reads once at startup and after a successful install; ordinary r
 Diagnosis and installation are serialized, so a pre-install answer cannot overtake a later install, and neither read makes the session coordinator wait.
 Shutdown stops admission, closes the fixed node to end its current call and joins the worker; a retiring answer is not published.
 
+### Reports kept while the core is away
+
+A status report nothing answered for is kept on its machine and handed to the core when the core is back (with-hide/hide-private#674): a device whose link to the core dropped (the core's laptop asleep, a network change, a core move), or this machine while its daemon restarts.
+Only the turn report waits: a letter pull, Memory and every other request needs its answer now, so it fails as before ([What a hook records when it fails](#what-a-hook-records-when-it-fails)).
+The report waits for the causes that say nothing of the pane's installation answered, so the core never decided on it: `unavailable`, `connect`, `unsent`, `timeout`, `answer` and `deadline` (`hide_agent_hooks::outbox::WAITED_OUT`).
+A refusal the core gave, an untrusted socket record and another installation's answer are not waited out.
+
+The hook keeps it in `hook-outbox.json` in the state folder its requests go to (`hide_kit::layout::hook_outbox`), private to the account, with the pane, the pane's installation, a fresh id, and the report stamped with when the hook made it (`HookStatusReport::at_unix_us`, microseconds of that machine's clock).
+The file is replaced whole under its own lock (`hook-outbox.lock`), holds at most 512 reports, and one more drops the oldest and counts it; a file that does not read back is set aside as `hook-outbox.damaged.json` and the outbox starts again, saying so to the core.
+A report is metadata only (runtime, session, turn, counts, open approvals): no prompt, path or letter waits there.
+
+The node that serves the state folder's panes sends the reports up its link when it starts, which is the link coming back, and at each five-second sweep after, oldest first, at most 32 or 16 KiB a batch (`NodeEvent::QueuedReports`), only its own installation's and those naming none; the core's daemon does the same for this machine's from its bootstrap's sweep.
+The core applies each report as the hook's own would have been (`Core::hook_replay`), but only when the hook made it after the last report the core applied for that session; it answers `ProofAnswer::Replayed`, and only then does the node remove the batch, so a link lost before the answer sends the same reports again and the core changes nothing the second time.
+A live report is the session's present and always applies; a replayed one older than it, or as old, changes nothing, so a queued report never undoes a later one.
+When the hook made the session's last applied report is kept with the session's facts and saved whenever they are, so after a core restart a replay is measured against the last one saved.
+Each batch is one `agent_hooks` `outbox.replayed` line in hided's diagnostic log with the device and how many were applied, ignored and dropped at the limit; a set-aside file is `outbox.damaged` for this machine and a node's `pane.refused` with the reason `outbox_damaged`, a failure to keep a report the hook's `outbox.failed` line in the hooks' log, and nothing reaches the screen (design principle 13).
+
 ## Native questions
 
 Agent question tools keep their native UI.

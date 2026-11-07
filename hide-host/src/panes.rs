@@ -16,6 +16,12 @@
 //! ([`StreamCaller`]). Everything here lives only as
 //! long as the link: the node's input closing ends the listener, every
 //! stream and every reference with it.
+//!
+//! The status reports this machine's hooks could not hand to the core while
+//! the link was down wait in the state folder's outbox
+//! (`hide_agent_hooks::outbox`); the service sends them up oldest first as
+//! [`NodeEvent::QueuedReports`] when it starts, which is the link coming
+//! back, and at each sweep after, and removes each batch the core answered.
 
 use std::collections::HashMap;
 use std::fs;
@@ -28,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use hide_agent_hooks::hook_request::install;
+use hide_agent_hooks::outbox;
 use hide_node_link::panes::{
     MAX_CHUNK, MAX_STREAMS, NodeEvent, PROJECT_OPEN_ACCEPT, PROJECT_OPEN_ANSWER,
     PROJECT_OPENS_PER_MINUTE, PaneIdentity, PanesStarted, ProofAnswer, StreamCaller,
@@ -105,6 +112,8 @@ struct Started {
     socket_wire: String,
     folder: PathBuf,
     closer: ListenerCloser,
+    /// The state folder `bridges` is in, whose hook outbox this node sends.
+    state_dir: PathBuf,
 }
 
 /// The pane service of one node link. Created idle with the serve loop and
@@ -123,6 +132,8 @@ pub struct Panes {
     /// which its answers name; `None` for a build of no installation.
     install: Option<String>,
     opens: Mutex<Opens>,
+    /// A drain of the hook outbox is under way: one at a time.
+    replaying: AtomicBool,
 }
 
 /// The plain shells' `hide <path>` on this link: one in flight, and when
@@ -175,6 +186,7 @@ impl Panes {
             checkout_callers: false,
             install: None,
             opens: Mutex::new(Opens::default()),
+            replaying: AtomicBool::new(false),
         }
     }
 
@@ -218,6 +230,11 @@ impl Panes {
             return Err(HostError::new(ErrorCode::Io, "The node is stopping"));
         }
         let io = |error: io::Error| HostError::new(ErrorCode::Io, error.to_string());
+        // `hide_kit::layout::workspace_bridges` names it in the state folder.
+        let state_dir = bridges
+            .parent()
+            .ok_or_else(|| HostError::new(ErrorCode::Io, "The bridge folder has no state folder"))?
+            .to_path_buf();
         validate_dir(bridges).map_err(io)?;
         remove_dead_folders(bridges);
         let folder = tempfile::Builder::new()
@@ -248,6 +265,7 @@ impl Panes {
             socket_wire: socket_wire.clone(),
             folder,
             closer: listener.closer(),
+            state_dir,
         };
         if self.started.set(started).is_err() {
             unreachable!("only the start lock's holder sets the service");
@@ -370,11 +388,13 @@ impl Panes {
             }
         });
         let mut last_sweep = Instant::now();
+        self.replay(scope, output);
         loop {
             if last_sweep.elapsed() >= SWEEP_INTERVAL {
                 if self.sweep_references(output).is_err() {
                     return;
                 }
+                self.replay(scope, output);
                 last_sweep = Instant::now();
             }
             let wait = SWEEP_INTERVAL.saturating_sub(last_sweep.elapsed());
@@ -401,6 +421,51 @@ impl Panes {
                 return;
             }
         }
+    }
+
+    /// Sends what waits in the hook outbox on a thread of its own, unless a
+    /// drain is under way; a batch the core did not answer stays for the
+    /// next sweep.
+    fn replay<'scope, 'env, W: Write + Send>(
+        &'scope self,
+        scope: &'scope Scope<'scope, 'env>,
+        output: &'scope Mutex<W>,
+    ) {
+        let Some(started) = self.started.get() else {
+            return;
+        };
+        if !outbox::waiting(&started.state_dir) || self.replaying.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        scope.spawn(move || {
+            let drained = outbox::drain(&started.state_dir, self.install.as_deref(), |batch| {
+                if batch.damaged {
+                    report_refusal(output, None, "outbox_damaged");
+                }
+                self.send_queued(output, batch)
+            });
+            if drained.is_err() {
+                report_refusal(output, None, "outbox_unavailable");
+            }
+            self.replaying.store(false, Ordering::Release);
+        });
+    }
+
+    /// One batch up the link, and whether the core answered for it.
+    fn send_queued(&self, output: &Mutex<impl Write>, batch: &outbox::Batch) -> bool {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let (waiting, answer) = mpsc::sync_channel(1);
+        lock(&self.proofs).insert(id, waiting);
+        let event = NodeEvent::QueuedReports {
+            request: id,
+            reports: batch.reports.clone(),
+            dropped: batch.dropped,
+        };
+        let answer = write_event(output, &event)
+            .ok()
+            .and_then(|()| answer.recv_timeout(CLIENT_TIMEOUT).ok());
+        lock(&self.proofs).remove(&id);
+        matches!(answer, Some(ProofAnswer::Replayed { .. }))
     }
 
     fn serve_client(&self, mut stream: LocalStream, output: &Mutex<impl Write>) {
@@ -562,8 +627,11 @@ impl Panes {
                     core_refused = true;
                     return Err(reason);
                 }
-                // An open's answers never pair a credential request.
-                ProofAnswer::ProjectOpenAccepted | ProofAnswer::ProjectOpen { .. } => {
+                // An open's or a replay's answers never pair a credential
+                // request.
+                ProofAnswer::ProjectOpenAccepted
+                | ProofAnswer::ProjectOpen { .. }
+                | ProofAnswer::Replayed { .. } => {
                     return Err("invalid_response".to_owned());
                 }
                 ProofAnswer::Issued { token, issued_new } => {
@@ -1371,5 +1439,144 @@ mod tests {
         assert!(live.exists());
         assert!(young.exists());
         assert!(other.exists());
+    }
+}
+
+/// The hook outbox's way up the link, on every system a node runs on.
+#[cfg(test)]
+mod outbox_tests {
+    use super::*;
+    use hide_agent_hooks::report::{HookStatusReport, HookTurn};
+
+    struct Events(mpsc::Sender<Value>);
+
+    impl Write for Events {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            for line in bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+            {
+                let _ = self
+                    .0
+                    .send(serde_json::from_slice(line).map_err(io::Error::other)?);
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn queued(n: usize) -> outbox::Queued {
+        outbox::Queued {
+            id: format!("r-{n}"),
+            pane_id: "w1:p1".to_owned(),
+            install: None,
+            report: HookStatusReport {
+                runtime: "claude".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some("s-1".to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+                waiting: None,
+                at_unix_us: Some(n as u64),
+            },
+        }
+    }
+
+    /// One link to the node whose state folder is `state`: the service
+    /// starts, `body` reads its events and answers as the core, and the
+    /// link ends.
+    fn link(state: &Path, body: impl FnOnce(&Panes, &mpsc::Receiver<Value>)) {
+        let panes = Panes::new();
+        let (sender, events) = mpsc::channel();
+        let output = Mutex::new(Events(sender));
+        std::thread::scope(|scope| {
+            panes
+                .start(
+                    scope,
+                    &output,
+                    &hide_kit::layout::workspace_bridges(state),
+                    crate::pane_holders::PaneSlot::default(),
+                )
+                .unwrap();
+            body(&panes, &events);
+            panes.stop();
+        });
+        panes.remove_folder();
+    }
+
+    fn next_batch(events: &mpsc::Receiver<Value>) -> Value {
+        loop {
+            let event = events.recv_timeout(Duration::from_secs(20)).unwrap();
+            if event["event"] == "queued_reports" {
+                return event;
+            }
+        }
+    }
+
+    /// A link that comes back sends the reports its hooks queued while it
+    /// was down, oldest first, with the count the outbox dropped at its
+    /// limit, and removes them only once the core answered: a link lost
+    /// before the answer sends the same reports again on the next one
+    /// (with-hide/hide-private#674).
+    #[test]
+    fn a_returning_link_sends_the_queued_reports_oldest_first_and_removes_them_once_answered() {
+        // Short, as a socket path inside it must be on Unix.
+        let base = if cfg!(unix) {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let root = tempfile::Builder::new()
+            .prefix("ho")
+            .tempdir_in(base)
+            .unwrap();
+        let state = root.path().join("s");
+        for n in 0..outbox::LIMIT + 2 {
+            outbox::push(&state, queued(n)).unwrap();
+        }
+        link(&state, |_, events| {
+            let first = next_batch(events);
+            assert_eq!(
+                (
+                    first["reports"][0]["id"].as_str(),
+                    first["dropped"].as_u64()
+                ),
+                (Some("r-2"), Some(2))
+            );
+            // The link ends before the core answers.
+        });
+        assert!(outbox::waiting(&state));
+
+        let mut sent = Vec::new();
+        link(&state, |panes, events| {
+            for batch in 0.. {
+                let event = next_batch(events);
+                assert_eq!(event["dropped"], if batch == 0 { 2 } else { 0 });
+                let reports = event["reports"].as_array().unwrap();
+                sent.extend(
+                    reports
+                        .iter()
+                        .map(|report| report["id"].as_str().unwrap().to_owned()),
+                );
+                let answer = ProofAnswer::Replayed {
+                    applied: reports.len() as u32,
+                    ignored: 0,
+                };
+                panes
+                    .answer_proof(event["request"].as_u64().unwrap(), answer)
+                    .unwrap();
+                if sent.len() == outbox::LIMIT {
+                    break;
+                }
+            }
+        });
+        // The link's end waits for its drain, which removed what was answered.
+        assert!(!outbox::waiting(&state));
+        let expected: Vec<String> = (2..outbox::LIMIT + 2).map(|n| format!("r-{n}")).collect();
+        assert_eq!(sent, expected);
     }
 }

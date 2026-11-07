@@ -800,12 +800,41 @@ impl Core {
         caller: &str,
         report: &hide_node_link::panes::HookStatusReport,
     ) -> Result<(), &'static str> {
+        self.hook_report(device, caller, report, false).map(|_| ())
+    }
+
+    /// A report `device`'s node replayed from its outbox for `caller`'s
+    /// pane after the hook ran (`hide_agent_hooks::outbox`): applied as
+    /// [`Core::hook_status`] applies one, only when the hook made it after
+    /// the session's last applied report. Answers whether it was applied.
+    pub fn hook_replay(
+        &self,
+        device: &str,
+        caller: &str,
+        report: &hide_node_link::panes::HookStatusReport,
+    ) -> Result<bool, &'static str> {
+        self.hook_report(device, caller, report, true)
+    }
+
+    fn hook_report(
+        &self,
+        device: &str,
+        caller: &str,
+        report: &hide_node_link::panes::HookStatusReport,
+        replayed: bool,
+    ) -> Result<bool, &'static str> {
         if !check_owner_thread(self, "hook.status") {
             return Err("hook_status_unavailable");
         }
         let target = {
             let mut runtime = lock_recover(&self.runtime);
-            runtime.ingest_hook_status(device, caller, report)?;
+            if replayed {
+                if !runtime.ingest_hook_replay(device, caller, report)? {
+                    return Ok(false);
+                }
+            } else {
+                runtime.ingest_hook_status(device, caller, report)?;
+            }
             runtime.hook_session_target(device, caller, report)
         };
         // The engine is asked off the runtime lock, as every engine call is.
@@ -826,7 +855,7 @@ impl Core {
                 })),
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     /// `hide agent catalog`: the agents, models and efforts of `machine`, or

@@ -15,7 +15,7 @@ use base64::Engine as _;
 use hide_node::ssh::{PaneEvents, RemoteHost};
 use hide_node_link::panes::{
     HookRequest, MAX_CHUNK, MAX_PENDING_CHUNKS, MAX_STREAMS, NodeEvent, PaneIdentity, ProofAnswer,
-    StreamCaller,
+    QueuedReport, StreamCaller,
 };
 use hide_node_link::protocol::Call;
 use serde_json::json;
@@ -133,6 +133,47 @@ impl NodePanes {
                 request,
                 answer,
             );
+        });
+    }
+
+    /// The status reports `node`'s hooks queued while its link was down,
+    /// applied in their order as this machine's own are
+    /// (`hook_request::replay`) and answered once all are taken; a refusal
+    /// leaves them with the node for its next sweep.
+    fn replay(
+        self: &Arc<Self>,
+        node: &str,
+        link: &RemoteHost,
+        request: u64,
+        reports: Vec<QueuedReport>,
+        dropped: u64,
+    ) {
+        let refuse = |reason: &str| {
+            record_refusal(node, None, reason, "core");
+            self.control_reply(
+                node,
+                link,
+                Call::PaneProofAnswer {
+                    request,
+                    answer: refused(reason),
+                },
+            );
+        };
+        if reports.len() > hide_agent_hooks::outbox::BATCH {
+            return refuse("invalid_request");
+        }
+        let Some(state) = self.state.get().cloned() else {
+            return refuse("hide_unavailable");
+        };
+        let Ok(permit) = Arc::clone(&self.proofs).try_acquire_owned() else {
+            return refuse("bridge_busy");
+        };
+        let node = node.to_owned();
+        let link = link.clone();
+        self.runtime.spawn_blocking(move || {
+            let _permit = permit;
+            let answer = crate::hook_request::replay(&state.core, &node, &reports, dropped);
+            send_reply(&node, &link, Call::PaneProofAnswer { request, answer });
         });
     }
 
@@ -362,6 +403,11 @@ impl PaneEvents for Events {
             }
             NodeEvent::StreamData { stream, data } => panes.stream_data(node, link, stream, &data),
             NodeEvent::StreamClosed { stream } => panes.stream_closed(node, link, stream),
+            NodeEvent::QueuedReports {
+                request,
+                reports,
+                dropped,
+            } => panes.replay(node, link, request, reports, dropped),
             NodeEvent::Refused { pane_id, reason } => {
                 record_refusal(node, pane_id.as_deref(), &reason, "node");
             }

@@ -106,7 +106,9 @@ enum Command {
         device_id: String,
         pane_id: String,
         report: hide_node_link::panes::HookStatusReport,
-        reply: Sender<Result<(), &'static str>>,
+        /// A node replayed it from its outbox (`Core::hook_replay`).
+        replayed: bool,
+        reply: Sender<Result<bool, &'static str>>,
     },
     /// A read of the operator's agent definition folder, made off the owner
     /// thread with the development switch on.
@@ -553,12 +555,35 @@ impl CoreHandle {
         pane: &str,
         report: hide_node_link::panes::HookStatusReport,
     ) -> Result<(), &'static str> {
+        self.hook_report(device, pane, report, false).map(|_| ())
+    }
+
+    /// A report a node replayed from its outbox, recorded on the owner
+    /// thread when it is newer than the session's last; answers whether it
+    /// was applied (`Core::hook_replay`).
+    pub fn hook_replay(
+        &self,
+        device: &str,
+        pane: &str,
+        report: hide_node_link::panes::HookStatusReport,
+    ) -> Result<bool, &'static str> {
+        self.hook_report(device, pane, report, true)
+    }
+
+    fn hook_report(
+        &self,
+        device: &str,
+        pane: &str,
+        report: hide_node_link::panes::HookStatusReport,
+        replayed: bool,
+    ) -> Result<bool, &'static str> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::HookStatus {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
                 report,
+                replayed,
                 reply,
             })
             .map_err(|_| "hook_status_unavailable")?;
@@ -1477,9 +1502,15 @@ fn owner_loop(
                 device_id,
                 pane_id,
                 report,
+                replayed,
                 reply,
             } => {
-                let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
+                let _ = reply.send(if replayed {
+                    core.hook_replay(&device_id, &pane_id, &report)
+                } else {
+                    core.hook_status(&device_id, &pane_id, &report)
+                        .map(|()| true)
+                });
             }
             Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
             Command::AgentCatalog {

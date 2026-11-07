@@ -48,15 +48,43 @@ impl Runtime {
         caller: &str,
         report: &HookStatusReport,
     ) -> Result<(), &'static str> {
+        self.ingest_hook(device, caller, report, false).map(|_| ())
+    }
+
+    /// Records a report `device`'s node replayed from its outbox for
+    /// `caller`'s pane, when it is newer than the session's last
+    /// (`HookFacts::replay`); answers whether it was applied.
+    pub(crate) fn ingest_hook_replay(
+        &mut self,
+        device: &str,
+        caller: &str,
+        report: &HookStatusReport,
+    ) -> Result<bool, &'static str> {
+        self.ingest_hook(device, caller, report, true)
+    }
+
+    fn ingest_hook(
+        &mut self,
+        device: &str,
+        caller: &str,
+        report: &HookStatusReport,
+        replayed: bool,
+    ) -> Result<bool, &'static str> {
         let local = device == self.node.as_str();
         let pane = crate::address::named_pane_id(self.node.as_str(), device, caller);
-        let recorded = self
-            .hook_facts
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .record(&pane, report)?;
+        let recorded = {
+            let mut facts = self
+                .hook_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if replayed {
+                facts.replay(&pane, report)?
+            } else {
+                facts.record(&pane, report)?
+            }
+        };
         if !recorded.changed {
-            return Ok(());
+            return Ok(!recorded.stale);
         }
         if local {
             // A turn the hook reports moved the agent where the engine may
@@ -77,6 +105,6 @@ impl Runtime {
         {
             sync.republish_waker().wake();
         }
-        Ok(())
+        Ok(true)
     }
 }

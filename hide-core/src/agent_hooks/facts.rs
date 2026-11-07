@@ -75,6 +75,15 @@ struct SessionFact {
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
     waiting_seq: Option<u64>,
+    /// When the hook made the last report applied to this session, by its
+    /// machine's clock (`HookStatusReport::at_unix_us`). A report a node
+    /// replays from its outbox is applied only when it is newer, so one sent
+    /// twice changes the session once and an older one never undoes a later
+    /// one; a live report is the session's present and always applies. Saved
+    /// with the session's other facts, so after a restart a replay is still
+    /// measured against what the core last kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reported_at: Option<u64>,
 }
 
 /// The most open approvals one session reports; the hook keeps the same
@@ -114,6 +123,9 @@ struct Stored {
 pub(crate) struct Recorded {
     /// A projection laid now would differ.
     pub changed: bool,
+    /// A replayed report the session already held a report as new as:
+    /// nothing was applied ([`HookFacts::replay`]).
+    pub stale: bool,
 }
 
 #[derive(Default)]
@@ -208,17 +220,11 @@ impl HookFacts {
         }
         let facts = self.panes.entry(pane.to_owned()).or_default();
         let before = facts.clone();
-        let same = |fact: &SessionFact| {
-            fact.runtime == report.runtime
-                && match (&report.session, &fact.session) {
-                    (Some(reported), Some(kept)) => reported == kept,
-                    // An event whose input named no session is the one the
-                    // runtime last reported, as the hook's own record reads it.
-                    (None, _) => true,
-                    (Some(_), None) => true,
-                }
-        };
-        let mut fact = match facts.sessions.iter().rposition(same) {
+        let mut fact = match facts
+            .sessions
+            .iter()
+            .rposition(|fact| reports_on(report, fact))
+        {
             Some(at) => facts.sessions.remove(at),
             None => SessionFact {
                 runtime: report.runtime.clone(),
@@ -229,9 +235,13 @@ impl HookFacts {
                 turn_seq: None,
                 waiting: Vec::new(),
                 waiting_seq: None,
+                reported_at: None,
             },
         };
         facts.reported_since_engine = true;
+        if report.at_unix_us.is_some() {
+            fact.reported_at = report.at_unix_us;
+        }
         let turn_before = fact.turn;
         fact.version = report.version;
         if report.session.is_some() {
@@ -264,12 +274,43 @@ impl HookFacts {
         if facts.sessions.len() > SESSIONS_PER_PANE {
             facts.sessions.remove(0);
         }
-        // The derived equality compares the turn too, which the file leaves out.
-        let changed = *facts != before;
+        // The derived equality compares the turn too, which the file leaves
+        // out, and must not count when a report was made, which no
+        // projection lays.
+        let changed = untimed(facts) != untimed(&before);
         if stored_part_moved(&before, facts) {
             self.save();
         }
-        Ok(Recorded { changed })
+        Ok(Recorded {
+            changed,
+            stale: false,
+        })
+    }
+
+    /// Records a report a node replayed from its outbox after the hook ran
+    /// (`hide_agent_hooks::outbox`), only when the hook made it after the
+    /// session's last applied report; a replay without the hook's time
+    /// cannot be ordered, so it never overrides what a live report said.
+    pub(crate) fn replay(
+        &mut self,
+        pane: &str,
+        report: &HookStatusReport,
+    ) -> Result<Recorded, &'static str> {
+        let held = self
+            .panes
+            .get(pane)
+            .and_then(|facts| facts.sessions.iter().rev().find(|fact| reports_on(report, fact)))
+            .and_then(|fact| fact.reported_at);
+        if report
+            .at_unix_us
+            .is_none_or(|made| held.is_some_and(|held| made <= held))
+        {
+            return Ok(Recorded {
+                changed: false,
+                stale: true,
+            });
+        }
+        self.record(pane, report)
     }
 
     /// Lays the facts on `payload`'s agents and answers each agent pane's
@@ -473,12 +514,33 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             turn_seq: None,
             waiting: Vec::new(),
             waiting_seq: None,
+            reported_at: None,
         })
         .collect();
     PaneFacts {
         sessions,
         ..PaneFacts::default()
     }
+}
+
+/// Whether `report` speaks of the session `fact` keeps: the same runtime
+/// and session, where an event whose input named no session is the one the
+/// runtime last reported, as the hook's own record reads it.
+fn reports_on(report: &HookStatusReport, fact: &SessionFact) -> bool {
+    fact.runtime == report.runtime
+        && match (&report.session, &fact.session) {
+            (Some(reported), Some(kept)) => reported == kept,
+            (None, _) | (Some(_), None) => true,
+        }
+}
+
+/// `facts` without when each session's last report was made.
+fn untimed(facts: &PaneFacts) -> PaneFacts {
+    let mut facts = facts.clone();
+    for fact in &mut facts.sessions {
+        fact.reported_at = None;
+    }
+    facts
 }
 
 fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
@@ -517,6 +579,7 @@ mod tests {
             counts: None,
             session_start: false,
             waiting: None,
+            at_unix_us: None,
         }
     }
 
@@ -569,6 +632,49 @@ mod tests {
             .record("w1:p1", &report(Some("s-print"), Some(HookTurn::Working)))
             .unwrap();
         assert_eq!(laid_turn(&mut facts, "s-other"), Some(HookTurn::Waiting));
+    }
+
+    /// A report a node replays from its outbox applies only when the hook
+    /// made it after the session's last applied report: replays in their
+    /// order apply each once, and one made before a live report never
+    /// undoes it (with-hide/hide-private#674).
+    #[test]
+    fn a_replayed_report_applies_once_and_never_undoes_a_later_one() {
+        let mut facts = HookFacts::default();
+        let made = |turn, at| HookStatusReport {
+            at_unix_us: Some(at),
+            ..report(Some("s-1"), Some(turn))
+        };
+        let working = made(HookTurn::Working, 10);
+        assert_eq!(
+            facts.replay("w1:p1", &working).unwrap(),
+            Recorded {
+                changed: true,
+                stale: false
+            }
+        );
+        assert_eq!(
+            facts.replay("w1:p1", &working).unwrap(),
+            Recorded {
+                changed: false,
+                stale: true
+            }
+        );
+        assert!(facts.replay("w1:p1", &made(HookTurn::Done, 20)).unwrap().changed);
+        assert_eq!(laid_turn(&mut facts, "s-1"), Some(HookTurn::Done));
+        // A live report is the session's present.
+        facts.record("w1:p1", &made(HookTurn::Working, 40)).unwrap();
+        assert!(facts.replay("w1:p1", &made(HookTurn::Done, 30)).unwrap().stale);
+        assert_eq!(laid_turn(&mut facts, "s-1"), Some(HookTurn::Working));
+        // A replay without the hook's time cannot be ordered.
+        let untimed = report(Some("s-1"), Some(HookTurn::Done));
+        assert!(facts.replay("w1:p1", &untimed).unwrap().stale);
+        // A session the core keeps nothing of takes the replay.
+        let other = HookStatusReport {
+            at_unix_us: Some(5),
+            ..report(Some("s-2"), Some(HookTurn::Done))
+        };
+        assert!(facts.replay("w1:p1", &other).unwrap().changed);
     }
 
     #[test]

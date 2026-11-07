@@ -447,6 +447,7 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
             }),
             session_start: false,
             waiting: None,
+            at_unix_us: None,
         },
         started + report::REPORT_TIMEOUT,
     );
@@ -487,6 +488,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
                 }),
                 session_start: false,
                 waiting: None,
+                at_unix_us: None,
             },
             started + report::REPORT_TIMEOUT,
         )
@@ -528,6 +530,7 @@ fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> 
                 counts: None,
                 session_start: true,
                 waiting: None,
+                at_unix_us: None,
             },
             started + report::REPORT_TIMEOUT,
         )

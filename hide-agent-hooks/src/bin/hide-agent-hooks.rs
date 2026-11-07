@@ -1282,6 +1282,7 @@ fn report_pane(
                     }),
                     session_start: starts,
                     waiting: speaks.then(|| applied.waiting.clone()),
+                    at_unix_us: None,
                 },
                 deadline,
             )

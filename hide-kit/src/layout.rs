@@ -92,6 +92,10 @@ pub fn state_dir_choice_from_process(home: &Path) -> (PathBuf, Option<StateVaria
 /// sit above.
 pub use hide_agent_hooks::hook_request::workspace_bridges;
 
+/// The status reports a machine's hooks keep while its core is away, in the
+/// state folder their requests go to; named beside the hooks that write it.
+pub use hide_agent_hooks::outbox::path as hook_outbox;
+
 /// The daemon's lifetime lock, shared with the account kit's route ownership check.
 pub fn daemon_lock(state_dir: &Path) -> PathBuf {
     state_dir.join("hided.lock")

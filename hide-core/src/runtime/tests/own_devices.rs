@@ -236,6 +236,7 @@ fn a_hooks_session_on_a_device_goes_to_that_devices_own_engine() {
         counts: None,
         session_start: true,
         waiting: None,
+        at_unix_us: None,
     };
     let runtime = shared.lock().unwrap();
     let device = runtime.own_device_engines().remove(0);

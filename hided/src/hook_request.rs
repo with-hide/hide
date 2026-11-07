@@ -2,9 +2,14 @@
 //! Authentication belongs to the proof owners; execution remains the same
 //! core operations the scoped Workspace route uses.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use hide_node_link::panes::{HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest};
+use hide_agent_hooks::outbox;
+
+use hide_node_link::panes::{
+    HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest, ProofAnswer, QueuedReport,
+};
 use serde_json::{Value, json};
 
 use crate::core::CoreHandle;
@@ -137,6 +142,75 @@ pub(crate) fn answer(
 
 /// A report names a known agent and, when it names one, a session id the
 /// delivery ledger would take.
+/// Applies the status reports a machine's hooks queued while its core did
+/// not answer them (`hide_agent_hooks::outbox`), in their order: each one
+/// whose session the core holds nothing newer for changes what it keeps,
+/// as the hook's own report would have (`Core::hook_replay`). The counts,
+/// with what the outbox dropped at its limit, go to the diagnostic log;
+/// nothing reaches the screen (design principle 13).
+pub(crate) fn replay(
+    core: &CoreHandle,
+    device: &str,
+    reports: &[QueuedReport],
+    dropped: u64,
+) -> ProofAnswer {
+    let (mut applied, mut ignored, mut refusal) = (0, 0, None);
+    for queued in reports {
+        let pane = &queued.pane_id;
+        let valid = valid_status(&queued.report)
+            && !pane.is_empty()
+            && pane.len() <= 256
+            && !pane.chars().any(char::is_control);
+        match valid.then(|| core.hook_replay(device, pane, queued.report.clone())) {
+            Some(Ok(true)) => applied += 1,
+            Some(Ok(false)) => ignored += 1,
+            Some(Err(reason)) => {
+                ignored += 1;
+                refusal = Some(reason);
+            }
+            None => {
+                ignored += 1;
+                refusal = Some("invalid_request");
+            }
+        }
+    }
+    hide_core::diagnostic!(json!({
+        "component": "agent_hooks",
+        "kind": "outbox.replayed",
+        "device": device,
+        "applied": applied,
+        "ignored": ignored,
+        "dropped": dropped,
+        "refusal": refusal,
+    }));
+    ProofAnswer::Replayed { applied, ignored }
+}
+
+/// Applies what this machine's hooks queued while this daemon did not
+/// answer them (a restart, an update), oldest first, the way a node's
+/// replay is applied; the bootstrap's sweep calls it.
+pub(crate) fn replay_own(state_dir: &Path, core: &CoreHandle) {
+    if !outbox::waiting(state_dir) {
+        return;
+    }
+    let device = core.node().as_str().to_owned();
+    let drained = outbox::drain(state_dir, crate::pane_auth::own_install(), |batch| {
+        if batch.damaged {
+            hide_core::diagnostic!(json!({
+                "component": "agent_hooks", "kind": "outbox.damaged", "device": device,
+            }));
+        }
+        replay(core, &device, &batch.reports, batch.dropped);
+        true
+    });
+    if let Err(error) = drained {
+        hide_core::diagnostic!(json!({
+            "component": "agent_hooks", "kind": "outbox.unavailable", "device": device,
+            "error": error.kind().to_string(),
+        }));
+    }
+}
+
 fn valid_status(report: &hide_node_link::panes::HookStatusReport) -> bool {
     hide_agent_adapter::adapter(&report.runtime).is_some_and(|adapter| adapter.id == report.runtime)
         && report

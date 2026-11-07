@@ -84,6 +84,7 @@ pub struct PaneIdentity {
 pub use hide_agent_hooks::hook_request::{
     HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest, PullPoint,
 };
+pub use hide_agent_hooks::outbox::Queued as QueuedReport;
 
 /// What a node tells the core without being asked: one JSON line with an
 /// `event` field and no `id`.
@@ -154,6 +155,21 @@ pub enum NodeEvent {
     /// A stream's end closed a stream the core opened, or the node did at
     /// one of its caps; `reason` says which, never what the stream carried.
     LinkClosed { stream: u64, reason: String },
+    /// The status reports this node's hooks could not hand to the core
+    /// while it was away, oldest first, as their outbox keeps them
+    /// (`hide_agent_hooks::outbox`), and how many the outbox dropped at its
+    /// limit since the core was last told. The node sends them when its
+    /// link stands and each sweep after; the core applies each one its
+    /// session holds nothing newer for, logs the counts and answers
+    /// [`ProofAnswer::Replayed`] under `request`, and only then does the
+    /// node remove them, so a link lost on the way sends them again and the
+    /// core changes nothing the second time.
+    QueuedReports {
+        request: u64,
+        reports: Vec<QueuedReport>,
+        #[serde(default)]
+        dropped: u64,
+    },
     /// The node turned a caller away on its own, before the core was asked
     /// or at one of its caps, with the reason the caller read; the core
     /// records it with the node, since a device's stderr reaches no log.
@@ -206,6 +222,12 @@ pub enum ProofAnswer {
     /// or the reason and next action.
     ProjectOpen {
         answer: serde_json::Value,
+    },
+    /// The core took a [`NodeEvent::QueuedReports`]: `applied` changed what
+    /// it keeps, `ignored` were older than what it kept, or unreadable.
+    Replayed {
+        applied: u32,
+        ignored: u32,
     },
 }
 

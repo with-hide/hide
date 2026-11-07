@@ -5,7 +5,9 @@
 //! the pane like every other hook request and hands the report to the core
 //! (PRD engine-bundle-1 D-7). The request ends
 //! within [`REPORT_TIMEOUT`], so a daemon that is gone or does not answer
-//! costs the agent's turn that long and no more (B13).
+//! costs the agent's turn that long and no more (B13). A report nothing
+//! answered for waits in the state folder's outbox until that machine's
+//! daemon or node hands it on ([`crate::outbox`]).
 
 use std::fs;
 use std::io;
@@ -62,6 +64,13 @@ pub struct HookStatusReport {
     /// turn says. Absent for an event that says nothing of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Vec<String>>,
+    /// When the hook made the report, in microseconds of its machine's
+    /// clock, which [`report`] stamps: a report replayed from the outbox
+    /// is applied only when it is newer than the session's last, so one
+    /// sent twice changes the core once and an older one never undoes a
+    /// later one. Absent from a hook older than the outbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_unix_us: Option<u64>,
 }
 
 /// Where a session's turn stands, as its hook saw it.
@@ -85,18 +94,33 @@ pub struct HookCounts {
     pub working: u32,
     pub done: u32,
 }
-/// Sends `report` for the pane, until `deadline`. A refusal or a failure to
-/// ask comes back as the cause it is recorded under
-/// ([`crate::delivery::refusal_cause`]).
+/// Sends `report` for the pane, stamped with when it was made, until
+/// `deadline`. A refusal or a failure to ask comes back as the cause it is
+/// recorded under ([`crate::delivery::refusal_cause`]); one that nothing
+/// answered for ([`crate::outbox::WAITED_OUT`]) also waits in the outbox
+/// for the core to come back.
 pub fn report(report: &HookStatusReport, deadline: Instant) -> Result<(), String> {
-    crate::delivery::ask(
+    let mut report = report.clone();
+    if report.at_unix_us.is_none() {
+        report.at_unix_us = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|made| u64::try_from(made.as_micros()).ok());
+    }
+    let sent = crate::delivery::ask(
         crate::hook_request::HookCommand::Status {
             report: report.clone(),
         },
         deadline,
     )
     .map(|_| ())
-    .map_err(|failure| failure.code.to_owned())
+    .map_err(|failure| failure.code.to_owned());
+    if let Err(cause) = &sent
+        && crate::outbox::WAITED_OUT.contains(&cause.as_str())
+    {
+        crate::outbox::keep(report);
+    }
+    sent
 }
 
 /// The last report that did not reach the core, kept so the failure is a
@@ -228,6 +252,7 @@ mod tests {
             }),
             session_start: false,
             waiting: None,
+            at_unix_us: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
