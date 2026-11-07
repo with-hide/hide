@@ -529,7 +529,10 @@ impl std::fmt::Display for ReplaceRefusal {
             Self::Kept(why) => write!(f, "the holder was kept: {why}"),
             Self::NotEnded(why) => write!(f, "the holder's end was not confirmed: {why}"),
             Self::NotReserved(why) => {
-                write!(f, "the holder ended and its replacement was not reserved: {why}")
+                write!(
+                    f,
+                    "the holder ended and its replacement was not reserved: {why}"
+                )
             }
         }
     }
@@ -785,9 +788,9 @@ impl Holders {
     }
 
     fn current_folder(&self) -> Result<String, CloseError> {
-        self.panes
-            .current_folder(&self.source)
-            .map_err(|error| CloseError::Failed(format!("the holder's files could not be read: {error}")))
+        self.panes.current_folder(&self.source).map_err(|error| {
+            CloseError::Failed(format!("the holder's files could not be read: {error}"))
+        })
     }
 
     /// Replaces the pane's holder of start `previous`, which runs from

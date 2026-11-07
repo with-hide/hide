@@ -1627,7 +1627,10 @@ fn claude_sleeps_and_wakes_resuming(outdated: bool) {
     );
     let now = record();
     if outdated {
-        assert_ne!(now.incarnation, slept.incarnation, "the holder was replaced");
+        assert_ne!(
+            now.incarnation, slept.incarnation,
+            "the holder was replaced"
+        );
         assert_ne!(now.version_folder, slept.version_folder);
         assert!(
             !slept_holder.runs(),
@@ -1635,7 +1638,10 @@ fn claude_sleeps_and_wakes_resuming(outdated: bool) {
         );
         assert_ne!(now.holder.map(|holder| holder.pid), Some(slept_holder.pid));
     } else {
-        assert_eq!(now.incarnation, slept.incarnation, "a current holder was replaced");
+        assert_eq!(
+            now.incarnation, slept.incarnation,
+            "a current holder was replaced"
+        );
         assert!(slept_holder.runs(), "a current holder was ended");
     }
     built.stop();

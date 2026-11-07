@@ -54,7 +54,11 @@ fn a_shell_on_another_builds_holder_is_started_again_in_its_place_under_its_id()
     assert!(engine.replace_outdated_holder(WAIT, &pane).unwrap());
     assert_eq!(*holders.replaced.lock().unwrap(), [(pane.clone(), 7)]);
     assert_eq!(starts_of(&holders, &pane), 2, "the new holder started once");
-    assert_eq!(listed(&engine), [pane.clone()], "the pane kept its id alone");
+    assert_eq!(
+        listed(&engine),
+        [pane.clone()],
+        "the pane kept its id alone"
+    );
     assert_eq!(restore_error(&engine, &pane), None);
     // The new shell has marked no prompt yet: a wake waits for its own.
     assert!(!prompt_marked(&engine, &pane));
@@ -75,8 +79,15 @@ fn a_holder_its_node_kept_is_woken_as_it_was() {
     });
 
     assert!(!engine.replace_outdated_holder(WAIT, &pane).unwrap());
-    assert_eq!(starts_of(&holders, &pane), 1, "a kept holder was started again");
-    assert!(prompt_marked(&engine, &pane), "a kept holder lost its facts");
+    assert_eq!(
+        starts_of(&holders, &pane),
+        1,
+        "a kept holder was started again"
+    );
+    assert!(
+        prompt_marked(&engine, &pane),
+        "a kept holder lost its facts"
+    );
     assert!(engine.topology().pane(&pane).unwrap().starting.is_none());
     assert_eq!(restore_error(&engine, &pane), None);
     assert!(engine.shared.pending.lock().unwrap().is_empty());

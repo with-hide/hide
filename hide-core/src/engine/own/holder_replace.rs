@@ -15,8 +15,7 @@ use std::sync::Arc;
 use hide_node_link::holders::HOLDER_KEPT;
 
 use super::{
-    EngineError, OnFailure, OwnEngine, creation, end_holders, settle_start, start_request,
-    starts,
+    EngineError, OnFailure, OwnEngine, creation, end_holders, settle_start, start_request, starts,
 };
 
 impl OwnEngine<'_> {
@@ -50,11 +49,8 @@ impl OwnEngine<'_> {
                 return Ok(false);
             }
         };
-        let ticket = match self.admit_start(
-            start_request(pane, None, &cwd, env, None),
-            false,
-            None,
-        ) {
+        let ticket = match self.admit_start(start_request(pane, None, &cwd, env, None), false, None)
+        {
             Ok(ticket) => ticket,
             Err(error) => {
                 kept(pane, Some(previous), &error.to_string());
@@ -141,12 +137,7 @@ impl OwnEngine<'_> {
 
     /// Puts the pane back as it was when its node kept its holder; a pane
     /// closed meanwhile left that holder to this call, which ends it.
-    fn keep(
-        &self,
-        pane: &str,
-        starting: &starts::Starting,
-        before: Option<Arc<starts::Starting>>,
-    ) {
+    fn keep(&self, pane: &str, starting: &starts::Starting, before: Option<Arc<starts::Starting>>) {
         let present = {
             let mut topology = self.topology();
             starting.finish(Ok(()));

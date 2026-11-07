@@ -21,9 +21,9 @@ use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
-    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink,
-    HOLDER_KEPT, PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HOLDER_KEPT, HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof,
+    HolderRecovery, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded,
+    PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
