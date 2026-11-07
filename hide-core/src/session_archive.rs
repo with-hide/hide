@@ -85,7 +85,9 @@ pub enum ArchivePhase {
     /// Hide restarted while saving or closing; nothing is repeated until
     /// the operator checks its status (B34).
     CloseUnknown,
-    /// Every pane closed: the root is under `보관됨`.
+    /// Every pane closed: the root is under `보관됨`. A conversation
+    /// `hide agent end` kept is archived as its pane closes, and its member
+    /// closes once the pane left its machine's listing.
     Archived,
 }
 
@@ -184,6 +186,8 @@ pub struct ArchivedMember {
     #[serde(default)]
     pub parent: Option<String>,
     pub depth: u8,
+    /// Its pane is gone from its machine's listing; only a closed member
+    /// resumes, and a live row of its conversation then is its resume.
     #[serde(default)]
     pub closed: bool,
     pub resume: Resume,

@@ -440,6 +440,11 @@ impl Runtime {
             mut member,
             starred_at_unix_ms,
         } = ended;
+        // The engine closed the pane, and its machine's listing can still
+        // show it until its next read: the member closes once the pane left,
+        // as an archive's own close does, so that listing is never taken
+        // for a resume of the conversation.
+        member.closed = self.pane_left(&member.machine, &member.pane_id);
         let archive = &mut self.snapshot.ui_state.session_archive;
         if archive
             .find(&member.machine, &member.kind, &member.native_session_id)
@@ -447,7 +452,6 @@ impl Runtime {
         {
             return Ok(());
         }
-        member.closed = true;
         let pane_id = member.pane_id.clone();
         let id = ArchiveId::new()?;
         archive.admit(
@@ -475,6 +479,27 @@ impl Runtime {
             context.notifier.notify();
         }
         Ok(())
+    }
+
+    /// Whether `pane_id` is gone from a connected `machine`'s listing; a
+    /// disconnected device's absence is not a close.
+    fn pane_left(&self, machine: &str, pane_id: &str) -> bool {
+        self.device_answers(machine) && !self.pane_listed(pane_id)
+    }
+
+    /// The panes of conversations `hide agent end` archived that have left
+    /// their machine's listing since.
+    fn ended_panes_left(&self) -> HashSet<String> {
+        self.snapshot
+            .ui_state
+            .session_archive
+            .records
+            .values()
+            .filter(|record| record.phase == ArchivePhase::Archived)
+            .flat_map(|record| &record.members)
+            .filter(|member| !member.closed && self.pane_left(&member.machine, &member.pane_id))
+            .map(|member| member.pane_id.clone())
+            .collect()
     }
 
     /// The root, then every live descendant its subtree close would take,
@@ -774,9 +799,7 @@ impl Runtime {
             .iter()
             .map(|member| member.pane_id.clone())
             .filter(|pane| {
-                closed.contains(pane)
-                    || (self.device_answers(&self.archive_machine_of(pane))
-                        && !self.pane_listed(pane))
+                closed.contains(pane) || self.pane_left(&self.archive_machine_of(pane), pane)
             })
             .collect::<HashSet<_>>();
         let record = self
@@ -1191,6 +1214,7 @@ impl Runtime {
         let now = unix_milliseconds();
         let mut changed = false;
         let live = self.archive_live();
+        let left = self.ended_panes_left();
         let task = self.snapshot.task_operation.clone();
         let mut restarred: Vec<(String, u64)> = Vec::new();
         let ids = self
@@ -1213,15 +1237,18 @@ impl Runtime {
                 continue;
             }
             for member in &mut record.members {
+                if !member.closed && left.contains(&member.pane_id) {
+                    member.closed = true;
+                    record.revision += 1;
+                    changed = true;
+                }
                 if !member.closed || matches!(member.resume, Resume::Done { .. }) {
                     continue;
                 }
-                // The pane the member was closed from is not a resume: a
-                // closed pane can still be listed until its machine's next
-                // session read.
-                if let Some((_, _, _, pane)) = live.iter().find(|(machine, kind, session, pane)| {
-                    member.is(machine, kind, session) && *pane != member.pane_id
-                }) {
+                if let Some((_, _, _, pane)) = live
+                    .iter()
+                    .find(|(machine, kind, session, _)| member.is(machine, kind, session))
+                {
                     crate::diagnostic!(serde_json::json!({
                         "component": "session_archive", "kind": "session_archive.resumed",
                         "archive_id": id.as_str(), "pane_id": pane,
@@ -1302,24 +1329,28 @@ impl Runtime {
         }
         changed |= self.continue_archived_registrations(now);
         changed |= self.start_next_resume(now);
-        // A record whose every member is live again is done.
+        // A record whose every member is live again is done. A member a
+        // failed close left open is a live session already; one `hide agent
+        // end` archived is not live until its pane left and it resumed.
         let before = self.snapshot.ui_state.session_archive.records.len();
+        let live_again = |member: &ArchivedMember| {
+            matches!(member.resume, Resume::Done { .. }) && member.registration.is_none()
+        };
         self.snapshot
             .ui_state
             .session_archive
             .records
-            .retain(|_, record| {
-                !(matches!(
-                    record.phase,
-                    ArchivePhase::Archived | ArchivePhase::CloseFailed
-                ) && record
+            .retain(|_, record| !match record.phase {
+                ArchivePhase::Archived => record
+                    .members
+                    .iter()
+                    .all(|member| member.closed && live_again(member)),
+                ArchivePhase::CloseFailed => record
                     .members
                     .iter()
                     .filter(|member| member.closed)
-                    .all(|member| {
-                        matches!(member.resume, Resume::Done { .. })
-                            && member.registration.is_none()
-                    }))
+                    .all(live_again),
+                _ => false,
             });
         changed |= before != self.snapshot.ui_state.session_archive.records.len();
         // A resumed root wears its ★ again, on the conversation it resumed.
