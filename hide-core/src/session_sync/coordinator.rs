@@ -100,6 +100,15 @@ fn run_coordinator(
     let mut usage_reader = usage_paths
         .zip(context.node().map(Arc::clone))
         .map(|(paths, node)| crate::usage::UsageDriver::new(paths, node));
+    // The agents a device's panes run are the device's own: its coordinator
+    // asks for their versions, which the doorbell reads a composer by. This
+    // machine's come with its kit.
+    let mut device_agents_reader = match &context.target {
+        SessionSyncTarget::Remote { target_id, .. } => Some(
+            crate::kit::DeviceDiagnosisReader::new(context.runtime.clone(), target_id.clone()),
+        ),
+        SessionSyncTarget::Local { .. } => None,
+    };
     // A listening port is its machine's: the local coordinator looks at this
     // machine's, and a node that dials this core is asked for its own.
     let mut ports_reader = context
@@ -269,6 +278,7 @@ fn run_coordinator(
         let read_usage = connected
             && !defer_background_reads
             && (run_background_reads || read_memory_reads_usage(&context));
+        let read_device_agents = connected && !defer_background_reads;
         defer_background_reads = false;
         if read_usage && let Some(reader) = usage_reader.as_mut() {
             let Some(activity) = read_usage_activity(&context) else {
@@ -279,6 +289,15 @@ fn run_coordinator(
             {
                 return;
             }
+        }
+        // Letters are delivered with no window attached, so the versions the
+        // doorbell reads a composer by are read then too.
+        if read_device_agents
+            && let Some(reader) = device_agents_reader.as_mut()
+            && let Some(Some(diagnosis)) = reader.read_if_due()
+            && !publish_device_agents(&context, diagnosis)
+        {
+            return;
         }
         if run_background_reads {
             if let Some(reader) = ports_reader.as_mut() {
@@ -1549,6 +1568,28 @@ fn publish_background_ai(
         context.notifier.notify();
     }
     true
+}
+
+/// Keeps what a device's hook diagnosis said, for the agent versions its panes
+/// run. Nothing on the snapshot changes with it, so nothing is announced; the
+/// doorbell's next pass reads it. False when the runtime has ended.
+fn publish_device_agents(
+    context: &SessionSyncContext,
+    diagnosis: hide_agent_hooks::Diagnosis,
+) -> bool {
+    let SessionSyncTarget::Remote { target_id, .. } = &context.target else {
+        return true;
+    };
+    let Some(runtime) = context.runtime.upgrade() else {
+        return false;
+    };
+    match runtime.lock() {
+        Ok(mut guard) => {
+            guard.ingest_device_hook_diagnosis(target_id, diagnosis);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn publish_ports(

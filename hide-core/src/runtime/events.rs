@@ -1554,10 +1554,14 @@ pub(super) struct TerminalScrollPayload {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct TerminalClickPayload {
+pub(super) struct TerminalMousePayload {
     pub(super) pane_id: String,
+    pub(super) action: hide_node_link::terminal::MouseAction,
+    #[serde(default)]
+    pub(super) button: Option<hide_node_link::terminal::MouseButton>,
     pub(super) column: u16,
     pub(super) row: u16,
+    #[serde(default)]
     pub(super) modifiers: u8,
 }
 
@@ -1727,7 +1731,7 @@ pub(super) enum Event {
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
     TerminalScroll(TerminalScrollPayload),
-    TerminalClick(TerminalClickPayload),
+    TerminalMouse(TerminalMousePayload),
     PaneFind(PaneFindPayload),
     PaneFindOpen(PaneFindOpenPayload),
     PaneTextScale(PaneTextScalePayload),
@@ -2076,7 +2080,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
         "terminal_scroll" => decode!(TerminalScrollPayload, TerminalScroll),
-        "terminal_click" => decode!(TerminalClickPayload, TerminalClick),
+        "terminal_mouse" => decode!(TerminalMousePayload, TerminalMouse),
         "pane_find" => decode!(PaneFindPayload, PaneFind),
         "pane_find_open" => decode!(PaneFindOpenPayload, PaneFindOpen),
         "pane_text_scale" => decode!(PaneTextScalePayload, PaneTextScale),
@@ -3753,44 +3757,17 @@ impl Runtime {
                     inode: payload.inode,
                 },
             }),
-            Event::TerminalClick(payload) => {
-                // D8 explicitly chooses the engine's detected agent as the policy
-                // boundary until its frame protocol carries mouse mode.
-                // Do not infer it from titles, output, or a session id.
-                let agent = self
-                    .snapshot
-                    .navigator
-                    .agents
-                    .iter()
-                    .find(|agent| agent.pane_id == payload.pane_id);
-                let report = agent
-                    .and_then(|agent| hide_agent_adapter::adapter(&agent.agent_kind))
-                    .is_some_and(|row| row.terminal_click);
-                crate::diagnostic!(serde_json::json!({
-                    "component": "terminal", "kind": "terminal.click_routed",
-                    "pane_id": payload.pane_id,
-                    "basis": if agent.is_some() { "herdr.agent.list" } else { "not_detected" },
-                    "agent_kind": agent.map(|agent| agent.agent_kind.as_str()),
-                    "route": if report { "sgr_mouse" } else { "local_selection" },
-                    "column": payload.column, "row": payload.row,
-                }));
-                if report {
-                    // SGR uses one-based cells, uppercase M for press and
-                    // lowercase m for release. No newline or Enter is sent.
-                    let column = u32::from(payload.column) + 1;
-                    let row = u32::from(payload.row) + 1;
-                    // The shell sends crossterm's bitset, the one the engine's
-                    // terminal.scroll takes. SGR has bits for shift, alt and
-                    // control only, so command (bit 8) is dropped here on
-                    // purpose: a TUI has no way to receive it.
-                    let flags = ((payload.modifiers & 1) * 4)
-                        | ((payload.modifiers & 2) * 8)
-                        | ((payload.modifiers & 4) * 2);
-                    let bytes =
-                        format!("\x1b[<{flags};{column};{row}M\x1b[<{flags};{column};{row}m");
-                    self.write_terminal_control(&payload.pane_id, bytes.as_bytes());
-                    return self.snapshot.status.last_error.is_some();
-                }
+            Event::TerminalMouse(payload) => {
+                // The pane's holder knows the program's mouse mode and
+                // encodes the event for it, or drops it, as Ghostty does.
+                self.mouse_pane(super::terminal::MouseRequest {
+                    pane_id: payload.pane_id,
+                    action: payload.action,
+                    button: payload.button,
+                    column: payload.column,
+                    row: payload.row,
+                    modifiers: payload.modifiers,
+                });
                 false
             }
             Event::TerminalScroll(payload) => {
@@ -4627,7 +4604,7 @@ impl Event {
             self,
             Event::TerminalResize(_)
                 | Event::TerminalScroll(_)
-                | Event::TerminalClick(_)
+                | Event::TerminalMouse(_)
                 | Event::Attachment(_)
                 | Event::AttachmentReady(_)
                 | Event::AttachmentAction(_)

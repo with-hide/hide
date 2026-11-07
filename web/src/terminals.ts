@@ -12,13 +12,16 @@
 // so a wheel batch becomes one `terminal_scroll` per animation frame and the
 // core answers with the viewport it now shows.
 //
-// A pointer gesture follows the routing policy (PRD S2 B20): a drag
-// selects locally, and a single primary click that never
-// dragged is replayed on release as one `terminal_click` with the pressed
-// cell; the core decides whether the program gets a mouse report. ⌥ + press
-// and a multi-click stay local, and so does a press on a link, whose click is
-// the link's (`terminalLinkProvider.ts`). A copy of the selection is
-// assembled here (`selection.ts`), not by xterm.
+// A pointer gesture follows the routing policy (PRD S2 B20), as a native
+// terminal routes it: a program that takes the pointer (the holder says so,
+// `terminalView.ts`) gets the press, the drag and the release as
+// `terminal_mouse`, unless ⇧ is held; otherwise a drag selects over the
+// pane's history, scrolling it while the pointer is past the top or bottom
+// edge, and a press that never dragged is sent as a click the holder reports
+// only to a program that tracks the mouse. ⌥ + press and a multi-click stay
+// xterm's, and so does a press on a link, whose click is the link's
+// (`terminalLinkProvider.ts`). A copy of the selection is assembled here
+// (`selection.ts`), not by xterm.
 
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -35,8 +38,9 @@ import { loadTerminalRenderer } from "./terminalRenderer";
 import { holdTerminalFont, setTerminalFontFamily, watchPixelRatio, type TerminalFont } from "./terminalFonts";
 import { remoteControl, remoteTargetOfPane } from "./remote";
 import { keyPayload, noteTerminalFocus } from "./keyTarget";
-import { bufferRow, followScroll, movedSelection, selectionToText, type CellRow } from "./selection";
+import { autoscrollRows, bufferRow, drawnSelection, orderPoints, selectionToText, type CellRow, type HistoryPoint } from "./selection";
 import { followWraps, forgetWraps, paneRowWraps } from "./terminalWrap";
+import { followView, forgetView, terminalView, type View } from "./terminalView";
 import { osc8Handler, registerTerminalLinks, terminalLinkAtCell, terminalPathOwner, type LinkState, type TerminalContextLink, type TerminalLinkActions } from "./terminalLinkProvider";
 import { isHtmlFile } from "./browserViews";
 import { pointerModifiers, wheelRows } from "./wheel";
@@ -78,18 +82,17 @@ type Instance = {
   /** The grid the core last got from this instance, so a host resize that keeps it sends nothing; null when the core may not have one. */
   grid: { cols: number; rows: number } | null;
   /** Wheel rows accumulated toward the next flush, and the pending flush. */
-  wheel: { held: boolean; rows: number; remainder: number; column: number; row: number; modifiers: number; frame: number | null };
-  /**
-   * The selection a wheel scrolled, including its original offscreen ends.
-   * Retained while clipped so a reverse wheel restores the complete range.
-   */
-  follow: FollowedSelection | null;
-  /**
-   * The original copy text while a selection is partly or wholly offscreen.
-   */
+  wheel: { rows: number; remainder: number; column: number; row: number; modifiers: number; frame: number | null };
+  /** The drag selection, in history rows, with every row it covers as last shown. */
+  selection: Selection | null;
+  /** The primary press being held, or null. */
+  gesture: SelectGesture | ProgramGesture | null;
+  /** The view the last frame left, to tell a frame that shows another screen. */
+  lastView: View | null;
+  /** True while this module changes xterm's selection itself. */
+  drawing: boolean;
+  /** The copy text of a selection none of which is on screen, held in the textarea for ⌘C. */
   kept: string | null;
-  /** The cell of a primary press that may still become a click, or null once it dragged or was not one. */
-  press: { column: number; row: number } | null;
   /**
    * An input method just finished a composition and xterm has not sent it
    * yet: it sends the composed text one task after `compositionend`, once the
@@ -101,18 +104,54 @@ type Instance = {
   disposeHandlers: () => void;
 };
 
-/** A selection as it stood when the wheel scrolled, with the rows it covered. */
-type FollowedSelection = {
-  start: { x: number; y: number };
-  end: { x: number; y: number };
-  /** The clipped range xterm currently draws, separate from the original ends. */
-  drawn: { start: { x: number; y: number }; end: { x: number; y: number } };
-  rows: string[];
-  /** What Copy takes from it. */
-  text: string;
-  /** The shift of the text the wheel asked for, rows, positive moving it down. */
-  expected: number;
+/**
+ * A drag selection from where it was pressed to where the pointer is, in
+ * history rows (`selection.ts`), so it stays on its text while the history
+ * scrolls under it. Each row it covers is read whenever a frame shows it, so
+ * a copy has the rows scrolled away too.
+ */
+type Selection = {
+  anchor: HistoryPoint;
+  head: HistoryPoint;
+  rows: Map<number, { cells: CellRow; wraps: boolean | null }>;
+  /** What xterm draws of it now, to draw again only on a change. */
+  drawn: string | null;
+  /** The width it was made at; another width rewraps every row. */
+  cols: number;
 };
+
+/** A press that selects: a click until it drags. */
+type SelectGesture = {
+  kind: "select";
+  press: { column: number; row: number };
+  anchor: HistoryPoint;
+  pointer: { clientX: number; clientY: number };
+  dragged: boolean;
+  modifiers: number;
+  /** A scroll sent for the drag whose frame has not come, with when to stop waiting for it. */
+  scroll: { top: number; until: number } | null;
+  /** The autoscroll interval while the pointer is past the top or bottom edge. */
+  timer: number | null;
+  capped?: boolean;
+  listeners: () => void;
+};
+
+/** A press the program takes: its drag and release go to the program too. */
+type ProgramGesture = {
+  kind: "program";
+  cell: { column: number; row: number };
+  /** The motion waiting for the next animation frame. */
+  motion: number | null;
+  modifiers: number;
+  listeners: () => void;
+};
+
+/** The most history rows one drag selects (each kept as its cells until the selection ends). */
+const MAX_SELECTION_ROWS = 20_000;
+/** How often a drag past the screen's edge scrolls, as Herdr's client does. */
+const AUTOSCROLL_MS = 30;
+/** How long a drag's scroll waits for its frame before the next may go. */
+const SCROLL_ANSWER_MS = 500;
 
 const instances = new Map<string, Instance>();
 
@@ -346,11 +385,11 @@ export function feedChunks(chunks: TerminalChunk[]) {
     if (probeEnabled()) {
       const term = instance.term;
       term.write(bytes, () => {
-        followSelection(instance);
+        afterFrame(instance);
         noteWriteComplete(term);
       });
     } else {
-      instance.term.write(bytes, instance.follow?.expected ? () => followSelection(instance) : undefined);
+      instance.term.write(bytes, () => afterFrame(instance));
     }
   }
 }
@@ -358,9 +397,12 @@ export function feedChunks(chunks: TerminalChunk[]) {
 /** A self-contained snapshot may follow a core restart; every pane redraws from its next full frame. */
 export function resetAllTerminals() {
   for (const instance of instances.values()) {
+    endGesture(instance);
+    clearSelection(instance);
     instance.term.reset();
     forgetWraps(instance.term);
-    setKept(instance, null);
+    forgetView(instance.term);
+    instance.lastView = null;
     instance.grid = null;
     if (!instance.host) instance.stale = true;
   }
@@ -443,8 +485,6 @@ function disposeInstance(paneId: string, instance: Instance) {
  */
 function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChanged = false) {
   if (!instance.host) return;
-  // The rows a selection was remembered at no longer exist at another grid.
-  instance.follow = null;
   instance.fit.fit();
   const { term } = instance;
   if (term.cols < 2 || term.rows < 2) {
@@ -482,58 +522,11 @@ export function setTextScale(paneId: string, scale: number) {
   applyFont(instance, false);
 }
 
-function screenRows(term: Terminal): string[] {
-  const buffer = term.buffer.active;
-  const rows: string[] = [];
-  for (let y = 0; y < term.rows; y += 1) rows.push(buffer.getLine(y)?.translateToString(true) ?? "");
-  return rows;
-}
-
 /**
- * The pane has no local scrollback: the holder redraws its viewport in place, so
- * xterm keeps the selection on the same screen cells while the text under it
- * moves. A wheel remembers what the selection covers, and the frame that
- * answers it moves the selection to where that text went, or to the part
- * still on screen; a selection whose text left the screen is cleared rather
- * than left on other text.
- */
-function armFollow(instance: Instance, rows: number) {
-  const { term } = instance;
-  const range = term.getSelectionPosition();
-  if (!range) {
-    instance.follow = null;
-    return;
-  }
-  const known = instance.follow;
-  const same = known && known.drawn.start.x === range.start.x && known.drawn.start.y === range.start.y && known.drawn.end.x === range.end.x && known.drawn.end.y === range.end.y;
-  const shift = rows > 0 ? -Math.abs(rows) : Math.abs(rows);
-  if (same) {
-    known.expected += shift;
-    return;
-  }
-  // A selection ending at column 0 does not take that row.
-  const last = range.end.x === 0 && range.end.y > range.start.y ? range.end.y : range.end.y + 1;
-  instance.follow = {
-    start: { ...range.start },
-    end: { ...range.end },
-    drawn: range,
-    rows: screenRows(term).slice(range.start.y, last),
-    text: selectedText(instance) ?? "",
-    expected: shift,
-  };
-}
-
-/** Nothing of the selection is on screen any more: Copy keeps its text, the highlight goes. */
-function keepOffscreen(instance: Instance, follow: FollowedSelection) {
-  instance.term.clearSelection();
-  setKept(instance, follow.text === "" ? null : follow.text);
-}
-
-/**
- * Keeps or drops the text of a selection clipped by the screen. The terminal's
- * input textarea holds it selected while kept, since the browser fires a copy
- * event (⌘C, the Edit menu) only for a selection to copy; `onCopy` then puts
- * the text on the clipboard.
+ * Keeps or drops the copy text of a selection no row of which is on screen.
+ * The terminal's input textarea holds it selected while kept, since the
+ * browser fires a copy event (⌘C, the Edit menu) only for a selection to
+ * copy; `onCopy` then puts the text on the clipboard.
  */
 function setKept(instance: Instance, text: string | null) {
   if (instance.kept === text) return;
@@ -552,77 +545,128 @@ function holdKept(instance: Instance) {
   area.select();
 }
 
-/** Whether Copy has something to take: a drawn selection or one the wheel carried off. */
+/** Whether Copy has something to take: a drag selection, or one xterm drew itself (a double or triple click). */
 function hasCopyText(instance: Instance): boolean {
-  return instance.term.hasSelection() || instance.kept !== null;
+  return instance.selection !== null || instance.term.hasSelection();
+}
+
+/** Ends the pane's drag selection and its highlight. */
+function clearSelection(instance: Instance) {
+  const had = instance.selection !== null;
+  instance.selection = null;
+  setKept(instance, null);
+  if (had) drawing(instance, () => instance.term.clearSelection());
+}
+
+/** Runs `change` to xterm's selection as this module's own drawing, which the selection listener ignores. */
+function drawing(instance: Instance, change: () => void) {
+  instance.drawing = true;
+  try {
+    change();
+  } finally {
+    instance.drawing = false;
+  }
+}
+
+/** The history row the screen's top row is, 0 while the holder has not said (`terminalView.ts`). */
+function viewTop(instance: Instance): number {
+  return terminalView(instance.term)?.top ?? 0;
 }
 
 /**
- * Runs after a frame is drawn: moves a waiting selection onto the text it
- * covered. It waits while the wheel's rows are not all accounted for, so
- * several frames of one fast scroll each move it. A clipped selection keeps
- * its original ends after the move, until restored, cleared or replaced.
+ * Reads the selected rows the screen shows now into the selection, so a copy
+ * finds every row it covers, those scrolled away included: a row is read
+ * each time a frame shows it, and a drag reaches a row only by showing it.
  */
-function followSelection(instance: Instance) {
-  const follow = instance.follow;
-  if (!follow || follow.expected === 0) return;
+function recordRows(instance: Instance, selection: Selection) {
   const { term } = instance;
-  const range = term.getSelectionPosition();
-  if (!range || range.start.x !== follow.drawn.start.x || range.start.y !== follow.drawn.start.y || range.end.x !== follow.drawn.end.x || range.end.y !== follow.drawn.end.y) {
-    instance.follow = null;
-    return;
-  }
-  // Only the selected rows are read while they are unchanged, which is every
-  // chunk of output elsewhere on the screen.
+  const [start, end] = orderPoints(selection.anchor, selection.head);
+  const top = viewTop(instance);
+  const first = Math.max(start.row - top, 0);
+  const last = Math.min(end.row - top, term.rows - 1);
+  if (first > last) return;
   const buffer = term.buffer.active;
-  const unchanged = follow.rows.every((text, index) => {
-    const row = follow.start.y + index;
-    return row < 0 || row >= term.rows || (buffer.getLine(row)?.translateToString(true) ?? "") === text;
-  });
-  if (unchanged) return;
-  const screen = screenRows(term);
-  const shift = followScroll(follow.rows, follow.start.y, screen, follow.expected);
-  if (shift === null) {
-    instance.follow = null;
-    // Text the wheel carried off the screen leaves nothing to select; text
-    // that changed in place under a selection stays as xterm keeps it.
-    const first = follow.start.y + follow.expected;
-    const last = follow.end.y + follow.expected;
-    if (last < 0 || first > term.rows - 1) keepOffscreen(instance, follow);
-    return;
+  const wraps = paneRowWraps(term, instance.paneId, first, last);
+  for (let y = first; y <= last; y += 1) {
+    selection.rows.set(top + y, { cells: bufferRow(buffer.getLine(y), term.cols), wraps: wraps?.[y - first] ?? null });
   }
-  const moved = movedSelection(follow.start, follow.end, shift, term.rows, term.cols);
-  if (!moved) {
-    instance.follow = null;
-    keepOffscreen(instance, follow);
-    return;
+}
+
+/** Draws the part of the selection on screen, or keeps its copy text when none of it is. */
+function drawSelection(instance: Instance, selection: Selection) {
+  const { term } = instance;
+  const [start, end] = orderPoints(selection.anchor, selection.head);
+  const drawn = drawnSelection(start, end, viewTop(instance), term.rows, term.cols);
+  const key = drawn ? `${drawn.column},${drawn.row},${drawn.length}` : "";
+  if (key === selection.drawn) return;
+  selection.drawn = key;
+  drawing(instance, () => (drawn ? term.select(drawn.column, drawn.row, drawn.length) : term.clearSelection()));
+  // Rows off screen are not read again, so the text is taken once, as the
+  // last of it leaves the screen.
+  setKept(instance, drawn ? null : ownText(instance, selection));
+}
+
+/** The text of the drag selection, or null when a row it covers was never shown, which the log records. */
+function ownText(instance: Instance, selection: Selection): string | null {
+  const [start, end] = orderPoints(selection.anchor, selection.head);
+  const rows: CellRow[] = [];
+  const wraps: (boolean | null)[] = [];
+  for (let row = start.row; row <= end.row; row += 1) {
+    const read = selection.rows.get(row);
+    if (!read) {
+      useShellStore.getState().noteDiagnostic(`terminal.selection_row_unread pane=${instance.paneId} row=${row} from=${start.row} to=${end.row}`);
+      return null;
+    }
+    rows.push(read.cells);
+    wraps.push(read.wraps);
   }
-  term.select(moved.column, moved.row, moved.length);
-  const now = term.getSelectionPosition();
-  const remaining = follow.expected - shift;
-  if (!now) {
-    instance.follow = null;
-    return;
+  return selectionToText(rows, start.column, end.column, wraps);
+}
+
+/**
+ * Runs after a frame is drawn while the pane has a selection or a gesture:
+ * a frame that shows another screen (the alternate one, a cleared history or
+ * another width) ends the selection, since its history rows name other text;
+ * a drag follows its pointer onto the rows the frame brought; and the
+ * selection reads the rows it shows and draws its part on screen.
+ */
+function afterFrame(instance: Instance) {
+  const view = terminalView(instance.term);
+  const selection = instance.selection;
+  const last = instance.lastView;
+  instance.lastView = view;
+  if (selection && (selection.cols !== instance.term.cols
+    || (last && view && (view.alternate !== last.alternate || view.bottom < last.bottom)))) {
+    clearSelection(instance);
   }
-  follow.start.y += shift;
-  follow.end.y += shift;
-  follow.drawn = now;
-  follow.expected = Math.sign(remaining) === Math.sign(follow.expected) ? remaining : 0;
-  const clipped = follow.start.y < 0 || follow.end.y >= term.rows;
-  setKept(instance, clipped ? follow.text : null);
-  if (!clipped && follow.expected === 0) instance.follow = null;
+  const gesture = instance.gesture;
+  if (gesture?.kind === "select") {
+    if (gesture.scroll && view?.top !== gesture.scroll.top) gesture.scroll = null;
+    followPointer(instance, gesture);
+  }
+  if (instance.selection) {
+    recordRows(instance, instance.selection);
+    drawSelection(instance, instance.selection);
+  }
 }
 
 function flushWheel(paneId: string, instance: Instance) {
   const wheel = instance.wheel;
   wheel.frame = null;
-  const rows = wheel.rows;
-  wheel.rows = 0;
+  const gesture = instance.gesture?.kind === "select" ? instance.gesture : null;
+  // While a drag selects, one wheel at a time and never a whole screen, so
+  // every row it passes is shown and read; the rest waits for its frame.
+  if (gesture?.scroll && performance.now() < gesture.scroll.until) {
+    if (wheel.rows !== 0) wheel.frame = requestAnimationFrame(() => flushWheel(paneId, instance));
+    return;
+  }
+  const rows = gesture ? Math.sign(wheel.rows) * Math.min(Math.abs(wheel.rows), instance.term.rows - 1) : wheel.rows;
+  wheel.rows -= rows;
   if (rows === 0) return;
-  // A wheel turned while the button is held belongs to the drag, which
-  // `select` would end; the selection then stays as xterm keeps it.
-  if (wheel.held) instance.follow = null;
-  else armFollow(instance, rows);
+  // Without the holder's view the rows a selection covers cannot be told
+  // apart from the ones the wheel brings, so it ends.
+  if (!terminalView(instance.term)) clearSelection(instance);
+  if (gesture) gesture.scroll = { top: viewTop(instance), until: performance.now() + SCROLL_ANSWER_MS };
   instance.dispatch({
     schema_version: 2,
     kind: "terminal_scroll",
@@ -661,7 +705,6 @@ function onWheel(paneId: string, instance: Instance, event: WheelEvent) {
   wheel.column = cell.column;
   wheel.row = cell.row;
   wheel.modifiers = pointerModifiers(event);
-  wheel.held = (event.buttons & 1) !== 0;
   if (wheel.frame === null) wheel.frame = requestAnimationFrame(() => flushWheel(paneId, instance));
 }
 
@@ -698,42 +741,214 @@ function cellAt(geometry: CellGeometry, event: { clientX: number; clientY: numbe
   };
 }
 
-function onMouseDown(instance: Instance, event: MouseEvent) {
-  instance.press = null;
-  // A right-click opens the menu, whose Copy still takes the kept text.
-  // On macOS a ctrl-press is a right-click too.
-  if (event.button === 0 && !(event.ctrlKey && keySystem() === "mac")) {
-    instance.follow = null;
-    setKept(instance, null);
-  }
-  // The primary button alone can become a click; ⌥ + press and a second
-  // click of a multi-click are the `application` and `localSelection`
-  // routes, and neither is replayed to the program. A press on a link is the
-  // link's click, so the program does not hear it too.
-  if (event.button !== 0 || event.altKey || event.detail !== 1 || instance.link.hovered) return;
-  const geometry = cellGeometry(instance);
-  if (!geometry) return;
-  instance.press = cellAt(geometry, event);
+/**
+ * The history point under the pointer: the screen row it is over, held to
+ * the top or bottom row past the screen's edge, and the column boundary
+ * nearest it, so a drag selects whole cells from where it started.
+ */
+function pointAt(instance: Instance, geometry: CellGeometry, pointer: { clientX: number; clientY: number }): HistoryPoint {
+  const { rect, cols, colWidth } = geometry;
+  const column = colWidth > 0 ? Math.max(0, Math.min(cols, Math.round((pointer.clientX - rect.left) / colWidth))) : 0;
+  return { row: viewTop(instance) + cellAt(geometry, pointer).row, column };
 }
 
-function onMouseUp(paneId: string, instance: Instance, event: MouseEvent) {
-  const press = instance.press;
-  instance.press = null;
-  if (!press || event.button !== 0) return;
-  const geometry = cellGeometry(instance);
-  if (!geometry) return;
-  const release = cellAt(geometry, event);
-  // Leaving the pressed cell, or a selection xterm made on the way, is a drag.
-  if (release.column !== press.column || release.row !== press.row || instance.term.hasSelection()) return;
+function sendMouse(instance: Instance, action: "press" | "release" | "motion", cell: { column: number; row: number }, modifiers: number) {
   instance.dispatch({
     schema_version: 2,
-    kind: "terminal_click",
-    payload: { pane_id: paneId, column: press.column, row: press.row, modifiers: pointerModifiers(event) },
+    kind: "terminal_mouse",
+    payload: { pane_id: instance.paneId, action, button: "left", column: cell.column, row: cell.row, modifiers },
   });
 }
 
-/** The text the current drag selection copies, or null when nothing is selected. */
+/**
+ * Starts a gesture for a primary press. A program that takes the pointer
+ * gets the press, the drag and the release, as a native terminal gives them,
+ * unless ⇧ is held, which selects instead; otherwise a single press starts a
+ * drag selection over the pane's history, and a press that never drags is a
+ * click the holder reports to the program only if it tracks the mouse. ⌥ +
+ * press and a double or triple click stay xterm's (a word, a line), and a
+ * press on a link is the link's click.
+ */
+function onMouseDown(instance: Instance, event: MouseEvent) {
+  // A right-click opens the menu, whose Copy still takes the selection.
+  // On macOS a ctrl-press is a right-click too.
+  if (event.button !== 0 || (event.ctrlKey && keySystem() === "mac")) return;
+  endGesture(instance);
+  if (instance.link.hovered) return;
+  const geometry = cellGeometry(instance);
+  if (!geometry) return;
+  const program = terminalView(instance.term)?.mouse === true && !event.shiftKey && !event.altKey;
+  if (!program && (event.altKey || event.detail !== 1)) {
+    clearSelection(instance);
+    return;
+  }
+  // The gesture is this module's: xterm would start its own selection.
+  event.preventDefault();
+  event.stopPropagation();
+  instance.term.focus();
+  const cell = cellAt(geometry, event);
+  const modifiers = pointerModifiers(event);
+  const move = (moved: MouseEvent) => onPointerMove(instance, moved);
+  const up = (released: MouseEvent) => {
+    if (released.button === 0) onPointerUp(instance, released);
+  };
+  // A window that loses focus mid-drag never sees the release: the program
+  // is told it now, so it does not keep the button held.
+  const blur = () => {
+    const gesture = instance.gesture;
+    if (gesture?.kind === "program") sendMouse(instance, "release", gesture.cell, gesture.modifiers);
+    endGesture(instance);
+  };
+  window.addEventListener("mousemove", move, true);
+  window.addEventListener("mouseup", up, true);
+  window.addEventListener("blur", blur);
+  const listeners = () => {
+    window.removeEventListener("mousemove", move, true);
+    window.removeEventListener("mouseup", up, true);
+    window.removeEventListener("blur", blur);
+  };
+  if (program) {
+    clearSelection(instance);
+    instance.gesture = { kind: "program", cell, motion: null, modifiers, listeners };
+    sendMouse(instance, "press", cell, modifiers);
+    return;
+  }
+  clearSelection(instance);
+  instance.gesture = {
+    kind: "select",
+    press: cell,
+    anchor: pointAt(instance, geometry, event),
+    pointer: { clientX: event.clientX, clientY: event.clientY },
+    dragged: false,
+    modifiers,
+    scroll: null,
+    timer: null,
+    listeners,
+  };
+}
+
+function onPointerMove(instance: Instance, event: MouseEvent) {
+  const gesture = instance.gesture;
+  if (!gesture) return;
+  if (gesture.kind === "program") {
+    const geometry = cellGeometry(instance);
+    if (!geometry) return;
+    const cell = cellAt(geometry, event);
+    if (cell.column === gesture.cell.column && cell.row === gesture.cell.row) return;
+    gesture.cell = cell;
+    gesture.modifiers = pointerModifiers(event);
+    // One motion per animation frame, at the cell the pointer reached.
+    gesture.motion ??= requestAnimationFrame(() => {
+      gesture.motion = null;
+      if (instance.gesture === gesture) sendMouse(instance, "motion", gesture.cell, gesture.modifiers);
+    });
+    return;
+  }
+  gesture.pointer = { clientX: event.clientX, clientY: event.clientY };
+  followPointer(instance, gesture);
+}
+
+function onPointerUp(instance: Instance, event: MouseEvent) {
+  const gesture = instance.gesture;
+  if (!gesture) return;
+  if (gesture.kind === "program") {
+    if (gesture.motion !== null) {
+      cancelAnimationFrame(gesture.motion);
+      gesture.motion = null;
+      sendMouse(instance, "motion", gesture.cell, gesture.modifiers);
+    }
+    sendMouse(instance, "release", gesture.cell, pointerModifiers(event));
+  } else if (!gesture.dragged) {
+    // A click the program hears only if it tracks the mouse.
+    sendMouse(instance, "press", gesture.press, gesture.modifiers);
+    sendMouse(instance, "release", gesture.press, gesture.modifiers);
+  } else if (instance.selection) {
+    const [start, end] = orderPoints(instance.selection.anchor, instance.selection.head);
+    if (start.row === end.row && start.column === end.column) clearSelection(instance);
+  }
+  endGesture(instance);
+}
+
+/** Ends the pane's gesture, its listeners, its pending motion and its autoscroll. */
+function endGesture(instance: Instance) {
+  const gesture = instance.gesture;
+  if (!gesture) return;
+  instance.gesture = null;
+  gesture.listeners();
+  if (gesture.kind === "program" && gesture.motion !== null) cancelAnimationFrame(gesture.motion);
+  if (gesture.kind === "select" && gesture.timer !== null) clearInterval(gesture.timer);
+}
+
+/**
+ * Moves a drag selection's head to the pointer, on the rows the screen
+ * shows now, and scrolls the history while the pointer is past the top or
+ * bottom edge, as a native terminal does. The selection is capped at
+ * `MAX_SELECTION_ROWS` rows from where it started.
+ */
+function followPointer(instance: Instance, gesture: SelectGesture) {
+  const geometry = cellGeometry(instance);
+  if (!geometry) return;
+  const head = pointAt(instance, geometry, gesture.pointer);
+  if (!gesture.dragged) {
+    const cell = cellAt(geometry, gesture.pointer);
+    if (cell.column === gesture.press.column && cell.row === gesture.press.row) return;
+    gesture.dragged = true;
+    instance.selection = { anchor: gesture.anchor, head, rows: new Map(), drawn: null, cols: instance.term.cols };
+  }
+  const selection = instance.selection;
+  if (!selection) return;
+  const reach = MAX_SELECTION_ROWS - 1;
+  if (Math.abs(head.row - selection.anchor.row) > reach) {
+    head.row = selection.anchor.row + Math.sign(head.row - selection.anchor.row) * reach;
+    if (!gesture.capped) useShellStore.getState().noteDiagnostic(`terminal.selection_capped pane=${instance.paneId} rows=${MAX_SELECTION_ROWS}`);
+    gesture.capped = true;
+  }
+  selection.head = head;
+  recordRows(instance, selection);
+  drawSelection(instance, selection);
+  const view = terminalView(instance.term);
+  const { rect } = geometry;
+  const past = gesture.pointer.clientY < rect.top ? "up" : gesture.pointer.clientY >= rect.bottom ? "down" : null;
+  // A wheel over a program that tracks the mouse would be its report, not a
+  // scroll of the history, so a ⇧ drag there stays on the screen.
+  const scrolls = past !== null && view !== null && !view.alternate && !view.mouse && view.bottom > 0 && !gesture.capped;
+  if (scrolls && gesture.timer === null) gesture.timer = window.setInterval(() => autoscroll(instance, gesture), AUTOSCROLL_MS);
+  if (!scrolls && gesture.timer !== null) {
+    clearInterval(gesture.timer);
+    gesture.timer = null;
+  }
+}
+
+/** One autoscroll step: the history moves toward the pointer once the last step's frame came. */
+function autoscroll(instance: Instance, gesture: SelectGesture) {
+  if (instance.gesture !== gesture) return;
+  const now = performance.now();
+  if (gesture.scroll && now < gesture.scroll.until) return;
+  const geometry = cellGeometry(instance);
+  const view = terminalView(instance.term);
+  if (!geometry || !view) return;
+  const { rect, rowHeight } = geometry;
+  const up = gesture.pointer.clientY < rect.top;
+  const distance = up ? rect.top - gesture.pointer.clientY : gesture.pointer.clientY - rect.bottom;
+  if (up ? view.top === 0 : view.top >= view.bottom) return;
+  gesture.scroll = { top: view.top, until: now + SCROLL_ANSWER_MS };
+  instance.dispatch({
+    schema_version: 2,
+    kind: "terminal_scroll",
+    payload: {
+      pane_id: instance.paneId,
+      direction: up ? "up" : "down",
+      lines: autoscrollRows(distance, rowHeight, instance.term.rows),
+      column: 0,
+      row: up ? 0 : instance.term.rows - 1,
+      modifiers: 0,
+    },
+  });
+}
+
+/** The text the current selection copies: the drag selection's, or xterm's own (a word or a line), or null. */
 function selectedText(instance: Instance): string | null {
+  if (instance.selection) return ownText(instance, instance.selection);
   const { term } = instance;
   const range = term.getSelectionPosition();
   if (!range) return null;
@@ -746,7 +961,7 @@ function selectedText(instance: Instance): string | null {
 /** The copy text of the pane's selection, for the probe; null without a selection or an instance. */
 export function terminalSelectionText(paneId: string): string | null {
   const instance = instances.get(paneId);
-  return instance ? (instance.kept ?? selectedText(instance)) : null;
+  return instance ? selectedText(instance) : null;
 }
 
 /** Resolves only the cell right-clicked, using the link provider's existing bounds and cache. */
@@ -828,12 +1043,12 @@ export async function pasteClipboard(paneId: string, where: string): Promise<voi
 export function selectAllText(paneId: string) {
   const instance = instances.get(paneId);
   if (!instance) return;
-  instance.follow = null;
+  clearSelection(instance);
   instance.term.selectAll();
 }
 
 function onCopy(instance: Instance, event: ClipboardEvent) {
-  const text = instance.kept ?? selectedText(instance);
+  const text = selectedText(instance);
   if (text === null || !event.clipboardData) return;
   // One owner again: xterm's own copy handler would put its padded,
   // hard-broken rows on the clipboard from the same event.
@@ -876,6 +1091,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
   term.loadAddon(new Unicode11Addon());
   term.unicode.activeVersion = "11";
   followWraps(term);
+  followView(term);
   const instance: Instance = {
     paneId,
     identity: terminalIdentity(paneId),
@@ -892,10 +1108,12 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
     observer: null,
     stale: false,
     grid: null,
-    wheel: { held: false, rows: 0, remainder: 0, column: 0, row: 0, modifiers: 0, frame: null },
-    follow: null,
+    wheel: { rows: 0, remainder: 0, column: 0, row: 0, modifiers: 0, frame: null },
+    selection: null,
+    gesture: null,
+    lastView: null,
+    drawing: false,
     kept: null,
-    press: null,
     commitPending: false,
     keysWaiting: 0,
     disposeHandlers: () => {},
@@ -917,10 +1135,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
     // On macOS ⌘C is the browser's own copy, which `terminalKey` leaves alone.
     const copying = action?.kind === "copy"
       || (system === "mac" && event.metaKey && !event.shiftKey && !event.altKey && (event.code === "KeyC" || event.key.toLowerCase() === "c"));
-    if (!copying && !MODIFIER_KEYS.has(event.key)) {
-      instance.follow = null;
-      setKept(instance, null);
-    }
+    if (!copying && !MODIFIER_KEYS.has(event.key)) clearSelection(instance);
     if (!action) return true;
     event.preventDefault();
     const run = () => {
@@ -933,7 +1148,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
       else if (hasCopyText(instance)) {
         void copySelection(instance.paneId, "terminal").then((copied) => {
           if (!copied) return;
-          setKept(instance, null);
+          clearSelection(instance);
           term.clearSelection();
         });
       }
@@ -954,29 +1169,32 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
     } else run();
     return false;
   });
-  // A selection drawn again, a drag or select-all, replaces the kept text.
+  // A selection xterm draws itself (a double or triple click, select-all)
+  // replaces the drag selection; one xterm dropped on its own is drawn
+  // again by the next frame.
   term.onSelectionChange(() => {
-    if (term.hasSelection()) setKept(instance, null);
-    else instance.follow = null;
+    if (instance.drawing) return;
+    if (term.hasSelection()) {
+      instance.selection = null;
+      setKept(instance, null);
+    } else if (instance.selection) instance.selection.drawn = null;
   });
   term.onData((data) => send(new TextEncoder().encode(data)));
   const linkProvider = registerTerminalLinks(term, () => instance.paneId, link, () => instance.actions);
   const wheel = (event: WheelEvent) => onWheel(instance.paneId, instance, event);
   const down = (event: MouseEvent) => onMouseDown(instance, event);
-  const up = (event: MouseEvent) => onMouseUp(instance.paneId, instance, event);
   const copy = (event: ClipboardEvent) => onCopy(instance, event);
   element.addEventListener("wheel", wheel, { capture: true, passive: false });
-  // The press and release are read on the way down and left to xterm, whose
-  // selection needs them. Its own mouse reports never fire: the holder's frames
-  // carry no mouse mode (`selection.ts` on what they carry), so the program
-  // hears about a click only through the core's terminal_click route.
+  // A primary press is read on the way down: a gesture this module takes
+  // stops there, and the rest (a link, a double click, ⌥) goes on to xterm.
+  // xterm's own mouse reports never fire, since the holder's frames carry no
+  // mouse mode; the program hears the pointer through `terminal_mouse`.
   element.addEventListener("mousedown", down, { capture: true });
-  element.addEventListener("mouseup", up, { capture: true });
   element.addEventListener("copy", copy, { capture: true });
   instance.disposeHandlers = () => {
     element.removeEventListener("wheel", wheel, { capture: true });
     element.removeEventListener("mousedown", down, { capture: true });
-    element.removeEventListener("mouseup", up, { capture: true });
+    endGesture(instance);
     element.removeEventListener("copy", copy, { capture: true });
     if (instance.wheel.frame !== null) cancelAnimationFrame(instance.wheel.frame);
     linkProvider.dispose();
@@ -1059,8 +1277,8 @@ export function attachTerminal(
     shown.host = null;
     // Text kept off screen is the shown pane's; coming back to it later must
     // not find Ctrl+C taken for a copy nobody can see.
-    shown.follow = null;
-    setKept(shown, null);
+    endGesture(shown);
+    clearSelection(shown);
     parkingLot().append(shown.element);
     // A pane closed while shown left the core's list before its view
     // unmounted, so the park decides for itself instead of waiting for a

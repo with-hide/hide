@@ -5548,6 +5548,18 @@ impl Runtime {
                             .insert(checkout_id.clone(), tab_id.clone());
                         self.send_created_tab(checkout_id, tab_id.clone());
                     }
+                    // The core's own engine lists the new tab before it
+                    // answers, so the session that shows it can reach the
+                    // core first. Then nothing is left to republish
+                    // (`draw_created_tab` has no layout to draw), the
+                    // navigator still names the old tab as the visible one,
+                    // and the selected pane above lies outside it until some
+                    // later session: a split sent then finds no focused pane
+                    // in the visible tab (with-hide/hide-private#476). Every
+                    // other writer of the visible tab projects it as it sets
+                    // it; with the tab not listed yet, the session that lists
+                    // it does.
+                    self.settle_selection_projection();
                     self.yield_surface_to_terminal();
                     self.persist_current_ui_state();
                 }

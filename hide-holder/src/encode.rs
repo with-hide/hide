@@ -6,8 +6,9 @@
 // ratatui frames, skips a row the capture shares unchanged, starts a full
 // screen with a display reset so any earlier state of the receiver is gone,
 // splits a screen between rows into fragments of at most `MAX_FRAGMENT`
-// bytes, writes overline, says which rows soft-wrap (`WRAP_OSC`) and which
-// end with a link (`LINK_END_OSC`), and drops
+// bytes, writes overline, says which rows soft-wrap (`WRAP_OSC`), which
+// end with a link (`LINK_END_OSC`) and where the screen stands
+// (`VIEW_OSC`), and drops
 // the drawn cursor, the surface patches, the profiling and the IME anchor
 // repeat, which only Herdr's own client uses.
 
@@ -30,6 +31,9 @@
 //! as [`LINK_END_OSC`] on every system, which rows end with a hyperlink the
 //! next row does not carry on (`Frame::link_ends`), which tells a link an
 //! agent's TUI broke across rows from one that filled its row. A program's
+//! A full fragment, and a delta whose view moved, says where the screen
+//! stands in its history and what the program asked of the pointer, as
+//! [`VIEW_OSC`]. A program's
 //! own OSC never reaches the receiver, since a fragment is drawn from the
 //! parsed cells, so only the holder writes these.
 
@@ -38,7 +42,7 @@ use std::io::Write;
 
 use hide_holder_protocol::MAX_FRAGMENT;
 
-use crate::screen::{Cell, Color, Frame, MAX_LINK, MAX_TEXT, Row, attrs};
+use crate::screen::{Cell, Color, Frame, MAX_LINK, MAX_TEXT, Row, View, attrs};
 
 const SYNC_START: &[u8] = b"\x1b[?2026h";
 const SYNC_END: &[u8] = b"\x1b[?2026l";
@@ -61,6 +65,18 @@ pub const WRAP_OSC: u16 = 7719;
 /// (`web/src/terminalWrap.ts`); a terminal that does not know it drops it.
 pub const LINK_END_OSC: u16 = 7720;
 
+/// The private OSC that says where the screen stands (`Frame::view`):
+/// `ESC ] 7721 ; <top> ; <bottom> ; <flags> ESC \`, the history row the
+/// screen's top row is and the most it can be, counted from the oldest row
+/// kept, and flags bit 0 when the program takes pointer events and bit 1
+/// while the alternate screen shows. The web shell reads it
+/// (`web/src/terminalView.ts`) to select past the screen's edge and to give
+/// a drag to the program; a terminal that does not know it drops it.
+pub const VIEW_OSC: u16 = 7721;
+
+/// The most bytes [`VIEW_OSC`] takes: its frame, two `u64`s and a flag digit.
+const MAX_VIEW: usize = 16 + 2 * 20;
+
 /// The most bytes [`WRAP_OSC`] or [`LINK_END_OSC`] takes: its frame, two
 /// sizes, a digit per four rows.
 const MAX_ROW_BITS: usize = 24 + hide_holder_protocol::MAX_ROWS as usize / 4;
@@ -78,6 +94,7 @@ const _: () = assert!(
         + SYNC_START.len()
         + RESET.len()
         + 2 * MAX_ROW_BITS
+        + MAX_VIEW
         + TAIL
         < MAX_FRAGMENT
 );
@@ -119,6 +136,7 @@ impl Encoder {
                     write_rows(&mut out, WRAP_OSC, &frame, wrapped);
                 }
                 write_rows(&mut out, LINK_END_OSC, &frame, &frame.link_ends);
+                write_view(&mut out, frame.view);
                 write_all_cells(&mut out, &frame);
                 self.shape = 0;
                 wrote = true;
@@ -135,6 +153,10 @@ impl Encoder {
                 }
                 if frame.link_ends != previous.link_ends {
                     write_rows(&mut out, LINK_END_OSC, &frame, &frame.link_ends);
+                    wrote = true;
+                }
+                if frame.view != previous.view {
+                    write_view(&mut out, frame.view);
                     wrote = true;
                 }
                 wrote |= write_changed_cells(&mut out, &frame, previous);
@@ -377,6 +399,18 @@ fn write_rows(out: &mut Pieces, osc: u16, frame: &Frame, bits: &[bool]) {
     out.push(&bytes);
 }
 
+/// Writes `view` as [`VIEW_OSC`].
+fn write_view(out: &mut Pieces, view: View) {
+    let flags = u8::from(view.mouse) | (u8::from(view.alternate) << 1);
+    let mut bytes = Vec::with_capacity(MAX_VIEW);
+    let _ = write!(
+        bytes,
+        "\x1b]{VIEW_OSC};{};{};{flags}\x1b\\",
+        view.top, view.bottom
+    );
+    out.push(&bytes);
+}
+
 fn write_cursor(out: &mut Pieces, frame: &Frame, last_shape: &mut u8, full: bool) {
     let cursor = frame.cursor;
     let mut bytes = Vec::new();
@@ -536,6 +570,51 @@ mod tests {
         let encoded = Encoder::default().encode(pane.take(true).unwrap(), true);
         assert!(wrap_sequences(&encoded).is_empty());
         assert_eq!(link_end_sequences(&encoded), ["7720;29;4;1"]);
+    }
+
+    #[test]
+    fn a_frame_says_where_the_screen_stands_and_a_delta_again_only_when_it_moves() {
+        let view = |encoded: &Encoded| sequences(encoded, VIEW_OSC);
+        let mut pane = pane(20, 3);
+        let mut encoder = Encoder::default();
+        assert_eq!(
+            view(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7721;0;0;0"]
+        );
+
+        // Five lines on a three-row screen leave two in the history, and the
+        // screen follows the bottom.
+        pane.feed(b"1\r\n2\r\n3\r\n4\r\n5", &mut Vec::new());
+        assert_eq!(
+            view(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7721;2;2;0"]
+        );
+
+        // A wheel up moves the top only.
+        pane.scroll(&hide_holder_protocol::Scroll {
+            lines: 1,
+            cell: None,
+            modifiers: hide_holder_protocol::Modifiers::default(),
+        })
+        .unwrap();
+        assert_eq!(
+            view(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7721;1;2;0"]
+        );
+
+        // Mouse reports on the alternate screen: no history there, and the
+        // pointer is the program's.
+        pane.feed(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h", &mut Vec::new());
+        assert_eq!(
+            view(&encoder.encode(pane.take(false).unwrap(), false)),
+            ["7721;0;0;3"]
+        );
+
+        // A delta that moves cells but not the view says nothing of it.
+        pane.feed(b"x", &mut Vec::new());
+        let moved = encoder.encode(pane.take(false).unwrap(), false);
+        assert!(!moved.pieces.is_empty());
+        assert!(view(&moved).is_empty());
     }
 
     // The URL of with-hide/hide-private#312 fills a 29-column row exactly.

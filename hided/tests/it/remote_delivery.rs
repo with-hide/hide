@@ -320,6 +320,84 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
     })
 }
 
+/// with-hide/hide-private#654: a request for an agent on a device is belled
+/// with no `--force` once its composer reads empty, though input reached its
+/// pane after its report. The core held such a letter for its 60 minutes: a
+/// key hide routed to the pane with no submission after it holds a letter on
+/// a possible draft, only a composer read of a known agent version releases
+/// it, and the core knew no version of an agent on a device. The device's
+/// helper now says which Claude Code is installed there
+/// (`Call::HookDiagnosis`), the core's composer checks hold that version as
+/// passed (the fixture's seed), and the screen the stand-in draws reads empty.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn a_request_for_a_device_agent_that_reported_is_belled_without_force_once_its_composer_reads_empty()
+-> Result<()> {
+    Fixture::journey_installed(|fixture| {
+        let remote_hide = fixture.remote.hide.clone();
+        let remote_hooks = fixture.remote.hooks.clone();
+
+        // The device's agent reports to the agent that started it.
+        let report = fixture
+            .remote
+            .run_in_pane(&format!(
+                "{} request send local-parent --intent bridge-report --kind report --body {}",
+                quote(&remote_hide),
+                quote("DEVICE_REPORT")
+            ))?
+            .json()?;
+        ensure!(
+            report["id"].as_str().is_some(),
+            "the device agent's report was not recorded: {report}"
+        );
+        // Then input reaches its pane that no submission follows, as an
+        // operator's key does: a Backspace the stand-in ignores, so its
+        // composer stays empty on the screen.
+        let key = fixture.local.run_in_pane(&format!(
+            "{} pane send {} --key backspace",
+            quote(&fixture.hide),
+            quote(&fixture.remote.pane)
+        ))?;
+        ensure!(key.status == 0, "the key was not sent: {}", key.stderr);
+
+        let request = fixture
+            .local
+            .run_in_pane(&format!(
+                "{} request send remote-child --intent bridge-after-report --body {}",
+                quote(&fixture.hide),
+                quote("DELIVERY_AFTER_REPORT")
+            ))?
+            .json()?;
+        let id = request["id"]
+            .as_str()
+            .context("the request's letter ID")?
+            .to_owned();
+        // The letter waits out the quiet period and the core's read of the
+        // device's agent, then its composer; before this change it waited
+        // for its deadline instead.
+        let bell = fixture.rung_within(&id, Duration::from_secs(150))?;
+        let delivered =
+            fixture
+                .remote
+                .run_in_pane(&hook(&remote_hooks, "fixture-remote-session", &bell))?;
+        let intake = context(&delivered.stdout)?;
+        ensure!(
+            delivered.status == 0
+                && intake.contains(&id)
+                && intake.contains("DELIVERY_AFTER_REPORT"),
+            "the device agent's prompt hook did not receive the request: {intake}"
+        );
+        wait_for("durable delivery of the request", || {
+            Ok(fixture
+                .ledger()?
+                .letters
+                .iter()
+                .any(|letter| letter.id == id && letter.state == State::Delivered && !letter.forced)
+                .then_some(()))
+        })
+    })
+}
+
 /// A request the recipient took in and never answered stops being awaited when
 /// the recipient's registration ends, and the sender, on the other machine,
 /// reads that and the reason from `hide request show`; the log records it

@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { altScreenProgram, bytesReceived } from "./alt-screen-program";
-import { corePaneFocus, focusTab, newTab, openProject, tabsOf, withControl } from "./daemon-actions";
+import { corePaneFocus, focusTab, newTab, openProject, sendKeys, tabsOf, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { executeTerminalCheck, waitForTerminal } from "./group-start-helper";
 import { panePrompt, printFileCommand, printLinesCommand } from "./pane-fixture";
@@ -298,10 +298,17 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
 });
 
 // @platform: Wheel and click input over a real PTY through the platform's engine and its shell: the bytes its shim reads, and the SGR report is the only thing it gets.
-test("a wheel over a shell pane is one terminal_scroll per batch, and a click is one terminal_click answered by the SGR report", { tag: "@platform" }, async ({ page }) => {
+test("a wheel over a shell pane is one terminal_scroll per batch, and a click is a terminal_mouse press and release answered by the SGR report", { tag: "@platform" }, async ({ page }) => {
   const flow = await startFlow(page);
   try {
     const { engine, sent, lastSent } = flow;
+    // The fixture agent writes back what it reads, so the modes typed into it
+    // reach its terminal as its own output: the program now tracks the mouse
+    // in SGR form, and its holder says so. Typed first, since a key into a
+    // pane takes the keyboard there.
+    const agentPane = engine.panes[1];
+    await withControl(flow.daemon, async (control) => sendKeys(control, agentPane, "\x1b[?1000h\x1b[?1006h"));
+    await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneView(id)?.mouse ?? null, agentPane), { timeout: 10_000 }).toBe(true);
     // The new pane runs the fixture shell. A wheel over it is one
     // terminal_scroll per batch and the core's viewport follows (B19).
     const shellPane = page.locator('[data-pane-view][data-focused="true"]');
@@ -330,12 +337,11 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     // cursor keys (which would walk the shell's history).
     expect(sent.get("key") ?? 0).toBe(keysBeforeWheel);
 
-    // A single click in a pane is one terminal_click with the pressed cell
-    // (B20). The core answers it with the SGR report a mouse-tracking
-    // program asked for, and that report is the only thing the PTY gets:
-    // the shim logs every byte it reads, and no key event went out, so
-    // xterm wrote no mouse report of its own.
-    const agentPane = engine.panes[1];
+    // A click in a pane whose program tracks the mouse is a terminal_mouse
+    // press and release at the pressed cell (B20). The pane's holder answers
+    // them with the SGR report the program asked for, and that report is the
+    // only thing the PTY gets: the shim logs every byte it reads, and no key
+    // event went out, so xterm wrote no mouse report of its own.
     // The cell comes from xterm's screen element, exactly cols by rows; the
     // host around it is larger by the fit's remainder, and a cell read from
     // the host drifts toward the far edge (the delta is printed so a run
@@ -356,8 +362,8 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
       agentScreen.x + (cell.column + 0.5) * (agentScreen.width / agentGrid.cols),
       agentScreen.y + (cell.row + 0.5) * (agentScreen.height / agentGrid.rows),
     );
-    await expect.poll(() => sent.get("terminal_click")).toBe(1);
-    expect(lastSent.get("terminal_click")).toEqual({ pane_id: agentPane, column: cell.column, row: cell.row, modifiers: 0 });
+    await expect.poll(() => sent.get("terminal_mouse")).toBe(2);
+    expect(lastSent.get("terminal_mouse")).toEqual({ pane_id: agentPane, action: "release", button: "left", column: cell.column, row: cell.row, modifiers: 0 });
     await expect.poll(() => sent.get("focus_pane")).toBe(focusBefore + 1);
     // The engine confirms a focus later than the core moves it, and a confirmation
     // still in flight when the next focus_pane goes out is followed as a
@@ -443,7 +449,7 @@ test("a drag selects locally without a click, and its copy joins wrapped lines a
       x: shellScreen.x + (column + 0.5) * (shellScreen.width / shellGrid.cols),
       y: shellScreen.y + (row + 0.5) * (shellScreen.height / shellGrid.rows),
     });
-    const clicksBeforeDrag = sent.get("terminal_click") ?? 0;
+    const clicksBeforeDrag = sent.get("terminal_mouse") ?? 0;
     // Dragged from the empty row back to the first cell: the split's divider
     // grab area covers the pane's first column, so the press starts inside.
     const pressAt = shellCell(shellGrid.cols - 2, 3);
@@ -453,7 +459,7 @@ test("a drag selects locally without a click, and its copy joins wrapped lines a
     await page.mouse.move(dragTo.x - shellScreen.width / shellGrid.cols, dragTo.y, { steps: 8 });
     await page.mouse.up();
     await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneSelection(id) ?? null, shellPaneId)).toBe(`${wrapped}\nshort\n`);
-    expect(sent.get("terminal_click") ?? 0).toBe(clicksBeforeDrag);
+    expect(sent.get("terminal_mouse") ?? 0).toBe(clicksBeforeDrag);
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await copy(page);
     // The Windows text clipboard represents line endings as CRLF.

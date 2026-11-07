@@ -1069,18 +1069,21 @@ impl Runtime {
         self.sync_session_state() | self.refresh_agent_scopes()
     }
 
-    /// The agent version Hide knows for `actor`, as the hook diagnosis read
-    /// it from the installed runtime's `--version` on this machine. A pane on
-    /// a connected device, or an agent with no hook runtime, has none known.
+    /// The agent version Hide knows for `actor`, as the hook diagnosis of
+    /// the machine its pane is on read it from the installed runtime's
+    /// `--version`: this machine's own, or a registered device's that its
+    /// coordinator read ([`Runtime::ingest_device_hook_diagnosis`]). An agent
+    /// with no hook runtime, a device not read yet, or a read that found no
+    /// version has none known.
     fn composer_version(&self, actor: &Actor) -> Option<String> {
         use hide_agent_hooks::MemoryCompatibility;
-        if self.node != actor.device_id.as_str() {
-            return None;
-        }
+        let diagnosis = if self.node == actor.device_id.as_str() {
+            self.hook_diagnosis.as_ref()
+        } else {
+            self.device_hook_diagnoses.get(actor.device_id.as_str())
+        }?;
         let id = hide_agent_adapter::adapter(&actor.kind)?.id;
-        let row = self
-            .hook_diagnosis
-            .as_ref()?
+        let row = diagnosis
             .runtimes
             .iter()
             .find(|row| row.runtime.id() == id)?;
@@ -1091,6 +1094,25 @@ impl Runtime {
             } => installed_version.clone(),
         }
         .filter(|version| crate::composer_checks::valid_version(version))
+    }
+
+    /// A registered device's hook diagnosis, read on its own machine by the
+    /// device's coordinator. Only the answer for a device that is still
+    /// registered is kept, so a read that ended after the device was removed
+    /// leaves nothing behind. `true` when the kept answer changed.
+    pub(crate) fn ingest_device_hook_diagnosis(
+        &mut self,
+        device_id: &str,
+        diagnosis: hide_agent_hooks::Diagnosis,
+    ) -> bool {
+        if !self.device_registration_exists(device_id)
+            || self.device_hook_diagnoses.get(device_id) == Some(&diagnosis)
+        {
+            return false;
+        }
+        self.device_hook_diagnoses
+            .insert(device_id.to_owned(), diagnosis);
+        true
     }
 
     /// What the doorbell needs to read `observation`'s composer: where to
@@ -4858,5 +4880,136 @@ pub(crate) mod tests {
         assert_eq!(names, ["reader", "writer"]);
         assert_eq!(saved.letters.len(), 1);
         assert_eq!(saved.letters[0].body, "read me after a restart");
+    }
+
+    /// A registered device `id`, reached over SSH, with no helper consent.
+    fn register_device(runtime: &mut Runtime, id: &str) {
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .push(crate::model::DeviceRegistration {
+                id: id.to_owned(),
+                label: id.to_owned(),
+                origin: crate::model::LinkOrigin::Dialed {
+                    ssh_alias: id.to_owned(),
+                },
+                host_consent: None,
+            });
+    }
+
+    /// The hook diagnosis of a machine whose Claude Code is `version`.
+    fn claude_at(version: &str) -> hide_agent_hooks::Diagnosis {
+        use hide_agent_hooks::{
+            AgentRuntime, Diagnosis, HOOK_ENTRY_VERSION, HookStatus, MemoryCompatibility,
+            RuntimeDiagnosis,
+        };
+        Diagnosis {
+            runtimes: vec![RuntimeDiagnosis {
+                runtime: AgentRuntime::ClaudeCode,
+                label: "Claude Code".into(),
+                path: String::new(),
+                status: HookStatus::Installed {
+                    version: HOOK_ENTRY_VERSION,
+                },
+                current_version: HOOK_ENTRY_VERSION,
+                memory_compatibility: MemoryCompatibility::Supported {
+                    version: version.into(),
+                },
+            }],
+            last_report_failure: None,
+        }
+    }
+
+    /// A Claude Code pane on `device` whose composer may hold a draft: a key
+    /// came after its last submission, long enough ago for the input to be
+    /// quiet, and the engine reports it at rest.
+    fn draft_on_device(runtime: &mut Runtime, device: &str) -> Actor {
+        let mut observation = observed(runtime, "recipient");
+        observation.actor.device_id = device.to_owned();
+        observation.actor.pane_id = format!("remote:{device}:pane:p1");
+        observation.actor.kind = "claude".into();
+        observation.status = "idle".into();
+        observation.state_change_seq = Some(2);
+        observation.status_changed_at_unix_ms = 0;
+        observation.last_input_at_unix_ms = 1;
+        observation.last_submit_at_unix_ms = 0;
+        observation.entered_working_at_unix_ms = 0;
+        observation.released_input_at_unix_ms = 0;
+        assert!(observation.unsent_draft());
+        let actor = observation.actor.clone();
+        runtime
+            .delivery_observations
+            .insert(actor.pane_id.clone(), observation);
+        actor
+    }
+
+    /// A pane on a device is read by the agent version its own machine
+    /// reported, the hook diagnosis the device's coordinator reads there
+    /// (`ingest_device_hook_diagnosis`): never this machine's, and never
+    /// another device's. Without a version the draft such a pane may hold is
+    /// never read, so a letter for it waits out its 60 minutes
+    /// (docs/delivery.md, Catching an agent's screen change).
+    #[test]
+    fn a_device_pane_is_read_by_the_version_its_own_machine_reported() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, ..) = fixture(root.path());
+        let mut runtime = runtime.lock().unwrap();
+        register_device(&mut runtime, "mini");
+        register_device(&mut runtime, "box");
+        let actor = draft_on_device(&mut runtime, "mini");
+        let now = unix_milliseconds();
+        let due = |runtime: &Runtime| {
+            runtime
+                .composer_release_due(&actor, now)
+                .map(|(_, read)| read.map(|read| read.version))
+        };
+
+        assert_eq!(due(&runtime), Some(Err("version_unknown")));
+        // This machine's Claude Code says nothing about the device's.
+        runtime.hook_diagnosis = Some(claude_at("9.9.9"));
+        assert_eq!(due(&runtime), Some(Err("version_unknown")));
+        // Nor does another device's.
+        assert!(runtime.ingest_device_hook_diagnosis("box", claude_at("1.0.0")));
+        assert_eq!(due(&runtime), Some(Err("version_unknown")));
+
+        // The device's own: known, then checked on a screen that read empty.
+        assert!(runtime.ingest_device_hook_diagnosis("mini", claude_at("2.1.319")));
+        assert_eq!(due(&runtime), Some(Err("version_unchecked")));
+        let agent = hide_agent_adapter::adapter("claude").unwrap().id;
+        runtime.record_composer_check(agent, "2.1.319", None, now);
+        assert_eq!(due(&runtime), Some(Ok("2.1.319".to_owned())));
+
+        // The same answer read again is no change, and an update is a new
+        // version to check.
+        assert!(!runtime.ingest_device_hook_diagnosis("mini", claude_at("2.1.319")));
+        assert!(runtime.ingest_device_hook_diagnosis("mini", claude_at("2.1.320")));
+        assert_eq!(due(&runtime), Some(Err("version_unchecked")));
+    }
+
+    /// What a device reported is kept only for a registered device and goes
+    /// with it, so an answer that lands after the device was removed leaves
+    /// nothing behind and the table is bounded by the device list.
+    #[test]
+    fn a_device_s_agent_versions_go_with_the_device() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, ..) = fixture(root.path());
+        let mut runtime = runtime.lock().unwrap();
+        register_device(&mut runtime, "mini");
+
+        assert!(!runtime.ingest_device_hook_diagnosis("ghost", claude_at("2.1.319")));
+        assert!(runtime.device_hook_diagnoses.is_empty());
+
+        assert!(runtime.ingest_device_hook_diagnosis("mini", claude_at("2.1.319")));
+        assert_eq!(runtime.device_hook_diagnoses.len(), 1);
+        runtime.forget_device_host("mini", super::super::devices::Retiring::Removed);
+        assert!(runtime.device_hook_diagnoses.is_empty());
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .retain(|device| device.id != "mini");
+        assert!(!runtime.ingest_device_hook_diagnosis("mini", claude_at("2.1.319")));
+        assert!(runtime.device_hook_diagnoses.is_empty());
     }
 }

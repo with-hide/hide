@@ -31,6 +31,10 @@ pub const PROMPT: &str = "fixture-ready> ";
 /// The device's id, as the fixture registers it.
 pub const DEVICE: &str = "remote";
 
+/// The Claude Code version `Fixture::journey_installed` installs on the device,
+/// and the one the core's composer checks hold as passed.
+pub const FIXTURE_VERSION: &str = "2.1.319";
+
 #[derive(Clone)]
 pub struct Environment {
     pub home: PathBuf,
@@ -687,12 +691,24 @@ impl Fixture {
     /// directory, a failing one keeps it for the lane to upload. The only way
     /// to start a fixture, so no test has to remember either half.
     pub fn journey(body: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
-        let mut fixture = Self::start()?;
+        Self::run(None, body)
+    }
+
+    /// [`Fixture::journey`] on a device whose account has Claude Code
+    /// `FIXTURE_VERSION` installed: the stand-in's `--version` prints it, so
+    /// the device's helper tells the core which version its agent is from the
+    /// first time the core asks.
+    pub fn journey_installed(body: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
+        Self::run(Some(FIXTURE_VERSION), body)
+    }
+
+    fn run(installed: Option<&str>, body: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
+        let mut fixture = Self::start(installed)?;
         let journey = body(&mut fixture);
         finish(&mut fixture, journey)
     }
 
-    fn start() -> Result<Self> {
+    fn start(installed: Option<&str>) -> Result<Self> {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let source_cli = repository.join("target/debug");
         // A node starts each pane's holder from beside its own program.
@@ -747,6 +763,12 @@ impl Fixture {
             local_env.home.join("bin/claude"),
             remote_env.home.join("bin/claude"),
         )?;
+        if let Some(version) = installed {
+            fs::write(
+                remote_env.home.join(".fixture-version"),
+                format!("{version} (Claude Code)"),
+            )?;
+        }
         // The ignored run directory lives inside this checkout. Give each
         // private project its own Git boundary so discovery cannot climb to
         // the real checkout outside the fixture account's home.
@@ -779,6 +801,25 @@ impl Fixture {
             "HIDE_TAILSCALE_BIN",
             local_env.home.join("absent-tailscale").into_os_string(),
         );
+        // Claude Code `FIXTURE_VERSION`'s composer was checked on a screen
+        // that read empty, as an earlier run of the daemon left it
+        // (`composer-checks.json`, docs/delivery.md, Catching an agent's
+        // screen change). Only a journey that installs that version on an
+        // account reads it: the stand-in's `--version` names no version
+        // otherwise, so for every other journey this holds nothing.
+        hide_platform::fs::atomic::write_file(
+            &hide_kit::layout::composer_checks(&state),
+            &serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "checks": [{
+                    "agent": "claude-code",
+                    "version": FIXTURE_VERSION,
+                    "passed": true,
+                    "checked_at_unix_ms": 1,
+                }],
+            }))?,
+            hide_platform::fs::Access::Private,
+        )?;
         let log = File::create(root.join("hided.log"))?;
         let mut command = local_env.command(cli.join("hided"));
         command
@@ -1040,18 +1081,21 @@ impl Fixture {
     /// be quiet for 30 seconds (`docs/delivery.md`), so this waits longer
     /// than a readiness check does.
     pub fn rung(&self, id: &str) -> Result<String> {
-        wait_within(
-            "the doorbell to ring for the letter",
-            Duration::from_secs(90),
-            || {
-                Ok(self
-                    .ledger()?
-                    .letters
-                    .into_iter()
-                    .find(|letter| letter.id == id)
-                    .and_then(|letter| letter.bell_line))
-            },
-        )
+        self.rung_within(id, Duration::from_secs(90))
+    }
+
+    /// [`Fixture::rung`] for a letter that waits for more than the quiet
+    /// period: one held on a possible draft until the core has read the
+    /// device's agent version and its composer.
+    pub fn rung_within(&self, id: &str, bound: Duration) -> Result<String> {
+        wait_within("the doorbell to ring for the letter", bound, || {
+            Ok(self
+                .ledger()?
+                .letters
+                .into_iter()
+                .find(|letter| letter.id == id)
+                .and_then(|letter| letter.bell_line))
+        })
     }
 
     pub fn wait_bridge(&self, minimum: usize) -> Result<()> {
@@ -1232,7 +1276,24 @@ static void run(void) {
   rename(staged, timing);
 }
 int main(int argc, char **argv) {
-  if (argc > 1 && strcmp(argv[1], "--version") == 0) { puts("fixture provider"); return 0; }
+  if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+    /* The version of the program the account has installed: what
+       `$HOME/.fixture-version` holds when a journey wrote one, which the
+       account's node reads as it reads any agent's. */
+    const char *home = getenv("HOME");
+    char path[4096], text[256] = "fixture provider";
+    if (home) {
+      snprintf(path, sizeof path, "%s/.fixture-version", home);
+      FILE *in = fopen(path, "r");
+      if (in) {
+        size_t size = fread(text, 1, sizeof text - 1, in);
+        text[size] = 0;
+        fclose(in);
+      }
+    }
+    puts(text);
+    return 0;
+  }
   if (argc > 1 && strcmp(argv[1], "auth") == 0) { puts("{\"loggedIn\":false}"); return 0; }
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--print") == 0) return 1;

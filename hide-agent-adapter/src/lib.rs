@@ -995,7 +995,6 @@ pub struct AgentAdapter {
     /// agent.
     pub updates: &'static [UpdateRoute],
     pub logo_id: &'static str,
-    pub terminal_click: bool,
 }
 
 /// Kind spellings, canonical ids and case variants share this one boundary.

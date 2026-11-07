@@ -14,7 +14,10 @@
 //!
 //! A device's kit runs on its helper (`hide_host::kit`), and a node's that
 //! dials this core on that node, through its link; a worker per device makes
-//! those calls while the device has kit work queued.
+//! those calls while the device has kit work queued. The device's hook
+//! diagnosis, which carries the versions of the agents its panes run, is read
+//! by the device's own coordinator ([`DeviceDiagnosisReader`]), whether or not
+//! any kit work is queued.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
@@ -183,6 +186,59 @@ pub(crate) fn hook_diagnosis(
         }));
     })
     .ok()
+}
+
+/// How long a device's answer stays fresh. What it carries that matters to
+/// the doorbell is the installed agents' versions, which change only when the
+/// operator updates one, and the node answers each from its own cache of the
+/// program's file, so a minute asks the device little.
+const DEVICE_DIAGNOSIS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Reads a registered device's hook diagnosis on a worker thread of its own,
+/// so the agent versions its panes run reach the core: the doorbell reads a
+/// pane's composer only for a version it knows, and a pane on a device has
+/// no other way to say it (docs/delivery.md, Catching an agent's screen
+/// change). The same `HookDiagnosis` call answers on every machine, from that
+/// machine's own account and search, so no system has a form of its own.
+///
+/// The core's own node is not read here: the kit pump reads it with the kit.
+pub(crate) struct DeviceDiagnosisReader {
+    inner: crate::reader::BackgroundRead<(), Option<hide_agent_hooks::Diagnosis>>,
+}
+
+impl DeviceDiagnosisReader {
+    pub(crate) fn new(runtime: Weak<Mutex<Runtime>>, device_id: String) -> Self {
+        Self {
+            inner: crate::reader::BackgroundRead::new(
+                DEVICE_DIAGNOSIS_REFRESH_INTERVAL,
+                Duration::ZERO,
+                move |_: &()| read_device_diagnosis(&runtime, &device_id),
+            ),
+        }
+    }
+
+    /// The answer of a finished read, `Some(None)` when the device could not
+    /// be asked or did not answer: that keeps the last answer, since an
+    /// agent's version does not go with a link that dropped. Starts the next
+    /// read once the last one is older than the refresh interval.
+    pub(crate) fn read_if_due(&mut self) -> Option<Option<hide_agent_hooks::Diagnosis>> {
+        self.inner.poll(())
+    }
+}
+
+/// The device's diagnosis, or `None` while its helper is not connected or
+/// when it did not answer (`hook_diagnosis` leaves the reason in the log).
+/// The link is looked up under a short lock and asked with it released.
+fn read_device_diagnosis(
+    runtime: &Weak<Mutex<Runtime>>,
+    device_id: &str,
+) -> Option<hide_agent_hooks::Diagnosis> {
+    let link = {
+        let runtime = runtime.upgrade()?;
+        let guard = runtime.lock().ok()?;
+        guard.linked_node(device_id).ok()?.1
+    };
+    hook_diagnosis(link.as_ref(), device_id)
 }
 
 /// One record per install pass on any machine, naming each part's outcome;

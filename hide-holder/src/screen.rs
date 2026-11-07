@@ -189,6 +189,38 @@ pub struct Frame {
     /// the cells; shared with the frame before while no row's answer moved.
     pub link_ends: Arc<[bool]>,
     pub cursor: Cursor,
+    pub view: View,
+}
+
+/// Where the screen stands in its history and what the program asked of the
+/// pointer, which a receiver needs to select past the screen's edge and to
+/// route a drag (`encode::VIEW_OSC`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct View {
+    /// The history row the screen's top row is, counted from the oldest
+    /// row kept.
+    pub top: u64,
+    /// The most `top` can be: the screen at the bottom of its history.
+    pub bottom: u64,
+    /// Whether the program takes pointer events in a form the holder can
+    /// encode (`Pane::mouse`), so a drag is the program's.
+    pub mouse: bool,
+    /// Whether the alternate screen shows, which keeps no history.
+    pub alternate: bool,
+}
+
+impl View {
+    /// The parser's view now.
+    pub fn of(terminal: &Terminal) -> Result<Self, hide_vt::Error> {
+        let bar = terminal.scrollbar()?;
+        Ok(Self {
+            top: bar.offset as u64,
+            bottom: bar.total.saturating_sub(bar.len) as u64,
+            mouse: terminal.mouse_tracking_enabled()?
+                && !terminal.mode_get(hide_vt::MODE_MOUSE_SGR_PIXELS)?,
+            alternate: terminal.active_screen()? == hide_vt::ActiveScreen::Alternate,
+        })
+    }
 }
 
 /// What decides how the pane's default colors go out: the theme's colors,
@@ -376,6 +408,7 @@ impl Capture {
             wrapped,
             link_ends,
             cursor,
+            view: View::of(terminal)?,
         };
         self.frame = Some(frame.clone());
         Ok(frame)

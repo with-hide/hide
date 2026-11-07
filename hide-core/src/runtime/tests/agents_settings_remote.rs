@@ -408,57 +408,46 @@ fn remote_file_results_are_scoped_and_generation_guarded() {
     assert_eq!(runtime.snapshot.status.remote[0].files.generation, 9);
 }
 
-/// D8: only the pane's detected kind permits an ordinary click report.
-/// A title, a different pane's agent, and missing detection permit no bytes.
+/// A pointer event reaches a controlled pane's node as what it means, for
+/// every program alike: the holder knows the program's mouse mode and
+/// encodes it or drops it, so no agent kind decides here. A pane with no
+/// session is told nothing.
 #[test]
-fn ordinary_click_uses_detected_pane_agent_and_never_sends_enter() {
+fn a_pointer_event_reaches_the_controlled_panes_node_for_any_program() {
+    use hide_node_link::terminal::{MouseAction, MouseButton};
     let mut runtime = runtime();
     let terminals = record_terminals(&mut runtime);
     let pane_id = "w-click:p1";
-    report_terminal(&mut runtime, pane_id, terminal_state("controlling", 1));
-    let click = serde_json::to_vec(&serde_json::json!({
-        "schema_version": SCHEMA_VERSION, "kind": "terminal_click",
-        "payload": {"pane_id": pane_id, "column": 7, "row": 3, "modifiers": 3}
-    }))
-    .unwrap();
-    let written = |terminals: &RecordedTerminals| {
+    let press = |pane: &str| {
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "terminal_mouse",
+            "payload": {"pane_id": pane, "action": "press", "button": "left",
+                        "column": 7, "row": 3, "modifiers": 1}
+        }))
+        .unwrap()
+    };
+    let sent = |terminals: &RecordedTerminals| {
         terminals
             .take()
             .into_iter()
-            .filter_map(|control| match control {
-                TerminalControl::Write { pane, data } if pane == pane_id => {
-                    Some(hide_node_link::terminal::decode_base64(&data).unwrap())
-                }
-                _ => None,
-            })
+            .filter(|control| matches!(control, TerminalControl::Mouse { .. }))
             .collect::<Vec<_>>()
     };
-    for (detected_pane, kind, expected) in [
-        ("w-click:p2", "claude", false),
-        (pane_id, "codex", false),
-        (pane_id, "unknown", false),
-        (pane_id, "claude", true),
-    ] {
-        let payload = crate::sidebar::owned_label_fixture(serde_json::json!({
-            "agents": [{"pane_id": detected_pane, "agent": kind, "state_change_seq": 1}]
-        }))
-        .unwrap();
-        runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
-        runtime.dispatch_json(&click);
-        let writes = written(&terminals);
-        assert_eq!(
-            writes.len(),
-            usize::from(expected),
-            "{detected_pane} {kind}"
-        );
-        if expected {
-            assert_eq!(writes[0], b"\x1b[<20;8;4M\x1b[<20;8;4m");
-            assert!(!writes[0].contains(&b'\r') && !writes[0].contains(&b'\n'));
-        }
-    }
-    runtime.snapshot.navigator.agents.clear();
-    runtime.dispatch_json(&click);
-    assert!(written(&terminals).is_empty());
+    report_terminal(&mut runtime, pane_id, terminal_state("controlling", 1));
+    runtime.dispatch_json(&press(pane_id));
+    assert_eq!(
+        sent(&terminals),
+        [TerminalControl::Mouse {
+            pane: pane_id.to_owned(),
+            action: MouseAction::Press,
+            button: Some(MouseButton::Left),
+            column: 7,
+            row: 3,
+            modifiers: 1,
+        }]
+    );
+    runtime.dispatch_json(&press("w-click:p2"));
+    assert!(sent(&terminals).is_empty());
 }
 
 #[test]

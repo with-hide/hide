@@ -111,6 +111,9 @@ test("reopening an unnamed tab leaves it unnamed", async ({ page }) => {
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
 
+    // The number its sidebar line gives it now, which a reopen has to give back.
+    const number = /Tab (\d+)/.exec((await page.locator(`[data-sidebar-tab-line="${fixture.tab}"]`).textContent()) ?? "")?.[1];
+    expect(number, "the unnamed tab's sidebar line says its number").toBeDefined();
     const closing = page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`);
     await closing.hover();
     await closing.getByRole("button", { name: /^Close tab/ }).click();
@@ -125,8 +128,11 @@ test("reopening an unnamed tab leaves it unnamed", async ({ page }) => {
     expect(reopened.sidebar?.manual_name).toBeNull();
 
     // The sidebar names it as any unnamed tab, so its last agent's close
-    // takes it (closing restored agents waits on a status check here).
-    await expect(page.locator(`[data-sidebar-tab-line="${reopenedId}"]`)).toContainText(`Tab ${reopened.sidebar!.number}`);
+    // takes it (closing restored agents waits on a status check here). A
+    // reopen makes the tab after the others and then moves it back to its old
+    // place, so the first snapshot that shows it carries a number it is about
+    // to leave; the number it settles on is the one it had when it closed.
+    await expect(page.locator(`[data-sidebar-tab-line="${reopenedId}"]`)).toContainText(`Tab ${number}`);
   } finally {
     control?.close();
     daemon?.stop();

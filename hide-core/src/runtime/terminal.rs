@@ -1693,20 +1693,37 @@ impl Runtime {
             || self.layout_holding_pane(pane).is_some()
             || self.input_requests.awaits_layout(pane)
     }
-    /// Writes bytes the core makes itself (a click's mouse report) to the
-    /// pane, through its node's writer like every key.
-    pub(super) fn write_terminal_control(&mut self, pane_id: &str, bytes: &[u8]) {
-        if self.close_operation_holds_pane(pane_id) {
-            self.set_error(
-                "terminal.close_pending",
-                format!("Pane {pane_id} is closing; input was not sent"),
-                true,
-            );
+    /// Sends a pointer event to a controlled pane's holder, which reports it
+    /// in the program's mouse mode or drops it when the program tracks none,
+    /// as a native terminal does. A pane with no session, or one closing, has
+    /// no program to tell: a pointer event is a gesture of the moment, never
+    /// kept for later.
+    pub(super) fn mouse_pane(&mut self, request: MouseRequest) {
+        let controlling = self
+            .terminal_states
+            .get(&request.pane_id)
+            .is_some_and(|state| state.state == "controlling");
+        if !controlling || self.close_operation_holds_pane(&request.pane_id) {
             return;
         }
-        self.terminals.control(TerminalControl::Write {
-            pane: pane_id.to_owned(),
-            data: hide_node_link::terminal::encode_base64(bytes),
+        self.terminals.control(TerminalControl::Mouse {
+            pane: request.pane_id,
+            action: request.action,
+            button: request.button,
+            column: request.column,
+            row: request.row,
+            modifiers: request.modifiers,
         });
     }
+}
+
+/// A pointer event over a pane's zero-based cell (`terminal_mouse`).
+pub(super) struct MouseRequest {
+    pub(super) pane_id: String,
+    pub(super) action: hide_node_link::terminal::MouseAction,
+    pub(super) button: Option<hide_node_link::terminal::MouseButton>,
+    pub(super) column: u16,
+    pub(super) row: u16,
+    /// crossterm's bitset, as `terminal_scroll` carries it.
+    pub(super) modifiers: u8,
 }

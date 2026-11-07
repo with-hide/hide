@@ -2298,12 +2298,13 @@ mod sys {
             reserved_more: [u64; 2],
         }
         const PROC_PIDUNIQIDENTIFIERINFO: libc::c_int = 17;
+        let raw = system_pid(pid)?;
         let mut info = Identifiers::default();
         let size = std::mem::size_of::<Identifiers>() as libc::c_int;
         // SAFETY: the buffer is a value we own of the size we pass.
         let written = unsafe {
             libc::proc_pidinfo(
-                pid as libc::c_int,
+                raw,
                 PROC_PIDUNIQIDENTIFIERINFO,
                 0,
                 (&mut info as *mut Identifiers).cast(),
@@ -3363,6 +3364,17 @@ mod sys {
         }
     }
 
+    /// `pid` as the system's own pid type, for every read about a process.
+    /// A `pid_t` is signed, so a pid above `i32::MAX` names no process the
+    /// system could have started: it is `NotFound`, the answer Linux's
+    /// `/proc` and Windows give for it, never a negative pid handed to the
+    /// kernel, which reads that as a group or refuses it as invalid input.
+    fn system_pid(pid: u32) -> io::Result<libc::pid_t> {
+        libc::pid_t::try_from(pid).map_err(|_| {
+            io::Error::new(io::ErrorKind::NotFound, format!("no process has pid {pid}"))
+        })
+    }
+
     /// Signals `target` (a pid, or a negative group id), where the process
     /// having gone already is an answer, not a failure.
     fn signal(target: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
@@ -3582,8 +3594,11 @@ mod sys {
     /// The processes whose group is `group`, zombies included.
     #[cfg(target_os = "macos")]
     pub(super) fn group_members(group: u32) -> io::Result<Vec<u32>> {
-        let group = libc::pid_t::try_from(group)
-            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        // A group id is its leader's pid: one the system cannot hold leads
+        // no group, as Linux finds no member of it.
+        let Ok(group) = system_pid(group) else {
+            return Ok(Vec::new());
+        };
         // `proc_listpgrppids` counts pids, as `proc_listchildpids` does (see
         // `Walk::children_of`).
         // SAFETY: the first call asks for the size with a null buffer; the
@@ -3671,7 +3686,7 @@ mod sys {
     }
 
     pub(super) fn is_alive(pid: u32) -> bool {
-        let Ok(raw) = libc::pid_t::try_from(pid) else {
+        let Ok(raw) = system_pid(pid) else {
             return false;
         };
         // SAFETY: signal 0 only checks that the process exists and may be
@@ -3756,8 +3771,7 @@ mod sys {
         pub(in super::super) fn listed(pid: u32) -> io::Result<Option<Listed>> {
             // `sizeof(struct kinfo_proc)` on 64-bit macOS.
             const KINFO_PROC: usize = 648;
-            let pid = libc::c_int::try_from(pid)
-                .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+            let pid = system_pid(pid)?;
             let mut name = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
             let mut buffer = [0u64; KINFO_PROC / 8];
             let mut size = KINFO_PROC;
@@ -3846,6 +3860,7 @@ mod sys {
         /// The region of `pid`'s memory at `address`, or the next one above
         /// it, with the file it maps (an empty path when it maps none).
         pub(in super::super) fn region_at(pid: u32, address: u64) -> io::Result<RegionWithPath> {
+            let raw = system_pid(pid)?;
             // SAFETY: an all-zero region structure is a valid value.
             let mut region: RegionWithPath = unsafe { std::mem::zeroed() };
             let size = std::mem::size_of::<RegionWithPath>() as libc::c_int;
@@ -3853,7 +3868,7 @@ mod sys {
             // `proc_pidinfo` reports that it filled the whole structure.
             let written = unsafe {
                 libc::proc_pidinfo(
-                    pid as libc::c_int,
+                    raw,
                     PROC_PIDREGIONPATHINFO,
                     address,
                     (&mut region as *mut RegionWithPath).cast(),
@@ -3868,6 +3883,7 @@ mod sys {
         }
 
         pub(in super::super) fn bsd_info(pid: u32) -> io::Result<libc::proc_bsdinfo> {
+            let raw = system_pid(pid)?;
             // SAFETY: an all-zero `proc_bsdinfo` is a valid value.
             let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
             let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
@@ -3875,7 +3891,7 @@ mod sys {
             // `proc_pidinfo` reports that it filled the whole structure.
             let written = unsafe {
                 libc::proc_pidinfo(
-                    pid as libc::c_int,
+                    raw,
                     libc::PROC_PIDTBSDINFO,
                     0,
                     (&mut info as *mut libc::proc_bsdinfo).cast(),
@@ -4066,8 +4082,7 @@ mod sys {
 
     #[cfg(target_os = "macos")]
     pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
-        let target = libc::c_int::try_from(pid)
-            .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "no such process"))?;
+        let target = system_pid(pid)?;
         let mut name = [libc::CTL_KERN, libc::KERN_ARGMAX];
         let mut most: libc::c_int = 0;
         let mut size = std::mem::size_of::<libc::c_int>();
@@ -4142,6 +4157,7 @@ mod sys {
     pub(super) fn cwd_of(pid: u32) -> io::Result<PathBuf> {
         use std::os::unix::ffi::OsStringExt;
 
+        let raw = system_pid(pid)?;
         // SAFETY: an all-zero `proc_vnodepathinfo` is a valid value.
         let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
@@ -4149,7 +4165,7 @@ mod sys {
         // `proc_pidinfo` reports that it filled the whole structure.
         let written = unsafe {
             libc::proc_pidinfo(
-                pid as libc::c_int,
+                raw,
                 libc::PROC_PIDVNODEPATHINFO,
                 0,
                 (&mut info as *mut libc::proc_vnodepathinfo).cast(),
@@ -4184,16 +4200,12 @@ mod sys {
     pub(super) fn image_of(pid: u32) -> io::Result<super::Image> {
         use std::os::unix::ffi::OsStringExt;
 
+        let raw = system_pid(pid)?;
         let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
         // SAFETY: the buffer is valid for the length passed, and only the
         // bytes the call reports are read.
-        let length = unsafe {
-            libc::proc_pidpath(
-                pid as libc::c_int,
-                buffer.as_mut_ptr().cast(),
-                buffer.len() as u32,
-            )
-        };
+        let length =
+            unsafe { libc::proc_pidpath(raw, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
         if length <= 0 {
             return Err(mac::error_for_missing_info());
         }
@@ -4233,6 +4245,7 @@ mod sys {
     #[cfg(target_os = "macos")]
     #[allow(deprecated)] // libc's mach_timebase_info, which the mach2 crate would only repeat
     pub(super) fn cpu_time(pid: u32) -> io::Result<Duration> {
+        let raw = system_pid(pid)?;
         // SAFETY: an all-zero `proc_taskinfo` is a valid value.
         let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
@@ -4240,7 +4253,7 @@ mod sys {
         // own, and reports how many it wrote.
         let written = unsafe {
             libc::proc_pidinfo(
-                pid as libc::c_int,
+                raw,
                 libc::PROC_PIDTASKINFO,
                 0,
                 (&mut info as *mut libc::proc_taskinfo).cast(),
@@ -4269,6 +4282,7 @@ mod sys {
 
     #[cfg(target_os = "macos")]
     pub(super) fn rss(pid: u32) -> io::Result<u64> {
+        let raw = system_pid(pid)?;
         // SAFETY: an all-zero `proc_taskinfo` is a valid value.
         let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
@@ -4276,7 +4290,7 @@ mod sys {
         // own, and reports how many it wrote.
         let written = unsafe {
             libc::proc_pidinfo(
-                pid as libc::c_int,
+                raw,
                 libc::PROC_PIDTASKINFO,
                 0,
                 (&mut info as *mut libc::proc_taskinfo).cast(),
@@ -4350,11 +4364,14 @@ mod sys {
             // returning). That differs from `proc_listpids`, which returns
             // bytes. Reading the count as bytes and dividing again made three
             // children measure as zero (2026-09-20).
+            let Ok(raw) = system_pid(pid) else {
+                return Vec::new();
+            };
             // SAFETY: the first call asks for the size with a null buffer;
             // the second writes at most `capacity` ints into a buffer we own.
             // Both are the documented `proc_listchildpids` contract.
             unsafe {
-                let needed = libc::proc_listchildpids(pid as libc::c_int, std::ptr::null_mut(), 0);
+                let needed = libc::proc_listchildpids(raw, std::ptr::null_mut(), 0);
                 if needed <= 0 {
                     return Vec::new();
                 }
@@ -4362,11 +4379,7 @@ mod sys {
                 let capacity = needed as usize + 16;
                 let mut buffer = vec![0i32; capacity];
                 let byte_len = (capacity * std::mem::size_of::<i32>()) as libc::c_int;
-                let written = libc::proc_listchildpids(
-                    pid as libc::c_int,
-                    buffer.as_mut_ptr().cast(),
-                    byte_len,
-                );
+                let written = libc::proc_listchildpids(raw, buffer.as_mut_ptr().cast(), byte_len);
                 if written <= 0 {
                     return Vec::new();
                 }

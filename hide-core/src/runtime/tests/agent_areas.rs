@@ -2358,3 +2358,83 @@ fn checkouts_not_yet_opened_keep_their_tabs_when_saved_workspaces_are_at_the_cap
     assert!(views.get(crate::node::TEST_NODE, "/gone-1").is_none());
     assert!(views.get(crate::node::TEST_NODE, "/gone-2").is_some());
 }
+
+/// The core's own engine lists a new tab before it answers the creation, so
+/// the session that shows it can reach the core before the answer. The answer
+/// moves the keyboard to the new pane; the visible tab moves with it in the
+/// same step, since no session is left to carry it, and a split sent from
+/// that pane then finds it in the visible tab (`herdr-coexistence.spec.ts`
+/// "Opening a new terminal and splitting it", with-hide/hide-private#476).
+#[test]
+fn a_created_tab_the_session_listed_before_its_answer_is_the_visible_tab_at_the_answer() {
+    for session_first in [false, true] {
+        let (runtime, checkout) = live_tab_order_runtime("/agent-groups");
+        let mut runtime = with_new_views(runtime, "agent-groups-created-first");
+        let mut engine = EngineMoves::new();
+        let first = ["w-order:t1"];
+        runtime.ingest_session(Ok(engine.after(
+            &[],
+            tab_order_payload("/agent-groups", &first, &first, "w-order:t1"),
+        )));
+        runtime.sync_workspace_view();
+        // The engine created the tab with focus, as a session reports it.
+        let both = ["w-order:t1", "w-order:t2"];
+        let mut listed = tab_order_payload("/agent-groups", &both, &both, "w-order:t2");
+        listed.tab_focus = Some(crate::sidebar::SessionTabFocus {
+            generation: 1,
+            workspace_id: "w-order".into(),
+            tab_id: "w-order:t2".into(),
+            revision: 1,
+            creation: true,
+        });
+        let session = engine.after(&["w-order:t2"], listed);
+        let answer = |runtime: &mut Runtime| {
+            runtime.ingest_local_control_result(
+                RemoteControlAction::CreateTab {
+                    workspace_id: "w-order".into(),
+                    cwd: "/agent-groups".into(),
+                    label: "Tab".into(),
+                    area_id: Some("a1".into()),
+                    group_id: None,
+                    admission_id: None,
+                },
+                Ok(RemoteControlOutcome::Acknowledged {
+                    created_tab_id: Some("w-order:t2".into()),
+                    created_pane_id: Some("w-order:t2:p".into()),
+                }),
+                1,
+            );
+        };
+        if session_first {
+            runtime.ingest_session(Ok(session.clone()));
+            answer(&mut runtime);
+        } else {
+            answer(&mut runtime);
+            runtime.ingest_session(Ok(session.clone()));
+        }
+        let which = format!("session_first={session_first}");
+        assert_eq!(
+            checkout_active_tab_id(&runtime, &checkout).as_deref(),
+            Some("w-order:t2"),
+            "the checkout shows the created tab ({which})"
+        );
+        assert_eq!(
+            runtime.snapshot().tab.id.as_deref(),
+            Some("w-order:t2"),
+            "the shown tab is the created one ({which})"
+        );
+        assert_eq!(
+            runtime.snapshot().terminal.pane_id.as_deref(),
+            Some("w-order:t2:p"),
+            "the keyboard is in the created pane ({which})"
+        );
+        // The session read that follows changes nothing the answer did not.
+        runtime.ingest_session(Ok(engine.after(&[], session.clone())));
+        assert_eq!(
+            checkout_active_tab_id(&runtime, &checkout).as_deref(),
+            Some("w-order:t2"),
+            "the next session keeps the created tab ({which})"
+        );
+        assert_eq!(layout(&runtime).active(), Some("w-order:t2"), "{which}");
+    }
+}
