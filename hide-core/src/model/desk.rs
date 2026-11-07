@@ -251,6 +251,9 @@ pub enum DeskJobFailure {
     DeviceUnavailable,
     /// The agent's CLI is not installed where it would run.
     AgentNotInstalled,
+    /// Hide's hook for the agent is not in place where it would run, so it
+    /// would start unconnected; that machine's row in Settings says why.
+    AgentHookNotReady,
     /// Another worktree holds its branch or folder.
     BranchInUse,
     /// Its project or worktree could not be prepared.
@@ -279,6 +282,9 @@ impl DeskJobFailure {
             | "device_unreachable"
             | "device_check_failed" => Self::DeviceUnavailable,
             "agent_not_installed" => Self::AgentNotInstalled,
+            code if crate::runtime::start_hook::HookRefusal::is_code(code) => {
+                Self::AgentHookNotReady
+            }
             "branch_in_use" | "checkout_path_conflict" => Self::BranchInUse,
             "repository_unavailable" | "worktree_unconfirmed" => Self::ProjectUnavailable,
             "intent_conflict" => Self::AlreadyStarted,

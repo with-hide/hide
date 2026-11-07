@@ -11,7 +11,7 @@ import { agentsByPane } from "./paneAgents";
 import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -201,7 +201,7 @@ function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageK
  */
 export type NodeTone = "done" | "working" | "hold" | "waiting" | "cancelled" | "dropped";
 
-export function nodeTone(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status" | "blocked" | "attention">): NodeTone {
+export function nodeTone(mission: Pick<Mission, "status">, node: MissionNodeBrief): NodeTone {
   if (node.status === "dropped") return "dropped";
   if (mission.status === "cancelled" && node.status !== "done") return "cancelled";
   if (openAttention(mission, node)) return "hold";
@@ -283,16 +283,16 @@ export function liveNodes<N extends MissionNodeBrief>(mission: { nodes: readonly
  * causes, the same worker `내 차례` lists), or the working step the open
  * decision stopped. Null for a step nobody has to look at.
  */
-export type HoldReason = { kind: "attention"; attention: MissionAttention } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
+export type HoldReason = { kind: "attention"; attention: Omit<MissionAttention, "choices"> } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
 
 /** What `holdReason` reads of a mission: its state, and the decision with the node it stopped. */
-export type HoldMission = Pick<Mission, "status" | "decision"> & { question?: Pick<NonNullable<Mission["question"]>, "node"> | null };
+export type HoldMission = Pick<Mission, "status" | "decision"> & { question?: Pick<NonNullable<Mission["question"]>, "node"> | null; conductor_letters?: MissionHeldLetters | null };
 
 export function holdReason<N extends MissionNodeBrief>(mission: HoldMission, node: N, escalationOf: (node: N) => WorkerEscalation | null): HoldReason | null {
   const attention = openAttention(mission, node);
   if (attention) return { kind: "attention", attention };
   if (node.status !== "working") return null;
-  const escalation = escalationOf(node);
+  const escalation = shownEscalation(mission, escalationOf(node));
   if (escalation) return { kind: "worker", escalation };
   return mission.decision && mission.question?.node === node.key ? { kind: "decision" } : null;
 }
@@ -607,7 +607,8 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
 export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "decision" }
   | { kind: "takeover" }
-  | { kind: "attention"; node: N; attention: MissionAttention }
+  | { kind: "letters"; letters: MissionHeldLetters }
+  | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
   | { kind: "landing"; nodes: N[]; git: boolean };
 
@@ -621,18 +622,34 @@ export function workerEscalation(row: Pick<AgentRow, "escalation" | "request"> |
   return { cause: row.escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null };
 }
 
+/** The escalations a held letter to the parent raises. */
+const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked", "bell_exhausted", "undelivered"]);
+
+/**
+ * A node worker's escalation as the mission shows it, the one rule 내 차례
+ * (`turnItems`) and the summary's 확인 필요 (`holdReason`) read: none for a
+ * worker raised only because its own letter to the Conductor is held while
+ * the mission shows the Conductor's held letters, since that line already
+ * says the cause and what to do; any other cause stays.
+ */
+export function shownEscalation(mission: { conductor_letters?: MissionHeldLetters | null }, escalation: WorkerEscalation | null): WorkerEscalation | null {
+  return escalation && mission.conductor_letters && LETTER_CAUSES.has(escalation.cause) ? null : escalation;
+}
+
 /** `escalationOf` answers for a node's worker: the desktop reads its row, the phone the escalation its core sent with the node. */
 export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, escalationOf: (node: N) => WorkerEscalation | null): TurnItem<N>[] {
   if (!missionOpen(mission)) return [];
   const items: TurnItem<N>[] = [];
   if (mission.decision) items.push({ kind: "decision" });
   else if (!mission.conductor.present) items.push({ kind: "takeover" });
+  // Letters the Conductor has not got stop the mission as surely as a decision (hide-private issue 678); the core counts only what the operator can lift.
+  if (mission.conductor_letters) items.push({ kind: "letters", letters: mission.conductor_letters });
   for (const node of orderedNodes(mission)) {
     const attention = openAttention(mission, node);
     if (attention?.to === "operator") items.push({ kind: "attention", node, attention });
   }
   for (const node of orderedNodes(mission)) {
-    const escalation = node.status === "working" ? escalationOf(node) : null;
+    const escalation = node.status === "working" ? shownEscalation(mission, escalationOf(node)) : null;
     if (escalation) items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
   }
   if (mission.status === "merge_wait") {
@@ -640,6 +657,55 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
     if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null) });
   }
   return items;
+}
+
+/**
+ * A mission's short number, `M39` for `mission-39`, the one name the Mission
+ * tool's rows, the map's head and a Conductor pane's chip call it by: read
+ * from the core's id only, never made up, and null for an id of another shape.
+ * The `M` keeps it apart from a pull request's `#`.
+ */
+export function missionNumber(id: string): string | null {
+  const found = /^mission-(\d+)$/.exec(id);
+  return found ? `M${found[1]}` : null;
+}
+
+/** `Conductor에게 편지 N통 대기 · <what to do>`: the Conductor's held letters as 내 차례 and the Mission tool's row say them. */
+export function heldLettersText(letters: MissionHeldLetters, t: TFunction<"translation">): string {
+  return `${t("mission.letters.waiting", { count: letters.count })} · ${t(`mission.letters.reason.${letters.reason}`)}`;
+}
+
+/**
+ * Whether a node in progress is worked now, as its card and mark say it
+ * (hide-private issue 680): the core's `work`, only while the card reads in
+ * progress; null leaves the card as it was, the ring turning.
+ */
+export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork | null {
+  return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
+}
+
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 없음`. */
+export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
+  switch (work.state) {
+    case "working":
+      return t("mission.work.working");
+    case "no_worker":
+      return t("mission.work.noWorker");
+    case "waiting":
+      return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+  }
+}
+
+/** What a resting worker's node waits on, in one or two words. */
+function waitingOnWord(on: MissionWaitingOn, t: TFunction<"translation">): string {
+  switch (on.kind) {
+    case "attention":
+      return t(`mission.attention.to.${on.to}`);
+    case "nodes":
+      return on.keys.join(", ");
+    default:
+      return t(`mission.work.on.${on.kind}`);
+  }
 }
 
 /** A step's state on the map: finished, being worked, or only planned (the worker has not reached it). */
@@ -754,7 +820,7 @@ export function attentionReasonText(reason: MissionAttentionReason, pr: number |
  * none for a dropped node or in a cancelled mission, whose work stays as it
  * was left.
  */
-export function openAttention(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status" | "attention">): MissionAttention | null {
+export function openAttention<A extends Omit<MissionAttention, "choices">>(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status"> & { attention: A | null }): A | null {
   return mission.status === "cancelled" || node.status === "dropped" ? null : node.attention;
 }
 
@@ -856,16 +922,6 @@ export function lineOutrun(node: MissionNode, events: readonly MissionEvent[] | 
   return written === null || facts > written;
 }
 
-/**
- * The operator's choices for a node that waits on someone to look, by why
- * (PRD mission-node-simple B15, B26): each is one `mission_attention`
- * event. A mission no
- * Conductor holds, or whose Conductor left a raise unanswered for ten
- * minutes (`conductorUnanswered`), offers 이어받기 on its Conductor row just
- * above.
- */
-export type AttentionChoice = MissionOperatorAction;
-
 /** The reasons only the operator settles, which reach them at once rather than after the Conductor's ten minutes (D-05, B26). */
 const OPERATOR_FIRST: readonly MissionAttentionReason[] = ["conductor_failed"];
 
@@ -883,20 +939,16 @@ export function conductorUnanswered(mission: Mission): boolean {
   });
 }
 
-export function attentionChoices(reason: MissionAttentionReason): AttentionChoice[] {
-  switch (reason) {
-    case "merged_unproven":
-      return ["done"];
-    case "worker_ended":
-    case "pr_closed":
-    case "wake_refused":
-    case "close_refused":
-      return ["drop"];
-    case "unplanned_pr":
-      return ["attach", "leave"];
-    case "conductor_failed":
-      return ["resume", "drop"];
-  }
+/**
+ * The pull request a raise is about, for the words beside its choices: the
+ * raise's own, else the node's current one or the outside one it follows,
+ * with its state as the project's list reads it, else as the node keeps it.
+ */
+export function attentionPr(node: MissionNode, attention: MissionAttention, pulls: readonly PullRequest[] | null | undefined): { number: number; state: PrState | null } | null {
+  const number = attention.pr ?? node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
+  if (number == null) return null;
+  const pull = pulls?.find((row) => row.number === number) ?? null;
+  return { number, state: pull?.state ?? (number === node.pr ? (node.pr_state ?? null) : null) };
 }
 
 /** Whether the operator can set a done or dropped node to work again (B16): not in a cancelled mission, which does not reopen. */

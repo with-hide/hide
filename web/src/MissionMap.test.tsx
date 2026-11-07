@@ -74,10 +74,12 @@ it("reads top down as the head, 내 차례 only when the operator has something 
     expect(empty.q("[data-mission-pill]")?.textContent).toBe("Planning");
     expect(empty.q("[data-mission-turn]")).toBeNull();
   } finally { await empty.unmount(); }
-  const nodes = [node("a", { status: "done" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { status: "working", depends_on: ["a"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }), node("d"), node("e", { depends_on: ["b"] }), node("f", { status: "dropped" })];
+  const nodes = [node("a", { status: "done" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { status: "working", depends_on: ["a"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }), node("d"), node("e", { depends_on: ["b"] }), node("f", { status: "dropped" })];
   const running = await mount({ items: [mission({ nodes })] });
   try {
     expect(running.q("[data-mission-pill]")?.textContent).toBe("Running");
+    // The head starts with the mission's number, the same `M1` its list row and its Conductor's chip use.
+    expect(running.q("[data-mission-summary]")?.firstElementChild?.getAttribute("data-mission-number")).toBe("M1");
     expect(running.q('[data-mission-stat="time"]')?.textContent).toBe("3m so far");
     expect(running.q('[data-mission-stat="done"]')?.textContent).toBe("1 / 5 done");
     // Its cells are drawn as the cards: done green, a node someone has to look at in the decision colour (PRD mission-node-simple B5).
@@ -207,7 +209,7 @@ it("lists the step the decision stopped and a worker the core raised under needs
   const nodes = [
     node("api", { status: "working", pane_id: "p2" }),
     node("screen", { title: "API screen", status: "working" }),
-    node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
     node("other", { status: "working" }),
   ];
   const map = await mount({ items: [asked({ nodes })] }, [], [], {}, [raised]);
@@ -356,7 +358,7 @@ it("offers Take over on the Conductor row when no Conductor holds an open missio
 
 it("offers Take over beside 터미널로 once a raise the live Conductor was asked first reached the operator, starting a new agent rather than resuming its live conversation (PRD mission-node-simple B15)", async () => {
   const conductor = [{ pane_id: "p1", mark: "quiet" } as AgentRow];
-  const asked = (to: "conductor" | "operator") => mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to, since_unix_ms: 1, on_row: false, item: to === "operator" } })] });
+  const asked = (to: "conductor" | "operator") => mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to, since_unix_ms: 1, on_row: false, item: to === "operator", choices: ["leave", "drop"] } })] });
   const fresh = await mount({ items: [asked("conductor")] }, [], [], {}, conductor);
   try {
     expect(fresh.q("[data-mission-conductor] [data-mission-takeover]")).toBeNull();
@@ -433,13 +435,13 @@ const card = (map: { q: (selector: string) => HTMLElement | null }, key: string)
 it("draws each card as its mark, its title, its pull requests, its worker's model and effort and `!` with who looks, Hide's mark when Hide changed it, and nothing else the panel carries (PRD mission-node-simple B1-B3, D-07)", async () => {
   const nodes = [
     node("core", { title: "제안 core: 기록·공책·점수·반영", status: "working", pr: 1704, prs: [{ number: 1703, state: "merged", url: null }, { number: 1704, state: "mergeable", url: null }], criteria: [line("c1", "own", { state: "pass" }), line("ci", "ci")], criteria_met: 1, criteria_skipped: 0, worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, line: "replay 19/31", reopened: 1, change: "split in two" }),
-    node("raised", { status: "working", pr: 1840, pr_state: "merged", attention: { reason: "merged_unproven", pr: 1840, to: "operator", since_unix_ms: 1, on_row: false, item: true } }),
-    node("asked", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("raised", { status: "working", pr: 1840, pr_state: "merged", attention: { reason: "merged_unproven", pr: 1840, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "done"] } }),
+    node("asked", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
     node("api", { status: "done", pr: 1650, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, hide: { action: "done", at_unix_ms: 1 }, criteria: [line("c1", "own", { state: "pass" })], criteria_met: 1, criteria_skipped: 0 }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
     node("on-branch", { status: "working", branch: "feat/engine-own-layout", worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false } }),
     node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 } }),
-    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
     node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
@@ -447,7 +449,7 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     node("ran", { status: "done", agent_id: "agent-5", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, launched: { agent_id: "agent-5", agent: "codex", model: "Sonnet 5.5", effort: "low" } }),
     node("bound", { status: "working", agent_id: "agent-4", pane_id: "w1:p6", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
     node("ran-unknown", { status: "done", agent_id: "agent-6", pane_id: "w1:p7", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
-    node("launched", { status: "working", agent_id: "agent-9", pane_id: "w1:p9", machine: "mac", launched: { agent_id: "agent-9", agent: "codex", model: "Opus 5.5", effort: "high" }, pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("launched", { status: "working", agent_id: "agent-9", pane_id: "w1:p9", machine: "mac", launched: { agent_id: "agent-9", agent: "codex", model: "Opus 5.5", effort: "high" }, pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
   ];
   // A launch the pane now shows for some session: a node names only the launch the core kept for its own worker, never its pane's.
   const launches = [{ device_id: "mac", pane_id: "w1:p6", session_digest: "other", launch_model: "Sonnet 5.5", launch_effort: "medium" }];
@@ -845,9 +847,9 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
   const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
   const nodes = [
     node("api", { status: "working", pane_id: "p2" }),
-    node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false, item: true } }),
+    node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } }),
     // What waits on the Conductor stays on its card.
-    node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
   ];
   const map = await mount({ items: [asked({ nodes: [...nodes, node("screen", { title: "API screen", status: "working" })] })] }, [], [], {}, [raised]);
   try {
@@ -856,9 +858,18 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(map.q('[data-mission-turn-item="worker_blocked"]')?.textContent).toContain("worker stuck: Login expired");
     const item = map.q('[data-mission-turn-item="attention"]')!;
     expect(item.textContent).toContain(`PR ${"#"}1232 closed without a merge`);
-    // Its choice says what it does and goes to the core once, as one event (B15, B16).
+    // Beside its choices the pull request it is about, with its state (mission-38 flaky-phone).
+    expect(item.querySelector("[data-attention-pr]")?.getAttribute("data-attention-pr")).toBe("1232");
+    // Its choices say what they do, handing it to the Conductor first; 노드 제외 never goes on one press.
+    expect([...item.querySelectorAll<HTMLButtonElement>("[data-attention-choice]")].map((button) => button.dataset.attentionChoice)).toEqual(["leave", "drop"]);
+    expect(item.querySelector('[data-attention-choice="leave"]')?.textContent).toBe("Leave to Conductor");
     const drop = item.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
     expect(drop.textContent).toBe("Drop node");
+    await act(async () => drop.click());
+    expect(map.events.filter((event) => event.kind === "mission_attention")).toEqual([]);
+    expect(drop.textContent).toBe("Confirm drop");
+    expect(drop.dataset.attentionConfirm).toBe("true");
+    // The second press sends it, once, as one event (B15, B16).
     await act(async () => drop.click());
     await act(async () => drop.click());
     expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "outside", action: "drop", since_unix_ms: expect.any(Number) }]);
@@ -888,7 +899,7 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
 
 it("puts in a node's panel what waits on whom with its choices, the worker's life, the Conductor's line dimmed once Hide's facts passed it, Hide's record, and 다시 진행 on finished work (PRD mission-node-simple B4, B15-B17)", async () => {
   const nodes = [
-    node("ended", { title: "Holder record", status: "working", line: "fixing the review", agent_runtime: "ended", worker: { agent: "claude", model: "opus", effort: null, effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 50, on_row: false, item: false } }),
+    node("ended", { title: "Holder record", status: "working", line: "fixing the review", agent_runtime: "ended", worker: { agent: "claude", model: "opus", effort: null, effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 50, on_row: false, item: false, choices: ["leave", "drop"] } }),
     node("done", { title: "Holder life", status: "done", pr: 1918, pr_state: "merged", line: "waiting on CI", finished_at_unix_ms: 60, hide: { action: "done", at_unix_ms: 60 } }),
   ];
   const events: MissionEvent[] = [
@@ -905,8 +916,14 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "attention", "now", "hide", "events"]);
     expect(panel.querySelector("[data-panel-attention]")?.textContent).toBe("! Conductor · Worker ended with work left");
     expect(panel.querySelector("[data-panel-worker-life]")?.textContent).toBe("Worker ended");
-    // The operator may settle it before the Conductor does (B17).
-    await act(async () => panel.querySelector<HTMLElement>('[data-attention-choice="drop"]')!.click());
+    // The operator may settle it before the Conductor does (B17); a press away from 제외 확인 puts it back.
+    const drop = panel.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
+    await act(async () => drop.click());
+    await act(async () => { drop.focus(); drop.blur(); });
+    expect(drop.textContent).toBe("Drop node");
+    expect(map.events.filter((event) => event.kind === "mission_attention")).toEqual([]);
+    await act(async () => drop.click());
+    await act(async () => drop.click());
     expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "ended", action: "drop", since_unix_ms: expect.any(Number) }]);
     // The Conductor's line stays readable, dimmed, once Hide raised the node after it.
     expect(panel.querySelector("[data-panel-line-behind]")?.textContent).toBe("fixing the review");
@@ -1030,7 +1047,7 @@ it("sums up an open mission beside the map until a node is picked: needs a look,
   const nodes = [
     node("api", { title: "API", status: "done", pr: 1901, pr_state: "merged" }),
     node("screen", { title: "Screen", status: "working", depends_on: ["api"], line: "moving tabs", stage: 1 }),
-    node("docs", { title: "Docs", status: "working", depends_on: ["api"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("docs", { title: "Docs", status: "working", depends_on: ["api"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
     node("demo", { title: "Demo", depends_on: ["screen"] }),
   ];
   const map = await mount({ items: [mission({ nodes, running: 2, cap: 3, decision: "Which order?" })] });
@@ -1087,5 +1104,52 @@ it("opens the map at 맞춤 and steps it with − and + between 40% and 200%, �
     expect([level(), step("in").disabled]).toEqual(["200%", true]);
     await act(async () => step("fit").click());
     expect([level(), canvas(), step("fit").getAttribute("aria-pressed")]).toEqual(["100%", "fit", "true"]);
+  } finally { await map.unmount(); }
+});
+
+it("lights a device worker's Terminal and opens its pane there by the address its row has (hide-private issue 679)", async () => {
+  const pane = "remote:mini:pane:h15:p3";
+  const remote = [{ target_id: "mini", state: "connected", message: null, session: { workspaces: [], agents: [{ pane_id: pane, mark: "going", activity: "working" }], active_tab_ids: {}, focused_workspace_id: null, focused_checkout_id: null, focused_tab_id: null, focused_pane_id: null, pane_layouts: [] } }];
+  const nodes = [node("cpu", { status: "working", agent_id: "agent-27621", pane_id: pane, machine: "mini", work: { state: "working" } })];
+  const map = await mount({ items: [mission({ nodes })] }, remote);
+  try {
+    await act(async () => card(map, "cpu").click());
+    const terminal = map.q('[data-mission-detail="cpu"] [data-node-terminal]') as HTMLButtonElement;
+    expect(terminal.disabled).toBe(false);
+    await act(async () => terminal.click());
+    expect(map.events.find((event) => event.kind === "focus_pane")?.payload).toMatchObject({ pane_id: pane });
+  } finally { await map.unmount(); }
+});
+
+it("tells a node being worked from one whose worker rests and what it waits on, or has no worker (hide-private issue 680)", async () => {
+  const nodes = [
+    node("busy", { status: "working", work: { state: "working" } }),
+    node("rests", { status: "working", work: { state: "waiting", on: { kind: "review" } } }),
+    node("gone", { status: "working", work: { state: "no_worker" } }),
+    node("unseen", { status: "working" }),
+  ];
+  const map = await mount({ items: [mission({ nodes })] });
+  try {
+    const look = (key: string) => [card(map, key).querySelector("[data-node-work]")?.textContent ?? null, card(map, key).querySelector("[data-node-mark]")?.hasAttribute("data-node-mark-still"), card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label")];
+    expect(look("busy")).toEqual([null, false, "Working"]);
+    expect(look("rests")).toEqual(["Waiting · review", true, "Waiting · review"]);
+    expect(look("gone")).toEqual(["No worker", true, "No worker"]);
+    // Hide cannot see the worker's row: the card stays as it was, in progress and turning.
+    expect(look("unseen")).toEqual([null, false, "In progress"]);
+    expect(card(map, "rests").getAttribute("aria-label")).toContain("Waiting · review");
+  } finally { await map.unmount(); }
+});
+
+it("says in 내 차례 how many letters the Conductor has not got and what to do, with its terminal, until they are delivered (hide-private issue 678)", async () => {
+  const held = mission({ nodes: [node("a", { status: "working" })], conductor_letters: { count: 3, reason: "draft", since_unix_ms: 1 } });
+  const map = await mount({ items: [held] });
+  try {
+    const item = map.q('[data-mission-turn-item="letters"]')!;
+    expect(item.getAttribute("data-mission-turn-reason")).toBe("draft");
+    expect(item.textContent).toContain("Letters waiting for the Conductor: 3 · unsent text in the Conductor's input: send or clear it");
+    await act(async () => item.querySelector<HTMLElement>("[data-mission-conversation]")!.click());
+    expect(map.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
+    await map.rerender({ ...held, conductor_letters: null });
+    expect(map.q("[data-mission-turn]")).toBeNull();
   } finally { await map.unmount(); }
 });

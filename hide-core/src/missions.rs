@@ -264,6 +264,29 @@ impl AttentionReason {
         matches!(self, Self::ConductorFailed)
     }
 
+    /// The operator's choices for a raise of this reason, in the order the
+    /// screen draws them (B15, B16): `leave` first while a Conductor holds
+    /// the mission, which hands the raise to it, or for an unplanned pull
+    /// request, which it leaves outside the nodes; then what the reason
+    /// takes; `drop` last, which the screen sends only on a second press. A
+    /// failed Conductor's raise has no one to hand it to. The one list the
+    /// view sends and the operator's answer is checked against.
+    pub fn choices(self, conductor: bool) -> Vec<OperatorAction> {
+        use OperatorAction::{Attach, Done, Drop, Leave, Resume};
+        let own: &[OperatorAction] = match self {
+            Self::MergedUnproven => &[Done],
+            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused | Self::CloseRefused => &[Drop],
+            Self::UnplannedPr => &[Attach],
+            Self::ConductorFailed => &[Resume, Drop],
+        };
+        let leave = self == Self::UnplannedPr || (conductor && self != Self::ConductorFailed);
+        leave
+            .then_some(Leave)
+            .into_iter()
+            .chain(own.iter().copied())
+            .collect()
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MergedUnproven => "merged_unproven",
@@ -423,7 +446,8 @@ pub enum OperatorAction {
     Drop,
     /// 노드에 붙이기: the unplanned pull request joins the node.
     Attach,
-    /// 그대로 두기.
+    /// Conductor에게 맡기기, or 그대로 두기 with no Conductor: settles the
+    /// raise and leaves the rest to the Conductor.
     Leave,
     /// 다시 진행: the node works again.
     Resume,
@@ -872,6 +896,15 @@ impl MissionNode {
         self.prs.last().copied()
     }
 
+    /// The registrations the Conductor bound as checkers to the node's lines
+    /// (a reviewer or a verifier), once each.
+    pub(crate) fn checker_agents(&self) -> impl Iterator<Item = &str> {
+        self.criteria
+            .iter()
+            .flat_map(|line| line.checkers.iter())
+            .filter_map(|checker| checker.agent_id.as_deref())
+    }
+
     /// Whether the node's worker and checkers may run on another machine
     /// than the mission's: only a change that reaches main through a pull
     /// request, whose work GitHub carries back. A direct change's branch
@@ -1180,6 +1213,20 @@ fn is_zero_u32(value: &u32) -> bool {
 }
 
 impl Mission {
+    /// The (checker registration, Conductor) pairs of `node`: the checkers
+    /// bound to its lines, each with this mission's Conductor. A letter from
+    /// one to the other is what the node's worker may read
+    /// (`MissionBook::checkers_read_by`) and what `hide mission show <node>`
+    /// lists for it, so the list and the reading never differ
+    /// (with-hide/hide-private#656, #668).
+    pub(crate) fn checker_letters<'a>(
+        &'a self,
+        node: &'a MissionNode,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        node.checker_agents()
+            .map(|checker| (checker, &self.conductor.actor))
+    }
+
     /// Each node's key, status and pull requests, which a reopen keeps so
     /// the mission is not closed again until one of them moves.
     pub(crate) fn node_marks(&self) -> String {
@@ -1443,6 +1490,21 @@ impl MissionBook {
 
     pub(crate) fn get_mut(&mut self, id: &str) -> Option<&mut Mission> {
         self.missions.iter_mut().find(|mission| mission.id == id)
+    }
+
+    /// The checkers bound to the lines of the nodes that registration
+    /// `worker` works, each with the Conductor of its mission: the pairs
+    /// whose letters from the checker to that Conductor the worker may read
+    /// (`hide request show`).
+    pub(crate) fn checkers_read_by<'a>(
+        &'a self,
+        worker: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        self.missions
+            .iter()
+            .flat_map(|mission| mission.nodes.iter().map(move |node| (mission, node)))
+            .filter(move |(_, node)| node.agent_id.as_deref() == Some(worker))
+            .flat_map(|(mission, node)| mission.checker_letters(node))
     }
 
     /// The mission `actor` conducts and still runs, if any.
@@ -2890,6 +2952,22 @@ impl MissionStore {
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// B15, B16 (with-hide/hide#2227): `leave` comes first while a Conductor
+    /// holds the mission, and for an unplanned pull request also without
+    /// one; `drop` comes last; a failed Conductor's raise is never handed on.
+    #[test]
+    fn each_raise_offers_its_choices_handing_it_on_first_and_dropping_last() {
+        use OperatorAction::{Attach, Done, Drop, Leave, Resume};
+        assert_eq!(AttentionReason::WorkerEnded.choices(true), [Leave, Drop]);
+        assert_eq!(AttentionReason::WorkerEnded.choices(false), [Drop]);
+        assert_eq!(AttentionReason::MergedUnproven.choices(true), [Leave, Done]);
+        assert_eq!(AttentionReason::UnplannedPr.choices(false), [Leave, Attach]);
+        assert_eq!(
+            AttentionReason::ConductorFailed.choices(true),
+            [Resume, Drop]
+        );
+    }
     use super::*;
 
     #[test]

@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
-import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, type EscalationCause } from "./missions";
+import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -155,7 +155,7 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   });
 });
 
-const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false, item: to === "operator" });
+const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false, item: to === "operator", choices: ["leave", "drop"] });
 
 describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () => {
   it("reads each status as waiting, in progress or done, a node someone has to look at in the decision colour, a blocked node waiting and a cancelled mission's unfinished node cancelled", () => {
@@ -508,7 +508,6 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
       const words = attentionWords(node("n", { attention: raised("operator", reason, 12) }), t);
       expect(words?.who).toBe("You");
       expect(words?.why).not.toMatch(/mission\.|\{\{/);
-      expect(attentionChoices(reason).length).toBeGreaterThan(0);
     }
     for (const action of contract.mission_operator_action) expect(english).toHaveProperty(`mission.operator.${action}`);
     for (const action of contract.mission_hide_action) expect(english).toHaveProperty(`mission.hide.${action}`);
@@ -528,11 +527,16 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(missionAsks([orphan], [])).toEqual([]);
   });
 
-  it("offers the choices each reason takes", () => {
-    expect(attentionChoices("merged_unproven")).toEqual(["done"]);
-    expect(attentionChoices("worker_ended")).toEqual(["drop"]);
-    expect(attentionChoices("unplanned_pr")).toEqual(["attach", "leave"]);
-    expect(attentionChoices("conductor_failed")).toEqual(["resume", "drop"]);
+  it("names the pull request a raise is about, with the state the project's list reads", () => {
+    const pull = (number: number, state: PullRequest["state"]) => ({ number, title: "", url: "", badge: "open", review: null, is_draft: false, state }) as PullRequest;
+    const ended = raised("operator", "worker_ended");
+    const at = node("n", { pr: 7, pr_state: "pending" });
+    expect(attentionPr(node("n"), ended, [])).toBeNull();
+    expect(attentionPr(at, ended, [pull(7, "failed")])).toEqual({ number: 7, state: "failed" });
+    expect(attentionPr(at, ended, null)).toEqual({ number: 7, state: "pending" });
+    // A raise about another pull request names it, with no state the node's would lend it.
+    expect(attentionPr(at, raised("operator", "unplanned_pr", 12), null)).toEqual({ number: 12, state: null });
+    expect(attentionPr(node("o", { kind: "external", external: { pr: 1232 } }), ended, null)?.number).toBe(1232);
   });
 
   it("says what Hide did last and why", () => {
@@ -633,5 +637,67 @@ describe("nodeSteps", () => {
     // A finished plan has no current step.
     const finished = nodeSteps(node("a", { plan: plan([step("a", "One", "done")], null, true) }));
     expect(finished).toMatchObject({ now: null, steps: [{ title: "One", tone: "done" }] });
+  });
+});
+
+describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
+  it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
+    for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
+    const states = contract.mission_node_work as string[];
+    expect(states).toEqual(["working", "waiting", "no_worker"]);
+    expect(nodeWorkWords({ state: "working" }, t)).toBe("Working");
+    expect(nodeWorkWords({ state: "no_worker" }, t)).toBe("No worker");
+    for (const kind of ["decision", "blocked", "start", "worker", "review", "verify", "ci", "merge", "conductor"] as const) {
+      expect(nodeWorkWords({ state: "waiting", on: { kind } }, t)).toMatch(/^Waiting · \S/);
+    }
+    expect(nodeWorkWords({ state: "waiting", on: { kind: "attention", to: "operator", reason: "worker_ended" } }, t)).toBe("Waiting · You");
+    expect(heldLettersText({ count: 2, reason: "draft", since_unix_ms: 1 }, t)).toBe("Letters waiting for the Conductor: 2 · unsent text in the Conductor's input: send or clear it");
+  });
+
+  it("folds a worker raised for its held letter into the Conductor's letters line, in 내 차례 and the summary's 확인 필요 alike, and keeps any other cause in both", () => {
+    const letters = { count: 2, reason: "draft" as const, since_unix_ms: 1 };
+    const nodes = [node("api", { status: "working", pane_id: "p2" })];
+    const raisedFor = (cause: EscalationCause) => () => ({ cause, line: null });
+    // Both screens read one rule (`shownEscalation`): what 내 차례 lists for the worker, and whether the summary holds its node.
+    const shown = (cause: EscalationCause, withLetters: boolean) => {
+      const m = mission("m", { nodes, ...(withLetters ? { conductor_letters: letters } : {}) });
+      const turn = turnItems(m, raisedFor(cause)).some((item) => item.kind === "worker_blocked");
+      const held = holdReason(m, nodes[0]!, raisedFor(cause)) !== null;
+      const groups = summaryGroups(m, raisedFor(cause));
+      expect(groups.attention.length > 0, `${cause}: summary group`).toBe(held);
+      expect(groups.working.length > 0, `${cause}: a folded worker reads as working`).toBe(!held);
+      expect(turn, `${cause}: 내 차례 and 확인 필요 agree`).toBe(held);
+      return turn;
+    };
+    for (const cause of ["draft", "parent_blocked", "bell_exhausted", "undelivered"] as const) {
+      expect(shown(cause, true), cause).toBe(false);
+      expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters"]);
+      // Without the letters line the worker's own item still says it, on both.
+      expect(shown(cause, false), cause).toBe(true);
+    }
+    for (const cause of ["child_blocked", "observer_unconfirmed", "input_unconfirmed"] as const) {
+      expect(shown(cause, true), cause).toBe(true);
+      expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters", "worker_blocked"]);
+    }
+  });
+
+  it("puts a running mission's held Conductor letters in 내 차례 and says a node's work only while it is in progress", () => {
+    const letters = { count: 3, reason: "unreachable" as const, since_unix_ms: 1 };
+    expect(turnItems(mission("m", { conductor_letters: letters }), () => null)).toEqual([{ kind: "letters", letters }]);
+    expect(turnItems(mission("m", { conductor_letters: letters, status: "done" }), () => null)).toEqual([]);
+    expect(turnItems(mission("m"), () => null)).toEqual([]);
+    const waiting = { state: "waiting" as const, on: { kind: "review" as const } };
+    expect(nodeWork(mission("m"), node("n", { status: "working", work: waiting }))).toEqual(waiting);
+    expect(nodeWork(mission("m"), node("n", { status: "done", work: waiting }))).toBeNull();
+    expect(nodeWork(mission("m", { status: "cancelled" }), node("n", { status: "working", work: waiting }))).toBeNull();
+    expect(nodeWork(mission("m"), node("n", { status: "working" }))).toBeNull();
+  });
+});
+
+describe("missionNumber", () => {
+  it("names a mission by the number in the core's id, and gives none for an id without one", () => {
+    expect(missionNumber("mission-39")).toBe("M39");
+    expect(missionNumber("mission-7")).toBe("M7");
+    for (const id of ["imported", "mission-", "mission-3a", "Mission-3", "mission-3-b"]) expect(missionNumber(id)).toBeNull();
   });
 });

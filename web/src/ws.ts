@@ -8,6 +8,7 @@ import { isOperatorFocus, numbered } from "./operatorFocus";
 import { showProjectOpened } from "./opening";
 import { noteArrival, probeEnabled } from "./probe";
 import { useShellStore, type TerminalChunk } from "./store";
+import type { ProgramCopy } from "./clipboard";
 import { hostBridge, hostKind } from "./host";
 import type { ViewCommentAnchor } from "./snapshot";
 import { browserCommentKey, closeBrowserNote, noteBrowserComment, openBrowserNote, resetBrowserComments, type PagePlace } from "./viewFeedback";
@@ -20,6 +21,8 @@ export type DispatchFn = (event: {
 
 type Handlers = {
   onChunks: (chunks: TerminalChunk[], full: boolean) => void;
+  /** What a pane's program wrote to the clipboard, handed over once and never with the screen's output. */
+  onCopy: (copy: ProgramCopy) => void;
 };
 
 function tokenFromLocation(): string | null {
@@ -201,6 +204,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       if (frame.type === "window_call") {
         hostBridge()?.comeForward?.();
         showProjectOpened(frame.payload as Record<string, unknown> | undefined);
+        return;
+      }
+      if (frame.type === "clipboard") {
+        handlers.onCopy(frame.payload as unknown as ProgramCopy);
         return;
       }
       if (frame.type === "agent_notice") {

@@ -30,12 +30,14 @@ export const SETTINGS_GROUPS: readonly { id: "app" | "machine"; tabs: readonly S
 
 /**
  * The Sleep idle agents choices (PRD agent-sleep D-10), in the hours the core
- * accepts; Never is the default and sends null. `unit` is how the choice reads.
+ * accepts; 24 hours is the default, and Never sends null. `unit` is how the
+ * choice reads.
  */
 export const SLEEP_AFTER_CHOICES: readonly { id: string; hours: number | null; unit: "hours" | "days" }[] = [
   { id: "never", hours: null, unit: "hours" },
   { id: "12", hours: 12, unit: "hours" },
   { id: "24", hours: 24, unit: "hours" },
+  { id: "48", hours: 48, unit: "days" },
   { id: "72", hours: 72, unit: "days" },
 ];
 

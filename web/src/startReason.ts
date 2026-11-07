@@ -10,6 +10,14 @@ import type { MessageKey } from "./i18n/catalogs";
 /** The codes the core sends for a start it refused, each worded once in the catalog. */
 const REASON_KEYS = new Map<string, MessageKey>([
   ["codex_capability_unknown", "agents.codexUnread"],
+  // A spawn whose agent would start without Hide's hook on its machine
+  // (`runtime::start_hook`); that machine's row in Settings says why.
+  ["agent_hook_off", "coreError.startReason.agent_hook_not_ready"],
+  ["agent_not_set_up", "coreError.startReason.agent_hook_not_ready"],
+  ["agent_hook_untrusted", "coreError.startReason.agent_hook_not_ready"],
+  ["agent_hook_missing", "coreError.startReason.agent_hook_not_ready"],
+  ["agent_hook_unchecked", "coreError.startReason.agent_hook_not_ready"],
+  ["agent_hook_unconfirmed", "coreError.startReason.agent_hook_unconfirmed"],
   // Why waking a sleeping agent failed (`agent_sleep_engine::WAKE_*`).
   ["agent_wake.folder_missing", "taskReason.folderMissing"],
   ["agent_wake.not_resumed", "wakeReason.notResumed"],

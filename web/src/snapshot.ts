@@ -1326,7 +1326,8 @@ export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean };
+/** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[] };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */
@@ -1524,7 +1525,17 @@ export type MissionNode = {
   asks_push?: boolean;
   /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
   waiting_on?: MissionWaitingOn | null;
+  /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
+  work?: MissionNodeWork | null;
 };
+
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */
+export type MissionNodeWork = { state: "working" } | { state: "waiting"; on: MissionWaitingOn } | { state: "no_worker" };
+
+/** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
+export type MissionLettersHeldFor = "unreachable" | "undelivered" | "approval" | "draft" | "unanswered";
+/** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
+export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
 /** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
 export type MissionWaitingOn =
@@ -1568,6 +1579,8 @@ export type Mission = {
   answer: MissionAnswer | null;
   /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
   end_asked?: boolean;
+  /** Letters to the Conductor only the operator can let through, while the mission runs; absent from an older core. */
+  conductor_letters?: MissionHeldLetters | null;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
   report: string | null;
@@ -1586,9 +1599,10 @@ export type Mission = {
  * What the mission rules both screens share read of a node (`missionEntry`, `turnItems`, `missionCells`): the desktop's `MissionNode` and the
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "attention" | "landing" | "agent_runtime">;
+/** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime"> & { attention: Omit<MissionAttention, "choices"> | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
-export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms"> & {
+export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters"> & {
   conductor: Pick<Mission["conductor"], "present">;
   nodes: N[];
 };
@@ -2488,7 +2502,7 @@ export type MemoryQuestion =
  * Why a failed promotion's agent never started (`memory_start_failure_code`):
  * `detail` is the line its new pane's shell stopped at, for `shell_starting`.
  */
-export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "card_not_processed" | "other"; detail: string | null };
+export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "agent_hook_not_ready" | "card_not_processed" | "other"; detail: string | null };
 
 export type MemoryDocument = {
   authority: "outdated" | "card_newer" | "ask";
@@ -2792,7 +2806,7 @@ export type DeskSteps = { sessions: number; files: number; letters: number; star
 /** `desk_job_reason`. */
 export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
 /** `desk_job_failure`: why a start failed, grouped by what the operator can do (`desk.jobFailure.*`). */
-export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
+export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "agent_hook_not_ready" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
 /** `desk_output_kind`. */
 export type DeskOutputKind = "image" | "page" | "doc" | "pr";
 /**

@@ -681,7 +681,7 @@ impl Runtime {
                 // number names a pull request only beside its repository.
                 let own_prs = record
                     .filter(|record| !record.ended)
-                    .and_then(|record| self.agent_row(&record.pane))
+                    .and_then(|record| self.agent_row(&record.pane_on(self.node.as_str())))
                     .and_then(|row| row.pulls.as_ref())
                     .map(|list| {
                         list.pulls
@@ -1231,6 +1231,18 @@ impl Runtime {
         };
         if payload.action != OperatorAction::Resume && !attention.as_ref().is_some_and(names_it) {
             return Err("mission_attention_moved".into());
+        }
+        // Only a choice the raise offers now: the screen draws the same list.
+        let conductor = self.conductor_present(&mission.conductor.actor);
+        if payload.action != OperatorAction::Resume
+            && attention.as_ref().is_some_and(|attention| {
+                !attention
+                    .reason
+                    .choices(conductor)
+                    .contains(&payload.action)
+            })
+        {
+            return Err("mission_attention_choice_refused".into());
         }
         let mut events = Vec::new();
         let mut next = node.clone();

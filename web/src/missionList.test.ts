@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupMissions, missionEntry, projectMissions, shownMission, turnCount } from "./missionList";
+import { groupMissions, missionEntry, missionPillKey, projectMissions, rowLine, rowLineText, shownMission, turnCount } from "./missionList";
 import { workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionNode } from "./snapshot";
 
@@ -32,9 +32,9 @@ describe("the group a mission stands in (B5) and the rail's number (D-08)", () =
   it("puts an open mission with anything in its 내 차례 there, whatever its state", () => {
     expect(group(mission("m", { decision: "Which order?" }))).toBe("turn");
     expect(group(mission("m", { conductor: { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: true } }))).toBe("turn");
-    expect(group(mission("m", { nodes: [node("x", { kind: "external", status: "working", attention: { reason: "pr_closed", pr: 3, to: "operator", since_unix_ms: 1, on_row: false, item: true } })] }))).toBe("turn");
+    expect(group(mission("m", { nodes: [node("x", { kind: "external", status: "working", attention: { reason: "pr_closed", pr: 3, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } })] }))).toBe("turn");
     // What waits on the Conductor is not the operator's yet.
-    expect(group(mission("m", { nodes: [node("x", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } })] }))).not.toBe("turn");
+    expect(group(mission("m", { nodes: [node("x", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } })] }))).not.toBe("turn");
     expect(group(mission("m", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 3, pr_state: "mergeable", landing: { state: "left", action: "merge" } })], landing_order: ["x"] }))).toBe("turn");
     const raised = { escalation: { cause: "bell_exhausted" } } as unknown as AgentRow;
     expect(group(mission("m", { nodes: [node("x", { status: "working", pane_id: "p9" })] }), (n) => (n.pane_id === "p9" ? raised : null))).toBe("turn");
@@ -78,5 +78,19 @@ describe("the selected row (B6, B23)", () => {
     expect(shownMission({ items: [{ kind: "mission", mission: "m1" }, { kind: "pull_request", workspace_id: "w", number: 2 }], shown: true })).toBeNull();
     expect(shownMission({ items: [{ kind: "mission", mission: "m1" }], shown: false })).toBeNull();
     expect(shownMission(null)).toBeNull();
+  });
+});
+
+describe("a mission whose Conductor has not got its letters (hide-private issue 678)", () => {
+  it("stands in 내 차례 with the count and what to do, and leaves it once they are delivered", async () => {
+    const { initializeInterfaceI18n } = await import("./i18n/instance");
+    const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
+    const held = mission("a", { conductor_letters: { count: 4, reason: "unanswered", since_unix_ms: 1 } });
+    const entry = missionEntry(held, () => null);
+    expect(entry.group).toBe("turn");
+    expect(turnCount([entry])).toBe(1);
+    expect(missionPillKey(held, entry.turn[0] ?? null)).toBe("missionTool.pill.letters");
+    expect(rowLineText(rowLine(held, entry.turn[0] ?? null)!, t)).toBe("Letters waiting for the Conductor: 4 · three bells went unanswered: tell the Conductor to read its letters");
+    expect(group(mission("a", { conductor_letters: null }))).toBe("running");
   });
 });

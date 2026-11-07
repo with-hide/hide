@@ -509,6 +509,7 @@ fn row_of_pane<'a>(value: &'a Value, pane: &str) -> Option<&'a Value> {
 fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Result<()> {
     Fixture::journey(|fixture| {
         let project = fixture.commit_remote_project()?;
+        fixture.agent_ready_on_device("claude-code", ".claude")?;
         let spawn = format!(
             "{} agent spawn --parent here --machine remote --name remote-worker --intent spawn-remote-1 --kind claude --repo {} --branch remote-worker",
             quote(&fixture.hide),

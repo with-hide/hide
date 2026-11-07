@@ -1,3 +1,4 @@
+import { MailIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AttentionChoices } from "./components/mission-attention";
@@ -6,7 +7,7 @@ import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
-import { attentionReasonText, turnItems, type TurnItem } from "./missions";
+import { attentionReasonText, heldLettersText, turnItems, type TurnItem } from "./missions";
 import { useWorkerEscalation } from "./missionWorkers";
 import type { Mission, MissionNode } from "./snapshot";
 
@@ -43,6 +44,17 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
     case "decision":
       // A new question is a new banner: nothing written for the one before carries over to it (B26).
       return <DecisionBanner key={mission.question?.key ?? 0} mission={mission} device={device} actions={actions} onNode={onSelect} />;
+    case "letters": {
+      // The letters the Conductor has not got, and what the operator does: the Conductor's pane is where each reason is lifted (hide-private issue 678).
+      const text = heldLettersText(item.letters, t);
+      return (
+        <Row data-mission-turn-item="letters" data-mission-turn-reason={item.letters.reason}>
+          <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />
+          <span className="min-w-0 flex-1 truncate text-body" title={text}>{text}</span>
+          {conversation}
+        </Row>
+      );
+    }
     case "worker_blocked":
       return (
         <Row data-mission-turn-item="worker_blocked">
@@ -61,7 +73,8 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
         <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs" data-mission-turn-item="attention" data-mission-turn-reason={item.attention.reason}>
           <span className="flex min-w-0 flex-1 basis-(--size-flow-title) items-center gap-sm">
             <span aria-hidden="true" className="shrink-0 font-semibold text-mission-hold">!</span>
-            <NodeChip node={item.node} onSelect={onSelect} />
+            {/* The pull request stands beside the choices, with its state. */}
+            <NodeChip node={item.node} onSelect={onSelect} pr={false} />
             <span className="min-w-0 flex-1 truncate text-body" title={why}>{why}</span>
           </span>
           <AttentionChoices key={`${item.node.key}-${item.attention.since_unix_ms}`} mission={mission} node={item.node} attention={item.attention} actions={actions} />
@@ -91,9 +104,9 @@ function Row({ children, ...data }: { children: ReactNode } & Record<`data-${str
 }
 
 /** A node named in 내 차례, which picks it on the map (B25): its title, with its pull request's mark when it has one (PRD mission-tool B18). */
-function NodeChip({ node, onSelect }: { node: MissionNode; onSelect: (key: string) => void }) {
+function NodeChip({ node, onSelect, pr: withPr = true }: { node: MissionNode; onSelect: (key: string) => void; pr?: boolean }) {
   // The pull request a node waits on now is its last one (D-10).
-  const pr = node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
+  const pr = withPr ? (node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null)) : null;
   return (
     <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs bg-muted px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-mission-turn-node={node.key}>
       <span className="min-w-0 truncate">{node.title}</span>

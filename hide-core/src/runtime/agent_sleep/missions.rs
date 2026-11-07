@@ -79,12 +79,7 @@ fn node_agents<'a>(mission: &'a Mission, node: &'a MissionNode) -> impl Iterator
     node.agent_id
         .as_deref()
         .into_iter()
-        .chain(
-            node.criteria
-                .iter()
-                .flat_map(|line| line.checkers.iter())
-                .filter_map(|checker| checker.agent_id.as_deref()),
-        )
+        .chain(node.checker_agents())
         .filter(move |id| Some(*id) != conductor)
 }
 

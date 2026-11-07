@@ -2,6 +2,7 @@
 //! as a node starts it, without a node (docs/TESTING.md, The pane holder).
 
 mod asks;
+mod clipboard;
 mod connections;
 #[cfg(windows)]
 mod conpty;

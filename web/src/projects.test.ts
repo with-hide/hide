@@ -421,7 +421,7 @@ describe("checkout row lines (PRD sidebar-typography D-04, D-06)", () => {
 
 
 describe("a mission in Needs You (PRD mission-node-simple D-19, B14)", () => {
-  const ask = { mission: { id: "m1", title: "Ship it" }, node: { key: "a", title: "API" }, attention: { reason: "pr_closed", pr: 7, to: "operator", since_unix_ms: 1, on_row: false }, more: 0 } as unknown as MissionAsk;
+  const ask = { mission: { id: "m1", title: "Ship it" }, node: { key: "a", title: "API" }, attention: { reason: "pr_closed", pr: 7, to: "operator", since_unix_ms: 1, on_row: false, choices: ["leave", "drop"] }, more: 0 } as unknown as MissionAsk;
 
   it("opens Needs You for a mission no row carries, above the projects, with no agent raised", () => {
     const rows = listRows([], {}, [], null, [], [ask]);
