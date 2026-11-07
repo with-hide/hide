@@ -8,7 +8,7 @@
 //! judges the parent against that device's own home (`Call::NewFolderTarget`),
 //! as hided's `$HOME` line judged it for the core's machine before the event
 //! arrived (PRD device-add-project D-07). The node stops Git's whole process
-//! group and removes the staging folder on every exit path; the node reports
+//! group and removes the clone's folder on every exit path but success; the node reports
 //! at least once a second, the worker answers each report with the runtime's
 //! cancel flag, and a runtime that has gone away answers as a cancel, so the
 //! clone ends with its owner.
@@ -156,7 +156,7 @@ impl Runtime {
     }
 
     /// Asks the running clone to stop; the worker settles it as `cancelled`
-    /// once Git has ended and the staging folder is gone.
+    /// once Git has ended and the clone's folder is gone.
     pub(super) fn cancel_repository_clone(&mut self, id: u64) -> bool {
         let Some(clone) = self
             .snapshot
@@ -301,7 +301,7 @@ fn spawn_clone(
             };
             // A panic still settles the slot, which is the only one: a clone
             // left `cloning` would refuse every later clone. Git's group and
-            // the staging folder are released by their guards on unwinding.
+            // the clone's folder are released by their guards on unwinding.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let parent = match &place.judge {
                     None => place.parent.clone(),

@@ -74,7 +74,7 @@ fn source(bare: &Path) -> CloneSource {
     CloneSource::parse(&format!("file://{}", bare.display())).unwrap()
 }
 
-/// Names under `parent`, sorted, so a leftover staging folder shows too.
+/// Names under `parent`, sorted, so a leftover folder shows too.
 fn children(parent: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(parent)
         .unwrap()
@@ -214,7 +214,7 @@ fn a_missing_repository_fails_in_plain_words_and_leaves_nothing() {
 
 /// The node clones only under home, whatever the shell checked before: a
 /// parent swapped for a link out of home between the check and the clone
-/// writes nothing there, neither the clone nor its staging folder.
+/// writes nothing there, neither the clone nor its folder.
 #[cfg(unix)]
 #[test]
 fn a_parent_swapped_for_a_link_out_of_home_after_the_check_clones_nothing_outside() {

@@ -5,10 +5,10 @@
 //! The run belongs to its caller. Git leads its own process group, so a
 //! cancel, a stall or the caller going away stops everything Git started
 //! (`ssh`, `git-remote-https`, `index-pack`), and dropping the run's guard on
-//! any exit path does the same. Git clones into a hidden staging folder beside
-//! the target, and only a finished clone is renamed into place, so a cancelled
-//! or failed clone leaves no half-written folder under the target's name; the
-//! staging folder is removed on every exit path.
+//! any exit path does the same. The run makes the target folder itself and
+//! Git clones into it, so the folder holds a partial repository while Git
+//! runs; a cancelled or failed clone empties it through its handle and removes
+//! the then empty name, so it leaves nothing under the target's name.
 //!
 //! No prompt can hold the run: Git starts through the node's one
 //! non-interactive launcher (`git_run`), and a run whose
@@ -24,7 +24,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use cap_std::fs::Dir;
-use hide_platform::fs::identity::{self, FileId};
+use hide_platform::fs::identity;
 use hide_platform::process::OwnedChild;
 
 pub use hide_node_link::clone::{
@@ -53,16 +53,15 @@ const LINE_CAP: usize = 400;
 const ALLOWED_PROTOCOLS: &str = "https:ssh:file";
 
 /// Clones `source` into `parent/<name>` under `home` and answers the new
-/// folder. The parent is opened under home by handle and every step goes
-/// through a handle: the look at the target's name; the staging folder,
-/// made by this run alone (a name already there, a link included, is never
-/// written through) and held open, so Git runs in it and clones into `.`
-/// whatever its name or its parent's path names by then; and the rename into
-/// place and the cleanup, each done only while the staging name still holds
-/// the folder this run made. A parent or a staging name swapped for a link
-/// therefore writes nothing outside home. `cancel` is asked every [`POLL`];
-/// answering true ends the run as cancelled. `progress` hears each change of
-/// stage or percent.
+/// folder. The parent is opened under home by handle, the target folder is
+/// made through it by this run alone (a name already taken, a link included,
+/// is refused) and held open, and Git runs in it and clones into `.`, so a
+/// parent or a target name swapped for a link writes nothing outside home.
+/// No step uses the target's name once it is held: a failed or cancelled
+/// clone is emptied through the held handle, and only then is the name
+/// removed, as an empty folder, so a folder put there by anyone else is never
+/// deleted. `cancel` is asked every [`POLL`]; answering true ends the run as
+/// cancelled. `progress` hears each change of stage or percent.
 pub fn clone_repository(
     source: &CloneSource,
     parent: &Path,
@@ -82,17 +81,19 @@ pub fn clone_repository(
     )
 }
 
-/// Where a run is when [`clone_with`] hands a test the parent and the staging
-/// name, so it can plant something there as another process could.
+/// Where a run is when [`clone_with`] hands a test the parent and the target
+/// name, so it can put something there as another process could.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Step {
-    /// A leftover at the staging name is gone; the folder is not made yet.
-    Cleared,
-    /// The staging folder is made and held; Git has not started.
+    /// The target folder is made; it is not opened yet.
+    Made,
+    /// The target folder is made and held; Git has not started.
     Held,
+    /// A failed clone's folder is emptied and released; its name is not
+    /// removed yet.
+    Emptied,
 }
 
-#[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn clone_with(
     source: &CloneSource,
     parent: &Path,
@@ -104,26 +105,84 @@ fn clone_with(
 ) -> Result<PathBuf, CloneFailure> {
     let opened = crate::browse::HomeFolder::open(&parent.to_string_lossy(), home)
         .map_err(|error| CloneFailure::Io(error.message))?;
-    let target = opened.real.join(source.name());
-    if opened.folder.symlink_metadata(source.name()).is_ok() {
-        return Err(CloneFailure::TargetExists(target));
-    }
-    let mut staging = Staging {
-        parent: &opened.folder,
-        name: format!(".{}.hide-clone-{}", source.name(), std::process::id()),
-        made: None,
+    let name = source.name();
+    let target = opened.real.join(name);
+    opened.folder.create_dir(name).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            CloneFailure::TargetExists(target.clone())
+        } else {
+            CloneFailure::Io(format!("The clone's folder could not be made: {error}"))
+        }
+    })?;
+    at(Step::Made, &opened.folder, name);
+    // The folder opened has to be the one the name holds as itself (a link
+    // put there is refused) and empty, or it is not the folder just made and
+    // nothing of it is touched.
+    let folder = match opened.folder.open_dir(name) {
+        Ok(folder)
+            if matches!(
+                (identity::file_id_of(&folder), identity::entry_id(&opened.folder, OsStr::new(name))),
+                (Ok(opened_id), Ok(named_id)) if opened_id == named_id
+            ) && folder
+                .entries()
+                .is_ok_and(|mut entries| entries.next().is_none()) =>
+        {
+            folder
+        }
+        _ => {
+            return Err(CloneFailure::Io(
+                "The clone's folder was replaced as it was made; nothing was cloned".to_owned(),
+            ));
+        }
     };
-    // A staging folder left by a run this process never finished (it was
-    // killed mid-clone) has this process's id only by reuse; it is ours to
-    // replace.
-    staging.clear_leftover();
-    at(Step::Cleared, &opened.folder, &staging.name);
-    let folder = staging.make()?;
+    // Every exit from here, an unwinding one included, removes the clone
+    // unless it finished.
+    let mut partial = Partial {
+        parent: &opened.folder,
+        name,
+        folder: Some(folder),
+        at,
+    };
     let held = opened
-        .hold(&folder, opened.real.join(&staging.name))
+        .hold(partial.folder.as_ref().expect("just made"), target.clone())
         .map_err(|error| CloneFailure::Io(error.message))?;
-    at(Step::Held, &opened.folder, &staging.name);
-    let mut command = crate::git_run::remote_in(&held);
+    at(Step::Held, &opened.folder, name);
+    run_git(source, &held, stall_limit, cancel, progress)?;
+    partial.folder = None;
+    Ok(target)
+}
+
+/// A clone's folder until the clone finishes; dropped before, it is taken
+/// away by [`remove_partial`]. Declared before the [`HeldFolder`] on it, so
+/// the hold is released first: on Windows a held folder cannot be removed.
+///
+/// [`HeldFolder`]: hide_platform::fs::held::HeldFolder
+struct Partial<'a> {
+    parent: &'a Dir,
+    name: &'a str,
+    folder: Option<Dir>,
+    at: &'a dyn Fn(Step, &Dir, &str),
+}
+
+impl Drop for Partial<'_> {
+    fn drop(&mut self) {
+        if let Some(folder) = self.folder.take() {
+            remove_partial(self.parent, self.name, folder, self.at);
+        }
+    }
+}
+
+/// Runs `git clone` into the held folder until it ends, is cancelled or
+/// stalls. Git's whole tree is stopped on every path that did not see it end.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn run_git(
+    source: &CloneSource,
+    held: &hide_platform::fs::held::HeldFolder,
+    stall_limit: Duration,
+    cancel: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(CloneProgress),
+) -> Result<(), CloneFailure> {
+    let mut command = crate::git_run::remote_in(held);
     command
         .args(["clone", "--progress", "--"])
         .arg(source.url())
@@ -186,33 +245,42 @@ fn clone_with(
         tail.push(line);
     }
     run.release();
-    if !status.success() {
-        return Err(classify(&tail, status.code()));
+    if status.success() {
+        Ok(())
+    } else {
+        Err(classify(&tail, status.code()))
     }
-    // Released first: on Windows a held folder cannot be renamed, by this run either.
-    drop(held);
-    drop(folder);
-    if !staging.still_ours() {
-        return Err(CloneFailure::Io(
-            "The clone's staging folder was moved while Git ran; nothing was put in place"
-                .to_owned(),
-        ));
-    }
-    hide_platform::fs::atomic::rename_no_replace(
-        &opened.folder,
-        std::ffi::OsStr::new(&staging.name),
-        &opened.folder,
-        std::ffi::OsStr::new(source.name()),
-    )
-    .map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            CloneFailure::TargetExists(target.clone())
-        } else {
-            CloneFailure::Io(format!("The clone could not be moved into place: {error}"))
+}
+
+/// Takes away a clone that did not finish: everything in `folder`, the
+/// folder this run made, through its handle (a link inside is removed as
+/// itself), then the name `name` in `parent` as an empty folder. Whatever the
+/// name holds by then, if it is not empty, is left as it is. What cannot be
+/// removed stays, logged; the clone's own failure is what the caller hears.
+fn remove_partial(parent: &Dir, name: &str, folder: Dir, at: &dyn Fn(Step, &Dir, &str)) {
+    let emptied = folder.entries().and_then(|entries| {
+        for entry in entries {
+            let entry = entry?;
+            let child = entry.file_name();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => folder.remove_dir_all(&child)?,
+                // A link to a folder is a directory entry on Windows.
+                _ => folder
+                    .remove_file(&child)
+                    .or_else(|_| folder.remove_dir(&child))?,
+            }
         }
-    })?;
-    staging.made = None;
-    Ok(target)
+        Ok(())
+    });
+    drop(folder);
+    at(Step::Emptied, parent, name);
+    let removed = emptied.and_then(|()| parent.remove_dir(name));
+    if let Err(error) = removed {
+        eprintln!(
+            "{}",
+            serde_json::json!({"component":"node","kind":"repository.clone.leftover","error":error.to_string()})
+        );
+    }
 }
 
 /// [`clone_repository`] for a caller that hears reports: each change of
@@ -251,67 +319,6 @@ pub fn clone_reporting(
             path: PathBuf::from(crate::root::wire(&path)),
         },
         Err(failure) => CloneAnswer::Failed { failure },
-    }
-}
-
-/// The folder Git writes into, by its name in the parent's handle and the
-/// identity of the folder this run made there; removed on drop, while the
-/// name still holds that folder, unless the clone moved it into place.
-struct Staging<'a> {
-    parent: &'a Dir,
-    name: String,
-    made: Option<FileId>,
-}
-
-impl Staging<'_> {
-    /// Takes away what an unfinished run left at the name: a folder, or a
-    /// link as itself, never what it leads to.
-    fn clear_leftover(&self) {
-        match self.parent.symlink_metadata(&self.name) {
-            Ok(metadata) if metadata.is_dir() => {
-                let _ = self.parent.remove_dir_all(&self.name);
-            }
-            Ok(_) => {
-                let _ = self.parent.remove_file(&self.name);
-            }
-            Err(_) => {}
-        }
-    }
-
-    /// Makes the staging folder, refusing a name something else took since
-    /// it was cleared, and opens it as the folder this run made.
-    fn make(&mut self) -> Result<Dir, CloneFailure> {
-        let refused = |error: std::io::Error| {
-            CloneFailure::Io(format!(
-                "The clone's staging folder could not be made: {error}"
-            ))
-        };
-        self.parent.create_dir(&self.name).map_err(refused)?;
-        let folder = self.parent.open_dir(&self.name).map_err(refused)?;
-        let made = identity::file_id_of(&folder).map_err(refused)?;
-        self.made = Some(made);
-        if !self.still_ours() {
-            return Err(CloneFailure::Io(
-                "The clone's staging folder was replaced as it was made".to_owned(),
-            ));
-        }
-        Ok(folder)
-    }
-
-    /// Whether the name still holds the folder this run made, a link at it
-    /// read as itself.
-    fn still_ours(&self) -> bool {
-        self.made.is_some_and(|made| {
-            identity::entry_id(self.parent, OsStr::new(&self.name)).is_ok_and(|now| now == made)
-        })
-    }
-}
-
-impl Drop for Staging<'_> {
-    fn drop(&mut self) {
-        if self.still_ours() {
-            let _ = self.parent.remove_dir_all(&self.name);
-        }
     }
 }
 
@@ -529,14 +536,15 @@ mod tests {
         assert_eq!(redact("no url here"), "no url here");
     }
 
-    /// A staging name taken by a link out of home, after the leftover was
-    /// cleared or after the run made and held its folder, is never cloned
-    /// through: the run refuses to make its folder at a taken name, and a
-    /// folder moved away while Git ran is not put in place. Nothing is
-    /// written outside home, and nothing lands under the target's name.
+    /// What another process can put at the target's name while a clone
+    /// runs, a link out of home or a real folder of its own, at each point
+    /// the run passes: right after the folder is made, after it is held and
+    /// before Git starts (the made folder moved aside), and after a failed
+    /// clone's folder is emptied and before its name is removed. Nothing is
+    /// written outside home, and nothing put there is changed or deleted.
     #[cfg(unix)]
     #[test]
-    fn a_staging_name_swapped_for_a_link_out_of_home_is_never_cloned_through() {
+    fn something_put_at_the_target_name_mid_clone_is_never_written_through_or_deleted() {
         let scratch = tempfile::tempdir().unwrap();
         let root = identity::canonical(scratch.path()).unwrap();
         let git = |cwd: &Path, args: &[&str]| {
@@ -570,50 +578,96 @@ mod tests {
                 &crate::root::wire(&bare),
             ],
         );
-        let source = CloneSource::parse(&format!("file://{}", bare.display())).unwrap();
+        let good = CloneSource::parse(&format!("file://{}", bare.display())).unwrap();
+        // The same folder name, from a repository that is not there.
+        let missing = root.join("gone/origin.git");
+        let failing = CloneSource::parse(&format!("file://{}", missing.display())).unwrap();
         let home = root.join("home");
         let projects = home.join("projects");
         std::fs::create_dir_all(&projects).unwrap();
         let outside = root.join("outside");
         std::fs::create_dir(&outside).unwrap();
+        let target = projects.join("origin");
+        let aside = projects.join("origin.moved");
 
-        for step in [Step::Cleared, Step::Held] {
-            let planted = std::cell::Cell::new(None::<String>);
-            let result = clone_with(
-                &source,
-                &projects,
-                &home,
-                STALL_LIMIT,
-                &|| false,
-                &mut |_| {},
-                &|at, parent, name| {
-                    if at != step {
-                        return;
+        #[derive(Clone, Copy, Debug)]
+        enum Planted {
+            Link,
+            Folder,
+        }
+        let cases = [
+            (Step::Made, &good, false),
+            (Step::Held, &good, true),
+            (Step::Held, &failing, false),
+            (Step::Emptied, &failing, false),
+        ];
+        for (step, source, succeeds) in cases {
+            for planted in [Planted::Link, Planted::Folder] {
+                let case = format!("{step:?} {planted:?} {}", source.url());
+                let result = clone_with(
+                    source,
+                    &projects,
+                    &home,
+                    STALL_LIMIT,
+                    &|| false,
+                    &mut |_| {},
+                    &|at, parent, name| {
+                        if at != step {
+                            return;
+                        }
+                        // The run's own folder leaves the name: a fresh one
+                        // is removed, a held or emptied one moved aside.
+                        if at == Step::Made {
+                            parent.remove_dir(name).unwrap();
+                        } else {
+                            parent.rename(name, parent, "origin.moved").unwrap();
+                        }
+                        match planted {
+                            Planted::Link => {
+                                std::os::unix::fs::symlink(&outside, projects.join(name)).unwrap()
+                            }
+                            Planted::Folder => {
+                                std::fs::create_dir(projects.join(name)).unwrap();
+                                std::fs::write(projects.join(name).join("mine.txt"), "mine")
+                                    .unwrap();
+                            }
+                        }
+                    },
+                );
+                assert_eq!(result.is_ok(), succeeds, "{case}: {result:?}");
+                assert_eq!(
+                    std::fs::read_dir(&outside).unwrap().count(),
+                    0,
+                    "{case} wrote outside home"
+                );
+                match planted {
+                    Planted::Link => assert!(
+                        std::fs::symlink_metadata(&target).unwrap().is_symlink(),
+                        "{case} removed the link"
+                    ),
+                    Planted::Folder => {
+                        let names: Vec<_> = std::fs::read_dir(&target)
+                            .unwrap()
+                            .map(|entry| entry.unwrap().file_name())
+                            .collect();
+                        assert_eq!(names, ["mine.txt"], "{case} changed the folder put there");
                     }
-                    if at == Step::Held {
-                        parent
-                            .rename(name, parent, format!("{name}.moved"))
-                            .unwrap();
-                    }
-                    std::os::unix::fs::symlink(&outside, projects.join(name)).unwrap();
-                    planted.set(Some(name.to_owned()));
-                },
-            );
-            assert!(
-                matches!(result, Err(CloneFailure::Io(_))),
-                "{step:?}: {result:?}"
-            );
-            assert_eq!(
-                std::fs::read_dir(&outside).unwrap().count(),
-                0,
-                "{step:?} wrote outside home"
-            );
-            assert!(
-                !projects.join("origin").exists(),
-                "{step:?} put something in place"
-            );
-            let name = planted.take().expect("the link was planted");
-            std::fs::remove_file(projects.join(&name)).unwrap();
+                }
+                if succeeds {
+                    // Git cloned into the folder the run held, where it was moved.
+                    assert!(aside.join(".git").is_dir(), "{case}");
+                } else if aside.exists() {
+                    // A failed clone's own folder, moved aside, is emptied.
+                    assert_eq!(std::fs::read_dir(&aside).unwrap().count(), 0, "{case}");
+                }
+                match planted {
+                    Planted::Link => std::fs::remove_file(&target).unwrap(),
+                    Planted::Folder => std::fs::remove_dir_all(&target).unwrap(),
+                }
+                if aside.exists() {
+                    std::fs::remove_dir_all(&aside).unwrap();
+                }
+            }
         }
     }
 }
