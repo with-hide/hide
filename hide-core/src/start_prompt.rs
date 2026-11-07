@@ -73,18 +73,22 @@ pub(crate) fn launched(
     }
 }
 
-/// How the pane's node starts `kind`'s program now (`Call::AgentInstalled`),
-/// asked before every start, since an update of the agent can move what its
-/// launcher runs: `None` when the program is not on the node's `PATH`.
+/// How the pane's node starts the program `program` now
+/// (`Call::AgentInstalled`), asked before every start, since an update of the
+/// agent can move what its launcher runs: `None` when the program is not on
+/// the node's `PATH`. `program` is the executable a definition starts the
+/// agent by ([`program_of`]), not the agent's kind: the node looks the name
+/// up on its `PATH`, and Cursor's kind (`cursor`) is not its program
+/// (`cursor-agent`), nor Kiro's (`kiro`) its first (`kiro-cli`).
 pub(crate) fn start_form(
     node: &dyn crate::node_access::NodeLink,
-    kind: &str,
+    program: &str,
     timeout: std::time::Duration,
 ) -> Result<Option<StartForm>, crate::node_access::LinkError> {
     crate::node_access::call_as::<Option<StartForm>>(
         node,
         hide_node_link::protocol::Call::AgentInstalled {
-            name: kind.to_owned(),
+            name: program.to_owned(),
         },
         timeout,
     )
@@ -93,28 +97,75 @@ pub(crate) fn start_form(
 /// How long a start waits for its node to say how the program starts.
 pub(crate) const START_FORM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// The file a start of `kind` names on the pane's node now ([`start_form`]),
-/// for a start that carries no first input, a Wake's, a fork's or a
-/// reopen's: on Windows the program npm's launcher runs, since PowerShell
-/// would find npm's `.ps1` by the name and Windows PowerShell 5.1 drops the
-/// quotes inside an argument it hands on (`--settings '{"key":true}'`).
-/// `None` where the node starts the program by its name, did not find it,
-/// or could not be asked, which is logged; the start then goes by its name.
-pub(crate) fn start_program(
+/// The executable the engine types for a start of `kind`: its definition's
+/// first (`Engine::start_program_name`), the name every question to a node
+/// about how the agent starts carries. `kind` itself where the engine holds
+/// no definition for it, which the node then does not find.
+pub(crate) fn program_of(engine: &dyn crate::engine::Engine, kind: &str) -> String {
+    engine
+        .start_program_name(kind)
+        .unwrap_or_else(|| kind.to_owned())
+}
+
+/// Why a start names its program by its name, not by a file the node read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ByName {
+    /// The node could not be asked, or did not answer: logged as
+    /// `start.form_unread`.
+    NodeUnanswered,
+    /// The node starts the program by its name: macOS and Linux, or a
+    /// Windows batch file that is not npm's launcher.
+    AsNamed,
+    /// The program is not on the node's `PATH`.
+    NotFound,
+}
+
+impl ByName {
+    /// The word a diagnostic records for it.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NodeUnanswered => "node_unanswered",
+            Self::AsNamed => "starts_by_name",
+            Self::NotFound => "not_found",
+        }
+    }
+}
+
+/// The file a start of `program` names on the pane's node now
+/// ([`start_form`]), for a start that carries no first input, a Wake's, a
+/// fork's, a reopen's or a restart's resume: on Windows the program npm's
+/// launcher runs, since PowerShell would find npm's `.ps1` by the name and
+/// Windows PowerShell 5.1 drops the quotes inside an argument it hands on
+/// (`--settings '{"key":true}'`). Where the node starts the program by its
+/// name, did not find it, or could not be asked (which is logged), the start
+/// goes by its name and the answer says which.
+pub(crate) fn start_program_file(
     node: &dyn crate::node_access::NodeLink,
-    kind: &str,
-) -> Option<crate::engine::StartProgram> {
-    let kind = hide_agent_adapter::canonical_kind(kind);
-    match start_form(node, kind, START_FORM_TIMEOUT) {
-        Ok(form) => form.and_then(|form| crate::engine::StartProgram::of(kind, &form)),
+    program: &str,
+) -> Result<crate::engine::StartProgram, ByName> {
+    match start_form(node, program, START_FORM_TIMEOUT) {
+        Ok(Some(form)) => crate::engine::StartProgram::of(program, &form).ok_or(ByName::AsNamed),
+        Ok(None) => Err(ByName::NotFound),
         Err(error) => {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_start", "kind": "start.form_unread",
-                "agent_kind": kind, "cause": error.to_string(),
+                "program": program, "cause": error.to_string(),
             }));
-            None
+            Err(ByName::NodeUnanswered)
         }
     }
+}
+
+/// The file a start of the `kind` agent names on the pane's node, if any:
+/// [`start_program_file`] of the program the engine types for `kind`
+/// ([`program_of`]), for a wake, a fork or a reopen, which hold a kind and
+/// not a program.
+pub(crate) fn start_program_of(
+    engine: &dyn crate::engine::Engine,
+    node: &dyn crate::node_access::NodeLink,
+    kind: &str,
+) -> Option<crate::engine::StartProgram> {
+    start_program_file(node, &program_of(engine, kind)).ok()
 }
 
 /// The UTF-16 units of the command line a start of `program` with these
@@ -201,7 +252,10 @@ pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::node_access::{LinkAnswer, LinkError, NodeLink};
 
     #[test]
     fn a_launched_prompt_uses_the_same_tab_width_as_typed_and_channel_input() {
@@ -287,5 +341,96 @@ mod tests {
             launched("codex", &[], &long, true, Some(&StartForm::Program)),
             Ok(Some(vec!["--".into(), long]))
         );
+    }
+
+    /// A node that answers every `Call::AgentInstalled` with `answer` and
+    /// keeps the program names it was asked about.
+    struct Asked {
+        answer: Result<serde_json::Value, ()>,
+        names: Mutex<Vec<String>>,
+    }
+
+    impl Asked {
+        fn new(answer: Result<serde_json::Value, ()>) -> Self {
+            Self {
+                answer,
+                names: Mutex::default(),
+            }
+        }
+
+        fn names(&self) -> Vec<String> {
+            self.names.lock().unwrap().clone()
+        }
+    }
+
+    impl NodeLink for Asked {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _: std::time::Duration,
+        ) -> Result<LinkAnswer, LinkError> {
+            let hide_node_link::protocol::Call::AgentInstalled { name } = call else {
+                panic!("the node was asked {call:?}");
+            };
+            self.names.lock().unwrap().push(name);
+            self.answer
+                .clone()
+                .map(LinkAnswer::Parsed)
+                .map_err(|()| LinkError::Unknown("the node did not answer".into()))
+        }
+    }
+
+    /// Issue 628: the node looks a name up on its `PATH`, so every question
+    /// about how an agent starts carries the definition's first executable,
+    /// not the agent's kind: Cursor's kind is `cursor` and its program
+    /// `cursor-agent`, Kiro's `kiro` and `kiro-cli`, Antigravity's
+    /// `antigravity` and `agy`.
+    #[test]
+    fn a_start_asks_its_node_about_the_definitions_first_executable_not_the_kind() {
+        let fake =
+            crate::engine::fake::FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let engine = fake.engine();
+        for (kind, program) in [
+            ("cursor", "cursor-agent"),
+            ("kiro", "kiro-cli"),
+            ("antigravity", "agy"),
+            ("claude", "claude"),
+            // An alias reads as the definition it names.
+            ("claude-code", "claude"),
+            // A kind no definition names is asked as it is.
+            ("unheard-of", "unheard-of"),
+        ] {
+            assert_eq!(program_of(engine.as_ref(), kind), program, "{kind}");
+            let node = Asked::new(Ok(serde_json::json!("program")));
+            assert!(start_program_of(engine.as_ref(), &node, kind).is_none());
+            assert_eq!(node.names(), [program], "{kind}");
+        }
+        // A node that names the file runs it under the program's name, which is
+        // what the engine names the program of a start by.
+        let direct = Asked::new(Ok(
+            serde_json::json!({"direct": {"program": "C:\\npm\\cursor-agent.js", "leading": ["a"]}}),
+        ));
+        let file = start_program_of(engine.as_ref(), &direct, "cursor").expect("the file is named");
+        assert_eq!(file.name, "cursor-agent");
+        assert_eq!(file.program, "C:\\npm\\cursor-agent.js");
+    }
+
+    /// Why a start went by the program's name is what a restart's resume
+    /// records beside `by_file`, so a pane whose resume went by name can be told
+    /// from one whose node did not answer.
+    #[test]
+    fn a_start_that_goes_by_the_programs_name_says_why() {
+        let why = |answer: Result<serde_json::Value, ()>| {
+            let node = Asked::new(answer);
+            start_program_file(&node, "claude").map_err(ByName::as_str)
+        };
+        assert_eq!(why(Err(())), Err("node_unanswered"));
+        assert_eq!(why(Ok(serde_json::json!("program"))), Err("starts_by_name"));
+        assert_eq!(why(Ok(serde_json::json!("batch"))), Err("starts_by_name"));
+        assert_eq!(why(Ok(serde_json::Value::Null)), Err("not_found"));
+        let file = why(Ok(
+            serde_json::json!({"direct": {"program": "p", "leading": []}}),
+        ));
+        assert_eq!(file.unwrap().program, "p");
     }
 }

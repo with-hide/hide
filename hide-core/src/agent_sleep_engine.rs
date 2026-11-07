@@ -426,7 +426,7 @@ pub(crate) fn start_agent(
         args: request.args.clone(),
         codex_daemon: request.codex_daemon,
         wakes: true,
-        program: crate::start_prompt::start_program(node, &request.kind),
+        program: crate::start_prompt::start_program_of(engine, node, &request.kind),
     }) {
         Ok(start) => start,
         // A Codex whose daemon Hide has not read answers its own code
@@ -1324,6 +1324,67 @@ mod tests {
             let starts = fake.calls_of("start_agent");
             assert_eq!(starts.len(), 1);
             assert_eq!(starts[0]["program"], named);
+        }
+    }
+
+    /// Issue 628: the node looks the program up on its `PATH`, so a Wake of an
+    /// agent whose kind is not its program (Cursor `cursor`, `cursor-agent`;
+    /// Kiro `kiro`, `kiro-cli`) asks about the program, and names the file it
+    /// answers with, where the kind would have named a program the node does
+    /// not have.
+    #[test]
+    fn a_wake_asks_its_node_about_the_definitions_first_executable() {
+        struct Starts(Mutex<Vec<String>>);
+        impl NodeLink for Starts {
+            fn call(
+                &self,
+                call: Call,
+                _: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                let Call::AgentInstalled { name } = call else {
+                    panic!("the node was asked {call:?}");
+                };
+                let answer = match name.as_str() {
+                    "cursor-agent" => {
+                        json!({"direct": {"program": "C:\\cursor-agent.exe", "leading": []}})
+                    }
+                    "kiro-cli" => json!({"direct": {"program": "C:\\kiro-cli.exe", "leading": []}}),
+                    // Only what the agents are called by on the node.
+                    _ => Value::Null,
+                };
+                self.0.lock().unwrap().push(name);
+                Ok(crate::node_access::LinkAnswer::Parsed(answer))
+            }
+        }
+        for (kind, program, exe) in [
+            ("cursor", "cursor-agent", "C:\\cursor-agent.exe"),
+            ("kiro", "kiro-cli", "C:\\kiro-cli.exe"),
+        ] {
+            let fake = FakeEngine::start(|method, _| match method {
+                "pane_processes" => process_info(42, 42),
+                "start_agent" => started(),
+                "replace_outdated_holder" => reply(false),
+                other => panic!("unexpected {other}"),
+            });
+            let node = Starts(Mutex::default());
+            let outcome = start_agent(
+                fake.engine().as_ref(),
+                &node,
+                &WakeRequest {
+                    codex_daemon: Default::default(),
+                    pane_id: "w1:p1".into(),
+                    kind: kind.into(),
+                    name: "one".into(),
+                    mode: WakeMode::Resume,
+                    args: vec!["--resume".into(), "abc".into()],
+                    cwd: None,
+                    session_id: None,
+                },
+            );
+            assert_eq!(outcome, WakeOutcome::Started, "{kind}");
+            assert_eq!(*node.0.lock().unwrap(), [program], "{kind}");
+            let starts = fake.calls_of("start_agent");
+            assert_eq!(starts[0]["program"], json!([exe, []]), "{kind}");
         }
     }
 
