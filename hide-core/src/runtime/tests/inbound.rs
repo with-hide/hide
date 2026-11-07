@@ -145,7 +145,7 @@ fn the_core_row_names_its_machine_and_only_a_node_row_dials_in() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()
@@ -203,7 +203,7 @@ fn a_link_is_refused_for_this_machine_a_dialed_device_or_a_live_node() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()
@@ -362,7 +362,7 @@ fn only_a_connected_node_that_dialed_in_is_a_linked_machine() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()
@@ -506,7 +506,7 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()

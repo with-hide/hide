@@ -40,6 +40,8 @@ mod detail;
 mod device_catalog;
 #[path = "tests/device_kit.rs"]
 mod device_kit;
+#[path = "tests/device_names.rs"]
+mod device_names;
 #[path = "tests/device_sleep.rs"]
 mod device_sleep;
 #[path = "tests/device_worktrees.rs"]

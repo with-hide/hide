@@ -2868,7 +2868,7 @@ fn device_connect_statistics_include_early_install_failure() {
     runtime.dispatch_json(
         &serde_json::to_vec(&serde_json::json!({
             "schema_version": SCHEMA_VERSION, "kind": "register_device",
-            "payload": { "id": DEVICE, "label": "private label", "ssh_alias": "private-host" },
+            "payload": { "label": "private label", "ssh_alias": "private-host" },
         }))
         .unwrap(),
     );
