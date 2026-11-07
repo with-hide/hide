@@ -1582,7 +1582,7 @@ fn claude_sleeps_and_wakes_resuming(outdated: bool) {
     }
     let slept = record();
     let slept_holder = slept.holder.expect("the slept pane's holder is written in");
-    let layout = serde_json::to_value(engine.pane_layout(WAIT, &pane).unwrap()).unwrap();
+    let layout = engine.pane_layout(WAIT, &pane).unwrap();
     let woke = start_agent(
         engine,
         &node,
@@ -1621,7 +1621,7 @@ fn claude_sleeps_and_wakes_resuming(outdated: bool) {
     assert_eq!(woken.len(), 1, "one agent runs: {woken:?}");
     assert_eq!(woken[0].pane_id, pane, "the agent woke in its own pane");
     assert_eq!(
-        serde_json::to_value(engine.pane_layout(WAIT, &pane).unwrap()).unwrap(),
+        engine.pane_layout(WAIT, &pane).unwrap(),
         layout,
         "the pane kept its place"
     );

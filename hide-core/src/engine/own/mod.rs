@@ -2448,6 +2448,12 @@ mod tests {
         /// does. The time each ask was given, in order.
         processes_held: (Mutex<bool>, Condvar),
         processes_within: Mutex<Vec<Duration>>,
+        /// Panes whose holder runs another build's, by the start it is.
+        outdated: Mutex<BTreeMap<String, u64>>,
+        /// What the next replacement answers instead of replacing.
+        replace_refusal: Mutex<Option<HolderError>>,
+        /// Each replacement asked, with the start it consumes.
+        replaced: Mutex<Vec<(String, u64)>>,
     }
 
     impl Holders {
@@ -2616,6 +2622,27 @@ mod tests {
             } else {
                 Ok(hide_node_link::holders::HolderReservation { incarnation })
             }
+        }
+
+        fn outdated(&self, pane: &str) -> Result<Option<u64>, HolderError> {
+            Ok(self.outdated.lock().unwrap().get(pane).copied())
+        }
+
+        fn replace(
+            &self,
+            start: &HolderStart,
+            previous: u64,
+            request: hide_node_link::holders::HolderRequest,
+        ) -> Result<hide_node_link::holders::HolderReservation, HolderError> {
+            if let Some(refusal) = self.replace_refusal.lock().unwrap().take() {
+                return Err(refusal);
+            }
+            self.replaced
+                .lock()
+                .unwrap()
+                .push((start.pane.clone(), previous));
+            self.outdated.lock().unwrap().remove(&start.pane);
+            self.reserve(start, Some(previous), request)
         }
 
         fn start_reserved(
@@ -2836,6 +2863,7 @@ mod tests {
     }
 
     mod creation;
+    mod holder_replace;
     mod rules_recovery;
 
     /// What a placement saw: each call, in order, with whether the pane's

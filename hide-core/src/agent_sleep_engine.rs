@@ -689,6 +689,7 @@ mod tests {
         ] {
             let expected = args.clone();
             let fake = FakeEngine::start(move |method, params| match method {
+                "replace_outdated_holder" => reply(false),
                 "pane_processes" => process_info(42, 42),
                 "start_agent" => {
                     assert_eq!(params["kind"], canonical);
@@ -716,8 +717,44 @@ mod tests {
                 WakeOutcome::Started,
                 "{kind}"
             );
-            assert_eq!(fake.methods(), ["pane_processes", "start_agent"]);
+            // The pane's holder is brought to this build before anything
+            // is read of its shell or typed into it.
+            assert_eq!(
+                fake.methods(),
+                ["replace_outdated_holder", "pane_processes", "start_agent"]
+            );
         }
+    }
+
+    /// with-hide/hide-private#646: a holder the engine could not replace
+    /// does not stop the wake, which goes on in the pane as it is.
+    #[test]
+    fn a_wake_whose_holder_was_not_replaced_still_starts_the_agent() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "replace_outdated_holder" => refused("holder_start_failed", "the holder did not start"),
+            "pane_processes" => process_info(42, 42),
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        let outcome = start_agent(
+            fake.engine().as_ref(),
+            &hide_node::Local::of_process(),
+            &WakeRequest {
+                pane_id: "w1:p1".into(),
+                name: "wake".into(),
+                kind: "claude".into(),
+                mode: WakeMode::Resume,
+                args: vec!["--resume".into(), "session".into()],
+                cwd: None,
+                session_id: None,
+                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            },
+        );
+        assert_eq!(outcome, WakeOutcome::Started);
+        assert_eq!(
+            fake.methods(),
+            ["replace_outdated_holder", "pane_processes", "start_agent"]
+        );
     }
 
     #[test]
@@ -1201,6 +1238,7 @@ mod tests {
     #[test]
     fn a_refused_wake_names_a_plain_reason_and_keeps_the_engine_s_words_for_the_log() {
         let fake = FakeEngine::start(|method, _| match method {
+            "replace_outdated_holder" => reply(false),
             "pane_processes" => process_info(42, 42),
             "start_agent" => refused("agent_name_taken", "agent name one is already used"),
             // Another agent holds the name, so reading it changes nothing.
@@ -1263,6 +1301,7 @@ mod tests {
             (json!("program"), Value::Null),
         ] {
             let fake = FakeEngine::start(|method, _| match method {
+                "replace_outdated_holder" => reply(false),
                 "pane_processes" => process_info(42, 42),
                 "start_agent" => started(),
                 other => panic!("unexpected {other}"),
