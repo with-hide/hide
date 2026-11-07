@@ -1,20 +1,30 @@
+use hided::role::Role;
+
 /// How long the process waits, once its roles ended, for blocking work
 /// still running before it exits.
 const EXIT_WITHIN: std::time::Duration = std::time::Duration::from_secs(1);
 
 fn main() {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    // A pane's entry point becomes its shell in this same process. In
-    // particular it must not acquire a daemon's owner watch or load state.
-    if args.first().is_some_and(|arg| arg == "shell-exec") {
-        match hided::shell_exec::run(&args[1..]) {
+    // Read before anything runs: an argument no role names is refused here,
+    // before an owner watch, a state folder or a log is touched.
+    let role = match hided::role::parse(&args) {
+        // A pane's entry point becomes its shell in this same process. In
+        // particular it must not acquire a daemon's owner watch or load
+        // state.
+        Ok(Role::ShellExec(words)) => match hided::shell_exec::run(words) {
             Ok(never) => match never {},
             Err(error) => {
                 eprintln!("shell-exec: {error}");
                 std::process::exit(2);
             }
+        },
+        Ok(role) => role,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
         }
-    }
+    };
     // Taken before daemon-role work, as every cooperative child takes it: a
     // starter that passes an owner channel (the web e2e fixture) ends this
     // daemon and what it started by ending itself, even when it is killed.
@@ -27,7 +37,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let result = run(&args);
+    let result = run(role);
     // Before every exit below, so the records queued last reach the log.
     hide_core::diagnostics::drain();
     // After `run` has dropped the runtime, and with it the core.
@@ -43,38 +53,48 @@ fn main() {
     }
 }
 
-fn run(args: &[std::ffi::OsString]) -> Result<(), String> {
-    // The node role on a device reads no daemon environment and opens no
-    // state folder: it answers its link until the channel closes.
-    if args.first().is_some_and(|arg| arg == "node") {
-        return hided::node_cli::run(&args[1..]);
-    }
-    // The attach role a node on another machine runs here over SSH: it
-    // pipes the node's channel to the core already running on this machine
-    // and starts none.
-    if args.first().is_some_and(|arg| arg == "attach") {
-        return hided::attach::run(&args[1..]);
-    }
-    // What the login item of a core moved here runs: its log kept within its
-    // limit first, then the daemon below.
-    if args.first().is_some_and(|arg| arg == "core-login") {
-        hided::login_item::before_core_at_login();
-    }
-    // A step of a core move run here over SSH by the machine driving it.
-    if args.first().is_some_and(|arg| arg == "core-move") {
-        return hided::core_move::target::run(&args[1..]);
-    }
-    // The update of the core here to this build, run over SSH by a node of
-    // this build.
-    if args.first().is_some_and(|arg| arg == "core-update") {
-        return hided::core_update::run(&args[1..]);
-    }
-    if args.first().is_some_and(|arg| arg == "--open-helper") {
-        // Only Unix supervises a file opener through this mode.
-        #[cfg(unix)]
-        return hide_node::opener::run_opener_helper(args);
-        #[cfg(not(unix))]
-        return Err("--open-helper is the Unix opener supervisor's mode".into());
+fn run(role: Role<'_>) -> Result<(), String> {
+    match role {
+        // Answered before the environment is read: neither opens a state
+        // folder, on any machine.
+        Role::Version => {
+            println!("{}", hided::role::version_line());
+            return Ok(());
+        }
+        Role::Help => {
+            println!("{}", hided::role::USAGE);
+            return Ok(());
+        }
+        // `main` hands it its shell before the owner watch.
+        Role::ShellExec(_) => {
+            return Err("shell-exec runs before the daemon's roles".into());
+        }
+        // The node role on a device reads no daemon environment and opens no
+        // state folder: it answers its link until the channel closes.
+        Role::Node(words) => return hided::node_cli::run(words),
+        // The attach role a node on another machine runs here over SSH: it
+        // pipes the node's channel to the core already running on this
+        // machine and starts none.
+        Role::Attach(words) => return hided::attach::run(words),
+        // A step of a core move run here over SSH by the machine driving it.
+        Role::CoreMove(words) => return hided::core_move::target::run(words),
+        // The update of the core here to this build, run over SSH by a node
+        // of this build.
+        Role::CoreUpdate(words) => return hided::core_update::run(words),
+        Role::OpenHelper(words) => {
+            // Only Unix supervises a file opener through this mode.
+            #[cfg(unix)]
+            return hide_node::opener::run_opener_helper(words);
+            #[cfg(not(unix))]
+            {
+                let _ = words;
+                return Err("--open-helper is the Unix opener supervisor's mode".into());
+            }
+        }
+        // What the login item of a core moved here runs: its log kept within
+        // its limit first, then the daemon below.
+        Role::CoreLogin => hided::login_item::before_core_at_login(),
+        Role::Daemon => {}
     }
     let mut env = hided::env::load().map_err(|errors| {
         errors
@@ -92,7 +112,7 @@ fn run(args: &[std::ffi::OsString]) -> Result<(), String> {
         ));
     }
     env.build = Some(build);
-    if args.first().is_some_and(|arg| arg == "core-login") {
+    if role == Role::CoreLogin {
         env.starter_program = Some(
             std::env::current_exe().map_err(|error| format!("this hided has no path: {error}"))?,
         );
