@@ -11,6 +11,10 @@ use super::{
     RETENTION_MS, WATCH_LIMIT,
 };
 
+/// The bells one letter has: the doorbell types it at most this many
+/// times (`Letter::reserve_bell`).
+pub(crate) const BELLS: u8 = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -140,11 +144,21 @@ pub struct Letter {
     /// build drops the field at its next save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bell_failure: Option<BellFailure>,
+    /// The bells whose result the store recorded: the doorbell rings a
+    /// letter one bell at a time and records how each ended (typed, failed,
+    /// or held after its reservation) before it reserves the next, so a
+    /// result ends the bell reserved last. Fewer than `bell_attempts` while
+    /// a bell is on its way. Null on a letter an earlier build rang, which
+    /// kept no such count; an older build drops the field at its next save.
+    #[serde(default)]
+    pub bell_ended: Option<u8>,
 }
 
 /// A bell that failed: the doorbell's code for it, and whether the engine
 /// had been asked to type the line, so it may be in the agent's input
-/// (`docs/delivery.md`, Letters while the agent works).
+/// (`docs/delivery.md`, Letters while the agent works). A failure that typed
+/// nothing after one that may have keeps that one's `maybe_typed` and time:
+/// the line it may have typed is still where it was.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BellFailure {
     pub code: String,
@@ -330,8 +344,26 @@ impl Letter {
     pub(crate) fn attempts(&self) -> u8 {
         // Legacy successes have an unknown total. Do not infer spare attempts
         // from the old boolean and repeat an already unbounded external effect.
-        self.bell_attempts
-            .unwrap_or(if self.bell_sent { 3 } else { self.bell_errors })
+        self.bell_attempts.unwrap_or(if self.bell_sent {
+            BELLS
+        } else {
+            self.bell_errors
+        })
+    }
+
+    /// Whether a bell is on its way: reserved, and its result not yet
+    /// recorded. A letter an earlier build rang has no record of it.
+    pub(crate) fn bell_in_flight(&self) -> bool {
+        self.bell_ended.is_some_and(|ended| ended < self.attempts())
+    }
+
+    /// Whether the letter has no bell left and the result of its last one
+    /// is recorded: the one fact the spent-bell judgment
+    /// (`Runtime::drive_spent_bells`) and the unconfirmed-input notice
+    /// (`Runtime::typed_input_work`) read, so neither judges a last bell
+    /// still on its way.
+    pub(crate) fn bells_spent(&self) -> bool {
+        self.bell_ended.is_some_and(|ended| ended >= BELLS)
     }
 
     /// Spends one of the letter's three bells on `line`, which the doorbell
@@ -352,7 +384,7 @@ impl Letter {
         if self.handed {
             return Err("letter_handed".into());
         }
-        if self.attempts() >= 3 {
+        if self.attempts() >= BELLS {
             return Err("doorbell_attempt_limit".into());
         }
         let attempt = self.attempts() + 1;
@@ -430,13 +462,16 @@ impl Ledger {
                 )
                 || letter.body.len() > BODY_LIMIT
                 || letter.body.trim().is_empty()
-                || letter.bell_errors > 3
+                || letter.bell_errors > BELLS
                 || letter.bell_turn.as_ref().is_some_and(|turn| {
                     !hide_agent_hooks::delivery::valid_sha256_digest(&turn.session)
                         || !hide_agent_hooks::delivery::valid_prompt_digest(&turn.digest)
                         || letter.recipient.session.as_ref() != Some(&turn.session)
                 })
-                || letter.bell_attempts.is_some_and(|attempts| attempts > 3)
+                || letter.bell_attempts.is_some_and(|attempts| attempts > BELLS)
+                || letter
+                    .bell_ended
+                    .is_some_and(|ended| ended > letter.attempts())
                 || letter
                     .bell_failure
                     .as_ref()

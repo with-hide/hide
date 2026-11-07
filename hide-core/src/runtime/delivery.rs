@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::delivery::doorbell::Turn;
-use crate::delivery::ledger::Ledger;
+use crate::delivery::ledger::{BELLS, Ledger};
 use crate::delivery::mailbox::Exchange;
 use crate::delivery::worker::{Authority, Client, Prepared, PreparedHuman};
 use crate::delivery::{Actor, Command};
@@ -2095,9 +2095,9 @@ impl Runtime {
                         && letter.state == crate::delivery::ledger::State::Pending
                         && match reserved {
                             Some(attempt) => {
-                                (1..=3).contains(&attempt) && letter.attempts() == attempt
+                                (1..=BELLS).contains(&attempt) && letter.attempts() == attempt
                             }
-                            None => letter.attempts() < 3,
+                            None => letter.attempts() < BELLS,
                         }
                         && letter.within_deadline(&ledger.node_clocks, now)
                 })

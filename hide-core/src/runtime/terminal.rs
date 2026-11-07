@@ -49,8 +49,6 @@ impl TerminalRoutes for NoTerminals {
     fn terminals_unstarted(&self, _device: &str, _reason: &str) {}
 }
 
-/// Whether a pane in `state` may be asked to attach: one with a session, or
-/// on its way to one, or failed and waiting for the operator, is not.
 /// The attach state of a pane its node has said nothing of yet.
 fn idle_terminal_state() -> PaneTerminalState {
     PaneTerminalState {
@@ -64,6 +62,8 @@ fn idle_terminal_state() -> PaneTerminalState {
     }
 }
 
+/// Whether a pane in `state` may be asked to attach: one with a session, or
+/// on its way to one, or failed and waiting for the operator, is not.
 pub(super) fn attach_allowed(state: &str) -> bool {
     !matches!(
         state,

@@ -244,6 +244,7 @@ pub(crate) fn send(
         input_noticed: 0,
         input_noticed_at_unix_ms: 0,
         bell_failure: None,
+        bell_ended: Some(0),
         // A letter to a machine with a clock waits on that clock from now;
         // the store gives one to a machine a letter waits on.
         intake_from: ledger
@@ -671,7 +672,7 @@ fn bell_pending(ledger: &Ledger, letter: &Letter, now: u64) -> bool {
     letter.state == State::Pending
         && !letter.handed
         && letter.within_deadline(&ledger.node_clocks, now)
-        && letter.attempts() < 3
+        && letter.attempts() < super::ledger::BELLS
         && super::doorbell::bell_target(&letter.recipient.kind)
 }
 

@@ -770,18 +770,34 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                         letter.bell_failure = None;
                     }
                     Rang::Failed { code, maybe_typed } => {
-                        letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
+                        letter.bell_errors = letter
+                            .bell_errors
+                            .saturating_add(1)
+                            .min(super::ledger::BELLS);
+                        // A failure that typed nothing leaves where it was a
+                        // line an earlier lost bell may have typed: the next
+                        // bell reads the composer for it (`doorbell::held_line`)
+                        // and the spent judgment waits for its record from
+                        // when it was typed.
+                        let lost = letter
+                            .bell_failure
+                            .as_ref()
+                            .filter(|failure| failure.maybe_typed && !maybe_typed)
+                            .map(|failure| failure.at_unix_ms);
                         letter.bell_failure = Some(super::ledger::BellFailure {
                             code: code.to_owned(),
-                            maybe_typed,
-                            at_unix_ms: now,
+                            maybe_typed: maybe_typed || lost.is_some(),
+                            at_unix_ms: lost.unwrap_or(now),
                         });
                     }
                 }
+                // The doorbell records each bell's result before it reserves
+                // the next, so this result ends the bell reserved last.
+                letter.bell_ended = Some(letter.attempts());
             }
             // Published either way: the core waits for the recipient's
-            // record of a typed bell (`delivery::typed`), and judges a failed
-            // one whose letter has no bell left (`Runtime::bell_failures`).
+            // record of a typed bell (`delivery::typed`), and judges a letter
+            // whose last bell ended (`Runtime::drive_spent_bells`).
             return Ok((Value::Null, true));
         }
         Effect::InputNoticed { id, attempt } => {

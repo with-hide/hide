@@ -71,7 +71,7 @@ pub(crate) struct Resubmit {
 /// Where an unconfirmed input stands with the fresh session read asked
 /// before its verdict.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reread {
+pub(super) enum Reread {
     /// Asked and given its time, or not needed: judge the input.
     Settled,
     /// Not asked for this typing yet.
@@ -358,6 +358,12 @@ impl Runtime {
             if self.bell_line_recorded(letter) {
                 continue;
             }
+            // Judged once the result of its last bell is recorded: until
+            // then its attempts and its last typing are different bells'.
+            if letter.bell_in_flight() {
+                open.insert(letter.id.clone());
+                continue;
+            }
             let standing = typed::standing(&input, Some(observation), now);
             self.note_verdict(&mut verdicts, &letter.id, input.attempts, standing);
             match standing {
@@ -382,7 +388,11 @@ impl Runtime {
                 }
                 Reread::Wait => continue,
             }
-            if !typed::notice_due(&input) {
+            // A letter whose bells are spent ends undelivered with its own
+            // letter to the sender, the only one it gets for its last bell.
+            if !typed::notice_due(&input)
+                || self.spent_bells_tell(letter, &observation.actor.pane_id)
+            {
                 continue;
             }
             let Some(target) = self.observed_sender(&letter.sender) else {
@@ -493,7 +503,7 @@ impl Runtime {
     /// fresh read of its agent's session that comes before the verdict
     /// (`typed::REREAD_WAIT_MS`). A device's pane is read on its own machine
     /// on its state changes alone, so it is judged at once.
-    fn reread(&self, id: &str, attempts: u8, pane_id: &str, now: u64) -> Reread {
+    pub(super) fn reread(&self, id: &str, attempts: u8, pane_id: &str, now: u64) -> Reread {
         if crate::address::is_device_scoped(pane_id) {
             return Reread::Settled;
         }
@@ -723,7 +733,7 @@ impl Runtime {
             else {
                 continue;
             };
-            if self.bell_line_recorded(letter) {
+            if self.bell_line_recorded(letter) || letter.bell_in_flight() {
                 continue;
             }
             let Standing::Unconfirmed { since } =

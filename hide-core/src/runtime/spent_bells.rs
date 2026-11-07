@@ -6,12 +6,16 @@
 //! one letter from `hide:input` naming the recipient, its pane, why and what
 //! to do now.
 //!
-//! A bell is not taken when it typed nothing, or when the agent rested the
-//! record wait (`typed::RECORD_WAIT_MS`) since the last bell that was or may
-//! have been typed and recorded none of them. An agent whose record Hide
-//! cannot hear (hooks not connected) is never judged here: its sender was
-//! already told the input cannot be confirmed, and the letter waits for
-//! `hide inbox` as before.
+//! A letter is judged only once the result of its last bell is recorded
+//! (`Letter::bells_spent`), never while that bell is on its way. A bell is
+//! not taken when it typed nothing and the agent rests, or when the agent
+//! rested the record wait (`typed::RECORD_WAIT_MS`) since the last bell
+//! that was or may have been typed, recorded none of them, and a fresh read
+//! of its session found none either. An agent whose record Hide cannot hear
+//! (hooks not connected) is never judged here: its sender is told the input
+//! cannot be confirmed, and the letter waits for `hide inbox` as before.
+//! The sender of a letter judged here hears of it only from here
+//! (`Runtime::spent_bells_tell`), not from the unconfirmed-input notice too.
 //!
 //! What is owed is memory: the store ends the letter on its next pass
 //! (`Runtime::delivery_undeliverable`), and the note's intent,
@@ -25,11 +29,10 @@ use serde_json::json;
 
 use super::Runtime;
 use super::hide_notes::{Note, NoteKind};
-use crate::delivery::ledger::{Letter, State};
+use super::typed_input::Reread;
+use crate::agent_state::AgentActivity;
+use crate::delivery::ledger::{BELLS, Letter, State};
 use crate::delivery::typed::{self, Standing, TypedInput};
-
-/// The bells one letter has (`Ledger::reserve_bell`).
-const BELLS: u8 = 3;
 
 #[derive(Default)]
 pub(in crate::runtime) struct SpentBells {
@@ -102,15 +105,20 @@ impl Runtime {
         self.note_spent_bells(&ledger);
     }
 
+    /// Whether this judgment, not the unconfirmed-input notice
+    /// (`Runtime::typed_input_work`), tells the sender of `letter`, rung in
+    /// `pane`, what became of a bell that was typed: its last bell ended
+    /// (`Letter::bells_spent`) and its recipient's record can be heard. An
+    /// agent whose record cannot be heard gets the notice that says so.
+    pub(super) fn spent_bells_tell(&self, letter: &Letter, pane: &str) -> bool {
+        letter.bells_spent() && self.input_source(&letter.recipient.kind, pane).is_ok()
+    }
+
     /// Why no bell can bring `letter` any more, or `None` while one can,
-    /// one may still be taken, or its record cannot be heard.
+    /// one is on its way or may still be taken, or its record cannot be
+    /// heard.
     fn spent_bell(&self, letter: &Letter, now: u64) -> Option<String> {
-        // A letter an earlier build counted no bells for has an unknown total
-        // (`Letter::attempts`), and its bells may have been typed.
-        let spent = letter
-            .bell_attempts
-            .is_some_and(|attempts| attempts >= BELLS);
-        if letter.state != State::Pending || letter.handed || !spent {
+        if letter.state != State::Pending || letter.handed || !letter.bells_spent() {
             return None;
         }
         let observation = self
@@ -129,17 +137,27 @@ impl Runtime {
             )
             .max();
         let Some(typed_at) = typed_at else {
-            // No bell was typed: each failed or was held before typing.
-            return Some(
-                failure.map_or_else(|| NOT_TYPED.to_owned(), |failure| failure.code.clone()),
-            );
+            // No bell was typed: each ended failed, or held after its
+            // reservation, and the last says why. An agent that works now
+            // may still take the letter from a hook of its turn.
+            let resting = observation
+                .projected_turn()
+                .is_some_and(|projected| projected.turn.activity != AgentActivity::Working);
+            return failure
+                .filter(|_| resting)
+                .map(|failure| failure.code.clone());
         };
         let reason =
             failure.map_or_else(|| NOT_RECORDED.to_owned(), |failure| failure.code.clone());
-        if self
-            .input_source(&letter.recipient.kind, &observation.actor.pane_id)
-            .is_err()
+        if !self.spent_bells_tell(letter, &observation.actor.pane_id)
             || self.bell_line_recorded(letter)
+        {
+            return None;
+        }
+        // A typed bell's letter waits for the fresh session read the
+        // unconfirmed-input judgment asks once its record wait ran out.
+        if letter.bell_typed_at_unix_ms.is_some()
+            && self.reread(&letter.id, BELLS, &observation.actor.pane_id, now) != Reread::Settled
         {
             return None;
         }
@@ -228,9 +246,6 @@ impl Runtime {
 
 /// The reason of a letter whose bells were typed and none recorded.
 const NOT_RECORDED: &str = "not_recorded";
-/// The reason of a letter none of whose bells was typed, with no failure
-/// recorded: each was held after its reservation.
-const NOT_TYPED: &str = "not_typed";
 
 /// What Hide tells a sender whose letter no bell can bring: who, in which
 /// pane, why in plain words with the doorbell's code (`delivery::doorbell`,

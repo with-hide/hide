@@ -1145,7 +1145,7 @@
                     ]
                 },
                 "BellFailure": {
-                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works).",
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
                     "properties": {
                         "at_unix_ms": {
                             "format": "uint64",
@@ -1221,6 +1221,16 @@
                         },
                         "bell_attempts": {
                             "default": null,
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "bell_ended": {
+                            "default": null,
+                            "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
                             "format": "uint8",
                             "minimum": 0.0,
                             "type": [
@@ -1426,7 +1436,8 @@
                         "bell_typed_at_unix_ms",
                         "bell_route",
                         "input_noticed",
-                        "input_noticed_at_unix_ms"
+                        "input_noticed_at_unix_ms",
+                        "bell_ended"
                     ],
                     "type": "object"
                 },
@@ -1622,7 +1633,7 @@
                     ]
                 },
                 "BellFailure": {
-                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works).",
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
                     "properties": {
                         "at_unix_ms": {
                             "format": "uint64",
@@ -1748,6 +1759,16 @@
                 },
                 "bell_attempts": {
                     "default": null,
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "bell_ended": {
+                    "default": null,
+                    "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
                     "format": "uint8",
                     "minimum": 0.0,
                     "type": [
@@ -1953,7 +1974,8 @@
                 "bell_typed_at_unix_ms",
                 "bell_route",
                 "input_noticed",
-                "input_noticed_at_unix_ms"
+                "input_noticed_at_unix_ms",
+                "bell_ended"
             ],
             "title": "Letter",
             "type": "object"
@@ -5348,7 +5370,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:37ded906730a2b5397e5c591f865c64f99c673ec4b4494ead20c1f8b02dc3a3c",
+    "digest": "sha256:ca649aec7df1904f94b60d4e293945f02f5bf8080a688405f5c32846b36e44e6",
     "envelopes": {
         "agent": {
             "answer": "value",
