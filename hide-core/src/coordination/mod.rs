@@ -272,6 +272,17 @@ fn spawn_cap(
 /// and a trust question at startup holds it longer.
 pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How long a spawn waits for the pass it asked of its child's machine's
+/// kit before it makes anything (`runtime::start_hook`). A pass asks Codex
+/// to trust Hide's hooks, which is bounded at 19 s
+/// (`hide_agent_hooks::codex_trust`), and reads each agent once; a kit that
+/// is still busy past this, waiting on another kit's account lock or on a
+/// slow device, has the spawn refused so the same command asks again,
+/// rather than held for the 90 s that lock allows. The `hide` CLI's spawn
+/// exchange adds it to its own wait, so this refusal arrives before the
+/// exchange gives up.
+pub const HOOK_PASS_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past
 /// this failed and was left (a retry under a new intent is its own spawn),

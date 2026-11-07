@@ -3768,6 +3768,9 @@ pub enum MemoryStartFailureCode {
     ShellStarting,
     /// The agent's start ended at the shell without the agent, twice.
     AgentNotStarted,
+    /// Hide's hook for the agent is not in place where it would run; that
+    /// machine's row in Settings says why.
+    AgentHookNotReady,
     CardNotProcessed,
     /// Any other answer: the device, the lock, the engine's refusal.
     Other,
@@ -3795,6 +3798,8 @@ impl MemoryStartFailure {
             (code, _) => Self {
                 code: if code == "agent_not_started" {
                     MemoryStartFailureCode::AgentNotStarted
+                } else if crate::runtime::start_hook::HookRefusal::is_code(code) {
+                    MemoryStartFailureCode::AgentHookNotReady
                 } else {
                     MemoryStartFailureCode::Other
                 },
@@ -8467,6 +8472,7 @@ mod wire_enum_tests {
         let start_failures = [
             MemoryStartFailureCode::ShellStarting,
             MemoryStartFailureCode::AgentNotStarted,
+            MemoryStartFailureCode::AgentHookNotReady,
             MemoryStartFailureCode::CardNotProcessed,
             MemoryStartFailureCode::Other,
         ];
@@ -8475,6 +8481,7 @@ mod wire_enum_tests {
                 MemoryStartFailureCode::ShellStarting
                 | MemoryStartFailureCode::CardNotProcessed
                 | MemoryStartFailureCode::AgentNotStarted
+                | MemoryStartFailureCode::AgentHookNotReady
                 | MemoryStartFailureCode::Other => {}
             }
         }
@@ -10165,6 +10172,7 @@ mod wire_enum_tests {
             &[
                 DeskJobFailure::DeviceUnavailable,
                 DeskJobFailure::AgentNotInstalled,
+                DeskJobFailure::AgentHookNotReady,
                 DeskJobFailure::BranchInUse,
                 DeskJobFailure::ProjectUnavailable,
                 DeskJobFailure::AlreadyStarted,
