@@ -1438,7 +1438,16 @@ mod tests {
             !devices.is_empty(),
             "the copy has no dialed device to rename"
         );
-        let projects = |core: &Value| core["workspace_registrations"].as_array().unwrap().len();
+        let projects = |core: &Value| -> Vec<(Value, Value)> {
+            let mut projects: Vec<(Value, Value)> = core["workspace_registrations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|project| (project["device_id"].clone(), project["path"].clone()))
+                .collect();
+            projects.sort_by_key(|project| project.1.to_string() + &project.0.to_string());
+            projects
+        };
         let letters = |ledger: &Value| -> Vec<(String, Value, Value)> {
             ledger["letters"]
                 .as_array()
@@ -1466,6 +1475,7 @@ mod tests {
             .iter()
             .map(|(id, _)| (id.clone(), cards(state, id)))
             .collect();
+        let core_cards = cards(state, node.as_str());
 
         let outcome = name_devices(state, &node).unwrap();
         assert!(outcome.held.is_empty(), "{outcome:?}");
@@ -1476,7 +1486,6 @@ mod tests {
         assert_eq!(renamed, expected);
 
         let core_after = read(state, CORE_STATE);
-        assert_eq!(projects(&core_after), projects(&core));
         let ledger_after = read(state, DELIVERY_LEDGER);
         let to: BTreeMap<&str, &str> = devices
             .iter()
@@ -1486,19 +1495,42 @@ mod tests {
             Some(machine) => json!(machine),
             None => device.clone(),
         };
+        // Every project stays at its path, a device's under its machine id.
+        let mut expected_projects: Vec<(Value, Value)> = projects(&core)
+            .into_iter()
+            .map(|(device, path)| (mapped(&device), path))
+            .collect();
+        expected_projects.sort_by_key(|project| project.1.to_string() + &project.0.to_string());
+        assert_eq!(projects(&core_after), expected_projects);
         let expected_letters: Vec<(String, Value, Value)> = letters(&ledger_before)
             .into_iter()
             .map(|(id, sender, recipient)| (id, mapped(&sender), mapped(&recipient)))
             .collect();
         assert_eq!(letters(&ledger_after), expected_letters);
-        assert_eq!(
-            links_of(&ledger_after, "watches"),
-            links_of(&ledger_before, "watches")
-        );
-        assert_eq!(
-            links_of(&ledger_after, "spawns"),
-            links_of(&ledger_before, "spawns")
-        );
+        // A watch's or spawn's parent is the same agent, its device and pane
+        // now under the machine id.
+        let actor = |parent: Value| -> Value {
+            let mut parent = parent;
+            if let Some(device) = parent.get("device_id").cloned() {
+                parent["device_id"] = mapped(&device);
+            }
+            if let Some(pane) = parent["pane_id"].as_str().and_then(|pane| {
+                to.iter().find_map(|(alias, machine)| {
+                    pane.strip_prefix(&format!("remote:{alias}:"))
+                        .map(|rest| format!("remote:{machine}:{rest}"))
+                })
+            }) {
+                parent["pane_id"] = json!(pane);
+            }
+            parent
+        };
+        for key in ["watches", "spawns"] {
+            let expected: Vec<Value> = links_of(&ledger_before, key)
+                .into_iter()
+                .map(actor)
+                .collect();
+            assert_eq!(links_of(&ledger_after, key), expected, "{key}");
+        }
         for (alias, machine) in &devices {
             assert_eq!(
                 &cards(state, machine),
@@ -1507,16 +1539,22 @@ mod tests {
             );
             assert!(cards(state, alias).is_empty(), "{alias}");
         }
+        assert_eq!(cards(state, node.as_str()), core_cards, "this core's cards");
         eprintln!(
-            "renamed {:?}; files {:?}; cards {:?}; letters {}; projects {}",
+            "renamed {:?}; files {:?}; device cards {:?}; core cards {}; letters {}; projects {} ({} on devices)",
             outcome.renamed,
             outcome.files,
             cards_before
                 .iter()
                 .map(|(id, cards)| (id, cards.len()))
                 .collect::<Vec<_>>(),
+            core_cards.len(),
             expected_letters.len(),
-            projects(&core_after),
+            projects(&core_after).len(),
+            expected_projects
+                .iter()
+                .filter(|(device, _)| to.values().any(|machine| device == machine))
+                .count(),
         );
     }
 
