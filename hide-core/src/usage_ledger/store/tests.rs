@@ -1,3 +1,4 @@
+use super::v3_fixture::{V3, kept_rows};
 use super::*;
 
 /// The store's step budgets are the worker's; these tests read what a step
@@ -93,12 +94,15 @@ fn claude_streaming_maxima_replace_one_call_and_its_context_band() {
     );
     assert_eq!(totals.price_bands[1].input, 0);
     assert_eq!(totals.price_bands[2].input, 210_000);
-    let saved: String = store
+    let saved: (String, String) = store
         .connection
-        .query_row("SELECT event FROM events", [], |row| row.get(0))
+        .query_row(
+            "SELECT p.session,p.cwd FROM calls c JOIN places p ON p.id=c.place",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .unwrap();
-    let saved: Event = decode(&saved).unwrap();
-    assert_eq!((saved.session, saved.cwd), (old.session, old.cwd));
+    assert_eq!(saved, (old.session, old.cwd.unwrap()));
 }
 
 #[test]
@@ -175,8 +179,7 @@ fn price_bands_reprice_expired_calls_and_daily_fetch_attempt_survives_restart() 
     assert_eq!(
         store
             .connection
-            .query_row("SELECT count(*) FROM events", [], |row| row
-                .get::<_, u64>(0))
+            .query_row("SELECT count(*) FROM calls", [], |row| row.get::<_, u64>(0))
             .unwrap(),
         0
     );
@@ -219,26 +222,18 @@ fn price_bands_reprice_expired_calls_and_daily_fetch_attempt_survives_restart() 
 fn price_cache_upgrade_preserves_existing_ledger_and_does_not_fetch() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    let mut store = open(&path).unwrap();
-    let now = instant("2026-10-01");
-    store
-        .ingest(
-            "node-a",
-            Agent::Claude,
-            &source(),
-            &step(vec![call(1, "2026-10-01")]),
-            now,
-            &jiff::tz::TimeZone::UTC,
-        )
-        .unwrap();
-    let before = store.daily().unwrap();
-    store
-        .connection
+    let v3 = V3::write(
+        &path,
+        &[("node-a", Agent::Claude, call(1, "2026-10-01"))],
+        &source(),
+    );
+    rusqlite::Connection::open(&path)
+        .unwrap()
         .execute_batch("DROP TABLE price_cache; ALTER TABLE backfills DROP COLUMN limited; PRAGMA user_version=1;")
         .unwrap();
-    drop(store);
     let store = open(&path).unwrap();
-    assert_eq!(store.daily().unwrap(), before);
+    assert_eq!(store.daily().unwrap(), v3.daily);
+    assert!(store.converting().unwrap());
     assert_eq!(
         store.prices().unwrap(),
         crate::usage_ledger::prices::Cache::default()
@@ -369,7 +364,7 @@ fn lost_checkpoints_after_sixty_days_cannot_change_frozen_or_recent_totals() {
     assert_eq!(
         store
             .connection
-            .query_row("SELECT count(*) FROM events", [], |r| r.get::<_, u64>(0))
+            .query_row("SELECT count(*) FROM calls", [], |r| r.get::<_, u64>(0))
             .unwrap(),
         1
     );
@@ -440,7 +435,10 @@ fn batch_failure_rolls_back_totals_and_checkpoint_and_capacity_reports_a_limit()
     );
     store
         .connection
-        .execute("INSERT INTO devices VALUES('node-a',?1)", [EVENT_LIMIT])
+        .execute(
+            "INSERT INTO nodes(device,calls) VALUES('node-a',?1)",
+            [EVENT_LIMIT],
+        )
         .unwrap();
     let outcome = store
         .ingest(
@@ -627,7 +625,9 @@ fn a_store_from_before_hide_ai_gains_its_tables_without_a_version_change() {
     let path = hide_kit::layout::usage_store(dir.path());
     {
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .execute_batch(&format!("{CALLS_SCHEMA}{SCHEMA}"))
+            .unwrap();
     }
     assert_eq!(user_version(&path), VERSION);
     let store = open(&path).unwrap();
@@ -877,23 +877,17 @@ fn calls_of_one_time_across_the_read_limit_are_kept_by_agent_and_key() {
     let expected = [(1000, true), (1001, true), (1011, true), (1111, false)];
     assert_eq!(read(&store), expected);
 
-    store.execute_for_test("DROP INDEX events_device_at");
+    store.execute_for_test("DROP INDEX calls_node_at");
     assert_eq!(read(&store), expected, "read without the index");
 }
 
-/// The projects' costs read one device's newest calls by its index rather
-/// than sorting the window, sorting only calls of one time; a store from
-/// before the index gains it when it opens, its version unchanged so an
-/// older build still opens it.
+/// The projects' costs read one node's newest calls by `calls_node_at` and
+/// sort none: beside a table without rowids the index carries the primary
+/// key, so time, agent and key are already in order.
 #[test]
-fn a_store_from_before_the_cost_index_gains_it_without_a_version_change() {
+fn the_projects_costs_read_calls_by_their_index_and_sort_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let path = hide_kit::layout::usage_store(dir.path());
-    open(&path)
-        .unwrap()
-        .execute_for_test("DROP INDEX events_device_at");
-    let store = open(&path).unwrap();
-    assert_eq!(user_version(&path), 3);
+    let store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     let mut query = store
         .connection
         .prepare(&format!("EXPLAIN QUERY PLAN {RECENT_CALLS}"))
@@ -904,9 +898,360 @@ fn a_store_from_before_the_cost_index_gains_it_without_a_version_change() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert!(
-        plan.iter().any(|step| step.contains("events_device_at"))
-            // Sorting the calls of one time is "FOR LAST 2 TERMS OF ORDER BY".
-            && !plan.iter().any(|step| step == "USE TEMP B-TREE FOR ORDER BY"),
+        plan.iter().any(|step| step.contains("calls_node_at"))
+            && !plan.iter().any(|step| step.contains("TEMP B-TREE")),
         "{plan:?}"
     );
+}
+
+/// A history shaped like an operator's: a few hundred calls a session, a
+/// worktree folder per session, two agents' model names, uuid sessions,
+/// over the last forty days before `now`.
+fn operator_like(count: usize, device: &str, now: u64) -> Vec<(String, Agent, Event)> {
+    (0..count)
+        .map(|n| {
+            let agent = if n % 3 == 0 {
+                Agent::Codex
+            } else {
+                Agent::Claude
+            };
+            let session = n / 125;
+            let mut event = call(0, "2026-10-01");
+            event.key = format!(
+                "{:x}",
+                <sha2::Sha256 as sha2::Digest>::digest(n.to_string())
+            );
+            event.at_ms = now - DAY_MS * 40 + (n as u64 * 5_417) % (DAY_MS * 40);
+            event.model = if agent == Agent::Codex {
+                "gpt-5.3-codex".into()
+            } else {
+                "claude-opus-4-6-20260115".into()
+            };
+            event.session = format!("{:08x}-60d7-4a7c-ae5a-{:012x}", session, session * 7);
+            event.cwd = Some(format!(
+                "/Users/operator/projects/herdr-ide.worktrees/fix-branch-{}",
+                session % 300
+            ));
+            event.provider = None;
+            event.recorded_cost_micro_usd = None;
+            event.tokens = Tokens {
+                input: 3 + n as u64 % 40,
+                output: 40 + n as u64 % 900,
+                cache_read: 20_000 + n as u64 * 13 % 150_000,
+                cache_write: n as u64 * 7 % 3_000,
+                cache_write_1h: 0,
+                reasoning: (agent == Agent::Codex).then_some(n as u64 % 40),
+            };
+            (device.to_owned(), agent, event)
+        })
+        .collect()
+}
+
+fn bytes_on_disk(path: &Path) -> u64 {
+    let wal = path.with_file_name(format!(
+        "{}-wal",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::metadata(path).unwrap().len() + std::fs::metadata(wal).map_or(0, |m| m.len())
+}
+
+/// Opens the version 3 store at `path` and converts it to the end, then
+/// compacts it as the worker does.
+fn convert_all(path: &Path, open: impl Fn(&Path) -> Result<Store, &'static str>) -> Store {
+    let mut store = open(path).unwrap();
+    assert_eq!(user_version(path), VERSION);
+    while store.converting().unwrap() {
+        store.convert().unwrap();
+    }
+    assert!(store.compaction_due().unwrap());
+    store.compact().unwrap();
+    assert!(!store.compaction_due().unwrap());
+    store
+}
+
+/// What the converted `store` must answer as `v3` did: the same days'
+/// totals, the same calls for the projects' costs, and every stored call
+/// found as already counted.
+fn answers_as(store: &mut Store, v3: &V3, now: u64) {
+    assert_eq!(store.daily().unwrap(), v3.daily);
+    for (device, calls) in &v3.calls {
+        let mut read = Vec::new();
+        let limited = store
+            .recent_calls(device, 0, calls.len(), |agent, day, event| {
+                read.push((agent.to_owned(), day.to_owned(), event));
+                Ok(())
+            })
+            .unwrap();
+        assert!(!limited);
+        assert!(read == *calls, "{device}: the calls read differ");
+    }
+    for (device, agent) in v3.agents() {
+        let events: Vec<Event> = v3
+            .stored
+            .iter()
+            .filter(|(d, a, _)| *d == device && *a == agent)
+            .map(|(_, _, event)| event.clone())
+            .collect();
+        for batch in events.chunks(BATCH_LIMIT) {
+            let outcome = store
+                .ingest(
+                    &device,
+                    agent,
+                    &source(),
+                    &step(batch.to_vec()),
+                    now,
+                    &jiff::tz::TimeZone::UTC,
+                )
+                .unwrap();
+            assert_eq!(
+                (
+                    outcome.repeated,
+                    outcome.added,
+                    outcome.changed,
+                    outcome.updated
+                ),
+                (batch.len(), 0, 0, 0),
+                "{device} {agent:?}"
+            );
+        }
+    }
+    assert_eq!(store.daily().unwrap(), v3.daily);
+}
+
+/// with-hide/hide-private#672: a version 3 store of an operator's shape is
+/// under half its size once converted and compacted, and answers as it did:
+/// the days' totals, the projects' calls and which calls are already
+/// counted, a Claude call's later view still merging into it.
+#[test]
+fn a_version_3_store_converts_to_under_half_its_size_and_answers_as_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = hide_kit::layout::usage_store(dir.path());
+    let now = instant("2026-11-07");
+    let mut calls = operator_like(12_000, "node-a", now);
+    calls.extend(operator_like(600, "device-b", now));
+    let borrowed: Vec<_> = calls
+        .iter()
+        .map(|(device, agent, event)| (device.as_str(), *agent, event.clone()))
+        .collect();
+    let v3 = V3::write(&path, &borrowed, &source());
+    let before = bytes_on_disk(&path);
+    let mut store = convert_all(&path, open);
+    let after = bytes_on_disk(&path);
+    assert!(after * 2 < before, "{before} bytes became {after}");
+    assert_eq!(v3.kept, kept_rows(&store.connection));
+    answers_as(&mut store, &v3, now);
+    // A later, larger view of a stored Claude call still replaces it.
+    let (_, _, first) = v3
+        .stored
+        .iter()
+        .find(|(device, agent, _)| device == "node-a" && *agent == Agent::Claude)
+        .unwrap();
+    let mut later = first.clone();
+    later.tokens.output += 1_000;
+    let outcome = store
+        .ingest(
+            "node-a",
+            Agent::Claude,
+            &source(),
+            &step(vec![later]),
+            now,
+            &jiff::tz::TimeZone::UTC,
+        )
+        .unwrap();
+    assert_eq!(outcome.updated, 1);
+}
+
+/// A conversion stopped between steps goes on where it stopped after a
+/// restart, and a step that fails moves nothing: the calls it read are
+/// still waiting, and the next step takes them again.
+#[test]
+fn an_interrupted_conversion_goes_on_where_it_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = hide_kit::layout::usage_store(dir.path());
+    let now = instant("2026-11-07");
+    let calls = operator_like(CONVERT_BATCH * 2 + 100, "node-a", now);
+    let borrowed: Vec<_> = calls
+        .iter()
+        .map(|(device, agent, event)| (device.as_str(), *agent, event.clone()))
+        .collect();
+    let v3 = V3::write(&path, &borrowed, &source());
+    let count = |store: &Store, table: &str| -> usize {
+        store
+            .connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    let mut store = open(&path).unwrap();
+    assert_eq!(store.convert().unwrap(), CONVERT_BATCH);
+    drop(store);
+    let mut store = open(&path).unwrap();
+    assert!(store.converting().unwrap());
+    // A damaged call in the next batch fails the step as a whole.
+    store.execute_for_test(&format!(
+        "UPDATE events SET event='{{' WHERE rowid=(SELECT rowid FROM events ORDER BY rowid LIMIT 1 OFFSET {})",
+        CONVERT_BATCH / 2
+    ));
+    assert_eq!(store.convert(), Err("usage_store_decode"));
+    assert_eq!(
+        (count(&store, "events"), count(&store, "calls")),
+        (CONVERT_BATCH + 100, CONVERT_BATCH)
+    );
+    let (_, _, damaged) = &calls[CONVERT_BATCH + CONVERT_BATCH / 2];
+    store.execute_for_test(&format!(
+        "UPDATE events SET event='{}' WHERE event='{{'",
+        encode(damaged).unwrap()
+    ));
+    while store.converting().unwrap() {
+        store.convert().unwrap();
+    }
+    assert_eq!(count(&store, "calls"), calls.len());
+    answers_as(&mut store, &v3, now);
+}
+
+/// A build before version 4 opens only versions up to 3, so from the first
+/// open of this build it refuses the store and writes nothing to it (as
+/// this build refuses a newer one, `corrupt_or_newer_stores_are_refused...`):
+/// the totals, checkpoints and backfills stay exactly as they were. Back on
+/// this build, the calls the native files gained meanwhile are read from
+/// the same checkpoints and counted once, beside the ones already counted.
+#[test]
+fn an_older_build_refuses_a_converted_store_and_the_calls_meanwhile_count_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = hide_kit::layout::usage_store(dir.path());
+    let now = instant("2026-11-07");
+    let old = [call(1, "2026-11-01"), call(2, "2026-11-02")];
+    let v3 = V3::write(
+        &path,
+        &old.clone().map(|event| ("node-a", Agent::Claude, event)),
+        &source(),
+    );
+    let store = open(&path).unwrap();
+    assert!(store.converting().unwrap());
+    // Not a call moved yet, and already past what an older build opens.
+    assert!(user_version(&path) > 3);
+    assert_eq!(v3.kept, kept_rows(&store.connection));
+    drop(store);
+    let mut store = convert_all(&path, open);
+    let (checkpoint_source, _) = store
+        .checkpoint("node-a", Agent::Claude, &source().path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint_source, source());
+    let mut grown = old.to_vec();
+    grown.extend([call(3, "2026-11-05"), call(4, "2026-11-06")]);
+    let outcome = store
+        .ingest(
+            "node-a",
+            Agent::Claude,
+            &source(),
+            &step(grown),
+            now,
+            &jiff::tz::TimeZone::UTC,
+        )
+        .unwrap();
+    assert_eq!((outcome.repeated, outcome.added), (2, 2));
+    let calls: u64 = store
+        .daily()
+        .unwrap()
+        .iter()
+        .map(|day| day.totals.calls)
+        .sum();
+    assert_eq!(calls, 4);
+}
+
+/// A place leaves with its last call: once a session's calls are past the
+/// event horizon and pruned, its row goes too, and a session with a call
+/// left keeps its row.
+#[test]
+fn a_place_is_pruned_with_its_last_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let zone = jiff::tz::TimeZone::UTC;
+    let in_session = |key: u8, day: &str, session: &str| {
+        let mut event = call(key, day);
+        event.session = session.into();
+        event
+    };
+    let early = instant("2026-09-01");
+    store
+        .ingest(
+            "node-a",
+            Agent::Claude,
+            &source(),
+            &step(vec![
+                in_session(1, "2026-08-20", "gone"),
+                in_session(2, "2026-08-20", "kept"),
+                in_session(3, "2026-08-31", "kept"),
+            ]),
+            early,
+            &zone,
+        )
+        .unwrap();
+    store
+        .complete_backfill("node-a", Agent::Claude, early, &zone)
+        .unwrap();
+    let places = |store: &Store| -> Vec<String> {
+        let mut query = store
+            .connection
+            .prepare("SELECT session FROM places ORDER BY session")
+            .unwrap();
+        query
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(places(&store), ["gone", "kept"]);
+    // 2026-08-20 is past the 45-day horizon on 2026-10-10, 2026-08-31 is not.
+    while store.prune(instant("2026-10-10"), &zone).unwrap() {}
+    assert_eq!(places(&store), ["kept"]);
+}
+
+/// The operator's own store, converted from a read-only copy: run by hand
+/// with `HIDE_TEST_USAGE_COPY` naming a copy of a version 3
+/// `usage.sqlite3`, on the real clock, so each step's budget is the
+/// worker's (`cargo nextest run -p hide-core --run-ignored only
+/// operator_copy`). The copy is copied again into a temporary folder; the
+/// file named is never opened for writing.
+#[test]
+#[ignore = "needs a copy of an operator's version 3 usage store"]
+fn operator_copy_converts_to_under_half_and_answers_as_before() {
+    let Some(copy) = std::env::var_os("HIDE_TEST_USAGE_COPY") else {
+        panic!("HIDE_TEST_USAGE_COPY names no copy");
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = hide_kit::layout::usage_store(dir.path());
+    std::fs::copy(&copy, &path).unwrap();
+    let v3 = V3::read(&path);
+    let before = bytes_on_disk(&path);
+    let newest = v3
+        .stored
+        .iter()
+        .map(|(_, _, event)| event.at_ms)
+        .max()
+        .unwrap();
+    let started = Instant::now();
+    let mut steps = 0;
+    let mut store = Store::open(&path).unwrap();
+    let opened = started.elapsed();
+    let mut slowest = Duration::ZERO;
+    while store.converting().unwrap() {
+        let step = Instant::now();
+        store.convert().unwrap();
+        slowest = slowest.max(step.elapsed());
+        steps += 1;
+    }
+    let moved = started.elapsed();
+    store.compact().unwrap();
+    let compacted = started.elapsed() - moved;
+    let after = bytes_on_disk(&path);
+    eprintln!(
+        "{} calls: {before} -> {after} bytes ({:.1}%), open {opened:?}, {steps} steps in {moved:?} \
+         (slowest {slowest:?}), compaction {compacted:?}",
+        v3.stored.len(),
+        after as f64 * 100.0 / before as f64
+    );
+    assert!(after * 2 < before);
+    assert_eq!(v3.kept, kept_rows(&store.connection));
+    answers_as(&mut store, &v3, newest);
 }

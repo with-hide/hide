@@ -1,8 +1,16 @@
-//! Events, daily totals and checkpoints are one transaction. After the first
+//! Calls, daily totals and checkpoints are one transaction. After the first
 //! backfill, days outside the event horizon are frozen and never added again.
 //! A damaged store is refused, never rebuilt: its old daily totals may be
 //! the only remaining record after an agent deletes its source history.
+//!
+//! A call row holds each value its readers need once (with-hide/hide-private#672):
+//! its key as 32 bytes, its node by number, its tokens as numbers and its
+//! session and folder by the number of a `places` row, so a call costs about
+//! a fifth of the whole-event JSON a version 3 store kept. A version 3 store
+//! is converted in place, a batch per step ([`Store::convert`]), and then
+//! compacted once ([`Store::compact`]).
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -10,24 +18,43 @@ use hide_session::{
     Agent,
     usage::{Candidate, Checkpoint, Event, Step, Tokens},
 };
-use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::{DAILY_DAYS, DAILY_LIMIT, DAY_MS, EVENT_DAYS, EVENT_LIMIT, local_day};
 mod ai;
 pub use ai::{AiPart, AiRecorded, AiRow, AiUnknown};
 mod stream;
+#[cfg(test)]
+pub(crate) mod v3_fixture;
 
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 const DEVICE_LIMIT: usize = 32;
 const BATCH_LIMIT: usize = 8192;
 const CHECKPOINT_BYTES: usize = 16 * 1024;
+/// The calls and what they name. `places` holds each (node, agent, session,
+/// folder) a call ran in once, with the newest call's time, so the place
+/// leaves with its last call ([`Store::prune`]); every place has had a call
+/// of its own, so a node's places never outnumber its calls. A call's folder
+/// is `''` when the native record named none, which no folder can be
+/// (`valid_name`). `calls_node_at` serves the projects' costs and pruning;
+/// beside a table without rowids it carries the primary key too, so a read
+/// ordered by time, agent and key sorts nothing.
+const CALLS_SCHEMA: &str = "
+CREATE TABLE nodes(id INTEGER PRIMARY KEY, device TEXT NOT NULL UNIQUE,
+    calls INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE places(id INTEGER PRIMARY KEY, node INTEGER NOT NULL, agent TEXT NOT NULL,
+    session TEXT NOT NULL, cwd TEXT NOT NULL, last_at INTEGER NOT NULL,
+    UNIQUE(node,agent,session,cwd));
+CREATE TABLE calls(node INTEGER NOT NULL, agent TEXT NOT NULL, key BLOB NOT NULL,
+    at INTEGER NOT NULL, day TEXT NOT NULL, model TEXT NOT NULL, place INTEGER NOT NULL,
+    provider TEXT, input INTEGER NOT NULL, output INTEGER NOT NULL,
+    cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL,
+    cache_write_1h INTEGER NOT NULL, reasoning INTEGER, cost INTEGER,
+    incomplete INTEGER NOT NULL, PRIMARY KEY(node,agent,key)) WITHOUT ROWID;
+CREATE INDEX calls_node_at ON calls(node,at);
+";
 const SCHEMA: &str = "
-CREATE TABLE events(device TEXT NOT NULL, agent TEXT NOT NULL, key TEXT NOT NULL,
-    day TEXT NOT NULL, fingerprint BLOB NOT NULL, at INTEGER NOT NULL,
-    event TEXT NOT NULL, PRIMARY KEY(device,agent,key));
-CREATE INDEX events_at ON events(at);
 CREATE TABLE backfills(device TEXT NOT NULL, agent TEXT NOT NULL,
     completed INTEGER NOT NULL DEFAULT 0, frozen_at INTEGER NOT NULL DEFAULT 0,
     limited INTEGER NOT NULL DEFAULT 0,
@@ -37,10 +64,33 @@ CREATE TABLE daily(device TEXT NOT NULL, agent TEXT NOT NULL, day TEXT NOT NULL,
 CREATE INDEX daily_day ON daily(day);
 CREATE TABLE cursors(device TEXT NOT NULL, agent TEXT NOT NULL, path TEXT NOT NULL,
     stamp TEXT NOT NULL, checkpoint TEXT NOT NULL, PRIMARY KEY(device,agent,path));
-CREATE TABLE devices(device TEXT PRIMARY KEY, calls INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE price_cache(slot INTEGER PRIMARY KEY CHECK(slot=1), value TEXT NOT NULL);
-PRAGMA user_version=3;
+PRAGMA user_version=4;
 ";
+/// A version 3 store becomes version 4 in one transaction that adds the new
+/// tables and moves no call: its `events` stay where they are, without the
+/// two indexes nothing reads any more, until [`Store::convert`] has moved
+/// them all. A build before version 4 refuses the store from here on
+/// (`usage_store_newer`) and writes nothing to it, so its totals, keys and
+/// checkpoints wait for the build that converted it.
+const START_CONVERSION: &str = "
+INSERT INTO nodes(device,calls) SELECT device,calls FROM devices;
+DROP TABLE devices;
+DROP INDEX IF EXISTS events_at;
+DROP INDEX IF EXISTS events_device_at;
+PRAGMA user_version=4;
+";
+/// The version 3 calls one conversion step moves, in one transaction: about
+/// a tenth of a second on a loaded Mac, so 640,000 calls take a minute of
+/// steps while a window is open.
+const CONVERT_BATCH: usize = 4096;
+/// A conversion step's own budget: the start drops two indexes and every
+/// step reads and writes thousands of calls, past an ordinary step's 250 ms
+/// on a machine under load.
+const CONVERT_BUDGET: Duration = Duration::from_secs(30);
+/// Compacting rewrites the whole file once: about two seconds for a
+/// converted 640,000-call store.
+const COMPACT_BUDGET: Duration = Duration::from_secs(120);
 
 /// Hide's own background AI, counted by day, provider, model and feature.
 /// Added beside the session tables without a version bump, so an older build
@@ -53,21 +103,18 @@ CREATE TABLE IF NOT EXISTS ai_daily(day TEXT NOT NULL, provider TEXT NOT NULL,
 CREATE INDEX IF NOT EXISTS ai_daily_day ON ai_daily(day);
 CREATE TABLE IF NOT EXISTS ai_state(slot INTEGER PRIMARY KEY CHECK(slot=1), limited_day TEXT);
 ";
-/// The projects' costs read one device's newest calls (`recent_calls`); with
-/// only `events_at` SQLite sorted every call of the window in a temporary
-/// tree. Added without a version bump, as `AI_SCHEMA` is, so an older build
-/// opens the same file and keeps the index current.
-const COST_INDEX: &str = "CREATE INDEX IF NOT EXISTS events_device_at ON events(device,at);";
-/// The own node's calls of a window, newest first. `(device, agent, key)` is
+/// The own node's calls of a window, newest first. `(node, agent, key)` is
 /// the primary key, so the order is total: past the limit the same calls are
-/// read whichever plan SQLite chooses. By `events_device_at` SQLite sorts
-/// only the calls of one time, a few at most, where an index holding agent
-/// and key too would be more than twice its size.
-const RECENT_CALLS: &str = "SELECT agent,day,event FROM events WHERE device=?1 AND at>=?2 ORDER BY at DESC,agent,key LIMIT ?3";
-/// Building `events_device_at` on an existing store reads every call once:
-/// about a second for 486,000 calls on a loaded machine, against a step's
-/// 250 ms.
-const INDEX_BUDGET: Duration = Duration::from_secs(30);
+/// read whichever plan SQLite chooses, and by `calls_node_at` none is sorted.
+const RECENT_CALLS: &str = "SELECT c.agent,c.day,c.key,c.at,c.model,c.input,c.output,c.cache_read,\
+    c.cache_write,c.cache_write_1h,c.reasoning,c.cost,c.incomplete,c.provider,p.session,p.cwd \
+    FROM calls c JOIN places p ON p.id=c.place \
+    WHERE c.node=(SELECT id FROM nodes WHERE device=?1) AND c.at>=?2 \
+    ORDER BY c.at DESC,c.agent,c.key LIMIT ?3";
+/// One stored call by its identity, with the day it was counted on.
+const STORED_CALL: &str = "SELECT c.day,c.key,c.at,c.model,c.input,c.output,c.cache_read,\
+    c.cache_write,c.cache_write_1h,c.reasoning,c.cost,c.incomplete,c.provider,p.session,p.cwd \
+    FROM calls c JOIN places p ON p.id=c.place WHERE c.node=?1 AND c.agent=?2 AND c.key=?3";
 /// Distinct (day, provider, model, feature) rows kept for Hide AI. About 400
 /// days of four features, two providers and a few models each.
 pub const AI_ROW_LIMIT: usize = 40_000;
@@ -245,7 +292,7 @@ impl Store {
             }
             store
                 .connection
-                .execute_batch(&format!("BEGIN;{SCHEMA}COMMIT;"))
+                .execute_batch(&format!("BEGIN;{CALLS_SCHEMA}{SCHEMA}COMMIT;"))
                 .map_err(failed)?;
         } else if version == 1 {
             store.connection.execute_batch("BEGIN; CREATE TABLE price_cache(slot INTEGER PRIMARY KEY CHECK(slot=1), value TEXT NOT NULL); PRAGMA user_version=2; COMMIT;").map_err(failed)?;
@@ -253,9 +300,15 @@ impl Store {
         if version == 1 || version == 2 {
             store.connection.execute_batch("BEGIN; ALTER TABLE backfills ADD COLUMN limited INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=3; COMMIT;").map_err(failed)?;
         }
+        if (1..=3).contains(&version) {
+            store.budget_of(CONVERT_BUDGET);
+            store
+                .connection
+                .execute_batch(&format!("BEGIN;{CALLS_SCHEMA}{START_CONVERSION}COMMIT;"))
+                .map_err(failed)?;
+            store.budget();
+        }
         store.connection.execute_batch(AI_SCHEMA).map_err(failed)?;
-        store.budget_of(INDEX_BUDGET);
-        store.connection.execute_batch(COST_INDEX).map_err(failed)?;
         Ok(store)
     }
 
@@ -407,24 +460,26 @@ impl Store {
         }
         self.budget();
         let tx = self.connection.transaction().map_err(failed)?;
-        let calls: Option<usize> = tx
-            .query_row("SELECT calls FROM devices WHERE device=?1", [device], |r| {
-                r.get(0)
-            })
+        let known: Option<(i64, usize)> = tx
+            .query_row(
+                "SELECT id,calls FROM nodes WHERE device=?1",
+                [device],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .optional()
             .map_err(failed)?;
-        let mut calls = match calls {
-            Some(n) => n,
+        let (node, mut calls) = match known {
+            Some(known) => known,
             None => {
                 let n: usize = tx
-                    .query_row("SELECT count(*) FROM devices", [], |r| r.get(0))
+                    .query_row("SELECT count(*) FROM nodes", [], |r| r.get(0))
                     .map_err(failed)?;
                 if n >= DEVICE_LIMIT {
                     return Err("usage_device_capacity");
                 }
-                tx.execute("INSERT INTO devices(device) VALUES(?1)", [device])
+                tx.execute("INSERT INTO nodes(device) VALUES(?1)", [device])
                     .map_err(failed)?;
-                0
+                (tx.last_insert_rowid(), 0)
             }
         };
         let known: bool = tx
@@ -473,27 +528,25 @@ impl Store {
         let mut outcome = Ingested::default();
         for event in &step.events {
             validate(event)?;
-            let fingerprint = fingerprint(event)?;
             if event.at_ms > now.saturating_add(DAY_MS) {
                 outcome.invalid += 1;
                 continue;
             }
-            let previous: Option<(Vec<u8>, String)> = tx
-                .query_row(
-                    "SELECT fingerprint,event FROM events WHERE device=?1 AND agent=?2 AND key=?3",
-                    params![device, agent.as_str(), event.key],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
+            let key = key_bytes(&event.key)?;
+            let previous = tx
+                .query_row(STORED_CALL, params![node, agent.as_str(), key], |row| {
+                    Ok((row.get::<_, String>(0)?, stored_call(row, 1)))
+                })
                 .optional()
                 .map_err(failed)?;
-            if let Some((previous, original)) = previous {
-                if previous == fingerprint {
+            if let Some((day, original)) = previous {
+                let original = original?;
+                if same_accounting(&original, event) {
                     outcome.repeated += 1;
                     continue;
                 }
-                let original: Event = decode(&original)?;
                 let merged = if agent == Agent::Claude {
-                    stream::merge(&tx, device, &original, event, frozen_at)?
+                    stream::merge(&tx, device, node, &day, &original, event, frozen_at)?
                 } else {
                     None
                 };
@@ -539,26 +592,14 @@ impl Store {
             totals.add(event)?;
             tx.execute("INSERT INTO daily VALUES(?1,?2,?3,?4,?5) ON CONFLICT(device,agent,day,model) DO UPDATE SET totals=excluded.totals",
                 params![device,agent.as_str(),day,event.model,encode(&totals)?]).map_err(failed)?;
-            tx.execute(
-                "INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                params![
-                    device,
-                    agent.as_str(),
-                    event.key,
-                    day,
-                    fingerprint,
-                    event.at_ms,
-                    encode(event)?
-                ],
-            )
-            .map_err(failed)?;
+            insert_call(&tx, node, agent.as_str(), &day, event)?;
             calls += 1;
             outcome.added += 1;
             outcome.newest_ms = outcome.newest_ms.max(Some(event.at_ms));
         }
         tx.execute(
-            "UPDATE devices SET calls=?2 WHERE device=?1",
-            params![device, calls],
+            "UPDATE nodes SET calls=?2 WHERE id=?1",
+            params![node, calls],
         )
         .map_err(failed)?;
         if outcome.limited > 0 {
@@ -610,8 +651,8 @@ impl Store {
     /// `RECENT_CALLS` order, with their agent and assigned day, for the
     /// projects' costs (PRD lane-two-columns B31), and says whether more than
     /// `limit` were there. Each call is decoded, handed on and dropped, so nothing here
-    /// grows with the calls read. It reads the 45-day `events` table by
-    /// `events_device_at`, with a longer budget than a step's because it
+    /// grows with the calls read. It reads the 45-day `calls` table by
+    /// `calls_node_at`, with a longer budget than a step's because it
     /// decodes every call, `each` included; the caller keeps the days it
     /// wants.
     pub fn recent_calls(
@@ -638,7 +679,7 @@ impl Store {
                     .as_str()
                     .map_err(|_| "usage_store_decode")
             };
-            each(text(0)?, text(1)?, decode(text(2)?)?)?;
+            each(text(0)?, text(1)?, stored_call(row, 2)?)?;
             read += 1;
         }
         Ok(false)
@@ -684,23 +725,64 @@ impl Store {
             [&frozen],
         )
         .map_err(failed)?;
-        // A maintenance turn deletes at most 512 calls and 512 rollups.
-        // Adjust the retained counter from those exact rows, never COUNT an
-        // entire million-call device on each wake.
-        let expired = {
-            let mut query=tx.prepare("SELECT e.rowid,e.device FROM events e WHERE e.at<?1 AND EXISTS(SELECT 1 FROM backfills b WHERE b.device=e.device AND b.agent=e.agent AND b.completed=1 AND e.at<b.frozen_at) LIMIT 512").map_err(failed)?;
+        // A maintenance turn deletes at most 512 calls, 512 places and 512
+        // rollups. Adjust the retained counter from those exact rows, never
+        // COUNT an entire million-call node on each wake. A completed
+        // backfill's `frozen_at` is at least `frozen` now, so its calls before
+        // `frozen` are the expired ones.
+        let nodes: Vec<(i64, String)> = {
+            let mut query = tx
+                .prepare("SELECT id,device FROM nodes ORDER BY id")
+                .map_err(failed)?;
             query
-                .query_map([frozen], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
                 .map_err(failed)?
-                .collect::<Result<Vec<_>, _>>()
+                .collect::<Result<_, _>>()
                 .map_err(failed)?
         };
-        for (id, device) in &expired {
-            tx.execute("DELETE FROM events WHERE rowid=?1", [id])
+        let (mut expired, mut places) = (0, 0);
+        for (node, device) in &nodes {
+            if expired == 512 || places == 512 {
+                break;
+            }
+            let keys: Vec<(String, Vec<u8>)> = {
+                let mut query = tx
+                    .prepare(
+                        "SELECT agent,key FROM calls WHERE node=?1 AND at<?2 AND agent IN \
+                         (SELECT agent FROM backfills WHERE device=?3 AND completed=1) LIMIT ?4",
+                    )
+                    .map_err(failed)?;
+                query
+                    .query_map(params![node, frozen, device, 512 - expired], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })
+                    .map_err(failed)?
+                    .collect::<Result<_, _>>()
+                    .map_err(failed)?
+            };
+            for (agent, key) in &keys {
+                tx.execute(
+                    "DELETE FROM calls WHERE node=?1 AND agent=?2 AND key=?3",
+                    params![node, agent, key],
+                )
                 .map_err(failed)?;
-            tx.execute("UPDATE devices SET calls=calls-1 WHERE device=?1", [device])
+            }
+            tx.execute(
+                "UPDATE nodes SET calls=calls-?2 WHERE id=?1",
+                params![node, keys.len()],
+            )
+            .map_err(failed)?;
+            expired += keys.len();
+            // A place whose newest call expired has no call left once its
+            // agent's expired calls are all gone.
+            places += tx
+                .execute(
+                    "DELETE FROM places WHERE id IN(SELECT p.id FROM places p WHERE p.node=?1 \
+                     AND p.last_at<?2 AND p.agent IN(SELECT agent FROM backfills \
+                     WHERE device=?3 AND completed=1) AND NOT EXISTS(SELECT 1 FROM calls c \
+                     WHERE c.node=?1 AND c.agent=p.agent AND c.at<?2) LIMIT ?4)",
+                    params![node, frozen, device, 512 - places],
+                )
                 .map_err(failed)?;
         }
         let days = tx
@@ -723,8 +805,231 @@ impl Store {
         )
         .map_err(failed)?;
         tx.commit().map_err(failed)?;
-        Ok(expired.len() == 512 || days == 512 || ai_days == 512)
+        Ok(expired == 512 || places == 512 || days == 512 || ai_days == 512)
     }
+}
+
+impl Store {
+    /// Whether version 3 calls still wait to be moved ([`Self::convert`]).
+    /// Until they are, nothing else reads or writes calls: a call still in
+    /// `events` would not be found as already counted.
+    pub fn converting(&self) -> Result<bool, &'static str> {
+        self.budget();
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='events')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(failed)
+    }
+
+    /// Moves the next version 3 calls into `calls`, at most
+    /// [`CONVERT_BATCH`], in one transaction, and drops `events` with the
+    /// last of them; answers how many it moved. A step that fails or is
+    /// ended changes nothing, so the next one, in this process or after a
+    /// restart, takes the same calls again.
+    pub fn convert(&mut self) -> Result<usize, &'static str> {
+        self.budget_of(CONVERT_BUDGET);
+        let moved = self.convert_batch();
+        self.budget();
+        moved
+    }
+
+    fn convert_batch(&mut self) -> Result<usize, &'static str> {
+        let tx = self.connection.transaction().map_err(failed)?;
+        type Old = (i64, String, String, String, String, String);
+        let rows: Vec<Old> = {
+            let mut query = tx
+                .prepare(
+                    "SELECT rowid,device,agent,key,day,event FROM events ORDER BY rowid LIMIT ?1",
+                )
+                .map_err(failed)?;
+            query
+                .query_map([CONVERT_BATCH], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                })
+                .map_err(failed)?
+                .collect::<Result<_, _>>()
+                .map_err(failed)?
+        };
+        // Freed first, so the batch's new rows reuse the pages its old rows
+        // leave in a store at its page limit.
+        if let Some((last, ..)) = rows.last() {
+            tx.execute("DELETE FROM events WHERE rowid<=?1", [last])
+                .map_err(failed)?;
+        }
+        let mut nodes = HashMap::new();
+        for (_, device, agent, key, day, event) in &rows {
+            let node = match nodes.get(device) {
+                Some(node) => *node,
+                None => {
+                    let node: i64 = tx
+                        .query_row("SELECT id FROM nodes WHERE device=?1", [device], |r| {
+                            r.get(0)
+                        })
+                        .optional()
+                        .map_err(failed)?
+                        .ok_or("usage_store_inconsistent")?;
+                    nodes.insert(device.clone(), node);
+                    node
+                }
+            };
+            let mut event: Event = decode(event)?;
+            // The key column was the call's identity; the copy inside the
+            // event is the one that goes.
+            event.key = key.clone();
+            validate(&event)?;
+            insert_call(&tx, node, agent, day, &event)?;
+        }
+        if rows.len() < CONVERT_BATCH {
+            tx.execute_batch("DROP TABLE events").map_err(failed)?;
+        }
+        tx.commit().map_err(failed)?;
+        Ok(rows.len())
+    }
+
+    /// Whether more than half the file is free pages, as a conversion or a
+    /// long quiet spell of pruning leaves it: SQLite reuses free pages but
+    /// never gives them back on its own.
+    pub fn compaction_due(&self) -> Result<bool, &'static str> {
+        self.budget();
+        let pages: u64 = self
+            .connection
+            .pragma_query_value(None, "page_count", |r| r.get(0))
+            .map_err(failed)?;
+        let free: u64 = self
+            .connection
+            .pragma_query_value(None, "freelist_count", |r| r.get(0))
+            .map_err(failed)?;
+        Ok(free * 2 > pages)
+    }
+
+    /// Rewrites the file without its free pages and empties the write-ahead
+    /// log, so the disk holds what the store keeps. One `VACUUM`: ended or
+    /// failed, the store stays as it was.
+    pub fn compact(&mut self) -> Result<(), &'static str> {
+        self.budget_of(COMPACT_BUDGET);
+        let compacted = self
+            .connection
+            .execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(failed);
+        self.budget();
+        compacted
+    }
+}
+
+/// A call's key as the 32 bytes its 64 hex digits spell (`validate`
+/// checked them).
+fn key_bytes(key: &str) -> Result<Vec<u8>, &'static str> {
+    (0..key.len())
+        .step_by(2)
+        .map(|at| {
+            key.get(at..at + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or("usage_key_invalid")
+        })
+        .collect()
+}
+
+/// Stores `event` as one call of `node`'s `agent` counted on `day`, and its
+/// place, which keeps the newest call's time.
+fn insert_call(
+    tx: &rusqlite::Transaction<'_>,
+    node: i64,
+    agent: &str,
+    day: &str,
+    event: &Event,
+) -> Result<(), &'static str> {
+    let place: i64 = tx
+        .query_row(
+            "INSERT INTO places(node,agent,session,cwd,last_at) VALUES(?1,?2,?3,?4,?5) \
+             ON CONFLICT(node,agent,session,cwd) DO UPDATE SET last_at=max(last_at,excluded.last_at) \
+             RETURNING id",
+            params![
+                node,
+                agent,
+                event.session,
+                event.cwd.as_deref().unwrap_or(""),
+                event.at_ms
+            ],
+            |r| r.get(0),
+        )
+        .map_err(failed)?;
+    let tokens = &event.tokens;
+    tx.execute(
+        "INSERT INTO calls VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        params![
+            node,
+            agent,
+            key_bytes(&event.key)?,
+            event.at_ms,
+            day,
+            event.model,
+            place,
+            event.provider,
+            tokens.input,
+            tokens.output,
+            tokens.cache_read,
+            tokens.cache_write,
+            tokens.cache_write_1h,
+            tokens.reasoning,
+            event.recorded_cost_micro_usd,
+            event.incomplete,
+        ],
+    )
+    .map_err(failed)?;
+    Ok(())
+}
+
+/// The call whose columns start at `from` in `row`, in `STORED_CALL`'s
+/// order: key, time, model, tokens, cost, incomplete, provider, session,
+/// folder.
+fn stored_call(row: &Row<'_>, from: usize) -> Result<Event, &'static str> {
+    let at = |index: usize| from + index;
+    let key: Vec<u8> = row.get(at(0)).map_err(failed)?;
+    if key.len() != 32 {
+        return Err("usage_store_decode");
+    }
+    let cwd: String = row.get(at(13)).map_err(failed)?;
+    Ok(Event {
+        key: key.iter().map(|byte| format!("{byte:02x}")).collect(),
+        at_ms: row.get(at(1)).map_err(failed)?,
+        model: row.get(at(2)).map_err(failed)?,
+        tokens: Tokens {
+            input: row.get(at(3)).map_err(failed)?,
+            output: row.get(at(4)).map_err(failed)?,
+            cache_read: row.get(at(5)).map_err(failed)?,
+            cache_write: row.get(at(6)).map_err(failed)?,
+            cache_write_1h: row.get(at(7)).map_err(failed)?,
+            reasoning: row.get(at(8)).map_err(failed)?,
+        },
+        recorded_cost_micro_usd: row.get(at(9)).map_err(failed)?,
+        incomplete: row.get(at(10)).map_err(failed)?,
+        provider: row.get(at(11)).map_err(failed)?,
+        session: row.get(at(12)).map_err(failed)?,
+        cwd: (!cwd.is_empty()).then_some(cwd),
+    })
+}
+
+/// Whether `next` bills what the stored call billed. A fork may change the
+/// containing session or cwd; neither changes the billed call. A completed
+/// call's accounting stays pinned while its call exists; the frozen-day
+/// boundary protects it after expiry.
+fn same_accounting(stored: &Event, next: &Event) -> bool {
+    stored.at_ms == next.at_ms
+        && stored.model == next.model
+        && stored.tokens == next.tokens
+        && stored.recorded_cost_micro_usd == next.recorded_cost_micro_usd
+        && stored.provider == next.provider
+        && stored.incomplete == next.incomplete
 }
 
 fn freeze_at(now: u64, zone: &jiff::tz::TimeZone) -> Result<u64, &'static str> {
@@ -787,24 +1092,6 @@ fn encode<T: Serialize>(value: &T) -> Result<String, &'static str> {
 
 fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, &'static str> {
     serde_json::from_str(text).map_err(|_| "usage_store_decode")
-}
-
-fn fingerprint(event: &Event) -> Result<Vec<u8>, &'static str> {
-    // A fork may change the containing session or cwd; neither changes the
-    // billed call. A completed call's accounting stays pinned while its
-    // event exists; the frozen-day boundary protects it after expiry.
-    Ok(Sha256::digest(
-        encode(&(
-            event.at_ms,
-            &event.model,
-            &event.tokens,
-            event.recorded_cost_micro_usd,
-            &event.provider,
-            event.incomplete,
-        ))?
-        .as_bytes(),
-    )
-    .to_vec())
 }
 
 #[cfg(test)]
