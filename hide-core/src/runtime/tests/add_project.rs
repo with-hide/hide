@@ -287,6 +287,45 @@ fn an_add_not_admitted_is_answered_by_a_refused_receipt() {
     ));
 }
 
+/// B25: an id reused for another folder keeps its refusal when the folder
+/// first named by that id settles, whether it was added or refused.
+#[test]
+fn a_reused_id_keeps_its_refusal_when_the_first_folder_settles() {
+    use super::super::project_open::Forward;
+    let receipts = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .status
+            .project_adds
+            .iter()
+            .map(|receipt| (receipt.path.clone(), receipt.outcome.clone()))
+            .collect::<Vec<_>>()
+    };
+    let refused_reuse = || crate::model::ProjectAddOutcome::Refused {
+        kind: "workspace.create_refused".to_owned(),
+        message: "The add named a request id another request already used".to_owned(),
+    };
+    for outcome in [Ok(()), Err("workspace.create_failed")] {
+        let (_outer, home) = device_home();
+        let mut runtime = runtime();
+        with_device(&mut runtime, &home);
+        assert!(runtime.await_add("r", DEVICE, "/A"));
+        assert!(!runtime.await_add("r", DEVICE, "/B"));
+        runtime.settle_project_open(DEVICE, "/A", outcome, Forward::No);
+        let first = match outcome {
+            Ok(()) => crate::model::ProjectAddOutcome::Added,
+            Err(kind) => crate::model::ProjectAddOutcome::Refused {
+                kind: kind.to_owned(),
+                message: "/A could not be added".to_owned(),
+            },
+        };
+        assert_eq!(
+            receipts(&runtime),
+            vec![("/A".to_owned(), first), ("/B".to_owned(), refused_reuse())]
+        );
+    }
+}
+
 /// D-04, B4: the folder list's last folder is kept per machine, this one's
 /// apart from each device's, a device's leaves with the device, and a
 /// machine the core does not know is refused.

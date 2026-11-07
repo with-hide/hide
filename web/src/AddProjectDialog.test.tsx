@@ -511,6 +511,8 @@ it("reads a row's answer only from its own receipt, not from a project another w
   // Another window registers another project on the machine, and another add is refused: neither answers app.
   await register(10, "/home/me/elsewhere", "ubuntu");
   await receipt("another-window", "/home/me/elsewhere", { state: "refused", kind: "workspace.create_failed", message: "no" });
+  // A receipt for another folder under app's own id answers app neither.
+  await receipt(requestOf(events, "/home/me/app"), "/home/me/elsewhere", { state: "added" });
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app"]);
   expect(importRows()).toEqual(["/home/me/app", "/home/me/site"]);
   expect(find("[data-add-project-import-failed]")).toBeNull();

@@ -69,7 +69,7 @@ export function ImportableProjects({
   }, [device, offline]);
 
   const rows = importRows(answer, after, device, registrations).filter((row) => !added.has(row.path));
-  const receipt = useShellStore((s) => (sent ? s.rest?.status?.project_adds?.findLast((row) => row.request_id === sent.request) : undefined));
+  const receipt = useShellStore((s) => (sent ? s.rest?.status?.project_adds?.findLast((row) => row.request_id === sent.request && row.path === sent.path) : undefined));
   const refused = sent && pathRefusal?.request_id === sent.request ? pathRefusal.reason : null;
 
   // The add on its way is answered by its receipt: added (its row leaves through the registrations), or refused with why.

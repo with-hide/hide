@@ -385,8 +385,13 @@ impl Runtime {
                 _ => None,
             },
         }));
+        // The receipts the selection chose, by the same test: an id reused
+        // for another folder keeps its own receipt.
         for open in &mut self.project_opens.entries {
-            if waiting.iter().any(|(id, _)| *id == open.request_id) {
+            if open.receipt == ProjectOpenReceipt::Pending
+                && open.device == device
+                && open.path == path
+            {
                 open.receipt = receipt.clone();
                 open.refusal = refusal.clone();
             }
