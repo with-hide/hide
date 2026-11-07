@@ -224,7 +224,7 @@ fn a_renamed_device_connects_only_once_the_state_naming_it_is_saved() {
         Ok(MACHINE)
     ));
     // The save runs on its own thread, which waits for this lock.
-    assert!(runtime.device_names_saving.contains(MACHINE));
+    assert!(runtime.device_names_saving.contains_key(MACHINE));
     let registration = runtime.device_registration(MACHINE).cloned().unwrap();
     runtime.connect_remote_device(&registration, hosts::HostAttempt::Operator);
     let held = row_message(&mut runtime, MACHINE).expect("reason");
@@ -264,7 +264,7 @@ fn a_failed_save_keeps_the_device_waiting_until_a_retry_saves_it() {
         Some(MACHINE),
         Ok(MACHINE)
     ));
-    assert!(runtime.device_names_saving.contains(MACHINE));
+    assert!(runtime.device_names_saving.contains_key(MACHINE));
     assert_eq!(
         runtime
             .snapshot()
@@ -289,44 +289,102 @@ fn a_failed_save_keeps_the_device_waiting_until_a_retry_saves_it() {
     assert_eq!(saved.device_registrations[0].id, MACHINE);
 }
 
-/// A save that ends after the device was removed connects nothing.
-#[test]
-fn a_device_removed_while_its_name_saves_is_not_connected_by_the_save() {
-    let shared = SharedRuntime::new(runtime());
-    let mut runtime = shared.lock().unwrap();
-    runtime.install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
-    let provisional = added(&mut runtime, ALIAS);
-    assert!(connected(
-        &mut runtime,
-        &provisional,
-        Some(MACHINE),
-        Ok(MACHINE)
-    ));
+/// The core state as a save takes it: the state and the naming round.
+fn taken(runtime: &Runtime) -> (crate::model::UiStateSnapshot, u64) {
+    (runtime.ui_state_to_save(), runtime.device_naming_round)
+}
+
+/// Saves fail until the returned path is put back as the state path.
+fn saves_failing(runtime: &mut Runtime) -> (std::path::PathBuf, tempfile::NamedTempFile) {
+    let state_path = runtime.state_path.clone();
+    let blocker = tempfile::NamedTempFile::new().unwrap();
+    runtime.state_path = blocker.path().join("state.json");
+    (state_path, blocker)
+}
+
+fn removed(runtime: &mut Runtime, name: &str) {
     runtime
         .device_command(
             crate::node::TEST_NODE,
             crate::device_command::DeviceCommand::Remove {
-                device_id: ALIAS.into(),
+                device_id: name.into(),
             },
         )
-        .expect("removed by its alias");
+        .expect("removed");
+}
+
+fn saving_held(runtime: &mut Runtime) -> bool {
+    row_message(runtime, MACHINE)
+        .is_some_and(|message| message.starts_with("Saving this device's new name"))
+}
+
+/// A save the worker took before the device was removed, added again and
+/// named again ends after that: it holds the machine's id named, but not
+/// this naming, so the device keeps waiting; a failed save of this naming
+/// keeps it waiting too, and only a save of it connects it.
+#[test]
+fn a_save_taken_before_a_device_was_named_again_does_not_connect_it() {
+    let mut runtime = runtime();
+    let (_state_path, _blocker) = saves_failing(&mut runtime);
+    let provisional = added(&mut runtime, ALIAS);
+    connected(&mut runtime, &provisional, Some(MACHINE), Ok(MACHINE));
+    let (first, first_round) = taken(&runtime);
+    assert!(first.device_registrations.iter().any(|registration| {
+        registration.id == MACHINE && registration.origin.naming() == Some(DeviceNaming::Named)
+    }));
+
+    removed(&mut runtime, ALIAS);
     assert!(runtime.device_names_saving.is_empty());
-    let saved = runtime.ui_state_to_save();
-    let mut named = saved.clone();
-    named
-        .device_registrations
-        .push(crate::model::DeviceRegistration {
-            id: MACHINE.to_owned(),
-            label: ALIAS.to_owned(),
-            origin: LinkOrigin::Dialed {
-                ssh_alias: ALIAS.to_owned(),
-                naming: DeviceNaming::Named,
-            },
-            host_consent: None,
-        });
-    assert!(!runtime.acknowledge_device_naming(&named, true));
+    assert!(!runtime.acknowledge_device_naming(&first, first_round, true));
     assert!(runtime.device_registration(MACHINE).is_none());
-    assert!(!runtime.device_hosts.contains_key(MACHINE));
+
+    let again = added(&mut runtime, ALIAS);
+    connected(&mut runtime, &again, Some(MACHINE), Ok(MACHINE));
+    assert!(runtime.device_names_saving.contains_key(MACHINE));
+    let (second, second_round) = taken(&runtime);
+    assert!(second_round > first_round, "rounds are never reused");
+
+    assert!(!runtime.acknowledge_device_naming(&first, first_round, true));
+    assert!(runtime.device_names_saving.contains_key(MACHINE));
+    let registration = runtime.device_registration(MACHINE).cloned().unwrap();
+    runtime.connect_remote_device(&registration, hosts::HostAttempt::Operator);
+    assert!(saving_held(&mut runtime));
+
+    assert!(!runtime.acknowledge_device_naming(&second, second_round, false));
+    assert!(runtime.device_names_saving.contains_key(MACHINE));
+
+    runtime.acknowledge_device_naming(&second, second_round, true);
+    assert!(runtime.device_names_saving.is_empty());
+    assert!(!saving_held(&mut runtime));
+}
+
+/// Taking Hide's helper's consent back while the name saves leaves the
+/// name waiting for its save; the save then lets the device connect, and
+/// its consent, gone, opens no helper until it is given again.
+#[test]
+fn a_device_whose_consent_was_taken_back_while_its_name_saved_opens_no_helper() {
+    let mut runtime = runtime();
+    let (state_path, _blocker) = saves_failing(&mut runtime);
+    let provisional = added(&mut runtime, ALIAS);
+    connected(&mut runtime, &provisional, Some(MACHINE), Ok(MACHINE));
+    assert!(runtime.set_host_consent(MACHINE, false));
+    assert!(runtime.device_names_saving.contains_key(MACHINE));
+
+    runtime.state_path = state_path;
+    runtime.persist_current_ui_state();
+    assert!(runtime.device_names_saving.is_empty());
+    let host = row(&mut runtime, MACHINE).host;
+    assert_eq!(host.state, "not_allowed", "{host:?}");
+    assert!(
+        !runtime
+            .device_hosts
+            .get(MACHINE)
+            .is_some_and(|host| matches!(host.phase, hosts::HostPhase::Ready { .. }))
+    );
+
+    assert!(runtime.set_host_consent(MACHINE, true));
+    let host = row(&mut runtime, MACHINE).host;
+    assert_ne!(host.state, "not_allowed", "{host:?}");
 }
 
 /// A new device is named only by a machine both readings agree on that is

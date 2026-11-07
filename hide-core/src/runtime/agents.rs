@@ -2750,6 +2750,7 @@ impl Runtime {
         let Some(context) = self.worker_context.clone() else {
             // Standalone runtimes have no shared mutex or worker context.
             let state = self.ui_state_to_save();
+            let naming_round = self.device_naming_round;
             let result = persistence::save(
                 &self.state_path,
                 &state,
@@ -2763,7 +2764,7 @@ impl Runtime {
             self.ingest_dormant_saved(&state.agent_sleep, result.is_ok());
             self.ingest_archive_saved(&state.session_archive, result.is_ok());
             self.acknowledge_project_settings_save(&state, result.is_ok());
-            self.acknowledge_device_naming(&state, result.is_ok());
+            self.acknowledge_device_naming(&state, naming_round, result.is_ok());
             return result;
         };
         self.state_save_pending = true;
@@ -2778,16 +2779,18 @@ impl Runtime {
                     return;
                 };
                 loop {
-                    let (path, state, sizes) = {
+                    let (path, state, naming_round, sizes) = {
                         let mut guard = runtime.lock().unwrap_or_else(|e| e.into_inner());
                         if !guard.state_save_pending {
                             guard.state_save_active = false;
                             return;
                         }
                         guard.state_save_pending = false;
+                        // The naming round is taken with the state it saves.
                         (
                             guard.state_path.clone(),
                             guard.ui_state_to_save(),
+                            guard.device_naming_round,
                             guard
                                 .terminal_sizes
                                 .iter()
@@ -2817,7 +2820,7 @@ impl Runtime {
                         let settings_changed =
                             guard.acknowledge_project_settings_save(&state, result.is_ok());
                         let naming_changed =
-                            guard.acknowledge_device_naming(&state, result.is_ok());
+                            guard.acknowledge_device_naming(&state, naming_round, result.is_ok());
                         if let Err(message) = &result {
                             if settings_changed {
                                 guard.push_diagnostic(

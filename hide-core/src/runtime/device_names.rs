@@ -156,7 +156,7 @@ impl Runtime {
     /// device whose consent holds its machine id waits for a start to name
     /// it, and a renamed one for the core state that names it to be saved.
     pub(super) fn device_name_hold(&self, registration: &DeviceRegistration) -> Option<String> {
-        if self.device_names_saving.contains(&registration.id) {
+        if self.device_names_saving.contains_key(&registration.id) {
             return Some(
                 "Saving this device's new name; it connects once the save is done".to_owned(),
             );
@@ -212,7 +212,9 @@ impl Runtime {
         if focused {
             self.snapshot.navigator.focused_device_id = Some(to.to_owned());
         }
-        self.device_names_saving.insert(to.to_owned());
+        self.device_naming_round += 1;
+        self.device_names_saving
+            .insert(to.to_owned(), self.device_naming_round);
         crate::diagnostic!(serde_json::json!({
             "component": "remote_host",
             "kind": "device.named",
@@ -243,12 +245,17 @@ impl Runtime {
         self.persist_current_ui_state();
     }
 
-    /// A save of `saved` ended: each renamed device it holds connects under
-    /// its machine id once that save succeeded. A failed save keeps it
-    /// waiting for the next one, which the operator's retry asks for.
+    /// A save of `saved`, taken at naming round `round`, ended: each device
+    /// renamed at or before that round that it holds named connects under
+    /// its machine id once that save succeeded. A save taken before a
+    /// device's latest rename (removed and added again since) stands for
+    /// nothing of it, and a failed save keeps it waiting for the next one,
+    /// which the operator's retry asks for. Whether it may connect is still
+    /// its consent's to say (`connect_remote_device`).
     pub(super) fn acknowledge_device_naming(
         &mut self,
         saved: &UiStateSnapshot,
+        round: u64,
         success: bool,
     ) -> bool {
         if !success || self.device_names_saving.is_empty() {
@@ -257,13 +264,14 @@ impl Runtime {
         let settled: Vec<String> = self
             .device_names_saving
             .iter()
-            .filter(|id| {
-                saved.device_registrations.iter().any(|registration| {
-                    &registration.id == *id
-                        && registration.origin.naming() == Some(DeviceNaming::Named)
-                })
+            .filter(|(id, renamed_at)| {
+                **renamed_at <= round
+                    && saved.device_registrations.iter().any(|registration| {
+                        &registration.id == *id
+                            && registration.origin.naming() == Some(DeviceNaming::Named)
+                    })
             })
-            .cloned()
+            .map(|(id, _)| id.clone())
             .collect();
         let mut changed = false;
         for id in settled {

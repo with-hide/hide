@@ -487,7 +487,7 @@ impl Runtime {
         }
         // A renamed device waits for the save that holds its new id; the
         // retry asks for that save again, and the save connects it.
-        if self.device_names_saving.contains(device_id) {
+        if self.device_names_saving.contains_key(device_id) {
             self.persist_current_ui_state();
             return true;
         }
