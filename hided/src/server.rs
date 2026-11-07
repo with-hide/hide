@@ -2800,6 +2800,25 @@ fn device_listing(
     }
 }
 
+/// The reason a node ask's frame carries for a refusal: the node's own code
+/// for a path it judged, `busy` for a link already full, and `disconnected`
+/// for a machine that cannot be reached (`contracts/hided-ws.schema.json`,
+/// `nodeAskReason`).
+fn node_ask_reason(error: &hide_node_link::LinkError) -> &'static str {
+    match error {
+        hide_node_link::LinkError::Refused(refused) => match refused.code {
+            hide_node_link::ErrorCode::OutsideRoot => "outside_home",
+            hide_node_link::ErrorCode::NotFound => "not_found",
+            hide_node_link::ErrorCode::NotADirectory => "not_a_directory",
+            hide_node_link::ErrorCode::InvalidPath => "invalid_path",
+            hide_node_link::ErrorCode::AlreadyExists => "already_exists",
+            _ => "unreadable",
+        },
+        hide_node_link::LinkError::Busy => "busy",
+        _ => "disconnected",
+    }
+}
+
 /// Asks a machine's node Add a project's question on a blocking task and
 /// hands the answer to the client's socket loop; a client gone by then drops
 /// it. The answer is never forwarded to the core and changes nothing on disk.
@@ -2857,16 +2876,7 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
                 "device": device, "code": code.map(|code| code.as_str()), "message": message,
             })
         );
-        match code {
-            Some(hide_node_link::ErrorCode::OutsideRoot) => "outside_home",
-            Some(hide_node_link::ErrorCode::NotFound) => "not_found",
-            Some(hide_node_link::ErrorCode::NotADirectory) => "not_a_directory",
-            Some(hide_node_link::ErrorCode::InvalidPath) => "invalid_path",
-            Some(hide_node_link::ErrorCode::AlreadyExists) => "already_exists",
-            Some(_) => "unreadable",
-            None if matches!(error, LinkError::Busy) => "busy",
-            None => "disconnected",
-        }
+        node_ask_reason(&error)
     };
     let link = core.node_link(&device);
     match kind {
@@ -5947,6 +5957,31 @@ mod tests {
             hide_platform::path::to_wire_lossy(
                 &hide_platform::fs::identity::canonical(&app).unwrap()
             )
+        );
+    }
+
+    /// Add a project's folder list words a node's refusal by the code the
+    /// node judged with, and a machine it cannot reach as disconnected, so a
+    /// device's `outside_home` reads as this machine's does (PRD
+    /// device-add-project B12, B31).
+    #[test]
+    fn a_node_ask_refusal_carries_the_reason_the_dialog_reads() {
+        use hide_node_link::{ErrorCode, HostError, LinkError};
+        let refused = |code| node_ask_reason(&LinkError::Refused(HostError::new(code, "refused")));
+        assert_eq!(refused(ErrorCode::OutsideRoot), "outside_home");
+        assert_eq!(refused(ErrorCode::NotFound), "not_found");
+        assert_eq!(refused(ErrorCode::NotADirectory), "not_a_directory");
+        assert_eq!(refused(ErrorCode::InvalidPath), "invalid_path");
+        assert_eq!(refused(ErrorCode::AlreadyExists), "already_exists");
+        assert_eq!(refused(ErrorCode::Io), "unreadable");
+        assert_eq!(node_ask_reason(&LinkError::Busy), "busy");
+        assert_eq!(
+            node_ask_reason(&LinkError::NotConnected("gone".into())),
+            "disconnected"
+        );
+        assert_eq!(
+            node_ask_reason(&LinkError::Unknown("lost".into())),
+            "disconnected"
         );
     }
 }
