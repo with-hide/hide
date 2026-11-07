@@ -26,6 +26,7 @@ pub mod feedback;
 pub mod gh;
 pub mod git;
 pub mod herdr_save;
+pub mod importable;
 pub mod holders;
 pub mod home;
 pub mod index;

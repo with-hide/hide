@@ -333,7 +333,11 @@ use crate::error::HostError;
 /// project would land under that home, so both run on any device (PRD
 /// device-add-project D-01, D-07); a helper on 78 would refuse both, so it
 /// upgrades.
-pub const PROTOCOL_VERSION: u32 = 79;
+/// 80: `importable_projects` answers the projects worth adding on the node,
+/// from its agents' sessions and Paseo's and Herdr's lists, for Add a
+/// project on any device (PRD device-add-project D-09); a helper on 79
+/// would refuse it, so it upgrades.
+pub const PROTOCOL_VERSION: u32 = 80;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -621,6 +625,16 @@ pub enum Call {
     /// repository carries its branch and a folder its repository count.
     HomeList {
         path: String,
+    },
+    /// The projects worth adding on this host (`importable::ImportableProjects`):
+    /// the folders its agents worked in and the projects Paseo and Herdr keep,
+    /// each as the root a registration would add under home, newest within
+    /// thirty days first, at most twenty, leaving out every root `exclude`
+    /// names (the core's registrations here, at most
+    /// `importable::EXCLUDE_CAP`). It only reads.
+    ImportableProjects {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude: Vec<String>,
     },
     /// Where a clone (`kind` `clone`) or a new project (`project`) named
     /// `name` would land in `parent`, home or a folder under it, judged
@@ -1296,6 +1310,7 @@ impl Call {
             | Self::Registrable { .. }
             | Self::HomeSync { .. }
             | Self::HomeList { .. }
+            | Self::ImportableProjects { .. }
             | Self::NewFolderTarget { .. }
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }
