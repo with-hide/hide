@@ -1713,7 +1713,10 @@ impl Runtime {
         // and the waiters (`ledger_walk`), where each was its own scan and the
         // delivered one scanned the previous ledger per delivered letter.
         let walk = super::ledger_walk::walk(
-            self.delivery_ledger.as_ref().ok().map(|previous| &**previous),
+            self.delivery_ledger
+                .as_ref()
+                .ok()
+                .map(|previous| &**previous),
             &ledger,
             &self.snapshot.overview_graph,
             now,

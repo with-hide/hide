@@ -188,7 +188,11 @@ mod tests {
             // The earlier pass: the graph's facts, letter by letter, and its count.
             graph.available
                 && previous.letters.len() == next.letters.len()
-                && next.letters.iter().filter(|letter| letter.retained(NOW)).count()
+                && next
+                    .letters
+                    .iter()
+                    .filter(|letter| letter.retained(NOW))
+                    .count()
                     == graph.retained_count
                 && previous
                     .letters
@@ -210,7 +214,11 @@ mod tests {
         )
     }
 
-    fn walked(previous: &Ledger, next: &Ledger, graph: &OverviewGraphSnapshot) -> (bool, Vec<String>, bool) {
+    fn walked(
+        previous: &Ledger,
+        next: &Ledger,
+        graph: &OverviewGraphSnapshot,
+    ) -> (bool, Vec<String>, bool) {
         let walk = walk(Some(previous), next, graph, NOW);
         (walk.graph_unchanged, walk.delivered, walk.waiters_moved)
     }
@@ -218,7 +226,10 @@ mod tests {
     #[test]
     fn a_ledger_that_did_not_move_says_nothing_moved() {
         let (ledger, graph) = ledger(6);
-        assert_eq!(walked(&ledger, &ledger.clone(), &graph), (true, vec![], false));
+        assert_eq!(
+            walked(&ledger, &ledger.clone(), &graph),
+            (true, vec![], false)
+        );
     }
 
     #[test]
@@ -245,7 +256,10 @@ mod tests {
         let (unchanged, delivered, _) = walked(&before, &after, &graph);
         assert!(!unchanged, "a letter left the graph's page");
         assert_eq!(delivered, ["recipient-3"]);
-        assert_eq!(walked(&before, &after, &graph), passes(&before, &after, &graph));
+        assert_eq!(
+            walked(&before, &after, &graph),
+            passes(&before, &after, &graph)
+        );
     }
 
     #[test]
@@ -279,7 +293,10 @@ mod tests {
         let mut copy = twin.letters[0].clone();
         copy.id = "twin".into();
         twin.letters.push(copy);
-        assert_eq!(walked(&before, &twin, &graph).2, passes(&before, &twin, &graph).2);
+        assert_eq!(
+            walked(&before, &twin, &graph).2,
+            passes(&before, &twin, &graph).2
+        );
     }
 
     #[test]
@@ -290,14 +307,18 @@ mod tests {
         // Pending awaits intake; Acknowledged with no hook confirmation still does, one with it does not.
         after.letters[0].state = State::Acknowledged;
         after.letters[0].hook_confirmed = Some(true);
-        assert_eq!(walked(&before, &after, &graph).2, passes(&before, &after, &graph).2);
+        assert_eq!(
+            walked(&before, &after, &graph).2,
+            passes(&before, &after, &graph).2
+        );
         assert!(walked(&before, &after, &graph).2);
     }
 
     #[test]
     fn the_walk_agrees_with_the_passes_it_replaced_over_every_kind_of_step() {
         let (before, graph) = ledger(8);
-        let steps: Vec<Box<dyn Fn(&mut Ledger)>> = vec![
+        type Step = Box<dyn Fn(&mut Ledger)>;
+        let steps: Vec<Step> = vec![
             Box::new(|ledger| ledger.letters[3].state = State::Delivered),
             Box::new(|ledger| ledger.letters[3].waiting_answer = true),
             Box::new(|ledger| {
@@ -317,7 +338,11 @@ mod tests {
         for (n, step) in steps.iter().enumerate() {
             let mut after = before.clone();
             step(&mut after);
-            assert_eq!(walked(&before, &after, &graph), passes(&before, &after, &graph), "step {n}");
+            assert_eq!(
+                walked(&before, &after, &graph),
+                passes(&before, &after, &graph),
+                "step {n}"
+            );
         }
     }
 
@@ -332,7 +357,15 @@ mod tests {
         after.letters[0].bell_sent = true;
         assert!(walk(Some(&before), &after, &graph, 3).graph_unchanged);
         // The letter outlived its retention: the page holds one the ledger no longer keeps.
-        assert!(!walk(Some(&before), &after, &graph, crate::delivery::RETENTION_MS + 1).graph_unchanged);
+        assert!(
+            !walk(
+                Some(&before),
+                &after,
+                &graph,
+                crate::delivery::RETENTION_MS + 1
+            )
+            .graph_unchanged
+        );
         after.letters[0].recipient.session = Some("replacement-session".into());
         assert!(!walk(Some(&before), &after, &graph, 3).graph_unchanged);
     }
