@@ -10,7 +10,7 @@
 import { ArrowLeftIcon, FolderOpenIcon, GitBranchIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
-import { alreadyRegistered, defaultProjectParent, projectNameProblem, projectPath, refusalText } from "./addProject";
+import { alreadyRegistered, defaultProjectParent, projectNameProblem, projectPath, refusalText, TYPED_ASK_DELAY_MS } from "./addProject";
 import { Note } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { DialogBody, DialogDescription, DialogHeader, DialogTitle } from "./components/ui/dialog";
@@ -41,8 +41,10 @@ export function CreateProjectView({ actions, device, hostLabel, registrations, p
   // Asked again when a create is refused or fails, since a failed create may
   // have left its folder behind, which the next create continues into.
   const failure = shown ? `${shown.reason}\n${shown.text}` : "";
+  // Typing settles first: on a device each probe is a round trip to its node.
   useEffect(() => {
-    actions.probeProjectTarget(parent, asked, device);
+    const timer = window.setTimeout(() => actions.probeProjectTarget(parent, asked, device), TYPED_ASK_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [actions, device, parent, asked, failure]);
 
   const registered = target?.path ? alreadyRegistered(target.path, device, registrations) : false;

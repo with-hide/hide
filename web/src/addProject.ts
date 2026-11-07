@@ -60,6 +60,9 @@ export function rememberedFolder(state: { add_project_folder?: string | null; de
   return (device === node || device === "" ? state?.add_project_folder : state?.device_add_project_folders?.[device]) || null;
 }
 
+/** How long typing settles before a machine is asked about what was typed: a clone or project target, or a folder. */
+export const TYPED_ASK_DELAY_MS = 150;
+
 /**
  * What a line typed into the folder list asks for (PRD device-add-project
  * D-06): a `~` path moves the list to the folder before its last `/` and

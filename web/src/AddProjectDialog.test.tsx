@@ -216,6 +216,55 @@ it("moves the list to a typed folder and filters it by the rest of the line", as
   await unmount();
 });
 
+it("waits for an answer newer than its ask, and moves nothing for a folder the field no longer names", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await answerList("ubuntu", "~", { listing: home });
+  const projects = (names: string[]): HomeListing => ({ path: "/home/me/projects", label: "~/projects", home: "/home/me", truncated: false, entries: names.map((name) => ({ name, is_directory: true })) });
+  const rows = () => [...document.querySelectorAll("[data-folder-row]")].map((row) => row.getAttribute("data-folder-row"));
+  await type("~/projects/");
+  await answerList("ubuntu", "~/projects", { listing: projects(["old"]) });
+  expect(rows()).toEqual(["old"]);
+  await type("~/");
+  await answerList("ubuntu", "~", { listing: home });
+  // Asked again, the folder's earlier answer is not this ask's: the list stays until a new one arrives.
+  await type("~/projects/");
+  expect(lists(events).filter((asked) => asked.path === "~/projects")).toHaveLength(2);
+  expect(rows()).toEqual(["app", "old", "projects", "notes.txt"]);
+  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  await answerList("ubuntu", "~/projects", { listing: projects(["new"]) });
+  expect(rows()).toEqual(["new"]);
+  // A typed folder that names nothing keeps the list, and Add does not take the folder shown instead.
+  await type("~/projcts/");
+  await answerList("ubuntu", "~/projcts", { reason: "not_found" });
+  expect(find("[data-folder-browser-hint]")?.getAttribute("data-folder-browser-hint")).toBe("not_found");
+  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  // An answer arriving after the field was cleared moves nothing.
+  await type("~/elsewhere/");
+  await type("");
+  await answerList("ubuntu", "~/elsewhere", { listing: { ...projects(["moved"]), path: "/home/me/elsewhere", label: "~/elsewhere" } });
+  expect(rows()).toEqual(["new"]);
+  await unmount();
+});
+
+it("keeps the keyboard in Clone from URL's parent field while a parent is typed", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { unmount } = await mount(state(null, "ubuntu"));
+  await act(async () => find('[data-add-project-way="clone"]')!.click());
+  const field = find("[data-clone-parent]") as HTMLInputElement;
+  field.focus();
+  for (const text of ["~", "~/w", "~/work"]) {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(document.activeElement, text);
+      document.activeElement!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  expect(document.activeElement).toBe(field);
+  expect(field.value).toBe("~/work");
+  await unmount();
+});
+
 it("asks the same question when a device's node answers that a typed folder is outside its home (PRD wsl-device B15)", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
   const { events, unmount } = await mount(state("/mnt", "ubuntu"));

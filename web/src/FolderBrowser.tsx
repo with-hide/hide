@@ -13,7 +13,7 @@
 import { ArrowLeftIcon, ChevronRightIcon, FileIcon, FolderIcon, GitBranchIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
-import { alreadyRegistered, childPath, filterEntries, folderCrumbs, typedPlace } from "./addProject";
+import { alreadyRegistered, childPath, filterEntries, folderCrumbs, TYPED_ASK_DELAY_MS, typedPlace, type TypedPlace } from "./addProject";
 import { DeviceChip } from "./components/device-chip";
 import { Note, Status } from "./components/settings-rows";
 import { Badge } from "./components/ui/badge";
@@ -26,8 +26,6 @@ import { composingKey } from "./keys";
 import type { WorkspaceRegistration } from "./snapshot";
 import { homeFolderKey, useShellStore, type HomeEntry, type HomeFolderAnswer } from "./store";
 
-/** How long typing settles before a typed path is asked about. */
-const TYPED_ASK_DELAY_MS = 150;
 
 /** What moved the list: its opening, the operator's click or key, or a typed path. */
 type Via = "start" | "click" | "typed";
@@ -97,6 +95,8 @@ export function FolderBrowser(props: FolderBrowserProps) {
   // An answer for the folder asked for: a listing becomes the list, a remembered folder that is gone opens home.
   useEffect(() => {
     if (!answer) return;
+    // A typed ask the field no longer makes (cleared or changed before it was answered) moves nothing.
+    if (asked.via === "typed" && typedPlaceRequest(typedPlace(text, drives, windows)) !== asked.request) return;
     if (answer.listing) {
       setShown(answer);
       setSelected(null);
@@ -113,7 +113,7 @@ export function FolderBrowser(props: FolderBrowserProps) {
 
   const place = typedPlace(text, drives, windows);
   // A typed folder or path moves the list once typing settles.
-  const typedRequest = place.kind === "folder" ? place.folder : place.kind === "path" ? place.path : null;
+  const typedRequest = typedPlaceRequest(place);
   useEffect(() => {
     if (typedRequest === null || typedRequest === shown?.listing?.label || typedRequest === asked.request) return;
     const timer = window.setTimeout(() => ask(typedRequest, "typed"), TYPED_ASK_DELAY_MS);
@@ -151,7 +151,9 @@ export function FolderBrowser(props: FolderBrowserProps) {
     if (mode === "add" && alreadyRegistered(path, device, registrations)) return { path, label, problem: t("addProject.browse.added"), note: null };
     return { path, label, problem: null, note: null };
   })();
-  const ready = target !== null && target.problem === null && !disconnected && !busy && !(loading || failed);
+  // A typed folder the list does not show yet, still settling or named nowhere, is not what Add would take.
+  const settling = typedRequest !== null && typedRequest !== listing?.label && outside === null;
+  const ready = target !== null && target.problem === null && !disconnected && !busy && !(loading || failed) && !settling;
 
   const submit = () => {
     if (!ready || !target) return;
@@ -391,4 +393,9 @@ function FolderRow({ id, entry, selected, added, onSelect, onEnter }: { id: stri
       {entry.is_directory ? <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : null}
     </div>
   );
+}
+
+/** The folder a typed line asks the machine for, or null when it only filters the folder shown. */
+function typedPlaceRequest(place: TypedPlace): string | null {
+  return place.kind === "folder" ? place.folder : place.kind === "path" ? place.path : null;
 }

@@ -203,9 +203,9 @@ export function AddProjectViews({
   return (
       <>
         {view === "create" ? (
-          <CreateProjectView key={form.parent ?? ""} actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("create")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
+          <CreateProjectView actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("create")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : view === "clone" ? (
-          <CloneFromUrl key={form.parent ?? ""} actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("clone")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
+          <CloneFromUrl actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("clone")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : (
           <>
             <DialogHeader>

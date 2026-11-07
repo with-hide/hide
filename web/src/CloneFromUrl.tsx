@@ -15,7 +15,7 @@ import { ArrowLeftIcon, FolderOpenIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Trans } from "react-i18next";
 import type { Actions } from "./actions";
-import { cloneUrlDraft, defaultProjectParent, folderLabel, parseCloneUrl, refusalText, trimFolder } from "./addProject";
+import { cloneUrlDraft, defaultProjectParent, folderLabel, parseCloneUrl, refusalText, trimFolder, TYPED_ASK_DELAY_MS } from "./addProject";
 import { Note, Status } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { DialogBody, DialogDescription, DialogHeader, DialogTitle } from "./components/ui/dialog";
@@ -28,9 +28,6 @@ import { cloneFailureText, cloneStageText, coreErrorText } from "./coreError";
 import { QuotedLine } from "./QuotedLine";
 import { useErrorSince } from "./errorSince";
 import { composingKey } from "./keys";
-
-/** How long typing settles before hided is asked about the folder. */
-const TARGET_CHECK_DELAY_MS = 150;
 
 /** Whether a clone is still running: nothing else may start until it ends. */
 export function cloneRunning(clone: RepositoryClone | null | undefined): boolean {
@@ -89,7 +86,7 @@ export function CloneFromUrl({ actions, device, hostLabel, registrations, pickPa
 
   useEffect(() => {
     if (!name || !parentPath) return;
-    const timer = window.setTimeout(() => actions.checkCloneTarget(parentPath, name, device), TARGET_CHECK_DELAY_MS);
+    const timer = window.setTimeout(() => actions.checkCloneTarget(parentPath, name, device), TYPED_ASK_DELAY_MS);
     return () => window.clearTimeout(timer);
     // A clone that ended may have taken the folder, so its end asks again.
   }, [actions, device, name, parentPath, clone?.phase]);
