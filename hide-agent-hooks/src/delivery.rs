@@ -354,8 +354,14 @@ fn confirm_runs(ids: &[String]) -> Vec<&[String]> {
     let mut runs = Vec::new();
     let (mut start, mut bytes) = (0, 0);
     for (at, id) in ids.iter().enumerate() {
-        // The id quoted and escaped, and its comma.
-        let size = serde_json::to_string(id).map_or(id.len() * 6 + 2, |text| text.len()) + 1;
+        // The id, its quotes, a backslash before each `"` and `\` in it (a
+        // valid id holds no control character, the only other escape), and
+        // its comma.
+        let size = id.len()
+            + id.bytes()
+                .filter(|byte| matches!(byte, b'"' | b'\\'))
+                .count()
+            + 3;
         if at > start && bytes + size > CONFIRM_IDS_BYTES {
             runs.push(&ids[start..at]);
             (start, bytes) = (at, 0);
