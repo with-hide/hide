@@ -10,11 +10,13 @@
 //!
 //! One record per pane holds one bundle. A record of another session in the
 //! pane is that session's, which ended there, and is dropped; one older than
-//! a letter's deadline is dropped too, since the core ended its letters
-//! then. At most [`OWED_PANES`] panes owe at once: past it a new
-//! confirmation is not kept and the miss is reported, and its letters end at
-//! their deadline as before. The same code runs on every system and in a
-//! device's hooks, under the hooks' own records folder.
+//! a letter's deadline, counted from its first miss, is dropped too, since
+//! the core ended its letters then, at that pane's turn end or by any pane's
+//! next miss. A turn end reads only its own pane's record, so one with
+//! nothing owed costs a failed open. At most [`OWED_PANES`] panes owe at
+//! once: past it a new confirmation is not kept and the miss is reported,
+//! and its letters end at their deadline as before. The same code runs on
+//! every system and in a device's hooks, under the hooks' own records folder.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -51,8 +53,11 @@ fn path(home: &Path, pane: &str) -> PathBuf {
 
 /// Keeps the confirmation of `ids`, which reached the agent of `session` in
 /// `pane`, for that pane's next turn end. A confirmation already owed there
-/// for the same session is kept with it, one bundle at most; one of another
-/// session is replaced. Refused past [`OWED_PANES`] with `owed_capacity`.
+/// for the same session is kept with it, one bundle at most, and keeps its
+/// first miss's time; one of another session is replaced. Refused past
+/// [`OWED_PANES`] with `owed_capacity`, and past [`RECORD_LIMIT`] with
+/// `owed_record`. Every pane's record past a letter's deadline, or damaged,
+/// is dropped first.
 pub fn owe(
     home: &Path,
     pane: &str,
@@ -62,11 +67,14 @@ pub fn owe(
 ) -> Result<(), &'static str> {
     sweep(home, now);
     let path = path(home, pane);
-    let mut owed = match read(&path) {
-        Some(record) if record.session == session => record.ids,
-        Some(_) => Vec::new(),
-        None if count(home) >= OWED_PANES => return Err("owed_capacity"),
-        None => Vec::new(),
+    let (mut owed, owed_at_unix_ms) = match read(&path) {
+        Ok(Some(record)) if record.session == session => (record.ids, record.owed_at_unix_ms),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && count(home) >= OWED_PANES => {
+            return Err("owed_capacity");
+        }
+        // Another session's, a damaged record or one not read now is
+        // replaced in its own place.
+        _ => (Vec::new(), now),
     };
     for id in ids {
         if !owed.contains(id) {
@@ -83,20 +91,24 @@ pub fn owe(
         version: RECORD_VERSION,
         session: session.to_owned(),
         ids: owed,
-        owed_at_unix_ms: now,
+        owed_at_unix_ms,
     })
     .map_err(|_| "owed_record")?;
+    if bytes.len() as u64 > RECORD_LIMIT {
+        return Err("owed_record");
+    }
     hide_platform::fs::private::create_dir_all(&folder(home)).map_err(|_| "owed_record")?;
     hide_platform::fs::atomic::write_file(&path, &bytes, hide_platform::fs::Access::Private)
         .map(drop)
         .map_err(|_| "owed_record")
 }
 
-/// Sends the confirmation `pane` owes for `session`, its own session's turn
-/// end, with `confirm`, and forgets it once sent; one that fails is kept for
-/// the next turn end. A record of another session, which ended in the pane,
-/// or past a letter's deadline is dropped unsent, as is any pane's record
-/// past it.
+/// Sends the confirmation `pane` owes for `session`, at that session's turn
+/// end, with `confirm`, and forgets it once sent; one that did not reach the
+/// core in time ([`Failure::transient`]) is kept for the next turn end, and
+/// one the core refused, which it would refuse again, is not. A record of
+/// another session, which ended in the pane, past a letter's deadline or
+/// damaged is dropped unsent.
 pub fn settle(
     home: &Path,
     pane: &str,
@@ -104,18 +116,25 @@ pub fn settle(
     now: u64,
     confirm: impl FnOnce(&[String]) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
-    sweep(home, now);
     let path = path(home, pane);
-    let Some(record) = read(&path) else {
-        return Ok(());
+    let record = match read(&path) {
+        Ok(Some(record)) if record.session == session && !expired(&record, now) => record,
+        Ok(_) => {
+            let _ = std::fs::remove_file(&path);
+            return Ok(());
+        }
+        // Nothing owed, or a record not read now and left for later.
+        Err(_) => return Ok(()),
     };
-    if record.session != session || expired(&record, now) {
+    let sent = confirm(&record.ids);
+    if sent
+        .as_ref()
+        .err()
+        .is_none_or(|failure| !failure.transient())
+    {
         let _ = std::fs::remove_file(&path);
-        return Ok(());
     }
-    confirm(&record.ids)?;
-    let _ = std::fs::remove_file(&path);
-    Ok(())
+    sent
 }
 
 fn expired(record: &Record, now: u64) -> bool {
@@ -123,10 +142,10 @@ fn expired(record: &Record, now: u64) -> bool {
 }
 
 /// Drops the records whose letters are past their deadline, and those that
-/// cannot be read.
+/// are damaged; one the system did not let it read now is left alone.
 fn sweep(home: &Path, now: u64) {
     for path in records(home) {
-        if read(&path).is_none_or(|record| expired(&record, now)) {
+        if read(&path).is_ok_and(|record| record.is_none_or(|record| expired(&record, now))) {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -153,15 +172,19 @@ fn records(home: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn read(path: &Path) -> Option<Record> {
-    let file = std::fs::File::open(path).ok()?;
+/// The record at `path`; `None` for a damaged one (too large, not one this
+/// build reads, or naming what is not a letter id), and the system's error
+/// for one it could not read.
+fn read(path: &Path) -> std::io::Result<Option<Record>> {
+    let file = std::fs::File::open(path)?;
     let mut bytes = Vec::new();
-    file.take(RECORD_LIMIT + 1).read_to_end(&mut bytes).ok()?;
+    file.take(RECORD_LIMIT + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > RECORD_LIMIT {
-        return None;
+        return Ok(None);
     }
-    let record: Record = serde_json::from_slice(&bytes).ok()?;
-    (record.version == RECORD_VERSION && valid_letter_ids(&record.ids)).then_some(record)
+    Ok(serde_json::from_slice::<Record>(&bytes)
+        .ok()
+        .filter(|record| record.version == RECORD_VERSION && valid_letter_ids(&record.ids)))
 }
 
 #[cfg(test)]
@@ -239,6 +262,64 @@ mod tests {
         assert_eq!(count(home.path()), 0);
     }
 
+    /// A confirmation the core refused would be refused at every turn end
+    /// after, so it is not kept.
+    #[test]
+    fn a_confirmation_the_core_refused_is_not_kept() {
+        let home = tempfile::tempdir().unwrap();
+        owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
+        let (result, _) = settled(home.path(), "w1:p1", "s1", NOW + 1_000, Err("refused"));
+        assert_eq!(result, Err("refused"));
+        let (_, asked) = settled(home.path(), "w1:p1", "s1", NOW + 2_000, Ok(()));
+        assert_eq!(asked, None);
+    }
+
+    /// A record larger than a read takes is not written, rather than
+    /// written and dropped unread.
+    #[test]
+    fn a_record_past_its_size_is_refused_when_written() {
+        let home = tempfile::tempdir().unwrap();
+        let long: Vec<String> = (0..300).map(|n| format!("letter-{n:0>240}")).collect();
+        assert_eq!(
+            owe(home.path(), "w1:p1", "s1", &long, NOW),
+            Err("owed_record")
+        );
+        assert_eq!(count(home.path()), 0);
+    }
+
+    /// Another pane's record the system does not let a miss read now is
+    /// left for later, not dropped as damaged.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_not_read_now_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
+        let other = path(home.path(), "w1:p1");
+        std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o000)).unwrap();
+        owe(home.path(), "w1:p2", "s2", &ids(&["letter-2"]), NOW).unwrap();
+        assert!(other.exists());
+        std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    /// A second miss of the session does not make its letters' deadline
+    /// later: the record ends a letter's deadline after its first miss.
+    #[test]
+    fn a_second_miss_keeps_the_first_misses_deadline() {
+        let home = tempfile::tempdir().unwrap();
+        owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
+        owe(
+            home.path(),
+            "w1:p1",
+            "s1",
+            &ids(&["letter-2"]),
+            NOW + DELIVERY_EXPIRY_MS - 1,
+        )
+        .unwrap();
+        let (_, asked) = settled(home.path(), "w1:p1", "s1", NOW + DELIVERY_EXPIRY_MS, Ok(()));
+        assert_eq!(asked, None);
+    }
+
     /// Two misses of one session are confirmed together; one of a new
     /// session replaces the old session's.
     #[test]
@@ -253,7 +334,7 @@ mod tests {
             NOW,
         )
         .unwrap();
-        let read_ids = || read(&path(home.path(), "w1:p1")).unwrap().ids;
+        let read_ids = || read(&path(home.path(), "w1:p1")).unwrap().unwrap().ids;
         assert_eq!(read_ids(), ids(&["letter-1", "letter-2"]));
         owe(home.path(), "w1:p1", "s2", &ids(&["letter-3"]), NOW).unwrap();
         assert_eq!(read_ids(), ids(&["letter-3"]));

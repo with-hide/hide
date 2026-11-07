@@ -280,13 +280,15 @@ A large letter is truncated at a UTF-8 boundary and includes its ID and `hide re
 
 #### A confirmation that missed its hook
 
-A command hook (Claude Code, Codex, Grok, Cursor, Antigravity) whose confirmation fails after its letters reached the agent keeps their ids for the pane's next turn end, and that turn end's hook of the same session sends the confirmation then (`hide_agent_hooks::owed`, `delivery::confirm_or_owe`, `delivery::settle_owed`); the core takes a confirmation that comes late, so the letter ends `delivered` with its receipt instead of waiting out its deadline.
+A command hook (Claude Code, Codex, Grok, Cursor, Antigravity) whose confirmation did not reach the core in time after its letters reached the agent (its deadline passed, its `hide` did not start, or no daemon or connection answered: `Failure::transient`) keeps their ids for the pane's next turn end, and that turn end's hook of the same session sends the confirmation then (`hide_agent_hooks::owed`, `delivery::confirm_or_owe`, `delivery::settle_owed`); the core takes a confirmation that comes late, so the letter ends `delivered` with its receipt instead of waiting out its deadline.
 On 2026-11-08 a first letter to a resting Claude Code missed its confirmation this way: the first run of the hook's `hide` took longer than the 400 ms it had, and nothing brought the letter again.
 The record is one small file per pane under the hooks' own records (`hide_kit::layout::owed_confirmations`, `~/.hide/agent-hooks/owed-confirmations/` or an installation's own folder), the same code on every system and in a device's hooks, holding one bundle of ids (at most 1024, 64 KiB read) and the session they reached.
-A confirmation that fails again is kept for the next turn end; a turn end of another session in the pane, whose session ended there, drops it unsent, as does every owe or turn end of any pane once the record is older than a letter's deadline (60 minutes, `DELIVERY_EXPIRY_MS`), when the core has ended its letters.
+A confirmation that again does not reach the core in time is kept for the next turn end, and one the core refuses (`refused`, `capacity`, `identity`), at the miss or at the turn end, is not kept, since it would be refused again; its letters end at their deadline as handed letters do.
+A turn end of another session in the pane, whose session ended there, drops the record unsent, as does the pane's turn end, or any pane's next miss, once it is older than a letter's deadline from its first miss (60 minutes, `DELIVERY_EXPIRY_MS`), when the core has ended its letters; a damaged record is dropped the same way, and one the system does not let a hook read at that moment is left for later.
+A turn end reads only its own pane's record, so one with nothing owed costs one failed open.
 At most 64 panes owe at once: past that a new miss is not kept and is recorded under the cause `owed_capacity`, and its letters end at their deadline as before.
 A subagent's turn end, and Claude Code's hook inside Grok, settle nothing, so they never drop the pane's own session's record.
-OpenCode's, Pi's and omp's scripts confirm from their own call with its own budget, not inside a prompt hook, and hand a letter they could not confirm again at their next ask.
+OpenCode's, Pi's and omp's scripts keep no such record: they confirm in a call of their own with a 2-second budget, not in the last 400 ms of a prompt hook, which is what a cold `hide` missed; a confirmation that still fails there is a known limit, its letter handed and unconfirmed until another ask takes it or its deadline ends it.
 
 #### One bundle per handover
 

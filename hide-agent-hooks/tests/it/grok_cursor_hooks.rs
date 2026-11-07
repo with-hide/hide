@@ -68,18 +68,12 @@ fn grok_stop_cannot_loop_even_when_confirmation_fails() {
                 }
             }
         }
-        // A confirmation that failed is owed to the next turn end, which
-        // Grok's continuing stop is: it sends it again and pulls nothing.
-        let owed_again = (mode == "letters-confirm-fails").then_some("inbox --confirm letter-1");
         assert_eq!(
             machine.calls(),
             [
                 "inbox --hook --session grok-session --turn-end",
                 "inbox --confirm letter-1",
             ]
-            .into_iter()
-            .chain(owed_again)
-            .collect::<Vec<_>>()
         );
     }
     // Neither a child stop nor a missing native identity may take the

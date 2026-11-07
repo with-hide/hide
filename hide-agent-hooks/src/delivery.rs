@@ -218,6 +218,30 @@ impl From<&'static str> for Failure {
     }
 }
 
+impl Failure {
+    /// Whether the core was not reached in time, so the same request may
+    /// still be taken later: the deadline passed, the `hide` beside the
+    /// helper did not start, no daemon or connection answered whole
+    /// ([`refusal_cause`]'s steps), or its store was not available. The
+    /// core's own refusal (`refused`, `capacity`, `identity`), an answer that
+    /// could not be read (`format`) and one that confirmed other letters
+    /// (`confirm`) would be the same again.
+    pub fn transient(&self) -> bool {
+        matches!(
+            self.code,
+            "deadline"
+                | "cli"
+                | "ledger"
+                | "unavailable"
+                | "record"
+                | "connect"
+                | "unsent"
+                | "timeout"
+                | "answer"
+        )
+    }
+}
+
 /// What the agent receives for the submitted prompt: the letter bodies when
 /// the core recognizes the prompt as the line its doorbell typed, otherwise
 /// at most a count.
@@ -332,14 +356,19 @@ pub fn valid_letter_ids(ids: &[String]) -> bool {
 }
 
 /// Confirms `intake`'s letters, which reached the agent, by `deadline`. One
-/// that misses it is recorded and owed to the pane's next turn end of the
-/// same session ([`crate::owed`], [`settle_owed`]), which confirms it then;
-/// the core takes a confirmation that comes late.
+/// that did not reach the core in time ([`Failure::transient`]) is recorded
+/// and owed to the pane's next turn end of the same session ([`crate::owed`],
+/// [`settle_owed`]), which confirms it then; the core takes a confirmation
+/// that comes late. One the core refused would be refused again and is only
+/// recorded as a failure.
 pub fn confirm_or_owe(home: &Path, intake: &Intake, deadline: Instant) {
     let Err(failure) = confirm(&intake.ids, deadline) else {
         return;
     };
     diagnose_failure(home, &failure);
+    if !failure.transient() {
+        return;
+    }
     let (Some(pane), Some(session)) = (crate::pane::from_env(), intake.session.as_deref()) else {
         return;
     };

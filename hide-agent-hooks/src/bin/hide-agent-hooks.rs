@@ -594,7 +594,13 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         }
         (HookEvent::Stop, None) => {
             report(Change::None, reporter(&conversation), Some(HookTurn::Done));
-            hide_agent_hooks::delivery::settle_owed(&home, &conversation, started + INTAKE_BUDGET);
+            // Its own time after the report, as the report has after the
+            // conversation's read.
+            hide_agent_hooks::delivery::settle_owed(
+                &home,
+                &conversation,
+                Instant::now() + report::REPORT_TIMEOUT,
+            );
         }
         (
             HookEvent::PreToolUse
