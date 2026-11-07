@@ -183,7 +183,7 @@ fn project_activity(
 /// waiting agents, changes, unpushed commits, the focus), every checkout is
 /// settled or stale, and the project's newest activity (an agent finishing in
 /// a merged worktree counts) is a week old. A pinned project is exempt (D-04).
-/// An unknown time never folds.
+/// A project with no known time anywhere never folds.
 pub(crate) fn project_is_inactive(
     workspace: &WorkspaceSnapshot,
     by_pane: &HashMap<&str, &SidebarAgentSnapshot>,
@@ -961,6 +961,23 @@ mod tests {
             .flat_map(|group| group.project_ids.clone())
             .collect();
         assert_eq!(inactive, ["untouched"]);
+    }
+
+    /// A merged worktree with no known time must not keep a project open
+    /// once its primary checkout has been quiet for a week.
+    #[test]
+    fn an_unknown_worktree_time_does_not_hold_a_quiet_project_open() {
+        let day_ms = 24 * 60 * 60 * 1_000;
+        let now_ms = 20 * day_ms;
+        let mut quiet = project("quiet", "local", Some((now_ms - 8 * day_ms) / 1_000), &[]);
+        let mut merged = make_worktree_checkout("quiet", "merged", None);
+        merged.landed = true;
+        quiet.checkouts.push(merged);
+        let mut navigator = navigator(vec![quiet]);
+
+        refresh_inactive_groups(&mut navigator, &UiStateSnapshot::default(), now_ms);
+
+        assert_eq!(navigator.inactive_projects[0].project_ids, ["quiet"]);
     }
 
     /// B3, B7. Every live-work exception wins over a settled branch, including

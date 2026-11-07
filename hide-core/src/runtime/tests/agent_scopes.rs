@@ -1531,14 +1531,14 @@ fn a_parent_here_draws_its_child_that_works_on_a_device_in_every_tree_it_opens_i
         "its device"
     );
 
-    // A device that stopped answering lists no row, so the shell has nothing
-    // to resolve its child to: the tree must not name it.
+    // A device that stopped answering keeps its last rows: the child stays on
+    // the parent's tree, which the shell dims, as the parent's badge counts it.
     runtime.snapshot.status.remote[0].state = "stale".into();
-    assert!(runtime.refresh_agent_scopes());
+    runtime.refresh_agent_scopes();
     let project = &runtime.snapshot.navigator.workspaces[0];
     assert_eq!(
         drawn(&project.checkouts[0].agent_scope),
-        [("root".to_owned(), 0)],
-        "a disconnected device's child is not drawn"
+        want,
+        "a disconnected device's child stays on its parent's tree"
     );
 }

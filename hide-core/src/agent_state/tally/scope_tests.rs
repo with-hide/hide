@@ -5,7 +5,7 @@ use crate::sidebar::{SessionSnapshotPayload, project_agents};
 use serde_json::json;
 
 fn family<'a>(rows: &'a [&'a SidebarAgentSnapshot]) -> super::lineage::Family<'a> {
-    super::lineage::Family::new(std::iter::once(("here", true, rows)))
+    super::lineage::Family::new(std::iter::once(rows))
 }
 
 fn rows() -> Vec<SidebarAgentSnapshot> {
@@ -76,7 +76,6 @@ fn physical_groups_root_headings_and_requests_keep_the_frozen_screen_values() {
         membership(&rows, "all"),
         &rows,
         &family(&rows),
-        None,
         MarkCountsSnapshot::default(),
     );
     assert_eq!(
@@ -140,7 +139,6 @@ fn physical_groups_root_headings_and_requests_keep_the_frozen_screen_values() {
         membership(&child, "child-project"),
         &rows,
         &family(&rows),
-        None,
         MarkCountsSnapshot::default(),
     );
     assert_eq!(
@@ -162,7 +160,6 @@ fn defaults_publish_known_zero_request_counts_and_unknown_groups_keep_their_head
         membership(&rows, "one"),
         &rows,
         &family(&rows),
-        None,
         MarkCountsSnapshot::default(),
     );
     assert_eq!(value.total, 1);

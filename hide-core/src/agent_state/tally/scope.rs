@@ -340,7 +340,6 @@ pub(super) fn scope(
     members: Vec<Member>,
     all: &[&SidebarAgentSnapshot],
     family: &super::lineage::Family<'_>,
-    device: Option<&str>,
     marks: MarkCountsSnapshot,
 ) -> Scope {
     let by_pane: HashMap<_, _> = all.iter().map(|row| (row.pane_id.as_str(), *row)).collect();
@@ -351,7 +350,7 @@ pub(super) fn scope(
     let mut value = Scope {
         marks,
         sections: sections(physical),
-        sidebar_tree: super::lineage::sidebar_tree(&tree_rows(physical), family, device),
+        sidebar_tree: super::lineage::sidebar_tree(&tree_rows(physical), family),
         ..Scope::default()
     };
     let references = row_references(physical);
@@ -905,11 +904,8 @@ impl Cache {
             devices: mut device_tasks,
         } = super::tasks::Forest::new(task_places).publish();
         // One index of every device's rows for every tree this refresh draws.
-        let family = super::lineage::Family::new(
-            devices
-                .iter()
-                .map(|device| (device.id, device.connected, device.agents.as_slice())),
-        );
+        let family =
+            super::lineage::Family::new(devices.iter().map(|device| device.agents.as_slice()));
         let mut overall_listed = Vec::new();
         let mut overall_members = Vec::new();
         let mut overall_projects = Vec::new();
@@ -939,7 +935,6 @@ impl Cache {
                         members(&[project], &device.listed),
                         &device.agents,
                         &family,
-                        Some(device.id),
                         project_marks(&[project]),
                     ),
                 );
@@ -1018,7 +1013,6 @@ impl Cache {
                             members,
                             &device.agents,
                             &family,
-                            Some(device.id),
                             checkout.agent_summary.marks,
                         ),
                     );
@@ -1058,7 +1052,6 @@ impl Cache {
                     scoped_members,
                     &device.agents,
                     &family,
-                    Some(device.id),
                     project_marks(&device.projects),
                 ),
             );
@@ -1170,7 +1163,6 @@ impl Cache {
             overall_members,
             &all,
             &family,
-            None,
             project_marks(&overall_projects),
         );
         overall.folded = super::lineage::folded(&live_listed, &live_projects, &places);
