@@ -376,7 +376,10 @@ export const PaneView = memo(function PaneView({
         }}
       >
         {/* The header's first row is this pane: its state on the left, what can be done to it on the right, each in a place that does not move.
+            The left side is one row that gives up its width first and clips at its end, so the right side's controls stay whole at any width;
+            below the pane head breakpoints its chips drop their words, then go, and the title keeps what is left.
             The grip says the header moves the pane; it shows while the header is pointed at or holds the keyboard, its place kept. */}
+        <div data-pane-move-row="true" className="flex min-w-0 flex-1 items-center gap-sm self-stretch overflow-hidden">
         <Hint label={t("panes.move.grip")}>
           <span data-pane-move-grip="true" className={`-mx-xxs flex shrink-0 cursor-grab text-subtle-foreground ${tools}`}>
             <GripVerticalIcon className="size-(--size-icon-sm)" aria-hidden="true" />
@@ -401,9 +404,12 @@ export const PaneView = memo(function PaneView({
               </>
             }
           >
-            {markSymbol && !look ? <StatusMark mark={markSymbol} className={markTone} data-pane-status-mark={markSymbol} /> : null}
-            {/* The logo names its product as the plain head's does (agent-mark-quiet B4, B6); the button's own name already says it. */}
-            <span data-pane-move-excluded="true" className="flex shrink-0" role="img" aria-label={agentProductName(agentKind)}><AgentMark kind={agentKind} /></span>
+            {/* The marks are the button's first column, the title its second (`PaneRecordButton`). */}
+            <span className="flex items-center gap-sm">
+              {markSymbol && !look ? <StatusMark mark={markSymbol} className={markTone} data-pane-status-mark={markSymbol} /> : null}
+              {/* The logo names its product as the plain head's does (agent-mark-quiet B4, B6); the button's own name already says it. */}
+              <span data-pane-move-excluded="true" className="flex shrink-0" role="img" aria-label={agentProductName(agentKind)}><AgentMark kind={agentKind} /></span>
+            </span>
             {titleContent}
             <span className="sr-only">, {agentProductName(agentKind)}</span>
           </PaneRecordButton>
@@ -415,17 +421,24 @@ export const PaneView = memo(function PaneView({
             </Hint>
           </>
         )}
-        {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
-        {agentKind ? <PanePrChip paneId={paneId} actions={actions} /> : null}
-        {agentKind ? <PaneWorkChip paneId={paneId} actions={actions} /> : null}
-        {agentKind ? <PaneViews paneId={paneId} name={title} actions={actions} /> : null}
+        {agentKind ? (
+          // What the pane did, which the session record also holds, gives way below the tight breakpoint; the ask and the letters after it stay, since the operator acts on them here.
+          <span className="contents pane-head-tight:hidden">
+            <PaneForkMark pane={pane} actions={actions} />
+            <PanePrChip paneId={paneId} actions={actions} />
+            <PaneWorkChip paneId={paneId} actions={actions} />
+            <PaneViews paneId={paneId} name={title} actions={actions} />
+          </span>
+        ) : null}
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
+        </div>
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
-        {agentKind ? <PaneMention paneId={paneId} actions={actions} className={tools} /> : null}
+        {/* A narrow pane draws neither `@` nor zoom: zoom waits in the pane menu, and `@` comes back as the pane widens. */}
+        {agentKind ? <PaneMention paneId={paneId} actions={actions} className={`${tools} pane-head-narrow:hidden`} /> : null}
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
             <Button
@@ -446,12 +459,12 @@ export const PaneView = memo(function PaneView({
               {hidden > 0 ? <span>+{hidden}</span> : null}
             </Button>
           </Hint>
-        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools}`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <Hint label={t("panes.actions", { name: title })}>
           <Button
             variant="ghost"
             size="icon-sm"
-            className="text-subtle-foreground hover:bg-popover hover:text-foreground"
+            className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground"
             aria-haspopup="menu"
             data-pane-menu={paneId}
             onClick={(event) => {
@@ -469,7 +482,7 @@ export const PaneView = memo(function PaneView({
           </Button>
         </Hint>
         <Hint label={t("panes.close", { name: title })}>
-          <Button variant="ghost" size="icon-sm" className="text-subtle-foreground hover:bg-popover hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
+          <Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
             <XIcon />
           </Button>
         </Hint>

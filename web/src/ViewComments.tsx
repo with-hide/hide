@@ -142,6 +142,7 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
         <DropdownMenuTrigger asChild>
           <button
             type="button"
+            aria-label={unseen ? `${label}, ${t("agents.mark.look")}` : label}
             data-pane-views={paneId}
             data-pane-views-unseen={unseen ? "true" : undefined}
             className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs px-xs outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary"
@@ -151,7 +152,7 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
               {/* Any View still unseen dots the chip's icon: the row's 볼 것 eye already says there is something to look at, the dot says it is in here (PRD unseen-agent-views B10). */}
               {unseen ? <span role="img" aria-label={t("agents.mark.look")} className="absolute -right-xxs -top-xxs size-(--size-tab-status-dot) rounded-full bg-warning" /> : null}
             </span>
-            <span>{label}</span>
+            <span className="pane-head-narrow:hidden">{label}</span>
           </button>
         </DropdownMenuTrigger>
       </Hint>
