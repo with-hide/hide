@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hide_host::importable::{IMPORTABLE_CAP, ImportableProjects, find};
 
@@ -62,7 +62,11 @@ impl Home {
     }
 
     fn find(&self, exclude: &[String]) -> ImportableProjects {
-        find(&self.path, &self.variables(), now_ms(), exclude)
+        self.find_by(exclude, Instant::now() + Duration::from_secs(60))
+    }
+
+    fn find_by(&self, exclude: &[String], deadline: Instant) -> ImportableProjects {
+        find(&self.path, &self.variables(), now_ms(), exclude, deadline)
     }
 
     fn folder(&self, relative: &str) -> PathBuf {
@@ -266,6 +270,57 @@ fn a_source_that_cannot_be_read_drops_out_alone() {
         .collect::<Vec<_>>();
     assert_eq!(dropped, vec!["paseo", "herdr"]);
     assert!(found.dropped.iter().all(|source| !source.reason.is_empty()));
+}
+
+/// B27 and the node's bound: a pipe where Paseo's registry or Herdr's
+/// session should be drops that source at once rather than waiting for a
+/// writer, the agents' projects are still answered, and asking again and
+/// again leaves no search behind; a search past its deadline answers at
+/// once with every source dropped as late.
+#[cfg(unix)]
+#[test]
+fn a_pipe_in_place_of_an_app_file_drops_that_app_without_holding_the_search() {
+    let home = Home::new();
+    let app = home.folder("work/app");
+    home.claude("one", &app);
+    for relative in [
+        ".paseo/projects/projects.json",
+        ".config/herdr/session.json",
+    ] {
+        let path = home.path.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    }
+    let home = std::sync::Arc::new(home);
+    for _ in 0..3 {
+        let (answer, answered) = std::sync::mpsc::channel();
+        let asked = std::sync::Arc::clone(&home);
+        std::thread::spawn(move || answer.send(asked.find(&[])).unwrap());
+        let found = answered
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the search waited on a pipe");
+        assert_eq!(
+            rows(&found),
+            vec![("~/work/app".to_owned(), set(&["claude"]))]
+        );
+        let dropped = found
+            .dropped
+            .iter()
+            .map(|source| source.source.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(dropped, vec!["paseo", "herdr"]);
+    }
+
+    let late = home.find_by(&[], Instant::now());
+    assert!(late.projects.is_empty());
+    assert!(late.dropped.iter().any(|source| source.source == "paseo"));
+    assert!(late.dropped.iter().any(|source| source.source == "claude"));
+    assert!(
+        late.dropped
+            .iter()
+            .all(|source| source.reason == "the search ran out of time")
+    );
 }
 
 /// B22: at most twenty rows, the newest first.

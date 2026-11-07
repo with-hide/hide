@@ -12,10 +12,23 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Hard cap on files visited in one catalog refresh.
 pub const SESSION_DISCOVERY_LIMIT: usize = 10_000;
+
+/// The agents that keep a file per session, in the order the walk reads them.
+const FILE_AGENTS: [Agent; 6] = [
+    Agent::Claude,
+    Agent::Codex,
+    Agent::Pi,
+    Agent::Omp,
+    Agent::Grok,
+    Agent::Cursor,
+];
+
+/// Why an agent the folder search had not reached by its deadline is left out.
+const LATE: &str = "the search ran out of time";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -207,10 +220,10 @@ impl SessionCatalog {
             let kept_stamp = file_cache::keeps(agent).then(|| stamp.clone()).flatten();
             let cwd = match self.file_cwd(agent, &path, kept_stamp.clone()) {
                 Ok(Some(cwd)) => cwd,
-                Ok(None) => continue,
+                Ok(None) | Err(HeaderError::Unreadable(_)) => continue,
                 // A file whose header is refused belongs to no Project the
                 // listing can name, so its refusal is the store's, once.
-                Err(reason) => {
+                Err(HeaderError::Refused(reason)) => {
                     let refusal = SessionStoreRefusal { agent, reason };
                     if !refusals.contains(&refusal) {
                         refusals.push(refusal);
@@ -262,48 +275,49 @@ impl SessionCatalog {
         visited: &mut usize,
     ) -> Result<Vec<(Agent, PathBuf)>, SessionCatalogError> {
         let mut files = Vec::new();
-        collect_jsonl(
-            &self.home.join(crate::CLAUDE_SESSIONS),
-            Agent::Claude,
-            2,
-            &mut files,
-            visited,
-            SESSION_DISCOVERY_LIMIT,
-        )?;
-        collect_jsonl(
-            &self.home.join(crate::CODEX_SESSIONS),
-            Agent::Codex,
-            4,
-            &mut files,
-            visited,
-            SESSION_DISCOVERY_LIMIT,
-        )?;
-        for agent in [Agent::Pi, Agent::Omp] {
-            if let Ok(root) = crate::native_file::root(&self.home, agent) {
-                collect_jsonl(
-                    &root,
-                    agent,
-                    1,
-                    &mut files,
-                    visited,
-                    SESSION_DISCOVERY_LIMIT,
-                )?;
-            }
-        }
-        if let Ok(root) = crate::native_file::root(&self.home, Agent::Grok) {
-            collect_grok(&root, &mut files, visited, SESSION_DISCOVERY_LIMIT)?;
-        }
-        if let Ok(root) = crate::native_file::root(&self.home, Agent::Cursor) {
-            collect_jsonl(
-                &root,
-                Agent::Cursor,
-                2,
-                &mut files,
-                visited,
-                SESSION_DISCOVERY_LIMIT,
-            )?;
+        for agent in FILE_AGENTS {
+            self.agent_files(agent, &mut files, visited)?;
         }
         Ok(files)
+    }
+
+    /// The session files of one agent of [`FILE_AGENTS`], added to `files`.
+    fn agent_files(
+        &self,
+        agent: Agent,
+        files: &mut Vec<(Agent, PathBuf)>,
+        visited: &mut usize,
+    ) -> Result<(), SessionCatalogError> {
+        let limit = SESSION_DISCOVERY_LIMIT;
+        let native = || crate::native_file::root(&self.home, agent).ok();
+        match agent {
+            Agent::Claude => collect_jsonl(
+                &self.home.join(crate::CLAUDE_SESSIONS),
+                agent,
+                2,
+                files,
+                visited,
+                limit,
+            ),
+            Agent::Codex => collect_jsonl(
+                &self.home.join(crate::CODEX_SESSIONS),
+                agent,
+                4,
+                files,
+                visited,
+                limit,
+            ),
+            Agent::Pi | Agent::Omp => native().map_or(Ok(()), |root| {
+                collect_jsonl(&root, agent, 1, files, visited, limit)
+            }),
+            Agent::Grok => {
+                native().map_or(Ok(()), |root| collect_grok(&root, files, visited, limit))
+            }
+            Agent::Cursor => native().map_or(Ok(()), |root| {
+                collect_jsonl(&root, agent, 2, files, visited, limit)
+            }),
+            Agent::OpenCode | Agent::Antigravity => Ok(()),
+        }
     }
 
     /// The working directory session file `path` of `agent` names, kept
@@ -313,11 +327,11 @@ impl SessionCatalog {
         agent: Agent,
         path: &Path,
         stamp: Option<String>,
-    ) -> Result<Option<PathBuf>, String> {
+    ) -> Result<Option<PathBuf>, HeaderError> {
         if agent == Agent::Cursor {
-            return Ok(crate::cursor::header(&self.home, path)
-                .ok()
-                .map(|header| header.cwd));
+            return crate::cursor::header(&self.home, path)
+                .map(|header| Some(header.cwd))
+                .map_err(|error| HeaderError::Unreadable(error.to_string()));
         }
         file_cache::header_cwd(path, stamp, || session_cwd(agent, path))
     }
@@ -327,67 +341,104 @@ impl SessionCatalog {
     /// changed, read from the same walk as [`Self::project_sessions`] plus
     /// the stores that keep no file per session (OpenCode's database,
     /// Antigravity's index). Only a session file changed since then is
-    /// opened; a store that cannot be read is a refusal, never the others'.
-    pub fn worked_folders(&self, since_unix_ms: u64) -> Result<WorkedFolders, SessionCatalogError> {
+    /// opened. Each agent is read on its own: one whose store cannot be
+    /// listed, or whose session files cannot be read, is a refusal beside
+    /// what the others found, and every agent not reached by `deadline` is
+    /// refused as late, so the call ends by then.
+    pub fn worked_folders(&self, since_unix_ms: u64, deadline: Instant) -> WorkedFolders {
         let mut visited = 0;
-        let files = self.session_files(&mut visited)?;
         let mut newest = std::collections::HashMap::<(Agent, PathBuf), u64>::new();
-        let mut refusals = Vec::new();
-        let mut note = |agent: Agent, cwd: PathBuf, at: u64| {
-            let entry = newest.entry((agent, cwd)).or_insert(at);
-            *entry = (*entry).max(at);
+        let mut refusals = Vec::<SessionStoreRefusal>::new();
+        let mut refuse = |agent: Agent, reason: String| {
+            // One line per agent: its first reason says why it fell short.
+            if !refusals.iter().any(|refusal| refusal.agent == agent) {
+                refusals.push(SessionStoreRefusal { agent, reason });
+            }
         };
-        for (agent, path) in files {
-            if agent.requires_native_file_proof()
-                && crate::native_file::inside_root(&self.home, agent, &path).is_err()
-            {
+        let late = || Instant::now() >= deadline;
+        let mut listed = HashSet::new();
+        let mut whole = true;
+        for agent in FILE_AGENTS {
+            if late() {
+                refuse(agent, LATE.to_owned());
+                whole = false;
                 continue;
             }
-            let Some(changed) = fs::metadata(&path)
-                .and_then(|metadata| metadata.modified())
-                .ok()
-                .and_then(system_time_ms)
-            else {
-                continue;
-            };
-            if changed < since_unix_ms {
+            let mut files = Vec::new();
+            if let Err(error) = self.agent_files(agent, &mut files, &mut visited) {
+                refuse(agent, error.to_string());
+                whole = false;
                 continue;
             }
-            let stamp = crate::stamp::stamp_at(&path);
-            let kept_stamp = file_cache::keeps(agent).then_some(stamp).flatten();
-            match self.file_cwd(agent, &path, kept_stamp) {
-                Ok(Some(cwd)) => note(agent, cwd, changed),
-                Ok(None) => {}
-                Err(reason) => {
-                    let refusal = SessionStoreRefusal { agent, reason };
-                    if !refusals.contains(&refusal) {
-                        refusals.push(refusal);
+            for (_, path) in files {
+                listed.insert(path.clone());
+                if late() {
+                    refuse(agent, LATE.to_owned());
+                    continue;
+                }
+                if agent.requires_native_file_proof()
+                    && crate::native_file::inside_root(&self.home, agent, &path).is_err()
+                {
+                    continue;
+                }
+                let Some(changed) = fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(system_time_ms)
+                else {
+                    continue;
+                };
+                if changed < since_unix_ms {
+                    continue;
+                }
+                let stamp = crate::stamp::stamp_at(&path);
+                let kept_stamp = file_cache::keeps(agent).then_some(stamp).flatten();
+                match self.file_cwd(agent, &path, kept_stamp) {
+                    Ok(Some(cwd)) => {
+                        let entry = newest.entry((agent, cwd)).or_insert(changed);
+                        *entry = (*entry).max(changed);
+                    }
+                    Ok(None) => {}
+                    Err(HeaderError::Refused(reason) | HeaderError::Unreadable(reason)) => {
+                        refuse(agent, format!("a session file could not be read: {reason}"));
                     }
                 }
             }
         }
-        match crate::opencode::worked_directories(
-            &self.home,
-            since_unix_ms,
-            &mut visited,
-            SESSION_DISCOVERY_LIMIT,
-        )? {
-            Ok(rows) => rows
-                .into_iter()
-                .for_each(|(cwd, at)| note(Agent::OpenCode, cwd, at)),
-            Err(reason) => refusals.push(SessionStoreRefusal {
-                agent: Agent::OpenCode,
-                reason,
-            }),
+        // Kept headers of files gone from a whole listing are dropped, as
+        // after a project's listing.
+        if whole {
+            file_cache::retain(&self.home, &listed);
         }
-        match crate::antigravity::worked_folders(&self.home, since_unix_ms) {
-            Ok(rows) => rows
-                .into_iter()
-                .for_each(|(cwd, at)| note(Agent::Antigravity, cwd, at)),
-            Err(reason) => refusals.push(SessionStoreRefusal {
-                agent: Agent::Antigravity,
-                reason,
-            }),
+        let opencode = if late() {
+            Err(LATE.to_owned())
+        } else {
+            crate::opencode::worked_directories(
+                &self.home,
+                since_unix_ms,
+                &mut visited,
+                SESSION_DISCOVERY_LIMIT,
+            )
+            .unwrap_or_else(|error| Err(error.to_string()))
+        };
+        let antigravity = if late() {
+            Err(LATE.to_owned())
+        } else {
+            crate::antigravity::worked_folders(&self.home, since_unix_ms)
+        };
+        for (agent, read) in [
+            (Agent::OpenCode, opencode),
+            (Agent::Antigravity, antigravity),
+        ] {
+            match read {
+                Ok(rows) => {
+                    for (cwd, at) in rows {
+                        let entry = newest.entry((agent, cwd)).or_insert(at);
+                        *entry = (*entry).max(at);
+                    }
+                }
+                Err(reason) => refuse(agent, reason),
+            }
         }
         let mut folders = newest
             .into_iter()
@@ -404,7 +455,7 @@ impl SessionCatalog {
                 .then_with(|| left.cwd.cmp(&right.cwd))
                 .then_with(|| (left.agent as u8).cmp(&(right.agent as u8)))
         });
-        Ok(WorkedFolders { folders, refusals })
+        WorkedFolders { folders, refusals }
     }
 
     pub fn filtered(
@@ -544,24 +595,42 @@ fn collect_grok(
     Ok(())
 }
 
-/// The cwd a session file names, `Err` with the reason when its record that
-/// names it is one the reader refuses by rule (Codex's `session_meta` over
-/// the record cap), so the listing says so rather than leaving it out.
-fn session_cwd(agent: Agent, path: &Path) -> Result<Option<PathBuf>, String> {
+/// Why a session file's header named no folder: refused by rule for its
+/// bytes (Codex's `session_meta` over the record cap), which holds while the
+/// file does, or not read at all (the file could not be opened, or its
+/// header is not one), which is tried again on the next listing.
+#[derive(Clone, Debug)]
+pub(crate) enum HeaderError {
+    Refused(String),
+    Unreadable(String),
+}
+
+/// The cwd a session file names, or why its header named none.
+fn session_cwd(agent: Agent, path: &Path) -> Result<Option<PathBuf>, HeaderError> {
+    let unreadable = |error: &dyn Display| HeaderError::Unreadable(error.to_string());
     match agent {
         Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => {
-            Ok(crate::source::facts::header(agent, path)
-                .ok()
-                .map(|header| header.cwd))
+            crate::source::facts::header(agent, path)
+                .map(|header| Some(header.cwd))
+                .map_err(|error| unreadable(&error))
         }
-        Agent::Codex => crate::source::facts::codex_cwd(path)
-            .map(|cwd| cwd.map(PathBuf::from))
-            .map_err(|error| error.to_string()),
-        Agent::Claude => Ok(crate::source::open(path).ok().and_then(|file| {
+        Agent::Codex => {
+            let file = crate::source::open(path).map_err(|error| unreadable(&error))?;
+            crate::source::facts::codex_meta_of(file)
+                .map(|meta| {
+                    meta.as_ref()
+                        .and_then(|value| value.pointer("/payload/cwd"))
+                        .and_then(Value::as_str)
+                        .map(PathBuf::from)
+                })
+                .map_err(|error| HeaderError::Refused(error.to_string()))
+        }
+        Agent::Claude => {
+            let file = crate::source::open(path).map_err(|error| unreadable(&error))?;
             crate::source::facts::claude(file, crate::source::facts::Wanted::Cwd)
-                .ok()?
-                .cwd
-        })),
+                .map(|head| head.cwd)
+                .map_err(|error| unreadable(&error))
+        }
         Agent::OpenCode | Agent::Cursor => Ok(None),
     }
 }
@@ -983,9 +1052,7 @@ mod tests {
             .unwrap();
 
         let since = system_time_ms(now - window).unwrap();
-        let read = SessionCatalog::new(&home, "local")
-            .worked_folders(since)
-            .unwrap();
+        let read = SessionCatalog::new(&home, "local").worked_folders(since, far_deadline());
         let mut found = read
             .folders
             .iter()
@@ -1000,6 +1067,88 @@ mod tests {
                 reason: "opencode_db_unreadable".to_owned(),
             }]
         );
+    }
+
+    fn far_deadline() -> Instant {
+        Instant::now() + std::time::Duration::from_secs(60)
+    }
+
+    fn codex_session(home: &Path, name: &str, cwd: &Path) -> PathBuf {
+        let path = home.join(format!(".codex/sessions/2026/11/07/{name}.jsonl"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{name}\",\"cwd\":{}}}}}\n",
+                serde_json::to_string(cwd).unwrap()
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_listed_is_refused_beside_the_folders_other_agents_found() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let beta = root.path().join("beta");
+        fs::create_dir_all(&beta).unwrap();
+        // Claude's store cannot be listed (here a file stands where its
+        // folder should, which fails the same listing a folder without
+        // read permission does, on every system and under any user).
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::write(home.join(crate::CLAUDE_SESSIONS), "").unwrap();
+        codex_session(&home, "codex-1", &beta);
+        // A Codex file that is no file cannot be read and is said, once.
+        #[cfg(unix)]
+        {
+            let pipe = home.join(".codex/sessions/2026/11/07/pipe.jsonl");
+            let name = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        }
+
+        let catalog = SessionCatalog::new(&home, "local");
+        let read = catalog.worked_folders(0, far_deadline());
+        let found = read
+            .folders
+            .iter()
+            .map(|folder| (folder.agent, folder.cwd.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(found, vec![(Agent::Codex, beta)]);
+        let refused = read
+            .refusals
+            .iter()
+            .map(|refusal| refusal.agent)
+            .collect::<Vec<_>>();
+        let mut expected = vec![Agent::Claude];
+        if cfg!(unix) {
+            expected.push(Agent::Codex);
+        }
+        assert_eq!(refused, expected);
+
+        // A search whose deadline has passed reads nothing and says so for every agent.
+        let late = catalog.worked_folders(0, Instant::now());
+        assert!(late.folders.is_empty());
+        assert!(late.refusals.iter().all(|refusal| refusal.reason == LATE));
+        assert_eq!(late.refusals.len(), FILE_AGENTS.len() + 2);
+    }
+
+    #[test]
+    fn a_second_folder_search_keeps_no_header_of_a_session_file_that_left() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let beta = root.path().join("beta");
+        fs::create_dir_all(&beta).unwrap();
+        let first = codex_session(&home, "one", &beta);
+        codex_session(&home, "two", &beta);
+        let catalog = SessionCatalog::new(&home, "local");
+        catalog.worked_folders(0, far_deadline());
+        assert_eq!(crate::file_cache::kept(&home), (2, 0));
+
+        fs::remove_file(first).unwrap();
+        codex_session(&home, "three", &beta);
+        catalog.worked_folders(0, far_deadline());
+        assert_eq!(crate::file_cache::kept(&home), (2, 0));
     }
 
     #[test]

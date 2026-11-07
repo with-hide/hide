@@ -20,6 +20,12 @@ pub const JUDGED_FOLDER_CAP: usize = 400;
 /// list is refused rather than cut.
 pub const EXCLUDE_CAP: usize = 4096;
 
+/// How long a node searches before it answers with what it has: every
+/// source not reached by then is answered as dropped. It is below the time
+/// the caller waits for the answer (hided's `IMPORTABLE_ASK_TIMEOUT`), so a
+/// search ends on the node before its caller gives up on it.
+pub const IMPORTABLE_SEARCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// The largest Paseo project registry read: a registry of a thousand
 /// projects stays far below it.
 pub const PASEO_READ_CAP: u64 = 4 * 1024 * 1024;

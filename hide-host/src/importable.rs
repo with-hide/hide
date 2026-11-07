@@ -11,22 +11,29 @@
 //! repository and a folder that is gone; folders of one root are one
 //! project carrying every source that named them (D-11).
 //!
-//! Every file is only read, and each read is capped (D-12, B26). A source
-//! that cannot be read is answered as dropped with why, for the caller's
-//! log, and never takes another source with it (B27).
+//! Every file is only read, opened without waiting and only when it is a
+//! regular file (`hide_platform::fs::open_regular`), and each read is capped
+//! (D-12, B26). A source that cannot be read is answered as dropped with
+//! why, for the caller's log, and never takes another source with it (B27).
+//! The search ends by its deadline: a source not reached by then is dropped
+//! as late, so no call outlives the caller waiting for it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use hide_platform::fs::identity;
 use serde::Deserialize;
 use serde_json::Value;
 
 pub use hide_node_link::importable::{
-    DroppedSource, EXCLUDE_CAP, IMPORTABLE_CAP, ImportApp, ImportSource, ImportableProject,
-    ImportableProjects, JUDGED_FOLDER_CAP, PASEO_READ_CAP, RECENT_WINDOW_MS,
+    DroppedSource, EXCLUDE_CAP, IMPORTABLE_CAP, IMPORTABLE_SEARCH_BUDGET, ImportApp, ImportSource,
+    ImportableProject, ImportableProjects, JUDGED_FOLDER_CAP, PASEO_READ_CAP, RECENT_WINDOW_MS,
 };
+
+/// Why a source the search had not reached by its deadline is dropped.
+const LATE: &str = "the search ran out of time";
 
 /// A folder one source named, and when that source last saw it in use.
 struct Named {
@@ -37,28 +44,38 @@ struct Named {
 
 /// The projects worth adding for the account whose home is `home`, read at
 /// `now_unix_ms`, with `variables` the account's environment (Paseo's and
-/// Herdr's folders follow it), leaving out each root `exclude` names.
+/// Herdr's folders follow it), leaving out each root `exclude` names, by
+/// `deadline`.
 pub fn find(
     home: &Path,
     variables: hide_platform::host::Variables,
     now_unix_ms: u64,
     exclude: &[String],
+    deadline: Instant,
 ) -> ImportableProjects {
     let since = now_unix_ms.saturating_sub(RECENT_WINDOW_MS);
     let mut named = Vec::new();
     let mut dropped = Vec::new();
-    agents(home, since, &mut named, &mut dropped);
-    let mut app = |app: ImportApp, read: Result<Vec<Named>, String>| match read {
-        Ok(rows) => named.extend(rows),
-        Err(reason) => dropped.push(DroppedSource {
-            source: app_name(app).to_owned(),
-            reason,
-        }),
-    };
-    app(ImportApp::Paseo, paseo(home, variables));
-    app(ImportApp::Herdr, herdr(variables));
+    agents(home, since, deadline, &mut named, &mut dropped);
+    for app in [ImportApp::Paseo, ImportApp::Herdr] {
+        let read = if Instant::now() >= deadline {
+            Err(LATE.to_owned())
+        } else {
+            match app {
+                ImportApp::Paseo => paseo(home, variables),
+                ImportApp::Herdr => herdr(variables),
+            }
+        };
+        match read {
+            Ok(rows) => named.extend(rows),
+            Err(reason) => dropped.push(DroppedSource {
+                source: app_name(app).to_owned(),
+                reason,
+            }),
+        }
+    }
     ImportableProjects {
-        projects: merge(home, named, since, exclude),
+        projects: merge(home, named, since, exclude, deadline),
         dropped,
     }
 }
@@ -70,24 +87,23 @@ fn app_name(app: ImportApp) -> &'static str {
     }
 }
 
-fn agents(home: &Path, since: u64, named: &mut Vec<Named>, dropped: &mut Vec<DroppedSource>) {
-    match hide_session::SessionCatalog::new(home, "").worked_folders(since) {
-        Ok(read) => {
-            named.extend(read.folders.into_iter().map(|folder| Named {
-                folder: folder.cwd,
-                source: ImportSource::Agent(folder.agent),
-                active_at_unix_ms: folder.active_at_unix_ms,
-            }));
-            dropped.extend(read.refusals.into_iter().map(|refusal| DroppedSource {
-                source: agent_name(refusal.agent),
-                reason: refusal.reason,
-            }));
-        }
-        Err(error) => dropped.push(DroppedSource {
-            source: "agents".to_owned(),
-            reason: error.to_string(),
-        }),
-    }
+fn agents(
+    home: &Path,
+    since: u64,
+    deadline: Instant,
+    named: &mut Vec<Named>,
+    dropped: &mut Vec<DroppedSource>,
+) {
+    let read = hide_session::SessionCatalog::new(home, "").worked_folders(since, deadline);
+    named.extend(read.folders.into_iter().map(|folder| Named {
+        folder: folder.cwd,
+        source: ImportSource::Agent(folder.agent),
+        active_at_unix_ms: folder.active_at_unix_ms,
+    }));
+    dropped.extend(read.refusals.into_iter().map(|refusal| DroppedSource {
+        source: agent_name(refusal.agent),
+        reason: refusal.reason,
+    }));
 }
 
 fn agent_name(agent: hide_session::Agent) -> String {
@@ -97,14 +113,16 @@ fn agent_name(agent: hide_session::Agent) -> String {
         .unwrap_or_else(|| format!("{agent:?}"))
 }
 
-/// Reads at most `cap` bytes of the file at `path`; `None` when nothing is
-/// there.
+/// Reads at most `cap` bytes of the regular file at `path`, a link to it
+/// followed; `None` when nothing is there. A pipe or a device at the path
+/// is refused at once rather than waited on.
 fn read_capped(path: &Path, cap: u64) -> Result<Option<String>, String> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("it could not be opened: {error}")),
-    };
+    let file =
+        match std::fs::canonicalize(path).and_then(|real| hide_platform::fs::open_regular(&real)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("it could not be opened: {error}")),
+        };
     let mut text = String::new();
     file.take(cap + 1)
         .read_to_string(&mut text)
@@ -227,8 +245,14 @@ fn herdr(variables: hide_platform::host::Variables) -> Result<Vec<Named>, String
 /// each root once with every source that named it and its newest activity,
 /// those active since `since` and not in `exclude`, newest first, at most
 /// [`IMPORTABLE_CAP`]. Only the newest [`JUDGED_FOLDER_CAP`] folders are
-/// judged.
-fn merge(home: &Path, named: Vec<Named>, since: u64, exclude: &[String]) -> Vec<ImportableProject> {
+/// judged, and none after `deadline`.
+fn merge(
+    home: &Path,
+    named: Vec<Named>,
+    since: u64,
+    exclude: &[String],
+    deadline: Instant,
+) -> Vec<ImportableProject> {
     let mut folders: HashMap<PathBuf, Vec<(ImportSource, u64)>> = HashMap::new();
     for row in named {
         folders
@@ -253,6 +277,9 @@ fn merge(home: &Path, named: Vec<Named>, since: u64, exclude: &[String]) -> Vec<
     let home_real = identity::canonical(home).unwrap_or_else(|_| home.to_path_buf());
     let mut projects: Vec<(PathBuf, Vec<ImportSource>, u64)> = Vec::new();
     for (folder, sources) in folders {
+        if Instant::now() >= deadline {
+            break;
+        }
         let Ok(judged) = crate::register::judge(&folder, None, home) else {
             continue;
         };

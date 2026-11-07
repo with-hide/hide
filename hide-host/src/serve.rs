@@ -1164,7 +1164,10 @@ pub fn handle_with_progress(
                 "HOME" => Some(home.as_os_str().to_owned()),
                 _ => std::env::var_os(name),
             };
-            to_value(crate::importable::find(&home, &variables, now, &exclude))
+            let deadline = std::time::Instant::now() + crate::importable::IMPORTABLE_SEARCH_BUDGET;
+            to_value(crate::importable::find(
+                &home, &variables, now, &exclude, deadline,
+            ))
         }
         Call::NewFolderTarget { parent, name, kind } => {
             let home = env.home("HOME is not set, so no folder can be judged against it")?;

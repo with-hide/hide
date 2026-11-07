@@ -2849,7 +2849,8 @@ const NODE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15)
 
 /// How long a node may take to find the projects worth adding: it walks up
 /// to `SESSION_DISCOVERY_LIMIT` session entries and judges up to
-/// `JUDGED_FOLDER_CAP` folders.
+/// `JUDGED_FOLDER_CAP` folders, and answers by `IMPORTABLE_SEARCH_BUDGET`,
+/// which this leaves room above for the link.
 const IMPORTABLE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Add a project's question for a machine's node, answered as the frame the
