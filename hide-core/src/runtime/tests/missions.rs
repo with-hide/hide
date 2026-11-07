@@ -3138,10 +3138,23 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
             "mission_summary_invalid"
         );
     }
+    // The node has a pull request, so the review names the commit it read.
+    assert_eq!(
+        command(
+            &mut runtime,
+            "reviewer",
+            record("review", json!({"summary": "문제 없음"}))
+        )
+        .unwrap_err(),
+        "mission_commit_required"
+    );
     let (shown, _) = command(
         &mut runtime,
         "reviewer",
-        record("review", json!({"summary": "  문제 없음  "})),
+        record(
+            "review",
+            json!({"summary": "  문제 없음  ", "commit": HEAD}),
+        ),
     )
     .unwrap();
     let review = shown["mission"]["nodes"][0]["criteria"]
@@ -3652,7 +3665,12 @@ fn met_fix(runtime: &mut Runtime) {
         record_of("fix", "check", json!({"commit": HEAD})),
     )
     .unwrap();
-    command(runtime, "reviewer", record_of("fix", "review", json!({}))).unwrap();
+    command(
+        runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD})),
+    )
+    .unwrap();
     let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
     runtime.github = read.clone();
     runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
@@ -7489,6 +7507,77 @@ fn a_pass_on_a_new_head_replaces_the_failure_of_an_older_head() {
             .unwrap()
             .fails_in_a_row,
         0
+    );
+}
+
+/// with-hide/hide-private#655 review: a checker's answer is for the head it
+/// names, never one guessed from the pull request when it is recorded, so a
+/// review of a node with a pull request is refused without `--commit`, and one
+/// of a node without a pull request needs none.
+#[test]
+fn a_review_of_a_node_with_a_pull_request_names_its_commit() {
+    let fixture = three_slot_review(false);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let plain = record_of("fix", "review", json!({}));
+    command(&mut runtime, "reviewer", plain.clone()).unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Pass);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let mut fail = record_of("fix", "review", json!({"evidence": "broken"}));
+    fail["pass"] = json!(false);
+    assert_eq!(
+        command(&mut runtime, "reviewer", fail).unwrap_err(),
+        "mission_commit_required"
+    );
+    assert_eq!(
+        review_state(&runtime),
+        CriterionState::Pass,
+        "a refused answer changes nothing"
+    );
+    let mut fail = record_of(
+        "fix",
+        "review",
+        json!({"commit": HEAD, "evidence": "broken"}),
+    );
+    fail["pass"] = json!(false);
+    command(&mut runtime, "reviewer", fail).unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Fail);
+}
+
+/// with-hide/hide-private#655 review: a checker the Conductor binds after the
+/// line passed opens it again, and the node is not done until that checker
+/// answers.
+#[test]
+fn a_checker_bound_after_the_review_passed_keeps_the_node_from_done() {
+    let fixture = three_slot_review(false);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({})),
+    )
+    .unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Pass);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-4"}}),
+    )
+    .unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Open);
+    let shown = runtime.mission_view_of("mission-1").unwrap();
+    let line = shown.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap();
+    assert_eq!(
+        line.tally.map(|tally| (tally.passed, tally.total)),
+        Some((1, 2))
     );
 }
 

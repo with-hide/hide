@@ -379,12 +379,23 @@ impl Runtime {
                     .position(|checker| self.registration_is(checker.agent_id.as_deref(), actor))
                     .ok_or("mission_criterion_not_yours")?;
                 let agent_id = line.checkers[slot].agent_id.clone();
-                // The head the answer is for: the commit the checker named,
-                // else the node's pull request head as the last read has it.
-                let head = commit
-                    .or_else(|| pull_head(row, self.mission_pulls(mission)).map(str::to_owned));
+                // The head an answer is for is the one the checker names: a
+                // guess from the pull request's head when it is recorded would
+                // put a review of one head on the next.
+                if commit.is_none() && row.current_pr().is_some() {
+                    return Err("mission_commit_required".into());
+                }
                 let target = &mut next.criteria[at];
-                let changed = target.record_checker(slot, pass, (evidence, summary, head), now)?;
+                let changed = target.record_checker(
+                    slot,
+                    pass,
+                    crate::mission_criteria::Answer {
+                        evidence,
+                        summary,
+                        commit,
+                    },
+                    now,
+                )?;
                 if changed {
                     target.by = Some(by(Role::Checker, agent_id));
                 }
@@ -631,28 +642,11 @@ impl Runtime {
             ));
         }
         let mut next = node.clone();
-        let line = next
-            .criteria
+        next.criteria
             .iter_mut()
             .find(|line| line.kind == kind.kind())
-            .ok_or("mission_checker_unknown")?;
-        if line
-            .checkers
-            .iter()
-            .any(|checker| checker.agent_id.as_deref() == Some(id))
-        {
-            return Ok(next);
-        }
-        let agent = hide_agent_adapter::canonical_kind(&record.actor.kind);
-        let slot = line
-            .checkers
-            .iter_mut()
-            .find(|checker| {
-                checker.agent_id.is_none()
-                    && hide_agent_adapter::canonical_kind(&checker.worker.agent) == agent
-            })
-            .ok_or("mission_checker_unknown")?;
-        slot.agent_id = Some(id.to_owned());
+            .ok_or("mission_checker_unknown")?
+            .bind(id, hide_agent_adapter::canonical_kind(&record.actor.kind))?;
         Ok(next)
     }
 
