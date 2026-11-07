@@ -766,6 +766,13 @@ pub enum Call {
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
     HookDiagnosis,
+    /// Hands over and forgets the letter confirmations the hooks of the
+    /// pane `pane` (the engine's id on this machine) could not send in time
+    /// (`hide_agent_hooks::owed::take`): `null`, or the session the letters
+    /// reached and their ids (`hide_agent_hooks::owed::Owed`).
+    OwedConfirmations {
+        pane: String,
+    },
     /// The node account's Herdr save and who runs the server on its default
     /// socket (`crate::herdr_save::Found`), only read (PRD
     /// engine-bundle-4-herdr-removal D-10).
@@ -1328,6 +1335,7 @@ impl Call {
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
             | Self::HookDiagnosis
+            | Self::OwedConfirmations { .. }
             | Self::HerdrSave
             | Self::HerdrStop { .. }
             | Self::GuardrailPolicy { .. }

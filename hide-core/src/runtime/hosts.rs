@@ -1452,6 +1452,13 @@ impl Runtime {
         Arc::clone(&self.own_node)
     }
 
+    /// Runs this machine's node work through `node`, for a test of a
+    /// module outside the runtime.
+    #[cfg(test)]
+    pub(crate) fn use_own_node(&mut self, node: Arc<dyn NodeLink>) {
+        self.own_node = node;
+    }
+
     /// Where Hide AI's agents run: this node, and each connected device,
     /// looked up when its agent is asked and never woken (PRD wsl-device
     /// B13). Asked off the runtime's lock, as every provider call is.

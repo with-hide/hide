@@ -194,7 +194,7 @@ pub struct Intake {
     #[serde(default)]
     pub plan_context: Option<serde_json::Value>,
     /// The native session the letters were pulled for, which a confirmation
-    /// that misses its hook is owed under ([`confirm_or_owe`]).
+    /// that misses its hook is kept under ([`confirm_or_owe`]).
     #[serde(skip)]
     pub session: Option<String>,
 }
@@ -352,41 +352,34 @@ pub fn valid_letter_ids(ids: &[String]) -> bool {
         })
 }
 
-/// Confirms `intake`'s letters, which reached the agent, by `deadline`. One
+/// Confirms the letters `ids`, which reached the agent of `session`, by
+/// `deadline`. One
 /// that did not reach the core in time ([`Failure::transient`]) is recorded
-/// and owed to the pane's next turn end of the same session ([`crate::owed`],
-/// [`settle_owed`]), which confirms it then; the core takes a confirmation
-/// that comes late. One the core refused would be refused again and is only
-/// recorded as a failure.
-pub fn confirm_or_owe(home: &Path, intake: &Intake, deadline: Instant) {
-    let Err(failure) = confirm(&intake.ids, deadline) else {
-        return;
+/// and kept on this machine for the pane ([`crate::owed`]), which its node
+/// hands to the core once the pane rests; the core confirms it then. One
+/// the core refused would be refused again and is only recorded as a
+/// failure.
+pub fn confirm_or_owe(
+    home: &Path,
+    ids: &[String],
+    session: Option<&str>,
+    deadline: Instant,
+) -> Result<(), Failure> {
+    let Err(failure) = confirm(ids, deadline) else {
+        return Ok(());
     };
     diagnose_failure(home, &failure);
     if !failure.transient() {
-        return;
+        return Err(failure);
     }
-    let (Some(pane), Some(session)) = (crate::pane::from_env(), intake.session.as_deref()) else {
-        return;
+    let (Some(pane), Some(session)) = (crate::pane::from_env(), session) else {
+        return Err(failure);
     };
-    let owed = crate::owed::owe(home, &pane, session, &intake.ids, crate::hook_log::now_ms());
+    let owed = crate::owed::owe(home, &pane, session, ids, crate::hook_log::now_ms());
     if let Err(cause) = owed {
         diagnose(home, cause);
     }
-}
-
-/// At a turn end of the pane's own `session`, confirms what an earlier hook
-/// of the session owes, by `deadline` ([`crate::owed::settle`]).
-pub fn settle_owed(home: &Path, session: &str, deadline: Instant) {
-    let Some(pane) = crate::pane::from_env() else {
-        return;
-    };
-    let settled = crate::owed::settle(home, &pane, session, crate::hook_log::now_ms(), |ids| {
-        confirm(ids, deadline)
-    });
-    if let Err(failure) = settled {
-        diagnose_failure(home, &failure);
-    }
+    Err(failure)
 }
 
 /// Tells the daemon the letters `ids` name reached the agent, in as many

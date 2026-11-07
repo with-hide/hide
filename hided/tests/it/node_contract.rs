@@ -841,7 +841,8 @@ fn executable(path: &Path, contents: &str) {
 }
 
 /// The answers a node gives for one checkout: its files, a file's bytes, its
-/// Git changes and worktrees, and the account's hook state.
+/// Git changes and worktrees, and the account's hook state and the
+/// confirmations its hooks owe.
 fn contract(link: &dyn NodeLink, project: &Path) -> Vec<Value> {
     let path = project.to_str().unwrap().to_owned();
     let opened: RootOpened = call_as(link, Call::RootOpen { root: path.clone() }, TIMEOUT).unwrap();
@@ -876,6 +877,9 @@ fn contract(link: &dyn NodeLink, project: &Path) -> Vec<Value> {
             reuse_unchanged: false,
         },
         Call::HookDiagnosis,
+        Call::OwedConfirmations {
+            pane: "w1:p1".to_owned(),
+        },
     ];
     calls
         .into_iter()

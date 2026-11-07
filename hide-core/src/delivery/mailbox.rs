@@ -522,6 +522,40 @@ pub fn apply_in(
     }
 }
 
+/// The letters a pane's hooks handed to `recipient` and could not confirm
+/// in time, which the node of the pane's machine handed over
+/// (`hide_agent_hooks::owed`, `doorbell::Doorbell::settle_owed`): each that
+/// is a letter to `recipient` still awaiting intake is taken in as the
+/// hook's confirmation would have taken it. A record of another session,
+/// which ended in the pane, confirms nothing. Returns the letters confirmed.
+pub(crate) fn confirm_owed(
+    ledger: &mut Ledger,
+    recipient: &Actor,
+    owed: &hide_agent_hooks::owed::Owed,
+    now: u64,
+) -> Vec<String> {
+    let session = Some(owed.session.as_str())
+        .filter(|session| super::valid_session(session))
+        .and_then(crate::engine::tokens::session_digest);
+    if session.is_none() || session != recipient.session {
+        return Vec::new();
+    }
+    let mut confirmed = Vec::new();
+    let mut reports = Vec::new();
+    for letter in ledger.letters.iter_mut().filter(|letter| {
+        letter.recipient.same_identity(recipient)
+            && letter.awaiting_intake()
+            && owed.ids.contains(&letter.id)
+    }) {
+        reports.extend(record_intake(letter, now));
+        confirmed.push(letter.id.clone());
+    }
+    for report in reports {
+        end_report_watches(ledger, Some(report));
+    }
+    confirmed
+}
+
 /// Refuses `ids` unless each names a letter to `actor`, and at most one
 /// bundle's worth of them, before any of them changes.
 fn recipient_of_all(ledger: &Ledger, actor: &Actor, ids: &[String]) -> Result<(), String> {
@@ -1923,6 +1957,63 @@ mod tests {
         let failed = std::collections::BTreeMap::from([(id, "wake_failed".to_owned())]);
         assert!(ledger.fail_undeliverable(&failed, 100));
         assert_eq!(ledger.letters[0].state, State::Undelivered);
+    }
+
+    /// What a pane's node hands over confirms only the letters to its
+    /// recipient's own session that still await intake, as the hook's
+    /// confirmation would: a report ends its watch at once rather than at
+    /// its deadline, and another session's record confirms nothing.
+    #[test]
+    fn owed_confirmations_take_in_only_the_recipients_own_sessions_letters() {
+        let mut ledger = Ledger::default();
+        let mut parent = actor("parent");
+        parent.session = crate::engine::tokens::session_digest("parent-native");
+        let child = actor("child");
+        super::super::watch::start(&mut ledger, &parent, &child, 0).unwrap();
+        let report = send(
+            &mut ledger,
+            &child,
+            &parent,
+            "done",
+            "body-0",
+            "report",
+            None,
+            1,
+        )
+        .unwrap()
+        .id;
+        let to_child = send(
+            &mut ledger,
+            &parent,
+            &child,
+            "ask",
+            "body-1",
+            "request",
+            None,
+            2,
+        )
+        .unwrap()
+        .id;
+        let line = "🦉 child 보고: body-0";
+        ring(&mut ledger, 0, line);
+        assert_eq!(pull_for(&mut ledger, &parent, line).ids, [report.as_str()]);
+        let owed = |session: &str| hide_agent_hooks::owed::Owed {
+            session: session.to_owned(),
+            ids: vec![report.clone(), to_child.clone()],
+        };
+        assert!(confirm_owed(&mut ledger, &parent, &owed("other-native"), 3).is_empty());
+        assert_eq!(ledger.letters[0].state, State::Pending);
+        assert_eq!(
+            confirm_owed(&mut ledger, &parent, &owed("parent-native"), 4),
+            [report.clone()]
+        );
+        assert_eq!(
+            (ledger.letters[0].state, ledger.letters[0].hook_confirmed),
+            (State::Delivered, Some(true))
+        );
+        assert!(ledger.watches.is_empty(), "the report ended its watch");
+        assert_eq!(ledger.letters[1].state, State::Pending, "not the parent's");
+        assert!(confirm_owed(&mut ledger, &parent, &owed("parent-native"), 5).is_empty());
     }
 
     /// A report a prompt hook handed over ends its parent's watch at its

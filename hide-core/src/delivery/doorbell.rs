@@ -410,6 +410,22 @@ pub(crate) struct Doorbell {
     /// Each unconfirmed brief's last composer read: the typing and the
     /// pane's last input it was read at, and when it may be read again.
     input_read: HashMap<String, ((u8, u64), u64)>,
+    /// Letters a hook handed over and did not confirm, by id, until their
+    /// pane's node was asked for what its hooks owe (`settle_owed`).
+    owed: HashMap<String, OwedWait>,
+}
+
+/// A handed letter's wait for its pane's node to be asked.
+#[derive(Default)]
+struct OwedWait {
+    /// The pane was seen working since the letter was first seen handed: the
+    /// hook that handed it had ended before its turn rested.
+    worked: bool,
+    /// When an ask that failed may be made again, and its last delay.
+    retry_at: u64,
+    delay: u64,
+    /// Its pane's node answered: the letter is not asked about again.
+    asked: bool,
 }
 
 /// How one attempt ended without failing.
@@ -435,6 +451,134 @@ pub(crate) fn run(runtime: Weak<Mutex<Runtime>>, client: Client, stop: Arc<Atomi
 }
 
 impl Doorbell {
+    /// Asks the node of a pane's machine for the confirmations its hooks
+    /// could not send in time (`hide_agent_hooks::owed`), and takes in the
+    /// letters it hands over (`Effect::Owed`). Only a pane with a letter a
+    /// hook handed over unconfirmed, at its prompt or at a tool, is asked,
+    /// once per letter, when it rests after it was seen working: the hook
+    /// that handed the letter ended before that, so whatever it kept is
+    /// there. An ask that fails is made again after the bell's retry delay.
+    /// The ask runs off the lock. Returns how many nodes were asked, which
+    /// count toward the pass's work, and whether a letter was taken in.
+    fn settle_owed(
+        &mut self,
+        owner: &Mutex<Runtime>,
+        client: &Client,
+        stop: &AtomicBool,
+        ledger: &Ledger,
+        now: u64,
+    ) -> (usize, bool) {
+        let handed: Vec<_> = ledger
+            .letters
+            .iter()
+            .filter(|letter| {
+                letter.state == State::Pending
+                    && (letter.handed || letter.tool_handovers > 0)
+                    && letter.within_deadline(&ledger.node_clocks, now)
+            })
+            .collect();
+        self.owed
+            .retain(|id, _| handed.iter().any(|letter| letter.id == *id));
+        let mut panes = HashMap::<&str, Vec<&Letter>>::new();
+        for &letter in &handed {
+            panes
+                .entry(letter.recipient.pane_id.as_str())
+                .or_default()
+                .push(letter);
+        }
+        let (mut asked, mut confirmed) = (0, false);
+        for letters in panes.into_values() {
+            if stop.load(Ordering::Acquire) || asked >= WORK_PER_PASS {
+                break;
+            }
+            let recipient = &letters[0].recipient;
+            let Some((observed, link)) = owner
+                .lock()
+                .ok()
+                .and_then(|guard| guard.delivery_owed_source(recipient))
+            else {
+                continue;
+            };
+            let Some(working) = observed.projected_turn().map(|projected| {
+                projected.turn.activity == crate::agent_state::AgentActivity::Working
+            }) else {
+                continue;
+            };
+            let mut due = Vec::new();
+            for letter in letters {
+                let wait = self.owed.entry(letter.id.clone()).or_default();
+                if working {
+                    wait.worked = true;
+                } else if wait.worked && !wait.asked && now >= wait.retry_at {
+                    due.push(letter.id.clone());
+                }
+            }
+            if due.is_empty() {
+                continue;
+            }
+            asked += 1;
+            let answer = crate::node_access::call_as::<Option<hide_agent_hooks::owed::Owed>>(
+                link.as_ref(),
+                hide_node_link::protocol::Call::OwedConfirmations {
+                    pane: observed.raw_pane_id.clone(),
+                },
+                RPC_TIMEOUT,
+            );
+            let owed = match answer {
+                Ok(owed) => owed,
+                Err(error) => {
+                    for id in &due {
+                        let wait = self.owed.entry(id.clone()).or_default();
+                        wait.delay = if wait.delay == 0 {
+                            RETRY_FIRST_MS
+                        } else {
+                            wait.delay.saturating_mul(2).min(RETRY_LIMIT_MS)
+                        };
+                        wait.retry_at = now.saturating_add(wait.delay);
+                    }
+                    crate::diagnostic!(
+                        json!({"component":"delivery","kind":"delivery.owed_ask_failed",
+                        "pane_id":recipient.pane_id,"device_id":recipient.device_id,
+                        "letters":due,"reason":error.to_string()})
+                    );
+                    continue;
+                }
+            };
+            // Asked once: the letters wait for their hook's or a later
+            // ask's receipt no more, and end at their deadline without one.
+            for id in &due {
+                self.owed.entry(id.clone()).or_default().asked = true;
+            }
+            crate::diagnostic!(json!({"component":"delivery","kind":"delivery.owed_asked",
+                "pane_id":recipient.pane_id,"device_id":recipient.device_id,"letters":due,
+                "owed":owed.as_ref().map_or(0, |owed| owed.ids.len())}));
+            let Some(owed) = owed else {
+                continue;
+            };
+            match client.submit(
+                Effect::Owed {
+                    recipient: recipient.clone(),
+                    owed,
+                },
+                Duration::from_secs(5),
+            ) {
+                Ok(taken) => {
+                    let taken = taken.as_array().map_or(0, Vec::len);
+                    confirmed |= taken > 0;
+                    crate::diagnostic!(
+                        json!({"component":"delivery","kind":"delivery.owed_confirmed",
+                        "pane_id":recipient.pane_id,"device_id":recipient.device_id,"confirmed":taken})
+                    );
+                }
+                Err(code) => crate::diagnostic!(
+                    json!({"component":"delivery","kind":"doorbell.transaction_failed",
+                    "pane_id":recipient.pane_id,"code":code})
+                ),
+            }
+        }
+        (asked, confirmed)
+    }
+
     /// One look at every pane with a pending letter, at most
     /// `WORK_PER_PASS` of which reach the engine. The verdict is memory only;
     /// the engine calls, the reservation and the input run off the lock.
@@ -452,6 +596,12 @@ impl Doorbell {
         else {
             return;
         };
+        // A letter its pane's node owes a confirmation of is taken in before
+        // any bell is judged: the next pass rings from the ledger it left.
+        let (asked, confirmed) = self.settle_owed(owner, client, stop, &ledger, now);
+        if confirmed {
+            return;
+        }
         let mut targets = HashSet::new();
         let pending: Vec<_> = ledger
             .letters
@@ -484,7 +634,7 @@ impl Doorbell {
                 .any(|letter| letter.recipient.pane_id == pane)
                 || answers.iter().any(|work| work.conductor.pane_id == pane)
         });
-        let mut count = 0;
+        let mut count = asked;
         for &letter in &pending {
             if stop.load(Ordering::Acquire) || count >= WORK_PER_PASS {
                 break;
@@ -2412,6 +2562,123 @@ mod tests {
         let operator = prompt_pull(&bell, "the operator's own prompt");
         assert_eq!(operator["ids"], json!([]));
         assert_eq!(operator["context"], "");
+    }
+
+    /// The state of `bell`'s letter and whether its receipt came.
+    fn letter_state(bell: &Bell) -> (State, Option<bool>) {
+        let guard = bell.runtime.lock().unwrap();
+        let ledger = guard.delivery_state().unwrap();
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == bell.letter)
+            .unwrap();
+        (letter.state, letter.hook_confirmed)
+    }
+
+    /// A letter its recipient's prompt hook took and could not confirm,
+    /// nor any hook after it, as on a device whose helper was just placed
+    /// (2026-11-08), is delivered with its receipt once the pane rests, with
+    /// no prompt after it: the node of the pane's machine hands over what
+    /// the hook kept (`hide_agent_hooks::owed`). Asked once, and not while
+    /// the pane works.
+    #[test]
+    fn a_handed_letter_no_hook_confirmed_is_delivered_when_its_pane_rests() {
+        use crate::runtime::delivery::tests::end_turn;
+        let bell = Bell::start(json!({}));
+        bell.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(bell.client.clone());
+        let home = tempfile::tempdir().unwrap();
+        bell.runtime
+            .lock()
+            .unwrap()
+            .use_own_node(Arc::new(hide_node::Local::new(Some(
+                home.path().to_path_buf(),
+            ))));
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        let handed = prompt_pull(&bell, &bell.line().unwrap());
+        assert_eq!(handed["ids"], json!([bell.letter]));
+        // The hook printed the letter and its confirmation did not reach the
+        // core in time, so it kept it on the pane's machine.
+        hide_agent_hooks::owed::owe(
+            home.path(),
+            "recipient",
+            "recipient-native",
+            std::slice::from_ref(&bell.letter),
+            start,
+        )
+        .unwrap();
+        let folder = hide_agent_hooks::owed::folder_of(home.path(), None);
+        bell.pass(&mut doorbell, start + 1);
+        bell.working_since(start + 2);
+        bell.pass(&mut doorbell, start + 3);
+        assert_eq!(letter_state(&bell), (State::Pending, Some(false)));
+        assert!(
+            folder.join("recipient.json").exists(),
+            "the node is not asked while the pane works"
+        );
+        end_turn(&mut bell.runtime.lock().unwrap(), "recipient", start + 4);
+        *bell.flags.lock().unwrap() = json!({"agent_status": "idle"});
+        bell.pass(&mut doorbell, start + 5);
+        assert_eq!(letter_state(&bell), (State::Delivered, Some(true)));
+        assert!(!folder.join("recipient.json").exists(), "handed over once");
+        assert_eq!(bell.typed().len(), 1, "no second bell");
+    }
+
+    /// A pane whose node answers that nothing is owed is not asked about the
+    /// same letter again, though it rests again after another turn; the
+    /// letter ends at its deadline as a handed letter does.
+    #[test]
+    fn a_handed_letter_is_asked_about_once() {
+        use crate::runtime::delivery::tests::end_turn;
+        let bell = Bell::start(json!({}));
+        bell.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(bell.client.clone());
+        let home = tempfile::tempdir().unwrap();
+        bell.runtime
+            .lock()
+            .unwrap()
+            .use_own_node(Arc::new(hide_node::Local::new(Some(
+                home.path().to_path_buf(),
+            ))));
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        prompt_pull(&bell, &bell.line().unwrap());
+        bell.working_since(start + 1);
+        bell.pass(&mut doorbell, start + 2);
+        end_turn(&mut bell.runtime.lock().unwrap(), "recipient", start + 3);
+        let asked = |bell: &Bell, doorbell: &mut Doorbell, at: u64| {
+            let stop = AtomicBool::new(false);
+            let ((), records) = crate::diagnostics::capture(|| {
+                doorbell.pass(&bell.runtime, &bell.client, &stop, at)
+            });
+            records
+                .iter()
+                .filter(|record| record["kind"] == "delivery.owed_asked")
+                .count()
+        };
+        assert_eq!(asked(&bell, &mut doorbell, start + 4), 1);
+        // A record kept after the answer is not asked for.
+        hide_agent_hooks::owed::owe(
+            home.path(),
+            "recipient",
+            "recipient-native",
+            std::slice::from_ref(&bell.letter),
+            start,
+        )
+        .unwrap();
+        bell.working_since(start + 5);
+        bell.pass(&mut doorbell, start + 6);
+        end_turn(&mut bell.runtime.lock().unwrap(), "recipient", start + 7);
+        assert_eq!(asked(&bell, &mut doorbell, start + 8), 0);
+        assert_eq!(letter_state(&bell), (State::Pending, Some(false)));
     }
 
     /// A bell line its recipient's session file records after that bell was

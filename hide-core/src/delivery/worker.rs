@@ -331,6 +331,12 @@ pub(crate) enum Effect {
         id: String,
         attempt: u8,
     },
+    /// What the hooks of `recipient`'s pane could not confirm, as the node
+    /// of its machine handed it over (`mailbox::confirm_owed`).
+    Owed {
+        recipient: Actor,
+        owed: hide_agent_hooks::owed::Owed,
+    },
 }
 
 #[derive(Clone)]
@@ -812,6 +818,11 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 letter.input_noticed_at_unix_ms = now;
             }
             return Ok((Value::Null, true));
+        }
+        Effect::Owed { recipient, owed } => {
+            let confirmed = mailbox::confirm_owed(ledger, recipient, owed, now);
+            let changed = !confirmed.is_empty();
+            return Ok((json!(confirmed), changed));
         }
         Effect::Deferred { id, recipient } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {

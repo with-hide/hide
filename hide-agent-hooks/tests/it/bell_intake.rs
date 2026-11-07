@@ -181,11 +181,11 @@ esac
 }
 
 /// The letters the prompt hook handed the agent but could not confirm in
-/// time are confirmed by the same session's turn end, once: the core takes a
-/// late confirmation, so the letter is not left pending with no bell to
-/// bring it again.
+/// time are kept on the pane's machine, where its node hands them to the
+/// core once the pane rests (`owed::take`): no later hook, which has the
+/// same deadline, sends them, so a turn end asks nothing.
 #[test]
-fn a_confirmation_the_prompt_hook_missed_is_sent_by_its_turn_end_once() {
+fn a_confirmation_the_prompt_hook_missed_is_kept_for_the_node_and_no_hook_sends_it() {
     let kit = Kit::answering(&late_confirm_hide());
     let late = kit.log().with_extension("log.late");
     std::fs::write(&late, "").unwrap();
@@ -209,12 +209,17 @@ fn a_confirmation_the_prompt_hook_missed_is_sent_by_its_turn_end_once() {
         "hook_event_name": "Stop", "stop_hook_active": false,
     });
     kit.hook("Stop", &stop, &pane);
-    assert_eq!(confirms(), 2, "the turn end sends it: {:?}", kit.asked());
-    kit.hook("Stop", &stop, &pane);
+    assert_eq!(confirms(), 1, "a turn end sends nothing: {:?}", kit.asked());
+    let folder = hide_agent_hooks::owed::folder_of(kit.root.path(), None);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
     assert_eq!(
-        confirms(),
-        2,
-        "nothing is owed once sent: {:?}",
-        kit.asked()
+        hide_agent_hooks::owed::take(&folder, "w1:p1", now),
+        Some(hide_agent_hooks::owed::Owed {
+            session: "fixture-session".to_owned(),
+            ids: vec!["letter-1".to_owned()],
+        })
     );
 }
