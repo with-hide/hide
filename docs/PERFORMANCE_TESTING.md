@@ -187,12 +187,12 @@ The shared `BackgroundRead` has one in-flight request and observes the latest de
 ## The opener guard hook on a shell call
 
 The `PreToolUse` entry runs `hide-agent-hooks` before every shell call a Claude Code or Codex agent makes, so it is a high-frequency path that every agent pays and no operator sees.
-Per input it adds one process start: the helper reads the payload (at most 256 KiB, waiting at most 0.5 seconds) and runs a byte test over the whole payload for a word of an opener and a viewable mark ([agent-hooks.md](agent-hooks.md#the-opener-guard)), and exits with no output when either is missing, before it parses JSON or starts a child; the [project guardrails](#the-guardrails-on-a-pre-tool-call) read their policy file first.
+Per input it adds one process start: the helper reads the payload (at most 256 KiB, waiting at most 0.5 seconds) and runs a byte test over the whole payload for a word of an opener and a viewable mark ([agent-hooks.md](agent-hooks.md#the-opener-guard)), and exits with no output when either is missing, before it parses JSON or asks the daemon; the [project guardrails](#the-guardrails-on-a-pre-tool-call) read their policy file first.
 A call that holds both, which includes an ordinary call whose payload mentions `open` and a `.md` file, pays one JSON parse and the shell lexer and starts nothing.
-Only an opener of a viewable target in a Hide pane starts a child: one `hide workspace bootstrap`, owned through `hide_platform::process` with the guard's 2.5 second deadline, a 16 KiB output cap, and an end of the child on success, failure and timeout alike.
-The guard keeps no state, runs no timer or worker, takes no lock of the runtime, publishes nothing and fans out no notification; the daemon sees one `bootstrap` request per refused call, the call `SessionStart` already makes.
+Only an opener of a viewable target in a Hide pane asks the daemon anything: one `registration` hook request over the local stream, within the guard's 2.5 second deadline, which starts no program.
+The guard keeps no state, runs no timer or worker, takes no lock of the runtime, publishes nothing and fans out no notification; the daemon sees one proof request per refused call, the proof `SessionStart` already asks for.
 The retained data is the hooks' log, capped at 256 KiB with one rotation, holding one `opener.refused` line per refusal, and the throttled diagnostic store `delivery` already caps; crossing a cap rotates or suppresses, and never refuses a call.
-A defect, a missing `hide` or a daemon that does not answer lets the shell call run, so the worst the guard can add to an ordinary call is its own bounded wait, never a refusal.
+A defect or a daemon that does not answer lets the shell call run, so the worst the guard can add to an ordinary call is its own bounded wait, never a refusal.
 
 Measure it at the command boundary: the installed command line run as the runtime runs it (`sh -c`, the payload on stdin), wall time per call from the caller's side, against a process-spawn baseline, with the first calls discarded as warm-up (ten, and five for the real `hide` row).
 Report p50, p95 and the load average before and after, and report the idle and driven (refusal) paths separately.

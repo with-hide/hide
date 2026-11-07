@@ -467,6 +467,12 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & (test(=kit::tests::an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does) | test(=kit::tests::every_kit_location_follows_the_home_the_platform_names))'
+      - name: Hide's Home lists its projects and holds no link
+        # Every process of an ssh session refuses a junction no administrator
+        # made, so Home holds none on Windows (hide-host/src/home.rs, LINKS).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(/^home::tests::/)'
       - name: The weekly usage child's environment
         # The `/usage` child is started with a restricted environment, which
         # on Windows has to carry what Node and the CLI need to start, and the

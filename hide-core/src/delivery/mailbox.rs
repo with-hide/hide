@@ -3777,4 +3777,57 @@ mod tests {
             );
         }
     }
+
+    /// A hook's confirmation reaches the ledger as `hide inbox --confirm`'s
+    /// does, whether its hook sent it over the hook's own request or a `hide`
+    /// it started (with-hide/hide-private#663): only the recipient's own pane
+    /// and session take its letters as received. The sender, a pane that is
+    /// no party to the letter and a later session in the recipient's pane
+    /// change nothing.
+    #[test]
+    fn a_confirmation_is_taken_only_from_the_recipients_own_pane_and_session() {
+        let mut ledger = Ledger::default();
+        let sender = actor("sender");
+        let recipient = actor("recipient");
+        let letter = send(
+            &mut ledger,
+            &sender,
+            &recipient,
+            "intent",
+            "body",
+            "request",
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            pull(&ledger, &recipient).unwrap().ids,
+            vec![letter.id.clone()]
+        );
+        let confirm = Command::Confirm {
+            ids: vec![letter.id.clone()],
+        };
+        let mut later = recipient.clone();
+        later.session = Some("session-later".into());
+        let before = ledger.clone();
+        for (caller, refusal) in [
+            (sender, "recipient_required"),
+            (actor("bystander"), "letter_unavailable"),
+            (later, "letter_unavailable"),
+        ] {
+            assert_eq!(
+                apply(&mut ledger, &caller, None, &confirm, 2).unwrap_err(),
+                refusal,
+                "{}",
+                caller.pane_id
+            );
+            assert_eq!(ledger, before);
+        }
+        assert_eq!(
+            pull(&ledger, &recipient).unwrap().ids,
+            vec![letter.id.clone()]
+        );
+        apply(&mut ledger, &recipient, None, &confirm, 2).unwrap();
+        assert!(pull(&ledger, &recipient).unwrap().ids.is_empty());
+    }
 }

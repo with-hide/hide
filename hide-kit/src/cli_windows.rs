@@ -3,12 +3,14 @@
 //! (`%~dp0`, which cmd expands without passing it through its code page),
 //! so a Unicode path never sits in the batch file's bytes.
 //!
-//! The desktop app's shim reaches its package's resources through a
-//! `.hide-kit` directory junction beside it, made without Developer Mode. A
-//! helper root's shim names the root's `current` folder by a relative path
-//! and makes no link: Windows' OpenSSH turns the redirection guard on for
-//! `sshd.exe`, and every process of an ssh session then refuses a junction
-//! no administrator made (with-hide/hide-private#501).
+//! Every installation's shim names the folder of its `hide.exe` by a path
+//! relative to its own and makes no link: the desktop app's its runtime copy
+//! (`~/.hide/runtime/<build>`), a helper root's the root's `current` folder.
+//! Windows' OpenSSH turns the redirection guard on for `sshd.exe`, and every
+//! process of an ssh session then refuses a junction no administrator made
+//! (with-hide/hide-private#501, #596). The `.hide-kit` junction an earlier
+//! desktop app made beside its shim goes with the next pass of the
+//! installation that made it.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -23,7 +25,8 @@ const SHIM_START: &[u8] =
     b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0";
 const SHIM_END: &[u8] = b"\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
 
-/// The junction beside the desktop app's shim, and the folder its shim names.
+/// The junction an earlier desktop app made beside its shim, and the folder
+/// that shim named.
 const JUNCTION: &str = ".hide-kit";
 
 /// The shim that runs the `hide.exe` in `folder`, relative to the shim's own.
@@ -51,21 +54,10 @@ fn junction(target: &KitTarget) -> PathBuf {
     target.cli_dir.join(JUNCTION)
 }
 
-/// How this installation's shim reaches its `hide.exe`.
-enum Form {
-    /// Through the junction beside it: the desktop app's.
-    Junction,
-    /// By this folder, relative to the shim's: a helper root's `current`.
-    Relative(String),
-}
-
-/// The form this installation's shim takes, or why it cannot take one.
-fn form(target: &KitTarget) -> Result<Form, crate::Reason> {
-    if target.install == hide_agent_hooks::route::APP_INSTALL {
-        return Ok(Form::Junction);
-    }
+/// The folder this installation's shim names, relative to the shim's, or why
+/// it cannot name one.
+fn folder(target: &KitTarget) -> Result<String, crate::Reason> {
     relative(&target.cli_dir, &target.kit_dir)
-        .map(Form::Relative)
         .ok_or_else(|| {
             crate::Reason::with(
                 crate::PartCause::Unsupported,
@@ -126,8 +118,8 @@ fn lexical(path: &Path) -> PathBuf {
 }
 
 /// The `hide.exe` the command folder's `hide` reaches now: the one its shim
-/// names, through the junction for the desktop app's form, or the one a
-/// junction left without a shim leads to.
+/// names, through the junction for an earlier desktop app's form, or the one
+/// a junction left without a shim leads to.
 fn reached(target: &KitTarget) -> Option<PathBuf> {
     let named = std::fs::read(link_path(target))
         .ok()
@@ -153,14 +145,18 @@ fn another_installs(target: &KitTarget) -> Option<PathBuf> {
 }
 
 /// Whether the junction beside the shim is this installation's own: one an
-/// earlier build of it made, leading to its command by the file or by the
-/// installation its folder names. Another installation's junction, such as
-/// one the desktop app's pass left before it wrote its shim, is not.
+/// earlier build of it made, leading to its command by the file, by the
+/// installation its folder names, or by the command this installation's own
+/// record last installed, whose folder may be gone (a runtime copy the app
+/// pruned after an update). Another installation's junction, such as one the
+/// desktop app's pass left before it wrote its shim, is not.
 fn own_junction(target: &KitTarget) -> bool {
     std::fs::read_link(junction(target)).is_ok_and(|destination| {
         let destination = destination.join("hide.exe");
         same_file(&destination, &wanted(target))
             || super::install_at(&destination).as_deref() == Some(target.install.as_str())
+            || crate::record::load(&target.home, &target.install)
+                .is_ok_and(|record| record.owns_cli(&destination))
     })
 }
 
@@ -269,20 +265,14 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
     if let Err(reason) = owned_or_missing(target) {
         return Observed::Blocked(crate::Reason::new(crate::PartCause::OtherProgram, reason));
     }
-    let form = match form(target) {
-        Ok(form) => form,
+    let folder = match folder(target) {
+        Ok(folder) => folder,
         Err(reason) => return Observed::Blocked(reason),
     };
     let Ok(bytes) = std::fs::read(link_path(target)) else {
         return Observed::Missing;
     };
-    let current = match &form {
-        Form::Junction => {
-            bytes == shim(JUNCTION) && link::is_link_to(&junction(target), &target.kit_dir)
-        }
-        Form::Relative(folder) => bytes == shim(folder) && !own_junction(target),
-    };
-    if current {
+    if bytes == shim(&folder) && !own_junction(target) {
         Observed::Current
     } else {
         Observed::Stale(crate::Reason::new(
@@ -300,31 +290,20 @@ pub(crate) fn install(target: &KitTarget) -> Result<(), String> {
         ));
     }
     owned_or_missing(target)?;
-    let form = form(target).map_err(|reason| reason.text)?;
+    let folder = folder(target).map_err(|reason| reason.text)?;
     std::fs::create_dir_all(&target.cli_dir)
         .map_err(|error| format!("{} could not be created: {error}", target.cli_dir.display()))?;
-    match form {
-        Form::Junction => {
-            link::replace_link(&target.kit_dir, &junction(target)).map_err(|error| {
-                format!("Hide's command junction could not be written: {error}")
-            })?;
-            atomic::write_file(&link_path(target), &shim(JUNCTION), Access::Private)
-                .map_err(|error| format!("Hide's command shim could not be written: {error}"))?;
-        }
-        Form::Relative(folder) => {
-            atomic::write_file(&link_path(target), &shim(&folder), Access::Private)
-                .map_err(|error| format!("Hide's command shim could not be written: {error}"))?;
-            // The junction an earlier build of this installation made: the
-            // shim no longer passes it. Another installation's stays.
-            if own_junction(target) {
-                link::remove_link(&junction(target)).map_err(|error| {
-                    format!(
-                        "the junction an earlier build left, {}, could not be removed: {error}",
-                        junction(target).display()
-                    )
-                })?;
-            }
-        }
+    atomic::write_file(&link_path(target), &shim(&folder), Access::Private)
+        .map_err(|error| format!("Hide's command shim could not be written: {error}"))?;
+    // The junction an earlier build of this installation made: the shim no
+    // longer passes it. Another installation's stays.
+    if own_junction(target) {
+        link::remove_link(&junction(target)).map_err(|error| {
+            format!(
+                "the junction an earlier build left, {}, could not be removed: {error}",
+                junction(target).display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -382,12 +361,24 @@ mod tests {
         crate::local_target(resources, home, Default::default())
     }
 
+    /// The desktop app's command names its runtime copy by a relative path
+    /// and makes no link, under a home whose name cmd's code page cannot
+    /// spell; it passes arguments and the exit code through, follows the
+    /// next build's copy, and replaces the junction form an earlier app left
+    /// (with-hide/hide-private#596).
     #[test]
-    fn command_runs_updates_and_removes_without_file_symlinks() {
+    fn the_apps_command_runs_updates_and_removes_without_a_link() {
         let dir = tempfile::tempdir().unwrap();
-        let first = target(dir.path(), &dir.path().join("old 한글 package/resources"));
+        let home = dir.path().join("한글 홈");
+        let runtime = home.join(".hide").join("runtime");
+        let first = target(&home, &runtime.join("1.2.2"));
         assert!(matches!(observe(&first), Observed::Missing));
         install(&first).unwrap();
+        assert_eq!(
+            std::fs::read(link_path(&first)).unwrap(),
+            shim(r"..\..\.hide\runtime\1.2.2")
+        );
+        assert!(std::fs::symlink_metadata(junction(&first)).is_err());
         assert_eq!(
             crate::apply(&first, &crate::Scope::automatic()).components[0].state,
             crate::ComponentState::Installed
@@ -403,12 +394,20 @@ mod tests {
             Some(23),
             "the shim preserves arguments and the exit code"
         );
-        let second = target(dir.path(), &dir.path().join("new 한글 package/resources"));
-        std::fs::remove_dir_all(first.kit_dir.parent().unwrap()).unwrap();
+        let second = target(&home, &runtime.join("1.2.3"));
+        std::fs::remove_dir_all(&first.kit_dir).unwrap();
         assert!(matches!(observe(&second), Observed::Stale(_)));
         install(&second).unwrap();
         install(&second).unwrap();
         assert!(matches!(observe(&second), Observed::Current));
+
+        // What an earlier app left: the junction form, into its copy.
+        std::fs::write(link_path(&second), shim(JUNCTION)).unwrap();
+        link::create_link(&second.kit_dir, &junction(&second)).unwrap();
+        assert!(matches!(observe(&second), Observed::Stale(_)));
+        install(&second).unwrap();
+        assert!(matches!(observe(&second), Observed::Current));
+        assert!(std::fs::symlink_metadata(junction(&second)).is_err());
         assert!(matches!(remove(&second), RemoveOutcome::Removed));
         assert!(second.kit_dir.join("hide.exe").is_file());
         assert!(matches!(remove(&second), RemoveOutcome::Absent));
@@ -433,6 +432,40 @@ mod tests {
         assert!(matches!(observe(&target), Observed::Blocked(_)));
         assert!(matches!(remove(&target), RemoveOutcome::Kept { .. }));
         assert!(link::is_link_to(&junction(&target), dir.path()));
+    }
+
+    /// with-hide/hide-private#596: an update pruned the runtime copy an
+    /// earlier app's junction led to. The record of the command that app
+    /// last installed still proves the junction its own, so the next pass
+    /// removes it, and the pass after reads the command current.
+    #[test]
+    fn an_earlier_apps_junction_into_a_pruned_copy_goes_with_the_next_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let runtime = home.join(".hide").join("runtime");
+        let old = target(&home, &runtime.join("1.2.1"));
+        // What 1.2.1 left: the junction form, and its record of the command.
+        std::fs::create_dir_all(&old.cli_dir).unwrap();
+        std::fs::write(link_path(&old), shim(JUNCTION)).unwrap();
+        link::create_link(&old.kit_dir, &junction(&old)).unwrap();
+        let mut record = crate::record::load(&home, &old.install).unwrap();
+        assert!(record.remember_cli(wanted(&old)));
+        crate::record::save(&home, &record).unwrap();
+        let new = target(&home, &runtime.join("1.2.2"));
+        std::fs::remove_dir_all(&old.kit_dir).unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(
+                crate::apply(&new, &crate::Scope::automatic()).components[0].state,
+                crate::ComponentState::Installed
+            );
+            assert!(std::fs::symlink_metadata(junction(&new)).is_err());
+            assert!(matches!(observe(&new), Observed::Current));
+        }
+        assert_eq!(
+            std::fs::read(link_path(&new)).unwrap(),
+            shim(r"..\..\.hide\runtime\1.2.2")
+        );
     }
 
     /// A device's helper root as `hided node serve` makes it under `home`:
@@ -505,7 +538,10 @@ mod tests {
         assert!(matches!(observe(&device), Observed::Absent(_)));
         assert!(install(&device).is_err());
         assert!(matches!(remove(&device), RemoveOutcome::Kept { .. }));
-        assert!(link::is_link_to(&junction(&app), &app.kit_dir));
+        assert_eq!(
+            std::fs::read(link_path(&app)).unwrap(),
+            shim(r"..\..\package\resources")
+        );
 
         assert!(matches!(remove(&app), RemoveOutcome::Removed));
         install(&device).unwrap();
@@ -513,7 +549,7 @@ mod tests {
         assert!(install(&app).is_err());
         assert!(std::fs::symlink_metadata(junction(&app)).is_err());
 
-        // The app's junction, left by a pass of the app that ended before its
+        // An earlier app's junction, left by a pass that ended before its
         // shim, beside the device's shim: the device's pass leaves it.
         link::create_link(&app.kit_dir, &junction(&app)).unwrap();
         assert!(matches!(observe(&device), Observed::Current));

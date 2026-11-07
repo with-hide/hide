@@ -1,9 +1,10 @@
 // This Mac's Home (PRD home-device-rail B16-B18, B21) against a private
 // engine and hided: the sidebar has no Home row (sidebar-titlebar-refresh B11),
 // so Home is reached from the start panel, whose start aimed at Home makes
-// `~/hide` in the daemon's HOME with a link per registered project and hide's
-// guide files, and runs the agent there; a `~/hide` that is not Hide's is left
-// alone, and the reason shows inside the start panel.
+// `~/hide` in the daemon's HOME with a link per registered project (on Windows
+// a line in its AGENTS.md naming the project's folder) and hide's guide files,
+// and runs the agent there; a `~/hide` that is not Hide's is left alone, and the
+// reason shows inside the start panel.
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
@@ -127,12 +128,22 @@ test("a start aimed at Home makes ~/hide with its guide files and runs the agent
   });
 });
 
-// @platform: The link Home makes to a project: a symbolic link on macOS and Linux, a junction on Windows.
-test("Home's ~/hide holds a link to each registered project", { tag: "@platform" }, async ({ page }) => {
+// @platform: How Home reaches a project: a symbolic link on macOS and Linux; on
+// Windows a line in AGENTS.md, because a process in an ssh session refuses a
+// junction no administrator made (docs/INSTALL.md, What each system supports).
+test("Home's ~/hide reaches each registered project", { tag: "@platform" }, async ({ page }) => {
   await inOpenedHome(page, async (home, root) => {
+    const project = fs.realpathSync(path.join(root, "fixture"));
     const link = path.join(home, "fixture");
-    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(link)).toBe(fs.realpathSync(path.join(root, "fixture")));
+    if (process.platform === "win32") {
+      expect(fs.lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
+      const named = /^- fixture -> (.+)$/m.exec(fs.readFileSync(path.join(home, "AGENTS.md"), "utf8"))?.[1];
+      if (!named) throw new Error(`${home}'s AGENTS.md names no fixture`);
+      expect(fs.realpathSync(named)).toBe(project);
+    } else {
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(fs.realpathSync(link)).toBe(project);
+    }
   });
 });
 

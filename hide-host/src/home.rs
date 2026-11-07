@@ -2,6 +2,10 @@
 //! project of that machine, plus a Hide-owned `AGENTS.md` and a `CLAUDE.md`
 //! that links to it.
 //!
+//! On Windows Home holds no link ([`LINKS`]): `AGENTS.md` names each project
+//! and its folder, `CLAUDE.md` imports it, and a link an earlier build made
+//! goes with the next sync.
+//!
 //! [`sync`] converges the folder on the projects it is given and is safe to
 //! repeat: a rerun with the same projects changes nothing but `AGENTS.md`'s
 //! own bytes. Hide only ever removes what it made. The marker file records
@@ -36,6 +40,15 @@ const MARKER_VERSION: u32 = 1;
 /// The longest file name most disks take; a longer parent-suffixed name falls
 /// back to the folder's own name.
 const MAX_NAME_BYTES: usize = 255;
+
+/// Whether Home holds a link per project. On Windows it holds none: every
+/// process of an ssh session there refuses a junction no administrator made
+/// (the redirection guard Windows' OpenSSH turns on), which is every
+/// junction a device's node or the desktop app makes, and a link to a file
+/// needs a privilege (with-hide/hide-private#596). An agent started in Home
+/// reaches each project by its real folder either way, which the start
+/// hands it as an extra root.
+pub const LINKS: bool = !cfg!(windows);
 
 /// The links Hide made, as the marker file stores them.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -93,7 +106,14 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
 
     let mut skipped = Vec::new();
     let candidates = candidates(projects, &mut skipped)?;
-    let desired = name_projects(candidates, &mut skipped);
+    let named = name_projects(candidates, &mut skipped);
+    // Where Home holds no link, every project is listed and none linked.
+    let (desired, listed) = if LINKS {
+        (named, Vec::new())
+    } else {
+        (Vec::new(), named)
+    };
+    let listed_names: BTreeSet<&str> = listed.iter().map(|(name, _)| name.as_str()).collect();
 
     let (created, on_disk) = match existing {
         Some(marker) => (false, marker),
@@ -117,7 +137,9 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
             link::remove_link(&entry).map_err(|error| {
                 io_error(&error, format!("The link {name} could not be removed"))
             })?;
-            let reason = if is_directory(Path::new(recorded)) {
+            let reason = if listed_names.contains(name.as_str()) {
+                "listed"
+            } else if is_directory(Path::new(recorded)) {
                 "unregistered"
             } else {
                 "dangling"
@@ -208,7 +230,13 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
 
     let home = identity::canonical(&home_path)
         .map_err(|error| io_error(&error, "Hide's Home cannot be read"))?;
-    let links = next
+    let mut held = next;
+    held.extend(
+        listed
+            .iter()
+            .map(|(name, target)| (name.clone(), target.to_string_lossy().into_owned())),
+    );
+    let links = held
         .into_iter()
         .map(|(name, target)| HomeLink {
             name,
@@ -409,13 +437,20 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> HostResult<()> {
         .map_err(|error| io_error(&error, format!("~/hide/{name} could not be written")))
 }
 
-/// `CLAUDE.md` links to `AGENTS.md` unless something is there already, which
-/// is left as it is.
+/// The one line a `CLAUDE.md` that is no link holds: Claude Code reads the
+/// file it names as part of this one.
+const CLAUDE_IMPORT: &str = "@AGENTS.md\n";
+
+/// `CLAUDE.md` links to `AGENTS.md`, or where Home holds no link imports it,
+/// unless something is there already, which is left as it is.
 fn link_claude_file(home: &Path) -> HostResult<()> {
     let entry = home.join(CLAUDE_FILE);
     match std::fs::symlink_metadata(&entry) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && LINKS => {
             make_link(Path::new(AGENTS_FILE), &entry, CLAUDE_FILE)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_atomic(home, CLAUDE_FILE, CLAUDE_IMPORT.as_bytes())
         }
         _ => Ok(()),
     }
@@ -463,10 +498,13 @@ fn agents_text(links: &[HomeLink]) -> String {
     let mut text = String::from(
         "# Hide Home\n\
          \n\
-         This folder is Hide's Home on this device.\n\
-         Each entry is a link to a project registered in Hide.\n\
-         \n",
+         This folder is Hide's Home on this device.\n",
     );
+    text.push_str(if LINKS {
+        "Each entry is a link to a project registered in Hide.\n\n"
+    } else {
+        "Each line names a project registered in Hide and its folder; work in that folder.\n\n"
+    });
     if links.is_empty() {
         text.push_str("No projects are registered on this device yet.\n");
     }
@@ -501,14 +539,66 @@ mod tests {
             assert!(!synced.home.contains('\\'));
             assert!(!target.contains('\\'));
         }
-        assert_eq!(
-            identity::canonical(&Path::new(&synced.home).join(&synced.links[0].name)).unwrap(),
-            identity::canonical(&project).unwrap()
-        );
+        let entry = Path::new(&synced.home).join(&synced.links[0].name);
+        if LINKS {
+            assert_eq!(
+                identity::canonical(&entry).unwrap(),
+                identity::canonical(&project).unwrap()
+            );
+        } else {
+            assert!(std::fs::symlink_metadata(&entry).is_err());
+            let guide = std::fs::read_to_string(Path::new(&synced.home).join(AGENTS_FILE)).unwrap();
+            assert!(guide.contains(&format!("- project -> {target}")), "{guide}");
+        }
         let removed = sync(dir.path(), &[]).unwrap();
         assert_eq!(removed.home, synced.home);
-        assert_eq!(removed.dropped[0].target, *target);
+        if LINKS {
+            assert_eq!(removed.dropped[0].target, *target);
+        } else {
+            assert!(removed.dropped.is_empty());
+        }
         assert!(removed.links.is_empty());
+    }
+
+    /// with-hide/hide-private#596: Windows' Home makes no link, and the
+    /// junction an earlier build made for a project goes with the next sync,
+    /// whose guide names the project's folder instead; `CLAUDE.md` imports
+    /// the guide.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_home_lists_its_projects_and_removes_an_earlier_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let wanted = vec![project.to_string_lossy().into_owned()];
+        let first = sync(dir.path(), &wanted).unwrap();
+        let home = dir.path().join(HOME_DIR_NAME);
+        // What an earlier build left: a junction recorded in the marker.
+        link::create_link(&project, &home.join("project")).unwrap();
+        write_marker(
+            &home,
+            &Marker {
+                version: MARKER_VERSION,
+                links: [("project".to_owned(), project.to_string_lossy().into_owned())].into(),
+            },
+        )
+        .unwrap();
+        let synced = sync(dir.path(), &wanted).unwrap();
+        assert_eq!(synced.links, first.links);
+        assert_eq!(synced.dropped.len(), 1);
+        assert_eq!(synced.dropped[0].reason, "listed");
+        assert!(std::fs::symlink_metadata(home.join("project")).is_err());
+        let names: Vec<_> = std::fs::read_dir(&home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert_eq!(names, [MARKER_FILE, AGENTS_FILE, CLAUDE_FILE]);
+        assert_eq!(
+            std::fs::read_to_string(home.join(CLAUDE_FILE)).unwrap(),
+            CLAUDE_IMPORT
+        );
     }
 
     /// A holder that never lets go is reported as busy within the wait,

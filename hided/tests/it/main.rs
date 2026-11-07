@@ -14,6 +14,7 @@ mod held_letter_notice;
 mod mobile;
 mod mobile_relay;
 mod node_contract;
+#[cfg(unix)]
 mod node_home;
 mod node_link_facts;
 mod node_owner;
