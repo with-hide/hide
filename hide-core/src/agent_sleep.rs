@@ -31,8 +31,16 @@ pub use dormant::{
     SleepingSessionSnapshot,
 };
 
-/// The Settings choices besides Never, in hours (PRD D-10).
-pub const SLEEP_AFTER_CHOICES_HOURS: [u32; 3] = [12, 24, 72];
+/// The Settings choices besides Off, in hours (PRD D-10).
+pub const SLEEP_AFTER_CHOICES_HOURS: [u32; 4] = [12, 24, 48, 72];
+/// The choice of a store that has none: a new one, or one written while
+/// Off was the default, which could not tell the default from an Off the
+/// operator chose.
+pub const DEFAULT_SLEEP_AFTER_HOURS: u32 = 24;
+/// How `core-state.json` writes an Off the operator chose. A build from
+/// before the 24-hour default reads it as Off too: zero is no choice it
+/// knows, and it loads such a value as Off.
+const STORED_OFF: u32 = 0;
 /// The decision runs at most this often; the coordinator tick is 250 ms.
 pub const DECISION_INTERVAL_MS: u64 = 60_000;
 /// A pane whose agent would not end is not tried again for this long,
@@ -79,6 +87,22 @@ impl SleepScope<'_> {
 
 pub fn valid_after_hours(hours: Option<u32>) -> bool {
     hours.is_none_or(|hours| SLEEP_AFTER_CHOICES_HOURS.contains(&hours))
+}
+
+/// The choice as `core-state.json` stores it, `None` (Off) as zero.
+pub(crate) fn stored_after_hours(hours: Option<u32>) -> u32 {
+    hours.unwrap_or(STORED_OFF)
+}
+
+/// The choice a stored value loads as: zero is Off, a choice is itself, and
+/// no value (a store from before a choice was stored) or one this build
+/// does not offer is the default.
+pub(crate) fn loaded_after_hours(stored: Option<u32>) -> Option<u32> {
+    match stored {
+        Some(STORED_OFF) => None,
+        Some(hours) if valid_after_hours(Some(hours)) => Some(hours),
+        _ => Some(DEFAULT_SLEEP_AFTER_HOURS),
+    }
 }
 
 /// Everything agent sleep keeps between launches, in `core-state.json`.

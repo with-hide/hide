@@ -56,7 +56,7 @@ describe("a sleeping pane's words", () => {
 
 describe("the Sleep idle agents setting and the pane menu", () => {
   it("reads a stored choice and reads anything it does not offer as Never", () => {
-    expect([null, undefined, 12, 24, 72, 5, "24"].map(sleepAfterChoice)).toEqual(["never", "never", "12", "24", "72", "never", "never"]);
+    expect([null, undefined, 12, 24, 48, 72, 5, "24"].map(sleepAfterChoice)).toEqual(["never", "never", "12", "24", "48", "72", "never", "never"]);
   });
 
   it("counts only this machine's sleeping agents", () => {

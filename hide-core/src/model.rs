@@ -4572,9 +4572,9 @@ pub struct UiStateSnapshot {
     #[serde(default, skip_serializing)]
     pub request_verbs: BTreeMap<String, crate::request_view::VerbRecord>,
     /// How long an agent may go untouched before Hide ends its process and
-    /// keeps its conversation to resume: 12, 24 or 72 hours, or `None` for
-    /// never, the default (PRD D-10).
-    #[serde(default)]
+    /// keeps its conversation to resume: 12, 24 (the default), 48 or 72
+    /// hours, or `None` for Off (PRD D-10).
+    #[serde(default = "default_sleep_after_hours")]
     pub agent_sleep_after_hours: Option<u32>,
     /// Each local project's chosen issue source, `github` or `local`, by the
     /// project's path; a project without an entry reads its default source
@@ -5333,6 +5333,10 @@ pub struct WorktreeNameSnapshot {
     pub message: Option<String>,
 }
 
+fn default_sleep_after_hours() -> Option<u32> {
+    Some(crate::agent_sleep::DEFAULT_SLEEP_AFTER_HOURS)
+}
+
 impl Default for UiStateSnapshot {
     fn default() -> Self {
         Self {
@@ -5402,7 +5406,7 @@ impl Default for UiStateSnapshot {
             pane_completions: BTreeMap::new(),
             pane_launches: BTreeMap::new(),
             request_verbs: BTreeMap::new(),
-            agent_sleep_after_hours: None,
+            agent_sleep_after_hours: default_sleep_after_hours(),
             project_issue_sources: BTreeMap::new(),
             issue_settings: IssueSettingsSnapshot::default(),
             conductor_settings: crate::missions::ConductorSettings::default(),

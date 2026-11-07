@@ -75,10 +75,13 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
     await page.locator('[data-settings-tab="agents"]').click();
     await expect(page.locator('[data-settings-group="idle-agents"]')).toContainText("1 sleeping now");
     const choice = page.locator("[data-agent-sleep-after]");
-    await expect(choice).toHaveAttribute("data-agent-sleep-after", "never");
+    // 24 hours until the operator chooses (the default), and 48 once chosen.
+    await expect(choice).toHaveAttribute("data-agent-sleep-after", "24");
     await choice.click();
-    await page.locator('[data-agent-sleep-option="24"]').click();
-    await expect(choice).toHaveAttribute("data-agent-sleep-after", "24", { timeout: 10_000 });
+    await expect(page.locator('[data-agent-sleep-option="48"]')).toBeVisible();
+    await screenshot(page, "agent-sleep-choices");
+    await page.locator('[data-agent-sleep-option="48"]').click();
+    await expect(choice).toHaveAttribute("data-agent-sleep-after", "48", { timeout: 10_000 });
     await screenshot(page, "agent-sleep-settings");
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
