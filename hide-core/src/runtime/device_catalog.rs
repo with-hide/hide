@@ -173,7 +173,11 @@ impl Runtime {
     /// pane's hook tokens and the device's own kit (PRD device-parity D-21,
     /// B14). A device whose kit Hide has not read yet leaves the cause
     /// unknown rather than guessing it.
-    fn judge_device_pane_children(&self, target: &str, session: &mut RemoteSessionSnapshot) {
+    pub(super) fn judge_device_pane_children(
+        &self,
+        target: &str,
+        session: &mut RemoteSessionSnapshot,
+    ) {
         let declined = self
             .device_kit_declined(target)
             .is_some_and(|declined| declined.installed_nothing());
@@ -1297,9 +1301,9 @@ impl Runtime {
             .iter()
             .any(|registration| registration.id == id)
         {
-            // Registering the same project again reaches the same state.
-            self.settle_project_open(device, requested, Ok(()), Forward::Checkout);
-            return false;
+            // Registering the same project again reaches the same state;
+            // only a read of what it brought forward is news.
+            return self.settle_project_open(device, requested, Ok(()), Forward::Checkout);
         }
         let label = Some(label.trim())
             .filter(|label| !label.is_empty())

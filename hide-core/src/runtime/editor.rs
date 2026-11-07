@@ -537,8 +537,7 @@ impl Runtime {
         self.snapshot.navigator.root_path = Some(checkout.path);
         self.sync_changes_root_path();
         self.select_terminal_pane(pane_id);
-        self.operator_focused_pane_id = None;
-        self.refresh_pane_read_state();
+        self.set_operator_focus(None);
         self.persist_current_ui_state();
         Ok(())
     }
@@ -669,11 +668,7 @@ impl Runtime {
     /// The device whose closed items the reopen command and the snapshot's
     /// `recent_closed` speak for: the one in front.
     fn reopen_device(&self) -> &str {
-        self.snapshot
-            .navigator
-            .focused_device_id
-            .as_deref()
-            .unwrap_or(self.node.as_str())
+        self.look.front().unwrap_or(self.node.as_str())
     }
 
     /// The newest closed item the device in front can reopen. One stack keeps
@@ -2850,6 +2845,17 @@ impl Runtime {
     }
 
     pub fn ingest_reopen_result(
+        &mut self,
+        request: &crate::recent_closed::reopen::ReopenRequest,
+        result: Result<crate::recent_closed::reopen::FileReopenResultOrEngine, String>,
+    ) -> bool {
+        let (changed, read) =
+            self.change_look(|runtime| runtime.ingest_reopen_result_steps(request, result));
+        changed || read
+    }
+
+    /// The steps of `ingest_reopen_result`, which runs them as one selection (`look.rs`).
+    fn ingest_reopen_result_steps(
         &mut self,
         request: &crate::recent_closed::reopen::ReopenRequest,
         result: Result<crate::recent_closed::reopen::FileReopenResultOrEngine, String>,

@@ -123,6 +123,8 @@ mod projects;
 mod ps;
 #[path = "tests/pull_requests.rs"]
 mod pull_requests;
+#[path = "tests/read_on_look.rs"]
+mod read_on_look;
 #[path = "tests/recent_checkouts.rs"]
 mod recent_checkouts;
 #[path = "tests/recent_panes.rs"]

@@ -262,7 +262,7 @@ impl Fixture {
             row.id = DEVICE.to_owned();
             row.kind = "remote".to_owned();
             runtime.snapshot.navigator.devices.push(row);
-            runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+            runtime.set_front_device(Some(DEVICE.to_owned()));
             runtime.snapshot.navigator.focused_workspace_id = None;
             runtime.snapshot.navigator.focused_checkout_id = None;
         }
@@ -562,7 +562,7 @@ fn behind_reveal(views: &str) -> (Fixture, Arc<Mutex<Vec<Value>>>, HeldRevealRea
         session.workspaces.push(project);
         session.focused_workspace_id = None;
         session.focused_checkout_id = None;
-        runtime.snapshot.navigator.focused_device_id = Some(crate::node::TEST_NODE.to_owned());
+        runtime.set_front_device(Some(crate::node::TEST_NODE.to_owned()));
     }
     f.device.hold_read("a.txt");
     let held = HeldRevealRead(f.device.clone());
@@ -1177,7 +1177,7 @@ fn a_device_file_tab_joins_the_device_strip_and_survives_session_syncs() {
             catalog: Default::default(),
             unreachable_since_unix_ms: None,
         });
-        runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+        runtime.set_front_device(Some(DEVICE.to_owned()));
         runtime.snapshot.navigator.focused_workspace_id = None;
         runtime.snapshot.navigator.focused_checkout_id = None;
         session
