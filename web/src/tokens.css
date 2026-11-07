@@ -2,6 +2,8 @@
 @custom-variant agent-tab-count-room (@container tab-title (min-width: 48px));
 @custom-variant overview-narrow (@media (width < 1280px));
 @custom-variant pane-wide (@container pane (min-width: 640px));
+@custom-variant pane-head-narrow (@container pane (width < 440px));
+@custom-variant pane-head-tight (@container pane (width < 300px));
 @custom-variant mission-wide (@container mission (min-width: 900px));
 @custom-variant mission-panel-words (@container mission-panel (min-width: 480px));
 @custom-variant task-table-wide (@container task-table (min-width: 520px));
@@ -361,6 +363,8 @@
   --size-agent-logo: 40px;
   --size-overview-panel-breakpoint: 1280px;
   --size-pane-parent-breakpoint: 640px;
+  --size-pane-head-narrow: 440px;
+  --size-pane-head-tight: 300px;
   --size-pane-state-example: 144px;
   --size-pane-narrow-example: 440px;
   --size-usage-cell: 12px;

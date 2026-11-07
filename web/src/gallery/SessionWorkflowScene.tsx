@@ -88,6 +88,9 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   ["child-narrow", "21 · 좁은 자식 pane · 화살표만", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
 ];
 const CHILD_CASES = ["child-wide", "child-narrow"];
+/** state=widths: a wide head, then one width inside each fold of the pane head (`--size-pane-head-narrow` and `--size-pane-head-tight`). */
+const HEAD_WIDTHS = [640, 420, 340, 280, 200, 140];
+const widthPane = (headWidth: number) => `narrow-${headWidth}`;
 const TURN_CASES = ["turn-question", "turn-working", "turn-finished", "turn-narrow", "turn-image", "turn-children", "turn-request-only"];
 
 // Frozen visual examples, not a second implementation of core judgments.
@@ -217,8 +220,18 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     // The Conductor row's mission, its open decision the row asks (needs-you-cleanup B1, B5).
     const conductor = agents[9]!;
     base.rest.missions = { items: [{ id: "m-gallery", title: "사이드바 정리", workspace_id: project.id, project: "/repo", checkout_path: "/repo", device_id: conductor.device_id, status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: conductor.pane_id, name: conductor.identity_label, agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: Array.from({ length: 8 }, (_, index) => ({ key: `n${index}`, title: `n${index}`, kind: "change", depends_on: [], status: "planned" })), merge_order: [], check: null, github: null, decision: "뼈대의 check 줄을 건너뛸까요?", question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null } as unknown as Mission] } as typeof base.rest.missions;
+    // state=widths: copies of the narrow case, one pane each, that conduct a finished mission, so the head carries the widest chip it can.
+    const widthAgents = state === "widths" ? HEAD_WIDTHS.map((headWidth) => ({ ...headerAgents.find((agent) => agent.pane_id === "narrow")!, id: widthPane(headWidth), pane_id: widthPane(headWidth) })) : [];
+    if (state === "widths") {
+      const missions = base.rest.missions!;
+      const mission = missions.items[0]!;
+      for (const headWidth of HEAD_WIDTHS) {
+        headers[widthPane(headWidth)] = headers.narrow!;
+        missions.items.push({ ...mission, id: `m-${widthPane(headWidth)}`, title: "헤더 정리", status: "done", decision: null, conductor: { ...mission.conductor, pane_id: widthPane(headWidth), name: "Group tab 기능 설계" }, nodes: Array.from({ length: 3 }, (_, index) => ({ key: `w${index}`, title: `w${index}`, kind: "change", depends_on: [], status: "done" })), closed_at_unix_ms: 2 } as unknown as Mission);
+      }
+    }
     base.rest.status = { ...base.rest.status, remote: [{ target_id: "mini", state: "not_connected", message: "Mac mini 연결되지 않음", session: null }] };
-    return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents], pane };
+    return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents, ...widthAgents], pane };
   }, [content, state]);
   // `turn-two-lines` and `turn-off` draw the turn cases in the View menu's other modes.
   const turnRow = state === "turn-two-lines" ? "two_lines" : state === "turn-off" ? "off" : "one_line";
@@ -229,6 +242,10 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, theme, scale, turnRow]);
+  // state=widths: one head, its PR, children and finished mission, at each width its chips fold at (docs/UI_BEHAVIOR.md, Agent panes).
+  if (kind === "pane-header" && state === "widths") {
+    return <TooltipProvider><div className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{HEAD_WIDTHS.map((headWidth) => <div key={headWidth} data-pane-header-case={widthPane(headWidth)} style={{ width: headWidth }} className="max-w-full min-w-0"><div className="pb-xs text-micro text-muted-foreground">{headWidth}px</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id: widthPane(headWidth), identity_label: content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계" }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="claude" markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div></div>)}</div></TooltipProvider>;
+  }
   // state=connection: a copy too old for Hide wears the Update needed badge, a session started before the update
   // put the piece in says to restart, and a session Hide cannot read says its letters wait; the other headers keep
   // the integration icon (docs/UI_BEHAVIOR.md).

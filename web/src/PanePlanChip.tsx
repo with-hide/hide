@@ -154,8 +154,9 @@ export function PlanChipFace({ tones, count, proposed, finished }: { tones: read
   return (
     <>
       <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-      <span className="whitespace-nowrap">{proposed ? t("plan.review") : t("plan.title")}</span>
-      <ProgressCells tones={tones} size="chip" />
+      {/* In a narrow pane's head the mark and the count stay; elsewhere no pane container narrows it. */}
+      <span className={cn("whitespace-nowrap", !proposed && "pane-head-narrow:hidden")}>{proposed ? t("plan.review") : t("plan.title")}</span>
+      <ProgressCells tones={tones} size="chip" className="pane-head-narrow:hidden" />
       {proposed ? null : <span className="font-mono tabular-nums">{count}</span>}
     </>
   );

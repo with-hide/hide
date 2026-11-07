@@ -245,7 +245,7 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
       onKeyDown={state.onKeyDown}
     >
       <span className={cn("font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{verb}</span>
-      <Elapsed since={band.since_unix_ms} className="font-mono text-muted-foreground" />
+      <Elapsed since={band.since_unix_ms} className="font-mono text-muted-foreground pane-head-narrow:hidden" />
     </button>
   )} />;
 }
@@ -369,7 +369,8 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
     // request on the second row only, and the record shows the whole title.
     <button
       type="button"
-      className="flex min-w-0 items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+      // Two columns, the marks and the title: the title's column gives up its width down to nothing, the marks' never, so a narrow head truncates the title rather than drawing the marks over the chips after it.
+      className="grid grid-flow-col grid-cols-[auto_minmax(0,auto)] items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       aria-label={[title, product, words, t("record.recordHint")].filter(Boolean).join(", ")}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => actions.togglePaneRecord(session)}

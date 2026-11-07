@@ -50,6 +50,10 @@ export function generate(root = process.cwd()) {
   if (overviewPanel?.type !== 'number') throw new Error('Expected numeric --size-overview-panel-breakpoint');
   const paneBreakpoint = tokens['--size-pane-parent-breakpoint'];
   if (paneBreakpoint?.type !== 'number') throw new Error('Expected numeric --size-pane-parent-breakpoint');
+  const paneHeadNarrow = tokens['--size-pane-head-narrow'];
+  if (paneHeadNarrow?.type !== 'number') throw new Error('Expected numeric --size-pane-head-narrow');
+  const paneHeadTight = tokens['--size-pane-head-tight'];
+  if (paneHeadTight?.type !== 'number') throw new Error('Expected numeric --size-pane-head-tight');
   const missionWide = tokens['--size-mission-wide'];
   if (missionWide?.type !== 'number') throw new Error('Expected numeric --size-mission-wide');
   const missionPanelWords = tokens['--size-mission-panel-words'];
@@ -96,6 +100,10 @@ export function generate(root = process.cwd()) {
     `@custom-variant overview-narrow (@media (width < ${overviewPanel.value}px));`,
     // A pane wide enough for its header to carry words beside its marks.
     `@custom-variant pane-wide (@container pane (min-width: ${paneBreakpoint.value}px));`,
+    // A pane too narrow for its head's chips to carry words: they keep their mark and count, and `@` and zoom wait in the pane menu.
+    `@custom-variant pane-head-narrow (@container pane (width < ${paneHeadNarrow.value}px));`,
+    // A pane too narrow for its head's chips at all: they go and the title keeps the room.
+    `@custom-variant pane-head-tight (@container pane (width < ${paneHeadTight.value}px));`,
     // A mission page wide enough for its node panel beside the map, else under it (PRD mission-map-git-criteria D-04).
     `@custom-variant mission-wide (@container mission (min-width: ${missionWide.value}px));`,
     // A mission node panel wide enough for its head's buttons to carry their words beside a long title, else their icons alone.

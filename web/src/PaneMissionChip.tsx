@@ -79,8 +79,9 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
         >
           <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
           {words.state === "decision" ? <span aria-hidden="true" className="font-semibold" data-mission-chip-decision="true">!</span> : null}
-          <span className="whitespace-nowrap">{t(words.key)}</span>
-          {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="chip" /> : null}
+          {/* A narrow pane keeps the mark and the count; the word and the cells come back as it widens, and the chip's name always says them. */}
+          <span className="whitespace-nowrap pane-head-narrow:hidden">{t(words.key)}</span>
+          {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="chip" className="pane-head-narrow:hidden" /> : null}
           {words.counts ? <span className="font-mono tabular-nums">{words.counts}</span> : null}
         </button>
       </PopoverAnchor>

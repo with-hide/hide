@@ -132,10 +132,11 @@ describe("pane move gesture", () => {
 // The record title is a draggable part of an existing button; its logo and status are not.
 it("starts from the grip, title text or blank space while preserving ordinary record clicks and excluding controls and the second row", () => {
   const host = document.createElement("section");
-  host.innerHTML = '<header><span data-pane-move-grip></span><button data-pane-record="session"><span data-logo data-pane-move-excluded>logo</span><span data-status data-pane-status-mark>status</span><span data-pane-move-title><span data-title-text>title</span><span data-title-gap></span></span></button><span data-pane-move-blank></span><button data-menu>menu</button><button data-close>close</button></header><div data-pane-header-band>second row</div>';
+  // The left side is one row of its own (PaneView); a gap between its parts is the header's unused space.
+  host.innerHTML = '<header><div data-pane-move-row="true"><span data-pane-move-grip></span><button data-pane-record="session"><span data-logo data-pane-move-excluded>logo</span><span data-status data-pane-status-mark>status</span><span data-pane-move-title><span data-title-text>title</span><span data-title-gap></span></span></button><span class="contents"><button data-chip>PR</button></span><span data-pane-move-blank></span></div><button data-menu>menu</button><button data-close>close</button></header><div data-pane-header-band>second row</div>';
   const header = host.querySelector("header")!;
-  for (const selector of ["[data-pane-move-grip]", "[data-title-text]", "[data-title-gap]", "[data-pane-record]", "[data-pane-move-blank]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(true);
-  for (const selector of ["[data-logo]", "[data-status]", "[data-menu]", "[data-close]", "[data-pane-header-band]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(false);
+  for (const selector of ["[data-pane-move-grip]", "[data-title-text]", "[data-title-gap]", "[data-pane-record]", "[data-pane-move-blank]", "[data-pane-move-row]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(true);
+  for (const selector of ["[data-logo]", "[data-status]", "[data-chip]", "[data-menu]", "[data-close]", "[data-pane-header-band]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(false);
   const record = vi.fn(); host.querySelector("button")!.addEventListener("click", record); host.querySelector<HTMLElement>("[data-title-text]")!.click();
   expect(record).toHaveBeenCalledOnce();
 });
