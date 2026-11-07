@@ -272,6 +272,17 @@ fn spawn_cap(
 /// and a trust question at startup holds it longer.
 pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How long a spawn waits for the pass it asked of its child's machine's
+/// kit before it makes anything (`runtime::start_hook`). A pass asks Codex
+/// to trust Hide's hooks, which is bounded at 19 s
+/// (`hide_agent_hooks::codex_trust`), and reads each agent once; a kit that
+/// is still busy past this, waiting on another kit's account lock or on a
+/// slow device, has the spawn refused so the same command asks again,
+/// rather than held for the 90 s that lock allows. The `hide` CLI's spawn
+/// exchange adds it to its own wait, so this refusal arrives before the
+/// exchange gives up.
+pub const HOOK_PASS_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past
 /// this failed and was left (a retry under a new intent is its own spawn),
@@ -750,6 +761,15 @@ pub(crate) enum Mutation {
 }
 
 impl AgentRecord {
+    /// The registration's pane as the core and the screen name it: the
+    /// engine's own id on the core's node `node`, `remote:<device>:pane:<id>`
+    /// on a device. Every place that shows the operator where a registration
+    /// is, or finds its agent row, takes it from here, never from `pane`,
+    /// which is the device's own id (with-hide/hide-private#679).
+    pub(crate) fn pane_on(&self, node: &str) -> String {
+        crate::address::pane_id_on(node, &self.machine, &self.pane)
+    }
+
     /// The name this agent has on the wire and in the ledger: the name it
     /// registered under, else its registration id, which is stable and which
     /// `hide request send` and `--parent` already resolve. Never a pane id and
@@ -2138,6 +2158,10 @@ pub(crate) enum PaneGone {
     /// The registration was made before this read's snapshot was asked for,
     /// and the snapshot lacks its pane.
     Absent,
+    /// The pane is there, a shell: its engine restored it after a restart
+    /// and did not resume the agent that ran in it, and no resume will be
+    /// typed (`ProjectionState::not_resumed`).
+    NotResumed,
 }
 
 impl PaneGone {
@@ -2145,6 +2169,7 @@ impl PaneGone {
         match self {
             Self::Left => "pane_left",
             Self::Absent => "pane_absent",
+            Self::NotResumed => "agent_not_resumed",
         }
     }
 }
@@ -2203,6 +2228,46 @@ pub(crate) fn gone_registrations(
                 .is_some_and(|floor| sequence < floor)
                 .then(|| (record.id.clone(), PaneGone::Absent))
         })
+        .collect()
+}
+
+/// The live registrations on `device` whose agent a restore did not resume
+/// (`left`, the panes' engine says are shells now), none of which runs: the
+/// registration on each such pane, unless an agent shows in that pane now
+/// (`shown`, the panes of the same read that list one) or the registration
+/// belongs to another conversation than the one that was not resumed, which
+/// both name. A registration on another engine of the same machine is not
+/// judged by this one's read (`host_scope`, as [`gone_registrations`]).
+pub(crate) fn not_resumed_registrations(
+    ledger: &Ledger,
+    device: &str,
+    host_scope: Option<&str>,
+    left: &[crate::session_sync::NotResumed],
+    shown: &std::collections::HashSet<&str>,
+) -> Vec<(String, PaneGone)> {
+    ledger
+        .agents
+        .iter()
+        .filter(|record| {
+            !record.ended
+                && !record.actor.code_owned()
+                && record.actor.device_id == device
+                && host_scope.is_none_or(|scope| scope == record.host_scope)
+                && !shown.contains(record.pane.as_str())
+        })
+        .filter(|record| {
+            left.iter().any(|left| {
+                left.pane_id == record.pane
+                    && match (&left.session, &record.actor.session) {
+                        (Some(session), Some(registered)) => {
+                            crate::engine::tokens::session_digest(session).as_ref()
+                                == Some(registered)
+                        }
+                        _ => true,
+                    }
+            })
+        })
+        .map(|record| (record.id.clone(), PaneGone::NotResumed))
         .collect()
 }
 

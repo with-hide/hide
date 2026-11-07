@@ -127,6 +127,7 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
 /** The failure codes of an attempt that ended, which the catalogs word; a code of another build reads as the generic ending, and its detail is in the log. */
 const FAILURE_KEYS: Record<string, MessageKey> = {
   agent_not_started: "suggestions.failure.agent_not_started",
+  agent_hook_not_ready: "suggestions.failure.agent_hook_not_ready",
   no_pr: "suggestions.failure.no_pr",
   shell_starting: "suggestions.failure.shell_starting",
   start_failed: "suggestions.failure.start_failed",

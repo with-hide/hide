@@ -302,6 +302,7 @@ async fn attached(
         }
     };
     let mut live = state.live.clone();
+    let renderer = matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
     let mut terminals: Option<HubClient> = None;
     let mut told = InputNotices::default();
     let unsent = state.terminals.unsent.watch(connection);
@@ -354,6 +355,12 @@ async fn attached(
                     && socket.send(Message::Text(frame.text.into())).await.is_err()
                 {
                     return ScreenEnd::Left;
+                }
+                // Only a window writes a program's copy to its clipboard.
+                for copied in client.take_clipboard().iter().filter(|_| renderer) {
+                    if socket.send(Message::Text(copied.as_ref().into())).await.is_err() {
+                        return ScreenEnd::Left;
+                    }
                 }
             }
             () = unsent.ready() => {

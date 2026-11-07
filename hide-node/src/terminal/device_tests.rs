@@ -364,6 +364,7 @@ type HeardOutput = (String, String, Vec<u8>, bool);
 #[derive(Default)]
 struct Heard {
     output: Mutex<Vec<HeardOutput>>,
+    copied: Mutex<Vec<(String, String, Vec<u8>)>>,
     reports: Mutex<Vec<(String, TerminalReport)>>,
 }
 
@@ -373,6 +374,13 @@ impl DeviceSink for Heard {
             .lock()
             .unwrap()
             .push((device.into(), pane.into(), bytes.to_vec(), full));
+    }
+
+    fn clipboard(&self, device: &str, pane: &str, text: &[u8]) {
+        self.copied
+            .lock()
+            .unwrap()
+            .push((device.into(), pane.into(), text.to_vec()));
     }
 
     fn report(&self, device: &str, report: TerminalReport) {
@@ -1200,4 +1208,104 @@ fn pending_device_permissions_expire_without_new_input_and_end_with_the_link() {
             wait_for(|| link.ended.lock().unwrap().is_some());
         }
     }
+}
+
+/// with-hide/hide-private#659: a device's copies go up ahead of every pane's
+/// waiting output, the latest of each pane in the order written, so a
+/// hidden pane's copy never pushes out the shown one's; none is kept for
+/// later: a link that stops drawing the node's panes, or a pane forgotten,
+/// drops it.
+#[test]
+fn a_devices_copy_goes_up_once_ahead_of_output_and_only_the_latest() {
+    let uplink = Uplink::default();
+    uplink.push_output("w1:p1", b"waiting", false);
+    uplink.push_clipboard("w1:p1", b"older");
+    uplink.push_clipboard("w1:p2", b"hidden");
+    uplink.push_clipboard("w1:p1", b"latest");
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let (line, _) = uplink.next().unwrap();
+        let TerminalUp::Clipboard(copied) = up(&line.unwrap()) else {
+            panic!("the copies go first");
+        };
+        copies.push((copied.pane.clone(), copied.text().unwrap()));
+    }
+    assert_eq!(
+        copies,
+        [
+            ("w1:p2".to_owned(), b"hidden".to_vec()),
+            ("w1:p1".to_owned(), b"latest".to_vec())
+        ]
+    );
+    let (line, _) = uplink.next().unwrap();
+    assert!(matches!(up(&line.unwrap()), TerminalUp::Output(_)));
+
+    uplink.push_clipboard("w1:p1", b"forgotten");
+    uplink.forget("w1:p1");
+    uplink.push_clipboard("w1:p2", b"withheld");
+    uplink.withhold(true);
+    uplink.push_clipboard("w1:p2", b"while withheld");
+    uplink.withhold(false);
+    uplink.push_output("w1:p2", b"after", true);
+    let (line, _) = uplink.next().unwrap();
+    assert!(matches!(up(&line.unwrap()), TerminalUp::Output(_)));
+}
+
+/// The core takes a device's copy for its hub decoded and named by device,
+/// and refuses one past the bound a holder keeps without ending the link.
+#[test]
+fn a_devices_copy_reaches_the_hub_and_one_past_the_bound_is_refused() {
+    let ((), records) = crate::diagnostics::capture(|| {
+        let (proxy, _link, heard) = proxy();
+        let inbound = proxy.inbound();
+        inbound(
+            &line_of(TerminalUp::Clipboard(TerminalClipboard::new(
+                "w1:p1", b"copied",
+            )))
+            .unwrap(),
+        );
+        let past = vec![b'x'; hide_holder_protocol::MAX_CLIPBOARD + 1];
+        inbound(
+            &line_of(TerminalUp::Clipboard(TerminalClipboard::new(
+                "w1:p1", &past,
+            )))
+            .unwrap(),
+        );
+        inbound(
+            &line_of(TerminalUp::Output(TerminalOutput {
+                pane: "w1:p1".into(),
+                data: encode_base64(b"after"),
+                full: true,
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            heard.copied.lock().unwrap().as_slice(),
+            [("mini".to_owned(), "w1:p1".to_owned(), b"copied".to_vec())]
+        );
+        assert_eq!(heard.output.lock().unwrap().len(), 1);
+    });
+    assert_eq!(kinds(&records, "terminal.clipboard_unreadable").len(), 1);
+}
+
+/// A core of the protocol before a device's copy reads its line as one of a
+/// kind it does not know: it is logged, and the link and the pane's output
+/// go on, as this build reads a later kind.
+#[test]
+fn a_line_of_a_kind_this_core_does_not_know_leaves_the_link_going() {
+    let ((), records) = crate::diagnostics::capture(|| {
+        let (proxy, _link, heard) = proxy();
+        let inbound = proxy.inbound();
+        inbound(br#"{"terminal":{"kind":"later_kind","pane":"w1:p1","data":"eA=="}}"#);
+        inbound(
+            &line_of(TerminalUp::Output(TerminalOutput {
+                pane: "w1:p1".into(),
+                data: encode_base64(b"after"),
+                full: true,
+            }))
+            .unwrap(),
+        );
+        assert_eq!(heard.output.lock().unwrap().len(), 1);
+    });
+    assert_eq!(kinds(&records, "terminal.up_unreadable").len(), 1);
 }

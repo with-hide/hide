@@ -72,6 +72,7 @@ impl hide_node::terminal::device::DeviceSink for Sink {
     fn output(&self, _: &str, _: &str, bytes: &[u8], _: bool) {
         self.output.lock().unwrap().extend_from_slice(bytes);
     }
+    fn clipboard(&self, _: &str, _: &str, _: &[u8]) {}
     fn report(&self, _: &str, report: TerminalReport) {
         self.reports.lock().unwrap().push(report);
     }

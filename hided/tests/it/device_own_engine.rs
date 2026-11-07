@@ -65,6 +65,7 @@ impl hide_node::ssh::PaneEvents for Events {
 struct Unseen;
 impl hide_node::terminal::device::DeviceSink for Unseen {
     fn output(&self, _: &str, _: &str, _: &[u8], _: bool) {}
+    fn clipboard(&self, _: &str, _: &str, _: &[u8]) {}
     fn report(&self, _: &str, _: hide_node_link::terminal::TerminalReport) {}
 }
 

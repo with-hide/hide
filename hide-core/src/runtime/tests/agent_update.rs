@@ -2,7 +2,9 @@
 //! it, the session that wore that badge reads `started_before_hide` once the
 //! agent is updated, and the read after the update installs what was
 //! refused (docs/agent-hooks.md, Updating an agent that is too old;
-//! docs/status-model.md, Not connected, and what fixes it).
+//! docs/status-model.md, Not connected, and what fixes it). The read that
+//! finds the folder an agent made at its first start installs what waited
+//! for it the same way.
 
 use super::agent_connection::{connection_of, diagnosis, feed, installed, kit_rows};
 use super::first_run::{agent, pass};
@@ -191,6 +193,65 @@ fn a_read_that_finds_the_agent_updated_queues_the_install_and_an_install_queues_
     runtime.ingest_kit_report(
         crate::node::TEST_NODE,
         &pass(false, vec![too_old(ComponentState::Installed)]),
+    );
+    assert_eq!(runtime.local_kit_pending, None);
+}
+
+/// with-hide/hide-private#662: a machine joined before Claude Code was first
+/// started there has no `~/.claude` for the hook; the read that finds the
+/// folder made queues the pass that puts the hook in, without a press.
+#[test]
+fn a_read_that_finds_the_agents_folder_made_queues_the_install() {
+    let mut runtime = runtime();
+    let claude = |state, cause: Option<hide_kit::PartCause>| {
+        let mut row = agent("claude-code", true, ComponentState::Installed);
+        row.hook = Some(hide_kit::PieceReport {
+            state,
+            reason: None,
+            why: cause.map(|cause| hide_kit::PartWhy { cause, value: None }),
+            location: None,
+        });
+        row
+    };
+    runtime.ingest_kit_report(
+        crate::node::TEST_NODE,
+        &pass(
+            false,
+            vec![claude(
+                ComponentState::Absent,
+                Some(hide_kit::PartCause::AgentAbsent),
+            )],
+        ),
+    );
+    runtime.local_kit_pending = None;
+
+    // The same wait read again queues nothing.
+    runtime.ingest_kit_report(
+        crate::node::TEST_NODE,
+        &pass(
+            false,
+            vec![claude(
+                ComponentState::Absent,
+                Some(hide_kit::PartCause::AgentAbsent),
+            )],
+        ),
+    );
+    assert_eq!(runtime.local_kit_pending, None);
+
+    // Claude Code made its folder: the hook can go in now.
+    runtime.ingest_kit_report(
+        crate::node::TEST_NODE,
+        &pass(false, vec![claude(ComponentState::NotInstalled, None)]),
+    );
+    assert_eq!(
+        runtime.local_kit_pending,
+        Some(hide_kit::Scope::automatic())
+    );
+
+    runtime.local_kit_pending = None;
+    runtime.ingest_kit_report(
+        crate::node::TEST_NODE,
+        &pass(false, vec![claude(ComponentState::Installed, None)]),
     );
     assert_eq!(runtime.local_kit_pending, None);
 }

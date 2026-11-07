@@ -1249,6 +1249,8 @@ struct HeardTerminals {
 impl hide_node::terminal::device::DeviceSink for HeardTerminals {
     fn output(&self, _device: &str, _pane: &str, _bytes: &[u8], _full: bool) {}
 
+    fn clipboard(&self, _device: &str, _pane: &str, _text: &[u8]) {}
+
     fn report(&self, _device: &str, report: hide_node_link::terminal::TerminalReport) {
         self.reports.lock().unwrap().push(report);
         self.arrived.notify_all();

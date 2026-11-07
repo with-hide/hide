@@ -340,32 +340,34 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
-/// How the pane's node starts `kind`'s program now, asked before every
-/// start of the spawn: what the start names and whether the brief can ride
-/// it. It only ever lets a start name a file or carry its brief: a program
-/// the node does not find (on Windows a `.ps1` alone, which the pane's
-/// PowerShell still runs), a node that could not be asked, or no node at all
-/// leave the start as it was, by the program's name with its brief typed. A
-/// device's start was refused already when its node did not find the
-/// program (`check_target`).
+/// The program the engine starts `kind` by (the definition's first
+/// executable, `start_prompt::program_of`) and how the pane's node starts it
+/// now, asked before every start of the spawn: what the start names and
+/// whether the brief can ride it. It only ever lets a start name a file or
+/// carry its brief: a program the node does not find (on Windows a `.ps1`
+/// alone, which the pane's PowerShell still runs), a node that could not be
+/// asked, or no node at all leave the start as it was, by the program's name
+/// with its brief typed. A device's start was refused already when its node
+/// did not find the program (`check_target`).
 fn start_form(
     node: Option<&dyn crate::node_access::NodeLink>,
+    engine: &dyn crate::engine::Engine,
     kind: &str,
     spawn: &str,
-) -> Option<StartForm> {
-    let node = node?;
-    crate::start_prompt::start_form(
-        node,
-        hide_agent_adapter::canonical_kind(kind),
-        TARGET_CHECK_TIMEOUT,
-    )
-    .unwrap_or_else(|error| {
-        crate::diagnostic!(json!({
-            "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
-            "agent_kind": kind, "cause": error.to_string(),
-        }));
-        None
-    })
+) -> (String, Option<StartForm>) {
+    let program = crate::start_prompt::program_of(engine, kind);
+    let Some(node) = node else {
+        return (program, None);
+    };
+    let form = crate::start_prompt::start_form(node, &program, TARGET_CHECK_TIMEOUT)
+        .unwrap_or_else(|error| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
+                "agent_kind": kind, "program": program, "cause": error.to_string(),
+            }));
+            None
+        });
+    (program, form)
 }
 
 /// The words a fresh start of `kind` adds to carry `brief` as its launch
@@ -796,7 +798,7 @@ fn check_target(
 ) -> Result<(), String> {
     use crate::node_access::{LinkError, call_as};
     use hide_node_link::{cleanup::RepositoryDirs, protocol::Call};
-    let link = client
+    let (link, engine) = client
         .runtime
         .upgrade()
         .ok_or("delivery_unavailable")?
@@ -840,7 +842,8 @@ fn check_target(
     match call_as::<Option<StartForm>>(
         link.as_ref(),
         Call::AgentInstalled {
-            name: hide_agent_adapter::canonical_kind(kind).to_owned(),
+            // The device's own engine says what the agent is started by.
+            name: crate::start_prompt::program_of(engine.as_ref(), kind),
         },
         TARGET_CHECK_TIMEOUT,
     ) {
@@ -849,6 +852,54 @@ fn check_target(
         Err(error) => {
             Err(unavailable("agent_installed", error).unwrap_or("agent_not_installed".into()))
         }
+    }
+}
+
+/// Judges whether `kind` on `machine` has Hide's hook in place, from that
+/// machine's kit report, before anything is made for the spawn
+/// (`runtime::start_hook`). Where a pass may put it in place, one runs on
+/// the machine's own kit worker, off the runtime lock, and the spawn judges
+/// again from its answer.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Result<(), String> {
+    use crate::runtime::start_hook::{HookRefusal, StartHook};
+    let refused = |refusal: HookRefusal, stage: &str| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "hook.refused", "device": machine,
+            "agent_kind": kind, "intent": intent, "reason": refusal.code(), "stage": stage,
+        }));
+        refusal.code().to_owned()
+    };
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let asked = {
+        let mut locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+        match locked.start_hook(machine, kind) {
+            StartHook::Ready => return Ok(()),
+            StartHook::Refused(refusal) => return Err(refused(refusal, "report")),
+            StartHook::Pass(_) => locked.ask_start_pass(machine)?,
+        }
+    };
+    let deadline = Instant::now() + super::HOOK_PASS_WAIT;
+    loop {
+        {
+            let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+            if locked.start_pass_answered(machine, asked) {
+                return locked
+                    .start_hook_after_pass(machine, kind)
+                    .map_err(|refusal| refused(refusal, "pass"));
+            }
+            if !locked.kit_reachable(machine) {
+                return Err("machine_unavailable".into());
+            }
+        }
+        if Instant::now() >= deadline {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "hook.pass_unanswered", "device": machine,
+                "agent_kind": kind, "intent": intent, "waited_ms": super::HOOK_PASS_WAIT.as_millis(),
+            }));
+            return Err(refused(HookRefusal::Unconfirmed, "wait"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -931,11 +982,10 @@ fn spawn(
         return Err("invalid_spawn".into());
     }
     let mut ledger = state(client)?;
-    // A spawn beside its caller opens in the caller's own tab, so it is
-    // judged before anything is registered, reserved or created; a retry of
-    // an intent whose pane exists already is judged by what it did, and a
-    // completed one stays offline (engineering #11).
-    let beside_of = if *beside {
+    // An earlier attempt of this intent by the same parent: every check
+    // below judges a retry by what that attempt already did (engineering
+    // #11).
+    let earlier = {
         let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
             super::live_self(&ledger, actor)
                 .next()
@@ -943,14 +993,22 @@ fn spawn(
         } else {
             parent.clone()
         };
-        let placed = known_parent.is_some_and(|id| {
-            ledger.spawns.iter().any(|record| {
-                record.parent == id
-                    && record.intent == *intent
-                    && record.beside
-                    && (record.pane.is_some() || record.completed)
-            })
-        });
+        known_parent.and_then(|id| {
+            ledger
+                .spawns
+                .iter()
+                .find(|record| record.parent == id && record.intent == *intent)
+                .cloned()
+        })
+    };
+    // A spawn beside its caller opens in the caller's own tab, so it is
+    // judged before anything is registered, reserved or created; a retry of
+    // an intent whose pane exists already is judged by what it did, and a
+    // completed one stays offline.
+    let beside_of = if *beside {
+        let placed = earlier
+            .as_ref()
+            .is_some_and(|record| record.beside && (record.pane.is_some() || record.completed));
         Some(beside_target(
             client,
             authority,
@@ -974,24 +1032,14 @@ fn spawn(
         {
             return Err("parent_authority_required".into());
         }
-        let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
-            super::live_self(&ledger, actor)
-                .next()
-                .map(|p| p.id.clone())
-        } else {
-            parent.clone()
-        };
-        let earlier = known_parent.and_then(|id| {
-            ledger
-                .spawns
-                .iter()
-                .find(|record| record.parent == id && record.intent == *intent)
-        });
-        if earlier.is_some_and(|record| record.machine != *machine) {
+        if earlier
+            .as_ref()
+            .is_some_and(|record| record.machine != *machine)
+        {
             return Err("intent_conflict".into());
         }
-        let started = earlier.is_some_and(|record| record.pane.is_some());
-        if !earlier.is_some_and(|record| record.completed) {
+        let started = earlier.as_ref().is_some_and(|record| record.pane.is_some());
+        if !earlier.as_ref().is_some_and(|record| record.completed) {
             check_target(
                 client,
                 actor,
@@ -1004,6 +1052,16 @@ fn spawn(
                 !started,
             )?;
         }
+    }
+    // The child's hook is judged before anything is made for it, on every
+    // attempt that has not typed its start yet: one that has is past what a
+    // hook changes (with-hide/hide-private#661, #662).
+    if !earlier
+        .as_ref()
+        .is_some_and(|record| record.completed || record.typed > 0)
+    {
+        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+        check_hook(client, child_machine, kind, intent)?;
     }
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that
@@ -1349,7 +1407,7 @@ fn spawn(
                 }));
             }
             close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
-            let form = start_form(node.as_deref(), kind, &reserved.id);
+            let (program, form) = start_form(node.as_deref(), engine.as_ref(), kind, &reserved.id);
             let mut start_args = with_permission(kind, &permissions, start_args);
             // A fresh start carries the brief as its prompt argument where
             // the agent holds that through its own start screens
@@ -1391,9 +1449,8 @@ fn spawn(
                 kind,
                 start_args,
                 codex_daemon,
-                form.as_ref().and_then(|form| {
-                    crate::engine::StartProgram::of(hide_agent_adapter::canonical_kind(kind), form)
-                }),
+                form.as_ref()
+                    .and_then(|form| crate::engine::StartProgram::of(&program, form)),
             )?;
             reserved = serde_json::from_value(mutate(
                 client,
@@ -2220,6 +2277,45 @@ mod tests {
     use super::*;
     use crate::engine::fake::{FakeEngine, processes, reply, session};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Issue 666: a spawn's start asks its node about the program its
+    /// definition starts the agent by, and names that program in the file it
+    /// carries, not the agent's kind. Kiro's kind is `kiro` and its first
+    /// executable `kiro-cli`; the node looks the name up on its `PATH`.
+    #[test]
+    fn a_spawns_start_asks_its_node_about_the_definitions_first_executable_not_the_kind() {
+        struct Asked(std::sync::Mutex<Vec<String>>);
+        impl crate::node_access::NodeLink for Asked {
+            fn call(
+                &self,
+                call: hide_node_link::protocol::Call,
+                _: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                let hide_node_link::protocol::Call::AgentInstalled { name } = call else {
+                    panic!("the node was asked {call:?}");
+                };
+                self.0.lock().unwrap().push(name);
+                Ok(crate::node_access::LinkAnswer::Parsed(
+                    json!({"direct": {"program": "C:\\npm\\kiro-cli.js", "leading": []}}),
+                ))
+            }
+        }
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let engine = fake.engine();
+        let node = Asked(std::sync::Mutex::default());
+        let (program, form) = start_form(Some(&node), engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!(program, "kiro-cli");
+        assert_eq!(*node.0.lock().unwrap(), ["kiro-cli"]);
+        // The file the node named stands for the word the start line begins
+        // with, which is the program and not the kind.
+        let file = crate::engine::StartProgram::of(&program, &form.expect("the node named a file"))
+            .expect("a direct start names a file");
+        assert_eq!(file.name, "kiro-cli");
+        assert_eq!(file.program, "C:\\npm\\kiro-cli.js");
+        // No node leaves the start by the program's name.
+        let (program, form) = start_form(None, engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!((program.as_str(), form), ("kiro-cli", None));
+    }
 
     /// A `worktree.create` whose answer never came may still finish in
     /// the engine, so it is one stable code the same intent resolves; a refusal
