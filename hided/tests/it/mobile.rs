@@ -208,6 +208,30 @@ async fn the_app_executable_is_run_as_the_cli() {
     assert_eq!(status.dns_name.as_deref(), Some(DNS));
 }
 
+/// The status answer does not follow the size of the tailnet: the full one
+/// lists every peer, about 1.2 KB each, and a tailnet of some 900 puts it past
+/// the 1 MiB a command may print, which would block Mobile for good. hided
+/// asks for the answer without the peers, whose fields it never reads.
+#[tokio::test]
+async fn a_tailnet_too_big_to_list_its_peers_still_answers_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    fake.crowded_tailnet(1_500);
+    let listed = std::fs::metadata(fake.state.join("status-with-peers.json"))
+        .unwrap()
+        .len();
+    assert!(
+        listed > 1024 * 1024,
+        "the tailnet's full answer is {listed} bytes, not past the bound"
+    );
+    let status = hided::mobile::tailscale::status(&fake.bin)
+        .await
+        .expect("the status without peers fits whatever the tailnet's size");
+    assert!(status.logged_in);
+    assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
 /// A command's answer is read when it has exited, not when its output closes:
 /// a process left holding the output open must not keep the answer to the
 /// 15 s command deadline. On macOS a child another thread starts while the
@@ -233,10 +257,13 @@ async fn a_process_left_holding_the_command_s_output_does_not_hold_its_answer() 
 /// Changes of Mobile's own settings that meet a pass already running cost one
 /// pass more, not one each: the pass that follows reads them all (`PassOwed`).
 /// The first pass is held inside `tailscale status` so both changes arrive
-/// while it runs, and a forced pass at the end queues behind whatever they
-/// asked for. Passes run: the held one, one for the two changes, the forced
-/// one; the forced one may also come first and settle the changes itself, so
-/// three at most, where a pass for each change makes four.
+/// while it runs. Each change spawns a pass of its own, which waits on the
+/// pass lock behind it; a forced pass asked for after them is handed the lock
+/// after them (the lock goes in the order it was asked for), so the count is
+/// final once a second one returns. What can run: the held pass, one pass for
+/// the debt the two changes left (a stale pass of the start may take it before
+/// the forced one does, or the forced one settles it), and the two forced
+/// ones, so four at most; a pass for each change is at least five.
 #[tokio::test]
 async fn two_changes_that_meet_a_running_pass_cost_one_pass_more() {
     let dir = tempfile::tempdir().unwrap();
@@ -267,10 +294,11 @@ async fn two_changes_that_meet_a_running_pass_cost_one_pass_more() {
         .unwrap();
     fake.release_status();
     mobile.reconcile().await;
+    mobile.reconcile().await;
 
     let runs = fake.status_runs();
     assert!(
-        (2..=3).contains(&runs),
+        runs <= 4,
         "tailscale status ran {runs} times; the two changes should cost one pass"
     );
     running.stop();

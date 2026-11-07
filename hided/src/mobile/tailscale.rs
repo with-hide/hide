@@ -77,9 +77,13 @@ impl CommandFailure {
     }
 }
 
-/// The most one command may print: `status --json` lists every peer of the
-/// tailnet, so the bound is the largest one `capture_until` takes, and an
-/// answer past it is a failure, never a cut one.
+/// The most one command may print. A child that writes without end must not
+/// grow hided (engineering rule 15), and `capture_until` takes no more than
+/// 1 MiB; an answer past it is a failure, never a cut one. The one answer that
+/// could follow the size of the tailnet is `status --json`, which lists every
+/// peer at about 1.2 KB each (34 KB on a tailnet of 27 peers, a bound reached
+/// at some 900), so `status` is read without the peers (`--peers=false`): the
+/// same fields hided reads, 3 KB, whatever the tailnet's size.
 const OUTPUT_LIMIT: usize = hide_platform::process::MAX_CAPTURE_BYTES;
 
 /// Runs one `tailscale` command and returns what it printed. The answer is
@@ -91,7 +95,7 @@ const OUTPUT_LIMIT: usize = hide_platform::process::MAX_CAPTURE_BYTES;
 /// that had exited in milliseconds (docs/ARCHITECTURE.md, The platform layer;
 /// with-hide/hide-private#524).
 async fn run(program: &Path, args: &[&str]) -> Result<Vec<u8>, CommandFailure> {
-    let command = format!("tailscale {}", args.join(" "));
+    let command = command_line(args);
     let mut process = std::process::Command::new(program);
     process
         .args(args)
@@ -141,6 +145,10 @@ fn capture(mut process: std::process::Command, command: &str) -> Result<Vec<u8>,
     }
 }
 
+fn command_line(args: &[&str]) -> String {
+    format!("tailscale {}", args.join(" "))
+}
+
 fn failure(command: &str, stderr: String, exit_code: Option<i32>) -> CommandFailure {
     CommandFailure {
         command: command.to_owned(),
@@ -149,7 +157,7 @@ fn failure(command: &str, stderr: String, exit_code: Option<i32>) -> CommandFail
     }
 }
 
-/// What `tailscale status --json` says about this Mac.
+/// What `tailscale status --json --peers=false` says about this Mac.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Status {
     pub logged_in: bool,
@@ -199,10 +207,14 @@ pub fn parse_status(bytes: &[u8]) -> Result<Status, String> {
     })
 }
 
+/// The status command: without the peers (`--peers=false`), which hided never
+/// reads and which are what make the full answer grow with the tailnet.
+const STATUS: &[&str] = &["status", "--json", "--peers=false"];
+
 pub async fn status(program: &Path) -> Result<Status, CommandFailure> {
-    let bytes = run(program, &["status", "--json"]).await?;
+    let bytes = run(program, STATUS).await?;
     parse_status(&bytes).map_err(|message| CommandFailure {
-        command: "tailscale status --json".to_owned(),
+        command: command_line(STATUS),
         stderr: format!("unreadable answer: {message}"),
         exit_code: Some(0),
     })

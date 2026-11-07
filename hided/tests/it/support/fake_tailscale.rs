@@ -19,7 +19,8 @@ pub const DNS: &str = "mac.tailnet-name.ts.net";
 /// 20 s, so a test that panics leaves no script waiting), and `hold-pipes`
 /// makes `status` leave a process behind that keeps its output open, as a
 /// child another thread started in the middle of the command's start does on
-/// macOS.
+/// macOS. Like the real CLI, `status` leaves the peers out only when asked
+/// with `--peers=false`; `crowded_tailnet` gives the answer with them.
 /// Like the macOS app's executable, it acts as the CLI only when told to with
 /// `TAILSCALE_BE_CLI=1`; otherwise it refuses, where the real one starts the
 /// app and never answers. It looks at that variable alone, so a terminal the
@@ -50,7 +51,7 @@ case "$1" in
   status)
     n=0; while [ -e "$S/hold-status" ] && [ "$n" -lt 400 ]; do sleep 0.05; n=$((n+1)); done
     if [ -e "$S/hold-pipes" ]; then sleep 20 & fi
-    cat "$S/status.json" ;;
+    case "$*" in *--peers=false*) cat "$S/status.json" ;; *) cat "$S/status-with-peers.json" 2>/dev/null || cat "$S/status.json" ;; esac ;;
   serve)
     shift
     if [ "$1" = status ]; then cat "$S/serve.json" 2>/dev/null || echo '{{}}'; exit 0; fi
@@ -134,12 +135,46 @@ esac
         std::fs::write(self.state.join("hold-pipes"), "").unwrap();
     }
 
-    /// How many times `tailscale status --json` has been run.
+    /// How many times `tailscale status` has been run.
     pub fn status_runs(&self) -> usize {
         self.calls()
             .lines()
-            .filter(|line| *line == "status --json")
+            .filter(|line| line.starts_with("status "))
             .count()
+    }
+
+    /// A tailnet of `peers` machines: the answer that lists them is what
+    /// `status` prints unless it is asked to leave them out. Each entry is
+    /// smaller than a real one (about 1.2 KB on a tailnet of 27), so a test
+    /// that needs the answer past a bound asks for more peers than the real
+    /// tailnet would take.
+    pub fn crowded_tailnet(&self, peers: usize) {
+        let mut answer: Value =
+            serde_json::from_str(&std::fs::read_to_string(self.state.join("status.json")).unwrap())
+                .unwrap();
+        let peer = |number: usize| {
+            json!({
+                "ID": format!("n{number}"), "HostName": format!("machine-{number}"),
+                "DNSName": format!("machine-{number}.tailnet-name.ts.net."), "OS": "linux",
+                "TailscaleIPs": [format!("100.64.{}.{}", number / 250, number % 250)],
+                "Tags": ["tag:server", "tag:ci"], "Online": true,
+                "KeyExpiry": "2027-01-01T00:00:00Z", "Relay": "fra", "RxBytes": 0, "TxBytes": 0,
+                "Addrs": null, "AllowedIPs": [format!("100.64.{}.{}/32", number / 250, number % 250)],
+                "PublicKey": format!("nodekey:{}", "0".repeat(64)),
+                "Capabilities": ["https://tailscale.com/cap/file-sharing", "funnel", "ssh"],
+                "CapMap": {"https://tailscale.com/cap/file-sharing": null, "funnel": null},
+            })
+        };
+        answer["Peer"] = Value::Object(
+            (0..peers)
+                .map(|number| (format!("nodekey:{number:064}"), peer(number)))
+                .collect(),
+        );
+        std::fs::write(
+            self.state.join("status-with-peers.json"),
+            serde_json::to_string_pretty(&answer).unwrap(),
+        )
+        .unwrap();
     }
 
     /// Returns once `status` has been run `count` times.
