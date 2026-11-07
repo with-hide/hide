@@ -287,6 +287,34 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const sendRemote = (targetId: string, request: RemoteAction) => dispatch(remoteControl(targetId, request));
 
   /**
+   * The one event that opens a pane for the operator, wherever it lives: this
+   * machine's `focus_pane`, or the device's `remote_control` focus_pane. It
+   * also brings the pane's device forward when that device is not in front, so
+   * a row, a chip or a relationship Open that reaches a pane on another device
+   * (or back to this one) shows it, rather than focusing it out of sight. Every
+   * way of opening an agent pane builds its event here (UI_BEHAVIOR, parent row
+   * opens a device child).
+   */
+  const openPaneEvent = (paneId: string, options: { requestId?: string; report?: boolean; revealUnseen?: boolean } = {}) => {
+    const node = localDeviceId(rest());
+    const target = remoteTargetOfPane(rest(), paneId) ?? node;
+    const forward = frontDeviceId(rest()) !== target;
+    if (target !== node) {
+      const event = remoteControl(target, { action: "focus_pane", pane_id: paneId }, options.requestId);
+      const reported = options.report ? { ...event, payload: { ...event.payload, report_pane_focus_outcome: true } } : event;
+      return { event: forward ? withDeviceForward(reported) : reported, remote: true };
+    }
+    return {
+      event: {
+        schema_version: 2,
+        kind: "focus_pane",
+        payload: { pane_id: paneId, origin: "operator", focus_device: forward, ...(options.requestId ? { request_id: options.requestId } : {}), ...(options.revealUnseen ? { reveal_unseen: true } : {}) },
+      },
+      remote: false,
+    };
+  };
+
+  /**
    * A child chip, a Return or a relationship Open (S6 B15, B16): one
    * focus_pane carrying a request id, so the core's receipt says whether this
    * click landed. A second click on the same target while the first is in
@@ -304,16 +332,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setRelation({ ...asked, timedOut: true });
     }, RELATION_ANSWER_TIMEOUT_MS);
     ui().setScreen({ kind: "workspace" });
-    const targetId = remoteTargetOfPane(rest(), targetPaneId);
-    if (targetId) {
-      dispatch({
-        schema_version: 2,
-        kind: "remote_control",
-        payload: { target_id: targetId, request_id: requestId, report_pane_focus_outcome: true, action: "focus_pane", pane_id: targetPaneId },
-      });
-      return;
-    }
-    dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: targetPaneId, origin: "operator", request_id: requestId } });
+    dispatch(openPaneEvent(targetPaneId, { requestId, report: true }).event);
   };
 
   /** The id of the core's task slot now, so a request can tell its own answer from an older one. */
@@ -2497,16 +2516,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     openAgent(paneId: string, look?: LookAt) {
       beginOpening({ paneId });
-      const node = localDeviceId(rest());
-      const target = remoteTargetOfPane(rest(), paneId) ?? node;
-      const forward = frontDeviceId(rest()) !== target;
-      if (target !== node) {
-        const event = remoteControl(target, { action: "focus_pane", pane_id: paneId });
-        dispatch(forward ? withDeviceForward(event) : event);
+      const { event, remote } = openPaneEvent(paneId, { revealUnseen: Boolean(look) });
+      dispatch(event);
+      if (remote) {
         if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
         return;
       }
-      dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: paneId, origin: "operator", focus_device: forward, ...(look ? { reveal_unseen: true } : {}) } });
       // The core's answer moves the keys only when it moves the focus, so a
       // pane already focused would leave them on the row, link or mark that
       // was pressed. The operator asked for the pane, so the open takes the
