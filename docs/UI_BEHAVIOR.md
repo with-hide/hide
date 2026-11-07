@@ -1701,7 +1701,7 @@ Projects and their checkouts sort by the latest authoritative agent activity tim
 Inside a project the primary checkout comes first whatever its activity, because it is the one checkout that never folds, and the rest follow in that activity order.
 Activity orders projects inside one device group and never across two.
 A project's secondary checkouts that are merged (as the Overview says) or whose pull request closed, and those inactive for seven days, move behind a trailing `Inactive N` disclosure, while its primary checkout and every checkout with live work, local changes, unpushed commits, or current focus remain visible.
-A project of a node that dials the core lists every worktree that node reports, one with no pane open included, and folds them by these same rules; a device the core dials shows only the checkouts its session opens.
+A device's project lists every worktree its worktree read reports, one with no pane open included, whether the device is a node that dials the core or one the core dials over SSH, and folds them by these same rules, so an agent ended in a device worktree resumes there and a tab starts there as on this machine.
 When every checkout in a project is inactive, the project itself moves behind the device's `Inactive projects N` disclosure.
 A project with no agent row in any checkout, no named tab the operator kept, and that is not pinned, not the front project and not inactive, moves behind `No agents N` after the active projects, where opening it draws the same project rows; an agent started there brings the project back to the active list on the next snapshot (D-01).
 Its fold is the core's per device (`no_agents/<device>`), so it survives a reconnect and a relaunch.

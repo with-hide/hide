@@ -1896,7 +1896,7 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
 /// links, label and fold kept under that id still meet it, and once nothing
 /// has worked in it for a week it folds under Inactive as this machine's do,
 /// a fold the sidebar opens and a new derive of the session keeps. A device
-/// this core dials keeps only the checkouts its session opens.
+/// this core dials over SSH lists and folds it the same way.
 #[test]
 fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_when_idle() {
     let repo = repo(None, "parked");
@@ -2000,10 +2000,11 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
         project
             .checkouts
             .iter()
-            .all(|checkout| checkout.path != repo.linked),
+            .any(|checkout| checkout.path == repo.linked && checkout.id == moved),
         "{:?}",
         project.checkouts
     );
+    assert_eq!(project.inactive_checkouts.checkout_ids, [moved.as_str()]);
 }
 
 /// Starting an issue of a node's project makes its worktree on the node and

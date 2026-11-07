@@ -25,6 +25,8 @@ const DEVICE_PANE: &str = "t1";
 const PANE: &str = "remote:mini:pane:t1";
 const TERMINAL: &str = "terminal-t1";
 const SESSION: &str = "native-worker";
+/// A linked worktree of the device's project `PATH`.
+const WORKTREE: &str = "/srv/repo-worker";
 /// The caller's and the worker's panes when both run on this machine, in
 /// the tree fixture's listed checkout.
 const HERE_CALLER: &str = "w1:p1";
@@ -339,16 +341,21 @@ fn registered(
 /// checkout with an agent running `conversation` in it, or, with none, no
 /// pane at all.
 fn show(runtime: &mut Runtime, conversation: Option<&str>) {
+    show_at(runtime, PATH, conversation);
+}
+
+/// [`show`] with the pane in `path`.
+fn show_at(runtime: &mut Runtime, path: &str, conversation: Option<&str>) {
     let tabs: &[(&str, &str)] = match conversation {
-        Some(_) => &[(DEVICE_PANE, PATH)],
+        Some(_) => &[(DEVICE_PANE, path)],
         None => &[],
     };
-    let mut reported = session(vec![engine_workspace(DEVICE, "w1", PATH, tabs)]);
+    let mut reported = session(vec![engine_workspace(DEVICE, "w1", path, tabs)]);
     if let Some(conversation) = conversation {
         reported.agents = project_agents(
             crate::sidebar::owned_label_fixture(json!({"agents": [{
                 "id": PANE, "pane_id": PANE, "agent": "codex", "agent_status": "idle",
-                "state_change_seq": 1, "cwd": PATH,
+                "state_change_seq": 1, "cwd": path,
                 "agent_session": {"kind": "id", "value": conversation},
             }]}))
             .unwrap(),
@@ -671,4 +678,142 @@ fn a_refused_close_of_this_machine_takes_its_archived_conversation_back() {
             && kinds.contains(&"session_archive.agent_end_withdrawn"),
         "{kinds:?}"
     );
+}
+
+/// The device's project `PATH`, registered, with its linked worktree
+/// `WORKTREE` as the device's helper lists them.
+fn list_worktrees(runtime: &mut Runtime) {
+    use crate::model::{ProjectWorktreesSnapshot, WorkspaceRegistration, WorktreeSnapshot};
+    runtime
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .push(WorkspaceRegistration {
+            primary_checkout_id: None,
+            id: crate::device_catalog::project_id(DEVICE, std::path::Path::new(PATH)),
+            label: "repo".into(),
+            path: PATH.into(),
+            device_id: DEVICE.into(),
+            pinned: false,
+            home: false,
+        });
+    runtime.device_facts.insert(
+        DEVICE.into(),
+        crate::device_catalog::DeviceFacts {
+            facts: [(
+                PATH.to_owned(),
+                crate::device_catalog::Fact::Known(hide_project::ProjectFacts {
+                    root: PATH.into(),
+                    checkout_root: PATH.into(),
+                    kind: hide_project::ProjectKind::Git,
+                    branch: Some("main".into()),
+                    linked_worktree: false,
+                }),
+            )]
+            .into(),
+            ..Default::default()
+        },
+    );
+    runtime.device_worktrees.insert(
+        DEVICE.into(),
+        crate::device_catalog::DeviceWorktrees {
+            projects: [(
+                PATH.to_owned(),
+                ProjectWorktreesSnapshot {
+                    root_path: PATH.into(),
+                    worktrees: [(PATH, "main", true), (WORKTREE, "worker", false)]
+                        .into_iter()
+                        .map(|(path, branch, is_main)| WorktreeSnapshot {
+                            path: path.into(),
+                            branch: Some(branch.into()),
+                            is_main,
+                            ..WorktreeSnapshot::default()
+                        })
+                        .collect(),
+                    ..ProjectWorktreesSnapshot::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        },
+    );
+}
+
+/// A device worker in a linked worktree, as a mission worker runs: its end
+/// closes the worktree's only tab, and the worktree stays one of the
+/// device's checkouts, as a worktree of this machine does, so 이어가기 starts
+/// the same conversation in that worktree's project on the device instead
+/// of refusing it as a checkout the device does not list. (The start itself
+/// needs the device's helper, which this fixture does not have.)
+#[test]
+fn an_agent_ended_in_a_device_worktree_resumes_in_that_worktree() {
+    let ending = ending();
+    {
+        let mut runtime = ending.runtime.lock().unwrap();
+        list_worktrees(&mut runtime);
+        show_at(&mut runtime, WORKTREE, Some(SESSION));
+    }
+    let answer = ending.end(false).unwrap();
+    assert_eq!(
+        (answer["pane"].as_str(), answer["conversation"].as_str()),
+        (Some("closed"), Some("archived"))
+    );
+    let [record] = ending.archive().try_into().expect("one archived session");
+    assert_eq!(record.root().checkout_path, WORKTREE);
+    let id = ending
+        .runtime
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .session_archive
+        .records
+        .keys()
+        .next()
+        .unwrap()
+        .as_str()
+        .to_owned();
+    {
+        let mut runtime = ending.runtime.lock().unwrap();
+        show_at(&mut runtime, WORKTREE, None);
+        runtime.advance_session_archive();
+        let checkouts = runtime
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .filter_map(|remote| remote.session.as_ref())
+            .flat_map(|session| &session.workspaces)
+            .flat_map(|project| &project.checkouts)
+            .map(|checkout| (checkout.path.as_str(), checkout.tabs.len()))
+            .collect::<Vec<_>>();
+        assert!(
+            checkouts.contains(&(WORKTREE, 0)),
+            "the worktree with no tab is still listed: {checkouts:?}"
+        );
+        let event = serde_json::to_vec(&json!({
+            "schema_version": crate::model::SCHEMA_VERSION, "kind": "archive_resume",
+            "payload": {"archive_id": id},
+        }))
+        .unwrap();
+        runtime.dispatch_json(&event);
+        let operation = runtime
+            .snapshot
+            .task_operation
+            .clone()
+            .unwrap_or_else(|| panic!("no start: {:?}", runtime.snapshot.status.last_error));
+        assert_eq!(
+            (
+                operation.device_id.as_deref(),
+                operation.repository_root.as_deref()
+            ),
+            (Some(DEVICE), Some(PATH))
+        );
+        let launch = runtime.task_agent_launch.clone().unwrap();
+        assert!(
+            launch.args.iter().any(|arg| arg == SESSION),
+            "{:?}",
+            launch.args
+        );
+    }
 }
