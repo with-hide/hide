@@ -367,10 +367,10 @@ impl Service {
 
     /// Types `input` into `pane` as the core's own engine, behind every key
     /// typed there before it. It is not the operator's typing: no input fact
-    /// is reported for it, and a letter's hold does not take it. A pane
-    /// whose session was released, since its tab left the last shown, is
-    /// attached again for it, and the input waits in the pane's hold as a
-    /// new pane's keys do (64 KiB, 3 s).
+    /// is reported for it, and a letter's hold does not take it. A pane no
+    /// screen holds is attached for it and released once the input ends
+    /// (`Inner::attach_for_input`), and the input waits in the pane's hold
+    /// as a new pane's keys do (64 KiB, 3 s).
     fn type_input(
         &self,
         pane: &str,
@@ -384,18 +384,14 @@ impl Service {
         }
         let now = Instant::now();
         let receipt = self.shared.run(|inner, shared| {
-            if inner.closed || !inner.panes.contains_key(pane) {
+            if inner.closed || !inner.takes_input(shared, pane) {
                 return Err(command::refused(
                     "pane_input_unavailable",
                     "Pane input has no live terminal owner",
                 ));
             }
             let (receipt, command) = command::Receipt::take(&inner.permits)?;
-            if inner.panes.get(pane).is_some_and(|entry| {
-                entry.session.is_none() && !entry.closing && entry.lifecycle.state == "released"
-            }) {
-                inner.request_control(shared, pane, now);
-            }
+            inner.attach_for_input(shared, pane, now);
             inner
                 .panes
                 .get_mut(pane)
@@ -470,8 +466,11 @@ impl Service {
                     .run(|inner, _| inner.end_letter(self.pane, now));
             }
         }
-        let _work = self.shared.run(|inner, _| {
-            if inner.closed || inner.panes.get(pane).is_none_or(|entry| entry.closing) {
+        let _work = self.shared.run(|inner, shared| {
+            if inner.closed
+                || !inner.takes_input(shared, pane)
+                || inner.panes.get(pane).is_some_and(|entry| entry.closing)
+            {
                 return Err(command::refused(
                     "pane_input_unavailable",
                     "Pane input has no live terminal owner",
@@ -2677,6 +2676,49 @@ impl Inner {
             "message": message,
             "retry_decision": self.retry_decision(pane, "manual"),
         }));
+    }
+
+    /// Whether the engine's input can go to `pane`: a pane this node tracks,
+    /// or one whose holder it runs or starts and tracks nothing of
+    /// ([`Attacher::holds`]), as after the node starts again or once
+    /// `forget_unowned` dropped an idle entry. Such a pane gets an entry
+    /// here, so the input attaches it (`attach_for_input`) as it does a
+    /// released one; the entries this adds are bounded by the holders the
+    /// node runs.
+    fn takes_input(&mut self, shared: &Shared, pane: &str) -> bool {
+        if self.panes.contains_key(pane) {
+            return true;
+        }
+        if !shared.attacher.holds(pane) {
+            return false;
+        }
+        self.panes.entry(pane.to_owned()).or_default();
+        true
+    }
+
+    /// Attaches `pane` for the engine's input only when no screen holds it:
+    /// one the core released, or one this node knows only from a control
+    /// such as `Asleep` that came before any attach (a device just linked,
+    /// with-hide/hide-private#660). It reads released throughout and is
+    /// released again once the input ends, unless the core attaches it
+    /// meanwhile, so a pane no screen shows keeps no session (and a
+    /// device's node sends no output) after it.
+    fn attach_for_input(&mut self, shared: &Arc<Shared>, pane: &str, now: Instant) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        if entry.session.is_some()
+            || entry.closing
+            || !matches!(entry.lifecycle.state, "released" | "idle")
+        {
+            return;
+        }
+        let message =
+            entry.lifecycle.message.clone().unwrap_or_else(|| {
+                format!("Pane {pane} is attached only while Hide types into it")
+            });
+        entry.release_after_input.get_or_insert(message);
+        self.request_control(shared, pane, now);
     }
 
     fn finish_input_release(&mut self, pane: &str) {

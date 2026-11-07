@@ -142,20 +142,8 @@ pub fn state_directory(home: &Path) -> PathBuf {
     crate::route::pane_records(home).join("panes")
 }
 
-/// A pane id is in Herdr's shape (`w7B:pM`, `h7B:pM`), so it is folded into
-/// a file name rather than used as one.
 fn record_path(home: &Path, pane_id: &str) -> PathBuf {
-    let safe: String = pane_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    state_directory(home).join(format!("{safe}.json"))
+    crate::route::pane_file(&state_directory(home), pane_id)
 }
 
 /// How long one event waits for another event of the same pane to finish its

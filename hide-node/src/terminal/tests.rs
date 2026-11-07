@@ -2407,10 +2407,13 @@ fn the_engines_typing_is_not_reported_as_the_operators() {
     );
 }
 
-/// A pane whose tab left the last shown has no session; the engine's input
-/// attaches it again and is written once the session opens.
+/// A pane whose tab is not on screen has no session; the engine's input
+/// (a letter's bell into a resting agent) attaches it again and is written
+/// once the session opens, and the pane is released again once the input
+/// ended. It reads released throughout, so the core is told of no attach
+/// and nothing it drew reaches a screen.
 #[test]
-fn the_engines_typing_into_a_released_pane_attaches_it_and_is_written() {
+fn the_engines_typing_into_a_released_pane_attaches_it_for_the_input_only() {
     let harness = harness(RetryPolicy::Automatic);
     let _first = harness.controlling("w1:p1");
     harness.service.control(TerminalControl::Release {
@@ -2424,6 +2427,162 @@ fn the_engines_typing_into_a_released_pane_attaches_it_and_is_written() {
         .unwrap();
     let again = harness.opened();
     assert_eq!(input_bytes(&again, b"resume\r".len()), b"resume\r");
+    let _ = again.output.send(SessionEvent::Frame {
+        width: SIZE.cols,
+        height: SIZE.rows,
+        full: true,
+        bytes: b"after the input".to_vec(),
+    });
+    // Released again: the session's writer is let go.
+    loop {
+        match again.input.recv_timeout(WAIT) {
+            Ok(_) => continue,
+            Err(error) => {
+                assert_eq!(error, std::sync::mpsc::RecvTimeoutError::Disconnected);
+                break;
+            }
+        }
+    }
+    let told: Vec<_> = harness
+        .reports
+        .try_iter()
+        .filter_map(|report| match report {
+            TerminalReport::State { pane, state } if pane == "w1:p1" => Some(state.state),
+            _ => None,
+        })
+        .collect();
+    assert!(told.iter().all(|state| state == "released"), "{told:?}");
+    assert!(
+        harness
+            .written()
+            .iter()
+            .all(|(_, bytes, _)| bytes != b"after the input")
+    );
+    // The next input attaches it again.
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"again\r".to_vec()))
+        .unwrap();
+    assert_eq!(input_bytes(&harness.opened(), 6), b"again\r");
+}
+
+/// with-hide/hide-private#660: a device just linked, the core never
+/// attached its pane in a tab not shown, and the only word its node had of
+/// it was that its agent sleeps. The sleep's quit key and the wake's resume
+/// line still reach the pane's holder, each attaching it for the input only.
+#[test]
+fn the_engines_typing_reaches_a_pane_its_node_knows_only_as_asleep() {
+    let (harness, panes) = holder_harness();
+    panes.holders.lock().unwrap().insert("h3:p2".into());
+    harness.service.control(TerminalControl::Asleep {
+        pane: "h3:p2".into(),
+        asleep: true,
+    });
+    harness
+        .service
+        .type_input("h3:p2", Typed::Bytes(b"\x1b".to_vec()))
+        .unwrap();
+    let opened = harness.opened();
+    assert_eq!(opened.size, HOLDER_SIZE);
+    assert_eq!(input_bytes(&opened, 1), b"\x1b");
+    // Released once the key is written: the session's writer is let go.
+    while opened.input.recv_timeout(WAIT).is_ok() {}
+    harness.state("h3:p2", "released");
+    harness
+        .service
+        .type_input("h3:p2", Typed::Bytes(b"claude --resume s\r".to_vec()))
+        .unwrap();
+    assert_eq!(
+        input_bytes(&harness.opened(), b"claude --resume s\r".len()),
+        b"claude --resume s\r"
+    );
+}
+
+/// A node that starts again, or dropped a pane's idle entry, knows a pane
+/// only through its holder. The engine's letter still reaches that holder,
+/// attached for the input only.
+#[test]
+fn the_engines_typing_reaches_a_pane_only_its_holder_knows() {
+    let (harness, panes) = holder_harness();
+    panes.holders.lock().unwrap().insert("h3:p2".into());
+    harness
+        .service
+        .type_input("h3:p2", Typed::Bytes(b"bell\r".to_vec()))
+        .unwrap();
+    let opened = harness.opened();
+    assert_eq!(opened.size, HOLDER_SIZE);
+    assert_eq!(input_bytes(&opened, 5), b"bell\r");
+    while opened.input.recv_timeout(WAIT).is_ok() {}
+    harness.state("h3:p2", "released");
+}
+
+/// A node's own holders are its one engine, so every pane keeps its own
+/// size; the engine's input still goes only to a pane whose holder the node
+/// runs or starts, and one no holder runs is refused.
+#[test]
+fn the_nodes_own_holders_refuse_the_engines_typing_into_a_pane_none_runs() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let (reports_tx, _reports) = channel();
+    let reports: Arc<dyn ReportSink> = Arc::new(Reports(Mutex::new(reports_tx)));
+    let holders = holder::Holders::open(
+        holder::HolderFolders {
+            home: home.path(),
+            state_dir: state.path(),
+        },
+        hide_kit::holders::Source {
+            program: home.path().join("hide-holder"),
+            conpty: None,
+        },
+        Arc::clone(&reports),
+    )
+    .unwrap();
+    // As the node's engine sets it before it draws a pane.
+    holders.own_every_pane();
+    assert!(holders.attacher().keeps_own_size("w1:p9"));
+    let service = Service::start(
+        holders.attacher(),
+        Arc::new(Outputs::default()),
+        reports,
+        RetryPolicy::Manual,
+    )
+    .unwrap();
+    let refused = service
+        .type_input("w1:p9", Typed::Bytes(b"bell\r".to_vec()))
+        .unwrap_err();
+    assert!(
+        matches!(&refused, hide_node_link::holders::HolderError::Refused { code, .. } if code == "pane_input_unavailable"),
+        "{refused}"
+    );
+}
+
+/// A pane the core attaches while the engine's input holds it attached
+/// stays attached once the input ends: a screen shows it now.
+#[test]
+fn a_pane_the_core_attaches_during_the_engines_input_stays_attached() {
+    let harness = harness(RetryPolicy::Automatic);
+    let _first = harness.controlling("w1:p1");
+    harness.service.control(TerminalControl::Release {
+        pane: "w1:p1".into(),
+        message: "detached".into(),
+    });
+    harness.state("w1:p1", "released");
+    // A letter's submit gap keeps the input going past its text.
+    begin_letter(&harness, "w1:p1");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"bell\r".to_vec()))
+        .unwrap();
+    let again = harness.opened();
+    assert_eq!(input_bytes(&again, 5), b"bell\r");
+    harness.attach("w1:p1", Some(SIZE));
+    harness.state("w1:p1", "controlling");
+    harness
+        .service
+        .shared
+        .run(|inner, _| inner.end_letter("w1:p1", Instant::now()));
+    harness.key("w1:p1", b"x");
+    assert_eq!(again.next_input(), b"x");
 }
 
 /// Named keys go only to a transport that encodes them; another refuses
@@ -2501,6 +2660,10 @@ impl Attacher for HolderPanes {
     fn keeps_own_size(&self, pane: &str) -> bool {
         self.holders.lock().unwrap().contains(pane)
     }
+
+    fn holds(&self, pane: &str) -> bool {
+        self.keeps_own_size(pane)
+    }
 }
 
 /// A harness over [`HolderPanes`] that never retries on its own, so an
@@ -2528,6 +2691,9 @@ fn holder_harness() -> (Harness, Arc<HolderPanes>) {
         }
         fn keeps_own_size(&self, pane: &str) -> bool {
             self.0.keeps_own_size(pane)
+        }
+        fn holds(&self, pane: &str) -> bool {
+            self.0.holds(pane)
         }
     }
     let outputs = Arc::new(Outputs::default());

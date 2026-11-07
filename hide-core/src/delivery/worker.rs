@@ -271,6 +271,17 @@ struct Request {
     reply: SyncSender<Result<Value, String>>,
 }
 
+/// What one bell did, for the store: typed by its route, or failed with the
+/// doorbell's code, maybe after the engine was asked to type it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Rang {
+    Sent(super::typed::SendRoute),
+    Failed {
+        code: &'static str,
+        maybe_typed: bool,
+    },
+}
+
 pub(crate) enum Effect {
     SpawnNames {
         work: Box<crate::coordination::naming::Work>,
@@ -306,8 +317,7 @@ pub(crate) enum Effect {
     Bell {
         id: String,
         recipient: Actor,
-        /// How the bell was sent, or `None` when it failed.
-        route: Option<super::typed::SendRoute>,
+        rang: Rang,
     },
     /// A forced letter whose recipient's composer showed text when the
     /// doorbell was about to type it: it stays, as an ordinary letter.
@@ -748,24 +758,50 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
         Effect::Bell {
             id,
             recipient,
-            route,
+            rang,
         } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
                 letter.id == *id
                     && letter.recipient.same_identity(recipient)
                     && letter.state == super::ledger::State::Pending
             }) {
-                if let Some(route) = route {
-                    letter.bell_sent = true;
-                    letter.bell_typed_at_unix_ms = Some(now);
-                    letter.bell_route = *route;
-                } else {
-                    letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
+                match *rang {
+                    Rang::Sent(route) => {
+                        letter.bell_sent = true;
+                        letter.bell_typed_at_unix_ms = Some(now);
+                        letter.bell_route = route;
+                        letter.bell_failure = None;
+                    }
+                    Rang::Failed { code, maybe_typed } => {
+                        letter.bell_errors = letter
+                            .bell_errors
+                            .saturating_add(1)
+                            .min(super::ledger::BELLS);
+                        // A failure that typed nothing leaves where it was a
+                        // line an earlier lost bell may have typed: the next
+                        // bell reads the composer for it (`doorbell::held_line`)
+                        // and the spent judgment waits for its record from
+                        // when it was typed.
+                        let lost = letter
+                            .bell_failure
+                            .as_ref()
+                            .filter(|failure| failure.maybe_typed && !maybe_typed)
+                            .map(|failure| failure.at_unix_ms);
+                        letter.bell_failure = Some(super::ledger::BellFailure {
+                            code: code.to_owned(),
+                            maybe_typed: maybe_typed || lost.is_some(),
+                            at_unix_ms: lost.unwrap_or(now),
+                        });
+                    }
                 }
+                // The doorbell records each bell's result before it reserves
+                // the next, so this result ends the bell reserved last.
+                letter.bell_ended = Some(letter.attempts());
             }
-            // A typed bell is published: the core waits for the recipient's
-            // record of it from then on (`delivery::typed`).
-            return Ok((Value::Null, route.is_some()));
+            // Published either way: the core waits for the recipient's
+            // record of a typed bell (`delivery::typed`), and judges a letter
+            // whose last bell ended (`Runtime::drive_spent_bells`).
+            return Ok((Value::Null, true));
         }
         Effect::InputNoticed { id, attempt } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| letter.id == *id)
@@ -940,10 +976,10 @@ fn run(
                     guard.delivery_reach(),
                     guard.delivery_asleep(),
                     guard.delivery_wakes_started(),
-                    guard.delivery_wake_failures(),
+                    guard.delivery_undeliverable(),
                 ))
             });
-        let (state, gone, rebinds, reach, asleep, woken, wake_failed) = match state {
+        let (state, gone, rebinds, reach, asleep, woken, undeliverable) = match state {
             Ok(state) => state,
             Err(code) => {
                 for request in batch {
@@ -972,7 +1008,7 @@ fn run(
                         || letter.answer_overdue(now)
                         || !letter.retained(now)
                         || (letter.state == ledger::State::Pending
-                            && (wake_failed.contains_key(&letter.id)
+                            && (undeliverable.contains_key(&letter.id)
                                 || ledger::Sleeper::of(&woke, letter).is_some()))
                 })
             {
@@ -987,7 +1023,7 @@ fn run(
             asleep,
             woke,
             woken,
-            wake_failed,
+            undeliverable,
         };
         let Settled {
             ledger: candidate,
@@ -1262,9 +1298,10 @@ struct Upkeep {
     /// The letters whose one wake started, with when: those wake no one
     /// in a later sleep, and their hour runs through it.
     woken: ledger::Woken,
-    /// The letters a failed wake leaves undelivered, with the wake's reason
-    /// (D-16).
-    wake_failed: std::collections::BTreeMap<String, String>,
+    /// The letters that cannot be delivered now, with why: a failed wake
+    /// leaves them (D-16), or no bell can bring them
+    /// (`runtime::spent_bells`).
+    undeliverable: std::collections::BTreeMap<String, String>,
 }
 
 type Moved = Vec<(String, Actor)>;
@@ -1281,7 +1318,7 @@ impl Upkeep {
         ledger.observe_reach(&self.reach, now);
         ledger.resume_woken(&self.woke, &self.woken, now);
         ledger.expire_awake(now, &self.asleep, &self.woken);
-        ledger.fail_woken(&self.wake_failed, now);
+        ledger.fail_undeliverable(&self.undeliverable, now);
         ledger.end_overdue_answer_waits(now);
         let moved = crate::coordination::rebind(ledger, &self.rebinds);
         let ended = crate::coordination::end_gone(ledger, &self.gone, now);
@@ -2326,7 +2363,7 @@ mod tests {
             asleep: Default::default(),
             woke: Default::default(),
             woken: Default::default(),
-            wake_failed: Default::default(),
+            undeliverable: Default::default(),
             reach: ledger::Reach::new(),
             gone: Default::default(),
             rebinds: Default::default(),
