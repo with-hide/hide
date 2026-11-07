@@ -374,7 +374,7 @@ impl Service {
         }
         let now = Instant::now();
         let receipt = self.shared.run(|inner, shared| {
-            if inner.closed || !inner.panes.contains_key(pane) {
+            if inner.closed || !inner.takes_input(shared, pane) {
                 return Err(command::refused(
                     "pane_input_unavailable",
                     "Pane input has no live terminal owner",
@@ -456,8 +456,11 @@ impl Service {
                     .run(|inner, _| inner.end_letter(self.pane, now));
             }
         }
-        let _work = self.shared.run(|inner, _| {
-            if inner.closed || inner.panes.get(pane).is_none_or(|entry| entry.closing) {
+        let _work = self.shared.run(|inner, shared| {
+            if inner.closed
+                || !inner.takes_input(shared, pane)
+                || inner.panes.get(pane).is_some_and(|entry| entry.closing)
+            {
                 return Err(command::refused(
                     "pane_input_unavailable",
                     "Pane input has no live terminal owner",
@@ -2640,6 +2643,23 @@ impl Inner {
             "message": message,
             "retry_decision": self.retry_decision(pane, "manual"),
         }));
+    }
+
+    /// Whether the engine's input can go to `pane`: a pane this node tracks,
+    /// or one only its holder layer knows, as every pane is after the node
+    /// starts again or once `forget_unowned` dropped an idle entry. Such a
+    /// pane gets an entry here, so the input attaches it
+    /// (`attach_for_input`) as it does a released one; the entries this adds
+    /// are bounded by the holders the node adopted.
+    fn takes_input(&mut self, shared: &Shared, pane: &str) -> bool {
+        if self.panes.contains_key(pane) {
+            return true;
+        }
+        if !shared.attacher.keeps_own_size(pane) {
+            return false;
+        }
+        self.panes.entry(pane.to_owned()).or_default();
+        true
     }
 
     /// Attaches `pane` for the engine's input only when no screen holds it:

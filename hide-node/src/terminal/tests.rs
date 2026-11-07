@@ -2455,6 +2455,32 @@ fn the_engines_typing_reaches_a_pane_its_node_knows_only_as_asleep() {
     );
 }
 
+/// A node that starts again, or dropped a pane's idle entry, knows a pane
+/// only through its holder. The engine's letter still reaches that holder,
+/// attached for the input only; a pane no holder keeps is still refused.
+#[test]
+fn the_engines_typing_reaches_a_pane_only_its_holder_knows() {
+    let (harness, panes) = holder_harness();
+    panes.holders.lock().unwrap().insert("h3:p2".into());
+    harness
+        .service
+        .type_input("h3:p2", Typed::Bytes(b"bell\r".to_vec()))
+        .unwrap();
+    let opened = harness.opened();
+    assert_eq!(opened.size, HOLDER_SIZE);
+    assert_eq!(input_bytes(&opened, 5), b"bell\r");
+    while opened.input.recv_timeout(WAIT).is_ok() {}
+    harness.state("h3:p2", "released");
+    let refused = harness
+        .service
+        .type_input("h9:p9", Typed::Bytes(b"bell\r".to_vec()))
+        .unwrap_err();
+    assert!(
+        matches!(&refused, hide_node_link::holders::HolderError::Refused { code, .. } if code == "pane_input_unavailable"),
+        "{refused}"
+    );
+}
+
 /// A pane the core attaches while the engine's input holds it attached
 /// stays attached once the input ends: a screen shows it now.
 #[test]
