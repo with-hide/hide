@@ -328,6 +328,13 @@ impl Runtime {
     }
 
     fn connect_machine_profile_row(&mut self, profile_id: &str, consent: bool) -> bool {
+        let (changed, read) = self
+            .change_look(|runtime| runtime.connect_machine_profile_row_steps(profile_id, consent));
+        changed || read
+    }
+
+    /// The steps of `connect_machine_profile_row`, which runs them as one selection (`look.rs`).
+    fn connect_machine_profile_row_steps(&mut self, profile_id: &str, consent: bool) -> bool {
         let Some(index) = self
             .snapshot
             .status

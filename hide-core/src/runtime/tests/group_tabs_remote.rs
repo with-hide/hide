@@ -451,7 +451,7 @@ fn setup(origin: LinkOrigin, path: &str) -> (Runtime, tempfile::TempDir) {
     let saved = tempfile::tempdir().unwrap();
     runtime.workspace_views =
         Some(WorkspaceViewStore::open(saved.path().join("views.json"), Default::default()).0);
-    runtime.snapshot.navigator.focused_device_id = Some(DEVICE.into());
+    runtime.set_front_device(Some(DEVICE.into()));
     runtime.ingest_remote_session(DEVICE, Ok(raw(path)));
     runtime.sync_workspace_view();
     (runtime, saved)
@@ -501,7 +501,7 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
             Weak::new(),
             ChangeNotifier::noop(),
         ));
-        runtime.snapshot.navigator.focused_device_id = Some(crate::node::TEST_NODE.into());
+        runtime.set_front_device(Some(crate::node::TEST_NODE.into()));
         let task = runtime
             .begin_task_operation("agent_start", None, None, None, None)
             .unwrap();
@@ -608,7 +608,7 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
             Weak::new(),
             ChangeNotifier::noop(),
         ));
-        runtime.snapshot.navigator.focused_device_id = Some(crate::node::TEST_NODE.into());
+        runtime.set_front_device(Some(crate::node::TEST_NODE.into()));
         let task = runtime
             .begin_task_operation("agent_start", None, None, None, Some("claude".into()))
             .unwrap();

@@ -827,6 +827,12 @@ impl Runtime {
     }
 
     pub(super) fn follow_start(&mut self, device: Option<&str>) -> bool {
+        let (changed, read) = self.change_look(|runtime| runtime.follow_start_steps(device));
+        changed || read
+    }
+
+    /// The steps of `follow_start`, which runs them as one selection (`look.rs`).
+    fn follow_start_steps(&mut self, device: Option<&str>) -> bool {
         if !self.pending_start_focus() {
             return false;
         }

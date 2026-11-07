@@ -163,6 +163,22 @@ impl Runtime {
         path: &str,
         outcome: Result<(), &str>,
         forward: Forward,
+    ) -> bool {
+        // Answers whether what it brought forward was read, for a caller
+        // that announces only what changed (`ingest_device_registration`).
+        self.change_look(|runtime| {
+            runtime.settle_project_open_steps(device, path, outcome, forward)
+        })
+        .1
+    }
+
+    /// The steps of `settle_project_open`, which runs them as one selection (`look.rs`).
+    fn settle_project_open_steps(
+        &mut self,
+        device: &str,
+        path: &str,
+        outcome: Result<(), &str>,
+        forward: Forward,
     ) {
         let waiting = self
             .project_opens
@@ -249,6 +265,11 @@ impl Runtime {
     /// machine's checkout through `focus_checkout`, a device's through that
     /// device's engine with the device moved in front.
     fn bring_target_forward(&mut self, device: &str, target: &Target, request_id: &str) {
+        self.change_look(|runtime| runtime.bring_target_forward_steps(device, target, request_id));
+    }
+
+    /// The steps of `bring_target_forward`, which runs them as one selection (`look.rs`).
+    fn bring_target_forward_steps(&mut self, device: &str, target: &Target, request_id: &str) {
         if device == self.node.as_str() {
             self.focus_checkout(&target.workspace_id, &target.checkout_id);
             if self.snapshot.navigator.focused_checkout_id.as_deref()

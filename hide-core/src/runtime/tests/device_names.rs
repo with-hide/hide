@@ -136,6 +136,13 @@ fn a_new_device_takes_its_machine_id_on_its_first_connection_and_keeps_its_alias
     let mut runtime = runtime();
     let provisional = added(&mut runtime, ALIAS);
     assert_eq!(provisional, ALIAS);
+    let focus = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "focus_device",
+        "payload": { "device_id": ALIAS },
+    });
+    runtime.dispatch_json(&serde_json::to_vec(&focus).unwrap());
+    assert_eq!(runtime.look.front(), Some(ALIAS));
 
     let (_, records) = crate::diagnostics::capture(|| {
         assert!(connected(
@@ -172,6 +179,12 @@ fn a_new_device_takes_its_machine_id_on_its_first_connection_and_keeps_its_alias
         runtime.snapshot().status.remote
     );
     assert!(!runtime.device_hosts.contains_key(ALIAS));
+    // In front before, in front under its new id.
+    assert_eq!(runtime.look.front(), Some(MACHINE));
+    assert_eq!(
+        runtime.snapshot.navigator.focused_device_id.as_deref(),
+        Some(MACHINE)
+    );
     // The alias still selects it, as `--machine` and `hide device` name it.
     assert_eq!(runtime.machine_named(ALIAS), Ok(MACHINE.to_owned()));
     assert_eq!(runtime.machine_named(MACHINE), Ok(MACHINE.to_owned()));

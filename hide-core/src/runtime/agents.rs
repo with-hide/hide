@@ -4,6 +4,18 @@ use super::*;
 /// with two sockets each, so a longer list is not one hided sends.
 const MAX_PHONE_VIEWED_PANES: usize = 16;
 
+/// The panes the operator looks at, per machine, as the read axis reads them
+/// (`Runtime::looked_at`): this machine's focus pane as the operator chose
+/// it, each device's own focus while that device is in front and its window
+/// shows the pane's tab (`remote_read_focus`), and every agent a phone has
+/// open. One value, so a move of any of its parts is one comparison
+/// (`Runtime::follow_operator_look`).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct OperatorLook {
+    local: Vec<String>,
+    devices: BTreeMap<String, Vec<String>>,
+}
+
 /// Which of this machine's panes the lineage pass saw, and how each one's
 /// connection stood, so a Reopen's published state ends with the need for it.
 #[derive(Default)]
@@ -310,6 +322,19 @@ impl Runtime {
 
     /// Whether the request was handed to the device's worker.
     fn request_remote_control_inner(
+        &mut self,
+        payload: RemoteControlPayload,
+        terminal_intent: bool,
+        report: FailureReport,
+    ) -> bool {
+        let (changed, read) = self.change_look(|runtime| {
+            runtime.request_remote_control_inner_steps(payload, terminal_intent, report)
+        });
+        changed || read
+    }
+
+    /// The steps of `request_remote_control_inner`, which runs them as one selection (`look.rs`).
+    fn request_remote_control_inner_steps(
         &mut self,
         payload: RemoteControlPayload,
         terminal_intent: bool,
@@ -1329,8 +1354,8 @@ impl Runtime {
         scope: ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) -> bool {
-        let looked_at = self.looked_at(self.operator_focused_pane_id.clone());
-        let looked_at = looked_at.iter().map(String::as_str).collect::<Vec<_>>();
+        let look = self.reading_local_look();
+        let looked_at = look.iter().map(String::as_str).collect::<Vec<_>>();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut changes = Vec::new();
         if let Some(live_pane_ids) = live_pane_ids {
@@ -1351,6 +1376,7 @@ impl Runtime {
             &mut self.local_read_connection,
             &looked_at,
         ));
+        self.read_look.local = look;
         self.snapshot.ui_state.pane_read_records = records;
         let synced = self.sync_pane_status_from_agents(agents);
         let pruned = prune_pane_text_scales(
@@ -1392,13 +1418,88 @@ impl Runtime {
 
     /// The panes the operator is looking at on one server: `focus`, that
     /// server's focus pane as the operator chose it, and every agent a phone
-    /// has open (`phone_viewed_pane_ids`). These are the panes the read axis
+    /// has open (`look.rs`). These are the panes the read axis
     /// reads as of now (`agent_state::apply_read_state`).
-    fn looked_at(&self, focus: Option<String>) -> Vec<String> {
+    fn looked_at(&self, focus: Option<&str>) -> Vec<String> {
         focus
             .into_iter()
-            .chain(self.phone_viewed_pane_ids.iter().cloned())
+            .map(str::to_owned)
+            .chain(self.look.phones().iter().cloned())
             .collect()
+    }
+
+    /// This machine's look: the focus pane the operator chose and a phone's.
+    fn local_look(&self) -> Vec<String> {
+        self.looked_at(self.look.focus())
+    }
+
+    /// A device's look: its own focus, as `remote_read_focus` filters it,
+    /// and a phone's.
+    fn device_look(&self, target_id: &str, session: &RemoteSessionSnapshot) -> Vec<String> {
+        self.looked_at(self.remote_read_focus(target_id, session).as_deref())
+    }
+
+    /// The look this machine's rows are read with now. While a selection is
+    /// under way (`look.rs`) it is the look the last completed one left, so
+    /// a session that arrives meanwhile reads what the operator still looks
+    /// at, a new turn there included, and no value the selection passes
+    /// through; otherwise it is the look now.
+    fn reading_local_look(&self) -> Vec<String> {
+        if self.look.selecting() {
+            self.read_look.local.clone()
+        } else {
+            self.local_look()
+        }
+    }
+
+    /// The same for one device's rows.
+    fn reading_device_look(&self, target_id: &str, session: &RemoteSessionSnapshot) -> Vec<String> {
+        if self.look.selecting() {
+            self.read_look
+                .devices
+                .get(target_id)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.device_look(target_id, session)
+        }
+    }
+
+    /// The same for every machine's rows.
+    fn reading_look(&self) -> OperatorLook {
+        if self.look.selecting() {
+            self.read_look.clone()
+        } else {
+            self.operator_look()
+        }
+    }
+
+    /// The operator's look now on every machine whose rows are published.
+    /// A device's look depends on its published session, so it is read
+    /// while the sessions are in place. A device that is not connected keeps
+    /// its last session's rows but shows none of its panes, so nothing on it
+    /// is looked at until it answers again; the session a device has just
+    /// answered with is read with its look as it arrives
+    /// (`apply_remote_read_state`).
+    pub(super) fn operator_look(&self) -> OperatorLook {
+        OperatorLook {
+            local: self.local_look(),
+            devices: self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .filter_map(|remote| {
+                    let session = remote.session.as_ref()?;
+                    let look = if remote.state == "connected" {
+                        self.device_look(&remote.target_id, session)
+                    } else {
+                        Vec::new()
+                    };
+                    Some((remote.target_id.clone(), look))
+                })
+                .collect(),
+        }
     }
 
     /// The focus a device's own server reports, counted as the operator's
@@ -1432,19 +1533,26 @@ impl Runtime {
 
     /// Re-runs the read axis over every row already published, this
     /// machine's and each device's, for a look that arrived without a new
-    /// agent list: a request view result opened, or a phone opening or
-    /// closing an agent. A device's rows are read with the same looks its
-    /// next sync reads them with (`apply_remote_read_state`).
+    /// agent list: the operator's look moved (`follow_operator_look`) or a
+    /// request view result was opened. A device's rows are read with the
+    /// same looks its next sync reads them with (`apply_remote_read_state`).
     pub(super) fn refresh_read_state_everywhere(&mut self) -> bool {
-        let mut changed = self.refresh_pane_read_state();
+        // Read before the rows are taken out below: which of a device's tabs
+        // its window shows is asked of its published session.
+        let look = self.reading_look();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut remotes = std::mem::take(&mut self.snapshot.status.remote);
         let mut changes = Vec::new();
+        let mut changed = false;
         for remote in &mut remotes {
             let Some(session) = remote.session.as_mut() else {
                 continue;
             };
-            let looked_at = self.looked_at(self.remote_read_focus(&remote.target_id, session));
+            let looked_at = look
+                .devices
+                .get(&remote.target_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             let before = session.agents.clone();
             changes.extend(crate::agent_state::apply_read_state(
                 &mut session.agents,
@@ -1453,14 +1561,79 @@ impl Runtime {
                 self.read_connection(Some(&remote.target_id)),
                 &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
             ));
-            changed |= before != session.agents;
+            if before != session.agents {
+                self.project_published_remote_rows(&remote.target_id, session);
+                self.reread_device_raw_session(&remote.target_id, looked_at, &mut records);
+                changed = true;
+            }
         }
         self.snapshot.status.remote = remotes;
         self.snapshot.ui_state.pane_read_records = records;
         if !changes.is_empty() {
             self.record_read_record_changes(&changes);
         }
-        changed | self.sync_request_rows()
+        // This machine's rows last, with every device's back in place: they
+        // read what a device's agents send up their lineage now, and the
+        // groups, presence and request rows follow every machine's rows.
+        let local = self.refresh_pane_read_state();
+        self.read_look = look;
+        changed | local
+    }
+
+    /// Reads the device's kept session (`device_raw_sessions`) with the look
+    /// its published rows were just read with. The kept session holds the
+    /// rows as its arrival read them; a catalog refresh derives the published
+    /// session from it again, and the same session arriving again is matched
+    /// against it, so left behind it would bring a read row back to 읽을 것
+    /// and make that session a change.
+    fn reread_device_raw_session(
+        &mut self,
+        target_id: &str,
+        looked_at: &[String],
+        records: &mut BTreeMap<String, crate::model::PaneReadRecord>,
+    ) {
+        let Some(mut raw) = self.device_raw_sessions.remove(target_id) else {
+            return;
+        };
+        crate::agent_state::apply_read_state(
+            &mut raw.agents,
+            Default::default(),
+            records,
+            self.read_connection(Some(target_id)),
+            &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        self.project_remote_rows(target_id, &mut raw);
+        self.device_raw_sessions.insert(target_id.to_owned(), raw);
+    }
+
+    /// What a device's tree shows of its agent rows, as a device's own read
+    /// leaves the session it sent: each pane's status and close checks, each
+    /// tab's agent and label, each strip entry's identity, the checkout
+    /// summaries, and the pane relations projected from the rows. The session
+    /// kept as it arrived (`device_raw_sessions`) carries this.
+    fn project_remote_rows(&self, target_id: &str, session: &mut RemoteSessionSnapshot) -> bool {
+        let status = sync_pane_status(
+            &mut session.workspaces,
+            &session.agents,
+            session.focused_pane_id.as_deref(),
+            self.sleep_machine(target_id),
+        );
+        status | sync_remote_pane_relations(session)
+    }
+
+    /// The same for the device's published session after a moved look read
+    /// its rows: the pane, tab and strip as above, and each pane's delegated
+    /// work judged again against the device's kit, as the session's
+    /// derivation judges it (`judge_device_pane_children`), whose chips carry
+    /// each child's read.
+    fn project_published_remote_rows(&self, target_id: &str, session: &mut RemoteSessionSnapshot) {
+        sync_pane_status(
+            &mut session.workspaces,
+            &session.agents,
+            session.focused_pane_id.as_deref(),
+            self.sleep_machine(target_id),
+        );
+        self.judge_device_pane_children(target_id, session);
     }
 
     /// A phone opened or closed an agent's detail, or went away: `pane_ids`
@@ -1482,15 +1655,16 @@ impl Runtime {
             return false;
         }
         let viewed = pane_ids.into_iter().collect::<BTreeSet<_>>();
-        if viewed == self.phone_viewed_pane_ids {
+        if &viewed == self.look.phones() {
             return false;
         }
         crate::diagnostic!(serde_json::json!({
             "component": "runtime", "kind": "pane.phone_viewing",
             "pane_ids": viewed,
         }));
-        self.phone_viewed_pane_ids = viewed;
-        self.refresh_read_state_everywhere()
+        // The phone's look moved; it is read when the selection that carried
+        // it completes (`look.rs`).
+        self.set_phone_look(viewed)
     }
 
     /// Applies the read axis to one remote target's agent rows.
@@ -1508,7 +1682,7 @@ impl Runtime {
         target_id: &str,
         session: &mut RemoteSessionSnapshot,
     ) -> bool {
-        let looked_at = self.looked_at(self.remote_read_focus(target_id, session));
+        let look = self.reading_device_look(target_id, session);
         let live_pane_ids = session
             .workspaces
             .iter()
@@ -1568,19 +1742,14 @@ impl Runtime {
             Default::default(),
             &mut records,
             connection,
-            &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
+            &look.iter().map(String::as_str).collect::<Vec<_>>(),
         ));
+        self.read_look.devices.insert(target_id.to_owned(), look);
         self.snapshot.ui_state.pane_read_records = records;
         if lineage_pruned {
             self.persist_ui_state();
         }
-        sync_pane_status(
-            &mut session.workspaces,
-            &session.agents,
-            session.focused_pane_id.as_deref(),
-            self.sleep_machine(target_id),
-        );
-        sync_remote_pane_relations(session);
+        self.project_remote_rows(target_id, session);
         let pruned = prune_pane_text_scales(
             &mut self.snapshot.ui_state.pane_text_scales,
             &session.workspaces,
@@ -2944,6 +3113,18 @@ impl Runtime {
         tab_id: Option<&str>,
         pane_id: &str,
     ) -> bool {
+        let (changed, read) = self
+            .change_look(|runtime| runtime.ingest_fork_pane_steps(source_pane_id, tab_id, pane_id));
+        changed || read
+    }
+
+    /// The steps of `ingest_fork_pane`, which runs them as one selection (`look.rs`).
+    fn ingest_fork_pane_steps(
+        &mut self,
+        source_pane_id: &str,
+        tab_id: Option<&str>,
+        pane_id: &str,
+    ) -> bool {
         let Some(pending) = self.forks_in_flight.get_mut(source_pane_id) else {
             return false;
         };
@@ -3143,6 +3324,19 @@ impl Runtime {
     }
 
     pub fn ingest_fork_result(
+        &mut self,
+        parent_pane_id: &str,
+        result: Result<String, String>,
+        elapsed_ms: u128,
+    ) -> bool {
+        let (changed, read) = self.change_look(|runtime| {
+            runtime.ingest_fork_result_steps(parent_pane_id, result, elapsed_ms)
+        });
+        changed || read
+    }
+
+    /// The steps of `ingest_fork_result`, which runs them as one selection (`look.rs`).
+    fn ingest_fork_result_steps(
         &mut self,
         parent_pane_id: &str,
         result: Result<String, String>,

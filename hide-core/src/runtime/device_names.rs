@@ -203,14 +203,16 @@ impl Runtime {
                     .to_owned(),
             );
         }
-        let focused = self.snapshot.navigator.focused_device_id.as_deref() == Some(from);
+        let in_front = self.look.front() == Some(from);
         self.forget_device_connect_outcome(from);
         self.delivery_panes.remove(from);
         self.disconnect_remote_device(from, Retiring::Removed);
         self.forget_device_directories(from);
         self.snapshot.ui_state = renamed;
-        if focused {
-            self.snapshot.navigator.focused_device_id = Some(to.to_owned());
+        // The device stays in front under its new id; the look's own setter
+        // moves it (`look.rs`).
+        if in_front {
+            self.set_front_device(Some(to.to_owned()));
         }
         self.device_naming_round += 1;
         self.device_names_saving

@@ -110,15 +110,18 @@ impl Runtime {
         // an operator's Retry retires a device's, and the operator's device
         // focus stays where it was.
         if self.remote_connections.contains_key(node) {
-            let focused_device = self.snapshot.navigator.focused_device_id.clone();
+            let focused_device = self.look.front().map(str::to_owned);
             let persisted_focus = self.snapshot.ui_state.focused_device_id.clone();
             // The node dialed in again under the id it had: a fresh row for
             // its new link, since no state of the old link means anything
             // to a node that reconnects by itself (only a dialed device's
-            // Reconnect keeps its last state).
-            self.disconnect_remote_device(node, super::devices::Retiring::Removed);
-            self.snapshot.navigator.focused_device_id = focused_device;
-            self.snapshot.ui_state.focused_device_id = persisted_focus;
+            // Reconnect keeps its last state). One selection, so the local
+            // front the disconnect passes through is never read (`look.rs`).
+            self.change_look(|runtime| {
+                runtime.disconnect_remote_device(node, super::devices::Retiring::Removed);
+                runtime.set_front_device(focused_device);
+                runtime.snapshot.ui_state.focused_device_id = persisted_focus;
+            });
         }
         crate::diagnostic!(serde_json::json!({
             "component": "remote_host",

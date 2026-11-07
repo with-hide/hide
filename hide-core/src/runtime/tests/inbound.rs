@@ -839,7 +839,7 @@ fn a_linked_node_s_sessions_are_read_through_its_link() {
             reported.focused_workspace_id = Some(format!("remote:{NODE}:workspace:w1"));
             reported.focused_checkout_id = Some(format!("remote:{NODE}:checkout:w1"));
             runtime.ingest_remote_session(NODE, Ok(reported));
-            runtime.snapshot.navigator.focused_device_id = Some(NODE.to_owned());
+            runtime.set_front_device(Some(NODE.to_owned()));
         }
         let refresh = |payload: serde_json::Value| {
             let event = serde_json::json!({
@@ -952,7 +952,7 @@ fn a_node_s_checkout_in_front_is_the_node_s_not_this_machine_s() {
         .expect("the node's project is listed");
     assert_eq!(workspace.remote_target_id.as_deref(), Some(NODE));
     let checkout = workspace.checkouts[0].id.clone();
-    runtime.snapshot.navigator.focused_device_id = Some(NODE.to_owned());
+    runtime.set_front_device(Some(NODE.to_owned()));
     runtime.snapshot.navigator.focused_checkout_id = Some(checkout);
     assert!(runtime.focused_local_checkout().is_none());
 }
