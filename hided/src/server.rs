@@ -1319,6 +1319,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "pane_close_failed" => {
+            "The registration ended, but the engine did not close its pane; run the same command again to close it"
+        }
         "composer_not_empty" => {
             "Someone is typing in the recipient's input, so nothing was typed or recorded; send it again without --force, and it is delivered once they submit"
         }
@@ -1347,7 +1350,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "The agent's start ended in its pane without the agent and was not typed again; check that pane for why, then spawn with a new intent"
         }
         "shell_starting" => {
-            "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
+            "The new pane's shell had not finished starting while the spawn could wait, so nothing was typed and Hide closed the tab it opened; find what the account's shell startup files wait on (start a login shell in a terminal of your own), then run the same command again with the same intent"
         }
         "pane_busy" => {
             "The new pane's shell kept another program running for the start's 30 s wait, so nothing was typed; let that program finish or end it in that pane, then run the same command again with the same intent"

@@ -381,7 +381,7 @@ pub(crate) fn start_at_shell_checked(
     answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
-    start_within(
+    start_at_shell_within(
         engine,
         node,
         correlation_id,
@@ -389,6 +389,34 @@ pub(crate) fn start_at_shell_checked(
         start,
         answer_timeout,
         SHELL_WAIT,
+        check,
+    )
+}
+
+/// [`start_at_shell_checked`] whose shell gets `shell_wait`, at most
+/// [`SHELL_WAIT`], to finish starting: a spawn's start ends its wait inside
+/// the time the spawn has to answer its caller
+/// (`coordination::SPAWN_ANSWER_WAIT`), so the caller hears why rather than
+/// a timeout.
+#[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
+pub(crate) fn start_at_shell_within(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    shell: ShellStart,
+    start: &PreparedStart,
+    answer_timeout: Duration,
+    shell_wait: Duration,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<StartedAgent, StartError> {
+    start_within(
+        engine,
+        node,
+        correlation_id,
+        shell,
+        start,
+        answer_timeout,
+        shell_wait.min(SHELL_WAIT),
         Duration::ZERO,
         check,
     )
@@ -614,7 +642,7 @@ impl Shell<'_> {
                         reason: "agent_start.shell_not_reading".into(),
                         detail: format!(
                             "The pane's shell did not start reading its command line within {} s, so the agent was not started: until it does, its terminal keeps only {limit} bytes of a typed line, and this start's line is up to {} bytes. Check what the shell's startup files wait on, then retry.",
-                            SHELL_WAIT.as_secs(),
+                            (deadline - started).as_secs(),
                             self.line,
                         ),
                     },
@@ -622,7 +650,7 @@ impl Shell<'_> {
                         reason: "agent_start.shell_no_prompt".into(),
                         detail: format!(
                             "The pane's shell did not reach its prompt within {} s, so the agent was not started.",
-                            SHELL_WAIT.as_secs()
+                            (deadline - started).as_secs()
                         ),
                     },
                 });

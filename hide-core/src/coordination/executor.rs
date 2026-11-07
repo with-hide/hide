@@ -54,7 +54,7 @@ fn state(client: &Client) -> Result<Arc<crate::delivery::ledger::Ledger>, String
 }
 /// The ledger with the registrations Hide holds asleep, read under one
 /// hold of the runtime's lock so the two agree.
-fn registrations(
+pub(super) fn registrations(
     client: &Client,
 ) -> Result<(Arc<crate::delivery::ledger::Ledger>, super::Sleeping), String> {
     let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
@@ -226,7 +226,7 @@ pub(crate) fn spawn_ref(
     }
 }
 
-fn mutate(
+pub(super) fn mutate(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
@@ -245,7 +245,7 @@ fn mutate(
         STORE_TIMEOUT,
     )
 }
-fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
+pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
     client
         .runtime
         .upgrade()
@@ -548,15 +548,8 @@ pub(crate) fn run(
         Command::End {
             id,
             actor: asserted,
-        } => mutate(
-            &client,
-            &authority,
-            &actor,
-            Mutation::End {
-                id,
-                actor: asserted,
-            },
-        ),
+            keep_pane,
+        } => super::end::end(&client, &authority, &actor, id, asserted, keep_pane),
         Command::Register {
             check,
             machine,
@@ -865,6 +858,20 @@ fn spawn(
     {
         *machine = None;
     }
+    // The caller waits this long for the answer; the new shell's wait ends
+    // inside it, so a stopped shell is answered rather than timed out.
+    let answer_by = Instant::now()
+        + if matches!(
+            &command,
+            Command::Spawn {
+                machine: Some(_),
+                ..
+            }
+        ) {
+            super::DEVICE_SPAWN_ANSWER_WAIT
+        } else {
+            super::SPAWN_ANSWER_WAIT
+        };
     let Command::Spawn {
         parent,
         machine,
@@ -1387,6 +1394,7 @@ fn spawn(
                 &reserved.id,
                 pane,
                 shell,
+                answer_by.saturating_duration_since(Instant::now()),
                 name,
                 kind,
                 start_args,
@@ -1394,7 +1402,23 @@ fn spawn(
                 form.as_ref().and_then(|form| {
                     crate::engine::StartProgram::of(hide_agent_adapter::canonical_kind(kind), form)
                 }),
-            )?;
+            )
+            .inspect_err(|code| {
+                // A pane a start of this spawn was typed into keeps it: the
+                // engine may still hold the agent's name there.
+                if reserved.typed == 0
+                    && super::split_refusal(code).0 == crate::agent_start::SHELL_STARTING
+                {
+                    close_unstarted_pane(
+                        client,
+                        authority,
+                        actor,
+                        engine.as_ref(),
+                        &reserved,
+                        pane,
+                    );
+                }
+            })?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
@@ -1868,6 +1892,40 @@ fn close_unstarted_attempts(
             "reason": closed.err(),
         }));
     }
+}
+
+/// Closes the pane `reserved` made, whose shell had not finished starting
+/// when its start's wait ran out, so nothing was typed there (a startup file
+/// stopped at a question or blocked), and takes it off the spawn: the
+/// attempt leaves no tab, and the same intent opens a new pane with a new
+/// shell. A pane that no longer runs the terminal the spawn recorded is left
+/// alone. Every outcome is logged; the caller's refusal says why either way.
+fn close_unstarted_pane(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    engine: &dyn Engine,
+    reserved: &SpawnRecord,
+    pane: &str,
+) {
+    let closed = same_terminal(engine, reserved, pane)
+        .and_then(|()| close_pane(engine, pane))
+        .and_then(|()| {
+            mutate(
+                client,
+                authority,
+                actor,
+                Mutation::Withdraw {
+                    id: reserved.id.clone(),
+                    pane: pane.to_owned(),
+                },
+            )
+            .map(drop)
+        });
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "shell_starting.close", "spawn": reserved.id,
+        "pane_id": pane, "closed": closed.is_ok(), "reason": closed.err(),
+    }));
 }
 
 /// Closes the pane `reserved` made, whose agent started but whose session a

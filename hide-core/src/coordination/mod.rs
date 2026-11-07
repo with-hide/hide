@@ -1,6 +1,7 @@
 //! Persistent participant identities and resumable child creation. The delivery
 //! store is the sole writer; native I/O is performed by request workers.
 
+mod end;
 pub(crate) mod executor;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
@@ -118,9 +119,15 @@ pub enum Command {
     Show {
         id: String,
     },
+    /// Ends the registration and, unless `keep_pane`, closes the pane its
+    /// agent ran in, which ends the pane's holder, its shell, the agent and
+    /// everything under it; the agent's conversation is kept in the session
+    /// archive for 이어가기 (`coordination::end`).
     End {
         id: String,
         actor: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_pane: bool,
     },
     Spawn {
         parent: Option<String>,
@@ -271,6 +278,16 @@ fn spawn_cap(
 /// submitted: the TUI of a started agent takes seconds to draw its prompt,
 /// and a trust question at startup holds it longer.
 pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a spawn on the caller's own machine has to answer. The CLI
+/// waits this, and an ordinary command's wait for the answer to come back,
+/// and the spawn's new shell gets what is left of it, at most
+/// `agent_start::SHELL_WAIT`, to finish starting: a shell stopped in its
+/// startup files is answered as `shell_starting` while the caller still
+/// waits, rather than as a timeout whose spawn holds the spawn lock.
+pub const SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+/// [`SPAWN_ANSWER_WAIT`] for a spawn on a connected device, whose checks,
+/// worktree, tab and start are each a round trip over SSH.
+pub const DEVICE_SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past

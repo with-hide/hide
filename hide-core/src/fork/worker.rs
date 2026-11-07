@@ -262,6 +262,7 @@ fn run_agent_fork_with_registration(
             &format!("hide-core:fork:{}:start", request.name),
             &child_pane_id,
             shell,
+            crate::agent_start::SHELL_WAIT,
             &request.name,
             request.agent.kind(),
             args,

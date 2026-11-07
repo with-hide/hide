@@ -37,6 +37,44 @@ pub struct AgentView {
     pub watch: Option<Watch>,
 }
 
+/// `hide agent end`: the registration as it ended, what became of the pane
+/// its agent ran in, and of the conversation that ran there.
+#[derive(Serialize, JsonSchema)]
+pub struct AgentEnd {
+    #[serde(flatten)]
+    pub agent: AgentView,
+    pub pane: PaneEnd,
+    pub conversation: ConversationEnd,
+}
+
+/// The pane of an ended registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneEnd {
+    /// Closed: its holder, shell, agent and everything under them ended.
+    Closed,
+    /// Left open, as `--keep-pane` asked.
+    Kept,
+    /// No pane of the registration runs: it closed before, or its id now
+    /// names another terminal.
+    Gone,
+    /// Another conversation runs in the pane now, so it was left open.
+    OtherAgent,
+}
+
+/// The conversation of an ended registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationEnd {
+    /// Kept under 보관됨, where 이어가기 resumes it.
+    Archived,
+    /// Not kept: the archive already holds as many sessions as it keeps.
+    ArchiveFull,
+    /// Nothing was archived: the pane stayed, was gone, or showed no
+    /// conversation Hide knows.
+    None,
+}
+
 /// `hide agent show`: the registration and what its agent is doing now.
 #[derive(Serialize, JsonSchema)]
 pub struct AgentShow {
@@ -355,6 +393,7 @@ pub fn answer_schemas() -> Value {
     let mut schemas = json!({
         "agent": schemars::schema_for!(AgentView),
         "agent_show": schemars::schema_for!(AgentShow),
+        "agent_end": schemars::schema_for!(AgentEnd),
         "spawn_show": schemars::schema_for!(SpawnShow),
         "agent_list": schemars::schema_for!(AgentList),
         "agent_register_check": schemars::schema_for!(RegisterCheck),

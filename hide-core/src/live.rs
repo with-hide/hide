@@ -523,9 +523,11 @@ pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> C
 }
 
 /// `node` runs the pane (`agent_start::start_at_shell_checked`); none
-/// when it cannot be reached. A start whose shell had not finished starting
-/// is refused as `agent_start::SHELL_STARTING` with the screen's last line,
-/// so the spawn that asked can say what the shell waits for.
+/// when it cannot be reached. The pane's shell gets `shell_wait`, at most
+/// `agent_start::SHELL_WAIT`, to finish starting; one that had not (stopped
+/// at a question, not at its prompt, or not reading its line yet) is refused
+/// as `agent_start::SHELL_STARTING` with the screen's last line when there
+/// is one, so the spawn that asked can say what the shell waits for.
 #[allow(clippy::too_many_arguments)] // the start identity and the pane's node
 pub(crate) fn start_agent(
     engine: &dyn Engine,
@@ -533,6 +535,7 @@ pub(crate) fn start_agent(
     request_id: &str,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
+    shell_wait: Duration,
     name: &str,
     kind: &str,
     args: Vec<String>,
@@ -545,6 +548,7 @@ pub(crate) fn start_agent(
         request_id,
         pane_id,
         shell,
+        shell_wait,
         name,
         kind,
         args,
@@ -557,6 +561,12 @@ pub(crate) fn start_agent(
             crate::agent_start::SHELL_STARTING,
             screen.as_deref().unwrap_or_default(),
         ),
+        crate::agent_start::StartError::NotStarted { reason, .. }
+            if reason == "agent_start.shell_no_prompt"
+                || reason == "agent_start.shell_not_reading" =>
+        {
+            crate::coordination::refusal(crate::agent_start::SHELL_STARTING, "")
+        }
         // The engine refused the pane as busy until the start's deadline: nothing
         // was typed, and the same intent asks again in the same pane.
         crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
@@ -578,6 +588,7 @@ pub(crate) fn start_agent_checked(
     request_id: &str,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
+    shell_wait: Duration,
     name: &str,
     kind: &str,
     args: Vec<String>,
@@ -599,13 +610,14 @@ pub(crate) fn start_agent_checked(
             reason: "agent_start.failed".into(),
             detail,
         })?;
-    match crate::agent_start::start_at_shell_checked(
+    match crate::agent_start::start_at_shell_within(
         engine,
         node,
         request_id,
         shell,
         &start,
         Duration::from_secs(5),
+        shell_wait,
         check,
     ) {
         Ok(started) => Ok(started.pane_id),
