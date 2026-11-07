@@ -578,12 +578,6 @@ pub(crate) fn start_agent(
             crate::agent_start::SHELL_STARTING,
             screen.as_deref().unwrap_or_default(),
         ),
-        crate::agent_start::StartError::NotStarted { reason, .. }
-            if reason == "agent_start.shell_no_prompt"
-                || reason == "agent_start.shell_not_reading" =>
-        {
-            crate::coordination::refusal(crate::agent_start::SHELL_STARTING, "")
-        }
         // The engine refused the pane as busy until the start's deadline: nothing
         // was typed, and the same intent asks again in the same pane.
         crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })

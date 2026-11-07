@@ -634,26 +634,10 @@ impl Shell<'_> {
                     "line_limit": held,
                     "prompt_unmarked": matches!(waiting, Waiting::Prompt),
                 }));
-                if matches!(waiting, Waiting::Prompt) {
-                    return Err(StartError::ShellStarting(self.last_screen_line()));
-                }
-                return Err(match held {
-                    Some(limit) => StartError::NotStarted {
-                        reason: "agent_start.shell_not_reading".into(),
-                        detail: format!(
-                            "The pane's shell did not start reading its command line within {} s, so the agent was not started: until it does, its terminal keeps only {limit} bytes of a typed line, and this start's line is up to {} bytes. Check what the shell's startup files wait on, then retry.",
-                            (deadline - started).as_secs(),
-                            self.line,
-                        ),
-                    },
-                    None => StartError::NotStarted {
-                        reason: "agent_start.shell_no_prompt".into(),
-                        detail: format!(
-                            "The pane's shell did not reach its prompt within {} s, so the agent was not started.",
-                            (deadline - started).as_secs()
-                        ),
-                    },
-                });
+                // Whichever of the three it waited on (its first prompt, the
+                // terminal, a line editor that would cut the line), the shell
+                // had not finished starting; the diagnostic above keeps which.
+                return Err(StartError::ShellStarting(self.last_screen_line()));
             }
             thread::sleep(POLL_INTERVAL);
         }
@@ -1152,15 +1136,17 @@ mod tests {
     fn a_shell_that_never_reaches_its_prompt_types_nothing_and_says_so() {
         let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(4200, &[4200]),
+            "read_pane" => reply(PaneText {
+                text: "Last login: today\n".into(),
+                truncated: false,
+            }),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::NotStarted { reason, detail }) =
-            start(&fake, Duration::from_millis(300))
+        let Err(StartError::ShellStarting(screen)) = start(&fake, Duration::from_millis(300))
         else {
             panic!("a shell that never holds the terminal is not a start");
         };
-        assert_eq!(reason, "agent_start.shell_no_prompt");
-        assert!(detail.contains("did not reach its prompt"), "{detail}");
+        assert_eq!(screen.as_deref(), Some("Last login: today"));
         assert!(!fake.methods().contains(&"start_agent"));
     }
 
@@ -1343,6 +1329,10 @@ mod tests {
     fn shell_alone(_name: &str) -> Fake {
         FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
+            "read_pane" => reply(PaneText {
+                text: String::new(),
+                truncated: false,
+            }),
             "start_agent" => started(),
             other => panic!("unexpected {other}"),
         })
@@ -1427,13 +1417,18 @@ mod tests {
     fn a_terminal_that_never_leaves_line_mode_gets_nothing_typed() {
         let fake = shell_alone("agent-start-canonical");
         let terminal = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
-        let Err(StartError::NotStarted { reason, detail }) =
+        let (refused, records) = crate::diagnostics::capture(|| {
             start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_millis(300))
-        else {
+        });
+        let Err(StartError::ShellStarting(_)) = refused else {
             panic!("a line the terminal would cut is not typed");
         };
-        assert_eq!(reason, "agent_start.shell_not_reading");
-        assert!(detail.contains("1024 bytes"), "{detail}");
+        assert!(
+            records.iter().any(
+                |record| record["kind"] == "shell_wait.timeout" && record["line_limit"] == 1024
+            ),
+            "{records:?}"
+        );
         assert_eq!(typed(&fake), 0);
     }
 

@@ -61,8 +61,6 @@ const KEYS = new Map<string, MessageKey>([
   ["agent_start.not_installed", "coreError.agent.notInstalled"],
   ["agent_start.install_check_failed", "coreError.agent.installUnchecked"],
   ["agent_start.shell_starting", "coreError.agent.shellStarting"],
-  ["agent_start.shell_not_reading", "coreError.agent.shellNotReading"],
-  ["agent_start.shell_no_prompt", "coreError.agent.shellNoPrompt"],
   ["agent_start.shell_unreadable", "coreError.agent.shellUnreadable"],
   ["agent_start.line_unchecked", "coreError.agent.lineUnchecked"],
   ["agent_start.refused_by_herdr", "coreError.agent.refusedByHerdr"],
