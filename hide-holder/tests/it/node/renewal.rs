@@ -185,8 +185,12 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
     next.linked
         .input(PANE, PaneInput::Bytes(titled.to_vec()))
         .unwrap();
+    // An elevated cmd puts "Administrator: " before the title it is given.
     told.wait(PANE, "the renewed holder's title", |facts| {
-        facts.title.as_deref() == Some("renewed")
+        facts
+            .title
+            .as_deref()
+            .is_some_and(|title| title.ends_with("renewed"))
     });
 
     // Asked again, a pane on this build is left as it runs.
@@ -466,10 +470,15 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
         }
     }
     let _resume = Resume(pid);
-    // More than the holder's connection buffers: the writer stops on it.
-    for _ in 0..4 {
+    // The node's whole unwritten input cap, none of it refused: more than
+    // the holder's connection takes on every system (about 200 KiB on Linux,
+    // 8 KiB on macOS), so the writer stops on it with bytes left, and the
+    // renewal's barrier, which a backlog past the cap would refuse at once,
+    // waits behind them.
+    let piece = hide_node_link::terminal::MAX_UNSENT_KEY_BYTES / 8;
+    for _ in 0..8 {
         next.service
-            .key(KeyTarget::Pane(PANE.to_owned()), vec![b' '; 32 * 1024], 0);
+            .key(KeyTarget::Pane(PANE.to_owned()), vec![b' '; piece], 0);
     }
     thread::scope(|scope| {
         // The holder is stopped, so the input can never be written: it is
