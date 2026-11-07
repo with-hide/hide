@@ -21,7 +21,7 @@ pub(crate) mod store;
 pub(crate) mod worker;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// The store key of a device's or linked node's records, which stay in
 /// memory (`store`).

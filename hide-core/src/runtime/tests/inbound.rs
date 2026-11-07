@@ -28,6 +28,7 @@ fn dialed_link(runtime: &mut Runtime, device: &str, host: Arc<dyn crate::node_ac
                 label: device.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: "fixture-host".to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });
@@ -144,7 +145,7 @@ fn the_core_row_names_its_machine_and_only_a_node_row_dials_in() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()
@@ -202,7 +203,7 @@ fn a_link_is_refused_for_this_machine_a_dialed_device_or_a_live_node() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()
@@ -361,7 +362,7 @@ fn only_a_connected_node_that_dialed_in_is_a_linked_machine() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()
@@ -505,7 +506,7 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
     let event = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": {"id": "studio", "label": "studio", "ssh_alias": "studio-host"},
+        "payload": {"label": "studio", "ssh_alias": "studio"},
     });
     shared
         .lock()
@@ -831,13 +832,14 @@ fn a_linked_node_s_sessions_are_read_through_its_link() {
                     .unwrap()
                     .origin = crate::model::LinkOrigin::Dialed {
                     ssh_alias: "fixture-host".to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 };
             }
             let mut reported = session(vec![engine_workspace(NODE, "w1", &path, &[("t1", &path)])]);
             reported.focused_workspace_id = Some(format!("remote:{NODE}:workspace:w1"));
             reported.focused_checkout_id = Some(format!("remote:{NODE}:checkout:w1"));
             runtime.ingest_remote_session(NODE, Ok(reported));
-            runtime.snapshot.navigator.focused_device_id = Some(NODE.to_owned());
+            runtime.set_front_device(Some(NODE.to_owned()));
         }
         let refresh = |payload: serde_json::Value| {
             let event = serde_json::json!({
@@ -950,7 +952,7 @@ fn a_node_s_checkout_in_front_is_the_node_s_not_this_machine_s() {
         .expect("the node's project is listed");
     assert_eq!(workspace.remote_target_id.as_deref(), Some(NODE));
     let checkout = workspace.checkouts[0].id.clone();
-    runtime.snapshot.navigator.focused_device_id = Some(NODE.to_owned());
+    runtime.set_front_device(Some(NODE.to_owned()));
     runtime.snapshot.navigator.focused_checkout_id = Some(checkout);
     assert!(runtime.focused_local_checkout().is_none());
 }
@@ -1006,6 +1008,7 @@ fn a_node_pane_s_hide_memory_reads_for_the_node_s_session() {
         crate::model::LinkOrigin::Inbound,
         crate::model::LinkOrigin::Dialed {
             ssh_alias: "fixture-host".to_owned(),
+            naming: crate::model::DeviceNaming::Named,
         },
     ] {
         runtime

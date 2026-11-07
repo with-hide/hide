@@ -65,10 +65,6 @@ impl Runtime {
                 .project_device
                 .as_ref()
                 .is_some_and(|id| id.is_empty() || id.len() > 256)
-            || payload
-                .project_path
-                .as_ref()
-                .is_some_and(|path| path.len() > 4096)
             || payload.project_form.as_ref().is_some_and(|form| {
                 !["", "add", "clone", "create"].contains(&form.view.as_str())
                     || [&form.url, &form.parent, &form.name]
@@ -98,9 +94,6 @@ impl Runtime {
         }
         if let Some(device) = payload.project_device {
             draft.project_device = Some(device);
-        }
-        if let Some(path) = payload.project_path {
-            draft.project_path = path;
         }
         if let Some(form) = payload.project_form {
             draft.project_form = form;
@@ -145,7 +138,6 @@ impl Runtime {
         if to == FirstRunStep::Done {
             let choices = &mut self.snapshot.ui_state.first_run_choices;
             choices.project_device = None;
-            choices.project_path.clear();
             choices.project_form = Default::default();
         }
         self.snapshot.ui_state.first_run = Some(FirstRun {

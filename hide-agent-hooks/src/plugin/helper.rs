@@ -341,13 +341,8 @@ fn confirm(home: &Path, input: Input, deadline: Instant) -> Value {
     if input.letters.is_empty() || !delivery::valid_letter_ids(&input.letters) {
         return json!({});
     }
-    let intake = Intake {
-        context: String::new(),
-        ids: input.letters,
-        plan_context: None,
-    };
-    match delivery::confirm(&intake, deadline) {
-        Ok(()) => json!({ "confirmed": intake.ids }),
+    match delivery::confirm(&input.letters, deadline) {
+        Ok(()) => json!({ "confirmed": input.letters }),
         Err(failure) => {
             delivery::diagnose_failure(home, &failure);
             json!({})

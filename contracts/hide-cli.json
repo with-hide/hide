@@ -1452,6 +1452,28 @@
                         }
                     ]
                 },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
                     "properties": {
@@ -1514,10 +1536,31 @@
                                 "null"
                             ]
                         },
+                        "bell_ended": {
+                            "default": null,
+                            "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
                         "bell_errors": {
                             "format": "uint8",
                             "minimum": 0.0,
                             "type": "integer"
+                        },
+                        "bell_failure": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/BellFailure"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                         },
                         "bell_line": {
                             "default": null,
@@ -1701,7 +1744,8 @@
                         "bell_typed_at_unix_ms",
                         "bell_route",
                         "input_noticed",
-                        "input_noticed_at_unix_ms"
+                        "input_noticed_at_unix_ms",
+                        "bell_ended"
                     ],
                     "type": "object"
                 },
@@ -1796,7 +1840,14 @@
                     "type": "array"
                 },
                 "letters": {
-                    "description": "The letters shown in full, grouped by sender, then the caller's own letters that went undelivered.",
+                    "description": "The letters shown in full, grouped by sender.",
+                    "items": {
+                        "$ref": "#/definitions/Letter"
+                    },
+                    "type": "array"
+                },
+                "returned": {
+                    "description": "The caller's own letters that went undelivered, returned to it: each names the recipient that did not get it, and `bell_failure` why its last bell failed when one did.",
                     "items": {
                         "$ref": "#/definitions/Letter"
                     },
@@ -1805,6 +1856,7 @@
             },
             "required": [
                 "letters",
+                "returned",
                 "folded"
             ],
             "title": "Inbox",
@@ -1887,6 +1939,28 @@
                             "type": "string"
                         }
                     ]
+                },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
                 },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
@@ -2000,10 +2074,31 @@
                         "null"
                     ]
                 },
+                "bell_ended": {
+                    "default": null,
+                    "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
                 "bell_errors": {
                     "format": "uint8",
                     "minimum": 0.0,
                     "type": "integer"
+                },
+                "bell_failure": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/BellFailure"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                 },
                 "bell_line": {
                     "default": null,
@@ -2187,7 +2282,8 @@
                 "bell_typed_at_unix_ms",
                 "bell_route",
                 "input_noticed",
-                "input_noticed_at_unix_ms"
+                "input_noticed_at_unix_ms",
+                "bell_ended"
             ],
             "title": "Letter",
             "type": "object"
@@ -5602,7 +5698,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e46f113c71be818f843285f41686784ca8b2ab6549626025cb67a87ed47f6443",
+    "digest": "sha256:83cd7672deda8629f95b3df1c2d3e3c7975ef7bdad46ff386ecc8962ac5adaa9",
     "envelopes": {
         "agent": {
             "answer": "value",

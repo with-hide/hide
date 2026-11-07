@@ -36,6 +36,13 @@ pub trait Attacher: Send + Sync {
     fn keeps_own_size(&self, _pane_id: &str) -> bool {
         false
     }
+
+    /// Whether a holder this node started or adopted runs the pane, or is
+    /// being started for it. Unlike [`Attacher::keeps_own_size`], never true
+    /// of a pane only because the holders are the node's one engine.
+    fn holds(&self, _pane_id: &str) -> bool {
+        false
+    }
 }
 
 /// Why a session could not be opened, and whether trying again can help.

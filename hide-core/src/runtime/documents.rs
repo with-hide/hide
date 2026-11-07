@@ -219,12 +219,7 @@ impl Runtime {
     /// it is the selected device, otherwise the core's explicit device/path
     /// choice. Engine focus supplies the initial choice only.
     pub(super) fn front_checkout(&self) -> Option<(&str, &str)> {
-        let device = self
-            .snapshot
-            .navigator
-            .focused_device_id
-            .as_deref()
-            .unwrap_or(self.node.as_str());
+        let device = self.look.front().unwrap_or(self.node.as_str());
         if device == self.node.as_str() {
             return self
                 .snapshot

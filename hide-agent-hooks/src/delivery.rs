@@ -20,6 +20,10 @@ use crate::hook_request::{Caller, HookCommand, PullPoint, Timing};
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const CONTEXT_LIMIT: usize = 8 * 1024;
 const CONFIRM_RESERVE: Duration = Duration::from_millis(400);
+/// How long a letter waits to be taken before the core ends it; named below
+/// the core so a confirmation a hook owes ([`crate::owed`]) is kept no longer
+/// than its letters can still be taken.
+pub const DELIVERY_EXPIRY_MS: u64 = 60 * 60 * 1_000;
 
 #[derive(Deserialize)]
 struct PromptInput {
@@ -193,6 +197,10 @@ pub struct Intake {
     /// be older than the core it asks.
     #[serde(default)]
     pub plan_context: Option<serde_json::Value>,
+    /// The native session the letters were pulled for, which a confirmation
+    /// that misses its hook is owed under ([`confirm_or_owe`]).
+    #[serde(skip)]
+    pub session: Option<String>,
 }
 
 #[derive(Debug)]
@@ -210,6 +218,30 @@ impl From<&'static str> for Failure {
     }
 }
 
+impl Failure {
+    /// Whether the core was not reached in time, so the same request may
+    /// still be taken later: the deadline passed, the `hide` beside the
+    /// helper did not start, no daemon or connection answered whole
+    /// ([`refusal_cause`]'s steps), or its store was not available. The
+    /// core's own refusal (`refused`, `capacity`, `identity`), an answer that
+    /// could not be read (`format`) and one that confirmed other letters
+    /// (`confirm`) would be the same again.
+    pub fn transient(&self) -> bool {
+        matches!(
+            self.code,
+            "deadline"
+                | "cli"
+                | "ledger"
+                | "unavailable"
+                | "record"
+                | "connect"
+                | "unsent"
+                | "timeout"
+                | "answer"
+        )
+    }
+}
+
 /// What the agent receives for the submitted prompt: the letter bodies when
 /// the core recognizes the prompt as the line its doorbell typed, otherwise
 /// at most a count.
@@ -224,7 +256,7 @@ pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failur
         },
         pull_deadline,
     )?;
-    let intake = intake(answer)?;
+    let intake = intake(answer, prompt.session.as_deref())?;
     Ok(intake.and_then(|intake| keep_plan(intake, prompt.session.as_deref())))
 }
 
@@ -289,11 +321,12 @@ fn pull_at_gap(
         },
         pull_deadline,
     )?;
-    intake(answer)
+    intake(answer, Some(session))
 }
 
-fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
-    let intake: Intake = serde_json::from_value(answer).map_err(|_| "format")?;
+fn intake(answer: serde_json::Value, session: Option<&str>) -> Result<Option<Intake>, Failure> {
+    let mut intake: Intake = serde_json::from_value(answer).map_err(|_| "format")?;
+    intake.session = session.map(str::to_owned);
     if intake.context.len() > CONTEXT_LIMIT || !valid_letter_ids(&intake.ids) {
         return Err("format".into());
     }
@@ -322,18 +355,55 @@ pub fn valid_letter_ids(ids: &[String]) -> bool {
         })
 }
 
-pub fn confirm(intake: &Intake, deadline: Instant) -> Result<(), Failure> {
+/// Confirms `intake`'s letters, which reached the agent, by `deadline`. One
+/// that did not reach the core in time ([`Failure::transient`]) is recorded
+/// and owed to the pane's next turn end of the same session ([`crate::owed`],
+/// [`settle_owed`]), which confirms it then; the core takes a confirmation
+/// that comes late. One the core refused would be refused again and is only
+/// recorded as a failure.
+pub fn confirm_or_owe(home: &Path, intake: &Intake, deadline: Instant) {
+    let Err(failure) = confirm(&intake.ids, deadline) else {
+        return;
+    };
+    diagnose_failure(home, &failure);
+    if !failure.transient() {
+        return;
+    }
+    let (Some(pane), Some(session)) = (crate::pane::from_env(), intake.session.as_deref()) else {
+        return;
+    };
+    let owed = crate::owed::owe(home, &pane, session, &intake.ids, crate::hook_log::now_ms());
+    if let Err(cause) = owed {
+        diagnose(home, cause);
+    }
+}
+
+/// At a turn end of the pane's own `session`, confirms what an earlier hook
+/// of the session owes, by `deadline` ([`crate::owed::settle`]).
+pub fn settle_owed(home: &Path, session: &str, deadline: Instant) {
+    let Some(pane) = crate::pane::from_env() else {
+        return;
+    };
+    let settled = crate::owed::settle(home, &pane, session, crate::hook_log::now_ms(), |ids| {
+        confirm(ids, deadline)
+    });
+    if let Err(failure) = settled {
+        diagnose_failure(home, &failure);
+    }
+}
+
+pub fn confirm(ids: &[String], deadline: Instant) -> Result<(), Failure> {
     let mut arguments = vec!["inbox", "--confirm"];
-    arguments.extend(intake.ids.iter().map(String::as_str));
+    arguments.extend(ids.iter().map(String::as_str));
     let answer = run_cli(&arguments, deadline)?;
     let confirmed = answer
         .get("confirmed")
         .and_then(serde_json::Value::as_array)
         .ok_or("confirm")?;
-    if confirmed.len() != intake.ids.len()
+    if confirmed.len() != ids.len()
         || !confirmed
             .iter()
-            .zip(&intake.ids)
+            .zip(ids)
             .all(|(actual, expected)| actual.as_str() == Some(expected))
     {
         return Err("confirm".into());
@@ -516,8 +586,9 @@ pub struct Stages {
 /// guardrails' three (`guardrails`: the policy file could not be read;
 /// `guardrails_words`: a shell call named more words than are checked;
 /// `guardrails_failed`: the hook failed or ran out of time before it judged a
-/// call).
-const CAUSES: [&str; 28] = [
+/// call), the plan record's two, and an owed confirmation's two
+/// (`crate::owed`: its record could not be written, or too many panes owe).
+const CAUSES: [&str; 30] = [
     "session_conflict",
     "cli",
     "deadline",
@@ -546,6 +617,8 @@ const CAUSES: [&str; 28] = [
     "guardrails_failed",
     "plan_record",
     "plan_context_format",
+    "owed_record",
+    "owed_capacity",
 ];
 
 /// Fixed causes ([`CAUSES`]), private storage and a nonblocking cross-process lock.
@@ -671,7 +744,7 @@ mod tests {
             "ids": ["letter-1"],
             "plan_context": {"plan": null, "mission": null, "conductor": null, "later": 1},
         });
-        let intake = intake(answer).unwrap().unwrap();
+        let intake = intake(answer, None).unwrap().unwrap();
         assert_eq!(
             (intake.context.as_str(), intake.ids.as_slice()),
             ("letter body", &["letter-1".to_owned()][..])

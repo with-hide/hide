@@ -38,7 +38,7 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
   const run = isolate(local, "ssh-browser");
   run.env.HIDE_HOST_HELPER_ROOT = path.join(run.root, "remote-helper");
   run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "remote-bin");
-  writeSshConfig(run.env.HOME!, ["isolated-workspace"]);
+  writeSshConfig(run.env.HOME!, { "isolated-workspace": "ssh-browser" });
   const deviceAccount = deviceHome();
   const bridge = deviceBridges(deviceAccount);
   proveDeviceHome(run.env, "isolated-workspace", deviceAccount);
@@ -66,7 +66,7 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
         ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2 }));
         ws.onmessage = () => {
           ws.send(JSON.stringify({ schema_version: 2, kind: "register_device", payload: {
-            id: "ssh-browser", label: "SSH browser fixture", ssh_alias: "isolated-workspace", host_consent: true,
+            label: "SSH browser fixture", ssh_alias: "isolated-workspace", host_consent: true,
           } }));
           clearTimeout(timer); ws.close(); resolve();
         };

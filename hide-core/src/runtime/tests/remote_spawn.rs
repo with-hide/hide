@@ -319,6 +319,7 @@ fn spawner() -> Spawner {
                     label: id.to_owned(),
                     origin: crate::model::LinkOrigin::Dialed {
                         ssh_alias: id.to_owned(),
+                        naming: crate::model::DeviceNaming::Named,
                     },
                     host_consent: None,
                 });
@@ -533,13 +534,18 @@ impl Spawner {
 
 /// A spawn asked as the Desk process asks it and run as hided runs it.
 fn desk_ask(spawner: &Spawner, intent: &str) -> Result<Value, String> {
+    desk_ask_on(spawner, intent, DEVICE)
+}
+
+/// `desk_ask` with `--machine <machine>`.
+fn desk_ask_on(spawner: &Spawner, intent: &str, machine: &str) -> Result<Value, String> {
     let command = crate::delivery::Command::Agents {
         command: Command::Spawn {
             mission: None,
             plan_node: None,
             plan: None,
             parent: None,
-            machine: Some(DEVICE.into()),
+            machine: Some(machine.into()),
             // The device's engine names its one agent `worker`.
             name: "worker".into(),
             intent: intent.into(),
@@ -622,6 +628,35 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
         .map(|job| (job.state, job.queue_position));
     assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
     drop(runtime);
+    assert_eq!(spawner.count("start_agent"), 1);
+}
+
+/// `--machine` may name a dialed device by the SSH alias it was added with,
+/// as before its id became its machine's: the spawn starts on that device
+/// and records the device's id.
+#[test]
+fn a_spawn_naming_a_device_by_its_alias_starts_on_that_device() {
+    let spawner = spawner();
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.install_delivery_client(spawner.client.clone());
+        runtime.open_test_desk(1);
+        let registration = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == DEVICE)
+            .unwrap();
+        registration.origin = crate::model::LinkOrigin::Dialed {
+            ssh_alias: "mini-ssh".to_owned(),
+            naming: crate::model::DeviceNaming::Named,
+        };
+    }
+
+    let started = desk_ask_on(&spawner, "first", "mini-ssh").unwrap();
+    assert_eq!(started["machine"], DEVICE);
+    assert_eq!(spawner.ledger().spawns[0].machine.as_deref(), Some(DEVICE));
     assert_eq!(spawner.count("start_agent"), 1);
 }
 

@@ -94,9 +94,10 @@ test("the Search row and the Overview row under the device, with no Home row, an
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
 
     // B5: a browser tab has no folder picker and no chord for Add project (Chrome keeps ⇧⌘N), so the row
-    // under Overview carries no keycap and the desktop chord opens nothing; the row opens the dialog with
-    // this machine's `~/` path field in place of Browse folder, and a typed `~/` folder, read against
-    // the daemon's home, registers the project (the desktop app's picker: desktop/e2e/add-project.spec.ts).
+    // under Overview carries no keycap and the desktop chord opens nothing; Browse folder opens the
+    // dialog's own folder list of this machine (PRD device-add-project D-02), read by the daemon's node
+    // from its home, and a typed `~/` folder registers the project (the desktop app's picker:
+    // desktop/e2e/add-project.spec.ts).
     const addProject = page.locator("[data-sidebar-new-workspace]");
     await expect(addProject).toBeVisible();
     await expect(addProject.locator("kbd")).toHaveCount(0);
@@ -106,20 +107,20 @@ test("the Search row and the Overview row under the device, with no Home row, an
     await addProject.click();
     const dialog = page.locator("[data-add-project]");
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator("[data-add-project-browse]")).toHaveCount(0);
-    const field = dialog.locator("[data-add-project-path]");
+    await expect(dialog.locator("[data-add-project-browse]")).toHaveAttribute("data-add-project-browse", "list");
+    await dialog.locator("[data-add-project-browse]").click();
+    const field = dialog.locator("[data-folder-browser-field]");
     await expect(field).toBeFocused();
+    await expect(dialog.locator('[data-folder-row="projects"]')).toBeVisible();
     await screenshot(page, "sidebar-shell-add-project-browser");
     await field.fill("~/projects/typed-project");
+    await expect(dialog.locator("[data-folder-browser-target]")).toHaveAttribute("data-folder-browser-target", path.join(daemon.home, "projects", "typed-project"));
     await field.press("Enter");
     await expect(page.locator("[data-project]", { hasText: "typed-project" })).toBeVisible({ timeout: 20_000 });
-    // The same folder typed again is answered by the core as already a project; the shell cannot match
-    // `~/` against the stored absolute path itself.
+    // Opening again starts where the list last was, and the folder now reads as already a project.
     await addProject.click();
-    await field.fill("~/projects/typed-project/");
-    await field.press("Enter");
-    await expect(dialog.locator('[data-registration-reason="already_registered"]')).toBeVisible();
-    await expect(dialog.locator("[data-registration-pending]")).toHaveCount(0);
+    await dialog.locator("[data-add-project-browse]").click();
+    await expect(dialog.locator('[data-folder-row="typed-project"]')).toHaveAttribute("data-folder-row-added", "true");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
 

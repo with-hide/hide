@@ -348,9 +348,12 @@ pub struct RegisterCheck {
 /// them (`docs/delivery.md`, One bundle per handover).
 #[derive(Serialize, JsonSchema)]
 pub struct Inbox {
-    /// The letters shown in full, grouped by sender, then the caller's own
-    /// letters that went undelivered.
+    /// The letters shown in full, grouped by sender.
     pub letters: Vec<Letter>,
+    /// The caller's own letters that went undelivered, returned to it: each
+    /// names the recipient that did not get it, and `bell_failure` why its
+    /// last bell failed when one did.
+    pub returned: Vec<Letter>,
     /// Per sender, the older letters the bundle folded, oldest first; each
     /// opens with `hide request show <id>`.
     pub folded: Vec<Folded>,
@@ -418,7 +421,7 @@ pub fn answer_schemas() -> Value {
 
 /// The fields an answer leaves out when they have no value
 /// (`skip_serializing_if`).
-const OMITTED: &[&str] = &["ack_command", "names"];
+const OMITTED: &[&str] = &["ack_command", "bell_failure", "names"];
 
 /// Marks every property of every object schema in `schema` required, but
 /// those in `OMITTED`.

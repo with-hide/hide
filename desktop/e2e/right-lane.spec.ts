@@ -470,7 +470,7 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     run = isolate(local, "remote-lane");
     run.env.HIDE_HOST_HELPER_ROOT = path.join(run.root, "device-helper");
     run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "device-bin");
-    writeSshConfig(run.env.HOME!, ["isolated-lane"]);
+    writeSshConfig(run.env.HOME!, { "isolated-lane": "lane-ssh" });
     remoteHome = deviceHome();
     proveDeviceHome(run.env, "isolated-lane", remoteHome);
     resetDeviceHome(remoteHome);
@@ -492,7 +492,7 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     await enterWorkspace(page, "fixture");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };
     await sendEvent(page, { origin: new URL(page.url()).origin, token: state.token }, "register_device", {
-      id: "lane-ssh", label: "SSH lane", ssh_alias: "isolated-lane", host_consent: true,
+      label: "SSH lane", ssh_alias: "isolated-lane", host_consent: true,
     });
     const rail = (device: string) => page.locator(`[data-rail-tile="${device}"]`);
     await expect(rail("lane-ssh")).toHaveAttribute("data-rail-connected", "true", { timeout: 120_000 });

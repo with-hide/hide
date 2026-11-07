@@ -328,6 +328,13 @@ impl Runtime {
     }
 
     fn connect_machine_profile_row(&mut self, profile_id: &str, consent: bool) -> bool {
+        let (changed, read) = self
+            .change_look(|runtime| runtime.connect_machine_profile_row_steps(profile_id, consent));
+        changed || read
+    }
+
+    /// The steps of `connect_machine_profile_row`, which runs them as one selection (`look.rs`).
+    fn connect_machine_profile_row_steps(&mut self, profile_id: &str, consent: bool) -> bool {
         let Some(index) = self
             .snapshot
             .status
@@ -406,16 +413,7 @@ impl Runtime {
             // A Host registers as Add device registers it (B50): the alias
             // and its name, the default server, and the press's consent.
             (None, None) => {
-                let existing: Vec<&str> = self
-                    .snapshot
-                    .ui_state
-                    .device_registrations
-                    .iter()
-                    .map(|r| r.id.as_str())
-                    .collect();
-                let id = super::devices::device_id_for_alias(&profile.target, &existing);
                 match self.register_device(super::events::RegisterDevicePayload {
-                    id,
                     label: profile.label.clone(),
                     ssh_alias: profile.target.clone(),
                     wsl_distro: None,

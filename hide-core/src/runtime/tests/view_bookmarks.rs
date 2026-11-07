@@ -1021,7 +1021,7 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
         Weak::new(),
         ChangeNotifier::noop(),
     ));
-    runtime.snapshot.navigator.focused_device_id = Some(device.to_owned());
+    runtime.set_front_device(Some(device.to_owned()));
     runtime
         .reconcile_agent_topology(&key, &[(tabs[0].clone(), false), (tabs[1].clone(), false)])
         .unwrap();

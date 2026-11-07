@@ -22,7 +22,6 @@ const KEYS = new Map<string, MessageKey>([
   ["workspace.create_refused.outside_root", "coreError.project.outsideRoot"],
   ["workspace.create_refused.project_holds_home", "addProject.refusal.projectHoldsHome"],
   ["workspace.pin_refused.needs_confirmation", "coreError.project.pinNeedsConfirmation"],
-  ["workspace.create_local_only", "coreError.project.localOnly"],
   ["workspace.create_unconfirmed", "coreError.project.addUnconfirmed"],
   ["workspace.create_unavailable", "coreError.deviceNotConnected"],
   ["workspace.create_in_flight", "coreError.project.addInFlight"],
@@ -36,6 +35,7 @@ const KEYS = new Map<string, MessageKey>([
   ["agent_permission.invalid_options", "agents.permission.invalidOptions"],
 
   ["repository.clone_busy", "coreError.clone.busy"],
+  ["repository.clone_unavailable", "coreError.clone.unavailable"],
   ["repository.clone_invalid", "coreError.clone.invalid"],
 
   ["task_operation.busy", "coreError.start.busy"],
@@ -187,6 +187,7 @@ const CLONE_FAILURES = new Map<string, MessageKey>([
   ["unreachable_host", "coreError.clone.failure.unreachable_host"],
   ["stalled", "coreError.clone.failure.stalled"],
   ["target_exists", "coreError.clone.failure.target_exists"],
+  ["moved", "coreError.clone.failure.moved"],
   ["io", "coreError.clone.failure.io"],
 ]);
 

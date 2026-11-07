@@ -1,34 +1,34 @@
-// Add a project: a Host selector and, on the machine this window runs on,
-// Browse folder, which opens the system's own folder picker through the
-// desktop app; any other machine's folders are not this window's to browse,
-// so it gets a `~/` path field its own node judges. A browser tab has no
-// picker, so its own machine gets that field too. The other ways to add
-// (Clone from URL, Create new project), each its own view of this dialog, sit
-// on the core's machine, the one a new project is made on (`hostWays`). Every
-// way sends one `create_workspace` and reads its answer through
-// `useRegistration`; a folder outside home is asked about once and sent again
-// with the operator's confirmation of that path (PRD wsl-device B15).
+// Add a project: a Host selector and one start view the same on every
+// machine (PRD device-add-project D-01): Browse folder, Clone from URL and
+// Create new project, each line naming the machine. Browse folder opens the
+// system's own folder window on the machine this window runs on when the
+// desktop app can open one, and the dialog's own folder list anywhere else
+// (`hostWays`, `FolderBrowser`); Clone and Create run on the chosen machine
+// and pick their parent with the same two. Every way sends one
+// `create_workspace` and reads its answer through `useRegistration`; a folder
+// outside home is asked about once and sent again with the operator's
+// confirmation of that path (PRD wsl-device B15).
 
 import { CornerDownLeftIcon, FolderOpenIcon, FolderPlusIcon, LinkIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
-import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost, trimFolder, wslDrivePath } from "./addProject";
+import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost, rememberedFolder, trimFolder } from "./addProject";
 import { CloneFromUrl, cloneRunning } from "./CloneFromUrl";
 import { CreateProjectView } from "./CreateProjectView";
-import { Button } from "./components/ui/button";
+import { FolderBrowser } from "./FolderBrowser";
+import { ImportableProjects } from "./ImportableProjects";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
-import { Input } from "./components/ui/input";
 import { Kbd } from "./components/ui/kbd";
+import { RowButton } from "./components/ui/row-button";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./components/ui/select";
 import { RegistrationStatus, useRegistration } from "./registration";
 import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
-import type { FirstRunProjectForm, WorkspaceRegistration } from "./snapshot";
+import { localDeviceId, type FirstRunProjectForm, type WorkspaceRegistration } from "./snapshot";
 import { hostBridge } from "./host";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import { composingKey } from "./keys";
 
 const NO_REGISTRATIONS: WorkspaceRegistration[] = [];
 
@@ -56,7 +56,7 @@ function AddProject({ actions }: { actions: Actions }) {
   );
 }
 
-/** The other ways to add on the core's machine, each a view of this dialog. */
+/** The other ways to add, each a view of this dialog; their lines name the chosen machine. */
 type OtherWay = { id: "clone" | "create"; label: MessageKey; detail: MessageKey; icon: LucideIcon };
 
 const OTHER_WAYS: readonly OtherWay[] = [
@@ -67,12 +67,16 @@ const OTHER_WAYS: readonly OtherWay[] = [
 /** The Host list's last entry; it opens Add device instead of choosing a host. */
 const ADD_DEVICE = "__add_device__";
 
+/** The folder list over the dialog: adding a folder, or picking the parent of a clone or a new project. */
+type Browsing = { mode: "add" } | { mode: "pick"; for: OtherWay["id"] };
+
 /**
  * The ways to add a project, inside a dialog that holds them: Add a project's
- * own, or the first-run wizard's third step (PRD first-run-onboarding B22),
- * which titles it and watches the project appear itself. `onLeave` closes
- * the holder when Add device takes its place; a holder without one (the
- * wizard, which keeps its steps) has no Add device entry.
+ * own, or the first-run wizard's third step (PRD first-run-onboarding B22,
+ * device-add-project D-16), which titles it and watches the project appear
+ * itself. `onLeave` closes the holder when Add device takes its place; a
+ * holder without one (the wizard, which keeps its steps) has no Add device
+ * entry.
  */
 export function AddProjectViews({
   actions,
@@ -87,35 +91,40 @@ export function AddProjectViews({
   onLeave?: () => void;
   /** The host the views add to, for the holder to name. */
   onHost?: (host: string) => void;
-  draft?: { device?: string | null; path?: string; form?: FirstRunProjectForm };
-  onDraft?: (draft: { project_device?: string; project_path?: string; project_form?: FirstRunProjectForm }) => void;
+  draft?: { device?: string | null; form?: FirstRunProjectForm };
+  onDraft?: (draft: { project_device?: string; project_form?: FirstRunProjectForm }) => void;
 }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const focused = useShellStore((s) => s.rest?.navigator?.focused_device_id);
-  const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations ?? NO_REGISTRATIONS);
+  const uiState = useShellStore((s) => s.rest?.ui_state);
+  const registrations = uiState?.workspace_registrations ?? NO_REGISTRATIONS;
   const hosts = addProjectHosts(devices, t);
-  const [chosen, setChosen] = useState(() => initialHost(hosts, draft?.device ?? focused));
+  // A clone still running when the dialog opens is shown where it started, on its machine.
+  const running = useShellStore.getState().rest?.repository_clone;
+  const [chosen, setChosen] = useState(() => (cloneRunning(running) && running?.device_id) || initialHost(hosts, draft?.device ?? focused));
   const host = hosts.find((row) => row.id === chosen) ?? hosts[0]!;
+  const device = devices?.find((row) => row.id === host.id);
   const ways = hostWays(host.id, devices, hostBridge() !== null);
+  const offline = host.offline;
   // Where a WSL device shows its PC's drives, as its helper reports it; null on any other machine.
-  const drives = devices?.find((row) => row.id === host.id)?.host?.windows_drives ?? null;
-  // A clone still running when the dialog opens is shown where it started.
-  const [view, setView] = useState<"add" | OtherWay["id"]>(() => (cloneRunning(useShellStore.getState().rest?.repository_clone) ? "clone" : draft?.form?.view || "add"));
+  const drives = device?.host?.windows_drives ?? null;
+  const windows = /^windows/i.test(device?.host?.platform ?? "") && !drives;
+  const node = localDeviceId(useShellStore.getState().rest);
+  const [view, setView] = useState<"add" | OtherWay["id"]>(() => (cloneRunning(running) ? "clone" : draft?.form?.view || "add"));
+  const [browsing, setBrowsing] = useState<Browsing | null>(null);
   const [form, setForm] = useState<FirstRunProjectForm>(draft?.form ?? {});
   const saveForm = (patch: FirstRunProjectForm) => {
     const next = { ...form, ...patch };
     setForm(next);
     onDraft?.({ project_form: next });
   };
-  const [text, setText] = useState(draft?.path || "~/");
   const registration = useRegistration(registrations);
   const { pending } = registration;
   const browseRef = useRef<HTMLButtonElement>(null);
-  const fieldRef = useRef<HTMLInputElement>(null);
   const hostChanged = useRef(false);
   // The way Back returns from, whose row takes the keyboard again.
-  const returnTo = useRef<OtherWay["id"] | null>(null);
+  const returnTo = useRef<OtherWay["id"] | "browse" | null>(null);
 
   const add = (path: string, confirmed = false) => {
     if (alreadyRegistered(path, host.id, registrations)) {
@@ -133,32 +142,71 @@ export function AddProjectViews({
   };
 
   const browse = async () => {
-    if (pending) return;
+    if (pending || offline) return;
+    if (!ways.native) {
+      registration.reset();
+      setBrowsing({ mode: "add" });
+      return;
+    }
     const folder = await actions.pickFolder();
     // A cancelled pick leaves the dialog as it was.
     if (folder !== null) add(trimFolder(folder));
   };
 
-  const submitField = () => {
-    const path = trimFolder(wslDrivePath(text, drives));
-    if (pending || !path || path === "~") return;
-    setText(path);
-    add(path);
+  /** A parent folder for Clone or Create: the system's folder window, or the dialog's own list on another machine. */
+  const pickParent = async (forWay: OtherWay["id"]): Promise<string | null> => {
+    if (!ways.native) {
+      setBrowsing({ mode: "pick", for: forWay });
+      return null;
+    }
+    const folder = await actions.pickFolder();
+    return folder === null ? null : trimFolder(folder);
   };
 
   useEffect(() => onHost?.(host.id), [onHost, host.id]);
-  // The keyboard starts on the primary control of the host in front.
+  // The keyboard starts on Browse folder, the primary row.
   useEffect(() => {
-    (ways.browse ? browseRef.current : fieldRef.current)?.focus();
+    browseRef.current?.focus();
     // Only on mount: a host chosen later moves the keyboard through the select's own close.
   }, []);
+
+  if (browsing) {
+    const leave = () => {
+      if (browsing.mode === "add") returnTo.current = "browse";
+      registration.reset();
+      setBrowsing(null);
+    };
+    return (
+      <FolderBrowser
+        actions={actions}
+        device={host.id}
+        deviceLabel={host.label}
+        local={ways.own}
+        drives={drives}
+        windows={windows}
+        mode={browsing.mode}
+        start={browsing.mode === "pick" ? form.parent || "~" : (rememberedFolder(uiState, host.id, node) ?? "~")}
+        remembered={rememberedFolder(uiState, host.id, node)}
+        registrations={registrations}
+        offline={offline}
+        busy={pending}
+        onAdd={(path) => add(path)}
+        onPick={(label) => {
+          saveForm({ parent: label });
+          setBrowsing(null);
+        }}
+        onBack={leave}
+        status={browsing.mode === "add" ? <RegistrationStatus registration={registration} drives={drives} onConfirm={(path) => add(path, true)} /> : null}
+      />
+    );
+  }
 
   return (
       <>
         {view === "create" ? (
-          <CreateProjectView actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} draft={form} onDraft={saveForm} />
+          <CreateProjectView actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("create")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : view === "clone" ? (
-          <CloneFromUrl actions={actions} registrations={registrations} pickParent={ways.pickParent} onBack={() => open("add")} draft={form} onDraft={saveForm} />
+          <CloneFromUrl actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("clone")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : (
           <>
             <DialogHeader>
@@ -187,16 +235,17 @@ export function AddProjectViews({
                   </SelectTrigger>
                   <SelectContent
                     onCloseAutoFocus={(event) => {
-                      // A new host hands the keyboard to its own primary control rather than back to the selector.
+                      // A new host hands the keyboard to Browse folder rather than back to the selector.
                       if (!hostChanged.current) return;
                       hostChanged.current = false;
                       event.preventDefault();
-                      (browseRef.current ?? fieldRef.current)?.focus();
+                      browseRef.current?.focus();
                     }}
                   >
                     {hosts.map((row) => (
-                      <SelectItem key={row.id} value={row.id} data-host-option={row.id}>
-                        {row.label}
+                      // A device that is not connected is listed dimmed and cannot be chosen (PRD device-add-project B31).
+                      <SelectItem key={row.id} value={row.id} disabled={row.offline} data-host-option={row.id} data-host-offline={row.offline || undefined}>
+                        {row.offline ? `${row.label} · ${t("addProject.hostOffline")}` : row.label}
                       </SelectItem>
                     ))}
                     {onLeave ? (
@@ -210,92 +259,67 @@ export function AddProjectViews({
                   </SelectContent>
                 </Select>
               </div>
-              {ways.browse ? (
-                <button
-                  ref={browseRef}
-                  type="button"
-                  disabled={pending}
-                  onClick={() => void browse()}
-                  data-add-project-browse="true"
-                  className="flex w-full items-center gap-md rounded-md border border-border bg-card px-md py-sm text-left outline-none transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
-                >
-                  <span aria-hidden="true" className="flex size-(--size-control) shrink-0 items-center justify-center rounded-sm bg-secondary text-foreground [&_svg]:size-(--size-icon)">
-                    <FolderOpenIcon />
+              <RowButton
+                ref={(row: HTMLButtonElement | null) => {
+                  browseRef.current = row;
+                  if (row && returnTo.current === "browse") {
+                    returnTo.current = null;
+                    row.focus();
+                  }
+                }}
+                disabled={pending || offline}
+                onClick={() => void browse()}
+                data-add-project-browse={ways.native ? "native" : "list"}
+                className="gap-md rounded-md border border-border bg-card px-md py-sm"
+              >
+                <WayIcon icon={FolderOpenIcon} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-subhead font-medium text-foreground">{t("addProject.browseTitle")}</span>
+                  <span className="text-body text-muted-foreground">
+                    {ways.native ? t("addProject.browseDetailNative", { host: host.label }) : t("addProject.browseDetail", { host: host.label })}
                   </span>
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="text-subhead font-medium text-foreground">{t("addProject.browseTitle")}</span>
-                    <span className="text-body text-muted-foreground">{t("addProject.browseDetail")}</span>
-                  </span>
-                  <Kbd aria-hidden="true">
-                    <CornerDownLeftIcon />
-                  </Kbd>
-                </button>
-              ) : (
-                <div className="flex flex-col gap-xs">
-                  <div className="flex items-center gap-sm">
-                    <Input
-                      ref={fieldRef}
-                      mono
-                      value={text}
-                      placeholder="~/…"
-                      aria-label={t("addProject.folderOn", { host: host.label })}
-                      data-add-project-path="true"
-                      onChange={(event) => { setText(event.target.value); onDraft?.({ project_path: event.target.value }); }}
-                      onPaste={(event) => {
-                        // A Windows path pasted on a WSL device is shown as that device's own path (PRD wsl-device B16).
-                        const pasted = event.clipboardData.getData("text");
-                        const spelled = wslDrivePath(pasted, drives);
-                        if (spelled === pasted) return;
-                        event.preventDefault();
-                        setText(spelled);
-                        onDraft?.({ project_path: spelled });
-                      }}
-                      onKeyDown={(event) => {
-                        if (composingKey(event) || event.key !== "Enter") return;
-                        event.preventDefault();
-                        submitField();
-                      }}
-                    />
-                    <Button variant="secondary" disabled={pending} onClick={submitField} data-add-project-submit="true">
-                      {t("common.add")}
-                    </Button>
-                  </div>
-                  <p className="text-body text-muted-foreground">{ways.own ? t("addProject.homeNoteOwn") : t("addProject.homeNote", { host: host.label })}</p>
-                </div>
-              )}
+                </span>
+                <Kbd aria-hidden="true">
+                  <CornerDownLeftIcon />
+                </Kbd>
+              </RowButton>
               <RegistrationStatus registration={registration} drives={drives} onConfirm={(path) => add(path, true)} />
-              {ways.otherWays ? (
-                <div className="flex flex-col gap-xs" data-add-project-other-ways="true">
-                  <span className="text-caption text-muted-foreground">{t("addProject.otherWays")}</span>
-                  {OTHER_WAYS.map((way) => (
-                    <button
-                      key={way.id}
-                      ref={(row) => {
-                        if (row && returnTo.current === way.id) {
-                          returnTo.current = null;
-                          row.focus();
-                        }
-                      }}
-                      type="button"
-                      disabled={pending}
-                      onClick={() => open(way.id)}
-                      data-add-project-way={way.id}
-                      className="flex w-full items-center gap-md rounded-md px-md py-sm text-left outline-none transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
-                    >
-                      <span aria-hidden="true" className="flex size-(--size-control) shrink-0 items-center justify-center rounded-sm bg-secondary text-foreground [&_svg]:size-(--size-icon)">
-                        <way.icon />
-                      </span>
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="text-subhead font-medium text-foreground">{t(way.label)}</span>
-                        <span className="text-body text-muted-foreground">{t(way.detail)}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
+              <div className="flex flex-col gap-xs" data-add-project-other-ways="true">
+                <span className="text-caption text-muted-foreground">{t("addProject.otherWays")}</span>
+                {OTHER_WAYS.map((way) => (
+                  <RowButton
+                    key={way.id}
+                    ref={(row: HTMLButtonElement | null) => {
+                      if (row && returnTo.current === way.id) {
+                        returnTo.current = null;
+                        row.focus();
+                      }
+                    }}
+                    disabled={pending || offline}
+                    onClick={() => open(way.id)}
+                    data-add-project-way={way.id}
+                    className="gap-md rounded-md px-md py-sm"
+                  >
+                    <WayIcon icon={way.icon} />
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="text-subhead font-medium text-foreground">{t(way.label)}</span>
+                      <span className="text-body text-muted-foreground">{t(way.detail, { host: host.label })}</span>
+                    </span>
+                  </RowButton>
+                ))}
+              </div>
+              <ImportableProjects actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} offline={offline} busy={pending} />
             </DialogBody>
           </>
         )}
       </>
+  );
+}
+
+function WayIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return (
+    <span aria-hidden="true" className="flex size-(--size-control) shrink-0 items-center justify-center rounded-sm bg-secondary text-foreground [&_svg]:size-(--size-icon)">
+      <Icon />
+    </span>
   );
 }
