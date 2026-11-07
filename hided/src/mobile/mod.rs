@@ -2213,7 +2213,6 @@ fn judge_pass(
 mod tests {
     use super::*;
     use crate::desktop_notices::DesktopNotices;
-
     use hide_core::agent_state::phone::project;
 
     /// Two changes that arrive before a pass starts are one pass, a pass that

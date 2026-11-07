@@ -15,6 +15,11 @@ pub const DNS: &str = "mac.tailnet-name.ts.net";
 /// only removals, and `apply-then-fail` applies an add and then fails it
 /// (a `serve --bg` that timed out after it took); with `funnel` a removal
 /// leaves the Funnel flag in place; every call is appended to `calls.log`.
+/// `hold-status` keeps `status` from answering while the file exists (at most
+/// 20 s, so a test that panics leaves no script waiting), and `hold-pipes`
+/// makes `status` leave a process behind that keeps its output open, as a
+/// child another thread started in the middle of the command's start does on
+/// macOS.
 /// Like the macOS app's executable, it acts as the CLI only when told to with
 /// `TAILSCALE_BE_CLI=1`; otherwise it refuses, where the real one starts the
 /// app and never answers. It looks at that variable alone, so a terminal the
@@ -42,7 +47,10 @@ S='{state}'
 if [ "$TAILSCALE_BE_CLI" != 1 ]; then echo "started as the Tailscale app, not the CLI" >&2; exit 3; fi
 echo "$*" >> "$S/calls.log"
 case "$1" in
-  status) cat "$S/status.json" ;;
+  status)
+    n=0; while [ -e "$S/hold-status" ] && [ "$n" -lt 400 ]; do sleep 0.05; n=$((n+1)); done
+    if [ -e "$S/hold-pipes" ]; then sleep 20 & fi
+    cat "$S/status.json" ;;
   serve)
     shift
     if [ "$1" = status ]; then cat "$S/serve.json" 2>/dev/null || echo '{{}}'; exit 0; fi
@@ -109,6 +117,42 @@ esac
             .pointer(&format!("/Web/{}:443/Handlers/~1/Proxy", self.dns))
             .and_then(Value::as_str)
             .map(str::to_owned)
+    }
+
+    /// From now on `status` waits until `release_status`.
+    pub fn hold_status(&self) {
+        std::fs::write(self.state.join("hold-status"), "").unwrap();
+    }
+
+    pub fn release_status(&self) {
+        std::fs::remove_file(self.state.join("hold-status")).unwrap();
+    }
+
+    /// From now on `status` leaves a process holding the command's output
+    /// open for 20 s after it has answered and exited.
+    pub fn hold_pipes(&self) {
+        std::fs::write(self.state.join("hold-pipes"), "").unwrap();
+    }
+
+    /// How many times `tailscale status --json` has been run.
+    pub fn status_runs(&self) -> usize {
+        self.calls()
+            .lines()
+            .filter(|line| *line == "status --json")
+            .count()
+    }
+
+    /// Returns once `status` has been run `count` times.
+    pub async fn wait_for_status_runs(&self, count: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while self.status_runs() < count {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "tailscale status was run {} times, not {count}",
+                self.status_runs()
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     /// Switch-off shows `off` at once and removes the entry right after it.

@@ -201,15 +201,79 @@ async fn the_app_executable_is_run_as_the_cli() {
     let dir = tempfile::tempdir().unwrap();
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
-    // The test is about how the command is started, not about the product's
-    // 15 s command deadline, which a loaded machine has run past while a
-    // shell script started (with-hide/hide-private#524); a hung start is
-    // ended by nextest's slow-timeout instead.
-    let status = hided::mobile::tailscale::status_within(&fake.bin, Duration::from_secs(600))
+    let status = hided::mobile::tailscale::status(&fake.bin)
         .await
         .expect("tailscale status runs as the CLI");
     assert!(status.logged_in);
     assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// A command's answer is read when it has exited, not when its output closes:
+/// a process left holding the output open must not keep the answer to the
+/// 15 s command deadline. On macOS a child another thread starts while the
+/// command's pipes are being made keeps them for as long as it lives, and a
+/// command that exited in milliseconds then timed out (with-hide/hide-private
+/// #524). `hide-platform`'s `a_pipe_holder_outside_the_tree_does_not_hold_the_answer`
+/// owns the holder outside the command's tree; this holds that the Tailscale
+/// commands are read the same way, with the holder inside it. The holder lives
+/// 20 s, past the deadline, so a read that waits for the output to close fails.
+#[tokio::test]
+async fn a_process_left_holding_the_command_s_output_does_not_hold_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    fake.hold_pipes();
+    let status = hided::mobile::tailscale::status(&fake.bin)
+        .await
+        .expect("the answer comes at the command's exit");
+    assert!(status.logged_in);
+    assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// Changes of Mobile's own settings that meet a pass already running cost one
+/// pass more, not one each: the pass that follows reads them all (`PassOwed`).
+/// The first pass is held inside `tailscale status` so both changes arrive
+/// while it runs, and a forced pass at the end queues behind whatever they
+/// asked for. Passes run: the held one, one for the two changes, the forced
+/// one; the forced one may also come first and settle the changes itself, so
+/// three at most, where a pass for each change makes four.
+#[tokio::test]
+async fn two_changes_that_meet_a_running_pass_cost_one_pass_more() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let change =
+        |kind: &str, payload: Value| json!({"schema_version": 2, "kind": kind, "payload": payload});
+    let mobile = &running.mobile;
+    mobile
+        .handle_event(0, &change("mobile_method", json!({"method": "tailscale"})))
+        .unwrap();
+    mobile.reconcile().await;
+    assert_eq!(fake.status_runs(), 0, "off never runs tailscale (B1)");
+
+    fake.hold_status();
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": true})))
+        .unwrap();
+    fake.wait_for_status_runs(1).await;
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": false})))
+        .unwrap();
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": true})))
+        .unwrap();
+    fake.release_status();
+    mobile.reconcile().await;
+
+    let runs = fake.status_runs();
+    assert!(
+        (2..=3).contains(&runs),
+        "tailscale status ran {runs} times; the two changes should cost one pass"
+    );
+    running.stop();
 }
 
 #[tokio::test]
