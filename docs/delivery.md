@@ -753,6 +753,11 @@ The current observer can assign a new observer; an attested new observer can acc
 Approval is nonblank text of at most 256 bytes without control characters, and does not replace the command's native caller binding.
 For that acceptance, the requested observer must be the actual caller; `--actor` cannot select a different caller, and a missing or stale generation refuses the handover.
 Activity is the later of the engine's status-transition time and the confirmed native session file's modification time.
+A status transition is a status other than the last settled one the watch read, or another state sequence on the same engine connection (`watch::StateRead`), since a sequence compares only within one engine ([status-model.md](status-model.md#across-an-engine-restart)).
+A device's link that comes back is no activity: its engine restores the target's pane at sequence 0, then `unknown`, which are no state, then at a sequence of its own, so a target that rested through any number of reconnects keeps its quiet episode, its warnings' hours and the human notice they owe.
+A target found in another state once the link is back is one transition, as one found on the same link is, and its parent hears of the quiet after it once.
+The engine connection a watch last read on is held in memory only: a watch loaded from the file compares its first reading by status.
+While the link is down the watch reads the target's last observation, as for any failed read, and warns by it.
 A local read and the device helper's `session_activity` use the same session ownership and root-confinement checks.
 Session lookup has one total budget of 10000 directory entries, including skipped extensions and unmatched names, 64 visited directories and 8 MiB of retained path bytes.
 Crossing a limit returns the path-free `session_capacity:<resource>:<limit>` outcome (a native header over the 1 MiB naming cap is `session_capacity:line_bytes:1048576`, never a session that is missing); the watch uses its existing status fallback and records the failure.

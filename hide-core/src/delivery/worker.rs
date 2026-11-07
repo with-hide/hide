@@ -371,6 +371,7 @@ fn read_session_activity(work: WatchWork) -> watch::Reading {
         status: work.status,
         status_available: work.observation.is_some(),
         state_change_seq: work.state_change_seq,
+        engine: None,
         status_changed_at_unix_ms: work.status_changed_at_unix_ms,
         session_modified_at_unix_ms: None,
         failure: None,
@@ -389,6 +390,7 @@ fn read_session_activity(work: WatchWork) -> watch::Reading {
     };
     reading.status = observation.status;
     reading.state_change_seq = observation.state_change_seq;
+    reading.engine = observation.engine;
     reading.status_changed_at_unix_ms = observation.status_changed_at_unix_ms;
     let result = (|| {
         let request = observation.session.ok_or("session_reference_missing")?;
@@ -465,6 +467,7 @@ fn same_target(left: &WatchWork, right: &WatchWork) -> bool {
         && left_observed.status == right_observed.status
         && left_observed.telemetry_stale == right_observed.telemetry_stale
         && left_observed.state_change_seq == right_observed.state_change_seq
+        && left_observed.engine == right_observed.engine
         && left_observed.status_changed_at_unix_ms == right_observed.status_changed_at_unix_ms
         && match (&left.source.link, &right.source.link) {
             (Some(left), Some(right)) => Arc::ptr_eq(left, right),
@@ -809,6 +812,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             if stored.last_status == "unknown" {
                 stored.last_status = target.status.clone();
                 stored.last_state_change_seq = target.state_change_seq;
+                stored.last_engine = target.engine.clone();
                 stored.status_changed_at_unix_ms = target.status_changed_at_unix_ms;
             }
             Ok(json!(stored))
@@ -1459,6 +1463,7 @@ mod tests {
             status: "idle".into(),
             telemetry_stale: false,
             state_change_seq: Some(1),
+            engine: None,
             status_changed_at_unix_ms: 1,
             last_input_at_unix_ms: 0,
             last_submit_at_unix_ms: 0,
@@ -2238,6 +2243,7 @@ mod tests {
             status: String::new(),
             status_available: false,
             state_change_seq: None,
+            engine: None,
             status_changed_at_unix_ms: 0,
             session_modified_at_unix_ms: None,
             failure: Some("projection_unavailable".into()),
