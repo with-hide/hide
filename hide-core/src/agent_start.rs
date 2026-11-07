@@ -422,9 +422,12 @@ pub(crate) fn start_at_shell_reusing_name(
     )
 }
 
+/// [`start_at_shell_reusing_name`] with its waits named: `wait` for the
+/// pane's shell and the engine's restore before it, `name_release_wait` for
+/// a name an ended agent still holds.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 #[allow(clippy::too_many_arguments)] // one bounded start with shell/name waits and effect admission
-fn start_within(
+pub(crate) fn start_within(
     engine: &dyn Engine,
     node: Option<&dyn NodeLink>,
     correlation_id: &str,

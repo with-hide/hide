@@ -3482,9 +3482,10 @@ mod tests {
     /// started, as a sleeping agent's wake on a visit is, reads the pane only
     /// once the node has said which holders still run: before that the
     /// node's answer for the pane is `pane_owner_unavailable`, which failed
-    /// the wake.
+    /// the wake. A restore still running when the start's wait ends refuses
+    /// it with the restore's own refusal, the pane never read.
     #[test]
-    fn a_start_into_a_saved_pane_waits_for_the_restore_before_it_reads_the_pane() {
+    fn a_start_into_a_saved_pane_reads_it_only_after_the_restore() {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
         std::fs::create_dir_all(home(&place)).unwrap();
@@ -3503,27 +3504,36 @@ mod tests {
             .prepare_start(launch(&pane, "sleeper", "claude", &[]))
             .unwrap();
         let read = || !holders.processes_within.lock().unwrap().is_empty();
-        let refused = std::thread::scope(|scope| {
-            let starting = scope.spawn(|| {
-                crate::agent_start::start_at_shell_reusing_name(
-                    &next,
-                    None,
-                    "test:wake",
-                    crate::agent_start::ShellStart::Plain,
-                    &start,
-                    Duration::from_secs(1),
-                    // Ends the start once its shell was read, before typing.
-                    &|| Err("read".to_owned()),
-                )
-            });
-            std::thread::sleep(Duration::from_millis(300));
-            assert!(!read(), "the pane is not read while the restore waits");
-            holders.hand(HolderRecovery {
-                present: vec![pane.clone()],
-                ..HolderRecovery::default()
-            });
-            starting.join().unwrap()
+        let start_within = |wait| {
+            crate::agent_start::start_within(
+                &next,
+                None,
+                "test:wake",
+                crate::agent_start::ShellStart::Plain,
+                &start,
+                Duration::from_secs(1),
+                wait,
+                Duration::ZERO,
+                // Ends the start once its shell was read, before typing.
+                &|| Err("read".to_owned()),
+            )
+        };
+
+        // The node has not said which holders run: the pane is never read.
+        match start_within(Duration::from_millis(200)) {
+            Err(crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })) => {
+                assert_eq!(code, "restore_unfinished")
+            }
+            other => panic!("expected the restore's refusal, got {other:?}"),
+        }
+        assert!(!read(), "the pane is not read while the restore waits");
+
+        // Once it has, the same start reads the pane's shell.
+        holders.hand(HolderRecovery {
+            present: vec![pane.clone()],
+            ..HolderRecovery::default()
         });
+        let refused = start_within(crate::agent_start::SHELL_WAIT);
         assert!(read(), "the pane is read once the restore lands");
         assert!(
             matches!(&refused, Err(crate::agent_start::StartError::NotStarted { reason, .. }) if reason == "read"),
