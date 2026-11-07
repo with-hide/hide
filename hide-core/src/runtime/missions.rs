@@ -750,7 +750,9 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 }
                 Some(crate::missions::OperatorAction::Drop) => "dropped it from the mission",
                 Some(crate::missions::OperatorAction::Attach) => "attached the pull request to it",
-                Some(crate::missions::OperatorAction::Leave) => "left it as it is",
+                Some(crate::missions::OperatorAction::Leave) => {
+                    "left it to you: judge what it needs"
+                }
                 Some(crate::missions::OperatorAction::Resume) => "set it to work again",
                 None => "settled it",
             };
