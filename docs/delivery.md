@@ -241,7 +241,7 @@ The `UserPromptSubmit` hook of a bell target reads the submitted prompt from its
 The core alone knows which line its doorbell typed, so it alone decides whether the prompt was the bell ([Recognizing the bell](#recognizing-the-bell)).
 When it was, the pull takes the pending letters as one bundle ([One bundle per handover](#one-bundle-per-handover)), each sender's pending letters before the letters an earlier build acknowledged without a receipt (`hook_confirmed: false`), which the store's expiry pass before every request drops once their deadline passes, so such a backlog never displaces the letter the bell rang for; it emits their context, flushes stdout, then confirms those IDs.
 The pull marks the pending letters it hands over as handed (`Letter.handed`), saved before it answers, and no bell is typed for a handed letter again, whether or not the confirmation arrives: the confirmation is a second `hide` process inside the hook's last 400 ms (`CONFIRM_RESERVE`), which a loaded machine misses, and on 2026-11-01 one such miss had the doorbell type the same letter three times (letter-19680, load 110 to 140).
-A handed letter that no confirmation took in rides the next bell's batch for the same recipient, a tool or turn-end gap where the adapter has one, or `hide inbox`; it is not counted in the waiting line below and its sender is never told it was not taken ([Input an agent did not take](#input-an-agent-did-not-take)).
+A handed letter that no confirmation took in is confirmed by its pane's next turn end ([A confirmation that missed its hook](#a-confirmation-that-missed-its-hook)), or rides the next bell's batch for the same recipient, a tool or turn-end gap where the adapter has one, or `hide inbox`; it is not counted in the waiting line below and its sender is never told it was not taken ([Input an agent did not take](#input-an-agent-did-not-take)).
 Only that pull marks a letter handed: a hook with no context to print (Grok's claim below) hands nothing over at the prompt, and a session file that records the bell line shows only that the line was submitted.
 At its deadline a handed letter that no confirmation took in ends `delivered` with `hook_confirmed` null, which its sender reads as probably received, and still waits for its answer; a handed report ends its parent's watch then, as its confirmation would have.
 It is never `undelivered`, so neither its sender nor the operator is told it failed, and a confirmation that comes later still records the receipt; a letter whose recipient's wake failed is `undelivered` whether or not it was handed ([status-model.md](status-model.md)).
@@ -277,6 +277,16 @@ Transport arrival and the doorbell alone do not confirm intake.
 Interruption before confirmation can repeat the same letter ID; confirmed letters do not appear again in hook context.
 The hook emits one bundle of at most 8 KiB of context, with a remaining-count line and `hide inbox` guidance when letters are left out.
 A large letter is truncated at a UTF-8 boundary and includes its ID and `hide request show` command for the complete body.
+
+#### A confirmation that missed its hook
+
+A command hook (Claude Code, Codex, Grok, Cursor, Antigravity) whose confirmation fails after its letters reached the agent keeps their ids for the pane's next turn end, and that turn end's hook of the same session sends the confirmation then (`hide_agent_hooks::owed`, `delivery::confirm_or_owe`, `delivery::settle_owed`); the core takes a confirmation that comes late, so the letter ends `delivered` with its receipt instead of waiting out its deadline.
+On 2026-11-08 a first letter to a resting Claude Code missed its confirmation this way: the first run of the hook's `hide` took longer than the 400 ms it had, and nothing brought the letter again.
+The record is one small file per pane under the hooks' own records (`hide_kit::layout::owed_confirmations`, `~/.hide/agent-hooks/owed-confirmations/` or an installation's own folder), the same code on every system and in a device's hooks, holding one bundle of ids (at most 1024, 64 KiB read) and the session they reached.
+A confirmation that fails again is kept for the next turn end; a turn end of another session in the pane, whose session ended there, drops it unsent, as does every owe or turn end of any pane once the record is older than a letter's deadline (60 minutes, `DELIVERY_EXPIRY_MS`), when the core has ended its letters.
+At most 64 panes owe at once: past that a new miss is not kept and is recorded under the cause `owed_capacity`, and its letters end at their deadline as before.
+A subagent's turn end, and Claude Code's hook inside Grok, settle nothing, so they never drop the pane's own session's record.
+OpenCode's, Pi's and omp's scripts confirm from their own call with its own budget, not inside a prompt hook, and hand a letter they could not confirm again at their next ask.
 
 #### One bundle per handover
 

@@ -14,7 +14,9 @@ pub mod answer;
 
 pub use mailbox::Command;
 
-pub const DELIVERY_EXPIRY_MS: u64 = 60 * 60 * 1_000;
+/// How long a letter waits to be taken before it ends; the hooks keep a
+/// confirmation they owe no longer (`hide_agent_hooks::owed`).
+pub const DELIVERY_EXPIRY_MS: u64 = hide_agent_hooks::delivery::DELIVERY_EXPIRY_MS;
 /// How long a `request` or `block` letter waits for its answer, from the time
 /// it was sent, before the wait ends as `deadline`.
 pub const ANSWER_WAIT_MS: u64 = 24 * 60 * 60 * 1_000;
