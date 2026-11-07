@@ -1,7 +1,11 @@
 # hide introduction site
 
 This directory contains the static introduction-site source prepared for issue #338 and the intended `withhide.dev` domain.
-It has no build step, packages, framework, webfont service, analytics, cookies, or application environment variables.
+It has no build step, packages, framework, webfont service, cookies, or application environment variables.
+Vercel Web Analytics records visitors and page views through the deferred `/_vercel/insights/script.js` script in `index.html`, using Vercel's plain-HTML integration without an npm package.
+Web Analytics must be enabled for the hosting project and the site redeployed before Vercel serves the insights routes; no API key belongs in the page.
+Local static previews do not serve these Vercel routes, so an analytics-script 404 there is expected and does not prevent the site from working.
+After deployment, verify a successful insights script load and page-view POST in the browser's Network panel, then confirm the visit in the project's Analytics dashboard.
 Bricolage Grotesque (headings and body) and Geist Mono (labels and drawn panels) are served from `assets/fonts/` under the SIL Open Font License (`OFL-BricolageGrotesque.txt`, `OFL-Geist.txt`), copied unchanged from the `@fontsource-variable/bricolage-grotesque` 5.3.0 and `geist` 1.4.2 npm packages.
 Serving this directory locally does not publish it or configure the domain.
 `llms.txt` lists the guides an agent reads to use or build hide, as links to their Markdown on the main branch; it names guides, never a release or a figure, so it changes only when a guide is added, renamed or retired.

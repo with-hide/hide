@@ -26,6 +26,10 @@ pub enum SessionEvent {
         full: bool,
         bytes: Vec<u8>,
     },
+    /// The text the pane's program wrote to the clipboard (OSC 52), once:
+    /// no part of the screen, so nothing that draws the screen again
+    /// repeats it.
+    Clipboard { text: Vec<u8> },
     /// A session that closed with the reason its transport names, never
     /// read from words.
     Ended {

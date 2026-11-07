@@ -2,6 +2,7 @@
 pub(crate) mod bell;
 pub(crate) mod composer;
 pub(crate) mod doorbell;
+pub(crate) mod held;
 mod human;
 pub(crate) mod ladder;
 pub mod ledger;

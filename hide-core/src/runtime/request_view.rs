@@ -364,7 +364,7 @@ impl Runtime {
                 self.device_signals(),
                 &mut records,
                 &mut self.local_read_connection,
-                Some(pane_id),
+                &[pane_id],
             );
         } else {
             let remote = self.snapshot.status.remote.iter().find_map(|remote| {
@@ -381,7 +381,7 @@ impl Runtime {
                     Default::default(),
                     &mut records,
                     self.read_connection(Some(&target_id)),
-                    Some(pane_id),
+                    &[pane_id],
                 );
             }
         }
@@ -390,26 +390,7 @@ impl Runtime {
             return marked && self.sync_request_rows();
         }
         self.record_read_record_changes(&changes);
-        // The rows take the new record with the focus each server reports.
-        let mut changed = self.refresh_pane_read_state();
-        let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
-        let mut remotes = std::mem::take(&mut self.snapshot.status.remote);
-        for remote in &mut remotes {
-            let Some(session) = remote.session.as_mut() else {
-                continue;
-            };
-            let before = session.agents.clone();
-            crate::agent_state::apply_read_state(
-                &mut session.agents,
-                Default::default(),
-                &mut records,
-                self.read_connection(Some(&remote.target_id)),
-                session.focused_pane_id.as_deref(),
-            );
-            changed |= before != session.agents;
-        }
-        self.snapshot.status.remote = remotes;
-        self.snapshot.ui_state.pane_read_records = records;
-        changed | self.sync_request_rows()
+        // The rows take the new record with the looks each server reads.
+        self.refresh_read_state_everywhere()
     }
 }

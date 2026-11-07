@@ -171,6 +171,11 @@ pub(crate) trait Engine: Send + Sync {
     /// core: what an engine that starts and reads agents itself starts,
     /// recognizes and reads them by.
     fn set_agent_definitions(&self, _catalog: Arc<hide_agent_adapter::definition::Catalog>) {}
+    /// The program a start of the `kind` agent types: its definition's first
+    /// executable, as this engine reads the definitions now, which is also
+    /// what the pane's node is asked how it starts (`start_prompt::program_of`).
+    /// `None` where no definition names `kind`.
+    fn start_program_name(&self, kind: &str) -> Option<String>;
     /// The session the hook of the `kind` agent in `pane` reported, proved
     /// to come from that pane (PRD engine-bundle-3-core-owns D-9, D-16): an
     /// engine that starts and resumes agents itself keeps it as the pane's
@@ -409,6 +414,14 @@ pub(crate) trait Engine: Send + Sync {
 
     // A pane's processes.
 
+    /// Returns once the engine has laid its saved session out again around
+    /// the holders its node found, the wait every call that makes a pane
+    /// takes, or refuses when that has not happened `within`. Until then a
+    /// saved pane is drawn but its holder is not yet taken back, so a start
+    /// into it reads nothing. An engine that restores nothing answers at once.
+    fn wait_restored(&self, _within: Duration) -> Answer<()> {
+        Ok(())
+    }
     /// The pane's shell and its foreground processes.
     fn pane_processes(&self, wait: Wait, pane: &str) -> Answer<PaneProcessGroup>;
     /// The session a foreground `agent` was explicitly resumed with, as its

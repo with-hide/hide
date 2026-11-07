@@ -73,6 +73,7 @@ export function jobReasonWords(t: T, reason: string | null | undefined): string 
 const FAILURE: Record<DeskJobFailure, MessageKey> = {
   device_unavailable: "desk.jobFailure.device_unavailable",
   agent_not_installed: "desk.jobFailure.agent_not_installed",
+  agent_hook_not_ready: "desk.jobFailure.agent_hook_not_ready",
   branch_in_use: "desk.jobFailure.branch_in_use",
   project_unavailable: "desk.jobFailure.project_unavailable",
   already_started: "desk.jobFailure.already_started",

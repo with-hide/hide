@@ -1429,3 +1429,116 @@ fn every_worktree_keeps_its_mark_past_the_tile_s_dot_cap() {
             .all(|c| c.agent_scope.git_mark == Some("changed"))
     );
 }
+
+/// A parent on this machine whose delegated child works in a project of a
+/// connected device: the lineage crosses machines, so the parent's tree has
+/// to draw the child wherever it works (mission-35 win-device-live).
+fn parent_here_with_child_on_a_device() -> Runtime {
+    let mut runtime = runtime();
+    let local_id = runtime.snapshot.navigator.devices[0].id.clone();
+    let mut agents = rows();
+    agents[1].pane_id = "local-child".into();
+    agents[1].delegated = false;
+    agents[0].lineage_child_pane_ids = vec!["remote:other-device:pane:child".into()];
+    agents[0].lineage_collapsed = false;
+    agents.truncate(1);
+    runtime.snapshot.navigator.agents = agents;
+    let mut local = workspace(
+        "here",
+        "here",
+        "/fixture",
+        vec![checkout(
+            "here",
+            "main",
+            "/fixture",
+            Some(pane("root", "/fixture")),
+        )],
+    );
+    local.device_id.clone_from(&local_id);
+    runtime.snapshot.navigator.workspaces = vec![local];
+
+    let mut remote_device = crate::workspace::local_device(&crate::node::test_node(), None, None);
+    remote_device.id = "other-device".into();
+    remote_device.label = Some("mini".into());
+    remote_device.kind = "remote".into();
+    runtime.snapshot.navigator.devices.push(remote_device);
+    let mut remote_project = workspace(
+        "there",
+        "there",
+        "/there",
+        vec![checkout(
+            "there",
+            "worker",
+            "/there/worker",
+            Some(pane("remote:other-device:pane:child", "/there/worker")),
+        )],
+    );
+    remote_project.device_id = "other-device".into();
+    let mut child = rows().remove(1);
+    child.pane_id = "remote:other-device:pane:child".into();
+    child.delegated = true;
+    child.lineage_parent_pane_id = Some("root".into());
+    runtime.snapshot.status.remote = vec![RemoteStatusSnapshot {
+        target_id: "other-device".into(),
+        state: "connected".into(),
+        message: None,
+        files: RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        session: Some(RemoteSessionSnapshot {
+            workspaces: vec![remote_project],
+            agents: vec![child],
+            active_tab_ids: Default::default(),
+            focused_workspace_id: None,
+            focused_checkout_id: None,
+            focused_tab_id: None,
+            focused_pane_id: None,
+            pane_layouts: Vec::new(),
+            pane_hook_tokens: Default::default(),
+            issue_tokens: Default::default(),
+            issue_links: Default::default(),
+        }),
+        unreachable_since_unix_ms: None,
+    }];
+    runtime
+}
+
+#[test]
+fn a_parent_here_draws_its_child_that_works_on_a_device_in_every_tree_it_opens_in() {
+    let mut runtime = parent_here_with_child_on_a_device();
+    assert!(runtime.refresh_agent_scopes());
+    let drawn = |scope: &crate::agent_state::Scope| {
+        scope
+            .sidebar_tree
+            .visible_rows
+            .iter()
+            .map(|row| (row.pane_id.clone(), row.depth))
+            .collect::<Vec<_>>()
+    };
+    let want = vec![
+        ("root".to_owned(), 0),
+        ("remote:other-device:pane:child".to_owned(), 1),
+    ];
+    let project = &runtime.snapshot.navigator.workspaces[0];
+    assert_eq!(
+        drawn(&project.checkouts[0].agent_scope),
+        want,
+        "its checkout"
+    );
+    assert_eq!(drawn(&project.agent_scope), want, "its project");
+    assert_eq!(
+        drawn(&runtime.snapshot.navigator.devices[0].agent_scope),
+        want,
+        "its device"
+    );
+
+    // A device that stopped answering keeps its last rows: the child stays on
+    // the parent's tree, which the shell dims, as the parent's badge counts it.
+    runtime.snapshot.status.remote[0].state = "stale".into();
+    runtime.refresh_agent_scopes();
+    let project = &runtime.snapshot.navigator.workspaces[0];
+    assert_eq!(
+        drawn(&project.checkouts[0].agent_scope),
+        want,
+        "a disconnected device's child stays on its parent's tree"
+    );
+}

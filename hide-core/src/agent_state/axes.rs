@@ -956,16 +956,18 @@ pub fn prune_completions(
     completions.len() != before
 }
 
-/// Raises the operator-focused pane's read record and sets every row's read
-/// axis and derived values. Authoritative topology pruning is separate because
-/// an agent list is not a pane list during server restoration.
+/// Raises the read record of every pane the operator is looking at and sets
+/// every row's read axis and derived values. Authoritative topology pruning is
+/// separate because an agent list is not a pane list during server restoration.
 ///
-/// This is the whole read authority. `operator_pane_id` is the pane the
-/// operator chose to look at, never the pane the engine happens to report focused:
-/// A tab-scoped seen would mark every pane in a tab seen the moment the tab is focused, so
-/// nothing here reads the engine's `done` or `idle` or a token's `_new` suffix to
-/// decide it. Running it twice over the same agents and the same pane changes
-/// nothing the second time (engineering rule 11).
+/// This is the whole read authority. `looked_at` holds the panes the operator
+/// chose to look at: the desktop's focus pane and every agent a phone has open
+/// (`Runtime::phone_viewed_pane_ids`), never the pane the engine happens to
+/// report focused. A tab-scoped seen would mark every pane in a tab seen the
+/// moment the tab is focused, so nothing here reads the engine's `done` or
+/// `idle` or a token's `_new` suffix to decide it. Running it twice over the
+/// same agents and the same panes changes nothing the second time
+/// (engineering rule 11).
 ///
 /// A record saved on another engine, or while its pane was still being
 /// restored, is carried over rather than compared: until the pane settles on
@@ -979,7 +981,7 @@ pub fn apply_read_state(
     beyond: SentSignals,
     records: &mut BTreeMap<String, PaneReadRecord>,
     connection: &mut ReadConnection,
-    operator_pane_id: Option<&str>,
+    looked_at: &[&str],
 ) -> Vec<ReadRecordChange> {
     let mut changes = Vec::new();
     // What each settled pane sends up its lineage now, a descendant on a
@@ -991,7 +993,7 @@ pub fn apply_read_state(
     for agent in agents.iter_mut() {
         let settled_here = settled(agent);
         let first_settled = settled_here && connection.settled.insert(agent.pane_id.clone());
-        if operator_pane_id == Some(agent.pane_id.as_str()) {
+        if looked_at.contains(&agent.pane_id.as_str()) {
             changes.extend(read_now(agent, records, connection));
             continue;
         }
@@ -1038,7 +1040,7 @@ pub fn apply_read_state(
         }
     }
 
-    derive_read_state(agents, records, connection, operator_pane_id);
+    derive_read_state(agents, records, connection, looked_at);
     for agent in agents.iter() {
         let Some(record) = records.get_mut(&agent.pane_id) else {
             continue;
@@ -1068,14 +1070,14 @@ pub(crate) fn derive_read_state(
     agents: &mut [SidebarAgentSnapshot],
     records: &BTreeMap<String, PaneReadRecord>,
     connection: &ReadConnection,
-    operator_pane_id: Option<&str>,
+    looked_at: &[&str],
 ) {
     for agent in agents.iter_mut() {
-        // The pane the operator is looking at is read as of now whether or not
+        // A pane the operator is looking at is read as of now whether or not
         // the ledger has caught up in this dispatch, so the two projections
         // agree regardless of which one the runtime builds first. A record
         // saved on another server keeps the verdict it was saved with.
-        let read = operator_pane_id == Some(agent.pane_id.as_str())
+        let read = looked_at.contains(&agent.pane_id.as_str())
             || records.get(&agent.pane_id).is_some_and(|record| {
                 if !agent.telemetry_stale && connection.judges_by_sequence(record, agent) {
                     record_covers(record, &read_fingerprint(agent))

@@ -51,6 +51,7 @@ mod hosts;
 mod inbound;
 mod issues;
 mod kit;
+mod ledger_walk;
 pub(crate) mod links;
 mod machine_profiles;
 pub(crate) mod memory;
@@ -98,6 +99,7 @@ mod session_thread;
 mod snapshot_delta;
 mod spent_bells;
 mod ssh_hosts;
+pub(crate) mod start_hook;
 mod strays;
 mod suggestion_apply;
 mod suggestion_evidence;
@@ -1411,6 +1413,10 @@ pub struct Runtime {
     /// The kit call each device's helper runs next, merged across requests,
     /// keyed by device id.
     device_kit_pending: BTreeMap<String, KitJob>,
+    /// The passes spawns asked of each machine's kit before starting an
+    /// agent there, by device id (`runtime/start_hook.rs`); one entry per
+    /// machine, dropped with the device's kit work.
+    start_passes: start_hook::StartPassLedger,
     /// The devices whose last kit report said they wait for the first-run
     /// agent choice, and whether this run already sent it: a device is sent
     /// the choice once, so a device that keeps waiting (its record would not
@@ -1621,6 +1627,13 @@ pub struct Runtime {
     /// operator's behalf arms this, and it is memory only: a launch starts
     /// with the operator having looked at nothing.
     operator_focused_pane_id: Option<String>,
+    /// The agents a phone has open now, by the core's pane id (a device's
+    /// pane carries its device): hided names every one whenever a phone opens
+    /// or closes an agent's detail or disconnects (`phone_viewing`). Each is
+    /// read as the desktop's focus pane is, for as long as it stays open, and
+    /// nothing else follows from it: no focus, tab, wake or attach. Memory
+    /// only; a launch starts with no phone looking.
+    phone_viewed_pane_ids: BTreeSet<String>,
     /// The read axis's view of the current connection to the local engine
     /// server and to each device's: the mark that names the server and the
     /// panes settled on it so far (`agent_state::ReadConnection`). Memory
@@ -2402,6 +2415,7 @@ impl Runtime {
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
+            start_passes: BTreeMap::new(),
             device_first_run_choice: BTreeMap::new(),
             device_kit_running: BTreeSet::new(),
             codex_daemon_off_running: BTreeMap::new(),
@@ -2498,6 +2512,7 @@ impl Runtime {
             system_language: None,
             agent_worked_at_unix_ms: 0,
             operator_focused_pane_id: None,
+            phone_viewed_pane_ids: BTreeSet::new(),
             local_read_connection: crate::agent_state::ReadConnection::new(read_mark(0)),
             remote_read_connections: BTreeMap::new(),
             read_marks_made: 1,

@@ -58,6 +58,9 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== "GET" || !isShell(url) || (url.pathname === "/m/sw.js" || url.pathname === "/sw.js")) return;
+  // A frame's page (an HTML file drawn in look-frame.html) is no shell: a navigation is keyed by the app's page below,
+  // so caching the frame would put it in the app's place.
+  if (request.mode === "navigate" && request.destination !== "document") return;
   if (url.pathname.startsWith("/assets/")) {
     // Hashed file names never change content: the cache answers first.
     event.respondWith(
