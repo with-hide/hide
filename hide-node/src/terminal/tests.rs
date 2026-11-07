@@ -2457,7 +2457,7 @@ fn the_engines_typing_reaches_a_pane_its_node_knows_only_as_asleep() {
 
 /// A node that starts again, or dropped a pane's idle entry, knows a pane
 /// only through its holder. The engine's letter still reaches that holder,
-/// attached for the input only; a pane no holder keeps is still refused.
+/// attached for the input only.
 #[test]
 fn the_engines_typing_reaches_a_pane_only_its_holder_knows() {
     let (harness, panes) = holder_harness();
@@ -2471,9 +2471,41 @@ fn the_engines_typing_reaches_a_pane_only_its_holder_knows() {
     assert_eq!(input_bytes(&opened, 5), b"bell\r");
     while opened.input.recv_timeout(WAIT).is_ok() {}
     harness.state("h3:p2", "released");
-    let refused = harness
-        .service
-        .type_input("h9:p9", Typed::Bytes(b"bell\r".to_vec()))
+}
+
+/// A node's own holders are its one engine, so every pane keeps its own
+/// size; the engine's input still goes only to a pane whose holder the node
+/// runs or starts, and one no holder runs is refused.
+#[test]
+fn the_nodes_own_holders_refuse_the_engines_typing_into_a_pane_none_runs() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let (reports_tx, _reports) = channel();
+    let reports: Arc<dyn ReportSink> = Arc::new(Reports(Mutex::new(reports_tx)));
+    let holders = holder::Holders::open(
+        holder::HolderFolders {
+            home: home.path(),
+            state_dir: state.path(),
+        },
+        hide_kit::holders::Source {
+            program: home.path().join("hide-holder"),
+            conpty: None,
+        },
+        Arc::clone(&reports),
+    )
+    .unwrap();
+    // As the node's engine sets it before it draws a pane.
+    holders.own_every_pane();
+    assert!(holders.attacher().keeps_own_size("w1:p9"));
+    let service = Service::start(
+        holders.attacher(),
+        Arc::new(Outputs::default()),
+        reports,
+        RetryPolicy::Manual,
+    )
+    .unwrap();
+    let refused = service
+        .type_input("w1:p9", Typed::Bytes(b"bell\r".to_vec()))
         .unwrap_err();
     assert!(
         matches!(&refused, hide_node_link::holders::HolderError::Refused { code, .. } if code == "pane_input_unavailable"),
@@ -2585,6 +2617,10 @@ impl Attacher for HolderPanes {
     fn keeps_own_size(&self, pane: &str) -> bool {
         self.holders.lock().unwrap().contains(pane)
     }
+
+    fn holds(&self, pane: &str) -> bool {
+        self.keeps_own_size(pane)
+    }
 }
 
 /// A harness over [`HolderPanes`] that never retries on its own, so an
@@ -2612,6 +2648,9 @@ fn holder_harness() -> (Harness, Arc<HolderPanes>) {
         }
         fn keeps_own_size(&self, pane: &str) -> bool {
             self.0.keeps_own_size(pane)
+        }
+        fn holds(&self, pane: &str) -> bool {
+            self.0.holds(pane)
         }
     }
     let outputs = Arc::new(Outputs::default());

@@ -2646,16 +2646,17 @@ impl Inner {
     }
 
     /// Whether the engine's input can go to `pane`: a pane this node tracks,
-    /// or one only its holder layer knows, as every pane is after the node
-    /// starts again or once `forget_unowned` dropped an idle entry. Such a
-    /// pane gets an entry here, so the input attaches it
-    /// (`attach_for_input`) as it does a released one; the entries this adds
-    /// are bounded by the holders the node adopted.
+    /// or one whose holder it runs or starts and tracks nothing of
+    /// ([`Attacher::holds`]), as after the node starts again or once
+    /// `forget_unowned` dropped an idle entry. Such a pane gets an entry
+    /// here, so the input attaches it (`attach_for_input`) as it does a
+    /// released one; the entries this adds are bounded by the holders the
+    /// node runs.
     fn takes_input(&mut self, shared: &Shared, pane: &str) -> bool {
         if self.panes.contains_key(pane) {
             return true;
         }
-        if !shared.attacher.keeps_own_size(pane) {
+        if !shared.attacher.holds(pane) {
             return false;
         }
         self.panes.entry(pane.to_owned()).or_default();
