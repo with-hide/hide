@@ -24,9 +24,10 @@ use crate::protocol::{Call, ShellLaunch};
 /// within ten seconds, and a start that finds an earlier one ending waits
 /// for that end.
 const START_WAIT: Duration = Duration::from_secs(40);
-/// How long an end may take: a holder's close is bounded at 20 s, and a
-/// tree that ignores it is ended by its pids after that.
-const END_WAIT: Duration = Duration::from_secs(50);
+/// How long a pane's end may take on its node, this machine's or a
+/// device's: a holder's close is bounded at 20 s, and a tree that ignores
+/// it is ended by its pids after that.
+pub const END_WAIT: Duration = Duration::from_secs(50);
 /// How long an ask, an input or new rules may take.
 pub const ASK_WAIT: Duration = Duration::from_secs(15);
 /// What a letter may take beyond its gap.

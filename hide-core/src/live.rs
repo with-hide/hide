@@ -248,6 +248,12 @@ pub enum RemoteControlOutcome {
 pub(crate) enum ControlFailure {
     Definite(String),
     Ambiguous(String),
+    /// The engine refused under its stable `code`; `message` says which
+    /// operation and why.
+    Refused {
+        code: String,
+        message: String,
+    },
 }
 
 impl ControlFailure {
@@ -257,7 +263,17 @@ impl ControlFailure {
 
     pub(crate) fn message(&self) -> &str {
         match self {
-            Self::Definite(message) | Self::Ambiguous(message) => message,
+            Self::Definite(message) | Self::Ambiguous(message) | Self::Refused { message, .. } => {
+                message
+            }
+        }
+    }
+
+    /// The engine's refusal code, when the engine refused.
+    pub(crate) fn code(&self) -> Option<&str> {
+        match self {
+            Self::Refused { code, .. } => Some(code),
+            Self::Definite(_) | Self::Ambiguous(_) => None,
         }
     }
 }
@@ -513,9 +529,10 @@ pub(crate) fn failed(operation: &str) -> impl FnOnce(EngineError) -> String + '_
 /// never came or could not be read may have happened.
 pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> ControlFailure + '_ {
     move |error| match error {
-        EngineError::Refused { code, message } => {
-            ControlFailure::Definite(format!("{operation} was refused: {code}: {message}"))
-        }
+        EngineError::Refused { code, message } => ControlFailure::Refused {
+            message: format!("{operation} was refused: {code}: {message}"),
+            code,
+        },
         EngineError::Request(message) => ControlFailure::Definite(message),
         EngineError::Answer(message) => ControlFailure::Ambiguous(message),
         other => ControlFailure::Ambiguous(format!("{operation} result is unknown: {other}")),
@@ -523,9 +540,11 @@ pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> C
 }
 
 /// `node` runs the pane (`agent_start::start_at_shell_checked`); none
-/// when it cannot be reached. A start whose shell had not finished starting
-/// is refused as `agent_start::SHELL_STARTING` with the screen's last line,
-/// so the spawn that asked can say what the shell waits for.
+/// when it cannot be reached. The pane's shell gets `shell_wait`, at most
+/// `agent_start::SHELL_WAIT`, to finish starting; one that had not (stopped
+/// at a question, not at its prompt, or not reading its line yet) is refused
+/// as `agent_start::SHELL_STARTING` with the screen's last line when there
+/// is one, so the spawn that asked can say what the shell waits for.
 #[allow(clippy::too_many_arguments)] // the start identity and the pane's node
 pub(crate) fn start_agent(
     engine: &dyn Engine,
@@ -533,6 +552,7 @@ pub(crate) fn start_agent(
     request_id: &str,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
+    shell_wait: Duration,
     name: &str,
     kind: &str,
     args: Vec<String>,
@@ -545,6 +565,7 @@ pub(crate) fn start_agent(
         request_id,
         pane_id,
         shell,
+        shell_wait,
         name,
         kind,
         args,
@@ -553,10 +574,9 @@ pub(crate) fn start_agent(
         &|| Ok(()),
     )
     .map_err(|error| match error {
-        crate::agent_start::StartError::ShellStarting(screen) => crate::coordination::refusal(
-            crate::agent_start::SHELL_STARTING,
-            screen.as_deref().unwrap_or_default(),
-        ),
+        crate::agent_start::StartError::ShellStarting { waited, screen } => {
+            crate::coordination::shell_starting_refusal(waited, screen.as_deref())
+        }
         // The engine refused the pane as busy until the start's deadline: nothing
         // was typed, and the same intent asks again in the same pane.
         crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
@@ -578,6 +598,7 @@ pub(crate) fn start_agent_checked(
     request_id: &str,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
+    shell_wait: Duration,
     name: &str,
     kind: &str,
     args: Vec<String>,
@@ -599,13 +620,14 @@ pub(crate) fn start_agent_checked(
             reason: "agent_start.failed".into(),
             detail,
         })?;
-    match crate::agent_start::start_at_shell_checked(
+    match crate::agent_start::start_at_shell_within(
         engine,
         node,
         request_id,
         shell,
         &start,
         Duration::from_secs(5),
+        shell_wait,
         check,
     ) {
         Ok(started) => Ok(started.pane_id),
@@ -623,8 +645,8 @@ pub(crate) fn start_agent_checked(
 pub(crate) fn start_error_message(error: crate::agent_start::StartError) -> String {
     match error {
         crate::agent_start::StartError::NotStarted { detail, .. } => detail,
-        crate::agent_start::StartError::ShellStarting(screen) => {
-            crate::agent_start::shell_starting_message(screen.as_deref())
+        crate::agent_start::StartError::ShellStarting { waited, screen } => {
+            crate::agent_start::shell_starting_message(waited, screen.as_deref())
         }
         crate::agent_start::StartError::Engine(error) => format!("agent.start failed: {error}"),
     }

@@ -361,7 +361,7 @@ fn start_dormant(
             }
         }
         Err(StartError::NotStarted { .. })
-        | Err(StartError::ShellStarting(_))
+        | Err(StartError::ShellStarting { .. })
         | Err(StartError::Engine(EngineError::Refused { .. })) => DormantStartOutcome::NotStarted,
         Err(StartError::Engine(_)) => {
             crate::diagnostic!(serde_json::json!({

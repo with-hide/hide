@@ -473,9 +473,9 @@ pub(crate) fn start_agent(
             reason: refused_reason(request.mode).to_owned(),
             detail,
         },
-        Err(StartError::ShellStarting(screen)) => WakeOutcome::Failed {
+        Err(StartError::ShellStarting { waited, screen }) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
-            detail: crate::agent_start::shell_starting_message(screen.as_deref()),
+            detail: crate::agent_start::shell_starting_message(waited, screen.as_deref()),
         },
         Err(StartError::Engine(EngineError::Refused { code, message })) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),

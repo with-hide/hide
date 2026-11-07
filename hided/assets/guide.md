@@ -45,7 +45,7 @@ hide agent show <id|here|spawn id|intent>
 hide agent catalog [--machine <device id>]
 hide agent sleep <id> [--actor <id>]
 hide agent archive <id> [--actor <id>]
-hide agent end <id> [--actor <id>]
+hide agent end <id> [--actor <id>] [--keep-pane]
 ```
 
 {session_rules}
@@ -58,7 +58,8 @@ hide agent end <id> [--actor <id>]
 - `hide agent catalog` lists the agents installed here, their models, efforts and usage, so you can choose `--kind`, `--model` and `--effort`.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.
 - `hide agent sleep <id>` puts a resting child of yours (or yourself) to sleep: its process ends, its conversation is kept, and a `request` or `block` letter wakes it; it answers `{"state":"ending"}`, or `asleep` when asked again, and refuses with a reason while the agent works, waits for the operator or is on the operator's screen.
-  `hide agent end <id>` instead ends only its registration and leaves its process running.
+  `hide agent end <id>` instead ends its registration and closes its pane, which ends the agent and every program it started; its conversation waits under 보관됨, where 이어가기 resumes it, and `--keep-pane` ends only the registration.
+  To end yourself, run `hide agent end <your id> --keep-pane`: without it your own pane closes, and the command never gets its answer.
 - `hide agent archive <id>` does what the screen's `세션 보관` does for that session: its conversation is saved, its panes close, and the operator resumes it from 보관됨; it answers `{"archived":"<id>","pane_id":"<pane>"}`, and refuses a session that is working with `archive_confirmation_required`, which only the operator confirms, from Hide's screen.
 
 ## Panes

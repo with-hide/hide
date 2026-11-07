@@ -2997,17 +2997,21 @@ impl Runtime {
                 true
             }
             Event::InactiveCheckoutsToggle(payload) => {
-                // The fold is this machine's projects' and those of a node
-                // that dials the core (D-29), keyed by the project's folder.
-                let nodes = self
-                    .node_sessions()
-                    .flat_map(|(_, session)| &session.workspaces);
+                // The fold is this machine's projects' and every device's,
+                // keyed by the project's folder.
+                let devices = self
+                    .snapshot
+                    .status
+                    .remote
+                    .iter()
+                    .filter_map(|status| status.session.as_ref())
+                    .flat_map(|session| &session.workspaces);
                 let folds: Vec<bool> = self
                     .snapshot
                     .navigator
                     .workspaces
                     .iter()
-                    .chain(nodes)
+                    .chain(devices)
                     .filter(|workspace| workspace.path == payload.project_path)
                     .map(|workspace| !workspace.inactive_checkouts.checkout_ids.is_empty())
                     .collect();

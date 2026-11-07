@@ -92,7 +92,7 @@ mod recent_panes;
 mod rename;
 mod request_view;
 mod session;
-mod session_archive;
+pub(crate) mod session_archive;
 mod session_command;
 mod session_state;
 mod session_thread;

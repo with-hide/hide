@@ -46,7 +46,6 @@ impl Runtime {
         let reports_own_facts = self
             .link_origin(target)
             .is_some_and(LinkOrigin::reports_own_facts);
-        let own_rows = reports_own_facts.then_some(target);
         if let Some(worktrees) = self.device_worktrees.get(target) {
             let measured = self.device_disk.get(target);
             for project in &mut session.workspaces {
@@ -89,11 +88,11 @@ impl Runtime {
                 match measured {
                     Some(disk) => {
                         super::projects::measure_worktrees(&mut listed, disk);
-                        device_catalog::apply_worktrees(project, &listed, own_rows);
+                        device_catalog::apply_worktrees(project, &listed, target);
                         let marks = self.disk_sweep_marks(Some(target), &project.path);
                         project.disk = super::projects::project_disk(Some(&listed), marks);
                     }
-                    None => device_catalog::apply_worktrees(project, &listed, own_rows),
+                    None => device_catalog::apply_worktrees(project, &listed, target),
                 }
                 if let Some(found) = self
                     .device_github
@@ -160,7 +159,6 @@ impl Runtime {
                 &self.snapshot.navigator.sleeping_sessions,
                 &self.snapshot.ui_state,
                 focused.as_deref(),
-                reports_own_facts,
                 now,
             );
         }

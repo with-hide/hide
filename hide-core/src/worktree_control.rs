@@ -1681,7 +1681,7 @@ fn launch_agent(
         }
         // The screen's last line is the operator's terminal content: the
         // screen quotes it, and no log keeps it.
-        Err(StartError::ShellStarting(line)) => Launch::Failed(AgentFailure {
+        Err(StartError::ShellStarting { screen: line, .. }) => Launch::Failed(AgentFailure {
             reason: crate::agent_start::SHELL_STARTING_REASON.to_owned(),
             detail: None,
             line,

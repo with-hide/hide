@@ -1331,6 +1331,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "holder_cap" => {
+            "That machine already runs the most panes Hide keeps open there (the detail names the machine and the count); end finished agents on it with hide agent end <id>, which closes their panes, then run the same command again with the same intent"
+        }
+        "pane_close_failed" => {
+            "The registration ended, but the engine did not close its pane; run the same command again to close it"
+        }
         "composer_not_empty" => {
             "Someone is typing in the recipient's input, so nothing was typed or recorded; send it again without --force, and it is delivered once they submit"
         }
@@ -1359,7 +1365,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "The agent's start ended in its pane without the agent and was not typed again; check that pane for why, then spawn with a new intent"
         }
         "shell_starting" => {
-            "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
+            "The new pane's shell had not finished starting while the spawn could wait, so nothing was typed and Hide closed the tab it opened; find what the account's shell startup files wait on (start a login shell in a terminal of your own), then run the same command again with the same intent"
         }
         "pane_busy" => {
             "The new pane's shell kept another program running for the start's 30 s wait, so nothing was typed; let that program finish or end it in that pane, then run the same command again with the same intent"
@@ -1471,11 +1477,17 @@ pub(crate) fn relay_ready(display_id: &str, facts: &Value) -> Value {
 /// reason stays the code.
 fn refusal_answer(reason: String, next_action: &'static str) -> (String, String) {
     match hide_core::coordination::split_refusal(&reason) {
-        (code @ "shell_starting", Some(screen)) if !screen.is_empty() => (
-            code.to_owned(),
-            format!("{next_action}. Its screen ends with: {screen}"),
-        ),
-        (code @ "shell_starting", _) => (code.to_owned(), next_action.to_owned()),
+        (code @ "shell_starting", detail) => {
+            let (seconds, screen) =
+                hide_core::coordination::shell_starting_detail(detail.unwrap_or_default());
+            let waited = seconds.map_or_else(String::new, |seconds| {
+                format!(". The shell was waited for {seconds} s")
+            });
+            let screen = screen.map_or_else(String::new, |screen| {
+                format!(". Its screen ends with: {screen}")
+            });
+            (code.to_owned(), format!("{next_action}{waited}{screen}"))
+        }
         (code @ "mission_cap_reached", Some(cap)) => (
             code.to_owned(),
             format!("{next_action}; the mission runs at most {cap} workers at once"),
@@ -5075,14 +5087,22 @@ mod tests {
         );
         assert!(none.contains("No other device is connected"), "{none}");
         let (code, next) = refusal_answer(
-            "shell_starting\u{1f}[oh-my-zsh] Would you like to update? [Y/n]".to_owned(),
+            "shell_starting\u{1f}30\u{1f}[oh-my-zsh] Would you like to update? [Y/n]".to_owned(),
             delivery_next_action("shell_starting"),
         );
         assert_eq!(code, "shell_starting");
         assert!(
-            next.ends_with("[oh-my-zsh] Would you like to update? [Y/n]"),
+            next.ends_with(
+                "The shell was waited for 30 s. Its screen ends with: [oh-my-zsh] Would you like to update? [Y/n]"
+            ),
             "{next}"
         );
+        // A shell that showed nothing still says how long it was waited for.
+        let (_, blank) = refusal_answer(
+            "shell_starting\u{1f}30\u{1f}".to_owned(),
+            delivery_next_action("shell_starting"),
+        );
+        assert!(blank.ends_with("The shell was waited for 30 s"), "{blank}");
         for code in [
             "spawn_busy",
             "machine_not_permitted",
