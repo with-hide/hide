@@ -11,12 +11,12 @@
 //! compacted once ([`Store::compact`]).
 //!
 //! A build from before this format opens a converted store as it opens its
-//! own: the version stays 3 and its `events` and `devices` tables stay,
-//! empty, so it goes on counting its calls into `events` and Hide AI's into
-//! `ai_daily`. Back on this build, those rows are converted like a version
-//! 3 store's, and a call the older build counted a second time, which it
-//! could not find in `events`, is taken back from its day ([`Totals::remove`])
-//! and taken as the later view of the call kept here, as ingest takes one.
+//! own: the version stays 3 and every table it uses stays, `events` empty.
+//! It records Hide AI's calls into `ai_daily` as before, but `events`
+//! refuses its write of a native call, which it could not tell from one
+//! this build already counted; the refusal rolls its whole ingest back,
+//! checkpoint included, so the call waits in its native file and this
+//! build counts it once on return.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -51,10 +51,13 @@ const CHECKPOINT_BYTES: usize = 16 * 1024;
 /// (`valid_name`). `calls_node_at` serves the projects' costs and pruning;
 /// beside a table without rowids it carries the primary key too, ascending
 /// after the newest-first time, so a read ordered by time (newest first),
-/// agent and key sorts nothing.
+/// agent and key sorts nothing. `events_closed` refuses a call an older
+/// build would write into `events`, so no call is ever counted in both.
+/// A node names its device's calls by number; how many calls a device has
+/// in both tables stays `devices.calls`, the one count either build reads
+/// against its limit.
 const CALLS_SCHEMA: &str = "
-CREATE TABLE nodes(id INTEGER PRIMARY KEY, device TEXT NOT NULL UNIQUE,
-    calls INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE nodes(id INTEGER PRIMARY KEY, device TEXT NOT NULL UNIQUE);
 CREATE TABLE places(id INTEGER PRIMARY KEY, node INTEGER NOT NULL, agent TEXT NOT NULL,
     session TEXT NOT NULL, cwd TEXT NOT NULL, last_at INTEGER NOT NULL,
     UNIQUE(node,agent,session,cwd));
@@ -65,6 +68,8 @@ CREATE TABLE calls(node INTEGER NOT NULL, agent TEXT NOT NULL, key BLOB NOT NULL
     cache_write_1h INTEGER NOT NULL, reasoning INTEGER, cost INTEGER,
     incomplete INTEGER NOT NULL, PRIMARY KEY(node,agent,key)) WITHOUT ROWID;
 CREATE INDEX calls_node_at ON calls(node,at DESC);
+CREATE TRIGGER events_closed BEFORE INSERT ON events
+    BEGIN SELECT RAISE(ABORT,'usage_calls_format'); END;
 ";
 /// The tables a version 3 build made, kept for one that opens this store:
 /// a version 3 store has them, and a new store is made with them.
@@ -87,22 +92,18 @@ CREATE TABLE price_cache(slot INTEGER PRIMARY KEY CHECK(slot=1), value TEXT NOT 
 PRAGMA user_version=3;
 ";
 /// A version 3 store gains the calls tables in one transaction that moves
-/// no call: its `events` stay where they are, without the two indexes that
-/// would slow each move, until [`Store::convert`] has moved them all. Each
-/// device becomes a node with no calls yet; a move counts its calls there
-/// and takes them off the device, whose count an older build still reads.
-const START_CONVERSION: &str = "
-INSERT INTO nodes(device) SELECT device FROM devices;
-DROP INDEX IF EXISTS events_at;
-DROP INDEX IF EXISTS events_device_at;
-";
+/// no call: its `events` stay where they are, with their indexes, until
+/// [`Store::convert`] has moved them all, so an older build that opens the
+/// store halfway reads and prunes them as it always did. Each device
+/// becomes a node; its count in `devices` already counts the calls a move
+/// carries from one table to the other.
+const START_CONVERSION: &str = "INSERT INTO nodes(device) SELECT device FROM devices;";
 /// The calls one conversion step moves, in one transaction: about half a
 /// second on a loaded Mac, so 640,000 calls take one to two minutes of
 /// steps while a window is open.
 const CONVERT_BATCH: usize = 4096;
-/// A conversion step's own budget: the start drops two indexes and every
-/// step reads and writes thousands of calls, past an ordinary step's 250 ms
-/// on a machine under load.
+/// A conversion step's own budget: every step reads and writes thousands of
+/// calls, past an ordinary step's 250 ms on a machine under load.
 const CONVERT_BUDGET: Duration = Duration::from_secs(30);
 /// Compacting rewrites the whole file once: four seconds for a converted
 /// 640,000-call store on a loaded Mac.
@@ -225,43 +226,6 @@ impl Totals {
             self.providers.sort();
         }
         Ok(())
-    }
-
-    /// Takes one call back out, as [`Self::add`] put it in; its provider
-    /// stays named, as the same call's own count names it.
-    fn remove(&mut self, event: &Event) -> Result<(), &'static str> {
-        fn minus(a: &mut u64, b: u64) -> Result<(), &'static str> {
-            *a = a.checked_sub(b).ok_or("usage_total_inconsistent")?;
-            Ok(())
-        }
-        let tokens = &event.tokens;
-        let prompt = tokens
-            .input
-            .checked_add(tokens.cache_read)
-            .and_then(|n| n.checked_add(tokens.cache_write))
-            .ok_or("usage_total_overflow")?;
-        for total in [
-            &mut self.tokens,
-            &mut self.price_bands[super::prices::prompt_band(prompt)],
-        ] {
-            minus(&mut total.input, tokens.input)?;
-            minus(&mut total.output, tokens.output)?;
-            minus(&mut total.cache_read, tokens.cache_read)?;
-            minus(&mut total.cache_write, tokens.cache_write)?;
-            minus(&mut total.cache_write_1h, tokens.cache_write_1h)?;
-            if let Some(n) = tokens.reasoning {
-                minus(
-                    total.reasoning.as_mut().ok_or("usage_total_inconsistent")?,
-                    n,
-                )?;
-            }
-        }
-        minus(&mut self.calls, 1)?;
-        match event.recorded_cost_micro_usd.filter(|_| !event.incomplete) {
-            Some(cost) => minus(&mut self.recorded_cost_micro_usd, cost)?,
-            None => minus(&mut self.missing_cost_calls, 1)?,
-        }
-        minus(&mut self.incomplete_calls, u64::from(event.incomplete))
     }
 
     pub fn new_tokens(&self) -> Result<u64, &'static str> {
@@ -521,28 +485,34 @@ impl Store {
         }
         self.budget();
         let tx = self.connection.transaction().map_err(failed)?;
-        let known: Option<(i64, usize)> = tx
-            .query_row(
-                "SELECT id,calls FROM nodes WHERE device=?1",
-                [device],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+        let calls: Option<usize> = tx
+            .query_row("SELECT calls FROM devices WHERE device=?1", [device], |r| {
+                r.get(0)
+            })
             .optional()
             .map_err(failed)?;
-        let (node, mut calls) = match known {
-            Some(known) => known,
+        let mut calls = match calls {
+            Some(calls) => calls,
             None => {
                 let n: usize = tx
-                    .query_row("SELECT count(*) FROM nodes", [], |r| r.get(0))
+                    .query_row("SELECT count(*) FROM devices", [], |r| r.get(0))
                     .map_err(failed)?;
                 if n >= DEVICE_LIMIT {
                     return Err("usage_device_capacity");
                 }
-                tx.execute("INSERT INTO nodes(device) VALUES(?1)", [device])
+                tx.execute("INSERT INTO devices(device) VALUES(?1)", [device])
                     .map_err(failed)?;
-                (tx.last_insert_rowid(), 0)
+                0
             }
         };
+        // An older build adds a device it meets to `devices` only.
+        tx.execute("INSERT OR IGNORE INTO nodes(device) VALUES(?1)", [device])
+            .map_err(failed)?;
+        let node: i64 = tx
+            .query_row("SELECT id FROM nodes WHERE device=?1", [device], |r| {
+                r.get(0)
+            })
+            .map_err(failed)?;
         let known: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM cursors WHERE device=?1 AND agent=?2 AND path=?3)",
@@ -659,8 +629,8 @@ impl Store {
             outcome.newest_ms = outcome.newest_ms.max(Some(event.at_ms));
         }
         tx.execute(
-            "UPDATE nodes SET calls=?2 WHERE id=?1",
-            params![node, calls],
+            "UPDATE devices SET calls=?2 WHERE device=?1",
+            params![device, calls],
         )
         .map_err(failed)?;
         if outcome.limited > 0 {
@@ -829,8 +799,8 @@ impl Store {
                 .map_err(failed)?;
             }
             tx.execute(
-                "UPDATE nodes SET calls=calls-?2 WHERE id=?1",
-                params![node, keys.len()],
+                "UPDATE devices SET calls=calls-?2 WHERE device=?1",
+                params![device, keys.len()],
             )
             .map_err(failed)?;
             expired += keys.len();
@@ -871,8 +841,8 @@ impl Store {
 }
 
 impl Store {
-    /// Whether calls in `events`, a version 3 store's or an older build's
-    /// since, still wait to be moved ([`Self::convert`]). Until they are,
+    /// Whether a version 3 store's calls still wait in `events` to be moved
+    /// ([`Self::convert`]). Until they are,
     /// nothing else reads or writes calls: a call still in `events` would
     /// not be found as already counted.
     pub fn converting(&self) -> Result<bool, &'static str> {
@@ -882,12 +852,11 @@ impl Store {
             .map_err(failed)
     }
 
-    /// Moves the next calls in `events` into `calls`, at most
-    /// [`CONVERT_BATCH`], in one transaction, and puts back the index an
-    /// older build reads `events` by with the last of them; answers how
-    /// many it moved. A step that fails or is ended changes nothing, so the
-    /// next one, in this process or after a restart, takes the same calls
-    /// again.
+    /// Moves the next version 3 calls into `calls`, at most
+    /// [`CONVERT_BATCH`], in one transaction; answers how many it moved.
+    /// `events` stays, empty, for an older build to open. A step that fails
+    /// or is ended changes nothing, so the next one, in this process or
+    /// after a restart, takes the same calls again.
     pub fn convert(&mut self) -> Result<usize, &'static str> {
         self.budget_of(CONVERT_BUDGET);
         let moved = self.convert_batch();
@@ -925,69 +894,28 @@ impl Store {
             tx.execute("DELETE FROM events WHERE rowid<=?1", [last])
                 .map_err(failed)?;
         }
-        let mut nodes: HashMap<String, (i64, u64)> = HashMap::new();
-        let mut moved: HashMap<String, u64> = HashMap::new();
+        let mut nodes = HashMap::new();
         for (_, device, agent, key, day, event) in &rows {
-            let node = match nodes.get_mut(device) {
-                Some((node, _)) => *node,
+            let node = match nodes.get(device) {
+                Some(node) => *node,
                 None => {
-                    let node = node_of(&tx, device)?;
-                    nodes.insert(device.clone(), (node, 0));
+                    let node: i64 = tx
+                        .query_row("SELECT id FROM nodes WHERE device=?1", [device], |r| {
+                            r.get(0)
+                        })
+                        .optional()
+                        .map_err(failed)?
+                        .ok_or("usage_store_inconsistent")?;
+                    nodes.insert(device.clone(), node);
                     node
                 }
             };
-            *moved.entry(device.clone()).or_default() += 1;
             let mut event: Event = decode(event)?;
             // The key column was the call's identity; the copy inside the
             // event is the one that goes.
             event.key = key.clone();
             validate(&event)?;
-            let held = tx
-                .query_row(STORED_CALL, params![node, agent, key_bytes(key)?], |row| {
-                    Ok((row.get::<_, String>(0)?, stored_call(row, 1)))
-                })
-                .optional()
-                .map_err(failed)?;
-            if let Some((held_day, held)) = held {
-                // An older build counted a call this build had already
-                // moved, which it could not find in `events`: its day gives
-                // the count back, and the call is taken as a later view of
-                // the one kept, as ingest takes one.
-                take_back(&tx, device, agent, day, &event)?;
-                if agent == Agent::Claude.as_str() {
-                    let frozen_at: u64 = tx
-                        .query_row(
-                            "SELECT frozen_at FROM backfills WHERE device=?1 AND agent=?2",
-                            params![device, agent],
-                            |r| r.get(0),
-                        )
-                        .optional()
-                        .map_err(failed)?
-                        .unwrap_or(0);
-                    stream::merge(&tx, device, node, &held_day, &held?, &event, frozen_at)?;
-                }
-                continue;
-            }
             insert_call(&tx, node, agent, day, &event)?;
-            if let Some((_, inserted)) = nodes.get_mut(device) {
-                *inserted += 1;
-            }
-        }
-        for (device, (node, inserted)) in &nodes {
-            tx.execute(
-                "UPDATE nodes SET calls=calls+?2 WHERE id=?1",
-                params![node, inserted],
-            )
-            .map_err(failed)?;
-            tx.execute(
-                "UPDATE devices SET calls=max(calls-?2,0) WHERE device=?1",
-                params![device, moved[device]],
-            )
-            .map_err(failed)?;
-        }
-        if rows.len() < CONVERT_BATCH {
-            tx.execute_batch("CREATE INDEX IF NOT EXISTS events_at ON events(at)")
-                .map_err(failed)?;
         }
         tx.commit().map_err(failed)?;
         Ok(rows.len())
@@ -1021,67 +949,6 @@ impl Store {
         self.budget();
         compacted
     }
-}
-
-/// The node `device` is, made when it is new, within [`DEVICE_LIMIT`]: an
-/// older build may have counted calls of a device this build never saw.
-fn node_of(tx: &rusqlite::Transaction<'_>, device: &str) -> Result<i64, &'static str> {
-    if let Some(node) = tx
-        .query_row("SELECT id FROM nodes WHERE device=?1", [device], |r| {
-            r.get(0)
-        })
-        .optional()
-        .map_err(failed)?
-    {
-        return Ok(node);
-    }
-    let n: usize = tx
-        .query_row("SELECT count(*) FROM nodes", [], |r| r.get(0))
-        .map_err(failed)?;
-    if n >= DEVICE_LIMIT {
-        return Err("usage_device_capacity");
-    }
-    tx.execute("INSERT INTO nodes(device) VALUES(?1)", [device])
-        .map_err(failed)?;
-    Ok(tx.last_insert_rowid())
-}
-
-/// Takes back from `day`'s totals what an older build added there for
-/// `event`; a day already pruned has nothing to give back, and a day left
-/// with no call goes, as this build would never have made it.
-fn take_back(
-    tx: &rusqlite::Transaction<'_>,
-    device: &str,
-    agent: &str,
-    day: &str,
-    event: &Event,
-) -> Result<(), &'static str> {
-    let raw: Option<String> = tx
-        .query_row(
-            "SELECT totals FROM daily WHERE device=?1 AND agent=?2 AND day=?3 AND model=?4",
-            params![device, agent, day, event.model],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(failed)?;
-    let Some(raw) = raw else {
-        return Ok(());
-    };
-    let mut totals: Totals = decode(&raw)?;
-    totals.remove(event)?;
-    if totals.calls == 0 {
-        tx.execute(
-            "DELETE FROM daily WHERE device=?1 AND agent=?2 AND day=?3 AND model=?4",
-            params![device, agent, day, event.model],
-        )
-    } else {
-        tx.execute(
-            "UPDATE daily SET totals=?5 WHERE device=?1 AND agent=?2 AND day=?3 AND model=?4",
-            params![device, agent, day, event.model, encode(&totals)?],
-        )
-    }
-    .map_err(failed)?;
-    Ok(())
 }
 
 /// A call's key as the 32 bytes its 64 hex digits spell (`validate`

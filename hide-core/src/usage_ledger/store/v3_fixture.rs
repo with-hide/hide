@@ -53,7 +53,7 @@ impl V3 {
         let db = Connection::open(path).unwrap();
         db.execute_batch(&format!("BEGIN;{V3_SCHEMA}")).unwrap();
         for (device, agent, event) in calls {
-            count_as_version_3(&db, device, *agent, event);
+            count_as_version_3(&db, device, *agent, event).unwrap();
             let agent = agent.as_str();
             db.execute(
                 "INSERT OR IGNORE INTO backfills(device,agent,completed) VALUES(?1,?2,1)",
@@ -148,10 +148,16 @@ impl V3 {
 }
 
 /// Counts `event` as a version 3 build counts a call it finds no row of in
-/// `events`: the whole event as JSON beside its key, added to its day's
-/// totals and to the device's count. What a build before
-/// with-hide/hide-private#672 writes into a store this build converted.
-pub(crate) fn count_as_version_3(db: &Connection, device: &str, agent: Agent, event: &Event) {
+/// `events`, in its order: its day's totals, then the whole event as JSON
+/// beside its key, then the device's count. What a build before
+/// with-hide/hide-private#672 asks of a store this build converted, which
+/// refuses the first write.
+pub(crate) fn count_as_version_3(
+    db: &Connection,
+    device: &str,
+    agent: Agent,
+    event: &Event,
+) -> rusqlite::Result<()> {
     let agent = agent.as_str();
     let day = local_day(event.at_ms, &jiff::tz::TimeZone::UTC).unwrap();
     let json = encode(event).unwrap();
@@ -160,6 +166,20 @@ pub(crate) fn count_as_version_3(db: &Connection, device: &str, agent: Agent, ev
         json.as_bytes(),
     ))
     .to_vec();
+    let totals: Option<String> = db
+        .query_row(
+            "SELECT totals FROM daily WHERE device=?1 AND agent=?2 AND day=?3 AND model=?4",
+            params![device, agent, day, event.model],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let mut totals: Totals = totals.map(|t| decode(&t).unwrap()).unwrap_or_default();
+    totals.add(event).unwrap();
+    db.execute(
+        "INSERT INTO daily VALUES(?1,?2,?3,?4,?5) ON CONFLICT(device,agent,day,model) \
+         DO UPDATE SET totals=excluded.totals",
+        params![device, agent, day, event.model, encode(&totals).unwrap()],
+    )?;
     db.execute(
         "INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7)",
         params![
@@ -171,35 +191,49 @@ pub(crate) fn count_as_version_3(db: &Connection, device: &str, agent: Agent, ev
             event.at_ms,
             json
         ],
-    )
-    .unwrap();
-    let totals: Option<String> = db
-        .query_row(
-            "SELECT totals FROM daily WHERE device=?1 AND agent=?2 AND day=?3 AND model=?4",
-            params![device, agent, day, event.model],
-            |r| r.get(0),
-        )
-        .optional()
-        .unwrap();
-    let mut totals: Totals = totals.map(|t| decode(&t).unwrap()).unwrap_or_default();
-    totals.add(event).unwrap();
-    db.execute(
-        "INSERT INTO daily VALUES(?1,?2,?3,?4,?5) ON CONFLICT(device,agent,day,model) \
-         DO UPDATE SET totals=excluded.totals",
-        params![device, agent, day, event.model, encode(&totals).unwrap()],
-    )
-    .unwrap();
+    )?;
     db.execute(
         "INSERT INTO devices VALUES(?1,1) ON CONFLICT(device) DO UPDATE SET calls=calls+1",
         [device],
+    )?;
+    Ok(())
+}
+
+/// Prunes as a version 3 build's maintenance turn prunes calls, in its
+/// order: each completed backfill's horizon moves up to `frozen`, then at
+/// most 512 calls before it leave `events`, each taken off its device's
+/// count. Answers how many left.
+pub(crate) fn prune_as_version_3(db: &Connection, frozen: u64) -> usize {
+    db.execute(
+        "UPDATE backfills SET frozen_at=max(frozen_at,?1) WHERE completed=1",
+        [frozen],
     )
     .unwrap();
+    let mut query = db
+        .prepare(
+            "SELECT e.rowid,e.device FROM events e WHERE e.at<?1 AND EXISTS(SELECT 1 FROM \
+             backfills b WHERE b.device=e.device AND b.agent=e.agent AND b.completed=1 AND \
+             e.at<b.frozen_at) LIMIT 512",
+        )
+        .unwrap();
+    let expired: Vec<(i64, String)> = query
+        .query_map([frozen], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for (id, device) in &expired {
+        db.execute("DELETE FROM events WHERE rowid=?1", [id])
+            .unwrap();
+        db.execute("UPDATE devices SET calls=calls-1 WHERE device=?1", [device])
+            .unwrap();
+    }
+    expired.len()
 }
 
 /// Every row of the tables a conversion must leave as they were.
 pub(crate) fn kept_rows(db: &Connection) -> Vec<String> {
     let mut rows = Vec::new();
-    for table in ["backfills", "daily", "cursors", "price_cache"] {
+    for table in ["backfills", "daily", "cursors", "devices", "price_cache"] {
         let mut query = db
             .prepare(&format!("SELECT * FROM {table} ORDER BY 1,2,3"))
             .or_else(|_| db.prepare(&format!("SELECT * FROM {table}")))
