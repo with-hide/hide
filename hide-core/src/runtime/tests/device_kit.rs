@@ -1047,6 +1047,51 @@ fn check_again_shows_a_read_under_way_and_a_failed_one_as_a_code_beside_the_last
     assert!(kit(&shared).check_failed.is_none());
 }
 
+/// with-hide/hide-private#661: Codex on the device had not trusted Hide's
+/// hook. Only a pass asks Codex again, so once the operator has approved
+/// the hooks in Codex, Check again runs one and the Codex hook row leaves
+/// Failed; a trusted hook is only read again.
+#[test]
+fn check_again_after_codex_trusts_the_hook_clears_its_failure() {
+    let untrusted = {
+        let mut report = report(&[(ComponentId::CodexHook, ComponentState::Failed)]);
+        let part = &mut report.components[0];
+        part.why = Some(hide_kit::PartWhy {
+            cause: hide_kit::PartCause::CodexUntrusted,
+            value: None,
+        });
+        part.reason = Some("Codex has not trusted the hook".to_owned());
+        report
+    };
+    let helper = KitDevice::answering(Ok(untrusted));
+    let shared = with_consent(Some(Arc::clone(&helper)));
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    let codex = |kit: &crate::model::KitSnapshot| {
+        kit.components
+            .iter()
+            .find(|part| part.id == ComponentId::CodexHook)
+            .map(|part| part.state)
+    };
+    assert_eq!(codex(&kit(&shared)), Some(ComponentState::Failed));
+
+    // The operator chose Trust all in Codex there.
+    *helper.answer.lock().unwrap() = Ok(report(&[(
+        ComponentId::CodexHook,
+        ComponentState::Installed,
+    )]));
+    let before = helper.calls().len();
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    assert_eq!(helper.calls()[before].0, KitAction::Apply);
+    assert_eq!(codex(&kit(&shared)), Some(ComponentState::Installed));
+
+    let before = helper.calls().len();
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    assert_eq!(helper.calls()[before].0, KitAction::Status);
+}
+
 fn registered(shared: &Mutex<Runtime>) -> bool {
     shared
         .lock()
