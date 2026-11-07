@@ -494,6 +494,13 @@ impl Doorbell {
             if stop.load(Ordering::Acquire) || count >= WORK_PER_PASS {
                 break;
             }
+            // A bell an earlier core left on its way was ended above, or
+            // could not be: either way this pass's snapshot has no failure
+            // to read the composer by, so the next pass rings the letter as
+            // it is now.
+            if letter.bell_in_flight() {
+                continue;
+            }
             let pane = &letter.recipient.pane_id;
             let verdict = owner
                 .lock()
@@ -3259,6 +3266,60 @@ mod tests {
         let notes = input_notices(&bell);
         let note = notes.iter().find(|notice| notice.intent == intent).unwrap();
         assert!(note.body.contains(INTERRUPTED), "{}", note.body);
+    }
+
+    /// A first bell a stopped core left on its way may sit typed in the
+    /// composer. The next core's doorbell ends it and types nothing in that
+    /// pass; its next pass reads the composer for the line before it rings.
+    #[test]
+    fn a_first_bell_a_stopped_core_left_on_its_way_is_read_in_the_composer_first() {
+        let bell = Bell::start(json!({}));
+        let observed =
+            crate::runtime::delivery::tests::observed(&bell.runtime.lock().unwrap(), "recipient");
+        let line = {
+            let guard = bell.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == bell.letter)
+                .unwrap();
+            bell_line(
+                "sender",
+                letter,
+                0,
+                crate::model::InterfaceLanguage::English,
+            )
+        };
+        // The first bell is reserved, and the core stops before its result.
+        bell.client
+            .submit(
+                Effect::BellAttempt {
+                    id: bell.letter.clone(),
+                    observed: Box::new(observed),
+                    line,
+                },
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        let mut next = Doorbell::default();
+        let start = now();
+        let records = bell.pass(&mut next, start);
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "doorbell.interrupted"),
+            "{records:?}"
+        );
+        assert!(bell.typed().is_empty(), "nothing is typed in that pass");
+        assert_eq!(bell.attempts(), 1);
+        let records = bell.pass(&mut next, start + 1_000);
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "doorbell.composer_after_lost"),
+            "{records:?}"
+        );
     }
 
     /// A letter whose three bells were typed and none recorded ends
