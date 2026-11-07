@@ -1157,7 +1157,9 @@ pub fn handle_with_progress(
             }
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+                .map_or(0, |since| {
+                    u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+                });
             let variables = |name: &str| match name {
                 "HOME" => Some(home.as_os_str().to_owned()),
                 _ => std::env::var_os(name),

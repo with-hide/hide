@@ -2916,7 +2916,9 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
             let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
                 // The core's registrations there are left out before the
                 // node keeps its newest twenty.
-                let exclude = core.registered_paths(&device).map_err(LinkError::NotConnected)?;
+                let exclude = core
+                    .registered_paths(&device)
+                    .map_err(LinkError::NotConnected)?;
                 hide_core::node_access::call_as::<hide_node_link::importable::ImportableProjects>(
                     link.as_ref(),
                     hide_node_link::protocol::Call::ImportableProjects { exclude },

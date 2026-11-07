@@ -129,7 +129,11 @@ fn repository_with_worktree(main: &Path, linked: &Path) {
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     std::fs::create_dir_all(linked).unwrap();
-    std::fs::write(linked.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    std::fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
     std::fs::write(admin.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
     std::fs::write(admin.join("commondir"), "../..\n").unwrap();
     std::fs::write(

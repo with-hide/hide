@@ -608,7 +608,7 @@ const zhCN = {
   "addProject.create.leftover": "已存在同名的空文件夹，项目将创建在其中。",
   "addProject.create.submit": "创建项目",
   "addProject.import.title": "可导入的项目",
-  "addProject.import.detail": "{{host}} 上用代理工作过的文件夹，以及 Paseo 和 Herdr 的项目。这些应用保持原样。",
+  "addProject.import.detail": "{{host}} 上与智能体一起工作过的文件夹，以及 Paseo 和 Herdr 的项目。这些应用保持原样。",
   "addProject.import.addAll": "全部添加（{{count}}）",
   "addProject.import.addNamed": "添加 {{name}}",
   "addProject.import.adding": "正在添加…",

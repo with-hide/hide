@@ -964,7 +964,10 @@ mod tests {
         let stale = claude("three", &old);
         fs::write(
             home.join(".codex/sessions/2026/11/07/rollout.jsonl"),
-            format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-1\",\"cwd\":{}}}}}\n", serde_json::to_string(&beta).unwrap()),
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-1\",\"cwd\":{}}}}}\n",
+                serde_json::to_string(&beta).unwrap()
+            ),
         )
         .unwrap();
         let database = home.join(".local/share/opencode/opencode.db");

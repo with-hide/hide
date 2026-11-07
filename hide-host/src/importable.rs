@@ -228,12 +228,7 @@ fn herdr(variables: hide_platform::host::Variables) -> Result<Vec<Named>, String
 /// those active since `since` and not in `exclude`, newest first, at most
 /// [`IMPORTABLE_CAP`]. Only the newest [`JUDGED_FOLDER_CAP`] folders are
 /// judged.
-fn merge(
-    home: &Path,
-    named: Vec<Named>,
-    since: u64,
-    exclude: &[String],
-) -> Vec<ImportableProject> {
+fn merge(home: &Path, named: Vec<Named>, since: u64, exclude: &[String]) -> Vec<ImportableProject> {
     let mut folders: HashMap<PathBuf, Vec<(ImportSource, u64)>> = HashMap::new();
     for row in named {
         folders
