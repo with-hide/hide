@@ -260,17 +260,26 @@ fn a_device_of_the_own_engine_runs_no_herdr_and_its_pane_outlives_the_node() -> 
     let [socket] = &bridges[..] else {
         anyhow::bail!("the node's pane sockets: {bridges:?}");
     };
+    // The asker asks once, and a pane's record says it runs only after its
+    // program started: a program that asks at once is refused as a pane the
+    // node does not know yet (hide-holder `Holder::start`). So the program
+    // waits for the test, which releases it once the node answers that the
+    // pane runs (`start` returns the node's proof of it).
+    let gate = device.environment.home.join("asker-may-ask");
     let ask = format!(
-        "python3 -c 'import json,socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall((json.dumps({{\"pane_id\": sys.argv[2], \"nonce\": \"a\"*32, \"one_shot\": False}})+chr(10)).encode()); print(\"answer\", json.loads(s.makefile().readline()).get(\"ok\"))' {} {ASKER}; exec sleep 600",
+        "while [ ! -e '{}' ]; do sleep 0.05; done; python3 -c 'import json,socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall((json.dumps({{\"pane_id\": sys.argv[2], \"nonce\": \"a\"*32, \"one_shot\": False}})+chr(10)).encode()); print(\"answer\", json.loads(s.makefile().readline()).get(\"ok\"))' {} {ASKER}; exec sleep 600",
+        gate.display(),
         socket.display()
     );
     let asker = start(ASKER, ask)?;
     device.started.push(asker);
+    std::fs::write(&gate, "")?;
     wait_for("the asker's credential", || {
         Ok(Device::screen(&panes, ASKER)?
             .contains("answer True")
             .then_some(()))
-    })?;
+    })
+    .with_context(|| format!("the asker's screen: {:?}", Device::screen(&panes, ASKER)))?;
     let heard = device.events.heard.lock().unwrap().clone();
     ensure!(
         matches!(
