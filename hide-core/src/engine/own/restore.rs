@@ -27,7 +27,8 @@
 //! again. An adopted pane whose saved agent is not running, its shell the
 //! terminal's foreground, is resumed the same way: the daemon that typed
 //! its resume ended before the line reached the shell, or the agent ended
-//! while no daemon ran.
+//! while no daemon ran. Its holder is renewed first when an earlier build
+//! started it (`OwnEngine::renew`, with-hide/hide-private#646).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -794,6 +795,23 @@ impl OwnEngine<'static> {
                     }
                 },
             };
+            // An adopted pane may still run an earlier build's holder: its
+            // shell, alone at its prompt, is brought to this build first, as a
+            // wake does (with-hide/hide-private#646); a restarted one already is.
+            if resume.new_tab.is_none()
+                && let Err(EngineError::Refused { code, message }) =
+                    engine.renew(&resume.pane, None)
+                && code == hide_node_link::holders::RENEWAL_LOST
+            {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "agent.resume_not_typed",
+                    "pane_id": resume.pane,
+                    "agent": resume.kind,
+                    "message": format!("{code}: {message}"),
+                }));
+                continue;
+            }
             if resume.cut {
                 cut().insert(resume.pane.clone(), resume.kind.clone());
             }

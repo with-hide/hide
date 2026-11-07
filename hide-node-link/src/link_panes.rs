@@ -13,9 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::holders::{
-    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderRequest,
-    HolderReservation, HolderScroll, HolderStart, PaneCall, PaneEnded, PaneFactsSink, PaneHolders,
-    PaneInput, PaneText, PaneWatchReport, ScreenRules, StyledRead,
+    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderRenewal,
+    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneCall, PaneEnded,
+    PaneFactsSink, PaneHolders, PaneInput, PaneText, PaneWatchReport, ScreenRules, StyledRead,
 };
 use crate::link::{LinkAnswer, LinkError, NodeLink};
 use crate::protocol::{Call, ShellLaunch};
@@ -27,6 +27,9 @@ const START_WAIT: Duration = Duration::from_secs(40);
 /// How long an end may take: a holder's close is bounded at 20 s, and a
 /// tree that ignores it is ended by its pids after that.
 const END_WAIT: Duration = Duration::from_secs(50);
+/// How long a renewal may take: the earlier holder's end, then the new
+/// holder's start.
+const RENEW_WAIT: Duration = Duration::from_secs(90);
 /// How long an ask, an input or new rules may take.
 pub const ASK_WAIT: Duration = Duration::from_secs(15);
 /// What a letter may take beyond its gap.
@@ -302,6 +305,15 @@ impl PaneHolders for LinkPanes {
                 request,
             },
             END_WAIT,
+        )
+    }
+
+    fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+        self.answer(
+            PaneCall::Renew {
+                start: start.clone(),
+            },
+            RENEW_WAIT,
         )
     }
 

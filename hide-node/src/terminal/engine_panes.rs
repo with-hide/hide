@@ -15,15 +15,16 @@ use hide_host::kit::PaneInstall;
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
-use super::holder::Holders;
+use super::holder::{Holders, RenewRefusal, Renewal};
 use super::input::Typed;
 use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
-    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink,
-    PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded,
+    PaneFactsSink, PaneHolders, PaneInput, RENEWAL_LOST, ScreenRules, StyledRead,
+    UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -387,6 +388,32 @@ impl PaneHolders for LocalPanes {
         self.holders
             .cancel(&guard, &self.service, intent)
             .map_err(start_refusal)
+    }
+
+    fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+        if start.program.is_some() {
+            return Err(HolderError::Refused {
+                code: "invalid_program".to_owned(),
+                message: "only a shell pane's holder is renewed".to_owned(),
+            });
+        }
+        let intent = start.intent()?;
+        match self
+            .holders
+            .renew(self.owner()?, &self.service, &intent, || {
+                self.expand(start).map_err(|error| format!("{error:?}"))
+            }) {
+            Ok(Renewal::Current) => Ok(HolderRenewal::Current),
+            Ok(Renewal::Renewed { from, to }) => Ok(HolderRenewal::Renewed { from, to }),
+            Err(RenewRefusal::Kept { code, message }) => Err(HolderError::Refused {
+                code: code.to_owned(),
+                message,
+            }),
+            Err(RenewRefusal::Lost(message)) => Err(HolderError::Refused {
+                code: RENEWAL_LOST.to_owned(),
+                message,
+            }),
+        }
     }
 
     fn shell_launch(&self) -> Option<ShellLaunch> {

@@ -746,6 +746,15 @@ impl<'g> Engine for FakeEngine<'g> {
         Ok(PreparedStart::new(launch, line))
     }
 
+    fn renew_holder(
+        &self,
+        _wait: Wait,
+        pane: &str,
+        cwd: Option<&str>,
+    ) -> Answer<hide_node_link::holders::HolderRenewal> {
+        self.ask("renew_holder", json!({"pane": pane, "cwd": cwd}))
+    }
+
     fn start_agent(&self, _wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {
         let launch = start.launch();
         self.ask(

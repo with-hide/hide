@@ -435,6 +435,18 @@ pub(crate) trait Engine: Send + Sync {
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String>;
     /// Starts `start` in its pane's shell: the agent's pane.
     fn start_agent(&self, wait: Wait, start: &PreparedStart) -> Answer<StartedAgent>;
+    /// Brings the pane's holder to this build before an agent starts again
+    /// in it (with-hide/hide-private#646): a shell pane whose holder runs from
+    /// another build is started again under the same id, in `cwd` when given
+    /// (else the folder it was started in), from its machine's current
+    /// holder. A refusal other than `hide_node_link::holders::RENEWAL_LOST`
+    /// leaves the pane's holder as it ran.
+    fn renew_holder(
+        &self,
+        wait: Wait,
+        pane: &str,
+        cwd: Option<&str>,
+    ) -> Answer<hide_node_link::holders::HolderRenewal>;
     /// An agent's kind, status and state sequence, by name or pane.
     fn agent_state(&self, wait: Wait, target: &str) -> Answer<AgentState>;
     /// An agent as a letter's delivery checks it, by name or pane.

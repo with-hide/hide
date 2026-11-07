@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use hide_node_link::holders::HolderRenewal;
 use hide_node_link::process::GroupEnd;
 use hide_node_link::protocol::Call;
 
@@ -38,6 +39,9 @@ pub(crate) use dormant::{
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a wake waits for its pane's holder to be renewed: the earlier
+/// holder's end, then the new one's start, as the node bounds them.
+const RENEW_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long an ended agent has to hand the terminal back to its shell before
 /// the sleep is given up and the agent is left awake (B8).
 const END_TIMEOUT: Duration = Duration::from_secs(10);
@@ -438,11 +442,38 @@ pub(crate) fn start_agent(
             };
         }
     };
+    let correlation = format!("hide-core:agent-sleep:{}:wake", request.pane_id);
+    // An agent asleep in its pane left only its shell there, so the pane
+    // wakes on this build's holder rather than the one an earlier build
+    // started (with-hide/hide-private#646). A renewal that leaves the holder as
+    // it ran is no failure: the wake goes on in it, as before. One whose new
+    // holder did not start leaves the pane no shell to wake in. A renewed
+    // pane's shell has just started, so the start waits for its first
+    // prompt, as a start into a new tab does.
+    let shell = match engine.renew_holder(
+        Wait::Each(RENEW_TIMEOUT),
+        &request.pane_id,
+        request.cwd.as_deref(),
+    ) {
+        Ok(HolderRenewal::Renewed { .. }) => crate::agent_start::ShellStart::of_tab(
+            true,
+            crate::agent_start::shell_launch(Some(node), &correlation).as_ref(),
+        ),
+        Err(EngineError::Refused { code, message })
+            if code == hide_node_link::holders::RENEWAL_LOST =>
+        {
+            return WakeOutcome::Failed {
+                reason: refused_reason(request.mode).to_owned(),
+                detail: format!("{code}: {message}"),
+            };
+        }
+        Ok(HolderRenewal::Current) | Err(_) => crate::agent_start::ShellStart::Plain,
+    };
     match crate::agent_start::start_at_shell_reusing_name(
         engine,
         Some(node),
-        &format!("hide-core:agent-sleep:{}:wake", request.pane_id),
-        crate::agent_start::ShellStart::Plain,
+        &correlation,
+        shell,
         &start,
         crate::agent_start::START_ANSWER_WAIT,
         &|| Ok(()),
@@ -647,6 +678,7 @@ mod tests {
         ] {
             let expected = args.clone();
             let fake = FakeEngine::start(move |method, params| match method {
+                "renew_holder" => reply(HolderRenewal::Current),
                 "pane_processes" => process_info(42, 42),
                 "start_agent" => {
                     assert_eq!(params["kind"], canonical);
@@ -674,7 +706,10 @@ mod tests {
                 WakeOutcome::Started,
                 "{kind}"
             );
-            assert_eq!(fake.methods(), ["pane_processes", "start_agent"]);
+            assert_eq!(
+                fake.methods(),
+                ["renew_holder", "pane_processes", "start_agent"]
+            );
         }
     }
 
@@ -1159,6 +1194,7 @@ mod tests {
     #[test]
     fn a_refused_wake_names_a_plain_reason_and_keeps_the_engine_s_words_for_the_log() {
         let fake = FakeEngine::start(|method, _| match method {
+            "renew_holder" => reply(HolderRenewal::Current),
             "pane_processes" => process_info(42, 42),
             "start_agent" => refused("agent_name_taken", "agent name one is already used"),
             // Another agent holds the name, so reading it changes nothing.
@@ -1221,6 +1257,7 @@ mod tests {
             (json!("program"), Value::Null),
         ] {
             let fake = FakeEngine::start(|method, _| match method {
+                "renew_holder" => reply(HolderRenewal::Current),
                 "pane_processes" => process_info(42, 42),
                 "start_agent" => started(),
                 other => panic!("unexpected {other}"),
@@ -1244,6 +1281,102 @@ mod tests {
             assert_eq!(starts.len(), 1);
             assert_eq!(starts[0]["program"], named);
         }
+    }
+
+    /// The node a renewal test's wake asks: the agent starts by its name,
+    /// and the pane's shell marks no prompt, so a renewed pane's start waits
+    /// for its shell to hold the terminal.
+    struct PlainNode;
+    impl NodeLink for PlainNode {
+        fn call(
+            &self,
+            call: Call,
+            _: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            match call {
+                Call::AgentInstalled { .. } => {
+                    Ok(crate::node_access::LinkAnswer::Parsed(json!("program")))
+                }
+                Call::ShellIntegration => Ok(crate::node_access::LinkAnswer::Parsed(Value::Null)),
+                Call::Directory { path } => Ok(crate::node_access::LinkAnswer::Parsed(json!(path))),
+                other => panic!("the node was asked {other:?}"),
+            }
+        }
+    }
+
+    fn resume_in(cwd: &str) -> WakeRequest {
+        WakeRequest {
+            codex_daemon: Default::default(),
+            pane_id: "w1:p1".into(),
+            kind: "claude".into(),
+            name: "one".into(),
+            mode: WakeMode::Resume,
+            args: vec!["--resume".into(), "abc".into()],
+            cwd: Some(cwd.to_owned()),
+            session_id: None,
+        }
+    }
+
+    /// with-hide/hide-private#646: a wake brings its pane's holder to this
+    /// build, in the conversation's folder, before it types the resume, and
+    /// a renewal the node refused (the pane busy, an older node) wakes the
+    /// agent in the holder it has, as before.
+    #[test]
+    fn a_wake_renews_its_pane_s_holder_before_it_types_the_resume() {
+        let cwd = "/work/agent";
+        for renewal in [
+            reply(HolderRenewal::Renewed {
+                from: "v1-earlier".into(),
+                to: "v1-current".into(),
+            }),
+            reply(HolderRenewal::Current),
+            refused("pane_busy", "a program other than the shell holds it"),
+            refused("holder_renewal_unsupported", "an older node"),
+        ] {
+            let renewal = std::sync::Mutex::new(Some(renewal));
+            let fake = FakeEngine::start(move |method, _| match method {
+                "renew_holder" => renewal.lock().unwrap().take().expect("one renewal"),
+                "pane_processes" => process_info(42, 42),
+                "start_agent" => started(),
+                other => panic!("unexpected {other}"),
+            });
+            let outcome = start_agent(fake.engine().as_ref(), &PlainNode, &resume_in(cwd));
+            assert_eq!(outcome, WakeOutcome::Started);
+            assert_eq!(
+                fake.methods(),
+                ["renew_holder", "pane_processes", "start_agent"]
+            );
+            let renewals = fake.calls_of("renew_holder");
+            assert_eq!(renewals[0]["pane"], "w1:p1");
+            assert_eq!(renewals[0]["cwd"], json!(cwd));
+        }
+    }
+
+    /// A renewal that ended the pane's earlier holder and could not start
+    /// its new one leaves no shell to type into: the wake fails with the
+    /// node's words and types nothing.
+    #[test]
+    fn a_wake_whose_renewal_left_no_holder_fails_and_types_nothing() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "renew_holder" => refused(
+                hide_node_link::holders::RENEWAL_LOST,
+                "the holder did not start",
+            ),
+            other => panic!("unexpected {other}"),
+        });
+        let outcome = start_agent(
+            fake.engine().as_ref(),
+            &PlainNode,
+            &resume_in("/work/agent"),
+        );
+        assert_eq!(
+            outcome,
+            WakeOutcome::Failed {
+                reason: WAKE_NOT_RESUMED.into(),
+                detail: "holder_renewal_lost: the holder did not start".into(),
+            }
+        );
+        assert_eq!(fake.methods(), ["renew_holder"]);
     }
 
     #[test]

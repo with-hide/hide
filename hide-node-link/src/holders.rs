@@ -74,6 +74,29 @@ pub struct HolderReservation {
     pub incarnation: u64,
 }
 
+/// What [`PaneHolders::renew`] did to a pane's holder (with-hide/hide-private#646).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "renewal", rename_all = "snake_case")]
+pub enum HolderRenewal {
+    /// The pane's holder already runs from this build's version folder.
+    Current,
+    /// The pane's holder, a shell alone at its prompt, was ended and the
+    /// pane started again under its own id from this build's folder,
+    /// replacing the earlier start's incarnation.
+    Renewed {
+        /// The version folder the earlier holder ran from.
+        from: String,
+        /// The version folder the pane runs from now.
+        to: String,
+    },
+}
+
+/// The refusal [`PaneHolders::renew`] answers when the earlier holder was
+/// ended and the pane's new one did not start: the pane has no holder, as a
+/// pane a restore could not start. Every other refusal of a renewal leaves
+/// the earlier holder running as it was.
+pub const RENEWAL_LOST: &str = "holder_renewal_lost";
+
 /// An interrupted existence record whose original process is gone. The
 /// replacement must consume this exact incarnation under the same pane ID.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -390,6 +413,19 @@ pub trait PaneHolders: Send + Sync {
     fn cancel(&self, _intent: &HolderIntent, _request: HolderRequest) -> Result<(), HolderError> {
         Err(reservation_unsupported())
     }
+    /// Brings the pane `start` names to this node's build (with-hide/hide-private#646):
+    /// when its holder runs from another build's version folder and only
+    /// its shell holds its terminal, ends that holder and starts the pane
+    /// again under the same id from `start` (a shell, in `start.cwd`),
+    /// replacing the earlier incarnation, and attaches its screen again. A
+    /// pane already on this build is left alone. Any refusal other than
+    /// [`RENEWAL_LOST`] leaves the earlier holder running as it was.
+    fn renew(&self, _start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+        Err(HolderError::Refused {
+            code: "holder_renewal_unsupported".to_owned(),
+            message: "this node cannot renew a pane's holder".to_owned(),
+        })
+    }
     /// How a pane started with no program runs its shell, when it runs one
     /// with Hide's shell integration, which marks its first prompt on its
     /// screen: what a start into such a pane waits for. `None` for a shell
@@ -494,6 +530,10 @@ pub enum PaneCall {
     },
     Retire {
         request: HolderRequest,
+    },
+    /// [`PaneHolders::renew`]; answers a [`HolderRenewal`].
+    Renew {
+        start: HolderStart,
     },
     /// [`PaneHolders::shell_launch`]; answers an optional
     /// [`crate::protocol::ShellLaunch`].

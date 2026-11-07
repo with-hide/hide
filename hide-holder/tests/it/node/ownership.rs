@@ -16,13 +16,28 @@ pub(super) struct Connection {
 }
 
 impl Connection {
-    fn open(home: &Path, state: &Path) -> Self {
+    pub(super) fn open(home: &Path, state: &Path) -> Self {
         Self::with_attacher(home, state, |attacher| attacher)
     }
 
     pub(super) fn with_attacher(
         home: &Path,
         state: &Path,
+        wrap: impl FnOnce(Box<dyn Attacher>) -> Box<dyn Attacher>,
+    ) -> Self {
+        Self::built(home, state, source(), wrap)
+    }
+
+    /// A connection whose node starts its holders from `holder`, as the
+    /// daemon of the build that carries it does.
+    pub(super) fn of_build(home: &Path, state: &Path, holder: hide_kit::holders::Source) -> Self {
+        Self::built(home, state, holder, |attacher| attacher)
+    }
+
+    fn built(
+        home: &Path,
+        state: &Path,
+        holder: hide_kit::holders::Source,
         wrap: impl FnOnce(Box<dyn Attacher>) -> Box<dyn Attacher>,
     ) -> Self {
         let screens = Arc::new(Screens::default());
@@ -33,7 +48,7 @@ impl Connection {
                     home,
                     state_dir: state,
                 },
-                source(),
+                holder,
                 reports.clone(),
             )
             .unwrap(),
