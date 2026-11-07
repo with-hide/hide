@@ -449,9 +449,11 @@ fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why(
             "an awaited request already reports an end: {waiting}"
         );
 
+        // The recipient ends its own registration from its own pane, which
+        // stays open to answer the command.
         fixture
             .local
-            .run_in_pane(&format!("{hide} agent end {recipient}"))?
+            .run_in_pane(&format!("{hide} agent end {recipient} --keep-pane"))?
             .value()?;
 
         let shown = fixture.remote.run_in_pane(&show)?.json()?;
