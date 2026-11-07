@@ -306,9 +306,8 @@ impl Runtime {
         };
         let mut members = Vec::new();
         for (agent, parent, depth) in &tree {
-            let mut member = self
-                .archive_member(agent, &checkout_path)
-                .expect("checked above");
+            let proof = self.archive_proof(agent).expect("checked above");
+            let mut member = self.archive_member(agent, &checkout_path, proof);
             member.registration = self.delivery_registration_of(&agent.pane_id);
             member.parent = parent.clone();
             member.depth = *depth;
@@ -363,17 +362,17 @@ impl Runtime {
         Ok(())
     }
 
-    /// `agent`'s conversation as an archive member that has not closed yet:
-    /// a root holding no registration, in `checkout_path` when its own pane's
-    /// checkout is not listed. `None` when Hide does not know its
-    /// conversation.
+    /// `agent`'s conversation, `(native session, reference)` as proven, as
+    /// an archive member that has not closed yet: a root holding no
+    /// registration, in `checkout_path` when its own pane's checkout is not
+    /// listed.
     fn archive_member(
         &self,
         agent: &SidebarAgentSnapshot,
         checkout_path: &str,
-    ) -> Option<ArchivedMember> {
-        let (native_session_id, source_reference) = self.archive_proof(agent)?;
-        Some(ArchivedMember {
+        (native_session_id, source_reference): (String, Option<SessionAgentSessionPayload>),
+    ) -> ArchivedMember {
+        ArchivedMember {
             machine: self.archive_machine_of(&agent.pane_id),
             pane_id: agent.pane_id.clone(),
             kind: agent.agent_kind.clone(),
@@ -391,7 +390,7 @@ impl Runtime {
             depth: 0,
             closed: false,
             resume: Resume::Idle,
-        })
+        }
     }
 
     /// What `hide agent end` does with `pane_id`, the pane registration
@@ -399,7 +398,11 @@ impl Runtime {
     /// conversation runs there now, and keep the registration's conversation
     /// for 이어가기 when Hide knows it. A pane no agent shows in is the
     /// registration's own leftover shell, which the caller closes only while
-    /// it still runs the terminal the registration recorded.
+    /// it still runs the terminal the registration recorded. The row's
+    /// session is the one the agent registered with, which proves it as the
+    /// label reader would: an agent ended right after its first turn is
+    /// often ended before that reader confirmed its session file, and its
+    /// resume still confirms the session by id and folder.
     pub(crate) fn end_pane_plan(&self, pane_id: &str, session: Option<&str>) -> EndPlan {
         let Some(row) = self.archive_rows().find(|agent| agent.pane_id == pane_id) else {
             return EndPlan::Close { keep: None };
@@ -413,18 +416,20 @@ impl Runtime {
         {
             return EndPlan::OtherAgent;
         }
-        let keep = self
-            .archive_place(pane_id)
-            .and_then(|(root, label, checkout)| {
-                Some(EndedConversation {
+        let proof = self
+            .archive_proof(row)
+            .or_else(|| Some((row.session_id.clone()?, None)));
+        let keep =
+            self.archive_place(pane_id)
+                .zip(proof)
+                .map(|((root, label, checkout), proof)| EndedConversation {
                     project_root: root,
                     project_label: label,
-                    member: self.archive_member(row, &checkout)?,
+                    member: self.archive_member(row, &checkout, proof),
                     starred_at_unix_ms: self
                         .revisit_mark(pane_id)
                         .and_then(|mark| mark.starred_at_unix_ms),
-                })
-            });
+                });
         EndPlan::Close { keep }
     }
 
@@ -1794,7 +1799,7 @@ pub(crate) enum EndPlan {
 pub(crate) struct EndedConversation {
     project_root: String,
     project_label: String,
-    member: ArchivedMember,
+    pub(crate) member: ArchivedMember,
     starred_at_unix_ms: Option<u64>,
 }
 

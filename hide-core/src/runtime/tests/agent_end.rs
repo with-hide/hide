@@ -430,3 +430,39 @@ fn a_full_archive_closes_the_pane_and_says_the_conversation_was_not_kept() {
         "{records:?}"
     );
 }
+
+/// An agent of this machine ended right after its first turn, before the
+/// label reader confirmed its session file, still has its conversation kept:
+/// the session it registered with is the one its row shows.
+#[test]
+fn an_agent_ended_before_its_session_file_was_confirmed_keeps_its_conversation() {
+    use super::tree_close::{EVERY, tree_catalog, tree_payload, tree_runtime};
+    let mut runtime = tree_runtime(&[]);
+    let mut payload = tree_payload(&EVERY, &[]);
+    for agent in &mut payload.agents {
+        agent.agent_session = Some(crate::sidebar::SessionAgentSessionPayload {
+            kind: "id".into(),
+            value: format!("s-{}", agent.pane_id.as_deref().unwrap().replace(':', "-")),
+        });
+    }
+    runtime.ingest_session_with_catalog(Ok(payload), Some(tree_catalog()));
+    let row = |pane: &str| {
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == pane)
+            .unwrap()
+            .clone()
+    };
+    assert!(row("w1:p2").row_facts.is_none(), "no file confirmed yet");
+    let registered = crate::engine::tokens::session_digest("s-w1-p2");
+    let crate::runtime::session_archive::EndPlan::Close { keep: Some(ended) } =
+        runtime.end_pane_plan("w1:p2", registered.as_deref())
+    else {
+        panic!("the conversation is kept");
+    };
+    assert_eq!(ended.member.native_session_id, "s-w1-p2");
+    assert_eq!(ended.member.source_reference, None);
+}
