@@ -54,10 +54,11 @@ jobs:
         # sshd. The mirror can stall, so the packages are cached and fetched
         # inside one time limit (.github/actions/apt-install). macOS has both.
         if: runner.os == 'Linux'
-        timeout-minutes: 8
+        timeout-minutes: 6
         uses: ./.github/actions/apt-install
         with:
           packages: zsh openssh-server
+          minutes: 3
       - name: A default key and a password account for the sign-in journeys
         # hided/tests/it/system_ssh.rs signs in with a key ssh finds by itself
         # in the runner account's own ~/.ssh, and as a second account with a

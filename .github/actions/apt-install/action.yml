@@ -3,7 +3,8 @@
 # (with-hide/hide-private#629: a slow mirror took 5 minutes for 5 MB of zsh and
 # held the job past its timeout).
 #
-# The files are cached under the runner image's version and the package list,
+# The files are cached under the runner's architecture, the image and its
+# version, and the package list,
 # so a hit fetches nothing and installs in seconds; a miss downloads inside
 # `minutes` and the job's end saves the files. `scripts/ci-apt-install.sh`
 # owns the retry and the one time limit: the action passes `minutes` to it as
@@ -36,10 +37,11 @@ runs:
       shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
-      # ImageVersion is a runner variable, not a workflow `env` value. The
-      # image fixes the package lists the cached versions were chosen from.
+      # ImageOS and ImageVersion are runner variables, not workflow `env`
+      # values. The image fixes the package lists the cached versions were
+      # chosen from, and the architecture fixes which .deb files they are.
       run: |
-        echo "key=apt-debs-v1-$ImageVersion-${PACKAGES// /+}" >> "$GITHUB_OUTPUT"
+        echo "key=apt-debs-v1-$RUNNER_ARCH-$ImageOS-$ImageVersion-${PACKAGES// /+}" >> "$GITHUB_OUTPUT"
         echo "dir=$RUNNER_TEMP/apt-debs" >> "$GITHUB_OUTPUT"
     - name: Look for the packages in the cache
       uses: actions/cache@v6

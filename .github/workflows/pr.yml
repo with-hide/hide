@@ -180,7 +180,9 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'policy')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # About 4 minutes of checks plus the zsh install's 6-minute backstop,
+    # with a margin; a cache hit installs in seconds.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
         with:
@@ -192,10 +194,11 @@ jobs:
           node-version: 22
       - name: Install zsh
         # The invariant scripts are zsh; the image has bash.
-        timeout-minutes: 8
+        timeout-minutes: 6
         uses: ./.github/actions/apt-install
         with:
           packages: zsh
+          minutes: 3
       # A merge group runs the structural checks below and not the script
       # suite, which takes about two minutes and checks the scripts each pull
       # request already ran it on; main's push run runs it on the merge.
