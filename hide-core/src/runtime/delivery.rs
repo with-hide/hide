@@ -287,19 +287,27 @@ impl Runtime {
                             .map(|reference| (reference.kind.as_str(), reference.value.as_str()))
                 })
                 .map_or(now, |old| old.observed_since_unix_ms);
-            let persisted = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
-                ledger.watches.iter().find(|watch| {
-                    watch.target.same_identity(&actor)
-                        && watch.last_status == status
-                        && watch.last_state_change_seq == agent.state_change_seq
-                })
-            });
+            // The ledger's watches are read only for an agent whose last
+            // observation does not already say when its state began: a
+            // resting pass looks no agent up in them.
             let changed_at = previous
                 .filter(|old| {
                     old.status == status && old.state_change_seq == agent.state_change_seq
                 })
                 .map(|old| old.status_changed_at_unix_ms)
-                .or_else(|| persisted.map(|watch| watch.status_changed_at_unix_ms))
+                .or_else(|| {
+                    self.delivery_ledger
+                        .as_ref()
+                        .ok()
+                        .and_then(|ledger| {
+                            ledger.watches.iter().find(|watch| {
+                                watch.target.same_identity(&actor)
+                                    && watch.last_status == status
+                                    && watch.last_state_change_seq == agent.state_change_seq
+                            })
+                        })
+                        .map(|watch| watch.status_changed_at_unix_ms)
+                })
                 .unwrap_or(now);
             // Turn reporting is a session-format fact, independent of letters
             // and bell eligibility. An unread turn-capable session stays held.
@@ -1701,51 +1709,45 @@ impl Runtime {
         self.letter_wakes.touch();
         // Or on a session Hide cannot read.
         self.unreadable_letters.touch();
-        let graph_changed = self.delivery_ledger.as_ref().ok().is_none_or(|previous| {
-            !self
-                .snapshot
-                .overview_graph
-                .matches_ledger(previous, &ledger, now)
-        });
+        // One walk of the new letters answers the graph, the newly delivered
+        // and the waiters (`ledger_walk`), where each was its own scan and the
+        // delivered one scanned the previous ledger per delivered letter.
+        let walk = super::ledger_walk::walk(
+            self.delivery_ledger.as_ref().ok().map(|previous| &**previous),
+            &ledger,
+            &self.snapshot.overview_graph,
+            now,
+        );
+        let graph_changed = !walk.graph_unchanged;
         if graph_changed {
             let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now);
             graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
             self.snapshot.overview_graph = graph;
         }
-        let delivered: Vec<_> = ledger
-            .letters
-            .iter()
-            .filter(|letter| {
-                letter.state == crate::delivery::ledger::State::Delivered
-                    && self.delivery_ledger.as_ref().ok().is_some_and(|previous| {
-                        previous
-                            .letters
-                            .iter()
-                            .any(|old| old.id == letter.id && old.state != letter.state)
-                    })
-            })
-            .map(|letter| letter.recipient.pane_id.clone())
-            .collect();
         let mut reopened = false;
-        for pane in delivered {
-            reopened |= self.reopen_resolved_session(&pane);
+        for pane in &walk.delivered {
+            reopened |= self.reopen_resolved_session(pane);
         }
-        let before = self.delivery_ledger.as_ref().ok().map(|ledger| {
-            ledger
+        // The watch views are read only when a transition asked to publish them.
+        let changed = transitions && {
+            let after = ledger
                 .watches
                 .iter()
                 .map(|watch| watch.view())
-                .collect::<Vec<_>>()
-        });
-        let after = ledger
-            .watches
-            .iter()
-            .map(|watch| watch.view())
-            .collect::<Vec<_>>();
-        let changed = transitions && before.as_ref() != Some(&after);
-        if changed {
-            self.snapshot.delivery_watches = after;
-        }
+                .collect::<Vec<_>>();
+            let moved = self.delivery_ledger.as_ref().ok().is_none_or(|before| {
+                before.watches.len() != after.len()
+                    || before
+                        .watches
+                        .iter()
+                        .zip(&after)
+                        .any(|(before, after)| &before.view() != after)
+            });
+            if moved {
+                self.snapshot.delivery_watches = after;
+            }
+            moved
+        };
         if !self.registrations_gone.is_empty() {
             self.registrations_gone.retain(|id, _| {
                 ledger
@@ -1766,28 +1768,7 @@ impl Runtime {
         // Only a change in who waits for a reply, from whom, and whether that
         // agent took the letter in moves a row's wait, so the lineage is not
         // rebuilt for every other step of a letter's delivery.
-        let waiters = |ledger: &Ledger| {
-            ledger
-                .letters
-                .iter()
-                .filter(|letter| letter.waiting_answer)
-                .map(|letter| {
-                    (
-                        (letter.sender.pane_id.clone(), letter.sender.session.clone()),
-                        (
-                            letter.recipient.pane_id.clone(),
-                            letter.recipient.session.clone(),
-                        ),
-                        letter.awaiting_intake(),
-                    )
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-        let waiters_moved = self
-            .delivery_ledger
-            .as_ref()
-            .ok()
-            .is_none_or(|previous| waiters(previous) != waiters(&ledger));
+        let waiters_moved = walk.waiters_moved;
         // Only a change in what Hide started moves a row's mark or a checkout's
         // group, so a letter's step or a watch never rebuilds the lineage.
         let started = crate::coordination::started::hide_started(&ledger);
