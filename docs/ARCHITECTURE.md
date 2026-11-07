@@ -1694,6 +1694,7 @@ The following table describes Hide's current macOS startup path, not an operator
 | Attach role (`hided attach`, C) | C's sshd starts it on the exec channel M opens; it starts no core and pipes the channel to C's running core. | Its channel ends, C's core socket closes, or 30 s pass without a byte from M. | Not the app's. | Gone with sshd; M dials again. |
 
 The local executable authorities are `desktop/src/main/{host,spawn}.ts`, `hided/src/{cli,env,lib,server}.rs`, `hide-node/src/ssh/host.rs` and `hide-host/src/serve.rs` with `hided/src/node_cli.rs`.
+Which of these a `hided` process is comes from its arguments, read once before anything else runs (`hided/src/role.rs`): no argument at all is the daemon, `core-login` alone is the daemon as a moved core's login item starts it, each other role in the table takes its own words and refuses the ones it does not know, `--version` and `--help` print and end without reading the environment, and any other argument is refused with exit 2 before an owner watch, a state folder, a lock or a log is touched, so a stray argument on a device can never start a second core there (`hided/tests/it/arguments.rs`).
 The one-release kit retirement stage is `hide-kit/src/coordination_retirement.rs`; it does not start a resident service.
 It reads legacy v1 and current Hide-only v2 Sasu registries without importing them, checks their retained run states, and refuses if the authoritative revision disappears after selection.
 After reboot, hided and its watches start with the app; no login automatic start is added.
