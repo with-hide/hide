@@ -122,7 +122,7 @@ pub(crate) struct SessionFacts {
     #[serde(default)]
     pub(crate) last_reply_at_unix_ms: Option<u64>,
     /// The canonical digests (`hide_agent_hooks::delivery::prompt_digest`)
-    /// of the newest user messages, newest last: the agent's own record of
+    /// of the newest user messages, each once, newest last: the agent's own record of
     /// the input it took, which confirms a brief Hide typed into an agent
     /// whose prompt hook reports no digest (`delivery::typed`).
     #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
@@ -328,11 +328,14 @@ impl SessionFacts {
                 requester
             }
         };
+        // A read that starts again at the last human record, as the first
+        // one on a new engine does, reads the same requests again.
+        let digest = hide_agent_hooks::delivery::prompt_digest(&event.text);
+        self.prompt_digests.retain(|known| *known != digest);
         if self.prompt_digests.len() >= MAX_PROMPT_DIGESTS {
             self.prompt_digests.pop_front();
         }
-        self.prompt_digests
-            .push_back(hide_agent_hooks::delivery::prompt_digest(&event.text));
+        self.prompt_digests.push_back(digest);
         let (text, cut) = capped(&event.text);
         let request = Request {
             text,

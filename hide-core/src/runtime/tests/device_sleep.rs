@@ -108,6 +108,7 @@ fn dialed_device() -> Device {
                 label: DEVICE.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: DEVICE.to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });

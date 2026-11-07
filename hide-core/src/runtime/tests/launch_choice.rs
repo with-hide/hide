@@ -565,6 +565,7 @@ fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
             label: device.to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: device.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });

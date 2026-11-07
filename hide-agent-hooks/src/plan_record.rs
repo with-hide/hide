@@ -129,19 +129,7 @@ struct Record {
 
 /// Where the pane's record lives, under Hide's own directory.
 fn record_path(home: &Path, pane_id: &str) -> PathBuf {
-    let safe: String = pane_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    crate::route::pane_records(home)
-        .join("plans")
-        .join(format!("{safe}.json"))
+    crate::route::pane_file(&crate::route::pane_records(home).join("plans"), pane_id)
 }
 
 /// Writes the pane's record whole, private to the account.

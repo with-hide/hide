@@ -31,6 +31,7 @@ mod lossless_json;
 pub mod memory;
 pub mod opencode;
 pub mod opener_guard;
+pub mod owed;
 pub mod pane;
 pub mod pi_extension;
 pub mod plan_record;

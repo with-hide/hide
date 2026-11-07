@@ -164,6 +164,7 @@ fn device_runtime(fake: &Fake, machine: &Machine) -> SharedRuntime {
             label: "mini".to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: DEVICE.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });

@@ -1,6 +1,9 @@
 // The device side of SSH e2e runs only in the declared private HOME.
 // The isolated sshd must set HOME to HIDE_E2E_SSH_HOME and that folder must
 // carry the fixture marker before a device can receive Hide's kit.
+// It must also `AcceptEnv HIDE_MACHINE_ID`: every alias is this Mac, and a
+// device is named by its machine's id (docs/ARCHITECTURE.md, A device's id),
+// so each alias sends the id its device is expected under (`writeSshConfig`).
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -34,13 +37,15 @@ export const deviceState = (home: string) => path.join(home, ".hide", "state");
 export const deviceBridges = (home: string) => path.join(deviceState(home), "workspace-bridges");
 
 /** An SSH config and known_hosts under the run's local HOME, one host entry per alias for the isolated server. */
-export function writeSshConfig(localHome: string, aliases: string[]): void {
+/** Each alias in `devices` reaches the isolated sshd as the machine whose id is its value, the id its device is named by. */
+export function writeSshConfig(localHome: string, devices: Record<string, string>): void {
   const ssh = path.join(localHome, ".ssh");
   fs.mkdirSync(ssh, { recursive: true });
   fs.copyFileSync(process.env.HIDE_E2E_SSH_KNOWN_HOSTS!, path.join(ssh, "known_hosts"));
-  fs.writeFileSync(path.join(ssh, "config"), aliases.flatMap((alias) => [
+  fs.writeFileSync(path.join(ssh, "config"), Object.entries(devices).flatMap(([alias, machine]) => [
     `Host ${alias}`, "  HostName 127.0.0.1", `  Port ${process.env.HIDE_E2E_SSH_PORT}`,
-    `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none", "",
+    `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none",
+    `  SetEnv HIDE_MACHINE_ID=${machine}`, "",
   ]).join("\n"), { mode: 0o600 });
 }
 
@@ -50,10 +55,11 @@ export function proveDeviceHome(localEnv: Record<string, string>, alias: string,
   const answer = spawnSync("ssh", [
     "-F", path.join(ssh, "config"), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
     "-o", `UserKnownHostsFile=${path.join(ssh, "known_hosts")}`, "-o", "GlobalKnownHostsFile=/dev/null",
-    alias, 'printf "%s" "$HOME"',
+    alias, 'printf "%s\\n%s" "$HOME" "${HIDE_MACHINE_ID:-}"',
   ], { env: localEnv, encoding: "utf8", timeout: 20_000 });
   if (answer.status !== 0) throw new Error(`the isolated sshd did not answer: ${answer.stderr}`);
-  const remoteHome = answer.stdout;
+  const [remoteHome, machine] = answer.stdout.split("\n");
+  if (!machine) throw new Error("the isolated sshd must AcceptEnv HIDE_MACHINE_ID, so each alias is a machine of its own");
   if (!remoteHome || fs.realpathSync(remoteHome) !== home) {
     throw new Error(`a session on the isolated sshd does not receive the declared private HOME; the kit would write that account's own files`);
   }

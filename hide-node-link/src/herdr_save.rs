@@ -6,6 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The newest session format Herdr v0.9.5 writes and reads
+/// (`SNAPSHOT_VERSION`); a newer one is a Herdr this build does not know.
+/// The core's session reader and a node's importable projects both refuse
+/// past it.
+pub const NEWEST_FORMAT: u32 = 3;
+
 /// The largest save read: an operator's session of 25 workspaces and 83
 /// panes took 51 KB on 2026-11-04, so this is far past any session and
 /// bounds what an unreadable file can cost.

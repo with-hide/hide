@@ -11,6 +11,10 @@ use super::{
     RETENTION_MS, WATCH_LIMIT,
 };
 
+/// The bells one letter has: the doorbell types it at most this many
+/// times (`Letter::reserve_bell`).
+pub(crate) const BELLS: u8 = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -134,6 +138,32 @@ pub struct Letter {
     /// When that notice was sent, 0 for none.
     #[serde(default)]
     pub input_noticed_at_unix_ms: u64,
+    /// Why the letter's last bell failed, while no bell typed after it went
+    /// through; absent otherwise. Its sender reads the cause here, and the
+    /// doorbell reads whether the line may be in the agent's input. An older
+    /// build drops the field at its next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bell_failure: Option<BellFailure>,
+    /// The bells whose result the store recorded: the doorbell rings a
+    /// letter one bell at a time and records how each ended (typed, failed,
+    /// or held after its reservation) before it reserves the next, so a
+    /// result ends the bell reserved last. Fewer than `bell_attempts` while
+    /// a bell is on its way. Null on a letter an earlier build rang, which
+    /// kept no such count; an older build drops the field at its next save.
+    #[serde(default)]
+    pub bell_ended: Option<u8>,
+}
+
+/// A bell that failed: the doorbell's code for it, and whether the engine
+/// had been asked to type the line, so it may be in the agent's input
+/// (`docs/delivery.md`, Letters while the agent works). A failure that typed
+/// nothing after one that may have keeps that one's `maybe_typed` and time:
+/// the line it may have typed is still where it was.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BellFailure {
+    pub code: String,
+    pub maybe_typed: bool,
+    pub at_unix_ms: u64,
 }
 
 /// How long one machine other than this core's own has been reachable, which
@@ -314,8 +344,26 @@ impl Letter {
     pub(crate) fn attempts(&self) -> u8 {
         // Legacy successes have an unknown total. Do not infer spare attempts
         // from the old boolean and repeat an already unbounded external effect.
-        self.bell_attempts
-            .unwrap_or(if self.bell_sent { 3 } else { self.bell_errors })
+        self.bell_attempts.unwrap_or(if self.bell_sent {
+            BELLS
+        } else {
+            self.bell_errors
+        })
+    }
+
+    /// Whether a bell is on its way: reserved, and its result not yet
+    /// recorded. A letter an earlier build rang has no record of it.
+    pub(crate) fn bell_in_flight(&self) -> bool {
+        self.bell_ended.is_some_and(|ended| ended < self.attempts())
+    }
+
+    /// Whether the letter has no bell left and the result of its last one
+    /// is recorded: the one fact the spent-bell judgment
+    /// (`Runtime::drive_spent_bells`) and the unconfirmed-input notice
+    /// (`Runtime::typed_input_work`) read, so neither judges a last bell
+    /// still on its way.
+    pub(crate) fn bells_spent(&self) -> bool {
+        self.bell_ended.is_some_and(|ended| ended >= BELLS)
     }
 
     /// Spends one of the letter's three bells on `line`, which the doorbell
@@ -336,7 +384,7 @@ impl Letter {
         if self.handed {
             return Err("letter_handed".into());
         }
-        if self.attempts() >= 3 {
+        if self.attempts() >= BELLS {
             return Err("doorbell_attempt_limit".into());
         }
         let attempt = self.attempts() + 1;
@@ -414,13 +462,20 @@ impl Ledger {
                 )
                 || letter.body.len() > BODY_LIMIT
                 || letter.body.trim().is_empty()
-                || letter.bell_errors > 3
+                || letter.bell_errors > BELLS
                 || letter.bell_turn.as_ref().is_some_and(|turn| {
                     !hide_agent_hooks::delivery::valid_sha256_digest(&turn.session)
                         || !hide_agent_hooks::delivery::valid_prompt_digest(&turn.digest)
                         || letter.recipient.session.as_ref() != Some(&turn.session)
                 })
-                || letter.bell_attempts.is_some_and(|attempts| attempts > 3)
+                || letter.bell_attempts.is_some_and(|attempts| attempts > BELLS)
+                || letter
+                    .bell_ended
+                    .is_some_and(|ended| ended > letter.attempts())
+                || letter
+                    .bell_failure
+                    .as_ref()
+                    .is_some_and(|failure| !super::valid_key(&failure.code))
                 || letter
                     .bell_line
                     .as_deref()
@@ -568,11 +623,12 @@ impl Ledger {
         changed
     }
 
-    /// Ends the wait of each pending letter in `failed`, whose recipient's
-    /// wake failed (PRD mission-worker-sleep D-16): it is undelivered and its
-    /// sender waits for no answer. The reason goes to the sender in Hide's
-    /// own letter, not into this one.
-    pub fn fail_woken(&mut self, failed: &BTreeMap<String, String>, now: u64) -> bool {
+    /// Ends the wait of each pending letter in `failed`, which cannot be
+    /// delivered now: its recipient's wake failed (PRD mission-worker-sleep
+    /// D-16), or its bells are spent and none was taken. It is undelivered
+    /// and its sender waits for no answer. The reason goes to the sender in
+    /// Hide's own letter, not into this one.
+    pub fn fail_undeliverable(&mut self, failed: &BTreeMap<String, String>, now: u64) -> bool {
         let mut changed = false;
         for letter in &mut self.letters {
             if letter.state != State::Pending || !failed.contains_key(&letter.id) {
@@ -1107,7 +1163,7 @@ mod tests {
     fn a_failed_wake_leaves_its_letter_undelivered() {
         let mut ledger = letter_to("local", 0);
         let id = ledger.letters[0].id.clone();
-        assert!(ledger.fail_woken(&[(id, "agent_wake.not_started".into())].into(), 5));
+        assert!(ledger.fail_undeliverable(&[(id, "agent_wake.not_started".into())].into(), 5));
         let letter = &ledger.letters[0];
         assert_eq!(letter.state, State::Undelivered);
         assert!(!letter.waiting_answer);

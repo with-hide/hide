@@ -1281,9 +1281,9 @@ fn agent_row<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgentSnapshot {
 
 /// The operator looks at one pane: the same path a sidebar click takes.
 fn look_at(runtime: &mut Runtime, pane: &str) {
-    runtime.operator_focused_pane_id = Some(pane.to_owned());
+    runtime.set_operator_focus(Some(pane.to_owned()));
     runtime.refresh_pane_read_state();
-    runtime.operator_focused_pane_id = None;
+    runtime.set_operator_focus(None);
 }
 
 // PRD B5, B6, B8, D-03: a descendant asking, changing its ask, or finishing
@@ -3288,9 +3288,9 @@ fn a_parent_read_with_its_device_child_stays_read_on_every_pass_until_the_child_
 
     // The operator looks at the parent while the engine updates, then
     // moves to another pane.
-    runtime.operator_focused_pane_id = Some("w1:p1".to_owned());
+    runtime.set_operator_focus(Some("w1:p1".to_owned()));
     ingest_lineage(&mut runtime, &local);
-    runtime.operator_focused_pane_id = Some("w1:p3".to_owned());
+    runtime.set_operator_focus(Some("w1:p3".to_owned()));
     runtime.refresh_pane_read_state();
     assert!(!agent_row(&runtime, "w1:p1").unread, "read after the move");
     ingest_lineage(&mut runtime, &local);

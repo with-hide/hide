@@ -7,6 +7,8 @@ use crate::engine::fake::{self, FakeEngine, Reply, refused, reply, unanswered};
 /// The stand-in engine a runtime test answers for.
 type Fake = Arc<FakeEngine<'static>>;
 
+#[path = "tests/add_project.rs"]
+mod add_project;
 mod agent_areas;
 #[path = "tests/agent_connection.rs"]
 mod agent_connection;
@@ -40,6 +42,10 @@ mod detail;
 mod device_catalog;
 #[path = "tests/device_kit.rs"]
 mod device_kit;
+#[path = "tests/device_names.rs"]
+mod device_names;
+#[path = "tests/device_reconnect.rs"]
+mod device_reconnect;
 #[path = "tests/device_sleep.rs"]
 mod device_sleep;
 #[path = "tests/device_worktrees.rs"]
@@ -119,6 +125,8 @@ mod projects;
 mod ps;
 #[path = "tests/pull_requests.rs"]
 mod pull_requests;
+#[path = "tests/read_on_look.rs"]
+mod read_on_look;
 #[path = "tests/recent_checkouts.rs"]
 mod recent_checkouts;
 #[path = "tests/recent_panes.rs"]
@@ -309,6 +317,17 @@ impl RecordedTerminals {
             .into_iter()
             .filter_map(|control| match control {
                 TerminalControl::Attach { pane, manual, .. } => Some((pane, manual)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The panes released since the last take.
+    pub(super) fn releases(&self) -> Vec<String> {
+        self.take()
+            .into_iter()
+            .filter_map(|control| match control {
+                TerminalControl::Release { pane, .. } => Some(pane),
                 _ => None,
             })
             .collect()

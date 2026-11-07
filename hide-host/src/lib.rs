@@ -13,6 +13,7 @@
 pub mod ai;
 pub mod attachments;
 pub mod branch_merge;
+pub mod browse;
 pub mod bytes;
 pub mod catalog;
 pub mod cleanup;
@@ -31,6 +32,7 @@ pub mod git_run;
 pub mod git_watch;
 pub mod herdr_save;
 pub mod home;
+pub mod importable;
 pub mod index;
 pub mod kit;
 pub mod label_lock;

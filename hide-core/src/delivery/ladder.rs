@@ -71,56 +71,68 @@ pub(crate) fn ready(
 /// argument and prompt identity use (`hide_agent_hooks::delivery::input_text`).
 pub(crate) fn deliver(engine: &dyn Engine, target: &InputTarget, text: &str) -> Delivered {
     let text = hide_agent_hooks::delivery::input_text(text);
-    match engine.prompt_agent(Wait::Small(PROMPT_TIMEOUT), &target.raw_pane_id, &text) {
-        Ok(()) => {
-            logged(target, TYPED);
-            Delivered::Sent(SendRoute::Typed)
+    answered(
+        target,
+        TYPED,
+        engine.prompt_agent(Wait::Small(PROMPT_TIMEOUT), &target.raw_pane_id, &text),
+    )
+}
+
+/// Presses Enter in the pane for a line Hide typed there that its composer
+/// still shows, unsubmitted, and nothing else (`composer::Shows::Typed`).
+pub(crate) fn press_enter(engine: &dyn Engine, target: &InputTarget) -> Delivered {
+    answered(
+        target,
+        ENTER,
+        engine.send_keys(Wait::Small(PROMPT_TIMEOUT), &target.raw_pane_id, &["Enter"]),
+    )
+}
+
+/// One input's answer as what it delivered, logged by its rung.
+fn answered(target: &InputTarget, rung: &str, answer: Result<(), EngineError>) -> Delivered {
+    let Err(error) = answer else {
+        logged(target, rung);
+        return Delivered::Sent(SendRoute::Typed);
+    };
+    match not_typed(&error) {
+        Some(reason) => {
+            unavailable_reason(target, rung, reason, &error);
+            Delivered::NotYet(reason)
         }
-        Err(error) => match not_typed(&error) {
-            Some(reason) => {
-                unavailable_reason(target, TYPED, reason, &error);
-                Delivered::NotYet(reason)
-            }
-            None => {
-                let reason = if matches!(error, EngineError::Answer(_)) {
-                    "herdr_format"
-                } else {
-                    "herdr_call_failed"
-                };
-                lost(target, TYPED, reason, &error);
-                Delivered::Lost(reason)
-            }
-        },
+        None => {
+            let reason = if matches!(error, EngineError::Answer(_)) {
+                "herdr_format"
+            } else {
+                "herdr_call_failed"
+            };
+            lost(target, rung, reason, &error);
+            Delivered::Lost(reason)
+        }
     }
 }
 
-/// Why a submission that failed typed nothing, or `None` when it may have:
-/// a request the engine could not take and a refusal the engine makes before
-/// it writes leave the agent's input untouched, so the doorbell may ring
-/// again. Any other refusal, such as the engine's `timeout` while it waits after
-/// the submission, a failed connection, and an answer that never came or
-/// could not be read may follow a submission that arrived.
+/// Why a submission that failed typed nothing, or `None` when it may have.
+/// The engine's contract decides it, never a list of its codes: a request it
+/// could not take, an engine that is not running or could not be reached,
+/// and every refusal, its own (a blocked or starting agent, an empty prompt)
+/// or its node's (a pane with no terminal owner, input over its cap, a
+/// queued input cancelled or expired, a node busy or not connected), are
+/// answered before anything is written (`hide-node`'s `command.rs`: once a
+/// write began, its failure is `Unreachable`). An answer that never came,
+/// or one that could not be read, may follow a submission that arrived.
 fn not_typed(error: &EngineError) -> Option<&'static str> {
     match error {
         EngineError::Request(_) => Some("herdr_parameters"),
-        EngineError::Refused { code, .. } if REFUSED_BEFORE_TYPING.contains(&code.as_str()) => {
-            Some("engine_refused")
-        }
-        // A connection that failed after the request was written can read
-        // as a transport failure, so only the engine's own words prove that
-        // nothing was typed.
-        _ => None,
+        EngineError::Refused { .. } => Some("engine_refused"),
+        EngineError::NotRunning(_) | EngineError::Transport(_) => Some("engine_unreachable"),
+        EngineError::Unanswered(_) | EngineError::Malformed(_) | EngineError::Answer(_) => None,
     }
 }
 
-/// The refusals an engine answers `agent.prompt` with before it writes
-/// anything: the engine's `agent_blocked` ("returns `agent_blocked` without
-/// sending input", its socket API), and the core's own engine's three
-/// (`engine::own`'s `prompt_agent`).
-const REFUSED_BEFORE_TYPING: &[&str] = &["agent_blocked", "agent_not_ready", "empty_agent_prompt"];
-
 /// The typed rung's name in a log line (`InputRung::name`).
 const TYPED: &str = "typed";
+/// The Enter a line still in the composer gets, in a log line.
+const ENTER: &str = "enter";
 
 fn logged(target: &InputTarget, rung: &str) {
     crate::diagnostic!(json!({"component":"delivery","kind":"input.rung",
@@ -202,19 +214,32 @@ mod tests {
     /// and is never sent again blindly.
     #[test]
     fn a_refused_submission_is_not_typed_and_an_unanswered_one_may_be() {
-        let fake = FakeEngine::start(|method, _| {
-            assert_eq!(method, "prompt_agent");
-            refused("agent_blocked", "agent is blocked")
-        });
         let target = InputTarget {
             kind: "claude".into(),
             pane_id: "pane".into(),
             raw_pane_id: "w1:p2".into(),
         };
-        assert_eq!(
-            deliver(fake.engine().as_ref(), &target, "letter"),
-            Delivered::NotYet("engine_refused")
-        );
+        // The engine's own refusals and its node's, on this machine or a
+        // device: a pane the node no longer lists answered
+        // `pane_input_unavailable` before writing (with-hide/hide-private#677).
+        for code in [
+            "agent_blocked",
+            "pane_input_unavailable",
+            "pane_input_limit",
+            "pane_input_cancelled",
+            "node_busy",
+        ] {
+            let fake = FakeEngine::start(move |method, _| {
+                assert_eq!(method, "prompt_agent");
+                refused(code, "refused before typing")
+            });
+            assert_eq!(
+                deliver(fake.engine().as_ref(), &target, "letter"),
+                Delivered::NotYet("engine_refused"),
+                "{code}"
+            );
+        }
+        let fake = FakeEngine::start(|_, _| refused("agent_blocked", "agent is blocked"));
         assert_eq!(
             crate::coordination::executor::send_brief(
                 fake.engine().as_ref(),

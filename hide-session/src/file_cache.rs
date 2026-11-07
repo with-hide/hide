@@ -10,14 +10,14 @@
 //! than that listing's own `SESSION_DISCOVERY_LIMIT` cap admits.
 
 use crate::Agent;
-use crate::catalog::{ProjectSession, SessionAvailability, Transcript};
+use crate::catalog::{HeaderError, ProjectSession, SessionAvailability, Transcript};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 type Kept<T> = Mutex<HashMap<PathBuf, (String, T)>>;
 
-static HEADERS: OnceLock<Kept<Result<Option<PathBuf>, String>>> = OnceLock::new();
+static HEADERS: OnceLock<Kept<Result<Option<PathBuf>, HeaderError>>> = OnceLock::new();
 static SESSIONS: OnceLock<Kept<Listed>> = OnceLock::new();
 
 /// A transcript's listed facts and where its read stopped; `None` for a file
@@ -33,20 +33,19 @@ pub(crate) fn keeps(agent: Agent) -> bool {
 
 /// The working directory a file's header names, or the reason its header
 /// is refused by rule, kept while `path` holds `stamp`. Only a header that
-/// named a directory or was refused for its bytes is kept: `None` cannot
-/// tell a file without one from a file that could not be opened, and the
-/// latter must be read again once it can be.
+/// named a directory or was refused for its bytes is kept: a file that could
+/// not be read, or named none yet, is read again on the next listing.
 pub(crate) fn header_cwd(
     path: &Path,
     stamp: Option<String>,
-    read: impl FnOnce() -> Result<Option<PathBuf>, String>,
-) -> Result<Option<PathBuf>, String> {
+    read: impl FnOnce() -> Result<Option<PathBuf>, HeaderError>,
+) -> Result<Option<PathBuf>, HeaderError> {
     fetch(
         &HEADERS,
         path,
         stamp,
         |_| read(),
-        |cwd| !matches!(cwd, Ok(None)),
+        |cwd| matches!(cwd, Ok(Some(_)) | Err(HeaderError::Refused(_))),
     )
 }
 
@@ -77,11 +76,12 @@ fn settled(session: &ProjectSession) -> bool {
     }
 }
 
-/// Drops the kept files under `home` that the listing of `home` no longer
-/// names. Other homes' entries stay, so two listings of different homes do
-/// not evict each other's facts.
-pub(crate) fn retain(home: &Path, listed: &HashSet<PathBuf>) {
-    let gone = |path: &PathBuf| path.starts_with(home) && !listed.contains(path);
+/// Drops the kept files under `under` (a home, or one agent's session
+/// folder) that its listing no longer names. Entries elsewhere stay, so two
+/// listings of different homes, or of two agents' folders, do not evict
+/// each other's facts.
+pub(crate) fn retain(under: &Path, listed: &HashSet<PathBuf>) {
+    let gone = |path: &PathBuf| path.starts_with(under) && !listed.contains(path);
     if let Some(kept) = HEADERS.get() {
         lock(kept).retain(|path, _| !gone(path));
     }

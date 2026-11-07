@@ -46,14 +46,28 @@ export type DirectoryList = {
 /** `reason` is the helper's refusal code on `code: "refused"`, worded by `fileFailure.ts`; its sentence stays in hided's log. */
 export type DirectoryUnavailable = { device_id: string; root_path: string; code: string; reason: string | null };
 /** `confirm` is the project root a `needs_confirmation` asks about instead of the folder sent. */
-export type PathRefusal = { kind: string; path: string; reason: string; confirm?: string };
-/** hided's answer to where a clone would land: `path` when it may, `reason` when it may not. */
-export type CloneTarget = { parent: string; name: string; path: string | null; reason: string | null };
+/** A path hided refused; `request_id` is the add's own when it sent one (Add a project's importable list). */
+export type PathRefusal = { kind: string; path: string; reason: string; confirm?: string; request_id?: string };
+/** The answer to where a clone would land on `device_id`: `path` when it may, `reason` when it may not. */
+export type CloneTarget = { device_id: string; parent: string; name: string; path: string | null; reason: string | null };
+/** One child of a folder in Add a project's folder list (`hide_node_link::browse::HomeEntry`). */
+export type HomeEntry = { name: string; is_directory: boolean; repository?: boolean; branch?: string; repositories?: number };
+/** One folder under a machine's home (`hide_node_link::browse::HomeListing`). */
+export type HomeListing = { path: string; label: string; home: string; entries: HomeEntry[]; truncated: boolean };
+/** Where a machine's node found a project worth adding: an agent's session format (`claude`, `codex`, ...), `paseo` or `herdr`. */
+export type ImportSource = string;
+/** One project worth adding on a machine (`hide_node_link::importable::ImportableProject`). */
+export type ImportableProject = { path: string; label: string; name: string; sources: ImportSource[]; active_at_unix_ms: number };
+/** A machine's answer to `importable_projects`: at most twenty projects, or why the machine could not be asked. */
+export type ImportableAnswer = { device_id: string; projects: ImportableProject[] | null; reason: string | null; seq: number };
+/** A machine's answer to `home_folder_list`: the listing, or the reason it could not list `request`. */
+export type HomeFolderAnswer = { device_id: string; request: string; listing: HomeListing | null; reason: string | null; seq: number };
 /**
  * hided's answer to a `project_target` probe: where Create new project would
  * make `name` in `parent`, as sent, and what the create would be refused for.
  */
 export type ProjectTarget = {
+  device_id: string;
   parent: string;
   name: string;
   parent_path: string | null;
@@ -225,6 +239,12 @@ type Store = {
   pathRefusal: PathRefusal | null;
   /** The last `clone_target` answer; Clone from URL reads the one for its own parent and name. */
   cloneTarget: CloneTarget | null;
+  /** Add a project's folder list answers, by `homeFolderKey`, oldest evicted past `HOME_FOLDER_CAP`. */
+  homeFolders: Record<string, HomeFolderAnswer>;
+  /** How many folder list answers arrived; an asker keeps only answers newer than its ask. */
+  homeFolderSeq: number;
+  /** Add a project's importable projects, the newest answer per machine; `seq` counts every answer, as `homeFolderSeq` does. */
+  importable: Record<string, ImportableAnswer>;
   /** hided's last answer about where Create new project would make its folder. */
   projectTarget: ProjectTarget | null;
   /** The last device folder that could not be listed, until a listing for it arrives. */
@@ -299,6 +319,25 @@ export const DIAGNOSTIC_CAP = 200;
 /** Expanded folders the store keeps a listing for; the PRD's watch cap is the same number. */
 export const LISTING_CAP = 64;
 
+/** Folder list answers the store keeps; a list reads a handful of folders while it is open. */
+export const HOME_FOLDER_CAP = 32;
+
+/** Where a folder list answer for `request` on `device` is kept. */
+export function homeFolderKey(device: string, request: string): string {
+  return `${device}\n${request}`;
+}
+
+function withHomeFolder(answers: Record<string, HomeFolderAnswer>, answer: HomeFolderAnswer): Record<string, HomeFolderAnswer> {
+  const key = homeFolderKey(answer.device_id, answer.request);
+  const next: Record<string, HomeFolderAnswer> = { ...answers };
+  // A newer answer for the same folder moves to the end, so eviction takes the oldest.
+  delete next[key];
+  next[key] = answer;
+  const keys = Object.keys(next);
+  for (const old of keys.slice(0, Math.max(0, keys.length - HOME_FOLDER_CAP))) delete next[old];
+  return next;
+}
+
 /** Watch-frame counts the store keeps; far above the 64-folder watch set. */
 export const FOLDER_CHANGE_CAP = 512;
 
@@ -361,6 +400,9 @@ export const useShellStore = create<Store>((set, get) => ({
   listings: {},
   pathRefusal: null,
   cloneTarget: null,
+  homeFolders: {},
+  homeFolderSeq: 0,
+  importable: {},
   projectTarget: null,
   directoryUnavailable: null,
   fileIndex: null,
@@ -519,21 +561,59 @@ export const useShellStore = create<Store>((set, get) => ({
     }
     if (frame.type === "path_refused") {
       set({
-        pathRefusal: { kind: payload.kind ?? "", path: payload.path ?? "", reason: payload.reason ?? "", ...(payload.confirm ? { confirm: payload.confirm } : {}) },
+        pathRefusal: {
+          kind: payload.kind ?? "",
+          path: payload.path ?? "",
+          reason: payload.reason ?? "",
+          ...(payload.confirm ? { confirm: payload.confirm } : {}),
+          ...(payload.request_id ? { request_id: payload.request_id } : {}),
+        },
       });
       return [];
     }
     if (frame.type === "clone_target") {
       const answer = payload as Partial<CloneTarget>;
       set({
-        cloneTarget: { parent: answer.parent ?? "", name: answer.name ?? "", path: answer.path ?? null, reason: answer.reason ?? null },
+        cloneTarget: { device_id: answer.device_id ?? "", parent: answer.parent ?? "", name: answer.name ?? "", path: answer.path ?? null, reason: answer.reason ?? null },
       });
+      return [];
+    }
+    if (frame.type === "home_folder_list") {
+      const answer = payload as Partial<HomeFolderAnswer>;
+      set((state) => ({
+        homeFolderSeq: state.homeFolderSeq + 1,
+        homeFolders: withHomeFolder(state.homeFolders, {
+          device_id: answer.device_id ?? "",
+          request: answer.request ?? "",
+          listing: answer.listing ?? null,
+          reason: answer.reason ?? (answer.listing ? null : "unreadable"),
+          seq: state.homeFolderSeq + 1,
+        }),
+      }));
+      return [];
+    }
+    if (frame.type === "importable_projects") {
+      const answer = payload as Partial<ImportableAnswer>;
+      const device = answer.device_id ?? "";
+      set((state) => ({
+        homeFolderSeq: state.homeFolderSeq + 1,
+        importable: {
+          ...state.importable,
+          [device]: {
+            device_id: device,
+            projects: answer.projects ?? null,
+            reason: answer.reason ?? (answer.projects ? null : "unreadable"),
+            seq: state.homeFolderSeq + 1,
+          },
+        },
+      }));
       return [];
     }
     if (frame.type === "project_target") {
       const answer = payload as Partial<ProjectTarget>;
       set({
         projectTarget: {
+          device_id: answer.device_id ?? "",
           parent: answer.parent ?? "",
           name: answer.name ?? "",
           parent_path: answer.parent_path ?? null,

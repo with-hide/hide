@@ -140,6 +140,13 @@ STORES = {
         "settings (PRD overview-device-tasks D-20), and a global instruction "
         "kept through a link moves as the text the core reads through it",
     ),
+    "hide-core/src/node_migration/devices.rs": (
+        10,
+        "renames a dialed device an earlier build registered under its SSH "
+        "alias to its machine id in the core's own stores and its engine "
+        "folder, once, where they were written, before the core starts on "
+        "them, resuming from its journal beside them",
+    ),
     "hide-core/src/node_migration/reown.rs": (
         4,
         "converts a moved copy of the core's own link and Project "

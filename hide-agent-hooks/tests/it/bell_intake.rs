@@ -49,11 +49,16 @@ impl Kit {
     /// lays them out, and a daemon answering from the same table, so the
     /// helper reaches the stand-ins and nothing else.
     fn new() -> Self {
+        Self::answering(&fake_hide())
+    }
+
+    /// [`new`](Self::new) with a stand-in `hide` that answers by `script`.
+    fn answering(script: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         stand_ins::place(programs::hook(), &bin.join("hide-agent-hooks"));
-        stand_ins::program(&bin.join("hide"), &fake_hide());
+        stand_ins::program(&bin.join("hide"), script);
         let daemon = StandInDaemon::serve(
             &bin.join("hide"),
             &[("FAKE_HIDE_LOG", root.path().join("asked.log").into())],
@@ -80,16 +85,16 @@ impl Kit {
             "session_id": "fixture-session", "cwd": "/tmp/fixture-project",
             "hook_event_name": "UserPromptSubmit", "prompt": prompt,
         });
+        self.hook("UserPromptSubmit", &payload, &[])
+    }
+
+    /// Runs the Claude Code hook for `event` with `payload` on its input and
+    /// `envs` beside the fixture's, and returns its stdout.
+    fn hook(&self, event: &str, payload: &serde_json::Value, envs: &[(&str, &str)]) -> String {
         let home: &Path = self.root.path();
         let mut command = Command::new(self.root.path().join("bin/hide-agent-hooks"));
         command
-            .args([
-                "hook",
-                "--runtime",
-                "claude-code",
-                "--event",
-                "UserPromptSubmit",
-            ])
+            .args(["hook", "--runtime", "claude-code", "--event", event])
             .env(hide_platform::host::HOME_VARIABLE, home)
             .env("FAKE_HIDE_LOG", self.log())
             .stdin(Stdio::piped())
@@ -104,6 +109,7 @@ impl Kit {
                 command.env_remove(key);
             }
         }
+        command.envs(envs.iter().copied());
         self.daemon.route(&mut command);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let mut stdin = child.take_stdin().unwrap();
@@ -111,7 +117,7 @@ impl Kit {
         drop(stdin);
         let output = child
             .capture_until(Instant::now() + Duration::from_secs(10), 64 * 1024)
-            .expect("the prompt hook ends within its bound");
+            .expect("the hook ends within its bound");
         assert!(output.status.success());
         String::from_utf8(output.stdout).unwrap()
     }
@@ -152,4 +158,63 @@ fn a_prompt_that_only_starts_like_the_bell_is_another_prompt() {
     let asked = kit.asked();
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert!(!asked[0].contains(LINE_DIGEST), "{asked:?}");
+}
+
+/// A stand-in `hide` whose letter confirmation fails while the file
+/// `<FAKE_HIDE_LOG>.late` exists, as a confirmation that reaches the core too
+/// late for the hook's deadline does, and is taken otherwise. It is a file,
+/// not a variable of the hook, because the stand-in daemon runs it, not the
+/// hook.
+fn late_confirm_hide() -> String {
+    format!(
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_HIDE_LOG"
+case "$*" in
+  *"--prompt-digest {LINE_DIGEST} "*) echo '{{"ok":true,"result":{{"context":"LETTER-BODY","ids":["letter-1"],"remaining":0}}}}' ;;
+  "inbox --confirm letter-1")
+    if [ -e "$FAKE_HIDE_LOG.late" ]; then echo '{{"ok":false,"reason":"request_timeout"}}'
+    else echo '{{"ok":true,"result":{{"confirmed":["letter-1"]}}}}'; fi ;;
+  *) echo '{{"ok":false,"reason":"unexpected"}}' ;;
+esac
+"#
+    )
+}
+
+/// The letters the prompt hook handed the agent but could not confirm in
+/// time are confirmed by the same session's turn end, once: the core takes a
+/// late confirmation, so the letter is not left pending with no bell to
+/// bring it again.
+#[test]
+fn a_confirmation_the_prompt_hook_missed_is_sent_by_its_turn_end_once() {
+    let kit = Kit::answering(&late_confirm_hide());
+    let late = kit.log().with_extension("log.late");
+    std::fs::write(&late, "").unwrap();
+    let pane = [("HIDE_PANE_ID", "w1:p1")];
+    let prompt = serde_json::json!({
+        "session_id": "fixture-session", "cwd": "/tmp/fixture-project",
+        "hook_event_name": "UserPromptSubmit", "prompt": LINE,
+    });
+    let stdout = kit.hook("UserPromptSubmit", &prompt, &pane);
+    assert!(stdout.contains("LETTER-BODY"), "{stdout}");
+    let confirms = || {
+        kit.asked()
+            .into_iter()
+            .filter(|asked| asked.starts_with("inbox --confirm"))
+            .count()
+    };
+    assert_eq!(confirms(), 1, "{:?}", kit.asked());
+    std::fs::remove_file(&late).unwrap();
+    let stop = serde_json::json!({
+        "session_id": "fixture-session", "cwd": "/tmp/fixture-project",
+        "hook_event_name": "Stop", "stop_hook_active": false,
+    });
+    kit.hook("Stop", &stop, &pane);
+    assert_eq!(confirms(), 2, "the turn end sends it: {:?}", kit.asked());
+    kit.hook("Stop", &stop, &pane);
+    assert_eq!(
+        confirms(),
+        2,
+        "nothing is owed once sent: {:?}",
+        kit.asked()
+    );
 }

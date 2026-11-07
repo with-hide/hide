@@ -8,7 +8,6 @@ import {
   ACCENT_CHOICES,
   canRetryDevice,
   deviceSubtitle as deviceSubtitleIn,
-  deviceIdFor,
   deviceAwayLine as deviceAwayLineIn,
   deviceProblemLine as deviceProblemLineIn,
   retryCanHelp,
@@ -186,13 +185,6 @@ describe("settings rules", () => {
     expect(usableTerminalFontFamily("Mono\nFont")).toBe("");
     expect(usableTerminalFontFamily("M".repeat(129))).toBe("");
     expect(usableTerminalFontFamily(undefined)).toBe("");
-  });
-
-  it("names a device after its alias without colliding", () => {
-    expect(deviceIdFor("Studio.Mac", ["local"])).toBe("studio-mac");
-    expect(deviceIdFor("studio", ["local", "studio"])).toBe("studio-2");
-    expect(deviceIdFor("local", ["local"])).toBe("local-2");
-    expect(deviceIdFor("***", [])).toBe("device");
   });
 
   it("tells pending, failed and connected devices apart and offers Retry only when it is a new attempt", () => {
