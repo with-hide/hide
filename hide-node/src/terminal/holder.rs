@@ -498,6 +498,10 @@ impl SessionWriter for HolderWriter {
         )
     }
 
+    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> std::io::Result<()> {
+        write_client(&mut self.stream, &ClientMessage::Mouse(*mouse))
+    }
+
     fn release(&mut self) -> std::io::Result<()> {
         write_client(&mut self.stream, &ClientMessage::Release)
     }

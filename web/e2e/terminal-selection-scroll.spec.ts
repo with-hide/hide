@@ -1,7 +1,10 @@
 // A drag selection in an agent pane keeps the text it covers while the wheel
-// scrolls the engine's viewport (the pane has no local scrollback, so the frame
-// is redrawn in place under the selection), on either engine.
+// scrolls the holder's viewport (the pane has no local scrollback, so the frame
+// is redrawn in place under the selection), a drag past the screen's edge
+// scrolls the history and copies every row it passed, and a program that
+// tracks the mouse gets the drag instead, unless shift is held.
 
+import fs from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { mod } from "./chords";
 import { sendKeys, withControl } from "./daemon-actions";
@@ -105,6 +108,107 @@ test("a selection stays on the text it covers when the wheel scrolls the pane", 
     // A click in the pane ends it.
     await page.mouse.click(cell(20, 10).x, cell(20, 10).y);
     await expect.poll(() => selection(page, pane)).toBeNull();
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});
+
+test("a drag past the top edge scrolls the history and its copy holds every row it passed", async ({ page, context }) => {
+  const lastSent = new Map<string, Record<string, unknown>>();
+  const sent = countSent(page, lastSent);
+  await page.setViewportSize({ width: 1680, height: 900 });
+  const engine = await startFixture();
+  let daemon: Daemon | null = null;
+  try {
+    const rows = Array.from({ length: 160 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`).join("\n");
+    daemon = await startHided(engine, "selection-autoscroll");
+    const [pane] = engine.panes;
+    await withControl(daemon, async (control) => sendKeys(control, pane, `${rows}\n`));
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await expect.poll(() => paneText(page, pane), { timeout: 20_000 }).toContain("row-160");
+    const view = () => page.evaluate((id) => window.__hideProbe?.paneView(id) ?? null, pane);
+    await expect.poll(async () => (await view())?.bottom ?? 0).toBeGreaterThan(0);
+
+    const screen = (await page.locator(`[data-pane-view="${pane}"] .xterm-screen`).boundingBox())!;
+    const grid = (await page.evaluate((id) => window.__hideProbe?.paneGrid(id) ?? null, pane))!;
+    const rowHeight = screen.height / grid.rows;
+    const rowAt = (row: number) => screen.y + (row + 0.5) * rowHeight;
+    // The press is on the last row that names one, at its start.
+    const shown = (await paneText(page, pane)).split("\n");
+    const pressRow = shown.findLastIndex((line) => /^row-\d{3}/.test(line));
+    const pressed = shown[pressRow]!.slice(0, 7);
+    await page.mouse.move(screen.x + 1, rowAt(pressRow));
+    await page.mouse.down();
+    // Held above the screen, the drag scrolls toward the oldest row.
+    await page.mouse.move(screen.x + 1, screen.y - 3 * rowHeight, { steps: 6 });
+    await expect.poll(async () => (await view())?.top ?? -1, { timeout: 20_000 }).toBe(0);
+    await page.mouse.up();
+    expect(sent.get("terminal_mouse") ?? 0).toBe(0);
+    expect(sent.get("terminal_scroll") ?? 0).toBeGreaterThan(0);
+
+    // Every row from the first to the pressed one, none missed or repeated.
+    const copied = (await selection(page, pane))!;
+    const named = copied.split("\n").filter((line) => /^row-\d{3}$/.test(line));
+    const last = Number(pressed.slice(4));
+    expect(named).toEqual(Array.from({ length: last - 1 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`));
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.keyboard.press(mod("KeyC"));
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});
+
+test("a program that tracks the mouse gets the drag, and a drag with shift selects instead", async ({ page }) => {
+  const lastSent = new Map<string, Record<string, unknown>>();
+  const sent = countSent(page, lastSent);
+  await page.setViewportSize({ width: 1680, height: 900 });
+  const engine = await startFixture();
+  let daemon: Daemon | null = null;
+  try {
+    daemon = await startHided(engine, "program-drag");
+    const [pane] = engine.panes;
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await expect.poll(() => paneText(page, pane), { timeout: 20_000 }).toContain("claude fixture ready");
+    // The fixture agent writes back what it reads, so these modes are its own
+    // output: it tracks a held button's motion, in SGR form.
+    await withControl(daemon, async (control) => sendKeys(control, pane, "\x1b[?1002h\x1b[?1006h"));
+    await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneView(id)?.mouse ?? null, pane), { timeout: 10_000 }).toBe(true);
+
+    const screen = (await page.locator(`[data-pane-view="${pane}"] .xterm-screen`).boundingBox())!;
+    const grid = (await page.evaluate((id) => window.__hideProbe?.paneGrid(id) ?? null, pane))!;
+    const cell = (column: number, row: number) => ({
+      x: screen.x + (column + 0.5) * (screen.width / grid.cols),
+      y: screen.y + (row + 0.5) * (screen.height / grid.rows),
+    });
+    const log = engine.inputLogs[0];
+    const before = fs.readFileSync(log).length;
+    await page.mouse.move(cell(2, 3).x, cell(2, 3).y);
+    await page.mouse.down();
+    await page.mouse.move(cell(9, 5).x, cell(9, 5).y, { steps: 4 });
+    await page.mouse.up();
+    // A press, motion with the button held, and the release where it ended.
+    const report = new RegExp(`^${"\u001b"}\\[<0;3;4M(${"\u001b"}\\[<32;\\d+;\\d+M)+${"\u001b"}\\[<0;10;6m$`);
+    await expect.poll(() => fs.readFileSync(log, "latin1").slice(before), { timeout: 10_000 }).toMatch(report);
+    expect(await selection(page, pane)).toBeNull();
+    expect(lastSent.get("terminal_mouse")).toMatchObject({ action: "release", button: "left", column: 9, row: 5 });
+
+    // With shift held the drag is the operator's selection, and the program hears nothing.
+    const mice = sent.get("terminal_mouse") ?? 0;
+    const heard = fs.readFileSync(log).length;
+    await page.keyboard.down("Shift");
+    await page.mouse.move(cell(0, 0).x, cell(0, 0).y);
+    await page.mouse.down();
+    await page.mouse.move(cell(8, 0).x, cell(8, 0).y, { steps: 4 });
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    await expect.poll(() => selection(page, pane)).not.toBeNull();
+    expect(sent.get("terminal_mouse") ?? 0).toBe(mice);
+    expect(fs.readFileSync(log).length).toBe(heard);
   } finally {
     daemon?.stop();
     engine.stop();

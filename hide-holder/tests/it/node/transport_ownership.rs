@@ -183,6 +183,9 @@ impl SessionWriter for GatedWriter {
     ) -> std::io::Result<()> {
         self.actual.scroll(lines, column, row, modifiers)
     }
+    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> std::io::Result<()> {
+        self.actual.mouse(mouse)
+    }
     fn release(&mut self) -> std::io::Result<()> {
         self.actual.release()
     }

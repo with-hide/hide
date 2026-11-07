@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dedent, followScroll, movedSelection, rowContinues, selectionToText, type CellRow } from "./selection";
+import { autoscrollRows, dedent, drawnSelection, orderPoints, rowContinues, selectionToText, type CellRow } from "./selection";
 
 /** A row of `width` cells holding `text`, padded with written spaces the way a holder's frame draws it. */
 function row(text: string, width: number): CellRow {
@@ -101,66 +101,38 @@ describe("selectionToText", () => {
   });
 });
 
-describe("followScroll", () => {
-  const screen = ["a", "b", "c", "d", "e", "f"];
-
-  it("finds the rows where the wheel moved the text", () => {
-    // The text scrolled up by two rows: what was rows 3-4 is now rows 1-2.
-    expect(followScroll(["d", "e"], 3, screen.slice(2).concat(["x", "y"]), -2)).toBe(-2);
-    // It scrolled down by one row.
-    expect(followScroll(["b", "c"], 1, ["z"].concat(screen.slice(0, 5)), 1)).toBe(1);
-  });
-
-  it("finds a shift smaller than the wheel asked for at the end of the history", () => {
-    expect(followScroll(["d", "e"], 3, screen.slice(1).concat(["x"]), -5)).toBe(-1);
-  });
-
-  it("reads blank rows as the shift the wheel asked for", () => {
-    expect(followScroll(["", ""], 2, ["a", "", "", "", "", ""], 1)).toBe(1);
-  });
-
-  it("keeps the part of the selection still on screen", () => {
-    // The first row left the top; the second is now row 0.
-    expect(followScroll(["a", "b"], 0, ["b", "c", "d", "e", "f", "g"], -1)).toBe(-1);
-  });
-
-  it("gives up when the text is no longer on screen", () => {
-    expect(followScroll(["a", "b"], 0, ["m", "n", "o", "p", "q", "r"], 3)).toBeNull();
-  });
-
-  it("does not take blank rows alone for the text it followed", () => {
-    expect(followScroll(["foo", ""], 10, ["", "a", "b", "c", "d", "e"], -50)).toBeNull();
-  });
-
-  it("never takes a shift against the direction the wheel turned", () => {
-    const rule = "----";
-    expect(followScroll([rule], 2, [rule, "a", "b", "c", "d", "e"], 2)).toBeNull();
-  });
-
-  it("takes repeated rows at the shift the wheel asked for", () => {
-    const rule = "----";
-    expect(followScroll([rule], 2, [rule, "a", rule, "b", rule, "c"], -2)).toBe(-2);
-    expect(followScroll([rule], 2, [rule, "a", rule, "b", rule, "c"], 2)).toBe(2);
-    expect(followScroll([rule], 2, [rule, "a", rule, "b", rule, "c"], 3)).toBe(2);
+describe("orderPoints", () => {
+  it("puts the earlier point first, by row and then by column", () => {
+    const a = { row: 7, column: 3 };
+    const b = { row: 5, column: 9 };
+    expect(orderPoints(a, b)).toEqual([b, a]);
+    expect(orderPoints({ row: 5, column: 4 }, { row: 5, column: 2 })).toEqual([{ row: 5, column: 2 }, { row: 5, column: 4 }]);
   });
 });
 
-describe("movedSelection", () => {
-  const start = { x: 3, y: 4 };
-  const end = { x: 7, y: 6 };
+describe("drawnSelection", () => {
+  const start = { row: 104, column: 3 };
+  const end = { row: 106, column: 7 };
 
-  it("moves the whole selection when it stays on screen", () => {
-    expect(movedSelection(start, end, 2, 20, 10)).toEqual({ column: 3, row: 6, length: 24 });
-    expect(movedSelection(start, end, -2, 20, 10)).toEqual({ column: 3, row: 2, length: 24 });
+  it("draws the whole selection where the screen shows it", () => {
+    expect(drawnSelection(start, end, 102, 20, 10)).toEqual({ column: 3, row: 2, length: 24 });
   });
 
-  it("starts at column 0 when the top scrolled off and ends at the last column when the bottom did", () => {
-    expect(movedSelection(start, end, -5, 20, 10)).toEqual({ column: 0, row: 0, length: 17 });
-    expect(movedSelection(start, end, 14, 20, 10)).toEqual({ column: 3, row: 18, length: 17 });
+  it("starts at column 0 when the top is above the screen and ends at the last column when the bottom is below", () => {
+    expect(drawnSelection(start, end, 105, 20, 10)).toEqual({ column: 0, row: 0, length: 17 });
+    expect(drawnSelection(start, end, 86, 20, 10)).toEqual({ column: 3, row: 18, length: 17 });
   });
 
-  it("selects nothing once every row left the screen", () => {
-    expect(movedSelection(start, end, -7, 20, 10)).toBeNull();
-    expect(movedSelection(start, end, 16, 20, 10)).toBeNull();
+  it("draws nothing once every row is off the screen", () => {
+    expect(drawnSelection(start, end, 107, 20, 10)).toBeNull();
+    expect(drawnSelection(start, end, 84, 20, 10)).toBeNull();
+  });
+});
+
+describe("autoscrollRows", () => {
+  it("moves one row at the edge, one more per row of distance, and never a whole screen", () => {
+    expect(autoscrollRows(3, 16, 40)).toBe(1);
+    expect(autoscrollRows(40, 16, 40)).toBe(3);
+    expect(autoscrollRows(10_000, 16, 40)).toBe(39);
   });
 });

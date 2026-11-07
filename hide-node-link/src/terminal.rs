@@ -14,6 +14,9 @@
 
 use std::sync::Arc;
 
+/// What a pointer event did and with which button
+/// ([`TerminalControl::Mouse`]), as the pane's holder takes them.
+pub use hide_holder_protocol::{MouseAction, MouseButton};
 use serde::{Deserialize, Serialize};
 
 /// Panes one node keeps attached at once (D-18). A pane wanted past it is
@@ -103,8 +106,19 @@ pub enum TerminalControl {
         #[serde(default)]
         modifiers: u8,
     },
-    /// Bytes the core writes itself (a click's mouse report).
-    Write { pane: String, data: String },
+    /// A pointer event for a controlled pane over its zero-based cell, which
+    /// the pane's holder reports in the program's mouse mode or drops when
+    /// the program tracks none.
+    Mouse {
+        pane: String,
+        action: MouseAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        button: Option<MouseButton>,
+        column: u16,
+        row: u16,
+        #[serde(default)]
+        modifiers: u8,
+    },
     /// The agent in the pane sleeps: keys for it are dropped until it wakes.
     Asleep { pane: String, asleep: bool },
     /// A creation the screen sends keys against before the engine names its pane.
@@ -524,7 +538,7 @@ impl TerminalControl {
             | Self::Closing { pane, .. }
             | Self::Resize { pane, .. }
             | Self::Scroll { pane, .. }
-            | Self::Write { pane, .. }
+            | Self::Mouse { pane, .. }
             | Self::Asleep { pane, .. }
             | Self::AttachmentHold { pane, .. }
             | Self::WatchFrame { pane } => Some(pane),
